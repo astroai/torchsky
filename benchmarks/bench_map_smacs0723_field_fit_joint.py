@@ -7,10 +7,12 @@ import argparse
 import collections
 import json
 import math
+import hashlib
 import os
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -35,7 +37,8 @@ from bench_map_smacs0723_field_fit import (  # noqa: E402
     _PerExposureScalarBias,
     _crop_field_inputs_to_target,
     _field_target_observation,
-    _robust_intensity_scale,
+    _training_intensity_scale,
+    _scaled_field_observation,
 )
 from bench_map_smacs0723_real import (  # noqa: E402
     DATA,
@@ -179,7 +182,10 @@ def _load_calibrated_operator_models(
     *,
     detectors: set[str],
     intensity_scale: float,
+    family: str = "adaptive",
 ) -> tuple[dict[str, dict[str, torch.nn.Module]], dict[str, Any]]:
+    if family not in {"stationary", "adaptive"}:
+        raise ValueError("calibration family must be stationary or adaptive")
     manifest = manifest.resolve()
     report = json.loads(fit_report.read_text(encoding="utf-8"))
     if report.get("manifest_sha256") != calibration_fit._sha256(manifest):
@@ -197,9 +203,9 @@ def _load_calibrated_operator_models(
     for detector in sorted(detectors):
         models[detector] = {}
         for role in ("background", "psf"):
-            group = indexed.get((detector, role, "adaptive"))
+            group = indexed.get((detector, role, family))
             if group is None:
-                raise ValueError(f"fit report has no adaptive {detector}/{role} group")
+                raise ValueError(f"fit report has no {family} {detector}/{role} group")
             checkpoint_path = Path(group["checkpoint"])
             if calibration_fit._sha256(checkpoint_path) != group["checkpoint_sha256"]:
                 raise ValueError(f"{detector}/{role} checkpoint hash mismatch")
@@ -216,7 +222,7 @@ def _load_calibrated_operator_models(
             model, _initializer = calibration_fit._make_model(
                 arrays,
                 role=role,
-                family="adaptive",
+                family=family,
                 device=torch.device("cpu"),
                 psf_model=str(checkpoint.get("psf_model") or "fitted_gaussian_kernel"),
             )
@@ -224,7 +230,7 @@ def _load_calibrated_operator_models(
                 checkpoint.get("schema_version") != 1
                 or checkpoint.get("detector") != detector
                 or checkpoint.get("role") != role
-                or checkpoint.get("family") != "adaptive"
+                or checkpoint.get("family") != family
             ):
                 raise ValueError(f"invalid {detector}/{role} checkpoint metadata")
             model.load_state_dict(checkpoint["state_dict"])
@@ -346,7 +352,10 @@ def _apply_learned_psf_arm(
             models[band] = model.to(
                 next(iter({o.image.device for o in observations}), torch.device("cpu"))
             ).to(
-                next(iter({o.image.device for o in observations if hasattr(o, 'image')}), torch.device('cpu'))
+                next(
+                    iter({o.image.device for o in observations if hasattr(o, "image")}),
+                    torch.device("cpu"),
+                )
             )
         height, width = (int(v) for v in observation.image.shape[-2:])
         xs = torch.linspace(0.0, width - 1.0, grid_side) + float(
@@ -999,8 +1008,9 @@ def _refine_foam_from_observations_exact(
         )
         basis_samples = spectral_basis(wavelengths).to(dtype=dtype)
         response_basis.append(
-            torch.sum(response.to(dtype=dtype)[:, None] * basis_samples, dim=0)
-            .to(storage_device)
+            torch.sum(response.to(dtype=dtype)[:, None] * basis_samples, dim=0).to(
+                storage_device
+            )
         )
         operators.append(operator.to(storage_device))
         forwards.append(psf_forward)
@@ -1072,9 +1082,7 @@ def _refine_foam_from_observations_exact(
         weight_sum += torch.sum(surface_weight)
     return {
         "foam_exact_refinement_initial_rmse": float(
-            torch.sqrt(
-                initial_weighted_square_sum / torch.clamp(weight_sum, min=1.0)
-            )
+            torch.sqrt(initial_weighted_square_sum / torch.clamp(weight_sum, min=1.0))
         ),
         "foam_exact_refinement_rmse": float(
             torch.sqrt(weighted_square_sum / torch.clamp(weight_sum, min=1.0))
@@ -1179,9 +1187,7 @@ def _write_export_products(
     support_mask: np.ndarray,
     source_mask: np.ndarray,
 ) -> None:
-    model_dir = (
-        export_dir / _safe_slug(psf_mode) / _safe_slug(band) / _safe_slug(model)
-    )
+    model_dir = export_dir / _safe_slug(psf_mode) / _safe_slug(band) / _safe_slug(model)
     model_dir.mkdir(parents=True, exist_ok=True)
     residual = prediction - reference
     torchsky.write(
@@ -1489,9 +1495,7 @@ def _structured_noise_diagnostics(
     models: Sequence[StructuredDetectorNoise],
     losses: Sequence[float],
 ) -> list[dict[str, Any]]:
-    if not (
-        len(observations) == len(predictions) == len(models) == len(losses)
-    ):
+    if not (len(observations) == len(predictions) == len(models) == len(losses)):
         raise ValueError("noise diagnostics inputs must have equal length")
     rows: list[dict[str, Any]] = []
     for index, (observation, prediction, model, loss) in enumerate(
@@ -1514,9 +1518,7 @@ def _structured_noise_diagnostics(
             plane = value.to(dtype=residual.dtype)
             plane_valid = torch.isfinite(plane) & (plane >= 0.0)
             support &= plane_valid
-            components[key] = torch.where(
-                plane_valid, plane, torch.zeros_like(plane)
-            )
+            components[key] = torch.where(plane_valid, plane, torch.zeros_like(plane))
         err = (
             None
             if observation.err is None
@@ -1578,17 +1580,13 @@ def _structured_noise_diagnostics(
                 "rnoise_scale": float(calibration.rnoise_scale.detach().cpu()),
                 "flat_scale": float(calibration.flat_scale.detach().cpu()),
                 "err_scale": float(calibration.err_scale.detach().cpu()),
-                "variance_floor": float(
-                    calibration.variance_floor.detach().cpu()
-                ),
+                "variance_floor": float(calibration.variance_floor.detach().cpu()),
                 "row_white_psd": row_noise.white_psd.detach().cpu().tolist(),
                 "row_knee_frequency": (
                     row_noise.knee_frequency.detach().cpu().tolist()
                 ),
                 "row_exponent": row_noise.exponent.detach().cpu().tolist(),
-                "outlier_probability": float(
-                    model.outlier_probability.detach().cpu()
-                ),
+                "outlier_probability": float(model.outlier_probability.detach().cpu()),
                 "outlier_scale": float(model.outlier_scale.detach().cpu()),
                 "active_amplifiers": active_amplifiers.tolist(),
                 "valid_pixels": int(support.sum()),
@@ -1684,7 +1682,9 @@ def _format_markdown(rows: list[dict[str, Any]]) -> str:
             ]
         )
         for model, row in exact_rows.items():
-            peak_mib = float(row["foam_exact_refinement_peak_operator_batch_bytes"]) / 2**20
+            peak_mib = (
+                float(row["foam_exact_refinement_peak_operator_batch_bytes"]) / 2**20
+            )
             ridge_center = (
                 "initial"
                 if float(row["foam_exact_refinement_ridge_centered_on_initial"])
@@ -1923,17 +1923,33 @@ def main() -> int:
     )
     parser.add_argument("--inr-hidden-layers", type=int, default=3)
     parser.add_argument(
+        "--measured-passband-dir",
+        type=Path,
+        default=None,
+        help="SVO NPZ curves; constant-I_nu photon-weighted response T/lambda",
+    )
+    parser.add_argument(
+        "--independent-frozen-calibration",
+        action="store_true",
+        help="Require measured passbands and a matching frozen evidence/fit pair",
+    )
+    parser.add_argument(
+        "--calibration-family",
+        choices=("stationary", "adaptive"),
+        default="adaptive",
+        help="Predeclared frozen calibration family; do not select using test results",
+    )
+    parser.add_argument(
         "--psf-model",
         choices=("fitted_gaussian", "learned_lowrank"),
         default="fitted_gaussian",
-        help="Operator arm: frozen fitted Gaussian (default) or learned "
-        "low-rank chromatic PSF anchored on calibration evidence.",
+        help="Control arm: nominal Gaussian width (legacy fitted_gaussian name) or frozen nominal low-rank initialization; independent fits require calibration evidence.",
     )
     parser.add_argument(
         "--background-model",
-        choices=("plane", "learned"),
-        default="plane",
-        help="Nuisance arm: scalar/plane background (default) or the learned "
+        choices=("none", "learned"),
+        default="none",
+        help="No additional background model, or the independently fitted "
         "ConditionedBackgroundField from the operator calibration fit.",
     )
     args = parser.parse_args()
@@ -2008,9 +2024,7 @@ def main() -> int:
         if int(args.inr_hidden_dim) <= 0 or int(args.inr_hidden_layers) <= 0:
             parser.error("INR hidden dimensions must be positive")
         if not args.foam_log_intensity_spectra:
-            parser.error(
-                "--foam-initialized-inr requires --foam-log-intensity-spectra"
-            )
+            parser.error("--foam-initialized-inr requires --foam-log-intensity-spectra")
     if (args.tile_ra is None) != (args.tile_dec is None):
         parser.error("--tile-ra and --tile-dec must be given together")
     if args.tile_ra is not None:
@@ -2027,11 +2041,19 @@ def main() -> int:
         ):
             parser.error("--tile-size-deg must be in (0, 2] deg")
     tile_center = (
-        None
-        if args.tile_ra is None
-        else (float(args.tile_ra), float(args.tile_dec))
+        None if args.tile_ra is None else (float(args.tile_ra), float(args.tile_dec))
     )
     calibrated_operators = args.operator_calibration_manifest is not None
+    if args.independent_frozen_calibration and (
+        not calibrated_operators
+        or args.measured_passband_dir is None
+        or args.background_model != "learned"
+        or args.psf_model == "learned_lowrank"
+        or args.forward_context
+    ):
+        parser.error(
+            "independent frozen calibration requires manifest, fit report, measured passbands, --background-model learned, and no nominal learned_lowrank or free-offset --forward-context override"
+        )
     if args.background_model == "learned" and not calibrated_operators:
         parser.error(
             "--background-model learned requires --operator-calibration-manifest"
@@ -2052,16 +2074,15 @@ def main() -> int:
     if (args.structured_noise_crossfit or args.foam_initialized_inr) and (
         "spectral_power_foam" not in model_kinds
     ):
-        parser.error("structured noise and Foam-initialized INR require spectral_power_foam")
+        parser.error(
+            "structured noise and Foam-initialized INR require spectral_power_foam"
+        )
     if args.foam_initialized_inr and "foam_initialized_inr" not in model_kinds:
         foam_index = model_kinds.index("spectral_power_foam")
         model_kinds.insert(foam_index + 1, "foam_initialized_inr")
     rows: list[dict[str, Any]] = []
 
     band_entries: list[dict[str, Any]] = []
-    all_raw_field_inputs: list[
-        tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
-    ] = []
     all_field_observations: list[FieldObservation] = []
     all_forward_contexts: list[ForwardContext] = []
     injection_rows: list[dict[str, Any]] = []
@@ -2111,6 +2132,13 @@ def main() -> int:
                     exposure_paths,
                     pattern_numbers,
                 )
+            if args.independent_frozen_calibration:
+                exposure_paths = [
+                    path
+                    for path in exposure_paths
+                    if _calibration_exposure(calibration_lookup, path)["split"]
+                    == "train"
+                ]
             if not reference_path.exists() or not exposure_paths:
                 message = (
                     f"missing reference={reference_path.exists()} "
@@ -2190,6 +2218,13 @@ def main() -> int:
                 band_name=band,
                 psf_sigma_pix=target_psf_sigma_pix,
             )
+            if args.measured_passband_dir is not None:
+                target_observation = replace(
+                    target_observation,
+                    **_field_observation_kwargs_for_band(
+                        band, measured_passband_dir=args.measured_passband_dir
+                    ),
+                )
             science_overrides = None
             if injection_manifest is not None:
                 injection_world, injection_flux = _injection_manifest_tensors(
@@ -2356,7 +2391,9 @@ def main() -> int:
                             band,
                             crop_header,
                         ),
-                        **_field_observation_kwargs_for_band(band),
+                        **_field_observation_kwargs_for_band(
+                            band, measured_passband_dir=args.measured_passband_dir
+                        ),
                     )
                 )
                 all_forward_contexts.append(
@@ -2377,6 +2414,26 @@ def main() -> int:
                         extra={
                             "exposure_index": obs_index,
                             "source_path": str(exposure_path),
+                            "split": calibration_exposure.get("split")
+                            if calibration_exposure
+                            else "train",
+                            "spectral_response_convention": "constant_I_nu_photon_mean_T_over_lambda"
+                            if args.measured_passband_dir
+                            else "nominal_gaussian_control",
+                            "measured_passband_path": str(
+                                args.measured_passband_dir
+                                / f"JWST_NIRCam2025.{band}.npz"
+                            )
+                            if args.measured_passband_dir
+                            else None,
+                            "measured_passband_sha256": hashlib.sha256(
+                                (
+                                    args.measured_passband_dir
+                                    / f"JWST_NIRCam2025.{band}.npz"
+                                ).read_bytes()
+                            ).hexdigest()
+                            if args.measured_passband_dir
+                            else None,
                         },
                     )
                 )
@@ -2435,7 +2492,6 @@ def main() -> int:
                     "n_exposures": len(exposure_paths),
                 }
             )
-            all_raw_field_inputs.extend(raw_field_inputs)
             all_field_observations.extend(field_observations)
 
         if not band_entries:
@@ -2455,59 +2511,14 @@ def main() -> int:
                 return 0
             raise RuntimeError("no bands available for joint fit")
 
-        intensity_scale = _robust_intensity_scale(all_raw_field_inputs)
-        normalized_observations: list[FieldObservation] = []
-        for observation in all_field_observations:
-            normalized_observations.append(
-                FieldObservation(
-                    image=observation.image / intensity_scale,
-                    header=dict(observation.header),
-                    weight=(
-                        observation.weight * (intensity_scale * intensity_scale)
-                        if observation.weight is not None
-                        else None
-                    ),
-                    mask=observation.mask.clone()
-                    if observation.mask is not None
-                    else None,
-                    err=(
-                        observation.err / intensity_scale
-                        if observation.err is not None
-                        else None
-                    ),
-                    var_poisson=(
-                        observation.var_poisson / (intensity_scale * intensity_scale)
-                        if observation.var_poisson is not None
-                        else None
-                    ),
-                    var_rnoise=(
-                        observation.var_rnoise / (intensity_scale * intensity_scale)
-                        if observation.var_rnoise is not None
-                        else None
-                    ),
-                    var_flat=(
-                        observation.var_flat / (intensity_scale * intensity_scale)
-                        if observation.var_flat is not None
-                        else None
-                    ),
-                    contamination_prior=observation.contamination_prior,
-                    amplifier_index=observation.amplifier_index,
-                    wavelength=observation.wavelength,
-                    spectral_min=observation.spectral_min,
-                    spectral_max=observation.spectral_max,
-                    transmission_center=observation.transmission_center,
-                    transmission_sigma=observation.transmission_sigma,
-                    transmission_wavelength=observation.transmission_wavelength,
-                    transmission_throughput=observation.transmission_throughput,
-                    psf_sigma_pix=observation.psf_sigma_pix,
-                    psf_spec=observation.psf_spec,
-                    band_name=observation.band_name,
-                    spectral_quantity=observation.spectral_quantity,
-                    detector_x0_pix=observation.detector_x0_pix,
-                    detector_y0_pix=observation.detector_y0_pix,
-                    detector_to_sky=observation.detector_to_sky,
-                )
-            )
+        intensity_scale, normalization_training_count = _training_intensity_scale(
+            all_field_observations,
+            [str(context.extra.get("split")) for context in all_forward_contexts],
+        )
+        normalized_observations = [
+            _scaled_field_observation(observation, intensity_scale=intensity_scale)
+            for observation in all_field_observations
+        ]
 
         psf_arm_audit: dict[str, float] | None = None
         if args.psf_model == "learned_lowrank":
@@ -2541,13 +2552,13 @@ def main() -> int:
                 args.operator_calibration_fit_report,
                 detectors=detectors,
                 intensity_scale=float(intensity_scale),
+                family=args.calibration_family,
             )
             calibrated_bundles = _calibrated_operator_bundles(
                 normalized_observations, all_forward_contexts, calibrated_models
             )
-            if args.background_model == "plane":
-                # Plane arm: drop the learned background component, keep the
-                # calibrated PSF; the scalar observation background stays.
+            if args.background_model == "none":
+                # Preserve supplied offsets but apply no fitted background field.
                 calibrated_bundles = tuple(
                     bundle.with_updates(background=None)
                     for bundle in calibrated_bundles
@@ -2567,9 +2578,7 @@ def main() -> int:
             log_intensity_spectra=bool(args.foam_log_intensity_spectra),
             initial_intensity=float(args.foam_initial_intensity),
         )
-        foam_model_kwargs["compact_fixed_geometry"] = not bool(
-            args.foam_train_geometry
-        )
+        foam_model_kwargs["compact_fixed_geometry"] = not bool(args.foam_train_geometry)
 
         def make_foam_model() -> torch.nn.Module:
             model = make_field_model(
@@ -2715,7 +2724,10 @@ def main() -> int:
             )
             fit_time_ms = (time.perf_counter() - t0) * 1000.0
             exact_refinement_diagnostics: dict[str, float] = {}
-            if model_kind == "spectral_power_foam" and args.foam_exact_observation_refine:
+            if (
+                model_kind == "spectral_power_foam"
+                and args.foam_exact_observation_refine
+            ):
                 if calibrated_bundles is not None or args.forward_context:
                     raise ValueError(
                         "exact Foam observation refinement does not yet support "
@@ -2726,9 +2738,7 @@ def main() -> int:
                 exact_refinement_diagnostics = _refine_foam_from_observations_exact(
                     hard_model,
                     normalized_observations,
-                    num_spectral_samples=int(
-                        fit_kwargs.get("num_spectral_samples", 1)
-                    ),
+                    num_spectral_samples=int(fit_kwargs.get("num_spectral_samples", 1)),
                     operator_max_candidate_pairs=int(
                         args.foam_exact_max_candidate_pairs
                     ),
@@ -3144,6 +3154,30 @@ def main() -> int:
             "module": str(args.module),
             "psf_model": str(args.psf_model),
             "background_model": str(args.background_model),
+            "independent_frozen_calibration": bool(args.independent_frozen_calibration),
+            "calibration_family": args.calibration_family,
+            "spectral_response_convention": "constant_I_nu_photon_mean_T_over_lambda"
+            if args.measured_passband_dir
+            else "nominal_gaussian_control",
+            "measured_passband_dir": str(args.measured_passband_dir)
+            if args.measured_passband_dir
+            else None,
+            "normalization_training_exposures": normalization_training_count,
+            "normalization_operation": "SCI/scale; ERR/scale; VAR/scale**2; no additive subtraction",
+            "jwst_reference_convention_verified": False,
+            "held_out_validation_pipeline": "not implemented; strict mode fits training exposures only",
+            "exposure_provenance": [
+                {
+                    "source_path": context.extra.get("source_path"),
+                    "photometric_header": {key: observation.header.get(key)
+                        for key in ("BUNIT", "PHOTMJSR", "PIXAR_SR", "CRDS_CTX")},
+                    "pixel_response_included": getattr(observation.psf_spec, "pixel_response_included", None),
+                    "pixel_response_provenance": "unknown; independent calibration does not by itself verify detector pixel integration",
+                    "measured_passband_path": context.extra.get("measured_passband_path"),
+                    "measured_passband_sha256": context.extra.get("measured_passband_sha256"),
+                }
+                for observation, context in zip(all_field_observations, all_forward_contexts, strict=True)
+            ],
             "psf_arm_audit": psf_arm_audit,
             "tile_center_deg": tile_center,
             "tile_size_deg": (
@@ -3164,9 +3198,7 @@ def main() -> int:
             "foam_initialize_from_coadd": bool(args.foam_initialize_from_coadd),
             "foam_fit_target_footprint": bool(args.foam_fit_target_footprint),
             "foam_whiten_spectral_basis": bool(args.foam_whiten_spectral_basis),
-            "foam_exact_observation_refine": bool(
-                args.foam_exact_observation_refine
-            ),
+            "foam_exact_observation_refine": bool(args.foam_exact_observation_refine),
             "foam_exact_operator_storage": str(args.foam_exact_operator_storage),
             "foam_exact_observation_batch_size": exact_batch,
             "foam_exact_max_iterations": int(args.foam_exact_max_iterations),
@@ -3231,10 +3263,7 @@ def main() -> int:
     return 0
 
 
-
-
 if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
-
     torch.cuda.memory._record_memory_history(
         enabled="all", context="all", stacks="python", max_entries=100000
     )
@@ -3255,9 +3284,7 @@ if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
             for _block in _segment:
                 if not isinstance(_block, dict):
                     continue
-                _size = int(
-                    _block.get("allocated_size") or _block.get("size", 0) or 0
-                )
+                _size = int(_block.get("allocated_size") or _block.get("size", 0) or 0)
                 _frames = []
                 _hist = _block.get("history")
                 if isinstance(_hist, list):

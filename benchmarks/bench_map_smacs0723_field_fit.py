@@ -8,6 +8,7 @@ import json
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -254,13 +255,34 @@ def _robust_intensity_scale(
     return scale
 
 
+def _training_intensity_scale(
+    observations: list[FieldObservation], splits: list[str]
+) -> tuple[float, int]:
+    """Fit a multiplicative scale to training SCI only; retain its diffuse level."""
+    inputs = []
+    for observation, split in zip(observations, splits, strict=True):
+        if split != "train":
+            continue
+        if observation.weight is None or observation.mask is None:
+            raise ValueError("training normalization requires weight and mask")
+        inputs.append((observation.image.detach().cpu().numpy(),
+                       observation.weight.detach().cpu().numpy(),
+                       observation.mask.detach().cpu().numpy(), observation.header))
+    if not inputs:
+        raise ValueError("normalization requires training exposures; held-out inputs cannot set the scale")
+    return _robust_intensity_scale(inputs), len(inputs)
+
+
 def _scaled_field_observation(
     observation: FieldObservation,
     *,
     intensity_scale: float,
 ) -> FieldObservation:
     scale = float(intensity_scale)
-    return FieldObservation(
+    if not np.isfinite(scale) or scale <= 0:
+        raise ValueError("intensity_scale must be finite and positive")
+    return replace(
+        observation,
         image=observation.image / scale,
         header=dict(observation.header),
         weight=(
@@ -285,22 +307,22 @@ def _scaled_field_observation(
             if observation.var_flat is not None
             else None
         ),
-        contamination_prior=observation.contamination_prior,
-        amplifier_index=observation.amplifier_index,
-        wavelength=observation.wavelength,
-        spectral_min=observation.spectral_min,
-        spectral_max=observation.spectral_max,
-        transmission_center=observation.transmission_center,
-        transmission_sigma=observation.transmission_sigma,
-        transmission_wavelength=observation.transmission_wavelength,
-        transmission_throughput=observation.transmission_throughput,
-        psf_sigma_pix=observation.psf_sigma_pix,
-        psf_spec=observation.psf_spec,
-        band_name=observation.band_name,
-        spectral_quantity=observation.spectral_quantity,
-        detector_x0_pix=observation.detector_x0_pix,
-        detector_y0_pix=observation.detector_y0_pix,
-        detector_to_sky=observation.detector_to_sky,
+        sky_background=(
+            observation.sky_background / scale
+            if observation.sky_background is not None
+            else None
+        ),
+        instrument_background=(
+            observation.instrument_background / scale
+            if observation.instrument_background is not None
+            else None
+        ),
+        detector_background=(
+            observation.detector_background / scale
+            if observation.detector_background is not None
+            else None
+        ),
+        background_offset=observation.background_offset / scale,
     )
 
 

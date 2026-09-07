@@ -40,7 +40,32 @@ def _prefix_root() -> Path:
 
 def _run(cmd: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
     print("+", " ".join(cmd))
-    subprocess.check_call(cmd, cwd=cwd, env=env)
+    try:
+        subprocess.check_call(cmd, cwd=cwd, env=env)
+    except subprocess.CalledProcessError:
+        if Path(cmd[0]).name == "configure":
+            config_log = cwd / "config.log"
+            if config_log.is_file():
+                # The runner tees stdout to persistent ARC storage even when its
+                # source checkout and config.log disappear with the session.
+                print(f"--- {config_log} ---", flush=True)
+                print(
+                    config_log.read_text(encoding="utf-8", errors="replace"), flush=True
+                )
+                artifact_root = (env or os.environ).get("ARTIFACT_ROOT")
+                if artifact_root:
+                    destination = Path(artifact_root) / f"{cwd.name}-config.log"
+                    try:
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(config_log, destination)
+                        print(
+                            f"configure diagnostic saved to {destination}", flush=True
+                        )
+                    except OSError as error:
+                        print(
+                            f"could not copy configure diagnostic: {error}", flush=True
+                        )
+        raise
 
 
 def _run_allow_failure(
@@ -104,7 +129,14 @@ def _ensure_repo(tool: str) -> Path:
         return src_dir
     src_dir.parent.mkdir(parents=True, exist_ok=True)
     _run(
-        ["git", "clone", "--filter=blob:none", "--no-checkout", REPOS[tool], str(src_dir)],
+        [
+            "git",
+            "clone",
+            "--filter=blob:none",
+            "--no-checkout",
+            REPOS[tool],
+            str(src_dir),
+        ],
         cwd=_repo_root(),
     )
     _run(["git", "checkout", "--detach", REFS[tool]], cwd=src_dir)
@@ -135,9 +167,7 @@ def _swarp_build_env(
     include_dir = conda_prefix / "include"
     lib_dir = conda_prefix / "lib"
     env["CPPFLAGS"] = f"-I{include_dir}"
-    env["LDFLAGS"] = (
-        f"-L{lib_dir} -Wl,-rpath,{lib_dir} -Wl,-rpath-link,{lib_dir}"
-    )
+    env["LDFLAGS"] = f"-L{lib_dir} -Wl,-rpath,{lib_dir} -Wl,-rpath-link,{lib_dir}"
     env["LD_LIBRARY_PATH"] = ":".join(
         value for value in (str(lib_dir), env.get("LD_LIBRARY_PATH", "")) if value
     )
@@ -160,6 +190,20 @@ def _build_swarp(src_dir: Path, prefix: Path, *, jobs: int) -> None:
         return
     conda_prefix = _conda_prefix()
     env = _swarp_build_env(conda_prefix)
+    # Print only build settings, never the full environment (which can contain
+    # credentials). These distinguish a compiler failure from CFITSIO ABI failure.
+    for key in (
+        "CC",
+        "CPP",
+        "LD",
+        "AR",
+        "CFLAGS",
+        "CPPFLAGS",
+        "LDFLAGS",
+        "LIBS",
+        "CONDA_BUILD_SYSROOT",
+    ):
+        print(f"swarp build {key}={env.get(key, '<unset>')}", flush=True)
     _run(["./autogen.sh"], cwd=src_dir, env=env)
     _run(
         [
@@ -273,7 +317,11 @@ def main() -> int:
 
     tools = ("swarp", "montage", "casutools") if args.tool == "all" else (args.tool,)
     for tool in tools:
-        if tool == "swarp" and not args.force_source and (swarp := shutil.which("swarp")):
+        if (
+            tool == "swarp"
+            and not args.force_source
+            and (swarp := shutil.which("swarp"))
+        ):
             # ponytail: conda-forge already packages the legacy comparator; prefer
             # its locked binary over rebuilding old Autoconf against modern CFITSIO.
             print(f"swarp: using environment binary at {swarp}")

@@ -43,7 +43,29 @@ without rewriting history. Focused merge checks passed 40 tests with four device
 skips. Runtime repair now selects each Pixi environment's own C++ library after
 activation, disables user-site Python packages, and prints loaded libraries and
 GPU information before science. Its shell behavior and launcher checks pass
-10 tests; the Linux GPU confirmation remains pending.
+10 tests. Run `depth-20260906-052224`, from pushed commit `cc822530`, confirmed
+Torchsky and Torchfits imports on Linux and loaded Pixi's `libstdc++.so.6.0.36`.
+It detected an H100 NVL MIG 1g.12gb device with 10.64 GiB free. Science did not
+start: SWarp configuration could not link `ffopen` from CFITSIO. The compiler's
+detailed configuration log must be retained before diagnosing this failure.
+
+The next implementation passes 137 focused field tests with 10 device skips.
+PSF-aware tiled residual training matches full predictions and gradients for
+all four loss reductions tested. A CPU saved-tensor check measured 91,624 bytes
+for both 40- and 80-row tiled images versus 1,892,572 bytes for the 80-row full
+image. This measures saved activations, not process/GPU peak memory. Structured
+noise and learned-variance losses still require full-observation evaluation;
+recomputation for those losses remains unfinished. Pixel-only sampling now
+rejects PSF or non-center quadrature settings it previously failed to honor.
+
+The measured-passband adapter preserves calibration metadata and rescales
+errors, variances and background planes consistently. It explicitly assumes
+constant-I_nu photon-response normalization, numerically checked against an
+analytic band integral. Matching the actual CRDS photometric reference-spectrum
+convention remains required before claiming calibrated colors. The misleading
+background option `plane` is replaced by `none`; a real independently fitted
+plane remains separate work. Frozen calibration can use stationary or adaptive
+families and derives numerical normalization from training exposures only.
 
 Recovered inputs: aligned 135, CAL 135, CRF 27, matching manifest filenames.
 Independent calibration evidence is at

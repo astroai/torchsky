@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -22,7 +23,12 @@ from ..operators.bundle import (
     ObservationOperatorBundle,
     field_observation_operator_bundle,
 )
-from ..operators.psf import LearnedPSFOp, apply_psf_spec, apply_psf_variance_spec
+from ..operators.psf import (
+    LearnedPSFOp,
+    apply_psf_spec,
+    apply_psf_variance_spec,
+    psf_support_radius,
+)
 from ..exposure_pose import ExposurePose
 
 from .bandpass import (
@@ -39,6 +45,7 @@ from .forwarding import (
 from .observation_ops import (
     apply_exposure_pose_to_sky_grid as _apply_exposure_pose_to_sky_grid,
     coordinate_grid as _coordinate_grid,
+    crop_field_observation as _crop_field_observation,
     header_shape as _header_shape,
     observation_pixel_to_world as _observation_pixel_to_world,
 )
@@ -73,6 +80,100 @@ def _spatial_quadrature_nodes(
             for offset_x in (-offset, offset)
         )
     raise ValueError(f"unsupported spatial_sampling {spatial_sampling!r}")
+
+
+def _validate_pixel_response(
+    observation: FieldObservation, spatial_sampling: FieldSpatialSampling,
+    operator_bundle: ObservationOperatorBundle | None = None,
+) -> None:
+    bundle = _resolve_operator_bundle(observation, operator_bundle)
+    if (
+        bundle.psf is not None
+        and observation.psf_spec is not None
+        and observation.psf_spec.pixel_response_included is True
+        and spatial_sampling != "center"
+    ):
+        raise ValueError(
+            "PSF already includes pixel response; use spatial_sampling='center'"
+        )
+
+
+def iter_field_observation_tiles(
+    model: nn.Module,
+    observation: FieldObservation,
+    *,
+    spatial_tile_hw: tuple[int, int],
+    **render_kwargs: Any,
+) -> Iterator[tuple[slice, slice, Tensor]]:
+    """Yield native detector cores rendered with their exact finite PSF margins.
+
+    Keyword arguments match :func:`render_field_observation`. Spectral draws are
+    shared across tiles. Consume and backward each core before requesting the
+    next to bound saved activations; assembling a differentiable full image still
+    retains every core's graph. Input/output storage itself remains proportional
+    to image size. Discrete convolution is unchanged, not a certification of an
+    optical PSF or subpixel accuracy.
+    """
+    tile_h, tile_w = _validate_spatial_tile_hw(spatial_tile_hw)
+    bundle = _resolve_operator_bundle(observation, render_kwargs.get("operator_bundle"))
+    if isinstance(bundle.psf, LearnedPSFOp):
+        size = getattr(bundle.psf.model, "kernel_size", None)
+        if size is None or int(size) <= 0 or int(size) % 2 != 1:
+            raise ValueError("tiled learned PSF requires an explicit odd kernel_size")
+        halo_y = halo_x = int(size) // 2
+    elif bundle.psf is None:
+        halo_y = halo_x = 0
+    else:
+        if (
+            observation.psf_spec is not None
+            and observation.psf_spec.mode == "learned_lowrank"
+        ):
+            raise ValueError(
+                "tiled learned_lowrank PSF requires globally indexed cell geometry"
+            )
+        halo_y, halo_x = psf_support_radius(observation.psf_spec)
+    device = next((p.device for p in model.parameters()), default_compute_device())
+    if (
+        render_kwargs.get("override_wavelengths") is None
+        and render_kwargs.get("override_weights") is None
+    ):
+        sampling = render_kwargs.get("spectral_sampling", "deterministic_quadrature")
+        count = render_kwargs.get("num_spectral_samples", 9)
+        if sampling == "deterministic_quadrature":
+            wavelengths, weights = _bandpass_quadrature(
+                observation, num_spectral_samples=count, device=device
+            )
+        elif sampling == "bandpass_mc":
+            wavelengths, weights = _bandpass_mc_samples(
+                observation,
+                num_spectral_samples=count,
+                device=device,
+                proposal_grid_size=render_kwargs.get("spectral_sampling_grid_size"),
+                generator=render_kwargs.get("generator"),
+            )
+        else:
+            raise ValueError(
+                "mixture_mc tiles require shared override wavelengths and weights"
+            )
+        render_kwargs.update(override_wavelengths=wavelengths, override_weights=weights)
+    height, width = map(int, observation.image.shape)
+    for y0, y1, x0, x1 in _iter_spatial_tiles(height, width, tile_h, tile_w):
+        hy0, hy1 = max(y0 - halo_y, 0), min(y1 + halo_y, height)
+        hx0, hx1 = max(x0 - halo_x, 0), min(x1 + halo_x, width)
+        cropped = _crop_field_observation(
+            observation,
+            x0=hx0,
+            y0=hy0,
+            width=hx1 - hx0,
+            height=hy1 - hy0,
+        )
+        prediction = render_field_observation(model, cropped, **render_kwargs)
+        yield (
+            slice(y0, y1),
+            slice(x0, x1),
+            prediction[y0 - hy0 : y1 - hy0, x0 - hx0 : x1 - hx0],
+        )
+        del prediction, cropped
 
 
 def _tile_world_coordinate_grid(
@@ -413,6 +514,7 @@ def render_field_observation_distribution(
     exposure_pose: ExposurePose | None = None,
     operator_bundle: ObservationOperatorBundle | None = None,
 ) -> tuple[Tensor, Tensor]:
+    _validate_pixel_response(observation, spatial_sampling, operator_bundle)
     image = observation.image
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
@@ -663,6 +765,32 @@ def render_field_observation(
     exposure_pose: ExposurePose | None = None,
     operator_bundle: ObservationOperatorBundle | None = None,
 ) -> Tensor:
+    _validate_pixel_response(observation, spatial_sampling, operator_bundle)
+    if spatial_tile_hw is not None:
+        rendered = None
+        for ys, xs, prediction in iter_field_observation_tiles(
+            model,
+            observation,
+            spatial_tile_hw=spatial_tile_hw,
+            num_spectral_samples=num_spectral_samples,
+            spectral_sampling=spectral_sampling,
+            spectral_sampling_grid_size=spectral_sampling_grid_size,
+            generator=generator,
+            override_wavelengths=override_wavelengths,
+            override_weights=override_weights,
+            spatial_sampling=spatial_sampling,
+            use_func_vmap=use_func_vmap,
+            func_vmap_chunk=func_vmap_chunk,
+            forward_context=forward_context,
+            exposure_pose=exposure_pose,
+            operator_bundle=operator_bundle,
+        ):
+            if rendered is None:
+                rendered = prediction.new_empty(observation.image.shape)
+            rendered[ys, xs] = prediction
+        if rendered is None:
+            raise ValueError("field observation must have nonempty spatial dimensions")
+        return rendered
     image = observation.image
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")

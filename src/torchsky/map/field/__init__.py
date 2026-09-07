@@ -119,6 +119,7 @@ from .core import (
 )
 from .rendering import (
     evaluate_field_coordinates_vmapped,
+    iter_field_observation_tiles,
     render_field_cube,
     render_field_cube_via_healpix,
     render_field_healpix,
@@ -335,6 +336,7 @@ __all__ = [
     "render_field_cube_via_healpix",
     "render_field_healpix",
     "render_field_observation",
+    "iter_field_observation_tiles",
     "render_field_observation_distribution",
     "render_diffuse_foam_hybrid_observation_exact",
     "render_spectral_power_foam_observation_exact",

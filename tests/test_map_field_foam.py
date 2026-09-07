@@ -472,6 +472,49 @@ def test_polygon_disk_candidate_csr_matches_disk_aabb_oracle() -> None:
     assert result.indices.numel() < result.total_pairs
 
 
+def test_polygon_disk_candidate_limit_applies_after_duplicate_bin_hits() -> None:
+    polygons = torch.tensor(
+        [
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            [[2.0, 0.0], [3.0, 0.0], [3.0, 1.0], [2.0, 1.0]],
+        ],
+        dtype=torch.float64,
+    )
+    sites = torch.tensor([[1.5, 0.5]], dtype=torch.float64)
+    radii = torch.tensor([2.0], dtype=torch.float64)
+    result = polygon_disk_candidate_csr(
+        polygons, sites, radii, bin_size=0.25, max_candidate_pairs=2
+    )
+    assert result.raw_candidate_pairs > 2
+    assert result.indptr.tolist() == [0, 1, 2]
+    assert result.indices.tolist() == [0, 0]
+    with pytest.raises(ValueError, match="max_candidate_pairs"):
+        polygon_disk_candidate_csr(
+            polygons, sites, radii, bin_size=0.25, max_candidate_pairs=1
+        )
+
+
+def test_streamed_polygon_candidates_match_randomized_disk_aabb_oracle() -> None:
+    generator = torch.Generator().manual_seed(207)
+    for _ in range(4):
+        lower = torch.rand((18, 2), generator=generator, dtype=torch.float64) * 3 - 1
+        upper = lower + 0.4
+        polygons = torch.stack(
+            (lower, torch.stack((upper[:, 0], lower[:, 1]), -1), upper,
+             torch.stack((lower[:, 0], upper[:, 1]), -1)), dim=1
+        )
+        sites = torch.rand((13, 2), generator=generator, dtype=torch.float64) * 3 - 1
+        radii = torch.rand(13, generator=generator, dtype=torch.float64) * 0.8
+        closest = torch.minimum(torch.maximum(sites[None], lower[:, None]), upper[:, None])
+        expected = ((sites[None] - closest).square().sum(-1) <= radii.square()).nonzero()
+        result = polygon_disk_candidate_csr(
+            polygons, sites, radii, bin_size=0.1, max_candidate_pairs=max(len(expected), 1)
+        )
+        assert result.raw_candidate_pairs > max(len(expected), 1)
+        torch.testing.assert_close(result.polygon_ids, expected[:, 0])
+        torch.testing.assert_close(result.indices, expected[:, 1])
+
+
 def test_tile_disk_candidate_csr_closed_boundaries_and_wide_support() -> None:
     sites = torch.tensor(
         [

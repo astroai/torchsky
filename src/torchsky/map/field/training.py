@@ -65,6 +65,7 @@ from .observation_ops import (
 )
 from .quality import _aggregate_quality_metrics, field_image_quality_metrics
 from .rendering import (
+    iter_field_observation_tiles,
     render_field_observation,
     render_field_observation_distribution,
     render_field_samples,
@@ -683,9 +684,7 @@ def _compute_full_observation_losses(
         if loss_kind == "structured_nll":
             weight_sum = valid.sum().to(dtype=pred.dtype)
             weighted_loss = (
-                _structured_noise_loss(
-                    observation, observation_bundle, residual, valid
-                )
+                _structured_noise_loss(observation, observation_bundle, residual, valid)
                 * weight_sum
             )
         else:
@@ -949,9 +948,7 @@ def fit_field_model(
             )
         recursive_args = fit_call_args
         recursive_args["amp_dtype"] = f"_active_{amp_name}"
-        autocast_dtype = (
-            torch.float16 if amp_name == "float16" else torch.bfloat16
-        )
+        autocast_dtype = torch.float16 if amp_name == "float16" else torch.bfloat16
         with torch.autocast(
             device_type="cuda",
             dtype=autocast_dtype,
@@ -962,9 +959,7 @@ def fit_field_model(
     elif amp_name in {"_active_float16", "_active_bfloat16"}:
         active_amp_name = amp_name.removeprefix("_active_")
     else:
-        raise ValueError(
-            "amp_dtype must be 'none', 'float16', or 'bfloat16'"
-        )
+        raise ValueError("amp_dtype must be 'none', 'float16', or 'bfloat16'")
     train_device = resolve_fit_device(model, device)
     amp_active = active_amp_name is not None
     amp_scaler = (
@@ -1004,6 +999,35 @@ def fit_field_model(
     if len(obs_operator_bundles) != len(observations):
         raise ValueError(
             "observation_operator_bundles must have the same length as observations"
+        )
+    streamed_tiles = streaming_accumulation and render_spatial_tile_hw is not None
+    pixel_sample_count = int(pixel_samples_per_observation or 0)
+    if pixel_sample_count < 0:
+        raise ValueError("pixel_samples_per_observation must be non-negative")
+    if streamed_tiles and diagnostic_spatial_tile_hw is None:
+        diagnostic_spatial_tile_hw = render_spatial_tile_hw
+    if pixel_sample_count > 0 and (
+        spatial_sampling != "center"
+        or any(bundle.psf is not None for bundle in obs_operator_bundles)
+    ):
+        raise ValueError(
+            "pixel-sampled fitting requires center sampling without a PSF; "
+            "use streamed spatial tiles to retain pixel integration and PSF response"
+        )
+    if streamed_tiles and (
+        loss_kind in {"structured_nll", "gaussian_nll"}
+        or gradient_residual_weight > 0
+        or pixel_sample_count > 0
+        or (context_observations_per_step > 0 and context_loss_weight > 0)
+        or (spectral_anchor_observations_per_step > 0 and spectral_anchor_loss_weight > 0)
+        or bool(component_anchor_terms)
+        or bool(component_centroid_anchor_terms)
+    ):
+        raise ValueError(
+            "streamed spatial tiles currently support fixed-weight residual losses; "
+            "structured_nll, learned gaussian_nll, gradient residuals, pixel sampling, "
+            "context and anchor losses "
+            "require the full-observation path"
         )
     if loss_kind == "structured_nll":
         incompatible = (
@@ -1214,11 +1238,6 @@ def fit_field_model(
     smoothness_weight = max(float(spatial_smoothness_weight), 0.0)
     smoothness_grid_size = max(int(spatial_smoothness_grid_size), 2)
     patches_per_observation = max(int(training_patches_per_observation), 1)
-    pixel_sample_count = (
-        max(int(pixel_samples_per_observation), 1)
-        if pixel_samples_per_observation is not None
-        else 0
-    )
     uncropped_count = max(int(full_observations_per_step), 0)
     context_count = max(int(context_observations_per_step), 0)
     context_pool = max(int(context_downsample_factor), 1)
@@ -1234,7 +1253,9 @@ def fit_field_model(
         or hybrid_sparsity_weight < 0.0
         or hybrid_separation_weight < 0.0
     ):
-        raise ValueError("hybrid regularization weights must be finite and non-negative")
+        raise ValueError(
+            "hybrid regularization weights must be finite and non-negative"
+        )
     if (
         hybrid_sparsity_weight > 0.0 or hybrid_separation_weight > 0.0
     ) and not isinstance(model, DiffuseFoamHybridField):
@@ -1469,9 +1490,7 @@ def fit_field_model(
             ]
         ] = []
         if context_count > 0 and context_weight > 0.0:
-            context_epoch_steps = max(
-                math.ceil(len(observations) / context_count), 1
-            )
+            context_epoch_steps = max(math.ceil(len(observations) / context_count), 1)
             context_indices = _sample_observation_indices(
                 observations,
                 observations_per_step=context_count,
@@ -1555,6 +1574,62 @@ def fit_field_model(
             # slices; tile them when the caller asks for bounded activations.
             if render_spatial_tile_hw is not None:
                 render_kwargs["spatial_tile_hw"] = render_spatial_tile_hw
+            if streamed_tiles:
+                band_key = (
+                    observation.spectral_min,
+                    observation.spectral_max,
+                    observation.wavelength,
+                    observation.band_name,
+                )
+                if loss_reduction == "per_observation":
+                    inverse_denominator = 1.0 / max(
+                        _observation_weight_sum_scalar(observation), 1e-8
+                    )
+                elif loss_reduction == "per_band":
+                    inverse_denominator = 1.0 / max(
+                        selected_band_weight_sum.get(band_key, 0.0), 1e-8
+                    )
+                elif loss_reduction == "global":
+                    inverse_denominator = 1.0 / max(
+                        float(selected_global_weight_sum or 0.0), 1e-8
+                    )
+                elif loss_reduction == "band_global_mix":
+                    inverse_denominator = 0.5 * (
+                        1.0 / max(selected_band_weight_sum.get(band_key, 0.0), 1e-8)
+                        + 1.0 / max(float(selected_global_weight_sum or 0.0), 1e-8)
+                    )
+                else:
+                    raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
+                support = _observation_support_mask(observation)
+                for ys, xs, prediction in iter_field_observation_tiles(
+                    model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                    spatial_sampling=spatial_sampling,
+                    **render_kwargs,
+                ):
+                    valid_tile = support[ys, xs].to(device=prediction.device)
+                    data_tile = observation.image[ys, xs].to(prediction)
+                    residual_tile = torch.where(valid_tile, prediction - data_tile, 0.0)
+                    weight_tile = (
+                        torch.ones_like(prediction)
+                        if observation.weight is None
+                        else observation.weight[ys, xs].to(prediction)
+                    )
+                    weight_tile = torch.where(valid_tile, weight_tile, 0.0)
+                    tile_loss = (
+                        weight_tile
+                        * _field_residual_loss(
+                            residual_tile,
+                            loss_kind=loss_kind,
+                            charbonnier_eps=charbonnier_eps,
+                            huber_delta=huber_delta,
+                        )
+                    ).sum() * inverse_denominator
+                    streamed_total_loss += float(tile_loss.detach().cpu())
+                    _backward(tile_loss)
+                    del prediction, tile_loss, residual_tile, data_tile, weight_tile
+                continue
             if pixel_sample_count > 0 and observation_bundle.psf is None:
                 sampled = _sample_observation_pixels(
                     observation,
@@ -2197,9 +2272,7 @@ def fit_field_model(
             if amp_scaler is not None and amp_scaler.is_enabled():
                 amp_scaler.unscale_(optimizer)
             if grad_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    trainable_params, float(grad_clip_norm)
-                )
+                torch.nn.utils.clip_grad_norm_(trainable_params, float(grad_clip_norm))
             if amp_scaler is not None and amp_scaler.is_enabled():
                 scale_before = float(amp_scaler.get_scale())
                 amp_scaler.step(optimizer)
@@ -2335,9 +2408,7 @@ def fit_field_model(
         operator_bundle=operator_bundle,
         observation_operator_bundles=obs_operator_bundles,
         optimizer_state=optimizer.state_dict(),
-        amp_scaler_state=(
-            amp_scaler.state_dict() if amp_scaler is not None else None
-        ),
+        amp_scaler_state=(amp_scaler.state_dict() if amp_scaler is not None else None),
         sampling_rng_state=sampling_generator.get_state(),
         completed_steps=int(steps),
         _pre_train_loss=pre_train_loss,

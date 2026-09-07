@@ -160,7 +160,9 @@ def persistent_foam_site_initialization(
         positive_count.add_((covered & (exposure_mean > 0.0)).to(dtype=torch.int64))
 
     coherent_mean = signed_sum / torch.clamp(covered_count, min=1).to(dtype=dtype)
-    scores = covered_count.to(dtype=dtype) * torch.clamp_min(coherent_mean, 0.0).square()
+    scores = (
+        covered_count.to(dtype=dtype) * torch.clamp_min(coherent_mean, 0.0).square()
+    )
     valid_ids = torch.nonzero(
         (positive_count >= required_exposures) & (scores > 0.0),
         as_tuple=False,
@@ -176,14 +178,13 @@ def persistent_foam_site_initialization(
     step = (upper_t - lower_t) / torch.tensor(
         [bins_x, bins_y], device=device, dtype=dtype
     )
-    sites = lower_t + (
-        torch.stack([selected_x, selected_y], dim=-1).to(dtype=dtype) + 0.5
-    ) * step
+    sites = (
+        lower_t
+        + (torch.stack([selected_x, selected_y], dim=-1).to(dtype=dtype) + 0.5) * step
+    )
     return PersistentFoamSiteInitialization(
         sites=sites,
-        radii=torch.full(
-            (requested_sites,), radius, device=device, dtype=dtype
-        ),
+        radii=torch.full((requested_sites,), radius, device=device, dtype=dtype),
         scores=scores[selected],
         exposure_counts=positive_count[selected],
         bin_ids=selected,
@@ -1132,13 +1133,14 @@ def solve_spectral_power_pixel_affine_least_squares(
         [None] * observation_count if pixel_matvecs is None else list(pixel_matvecs)
     )
     adjoints = (
-        [None] * observation_count
-        if pixel_rmatvecs is None
-        else list(pixel_rmatvecs)
+        [None] * observation_count if pixel_rmatvecs is None else list(pixel_rmatvecs)
     )
     if len(forwards) != observation_count or len(adjoints) != observation_count:
         raise ValueError("pixel transforms must match operators")
-    if any((forward is None) != (adjoint is None) for forward, adjoint in zip(forwards, adjoints, strict=True)):
+    if any(
+        (forward is None) != (adjoint is None)
+        for forward, adjoint in zip(forwards, adjoints, strict=True)
+    ):
         raise ValueError("pixel forward and adjoint must be supplied in pairs")
 
     first = operators[0]
@@ -1188,10 +1190,7 @@ def solve_spectral_power_pixel_affine_least_squares(
     if batch_size <= 0:
         raise ValueError("observation_batch_size must be positive")
     for operator, values, weight in zip(operators, pixel_values, weights, strict=True):
-        if (
-            operator.cell_count != cells
-            or operator.areas.dtype != first.areas.dtype
-        ):
+        if operator.cell_count != cells or operator.areas.dtype != first.areas.dtype:
             raise ValueError("operators must share cell count and dtype")
         if (
             not values.is_floating_point()
@@ -1207,7 +1206,9 @@ def solve_spectral_power_pixel_affine_least_squares(
             or not bool(torch.isfinite(weight).all())
             or bool(torch.any(weight < 0))
         ):
-            raise ValueError("pixel weights must be finite, non-negative, and match values")
+            raise ValueError(
+                "pixel weights must be finite, non-negative, and match values"
+            )
     penalty = float(ridge)
     threshold = float(tolerance)
     iterations = int(max_iterations)
@@ -1218,9 +1219,7 @@ def solve_spectral_power_pixel_affine_least_squares(
     if iterations <= 0:
         raise ValueError("max_iterations must be positive")
     if preconditioner not in ("diagonal", "cell_block", "auto"):
-        raise ValueError(
-            "preconditioner must be 'diagonal', 'cell_block', or 'auto'"
-        )
+        raise ValueError("preconditioner must be 'diagonal', 'cell_block', or 'auto'")
     if preconditioner_max_bytes is not None and preconditioner_max_bytes <= 0:
         raise ValueError("preconditioner_max_bytes must be positive")
 
@@ -1249,9 +1248,7 @@ def solve_spectral_power_pixel_affine_least_squares(
     gradient_diagonal = torch.zeros(
         (cells, basis_count, 2), dtype=first.areas.dtype, device=device
     )
-    block_storage_bytes = (
-        cells * (3 * basis_count) ** 2 * first.areas.element_size()
-    )
+    block_storage_bytes = cells * (3 * basis_count) ** 2 * first.areas.element_size()
     response_condition = torch.linalg.cond(basis_on_device)
     # ponytail: cap automatic block construction at 512 MiB and 10% of free
     # CUDA memory; replace this heuristic with allocator telemetry if real
@@ -1316,9 +1313,7 @@ def solve_spectral_power_pixel_affine_least_squares(
             )
             basis_square = basis.square()
             value_diagonal += value_base[:, None] * basis_square[None, :]
-            gradient_diagonal += (
-                gradient_base[:, None, :] * basis_square[None, :, None]
-            )
+            gradient_diagonal += gradient_base[:, None, :] * basis_square[None, :, None]
             if block_normal is not None:
                 spatial_features = torch.cat(
                     (
@@ -1385,12 +1380,8 @@ def solve_spectral_power_pixel_affine_least_squares(
     def apply_preconditioner(residual: Tensor) -> Tensor:
         if block_cholesky is None:
             return residual / diagonal_preconditioner
-        coefficient_residual = residual[:coefficient_size].reshape(
-            cells, basis_count
-        )
-        gradient_residual = residual[coefficient_size:].reshape(
-            cells, basis_count, 2
-        )
+        coefficient_residual = residual[:coefficient_size].reshape(cells, basis_count)
+        gradient_residual = residual[coefficient_size:].reshape(cells, basis_count, 2)
         local_residual = torch.cat(
             (coefficient_residual[:, :, None], gradient_residual), dim=2
         ).reshape(cells, 3 * basis_count)
@@ -1518,9 +1509,7 @@ def solve_spectral_power_pixel_affine_least_squares(
                 "iterations": float(completed_iterations),
                 "normal_operator_applications": float(normal_operator_applications),
                 "initial_relative_residual": float(initial_relative_residual),
-                "ridge_centered_on_initial": float(
-                    initial_coefficients is not None
-                ),
+                "ridge_centered_on_initial": float(initial_coefficients is not None),
                 "relative_residual": float(relative_residual),
                 "converged": float(relative_residual <= threshold),
                 "preconditioner_setup_seconds": setup_seconds,
@@ -1528,9 +1517,7 @@ def solve_spectral_power_pixel_affine_least_squares(
                 "initial_residual_seconds": initial_residual_seconds,
                 "pcg_seconds": pcg_seconds,
                 "preconditioner_cell_block": float(block_cholesky is not None),
-                "preconditioner_block_fallback_cells": float(
-                    block_fallback_cells
-                ),
+                "preconditioner_block_fallback_cells": float(block_fallback_cells),
                 "preconditioner_auto": float(preconditioner == "auto"),
                 "preconditioner_response_condition": float(response_condition),
                 "preconditioner_auto_condition_threshold": 2.0,
@@ -1546,9 +1533,7 @@ def solve_spectral_power_pixel_affine_least_squares(
                 ),
                 "observation_batch_size": float(batch_size),
                 "observation_batch_auto": float(batch_auto),
-                "observation_batch_transfer_budget_bytes": float(
-                    transfer_budget_bytes
-                ),
+                "observation_batch_transfer_budget_bytes": float(transfer_budget_bytes),
                 "max_observation_transfer_bytes": float(max_observation_bytes),
                 "operator_storage_bytes": float(
                     sum(operator.storage_bytes for operator in operators)
@@ -1867,7 +1852,9 @@ class SpectralPowerFoam(torch.nn.Module):
             or contribution.numel() != sample_count
             or coords.shape[0] != sample_count
         ):
-            raise ValueError("adaptation statistic samples must be non-empty and aligned")
+            raise ValueError(
+                "adaptation statistic samples must be non-empty and aligned"
+            )
         if (
             bool(torch.any(indices < 0))
             or bool(torch.any(indices >= self.sites.shape[0]))
@@ -1885,12 +1872,8 @@ class SpectralPowerFoam(torch.nn.Module):
             dtype=self.sites.dtype,
         ).index_add_(0, indices, torch.ones_like(residual))
         residual_energy = residual.square()
-        residual_sum = torch.zeros_like(counts).index_add_(
-            0, indices, residual_energy
-        )
-        contribution_sum = torch.zeros_like(counts).index_add_(
-            0, indices, contribution
-        )
+        residual_sum = torch.zeros_like(counts).index_add_(0, indices, residual_energy)
+        contribution_sum = torch.zeros_like(counts).index_add_(0, indices, contribution)
         weighted_position = torch.zeros_like(self.residual_position_ema).index_add_(
             0,
             indices,
@@ -2081,9 +2064,7 @@ class SpectralPowerFoam(torch.nn.Module):
 
 def _rank_cell_ids(scores: Tensor, eligible: Tensor, *, descending: bool) -> Tensor:
     cell_ids = torch.nonzero(eligible, as_tuple=False).flatten()
-    return cell_ids[
-        torch.argsort(scores[cell_ids], descending=descending, stable=True)
-    ]
+    return cell_ids[torch.argsort(scores[cell_ids], descending=descending, stable=True)]
 
 
 def _replace_optimizer_parameter(
@@ -2185,9 +2166,9 @@ def adapt_spectral_power_foam(
 
     updated = model.evidence_updates >= required_updates
     split_radii = model.radii.detach() / math.sqrt(2.0)
-    movable = torch.any(
-        model.residual_position_ema != model.sites.detach(), dim=-1
-    ) & (split_radii > model._minimum_radius)
+    movable = torch.any(model.residual_position_ema != model.sites.detach(), dim=-1) & (
+        split_radii > model._minimum_radius
+    )
     densify_ranked = _rank_cell_ids(
         model.heldout_residual_ema,
         updated & movable,
@@ -2721,7 +2702,8 @@ def polygon_disk_candidate_csr(
     Polygon and disk AABBs are joined through a uniform grid, then candidate
     pairs that fail the exact disk/AABB intersection predicate are removed.
     The result can contain false positives for rotated polygons, but it cannot
-    omit a disk that intersects a polygon.
+    omit a disk that intersects a polygon. ``max_candidate_pairs`` bounds both
+    each temporary join and the retained result, not duplicate hits across bins.
     """
     _validate_sites_and_radii(sites, radii, allow_empty=True)
     if sites.shape[1] != 2:
@@ -2855,24 +2837,70 @@ def polygon_disk_candidate_csr(
         }
         pair_pixels: list[Tensor] = []
         pair_sites: list[Tensor] = []
-        raw_count = 0
-        for key, start, count in zip(
-            unique_polygon_keys.tolist(),
-            polygon_starts.tolist(),
-            polygon_counts.tolist(),
-            strict=True,
-        ):
+        polygon_groups = list(
+            zip(
+                unique_polygon_keys.tolist(),
+                polygon_starts.tolist(),
+                polygon_counts.tolist(),
+                strict=True,
+            )
+        )
+        raw_count = sum(
+            int(count) * site_groups[int(key)][1]
+            for key, _, count in polygon_groups
+            if int(key) in site_groups
+        )
+        stream_join = raw_count > candidate_limit
+        retained_count = 0
+        if stream_join:
+            polygon_first_bin = torch.floor((polygon_lower - origin) / width).long()
+            site_first_bin = torch.floor((site_lower - origin) / width).long()
+        for key, start, count in polygon_groups:
             site_group = site_groups.get(int(key))
             if site_group is None:
                 continue
             site_start, site_count_in_bin = site_group
             group_count = int(count) * site_count_in_bin
-            raw_count += group_count
-            if raw_count > candidate_limit:
-                raise ValueError(
-                    f"uniform-grid join needs {raw_count} raw candidate pairs, "
-                    f"exceeding max_candidate_pairs={candidate_limit}"
-                )
+            if stream_join:
+                for offset in range(0, group_count, candidate_limit):
+                    local = torch.arange(
+                        offset,
+                        min(offset + candidate_limit, group_count),
+                        device=sites.device,
+                    )
+                    pixels = polygon_ids[
+                        int(start)
+                        + torch.div(local, site_count_in_bin, rounding_mode="floor")
+                    ]
+                    disks = site_ids[
+                        site_start + torch.remainder(local, site_count_in_bin)
+                    ]
+                    # Each AABB pair belongs to its lexically first shared bin.
+                    # This removes duplicate bin hits before retaining any pairs.
+                    first = (
+                        torch.maximum(polygon_first_bin[pixels], site_first_bin[disks])
+                        - min_bins
+                    )
+                    owned = first[:, 1] * columns + first[:, 0] == int(key)
+                    pixels, disks = pixels[owned], disks[owned]
+                    closest = torch.minimum(
+                        torch.maximum(index_sites[disks], polygon_lower[pixels]),
+                        polygon_upper[pixels],
+                    )
+                    intersects = (index_sites[disks] - closest).square().sum(
+                        dim=1
+                    ) <= index_radii[disks].square()
+                    pixels, disks = pixels[intersects], disks[intersects]
+                    retained_count += pixels.numel()
+                    if retained_count > candidate_limit:
+                        raise ValueError(
+                            f"polygon/disk result needs {retained_count} candidate pairs, "
+                            f"exceeding max_candidate_pairs={candidate_limit}"
+                        )
+                    if pixels.numel():
+                        pair_pixels.append(pixels)
+                        pair_sites.append(disks)
+                continue
             pair_pixels.append(
                 polygon_ids[int(start) : int(start) + int(count)].repeat_interleave(
                     site_count_in_bin

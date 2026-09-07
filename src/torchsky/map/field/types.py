@@ -178,6 +178,13 @@ class PSFSpec:
     cell_u_pix: Tensor | None = None
     cell_lam_norm: float = 0.5
     frozen: bool = True
+    pixel_response_included: bool | None = None
+    """Whether the calibrated kernel already includes detector pixel response.
+
+    True requires center sampling; another pixel quadrature would integrate twice.
+    False records an optical-only kernel; None leaves legacy calibration unknown.
+    This metadata does not certify the accuracy of discrete detector-grid convolution.
+    """
 
     @classmethod
     def gaussian(cls, sigma_pix: float) -> "PSFSpec":
@@ -207,6 +214,10 @@ class PSFSpec:
         )
 
     def __post_init__(self) -> None:
+        if self.pixel_response_included is not None and not isinstance(
+            self.pixel_response_included, bool
+        ):
+            raise TypeError("pixel_response_included must be bool or None")
         if self.mode == "none":
             return
         if self.mode == "gaussian_sigma_pix":
@@ -271,6 +282,7 @@ class PSFSpec:
             cell_u_pix=cells,
             cell_lam_norm=float(self.cell_lam_norm),
             frozen=bool(self.frozen),
+            pixel_response_included=self.pixel_response_included,
         )
 
 

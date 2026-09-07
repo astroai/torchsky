@@ -105,6 +105,15 @@ gate() {
   fi
 }
 
+if [[ "${mode}" == "comparator-build" ]]; then
+  # A CPU-only build diagnostic uses the same locked environment as science.
+  export ARTIFACT_ROOT="${artifact_root}"
+  build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}
+  run pixi_run "${build_env}" python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
+    --tool swarp --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
+  exit 0
+fi
+
 # --- scene-representation zoo (FIELD_MODELS) --------------------------------
 field_models=${FIELD_MODELS:-spectral_power_foam}
 IFS=',' read -r -a field_model_list <<< "${field_models}"
@@ -165,11 +174,11 @@ case "${PSF_MODEL:-fitted_gaussian}" in
     exit 2
     ;;
 esac
-case "${BACKGROUND_MODEL:-plane}" in
-  plane) background_model=plane ;;
+case "${BACKGROUND_MODEL:-none}" in
+  none) background_model=none ;;
   learned) background_model=learned ;;
   *)
-    echo "BACKGROUND_MODEL must be plane or learned, got: ${BACKGROUND_MODEL}" >&2
+    echo "BACKGROUND_MODEL must be none or learned, got: ${BACKGROUND_MODEL}" >&2
     exit 2
     ;;
 esac

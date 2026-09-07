@@ -61,9 +61,7 @@ for _band in NIRCAM_UPDEC_BANDS:
         "spectral_max_angstrom": _metadata.half_power_max_angstrom,
         "transmission_sigma_angstrom": _half_power_width / 2.354820045,
         "detector_pixel_scale_arcsec": _metadata.detector_pixel_scale_arcsec,
-        "detector_nyquist_period_arcsec": (
-            _metadata.detector_nyquist_period_arcsec
-        ),
+        "detector_nyquist_period_arcsec": (_metadata.detector_nyquist_period_arcsec),
         "simulated_psf_fwhm_arcsec": _metadata.simulated_psf_fwhm_arcsec,
         "empirical_psf_fwhm_arcsec": _metadata.empirical_psf_fwhm_arcsec,
     }
@@ -147,6 +145,7 @@ def _field_observation_kwargs_for_band(
     band: str,
     *,
     observation_mode: str = "bandpass",
+    measured_passband_dir: Path | None = None,
 ) -> dict[str, Any]:
     spec = _band_spec(band)
     mode = str(observation_mode).lower()
@@ -154,6 +153,42 @@ def _field_observation_kwargs_for_band(
         raise ValueError(
             "observation_mode must be one of {'bandpass', 'exact_wavelength'}"
         )
+    if measured_passband_dir is not None:
+        if mode != "bandpass":
+            raise ValueError("measured passbands require bandpass observation mode")
+        path = Path(measured_passband_dir) / f"JWST_NIRCam2025.{band.upper()}.npz"
+        with np.load(path, allow_pickle=False) as payload:
+            wavelength = np.asarray(payload["wavelength_angstrom"], dtype=np.float64)
+            throughput = np.asarray(payload["transmission"], dtype=np.float64)
+            if str(payload["filter_id"].item()) != f"JWST/NIRCam2025.{band.upper()}":
+                raise ValueError(f"passband identity does not match {band}: {path}")
+        if (
+            wavelength.ndim != 1
+            or wavelength.size < 2
+            or throughput.shape != wavelength.shape
+            or not np.all(np.isfinite(wavelength))
+            or not np.all(np.isfinite(throughput))
+            or not np.all(wavelength > 0)
+            or not np.all(np.diff(wavelength) > 0)
+            or np.any(throughput < 0)
+            or not np.any(throughput > 0)
+        ):
+            raise ValueError(f"invalid measured passband: {path}")
+        # Photon counts from I_nu are proportional to integral I_nu T/lambda dLambda.
+        # This is a constant-I_nu reference convention, not a PHOTMJSR color correction.
+        return {
+            "wavelength": float(spec["wavelength_angstrom"]),
+            "spectral_min": float(wavelength[0]),
+            "spectral_max": float(wavelength[-1]),
+            "transmission_wavelength": torch.from_numpy(wavelength.copy()),
+            "transmission_throughput": torch.from_numpy(
+                (throughput / wavelength).copy()
+            ),
+            "band_name": band.upper(),
+            "value_unit": "MJy/sr",
+            "value_semantics": "surface_brightness",
+            "spectral_unit": "angstrom",
+        }
     if mode == "exact_wavelength":
         return {
             "wavelength": float(spec["wavelength_angstrom"]),
@@ -208,6 +243,10 @@ def _exposure_filter_band(path: Path) -> str | None:
 
 def _sci_header(path: Path) -> dict[str, Any]:
     header = dict(torchsky.get_header(str(path), "SCI"))
+    primary = dict(torchsky.get_header(str(path), 0))
+    for key in ("BUNIT", "PHOTMJSR", "PIXAR_SR", "CRDS_CTX"):
+        if key not in header and key in primary:
+            header[key] = primary[key]
     for axis in (1, 2):
         compressed_key = f"ZNAXIS{axis}"
         if compressed_key in header:
@@ -269,9 +308,7 @@ def _discover_exposure_paths(
     elif product == "aligned":
         paths = aligned_paths
     else:
-        by_exposure = {
-            path.name.removesuffix("_cal.fits"): path for path in cal_paths
-        }
+        by_exposure = {path.name.removesuffix("_cal.fits"): path for path in cal_paths}
         by_exposure.update(
             {path.name.removesuffix("_crf.fits"): path for path in crf_paths}
         )
@@ -347,9 +384,7 @@ def _best_overlap_cutout(
     window_sums = integral[size:, size:] - integral[:-size, size:]
     window_sums -= integral[size:, :-size]
     window_sums += integral[:-size, :-size]
-    best_y0, best_x0 = np.unravel_index(
-        int(np.argmax(window_sums)), window_sums.shape
-    )
+    best_y0, best_x0 = np.unravel_index(int(np.argmax(window_sums)), window_sums.shape)
     return (
         reference[best_y0 : best_y0 + size, best_x0 : best_x0 + size],
         int(best_x0),

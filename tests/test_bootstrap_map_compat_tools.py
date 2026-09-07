@@ -2,14 +2,39 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import subprocess
 from unittest.mock import patch
+
+import pytest
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from bootstrap_map_compat_tools import _swarp_build_env, main  # noqa: E402
+from bootstrap_map_compat_tools import _run, _swarp_build_env, main  # noqa: E402
+
+
+def test_failed_configure_preserves_diagnostic_and_original_error(tmp_path, capsys):
+    source = tmp_path / "swarp"
+    source.mkdir()
+    diagnostic = "checking for ffopen... no\nld: missing dependency\n"
+    (source / "config.log").write_text(diagnostic)
+    artifact_root = tmp_path / "persistent"
+    error = subprocess.CalledProcessError(1, ["./configure"])
+    with patch("bootstrap_map_compat_tools.subprocess.check_call", side_effect=error):
+        with pytest.raises(subprocess.CalledProcessError) as caught:
+            _run(["./configure"], cwd=source, env={"ARTIFACT_ROOT": str(artifact_root)})
+    assert caught.value is error
+    assert diagnostic in capsys.readouterr().out
+    assert (artifact_root / "swarp-config.log").read_text() == diagnostic
+
+
+def test_successful_configure_does_not_publish_stale_log(tmp_path, capsys):
+    (tmp_path / "config.log").write_text("stale failure")
+    with patch("bootstrap_map_compat_tools.subprocess.check_call"):
+        _run(["./configure"], cwd=tmp_path, env={})
+    assert "stale failure" not in capsys.readouterr().out
 
 
 def test_swarp_build_env_exposes_conda_shared_dependencies() -> None:
@@ -33,15 +58,10 @@ def test_swarp_build_env_exposes_conda_shared_dependencies() -> None:
     assert "-L/opt/pixi/env/lib" in env["LDFLAGS"]
     assert "-Wl,-rpath-link,/opt/pixi/env/lib" in env["LDFLAGS"]
     assert env["LD_LIBRARY_PATH"] == "/opt/pixi/env/lib:/system/lib"
-    assert (
-        env["PKG_CONFIG_PATH"]
-        == "/opt/pixi/env/lib/pkgconfig:/system/pkgconfig"
-    )
+    assert env["PKG_CONFIG_PATH"] == "/opt/pixi/env/lib/pkgconfig:/system/pkgconfig"
 
 
-def test_bootstrap_reuses_environment_swarp(
-    monkeypatch, capsys
-) -> None:
+def test_bootstrap_reuses_environment_swarp(monkeypatch, capsys) -> None:
     monkeypatch.setattr(sys, "argv", ["bootstrap", "--tool", "swarp"])
     with (
         patch(

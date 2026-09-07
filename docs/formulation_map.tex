@@ -34,6 +34,41 @@ Problem Formulation, Epistemic Assumptions, and Statistical Claim Gates}}
 We present a closed mathematical, statistical, and computational formulation for recovering optimal, ultra-deep astronomical fields from multi-epoch, multi-band imaging. The core epistemic premise is that no post-processing algorithm or neural prior can exceed the intrinsic Fisher information content of the native detector photon arrivals. However, by replacing classical lossy pipelines (resampling $\to$ stacking $\to$ detection $\to$ catalog photometry) with direct scene inference under the joint native-pixel likelihood, the method can substantially outperform existing practical estimators. We formulate sky reconstruction as a continuous inverse problem on $(\alpha, \delta, \lambda) \in \mathcal{S}^2 \times \mathbb{R}^+$, representing the non-negative latent field $I_\theta(\boldsymbol{x}, \lambda) \ge 0$ via continuous parameterizations (INRs, Riemannian tangent Gaussian Splats, and spherical Power Foams) and decomposing its projection into an identifiable passband subspace and an orthogonal, prior-regularized null space. We formulate a flexible mechanistic forward model in canonical detector electron counts $[e^-]$ that preserves geometric, radiometric, and optical invariants while learning gauge-closed deviations in passband transmission, non-stationary chromatic point-spread functions (PSFs), sub-pixel astrometric poses, time-dependent astronomical foregrounds, and instrumental rates. We catalogue a systematic inventory of 52 principal assumptions underlying the methodology, analyze population-specific expected headroom across distinct astrophysical source classes, establish an injection protocol protected against the inverse crime, and formulate rigorous statistical claim gates based on $50\%$ completeness depth ($m_{50}$) at fixed false-positive surface density, matched effective resolution, and a two-stage out-of-sample held-out exposure photon prediction test.
 \end{abstract}
 
+\section*{Scope of the September 2026 SMACS experiment}
+The count-domain model below describes possible extensions, not the likelihood
+of the current calibrated SMACS inputs. The accepted implementation plan is
+\texttt{docs/roadmap/next.md}. For this experiment the learned scene is static
+$I_\nu(\boldsymbol{x},\lambda)$ in calibrated surface-brightness units, including
+intracluster light. Exposure dependence initially belongs to the instrument and
+foreground terms, not to an unrestricted astronomical time coordinate. The
+baseline likelihood is Gaussian with calibrated error/variance planes and common
+masks. Multiplying calibrated brightness by gain does not recover raw counts.
+
+Measured throughput curves are fixed. Under a flat-$I_\nu$ photometric convention,
+dimensionless photon throughput gives the band mean
+\[
+\overline I_{\nu,b}(\boldsymbol{x}) =
+\frac{\int I_\nu(\boldsymbol{x},\lambda)T_b(\lambda)\,d\lambda/\lambda}
+     {\int T_b(\lambda)\,d\lambda/\lambda}.
+\]
+The actual calibration reference spectrum must be verified before adopting this
+normalization. Six bands constrain six band integrals; finer spectra remain
+prior-dependent. PSFs are calibrated independently and frozen across scene
+comparisons. Their metadata must state whether the pixel response is included,
+so pixel integration occurs exactly once. Nominal Gaussian kernels and
+summary-shaped passbands are approximation controls.
+
+Persistent celestial diffuse emission remains in the scene. Detector residual
+backgrounds use detector coordinates; optical foregrounds pass through the
+optical response. Background planes or neural fields require independent
+calibration evidence. Relative offsets have weighted zero mean, which does not
+fix the absolute foreground: without an external reference, diffuse brightness
+is relative to the adopted mean foreground. Numerical normalization uses training
+exposures only, rescales errors and variances consistently, and is reversed on
+export. No unrestricted variance inflation or held-out science-residual fitting
+is allowed. Hybrid spatial/spectral components remain diagnostic until separate
+recovery experiments establish physical meaning.
+
 \vspace{0.5em}
 \hrule
 \vspace{1em}
@@ -264,7 +299,7 @@ K_n(\Delta\boldsymbol{u} \mid \boldsymbol{u}, \lambda) = \mathcal{G}\big(\Delta\
 with kernel parameters $\boldsymbol{\phi} = (\sigma_x, \sigma_y, \rho)$ produced by a bilinear spatial control-grid interpolant modulated by an in-band spectral Legendre basis; positivity is enforced by construction (softplus parameterization), and the existing gauges of \S\ref{subsec:gauges} apply unchanged: unit integral $\int K\,\mathrm{d}^2\Delta\boldsymbol{u} = 1$ and zero centroid $\int \Delta\boldsymbol{u}\, K\,\mathrm{d}^2\Delta\boldsymbol{u} = \mathbf{0}$, plus a smoothness prior on $\boldsymbol{\phi}(\boldsymbol{u}, \lambda)$.
 
 \paragraph{Identifiability Decision:}
-Learned operator components are estimated \emph{only} from calibration stars (and judged on held-out validation-star negative log-likelihood) --- never jointly from scene residuals. This closes the degeneracy in which astrophysical sources are absorbed into a flexible PSF: a learned kernel that must explain unresolved structure would otherwise trade flux against the scene $\theta$. The deliberate $5\%$-wider fitted Gaussian remains in the protocol as the PSF-misspecification control arm.
+Learned PSFs are estimated from independent calibration stars and judged on held-out validation-star likelihood. Background models require independent foreground or detector-background evidence appropriate to their coordinate system. These components are frozen during scene comparisons, rather than fitted freely to scene residuals. A deliberately $5\%$-wider Gaussian is a PSF-misspecification control, not a measured effective PSF.
 
 \subsection{Instrument-Specific Native Detector Likelihoods}
 \label{subsec:likelihoods}
@@ -388,7 +423,7 @@ The scientific integrity and operational validity of this formulation depend on 
 49 & Hyperparameters and detection thresholds are frozen before blind evaluation. & Explicit & Pre-registration integrity \\
 50 & Discovered sources predict photon arrivals in held-out test dithers. & Explicit & \textbf{Decisive falsification test} \\
 51 & All benchmark methods receive identical exposures, masks, and priors. & Explicit & \textbf{Benchmark fairness} \\
-52 & Learned operator components ($\boldsymbol{\phi}$) are fitted only on calibration stars and judged on held-out validation NLL --- never jointly from scene residuals. & Explicit & \textbf{Identifiability: no source absorption into PSF} \\
+52 & PSFs use independent stars; backgrounds use independent foreground/detector evidence. Both are frozen during scene fitting and checked on validation evidence. & Explicit & \textbf{Limit source absorption into calibration terms} \\
 \end{longtable}
 \endgroup
 
@@ -561,7 +596,7 @@ A reconstruction is scientifically certified as \emph{deeper} if and only if it 
     \item \textbf{Spatial Homogeneity:}
     Depth gains must hold across at least two independent spatial quadrants, confirming that the improvement is not localized to a single favorable patch.
     \item \textbf{Model Selection on Validation Batches Only:}
-    Every $(\text{scene kind}, \text{operator rung})$ cell of the model zoo (\S\ref{subsec:parameterizations}, \S\ref{subsec:hybrid_operators}) is scored on validation batches only ($\mathrm{Val} = \{3, 8\}$): $\Delta m_{50}$ with $10{,}000$-sample cluster-bootstrap CIs, matched-resolution $\sigma_{a,\rm eff}$, flux/color invariants, and held-out $\Delta\log\mathcal{L}$. The winning cell is the largest $\Delta m_{50}$ among cells passing all invariants; the untouched test exposures are scored exactly once after selection. A learned-PSF cell that fails the held-out-star NLL improvement gate is reported but cannot win unless it also beats the analytic arm's held-out gate.
+    Scene representations are selected by validation detector likelihood on $\mathrm{Val}=\{3,8\}$ after flux, color and diffuse-light recovery checks. Calibration products are fixed across these comparisons. Depth is a secondary result measured at matched effective resolution and false-positive density, with paired confidence intervals. Use at least 20 paired batches and 800 continuum injections spanning seven flux levels and the four fixed science regions; injection PSFs must be independent of the fitted approximation. Evaluate the untouched test exposures exactly once after selection, then refit the selected configuration on all exposures. Published UPDC images support secondary photometric and morphological comparisons; they are neither ground truth nor an injected-depth competitor unless UPDC is rerun on the same injected inputs.
 \end{enumerate}
 
 \vspace{1em}
