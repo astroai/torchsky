@@ -45,6 +45,21 @@ def test_manifest_training_selection_preserves_grouped_split():
     assert omitted == {"validation": 2, "test": 2}
 
 
+@pytest.mark.parametrize("operator_args", [
+    ["--forward-context"],
+    ["--operator-calibration-manifest", "missing.json",
+     "--operator-calibration-fit-report", "missing-fit.json"],
+])
+def test_exact_refinement_rejects_conditioned_operators_before_reading_data(operator_args):
+    result = subprocess.run(
+        [sys.executable, joint.__file__, "--foam-exact-observation-refine",
+         "--foam-affine-spatial-basis", *operator_args],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 2
+    assert "does not yet support conditioned operators" in result.stderr
+
+
 def test_joint_inr_configuration_runs_with_psf_and_pixel_integration():
     from test_map_field_streamed_tiles import Scene, observation
     from torchsky.map.field.training import fit_field_model
@@ -169,3 +184,76 @@ def test_plain_report_leads_with_validation_and_labels_missing_scores():
     assert report.index("excluded from training") < report.index("reference-image")
     assert "final test exposures were not evaluated" in report
     assert "not measured" in joint._format_markdown([])
+
+
+@pytest.mark.parametrize("unfrozen,refined", [(False, False), (True, False), (False, True)])
+def test_joint_artifact_replays_fitted_foam_and_records_resume_limits(tmp_path, unfrozen, refined):
+    from test_field_artifacts import _foam
+    from torchsky.map.field import load_field_artifact
+    from torchsky.map.field.types import FieldFitResult
+
+    model = _foam()
+    ra = torch.tensor([11.999, 12.001], dtype=torch.float64)
+    dec = torch.tensor([-3.001, -2.999], dtype=torch.float64)
+    wavelength = torch.tensor([4800., 5200.], dtype=torch.float64)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1.e-3)
+    model(ra, dec, wavelength).square().sum().backward()
+    optimizer.step()
+    result = FieldFitResult(
+        model=model, loss_history=(1.,), final_loss=1.,
+        optimizer_state=optimizer.state_dict(), completed_steps=1,
+        sampling_rng_state=torch.Generator().manual_seed(42).get_state(),
+    )
+    calibration = tmp_path / "frozen.pt"
+    calibration.write_bytes(b"frozen calibration checkpoint")
+    identity = {"path": str(calibration), "size": calibration.stat().st_size,
+                "sha256": joint.calibration_fit._sha256(calibration)}
+    context = ForwardContext(
+        survey="F090W", exposure_id="train-1",
+        extra={"split": "train", "measured_passband_sha256": "passband-hash"},
+    )
+    audit = {"models": [{"checkpoint": str(calibration),
+                         "checkpoint_sha256": identity["sha256"]}]}
+    path = tmp_path / "artifact"
+    status = joint._save_joint_field_artifact(
+        path, result=result, model_kind="spectral_power_foam", model_kwargs={},
+        fit_kwargs={"lr": 1.e-3, "observation_operator_bundles": (object(),),
+                    "observation_forward_contexts": (context,)},
+        run_config={"seed": 42}, contexts=[context], input_identities=[identity],
+        calibration_audit=audit, intensity_scale=3., normalization_training_count=1,
+        unfrozen_extras=unfrozen, exact_refined=refined,
+    )
+    loaded = load_field_artifact(path)
+    torch.testing.assert_close(loaded.model(ra, dec, wavelength), model(ra, dec, wavelength))
+    assert loaded.completed_steps == 1
+    torch.testing.assert_close(loaded.sampling_rng_state, result.sampling_rng_state)
+    assert (loaded.optimizer_state is None) == refined
+    if not refined:
+        torch.testing.assert_close(loaded.optimizer_state, optimizer.state_dict())
+    manifest = loaded.manifest.payload
+    assert manifest["fit_config"]["normalization"]["intensity_scale"] == 3.
+    assert manifest["fit_config"]["fit_kwargs"] == {"lr": 1.e-3}
+    assert manifest["operator_manifest"]["contexts"][0]["extra"] == context.extra
+    assert manifest["calibration_manifest"] == audit
+    assert status["detector_replay_available"] == (not unfrozen)
+    assert status["training_resume_available"] == (not unfrozen and not refined)
+    calibration.write_bytes(b"changed checkpoint")
+    with pytest.raises(ValueError, match="input size changed"):
+        load_field_artifact(path)
+
+
+def test_joint_artifact_explicitly_skips_per_exposure_wrapper(tmp_path):
+    from test_field_artifacts import _foam
+    from torchsky.map.field.types import FieldFitResult
+
+    result = FieldFitResult(
+        model=joint._PerExposureScalarBias(_foam(), 2), loss_history=(1.,), final_loss=1.,
+    )
+    status = joint._save_joint_field_artifact(
+        tmp_path / "unsupported", result=result, model_kind="spectral_power_foam",
+        model_kwargs={}, fit_kwargs={}, run_config={}, contexts=[], input_identities=[],
+        calibration_audit=None, intensity_scale=1., normalization_training_count=2,
+    )
+    assert status["status"] == "unsupported"
+    assert not status["training_resume_available"]
+    assert not (tmp_path / "unsupported").exists()

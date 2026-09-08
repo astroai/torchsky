@@ -99,6 +99,29 @@ Its upload was read back and hash-verified. The launcher now forwards these
 existing benchmark controls. This pilot remains a cropped experiment, not
 the final cluster reconstruction or the full injection comparison.
 
+This pilot is running as session `z93v5gab`, run
+`depth-20260908-202557`, from fork commit `5dc782d3`. The Torchsky-only job
+uses the explicitly selected working base notebook image; the comparison
+image default remains `astroai/improc:latest`. Its latest status is Running,
+with no completed science report yet. Exact observation refinement is off.
+
+Joint fits now save registered scene models immediately after fitting, before
+validation and image export. Artifacts include optimizer and sampling state,
+training normalization, run configuration, and hashes of detector inputs,
+passbands and frozen calibration references. Loading a trained Foam reproduces
+its predictions in the focused tests. Replaying detector predictions still
+requires rebuilding observations and operators from those verified references;
+there is no automatic benchmark resume command yet. Unregistered exposure-bias
+wrappers are explicitly unsupported, unfrozen PSF/noise extras are marked as
+scene-only exports, and exact-refined scenes omit stale optimizer state.
+The artifact and sampling tests pass (23 tests); type checking reports zero
+errors and the existing export-list warning.
+The independent numerical review confirmed that exact observation refinement
+cannot consume the calibrated PSF/background bundles used by Adam. The
+existing rejection now also happens during argument checking, before reading
+data or fitting. Measured passbands alone remain supported by that refiner;
+consistency of its quadrature does not establish spectral convergence.
+
 Structured-noise training now supports PSF-aware tiled recomputation. It
 evaluates the likelihood on the full detector image, then re-renders each
 tile to propagate the full-image likelihood gradient. This preserves
@@ -2278,11 +2301,10 @@ directory, check out the recorded commit, use Pixi, write logs/JSON/Markdown to
 `/arc/projects/ots/torchsky-runs/<run-id>/`, and record `git rev-parse HEAD`,
 `pixi info`, device information, and the exact command.
 
-Use an `astroai/*` image. The current headless benchmark image is
-`astroai/notebook:latest`: it supplies the shell and authenticated GitHub
-tooling needed by this private-repository runner while still running as a
-headless session. Pass the fully qualified image through `CONTAINER_IMAGE`;
-`scripts/run_canfar_adass_depth.sh` rejects non-AstroAI images.
+Use `astroai/improc:latest` for the installed comparison tools. Headless-only
+images may be absent from image listings. A separately recorded working image
+override is acceptable for Torchsky-only jobs; it does not change the
+comparison-image default or establish that the default name is incorrect.
 
 Use `map-compat` for classical comparator jobs and `smacs-cuda` for real-data
 Foam jobs. Both run through `scripts/run_local_sphere_bench.py`, which installs

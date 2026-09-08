@@ -12,7 +12,7 @@ import os
 import sys
 import tempfile
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -84,6 +84,7 @@ from torchsky.map import (  # noqa: E402
     render_spectral_power_foam_observation_exact,
 )
 from torchsky.map.field import (  # noqa: E402
+    save_field_artifact,
     solve_power_pixel_affine_least_squares,
     solve_power_pixel_least_squares,
     solve_spectral_cell_coefficients,
@@ -122,6 +123,63 @@ FOAM_FOOTPRINT_EXTENT = 0.55
 FOAM_MAX_SMOOTH_PAIRS = 64 * 1024 * 1024
 FOAM_TEMPERATURE_START_CELL_UNITS = 1.0
 FOAM_TEMPERATURE_END_CELL_UNITS = 16.0
+
+
+def _save_joint_field_artifact(
+    path: Path, *, result: Any, model_kind: str, model_kwargs: dict[str, Any],
+    fit_kwargs: dict[str, Any], run_config: dict[str, Any],
+    contexts: Sequence[ForwardContext], input_identities: list[dict[str, Any]],
+    calibration_audit: dict[str, Any] | None, intensity_scale: float,
+    normalization_training_count: int, unfrozen_extras: bool = False,
+    exact_refined: bool = False,
+) -> dict[str, Any]:
+    """Persist the scene and explicitly describe external replay requirements."""
+    if isinstance(result.model, _PerExposureScalarBias):
+        return {
+            "status": "unsupported", "reason": "per-exposure bias wrapper is not registered",
+            "detector_replay_available": False, "training_resume_available": False,
+        }
+    # Operator instances remain external; their frozen checkpoint identities are saved.
+    scalar_fit_config = {
+        key: value for key, value in fit_kwargs.items()
+        if key not in {"observation_forward_contexts", "observation_operator_bundles"}
+    }
+    replay = {
+        "detector_replay_available": not unfrozen_extras,
+        "training_resume_available": not unfrozen_extras and not exact_refined,
+        "requirements": (
+            "scene only: PSF/noise extras have no saved checkpoint references"
+            if unfrozen_extras else
+            "rebuild observations and operators from verified inputs and saved run configuration"
+        ),
+        "optimizer_status": (
+            "discarded: exact refinement changed parameters after optimizer steps"
+            if exact_refined else "saved from field fit"
+        ),
+    }
+    save_field_artifact(
+        path, model=result.model, model_kind=model_kind, model_kwargs=model_kwargs,
+        fit_result=(replace(result, optimizer_state=None, amp_scaler_state=None)
+                    if exact_refined else result),
+        fit_config={
+            "fit_kwargs": scalar_fit_config, "run_config": run_config,
+            "normalization": {
+                "intensity_scale": float(intensity_scale),
+                "training_exposures": int(normalization_training_count),
+                "operation": "SCI/scale; ERR/scale; VAR/scale**2; no additive subtraction",
+                "prediction_to_original_units": "multiply by intensity_scale",
+            },
+            "replay": replay,
+        },
+        calibration_manifest=calibration_audit,
+        operator_manifest={
+            "contexts": [asdict(context) for context in contexts],
+            "frozen_calibration": calibration_audit,
+            "live_operator_objects_serialized": False,
+        },
+        input_identities=input_identities,
+    )
+    return {"status": "saved", "path": str(path.resolve()), **replay}
 
 
 def _fitted_gaussian_psf_sigma_pix(
@@ -2000,6 +2058,10 @@ def main() -> int:
     parser.add_argument("--markdown-out", type=Path, default=DEFAULT_MARKDOWN_OUT)
     parser.add_argument("--export-dir", type=Path, default=DEFAULT_EXPORT_DIR)
     parser.add_argument(
+        "--artifact-dir", type=Path, default=None,
+        help="Saved model artifacts (default: <json-out stem>_artifacts); existing artifacts are not overwritten",
+    )
+    parser.add_argument(
         "--operator-calibration-manifest",
         type=Path,
         default=None,
@@ -2136,6 +2198,13 @@ def main() -> int:
             "--operator-calibration-manifest and "
             "--operator-calibration-fit-report must be provided together"
         )
+    if args.foam_exact_observation_refine and (
+        args.operator_calibration_manifest is not None or args.forward_context
+    ):
+        parser.error(
+            "exact Foam observation refinement does not yet support "
+            "conditioned operators or per-exposure bias"
+        )
     if args.structured_noise_crossfit:
         if args.crossfit_scene_steps <= 0 or args.structured_noise_steps <= 0:
             parser.error("cross-fit scene and structured-noise steps must be positive")
@@ -2218,6 +2287,14 @@ def main() -> int:
         foam_index = model_kinds.index("spectral_power_foam")
         model_kinds.insert(foam_index + 1, "foam_initialized_inr")
     rows: list[dict[str, Any]] = []
+    field_artifacts: dict[str, dict[str, Any]] = {}
+    artifact_dir = args.artifact_dir or args.json_out.with_name(
+        f"{args.json_out.stem}_artifacts"
+    )
+    if not args.forward_context:
+        for model_kind in model_kinds:
+            if (artifact_dir / _safe_slug(model_kind) / "manifest.json").exists():
+                parser.error(f"artifact already exists for {model_kind}: {artifact_dir}")
 
     band_entries: list[dict[str, Any]] = []
     held_out_exposures_omitted: dict[str, dict[str, int]] = {}
@@ -2762,6 +2839,33 @@ def main() -> int:
                 ),
             }
 
+        artifact_paths = {
+            Path(value).resolve()
+            for context in all_forward_contexts + validation_contexts
+            for key in ("source_path", "measured_passband_path")
+            if (value := context.extra.get(key)) is not None
+        }
+        artifact_paths.update(_reference_path_for_band(str(entry["band"])).resolve()
+                              for entry in band_entries)
+        artifact_paths.update(
+            path.resolve() for path in (
+                args.operator_calibration_manifest, args.operator_calibration_fit_report,
+                args.injection_manifest, args.target_header_path,
+            ) if path is not None
+        )
+        if calibration_audit is not None:
+            artifact_paths.update(Path(item["checkpoint"]).resolve()
+                                  for item in calibration_audit["models"])
+        # Hash each source once for all models, including SCI/ERR/DQ/variance HDUs.
+        artifact_inputs = [
+            {"path": str(path), "size": path.stat().st_size,
+             "sha256": calibration_fit._sha256(path)}
+            for path in sorted(artifact_paths)
+        ]
+        artifact_run_config = {
+            key: str(value.resolve()) if isinstance(value, Path) else value
+            for key, value in vars(args).items()
+        }
         fitted_models: dict[
             str,
             tuple[Any, float, dict[str, Any], dict[str, Any]],
@@ -2874,6 +2978,18 @@ def main() -> int:
                     preconditioner=str(args.foam_exact_preconditioner),
                 )
                 fit_time_ms += (time.perf_counter() - refine_t0) * 1000.0
+            field_artifacts[model_kind] = _save_joint_field_artifact(
+                artifact_dir / _safe_slug(model_kind), result=result,
+                model_kind=model_kind, model_kwargs=model_kwargs,
+                fit_kwargs={"steps": model_steps, **fit_kwargs},
+                run_config=artifact_run_config, contexts=all_forward_contexts,
+                input_identities=artifact_inputs, calibration_audit=calibration_audit,
+                intensity_scale=intensity_scale,
+                normalization_training_count=normalization_training_count,
+                unfrozen_extras=(structured_bundles is not None
+                                 or args.psf_model == "learned_lowrank"),
+                exact_refined=bool(exact_refinement_diagnostics),
+            )
             if validation_bundles and not args.forward_context:
                 validation_scores[model_kind] = _validation_detector_scores(
                     result.model, normalized_validation, validation_contexts,
@@ -3394,6 +3510,7 @@ def main() -> int:
             for index, context in enumerate(all_forward_contexts)
         ],
         "operator_calibration": calibration_audit,
+        "field_artifacts": field_artifacts,
         "psf_arm_audit": psf_arm_audit,
         "structured_noise_crossfit": noise_crossfit_audit,
         "rows": ok_rows + fail_rows,
