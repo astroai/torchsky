@@ -85,7 +85,7 @@ def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
     assert "--expected-exposures" in parity
     assert "bootstrap_map_compat_tools.py" not in parity
     assert "--force-source" not in parity
-    assert "astroai/improc-notebook:latest" in runner
+    assert "astroai/improc:latest" in runner
     assert "parity_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}" in parity
     assert parity.count('pixi_run "${parity_env}"') == 3
     assert "torch.cuda.is_available()" in parity

@@ -12,8 +12,11 @@ no longer present; no replacement build was launched.
 Checkpoint `e085b5a3` is pushed to fork main: 107 focused tests pass,
 preflight passes, and typecheck reports no errors (one existing warning).
 CANFAR rejected both `astroai/improc:latest` and its registry-qualified form
-as unknown/private. The live image list names `astroai/improc-notebook:latest`;
-that is the corrected default for subsequent depth launches. One Torchsky-only
+as unknown/private. These requests failed, but that does not establish that
+the image name is wrong: the image listing omits headless-only labelled images.
+The user-confirmed `astroai/improc:latest` remains the depth default. The
+temporary substitution of `astroai/improc-notebook:latest` was incorrect.
+One Torchsky-only
 GPU validation session `my8tv91c`, run `depth-20260908-032847`, was created from
 `e085b5a3` using the previously working base notebook image. It uses frozen
 stationary calibration, measured passbands, two bands, a 32-pixel crop and two

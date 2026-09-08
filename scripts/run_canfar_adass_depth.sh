@@ -4,7 +4,7 @@ set -euo pipefail
 mode=${1:?usage: run_canfar_adass_depth.sh MODE RUN_ID}
 run_id=${2:?usage: run_canfar_adass_depth.sh MODE RUN_ID}
 commit=${TORCHSKY_COMMIT:?set TORCHSKY_COMMIT to an exact pushed SHA}
-container_image=${CONTAINER_IMAGE:-astroai/improc-notebook:latest}
+container_image=${CONTAINER_IMAGE:-astroai/improc:latest}
 artifact_root=${ARTIFACT_ROOT:-/arc/projects/ots/torchsky-runs/${run_id}}
 source_root=${SOURCE_ROOT:-/scratch/${run_id}-src}
 data_root=${TORCHSKY_DATA_ROOT:-/arc/projects/ots/torchsky-data}

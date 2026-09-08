@@ -43,7 +43,7 @@ if ! git branch -r --contains "${COMMIT}" | grep -q 'origin/'; then
 fi
 IMAGE="${CONTAINER_IMAGE:-astroai/notebook:latest}"
 if [[ "${MODE}" == "depth" ]]; then
-  IMAGE="${CONTAINER_IMAGE:-astroai/improc-notebook:latest}"
+  IMAGE="${CONTAINER_IMAGE:-astroai/improc:latest}"
 fi
 CPU="${TORCHSKY_CANFAR_CPU:-8}"
 MEMORY="${TORCHSKY_CANFAR_MEMORY:-32}"
