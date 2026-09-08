@@ -2,12 +2,24 @@
 
 ## Reconstruction work — 2026-09-07
 
-Use the existing `astroai/improc:latest` image for SMACS comparison tools.
+Use the existing AstroAI improc image for SMACS comparison tools.
 The reported SWarp build was official SWarp, not Torchsky's implementation;
 rebuilding it was unnecessary. Depth launches now default to this image,
 mosaic comparisons no longer build external tools, and Montage discovery
 also checks the image's PATH. The previous CPU build session `isy3usqe` is
 no longer present; no replacement build was launched.
+
+Checkpoint `e085b5a3` is pushed to fork main: 107 focused tests pass,
+preflight passes, and typecheck reports no errors (one existing warning).
+CANFAR rejected both `astroai/improc:latest` and its registry-qualified form
+as unknown/private. The live image list names `astroai/improc-notebook:latest`;
+that is the corrected default for subsequent depth launches. One Torchsky-only
+GPU validation session `my8tv91c`, run `depth-20260908-032847`, was created from
+`e085b5a3` using the previously working base notebook image. It uses frozen
+stationary calibration, measured passbands, two bands, a 32-pixel crop and two
+optimization steps. This checks real-data execution, not scientific convergence.
+No external comparison tools are built or invoked by this run. Its results
+are pending.
 
 Structured-noise training now supports PSF-aware tiled recomputation. It
 evaluates the likelihood on the full detector image, then re-renders each
