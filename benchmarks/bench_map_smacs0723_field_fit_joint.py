@@ -3458,3 +3458,5 @@ if __name__ == "__main__" and os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1":
             print(f"[gpu-mem] {_size / 1024**3:8.3f} GiB  {_key}", flush=True)
         raise
     raise SystemExit(_code)
+elif __name__ == "__main__":
+    raise SystemExit(main())

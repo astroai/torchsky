@@ -3,6 +3,8 @@
 from pathlib import Path
 import math
 import sys
+import os
+import subprocess
 from dataclasses import replace
 
 import pytest
@@ -15,6 +17,22 @@ from torchsky.map.operators import LearnedBackgroundOp, ObservationOperatorBundl
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks"))
 import bench_map_smacs0723_field_fit_joint as joint
 from bench_map_smacs0723_field_fit_joint import _training_calibration_exposure_paths
+
+
+def test_joint_command_runs_without_gpu_memory_logging():
+    env = dict(os.environ)
+    env.pop("TORCHSKY_GPU_MEM_LOG", None)
+    result = subprocess.run(
+        [sys.executable, joint.__file__, "--help"],
+        env=env, capture_output=True, text=True, check=True,
+    )
+    assert "--independent-frozen-calibration" in result.stdout
+    invalid = subprocess.run(
+        [sys.executable, joint.__file__, "--not-a-valid-option"],
+        env=env, capture_output=True, text=True,
+    )
+    assert invalid.returncode == 2
+    assert "unrecognized arguments" in invalid.stderr
 
 
 def test_manifest_training_selection_preserves_grouped_split():

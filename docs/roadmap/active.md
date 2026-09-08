@@ -47,6 +47,17 @@ is still setting up; no reconstruction result has been measured yet.
 The plain-text report now places held-out detector scores before secondary
 reference-image comparisons and labels missing scores “not measured.”
 
+The replacement run recorded exit code 1 after the benchmark command, with
+no score products. Inspection found the direct cause: the script entry point
+only called `main()` when `TORCHSKY_GPU_MEM_LOG=1`. Ordinary invocations exited
+successfully without fitting; the runner then failed its missing-output check.
+The normal entry point is restored, with subprocess checks that `--help`
+prints options and invalid arguments fail without memory logging enabled.
+This explains the observed empty-output behavior without attributing it to
+memory exhaustion. Historical six-band native Drizzle products were also
+located on ARC; historical Foam products had poor source-flux recovery and
+are diagnostic evidence, not promoted reconstructions.
+
 Structured-noise training now supports PSF-aware tiled recomputation. It
 evaluates the likelihood on the full detector image, then re-renders each
 tile to propagate the full-image likelihood gradient. This preserves
