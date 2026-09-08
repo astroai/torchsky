@@ -176,6 +176,100 @@ def _calibration_exposure(
     return exposure
 
 
+def _training_calibration_exposure_paths(
+    paths: list[Path], lookup: dict[str, dict[str, Any]]
+) -> tuple[list[Path], dict[str, int]]:
+    training = []
+    omitted = {"validation": 0, "test": 0}
+    for path in paths:
+        split = _calibration_exposure(lookup, path).get("split")
+        if split == "train":
+            training.append(path)
+        elif split in omitted:
+            omitted[split] += 1
+        else:
+            raise ValueError(f"invalid calibration split {split!r} for {path}")
+    if paths and not training:
+        raise ValueError("calibration selection contains no training exposures")
+    return training, omitted
+
+
+def _validation_detector_scores(
+    model: torch.nn.Module,
+    observations: Sequence[FieldObservation],
+    contexts: Sequence[ForwardContext],
+    bundles: Sequence[ObservationOperatorBundle],
+    *,
+    intensity_scale: float,
+    fit_kwargs: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Score fixed detector predictions under pipeline ERR, without residual fitting."""
+    if not (len(observations) == len(contexts) == len(bundles)):
+        raise ValueError("validation observations, contexts and bundles must align")
+    if any(context.extra.get("split") != "validation" for context in contexts):
+        raise ValueError("detector scoring accepts only the validation split")
+    scale = float(intensity_scale)
+    if not math.isfinite(scale) or scale <= 0:
+        raise ValueError("validation intensity_scale must be finite and positive")
+    scores: dict[str, dict[str, Any]] = {}
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            for observation, context, bundle in zip(observations, contexts, bundles, strict=True):
+                if observation.err is None or observation.mask is None:
+                    raise ValueError("validation detector scoring requires ERR and mask")
+                image = observation.image.detach().cpu().double()
+                err = observation.err.detach().cpu().double()
+                valid = (observation.mask.detach().cpu() > 0) & torch.isfinite(image)
+                valid &= torch.isfinite(err) & (err > 0)
+                if observation.weight is not None:
+                    weight = observation.weight.detach().cpu()
+                    valid &= torch.isfinite(weight) & (weight > 0)
+                count = int(valid.sum())
+                if count == 0:
+                    raise ValueError(f"validation exposure has no valid pixels: {context.exposure_id}")
+                prediction = render_field_observation(
+                    model, observation,
+                    num_spectral_samples=int(fit_kwargs.get("num_spectral_samples", 9)),
+                    spectral_sampling="deterministic_quadrature",
+                    spatial_sampling=fit_kwargs.get("spatial_sampling", "center"),
+                    spatial_tile_hw=fit_kwargs.get("render_spatial_tile_hw", (256, 256)),
+                    forward_context=context, operator_bundle=bundle,
+                ).detach().cpu().double()
+                if prediction.shape != image.shape or not torch.isfinite(prediction[valid]).all():
+                    raise ValueError("validation prediction has invalid shape or nonfinite valid pixels")
+                chi2 = ((prediction[valid] - image[valid]) / err[valid]).square()
+                # Restore the density to original SCI units after train-only scaling.
+                nll = .5 * (chi2 + math.log(2 * math.pi)) + torch.log(err[valid]) + math.log(scale)
+                band = str(context.survey)
+                row = scores.setdefault(band, {
+                    "band": band, "exposures": 0, "pixels": 0,
+                    "gaussian_nll_sum": 0., "chi2_sum": 0.,
+                    "value_unit": observation.value_unit,
+                    "per_exposure": [],
+                })
+                if row["value_unit"] != observation.value_unit:
+                    raise ValueError("validation exposures must share units within a band")
+                row["exposures"] += 1
+                row["pixels"] += count
+                row["gaussian_nll_sum"] += float(nll.sum())
+                row["chi2_sum"] += float(chi2.sum())
+                row["per_exposure"].append({
+                    "exposure_id": context.exposure_id,
+                    "source_path": context.extra.get("source_path"),
+                    "pixels": count,
+                    "gaussian_nll_per_pixel": float(nll.mean()),
+                    "chi2_per_pixel": float(chi2.mean()),
+                })
+    finally:
+        model.train(was_training)
+    for row in scores.values():
+        row["gaussian_nll_per_pixel"] = row["gaussian_nll_sum"] / row["pixels"]
+        row["chi2_per_pixel"] = row["chi2_sum"] / row["pixels"]
+    return list(scores.values())
+
+
 def _load_calibrated_operator_models(
     manifest: Path,
     fit_report: Path,
@@ -1398,6 +1492,15 @@ def _joint_real_fit_kwargs(
         )
     if model_kind == "spectral_basis_field":
         kwargs["lr"] = min(float(kwargs.get("lr", 1.0e-3)), 5.0e-4)
+    if model_kind != "spectral_power_foam":
+        # Pixel samples cannot represent the PSF convolution or pixel quadrature.
+        kwargs.update(
+            pixel_samples_per_observation=None,
+            streaming_accumulation=True,
+            context_observations_per_step=0,
+            spectral_anchor_observations_per_step=0,
+            gradient_residual_weight=0.0,
+        )
     return kwargs
 
 
@@ -1762,7 +1865,7 @@ def main() -> int:
     parser.add_argument(
         "--patt-nums",
         default="",
-        help="Comma-separated PATT_NUM identifiers, for example 3,8 for validation",
+        help="Comma-separated PATT_NUM identifiers; calibration manifests restrict fitting to the training split",
     )
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--seed", type=int, default=101)
@@ -2083,8 +2186,12 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
 
     band_entries: list[dict[str, Any]] = []
+    held_out_exposures_omitted: dict[str, dict[str, int]] = {}
     all_field_observations: list[FieldObservation] = []
     all_forward_contexts: list[ForwardContext] = []
+    validation_observations: list[FieldObservation] = []
+    validation_contexts: list[ForwardContext] = []
+    validation_scores: dict[str, list[dict[str, Any]]] = {}
     injection_rows: list[dict[str, Any]] = []
     injection_manifest = (
         json.loads(args.injection_manifest.read_text(encoding="utf-8"))
@@ -2132,13 +2239,16 @@ def main() -> int:
                     exposure_paths,
                     pattern_numbers,
                 )
-            if args.independent_frozen_calibration:
-                exposure_paths = [
-                    path
-                    for path in exposure_paths
-                    if _calibration_exposure(calibration_lookup, path)["split"]
-                    == "train"
+            validation_paths = []
+            if calibrated_operators:
+                validation_paths = [
+                    path for path in exposure_paths
+                    if _calibration_exposure(calibration_lookup, path).get("split") == "validation"
                 ]
+                exposure_paths, omitted = _training_calibration_exposure_paths(
+                    exposure_paths, calibration_lookup
+                )
+                held_out_exposures_omitted[band] = omitted
             if not reference_path.exists() or not exposure_paths:
                 message = (
                     f"missing reference={reference_path.exists()} "
@@ -2232,7 +2342,7 @@ def main() -> int:
                     band=band,
                 )
                 science_overrides, injection_audit = inject_common_world_exposures(
-                    exposure_paths,
+                    exposure_paths + validation_paths,
                     band=band,
                     world_radec_deg=injection_world,
                     flux_jy=injection_flux,
@@ -2254,7 +2364,7 @@ def main() -> int:
                     np.ndarray,
                 ],
             ] = {}
-            for exposure_path in exposure_paths:
+            for exposure_path in exposure_paths + validation_paths:
                 science_override = (
                     science_overrides.get(exposure_path)
                     if science_overrides is not None
@@ -2266,7 +2376,8 @@ def main() -> int:
                     linearize_sip=False,
                     science_override=science_override,
                 )
-                image_observations.append(
+                if exposure_path in exposure_paths:
+                    image_observations.append(
                     ImageObservation(
                         str(science_path),
                         hdu=0,
@@ -2306,7 +2417,7 @@ def main() -> int:
                 )
             field_observations: list[FieldObservation] = []
             for exposure_path, (image, weight, mask, header) in zip(
-                exposure_paths, raw_field_inputs, strict=True
+                exposure_paths + validation_paths, raw_field_inputs, strict=True
             ):
                 cropped = _crop_field_inputs_to_target(
                     image=image,
@@ -2357,7 +2468,8 @@ def main() -> int:
                     min=0,
                     max=3,
                 )
-                field_observations.append(
+                is_validation = exposure_path in validation_paths
+                (validation_observations if is_validation else field_observations).append(
                     FieldObservation(
                         image=torch.from_numpy(crop_image),
                         header=crop_header,
@@ -2396,7 +2508,7 @@ def main() -> int:
                         ),
                     )
                 )
-                all_forward_contexts.append(
+                (validation_contexts if is_validation else all_forward_contexts).append(
                     ForwardContext(
                         survey=str(band),
                         instrument="NIRCAM" if calibration_exposure else None,
@@ -2519,6 +2631,10 @@ def main() -> int:
             _scaled_field_observation(observation, intensity_scale=intensity_scale)
             for observation in all_field_observations
         ]
+        normalized_validation = [
+            _scaled_field_observation(observation, intensity_scale=intensity_scale)
+            for observation in validation_observations
+        ]
 
         psf_arm_audit: dict[str, float] | None = None
         if args.psf_model == "learned_lowrank":
@@ -2540,12 +2656,14 @@ def main() -> int:
             forward_ctx_tuple = tuple(all_forward_contexts)
 
         calibrated_bundles: tuple[ObservationOperatorBundle, ...] | None = None
+        validation_bundles: tuple[ObservationOperatorBundle, ...] = ()
         calibration_audit: dict[str, Any] | None = None
         if calibrated_operators:
             assert args.operator_calibration_manifest is not None
             assert args.operator_calibration_fit_report is not None
             detectors = {
-                str(context.detector).upper() for context in all_forward_contexts
+                str(context.detector).upper()
+                for context in all_forward_contexts + validation_contexts
             }
             calibrated_models, calibration_audit = _load_calibrated_operator_models(
                 args.operator_calibration_manifest,
@@ -2557,11 +2675,18 @@ def main() -> int:
             calibrated_bundles = _calibrated_operator_bundles(
                 normalized_observations, all_forward_contexts, calibrated_models
             )
+            validation_bundles = _calibrated_operator_bundles(
+                normalized_validation, validation_contexts, calibrated_models
+            )
             if args.background_model == "none":
                 # Preserve supplied offsets but apply no fitted background field.
                 calibrated_bundles = tuple(
                     bundle.with_updates(background=None)
                     for bundle in calibrated_bundles
+                )
+                validation_bundles = tuple(
+                    bundle.with_updates(background=None)
+                    for bundle in validation_bundles
                 )
 
         foam_bounds = (
@@ -2748,6 +2873,12 @@ def main() -> int:
                     preconditioner=str(args.foam_exact_preconditioner),
                 )
                 fit_time_ms += (time.perf_counter() - refine_t0) * 1000.0
+            if validation_bundles and not args.forward_context:
+                validation_scores[model_kind] = _validation_detector_scores(
+                    result.model, normalized_validation, validation_contexts,
+                    validation_bundles, intensity_scale=intensity_scale,
+                    fit_kwargs=fit_kwargs,
+                )
             fitted_models[model_kind] = (
                 result.model,
                 fit_time_ms,
@@ -3165,7 +3296,20 @@ def main() -> int:
             "normalization_training_exposures": normalization_training_count,
             "normalization_operation": "SCI/scale; ERR/scale; VAR/scale**2; no additive subtraction",
             "jwst_reference_convention_verified": False,
-            "held_out_validation_pipeline": "not implemented; strict mode fits training exposures only",
+            "held_out_validation_pipeline": (
+                "unavailable: training-exposure scalar biases cannot transfer to validation"
+                if args.forward_context else "fixed-model detector prediction; no held-out residual fitting"
+            ) if calibrated_operators else "unavailable: no calibration manifest",
+            "held_out_exposures_omitted": held_out_exposures_omitted,
+            "validation_detector_scoring": {
+                "split": "validation",
+                "test_exposures_evaluated": 0,
+                "pixel_domain": "all valid pixels in detector crops overlapping the target footprint",
+                "likelihood": "diagonal Gaussian using supplied pipeline ERR squared; ignores pixel correlations and fitted structured noise",
+                "normalization": "training-only scale; NLL restored to original SCI units by adding log(scale) per pixel",
+                "pixel_response_provenance": "unknown; detector integration remains unverified",
+                "scores_by_model": validation_scores,
+            },
             "exposure_provenance": [
                 {
                     "source_path": context.extra.get("source_path"),

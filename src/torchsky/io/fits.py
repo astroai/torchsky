@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import torchfits
-import torchsky.cpp as cpp
+import torchfits.cpp as cpp
 
 # ── public API — re-exported from torchfits ──────────────────────────
 read = torchfits.read

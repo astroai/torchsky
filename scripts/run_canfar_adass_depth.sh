@@ -4,7 +4,7 @@ set -euo pipefail
 mode=${1:?usage: run_canfar_adass_depth.sh MODE RUN_ID}
 run_id=${2:?usage: run_canfar_adass_depth.sh MODE RUN_ID}
 commit=${TORCHSKY_COMMIT:?set TORCHSKY_COMMIT to an exact pushed SHA}
-container_image=${CONTAINER_IMAGE:-images.canfar.net/astroai/notebook:latest}
+container_image=${CONTAINER_IMAGE:-images.canfar.net/astroai/improc:latest}
 artifact_root=${ARTIFACT_ROOT:-/arc/projects/ots/torchsky-runs/${run_id}}
 source_root=${SOURCE_ROOT:-/scratch/${run_id}-src}
 data_root=${TORCHSKY_DATA_ROOT:-/arc/projects/ots/torchsky-data}
@@ -320,6 +320,15 @@ case "${mode}" in
     gate "${artifact_root}/inspection/cutouts_science.fits"
     ;;
   foam)
+    joint_calibration_args=(--calibration-family "${CALIBRATION_FAMILY:-stationary}")
+    if [[ -n "${MEASURED_PASSBAND_DIR:-}" ]]; then
+      joint_calibration_args+=(--measured-passband-dir "${MEASURED_PASSBAND_DIR}")
+    fi
+    case "${INDEPENDENT_FROZEN_CALIBRATION:-0}" in
+      0) ;;
+      1) joint_calibration_args+=(--independent-frozen-calibration) ;;
+      *) echo "INDEPENDENT_FROZEN_CALIBRATION must be 0 or 1" >&2; exit 2 ;;
+    esac
     for module in "${modules[@]+${modules[@]}}"; do
       module_root="${artifact_root}/${module}"
       mkdir -p "${module_root}"
@@ -366,6 +375,7 @@ case "${mode}" in
         "${foam_exact_refinement_args[@]+${foam_exact_refinement_args[@]}}" \
         "${operator_calibration_args[@]+${operator_calibration_args[@]}}" \
         "${operator_arm_args[@]+${operator_arm_args[@]}}" \
+        "${joint_calibration_args[@]}" \
         --models "${field_models}" \
         --fail-on-method-error \
         --json-out "${module_root}/${FOAM_SHARED_FOAM_NAME:-shared-foam.json}" \
@@ -587,13 +597,6 @@ case "${mode}" in
     parity_expected_total=${MOSAIC_EXPECTED_TOTAL_EXPOSURES:-135}
     echo "mosaic-parity inventory=${parity_total} expected=${parity_expected_total}"
     test "${parity_total}" = "${parity_expected_total}"
-
-    run pixi_run "${parity_env}" \
-      python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
-      --tool swarp --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
-    run pixi_run "${parity_env}" \
-      python "${source_root}/scripts/bootstrap_map_compat_tools.py" \
-      --tool montage --force-source --jobs "${TORCHSKY_SPIN_THREADS:-1}"
 
     IFS=',' read -r -a parity_bands <<< \
       "${MOSAIC_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}"

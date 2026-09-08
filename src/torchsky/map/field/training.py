@@ -932,6 +932,14 @@ def fit_field_model(
     sampling_rng_state: Tensor | None = None,
     _progress_callback: Callable[[int, float], None] | None = None,
 ) -> FieldFitResult:
+    """Fit observations, optionally recomputing tiled structured-noise renders.
+
+    With ``streaming_accumulation`` and ``render_spatial_tile_hw``, structured
+    noise uses one full-exposure likelihood and replays each renderer tile for
+    its gradient. Renderer activations are bounded by tile size; prediction,
+    residual, and noise-model storage still scale with exposure size. As with
+    activation checkpointing, rendering must not mutate model state.
+    """
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
     fit_call_args = dict(locals())
@@ -1001,6 +1009,7 @@ def fit_field_model(
             "observation_operator_bundles must have the same length as observations"
         )
     streamed_tiles = streaming_accumulation and render_spatial_tile_hw is not None
+    recompute_structured = streamed_tiles and loss_kind == "structured_nll"
     pixel_sample_count = int(pixel_samples_per_observation or 0)
     if pixel_sample_count < 0:
         raise ValueError("pixel_samples_per_observation must be non-negative")
@@ -1015,7 +1024,7 @@ def fit_field_model(
             "use streamed spatial tiles to retain pixel integration and PSF response"
         )
     if streamed_tiles and (
-        loss_kind in {"structured_nll", "gaussian_nll"}
+        loss_kind == "gaussian_nll"
         or gradient_residual_weight > 0
         or pixel_sample_count > 0
         or (context_observations_per_step > 0 and context_loss_weight > 0)
@@ -1024,8 +1033,8 @@ def fit_field_model(
         or bool(component_centroid_anchor_terms)
     ):
         raise ValueError(
-            "streamed spatial tiles currently support fixed-weight residual losses; "
-            "structured_nll, learned gaussian_nll, gradient residuals, pixel sampling, "
+            "streamed spatial tiles support residual and structured_nll losses; "
+            "learned gaussian_nll, gradient residuals, pixel sampling, "
             "context and anchor losses "
             "require the full-observation path"
         )
@@ -1034,7 +1043,6 @@ def fit_field_model(
             pixel_samples_per_observation not in (None, 0)
             or training_patch_size is not None
             or shared_sky_patch_sampling
-            or diagnostic_spatial_tile_hw is not None
             or gradient_residual_weight > 0.0
             or spectral_anchor_observations_per_step > 0
             or context_observations_per_step > 0
@@ -1521,9 +1529,14 @@ def fit_field_model(
         selected_global_weight_sum = None
         selected_band_weight_sum: dict[tuple[object, ...], float] = {}
         if streaming_accumulation:
+            def observation_normalizer(observation: FieldObservation) -> float:
+                if loss_kind == "structured_nll":
+                    return float(_observation_support_mask(observation).sum())
+                return _observation_weight_sum_scalar(observation)
+
             if loss_reduction in {"global", "band_global_mix"}:
                 selected_global_weight_sum = sum(
-                    _observation_weight_sum_scalar(observation)
+                    observation_normalizer(observation)
                     for observation in selected_observations
                 )
             if loss_reduction in {"per_band", "band_global_mix"}:
@@ -1536,7 +1549,7 @@ def fit_field_model(
                     )
                     selected_band_weight_sum[band_key] = selected_band_weight_sum.get(
                         band_key, 0.0
-                    ) + _observation_weight_sum_scalar(observation)
+                    ) + observation_normalizer(observation)
         for (
             pair_index,
             (observation, forward_context, exposure_pose, observation_bundle),
@@ -1574,7 +1587,7 @@ def fit_field_model(
             # slices; tile them when the caller asks for bounded activations.
             if render_spatial_tile_hw is not None:
                 render_kwargs["spatial_tile_hw"] = render_spatial_tile_hw
-            if streamed_tiles:
+            if streamed_tiles and not recompute_structured:
                 band_key = (
                     observation.spectral_min,
                     observation.spectral_max,
@@ -1687,13 +1700,22 @@ def fit_field_model(
                     dtype=pred.dtype,
                 )
             elif loss_kind == "structured_nll":
-                pred = render_field_observation(
-                    model,
-                    observation,
-                    num_spectral_samples=num_spectral_samples,
-                    spatial_sampling=spatial_sampling,
-                    **render_kwargs,
-                )
+                if recompute_structured:
+                    render_cpu_rng = torch.get_rng_state()
+                    render_device_rng = (
+                        None if train_device.type == "cpu"
+                        else torch.get_device_module(train_device).get_rng_state(train_device)
+                    )
+                with torch.no_grad() if recompute_structured else nullcontext():
+                    pred = render_field_observation(
+                        model,
+                        observation,
+                        num_spectral_samples=num_spectral_samples,
+                        spatial_sampling=spatial_sampling,
+                        **render_kwargs,
+                    )
+                if recompute_structured:
+                    pred.requires_grad_()
                 pred_logvar = None
                 image = observation.image.to(device=pred.device, dtype=pred.dtype)
                 valid = _observation_support_mask(observation).to(device=pred.device)
@@ -1807,6 +1829,33 @@ def fit_field_model(
                     raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
                 streamed_total_loss += float(obs_loss.detach().cpu())
                 _backward(obs_loss)
+                if recompute_structured:
+                    # Checkpoint the renderer, not the likelihood: correlations
+                    # and amplifier geometry still see the entire exposure.
+                    # Full image/noise storage is O(pixels); field activations
+                    # are released after each tile's vector-Jacobian product.
+                    assert pred.grad is not None
+                    with torch.random.fork_rng(
+                        devices=[] if train_device.type == "cpu" else [train_device],
+                        device_type=train_device.type,
+                    ):
+                        torch.set_rng_state(render_cpu_rng)
+                        if render_device_rng is not None:
+                            torch.get_device_module(train_device).set_rng_state(
+                                render_device_rng, train_device
+                            )
+                        for ys, xs, prediction in iter_field_observation_tiles(
+                            model,
+                            observation,
+                            num_spectral_samples=num_spectral_samples,
+                            spatial_sampling=spatial_sampling,
+                            **render_kwargs,
+                        ):
+                            # pred.grad already includes AMP loss scaling.
+                            if prediction.requires_grad:
+                                with _amp_disabled():
+                                    prediction.backward(pred.grad[ys, xs])
+                            del prediction
                 if (
                     os.environ.get("TORCHSKY_GPU_MEM_LOG") == "1"
                     and train_device.type == "cuda"

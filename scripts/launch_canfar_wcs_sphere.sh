@@ -42,6 +42,9 @@ if ! git branch -r --contains "${COMMIT}" | grep -q 'origin/'; then
   exit 2
 fi
 IMAGE="${CONTAINER_IMAGE:-astroai/notebook:latest}"
+if [[ "${MODE}" == "depth" ]]; then
+  IMAGE="${CONTAINER_IMAGE:-astroai/improc:latest}"
+fi
 CPU="${TORCHSKY_CANFAR_CPU:-8}"
 MEMORY="${TORCHSKY_CANFAR_MEMORY:-32}"
 # TORCHSKY_SPIN_THREADS matches --cpu. SpinMPool used to follow host
@@ -261,6 +264,9 @@ launch_depth() {
     --env "PSF_MODEL=${PSF_MODEL:-fitted_gaussian}"
     --env "CALIBRATION_EVIDENCE_MANIFEST=${CALIBRATION_EVIDENCE_MANIFEST:-}"
     --env "CALIBRATION_FIT_REPORT=${CALIBRATION_FIT_REPORT:-}"
+    --env "MEASURED_PASSBAND_DIR=${MEASURED_PASSBAND_DIR:-}"
+    --env "INDEPENDENT_FROZEN_CALIBRATION=${INDEPENDENT_FROZEN_CALIBRATION:-0}"
+    --env "CALIBRATION_FAMILY=${CALIBRATION_FAMILY:-stationary}"
     --env "BACKGROUND_MODEL=${BACKGROUND_MODEL:-none}"
     --env "COMPARATOR_TOOL=${COMPARATOR_TOOL:-swarp}"
     --env "MODULES=${MODULES:-b}"

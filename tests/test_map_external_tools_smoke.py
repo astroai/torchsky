@@ -26,3 +26,13 @@ def test_montage_binary_probe_returns_none_or_existing_path() -> None:
     for name in ("mProject", "mProjectPP"):
         found = bench_map_compat._find_montage_binary(name)
         assert found is None or found.is_file()
+
+
+def test_montage_binary_probe_uses_installed_image_tools(tmp_path, monkeypatch):
+    monkeypatch.setattr(bench_map_compat, "ROOT", tmp_path / "checkout")
+    executable = tmp_path / "mProject"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert bench_map_compat._find_montage_binary("mProject") == executable
+    assert bench_map_compat._find_montage_binary("mProjectPP") is None

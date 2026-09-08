@@ -55,6 +55,7 @@ def _load_visualize_module():
     )
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
@@ -161,6 +162,7 @@ def test_minicutout_and_stack_baseline_end_to_end(
     header["CDELT2"] = 0.05 / 3600.0
     header["CUNIT1"] = "deg"
     header["CUNIT2"] = "deg"
+    header["BUNIT"] = "MJy/sr"
     for band, offset in (("F090W", 1.0), ("F150W", 2.0)):
         data = np.arange(32 * 32, dtype=np.float32).reshape(32, 32) + offset
         filename = _load_script_module().REFERENCE_NAMES[band]
@@ -249,8 +251,8 @@ def test_minicutout_and_stack_baseline_end_to_end(
     assert visualize_module.main() == 0
     assert (quicklook_dir / "cutouts.png").is_file()
     assert (quicklook_dir / "baseline_cube.png").is_file()
-    assert (quicklook_dir / "baseline_false_color.png").is_file()
     summary = json.loads(
         (quicklook_dir / "quicklook_summary.json").read_text(encoding="utf-8")
     )
     assert summary["baseline_shape"] == [2, 16, 16]
+    assert summary["six_band_rgb"]["baseline"]["status"] == "pending"

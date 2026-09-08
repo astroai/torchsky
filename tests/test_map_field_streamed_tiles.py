@@ -10,6 +10,9 @@ from torch import nn
 from torchsky.map.field import rendering
 from torchsky.map.field.training import fit_field_model
 from torchsky.map.field.types import FieldObservation, PSFSpec
+from torchsky.map.operators.bundle import field_observation_operator_bundle
+from torchsky.map.operators.background import LearnedBackgroundOp
+from torchsky.map.operators.noise import StructuredDetectorNoise, StructuredNoiseOp
 
 
 class Scene(nn.Module):
@@ -197,6 +200,121 @@ def test_incompatible_sampling_and_correlated_tile_loss_fail_explicitly():
             streaming_accumulation=True,
             render_spatial_tile_hw=(8, 8),
         )
+
+
+@pytest.mark.parametrize(
+    "reduction", ["per_observation", "per_band", "global", "band_global_mix"]
+)
+def test_recomputed_structured_loss_preserves_full_image_and_noise_gradients(reduction):
+    class Background(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.slope = nn.Parameter(torch.tensor(0.01))
+
+        def forward(self, x, y, wavelength, time):
+            return self.slope * (x + 0.3 * y)
+
+    torch.manual_seed(238)
+    models = [Scene(), None]
+    models[1] = copy.deepcopy(models[0])
+    first = observation(13)
+    observations = [first, replace(observation(17), band_name="other")]
+    noises = [StructuredDetectorNoise(num_amplifiers=2), None]
+    noises[1] = copy.deepcopy(noises[0])
+    backgrounds = [Background(), Background()]
+    results = []
+    for index, model in enumerate(models):
+        bundles = [
+            replace(field_observation_operator_bundle(obs),
+                    noise=StructuredNoiseOp(noises[index], frozen=False),
+                    background=LearnedBackgroundOp(backgrounds[index]))
+            for obs in observations
+        ]
+        results.append(fit_field_model(
+            observations, model, steps=1, lr=0.0, num_spectral_samples=2,
+            spatial_sampling="gauss_legendre_2x2", loss_kind="structured_nll",
+            loss_reduction=reduction, observation_operator_bundles=bundles,
+            streaming_accumulation=bool(index),
+            render_spatial_tile_hw=(6, 7) if index else None, device="cpu",
+        ))
+    assert results[1].final_loss == pytest.approx(results[0].final_loss, rel=2e-5)
+    for left, right in [models, noises, backgrounds]:
+        for (name, full), tiled in zip(left.named_parameters(), right.parameters(), strict=True):
+            if full.grad is None:
+                assert tiled.grad is None, name
+            else:
+                torch.testing.assert_close(tiled.grad, full.grad, rtol=3e-4, atol=2e-6,
+                                           msg=lambda message: f"{name}: {message}")
+
+
+def test_recomputed_structured_loss_replays_random_draws():
+    class RandomScene(Scene):
+        def forward(self, ra, dec, wavelength):
+            return super().forward(ra, dec, wavelength) * torch.rand_like(ra)
+
+    torch.manual_seed(241)
+    full = RandomScene()
+    recomputed = copy.deepcopy(full)
+    obs = observation(13)
+    noise = StructuredDetectorNoise(num_amplifiers=2).requires_grad_(False)
+    bundle = replace(field_observation_operator_bundle(obs), noise=StructuredNoiseOp(noise))
+    rng_states = []
+    for model, streaming in [(full, False), (recomputed, True)]:
+        torch.manual_seed(243)
+        fit_field_model(
+            [obs], model, steps=1, lr=0.0, num_spectral_samples=2,
+            training_spectral_sampling="bandpass_mc", loss_kind="structured_nll",
+            observation_operator_bundles=[bundle], streaming_accumulation=streaming,
+            render_spatial_tile_hw=(6, 7), diagnostic_spatial_tile_hw=(6, 7), device="cpu",
+        )
+        rng_states.append(torch.get_rng_state())
+    for left, right in zip(full.parameters(), recomputed.parameters(), strict=True):
+        torch.testing.assert_close(left.grad, right.grad, rtol=2e-5, atol=2e-6)
+    assert torch.equal(*rng_states)
+
+
+def test_recomputed_structured_loss_bounds_field_activation_memory():
+    class Saved:
+        def __init__(self, tensor, counter):
+            self.tensor, self.counter = tensor, counter
+            self.size = tensor.numel() * tensor.element_size()
+            counter[0] += self.size
+            counter[1] = max(counter)
+
+        def __del__(self):
+            self.counter[0] -= self.size
+
+    class MeasuredScene(Scene):
+        def __init__(self):
+            super().__init__()
+            self.counter = [0, 0]
+
+        def forward(self, ra, dec, wavelength):
+            # Count field activations separately: the exact noise likelihood
+            # necessarily retains full-image tensors outside this scope.
+            with torch.autograd.graph.saved_tensors_hooks(
+                lambda tensor: Saved(tensor, self.counter), lambda saved: saved.tensor
+            ):
+                return super().forward(ra, dec, wavelength)
+
+    def measure(side, streaming):
+        model, obs = MeasuredScene(), observation(side)
+        bundle = replace(
+            field_observation_operator_bundle(obs),
+            noise=StructuredNoiseOp(StructuredDetectorNoise(num_amplifiers=2)),
+        )
+        fit_field_model(
+            [obs], model, steps=1, lr=0.0, num_spectral_samples=1,
+            observation_operator_bundles=[bundle], loss_kind="structured_nll",
+            streaming_accumulation=streaming, render_spatial_tile_hw=(8, 8),
+            diagnostic_spatial_tile_hw=(8, 8), device="cpu",
+        )
+        assert model.counter[0] == 0
+        return model.counter[1]
+
+    small, large, retained = measure(20, True), measure(40, True), measure(40, False)
+    assert large <= small * 1.05
+    assert large < retained / 4
 
 
 def test_effective_psf_rejects_double_pixel_integration():

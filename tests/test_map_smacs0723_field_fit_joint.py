@@ -395,7 +395,7 @@ def test_joint_field_fit_summary_averages_rows_by_model() -> None:
     assert abs(summary[0]["mean_affine_slope"] - 0.9) < 1.0e-6
 
 
-def test_joint_real_fit_kwargs_use_pixel_sampling() -> None:
+def test_joint_real_fit_kwargs_preserve_psf_with_streamed_tiles() -> None:
     kwargs = _joint_real_fit_kwargs(
         "spectral_basis_field",
         crop_size=32,
@@ -404,7 +404,9 @@ def test_joint_real_fit_kwargs_use_pixel_sampling() -> None:
     )
     assert kwargs["observations_per_step"] == 12
     assert kwargs["training_patch_size"] is None
-    assert kwargs["pixel_samples_per_observation"] >= 256
+    assert kwargs["pixel_samples_per_observation"] is None
+    assert kwargs["streaming_accumulation"] is True
+    assert kwargs["render_spatial_tile_hw"] == (256, 256)
 
 
 def test_joint_real_foam_fit_bounds_psf_training_and_diagnostics() -> None:

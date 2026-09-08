@@ -18,6 +18,20 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src" / "torchsky"
 REPO_ROOT = PACKAGE_ROOT.parents[1]
 
 
+def test_fits_facade_and_tensor_operators_do_not_require_torchsky_native():
+    script = """
+import sys
+sys.modules['torchsky._cpp'] = None
+import torchfits
+from torchsky.io import fits
+from torchsky.map.operators import LowRankChromaticPSF
+assert fits.read is torchfits.read
+assert LowRankChromaticPSF(grid_side=2, spectral_degree=1,
+                          base_sigma_pix=0.8, kernel_size=5) is not None
+"""
+    subprocess.run([sys.executable, "-c", script], cwd=REPO_ROOT, check=True)
+
+
 def test_native_torch_abi_contract_is_consistent() -> None:
     pyproject = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")

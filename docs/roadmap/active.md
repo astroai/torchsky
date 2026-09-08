@@ -1,5 +1,46 @@
 # Active Torchsky Execution Checklist
 
+## Reconstruction work — 2026-09-07
+
+Use the existing `astroai/improc:latest` image for SMACS comparison tools.
+The reported SWarp build was official SWarp, not Torchsky's implementation;
+rebuilding it was unnecessary. Depth launches now default to this image,
+mosaic comparisons no longer build external tools, and Montage discovery
+also checks the image's PATH. The previous CPU build session `isy3usqe` is
+no longer present; no replacement build was launched.
+
+Structured-noise training now supports PSF-aware tiled recomputation. It
+evaluates the likelihood on the full detector image, then re-renders each
+tile to propagate the full-image likelihood gradient. This preserves
+cross-tile noise correlations and bounds field activations by tile size;
+prediction and noise tensors still scale with image size. CPU tests compare
+scene, noise and background gradients across all four reductions, replay
+random draws, and check saved activation memory. CUDA AMP and MPS remain
+unverified, and rendering must not mutate model buffers.
+
+Every reconstruction supplied with a calibration manifest now excludes
+validation and test exposures before coaddition, domain construction and
+fitting. Previously this depended on the independent-calibration flag.
+Unknown splits and selections without training data are rejected.
+
+The joint benchmark now scores frozen model predictions on validation
+detector crops, using all valid pixels and the supplied ERR planes. It
+records Gaussian NLL and chi-squared per band and exposure, reverses the
+training-only numerical scale in the likelihood density, and never renders
+test exposures for selection. This is a diagonal-noise score: correlations,
+the actual photometric reference spectrum and pixel-response calibration
+still need independent verification. Training-specific free-offset models
+are explicitly excluded from this scoring path. INR configurations now use
+PSF-aware streamed tiles instead of incompatible independent pixel samples.
+
+CI at `9c467265` passed every map group and sphere spectral checks. The
+remaining failures were a FITS facade unnecessarily importing Torchsky's
+native extension, and the old small-cutout visualization test lacking
+physical units. The facade now gets its FITS capability flags directly
+from Torchfits; the test supplies units and expects RGB to remain pending
+when only two bands are available. Remote verification of these repairs
+is pending.
+
 ## Branch consolidation and SMACS implementation — 2026-09-05
 
 The accepted plan is the 2026-09-05 section of `next.md`. Work now targets

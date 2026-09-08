@@ -518,7 +518,8 @@ def _find_montage_binary(name: str) -> Path | None:
     )
     if source_candidate.exists():
         return source_candidate
-    return None
+    path = shutil.which(name)
+    return Path(path) if path is not None else None
 
 
 def _find_casutools_binary(name: str) -> Path | None:
