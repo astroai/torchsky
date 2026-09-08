@@ -39,6 +39,13 @@ resource and diagnostic limitations; they do not establish the old run's cause.
 The changes pass 53 focused tests, preflight and type checking (one existing
 export-list warning). Whole-band injection overrides still retain full arrays;
 the preparation memory improvement currently applies to uninjected science.
+Checkpoint `433c1db6` contains these fixes. The replacement two-band validation
+run `depth-20260908-054220` (session `y2l4autn`) was created from that commit
+using the working base image after the improc launch request again returned
+HTTP 400. The configured default remains `astroai/improc:latest`. The new run
+is still setting up; no reconstruction result has been measured yet.
+The plain-text report now places held-out detector scores before secondary
+reference-image comparisons and labels missing scores “not measured.”
 
 Structured-noise training now supports PSF-aware tiled recomputation. It
 evaluates the likelihood on the full detector image, then re-renders each

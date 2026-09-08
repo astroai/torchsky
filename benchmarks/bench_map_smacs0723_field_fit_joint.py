@@ -1758,17 +1758,45 @@ def _summarize_by_model(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return summary
 
 
-def _format_markdown(rows: list[dict[str, Any]]) -> str:
+def _format_markdown(
+    rows: list[dict[str, Any]],
+    *,
+    validation_scores: dict[str, list[dict[str, Any]]] | None = None,
+) -> str:
     ok_rows = [row for row in rows if row["status"] == "OK"]
     summary = _summarize_by_model(ok_rows)
     lines = [
         "# SMACS J0723 Joint Multiband Field-Fit",
         "",
-        "## Model Summary",
+        "## Prediction of exposures excluded from training",
+        "",
+    ]
+    if validation_scores:
+        lines.extend([
+            "Lower negative log likelihood means better prediction on the same validation pixels. "
+            "These scores use pipeline errors and assume independent pixels. "
+            "The final test exposures were not evaluated. Differences alone do not establish "
+            "improvement without paired uncertainty estimates and flux/color recovery checks.",
+            "",
+            "| Method | Band | Exposures | Pixels | Negative log likelihood per pixel | Chi-squared per pixel | Brightness units |",
+            "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+        ])
+        for method, band_scores in validation_scores.items():
+            for score in band_scores:
+                lines.append(
+                    f"| {method} | {score['band']} | {score['exposures']} | {score['pixels']} | "
+                    f"{score['gaussian_nll_per_pixel']:.6f} | {score['chi2_per_pixel']:.6f} | "
+                    f"{score.get('value_unit') or 'not measured'} |"
+                )
+    else:
+        lines.append("Validation prediction error: not measured.")
+    lines.extend([
+        "",
+        "## Secondary reference-image comparisons",
         "",
         "| model | bands | mean source contrast rmse | mean source rmse | mean support rmse | mean aligned rmse | mean source slope | fit ms |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ]
+    ])
     for row in summary:
         lines.append(
             f"| {row['model']} | {row['bands']} | {row['mean_source_contrast_rmse']:.6f} | "
@@ -3373,7 +3401,10 @@ def main() -> int:
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     args.markdown_out.parent.mkdir(parents=True, exist_ok=True)
-    args.markdown_out.write_text(_format_markdown(payload["rows"]), encoding="utf-8")
+    args.markdown_out.write_text(
+        _format_markdown(payload["rows"], validation_scores=validation_scores),
+        encoding="utf-8",
+    )
     print(json.dumps(payload, indent=2))
     if args.fail_on_method_error and fail_rows:
         return 1

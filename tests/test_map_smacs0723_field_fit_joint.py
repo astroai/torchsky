@@ -309,7 +309,7 @@ def test_joint_field_fit_markdown_lists_summary_and_band_rows() -> None:
             }
         ]
     )
-    assert "Model Summary" in text
+    assert "Secondary reference-image comparisons" in text
     assert "F090W" in text
     assert "spectral_basis_field" in text
 

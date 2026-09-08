@@ -138,3 +138,16 @@ def test_validation_scores_render_real_detector_tiles():
     )
     assert scores[0]["pixels"] == int(obs.mask.sum())
     assert math.isfinite(scores[0]["gaussian_nll_per_pixel"])
+
+
+def test_plain_report_leads_with_validation_and_labels_missing_scores():
+    scores = {"example": [{
+        "band": "F090W", "exposures": 2, "pixels": 100,
+        "gaussian_nll_per_pixel": -1.5, "chi2_per_pixel": 1.1,
+        "value_unit": "MJy/sr",
+    }]}
+    report = joint._format_markdown([], validation_scores=scores)
+    assert "| example | F090W | 2 | 100 | -1.500000 | 1.100000 | MJy/sr |" in report
+    assert report.index("excluded from training") < report.index("reference-image")
+    assert "final test exposures were not evaluated" in report
+    assert "not measured" in joint._format_markdown([])
