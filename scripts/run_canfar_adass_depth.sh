@@ -331,6 +331,9 @@ case "${mode}" in
     ;;
   foam)
     joint_calibration_args=(--calibration-family "${CALIBRATION_FAMILY:-stationary}")
+    if [[ -n "${FOAM_TARGET_HEADER_PATH:-}" ]]; then
+      joint_calibration_args+=(--target-header-path "${FOAM_TARGET_HEADER_PATH}")
+    fi
     if [[ -n "${MEASURED_PASSBAND_DIR:-}" ]]; then
       joint_calibration_args+=(--measured-passband-dir "${MEASURED_PASSBAND_DIR}")
     fi

@@ -36,8 +36,12 @@ def test_depth_foam_uses_cuda_build_and_forwards_size_controls():
     assert '"${mode}" == "foam"' in selection
     assert "native_build_env=smacs-cuda" in selection
     launcher = (ROOT / "scripts/launch_canfar_wcs_sphere.sh").read_text()
-    for name in ("FOAM_BANDS", "FOAM_CROP_SIZE", "FOAM_STEPS", "FOAM_GRID_SIDE"):
+    for name in ("FOAM_BANDS", "FOAM_CROP_SIZE", "FOAM_STEPS", "FOAM_GRID_SIDE",
+                 "FOAM_BASIS_COUNT", "FOAM_INITIALIZE_FROM_COADD",
+                 "FOAM_AFFINE_SPATIAL_BASIS", "FOAM_WHITEN_SPECTRAL_BASIS",
+                 "FOAM_TARGET_HEADER_PATH"):
         assert f'--env "{name}=' in launcher
+    assert '--target-header-path "${FOAM_TARGET_HEADER_PATH}"' in runner
 
 
 def _inspection_module() -> ModuleType:

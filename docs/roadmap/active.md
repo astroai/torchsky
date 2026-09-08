@@ -77,6 +77,28 @@ SHA256 provenance, a masked six-band FITS cube and Torchfits RGB in
 `quicklooks_v2/`. They are labelled as historical, not new neural results;
 unmeasured metrics are not inferred from the image appearance.
 
+The repaired run completed successfully with exit code 0. It exported two-band
+FITS products and validated on two overlapping exposures per band, evaluating
+no test exposures. F090W has 9,504 valid validation pixels, mean Gaussian NLL
+-2.162687 and chi-squared 1.513361 per pixel; F150W has 9,249 pixels, NLL
+-2.516363 and chi-squared 1.237603. The density is expressed in the original
+MJy/sr brightness units. Two optimization steps took 17.08 seconds, with
+72,892,928 bytes peak tracked CUDA allocation. This is execution evidence:
+the source-flux comparison shows a severely underfitted scene, not a usable
+neural map. Nominal Gaussian widths in subsequent reports are explicitly
+labelled as assumptions, not measured or fitted PSF widths.
+
+The next pilot uses a single predeclared 128-pixel common target grid centered
+on the historical crop, six measured bands, 64-by-64 fixed Foam cells, six
+spectral modes, affine spatial coefficients, coadd initialization and spectral
+basis whitening, then 200 Adam steps with stationary independent calibration.
+The target FITS is stored at
+`/arc/projects/ots/torchsky-runs/20260908-six-band-pilot-inputs/target_128.fits`,
+SHA256 `46842f1b9edbdadc717199367434dfe8faf40130f245aab2ddda729ac3b423c2`.
+Its upload was read back and hash-verified. The launcher now forwards these
+existing benchmark controls. This pilot remains a cropped experiment, not
+the final cluster reconstruction or the full injection comparison.
+
 Structured-noise training now supports PSF-aware tiled recomputation. It
 evaluates the likelihood on the full detector image, then re-renders each
 tile to propagate the full-image likelihood gradient. This preserves
