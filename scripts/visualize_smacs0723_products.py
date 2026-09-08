@@ -703,7 +703,7 @@ def main() -> int:
         rgb_path = output_dir / f"{slug}_six_band_lupton_rgb.png"
         fig, ax = plt.subplots(figsize=(5.0, 5.0))
         ax.imshow(rgb, origin="lower")
-        ax.set_title(f"{method} | false color | native resolution\nB: F090W/F150W; G: F200W/F277W; R: F356W/F444W\nFixed stretch; gray marks missing coverage")
+        ax.set_title(f"{method}\nFalse color | native resolution\nB: F090W/F150W; G: F200W/F277W; R: F356W/F444W\nFixed stretch; gray marks missing coverage", fontsize=9)
         ax.axis("off")
         fig.tight_layout()
         fig.savefig(rgb_path, dpi=dpi)

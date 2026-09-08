@@ -58,6 +58,25 @@ memory exhaustion. Historical six-band native Drizzle products were also
 located on ARC; historical Foam products had poor source-flux recovery and
 are diagnostic evidence, not promoted reconstructions.
 
+The repaired-entry run is `depth-20260908-152136`, session `qx6jqxkw`, from
+`7ef600a5`; it passed CUDA import/device checks and entered the benchmark
+command. Science results are pending. An independent analytic Gaussian
+continuum check now tests the default linear-affine Foam with pixel integration
+and a PSF: both cold Adam and coadd/whitening controls recover aperture flux
+within 1% after the existing exact refinement. The positive-log variant
+underconverged at 200 steps and improved at 800 in a separate experiment;
+this does not reproduce or resolve the historical real-data flux deficit.
+Real masks, measured passbands, independent PSFs and larger injection batches
+remain necessary before making a SMACS recovery claim.
+
+Historical uninjected Drizzle science and weights from
+`20260729-smacs-torchsky-drizzle-aa0aa21/blank` were recovered for all six bands.
+They share a 512-pixel WCS at 0.06300066 arcsec/pixel. Local products under
+`benchmarks_results/recovered_smacs_20260908/` include original FITS files,
+SHA256 provenance, a masked six-band FITS cube and Torchfits RGB in
+`quicklooks_v2/`. They are labelled as historical, not new neural results;
+unmeasured metrics are not inferred from the image appearance.
+
 Structured-noise training now supports PSF-aware tiled recomputation. It
 evaluates the likelihood on the full detector image, then re-renders each
 tile to propagate the full-image likelihood gradient. This preserves
