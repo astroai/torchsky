@@ -215,6 +215,12 @@ def _validation_detector_scores(
     was_training = model.training
     model.eval()
     try:
+        device = next((parameter.device for parameter in model.parameters()), torch.device("cpu"))
+        for bundle in bundles:
+            for operator in (getattr(bundle, "psf", None), getattr(bundle, "background", None)):
+                operator_model = getattr(operator, "model", None)
+                if isinstance(operator_model, torch.nn.Module):
+                    operator_model.to(device=device)
         with torch.no_grad():
             for observation, context, bundle in zip(observations, contexts, bundles, strict=True):
                 if observation.err is None or observation.mask is None:
@@ -2351,42 +2357,32 @@ def main() -> int:
                 injection_rows.extend({"band": band, **row} for row in injection_audit)
 
             image_observations: list[ImageObservation] = []
-            raw_field_inputs: list[
-                tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]
-            ] = []
-            raw_noise_inputs: dict[
-                Path,
-                tuple[
-                    np.ndarray,
-                    np.ndarray | None,
-                    np.ndarray | None,
-                    np.ndarray | None,
-                    np.ndarray,
-                ],
-            ] = {}
+            field_observations: list[FieldObservation] = []
+            band_validation_observations: list[FieldObservation] = []
+            band_validation_contexts: list[ForwardContext] = []
             for exposure_path in exposure_paths + validation_paths:
                 science_override = (
                     science_overrides.get(exposure_path)
                     if science_overrides is not None
                     else None
                 )
-                science_path, weight_path, mask_path = _prepare_aux_files(
-                    exposure_path,
-                    tmpdir,
-                    linearize_sip=False,
-                    science_override=science_override,
-                )
                 if exposure_path in exposure_paths:
-                    image_observations.append(
-                    ImageObservation(
-                        str(science_path),
-                        hdu=0,
-                        weight_path=str(weight_path),
-                        weight_hdu=0,
-                        mask_path=str(mask_path),
-                        mask_hdu=0,
+                    science_path, weight_path, mask_path = _prepare_aux_files(
+                        exposure_path,
+                        tmpdir,
+                        linearize_sip=False,
+                        science_override=science_override,
                     )
-                )
+                    image_observations.append(
+                        ImageObservation(
+                            str(science_path),
+                            hdu=0,
+                            weight_path=str(weight_path),
+                            weight_hdu=0,
+                            mask_path=str(mask_path),
+                            mask_hdu=0,
+                        )
+                    )
                 science = (
                     _read_ext(exposure_path, "SCI")
                     if science_override is None
@@ -2400,29 +2396,11 @@ def main() -> int:
                 valid = np.isfinite(err) & (err > 0) & dq_support
                 weight = np.zeros_like(err, dtype=np.float32)
                 weight[valid] = 1.0 / np.square(err[valid])
-                raw_noise_inputs[exposure_path] = (
-                    err,
-                    _read_optional_ext(exposure_path, "VAR_POISSON"),
-                    _read_optional_ext(exposure_path, "VAR_RNOISE"),
-                    _read_optional_ext(exposure_path, "VAR_FLAT"),
-                    contamination_prior,
-                )
-                raw_field_inputs.append(
-                    (
-                        science,
-                        weight,
-                        valid.astype(np.float32, copy=False),
-                        dict(_sci_header(exposure_path)),
-                    )
-                )
-            field_observations: list[FieldObservation] = []
-            for exposure_path, (image, weight, mask, header) in zip(
-                exposure_paths + validation_paths, raw_field_inputs, strict=True
-            ):
+                header = dict(_sci_header(exposure_path))
                 cropped = _crop_field_inputs_to_target(
-                    image=image,
+                    image=science,
                     weight=weight,
-                    mask=mask,
+                    mask=valid.astype(np.float32, copy=False),
                     header=header,
                     target_header=target_header,
                 )
@@ -2456,9 +2434,14 @@ def main() -> int:
                     slice(source_y0, source_y0 + crop_image.shape[0]),
                     slice(source_x0, source_x0 + crop_image.shape[1]),
                 )
-                err, var_poisson, var_rnoise, var_flat, contamination_prior = (
-                    raw_noise_inputs[exposure_path]
-                )
+                # Retain only cropped variance arrays between exposures.
+                variance_crops = []
+                for extension in ("VAR_POISSON", "VAR_RNOISE", "VAR_FLAT"):
+                    variance = _read_optional_ext(exposure_path, extension)
+                    variance_crops.append(
+                        None if variance is None else torch.from_numpy(variance[source_slice].copy())
+                    )
+                del variance
                 amplifier_columns = torch.clamp(
                     (
                         torch.arange(crop_image.shape[1], dtype=torch.int64)
@@ -2469,28 +2452,16 @@ def main() -> int:
                     max=3,
                 )
                 is_validation = exposure_path in validation_paths
-                (validation_observations if is_validation else field_observations).append(
+                (band_validation_observations if is_validation else field_observations).append(
                     FieldObservation(
                         image=torch.from_numpy(crop_image),
                         header=crop_header,
                         weight=torch.from_numpy(crop_weight),
                         mask=torch.from_numpy(crop_mask),
                         err=torch.from_numpy(err[source_slice].copy()),
-                        var_poisson=(
-                            None
-                            if var_poisson is None
-                            else torch.from_numpy(var_poisson[source_slice].copy())
-                        ),
-                        var_rnoise=(
-                            None
-                            if var_rnoise is None
-                            else torch.from_numpy(var_rnoise[source_slice].copy())
-                        ),
-                        var_flat=(
-                            None
-                            if var_flat is None
-                            else torch.from_numpy(var_flat[source_slice].copy())
-                        ),
+                        var_poisson=variance_crops[0],
+                        var_rnoise=variance_crops[1],
+                        var_flat=variance_crops[2],
                         contamination_prior=torch.from_numpy(
                             contamination_prior[source_slice].copy()
                         ),
@@ -2508,7 +2479,7 @@ def main() -> int:
                         ),
                     )
                 )
-                (validation_contexts if is_validation else all_forward_contexts).append(
+                (band_validation_contexts if is_validation else all_forward_contexts).append(
                     ForwardContext(
                         survey=str(band),
                         instrument="NIRCAM" if calibration_exposure else None,
@@ -2565,6 +2536,8 @@ def main() -> int:
                     continue
                 raise RuntimeError(f"no overlapping field observations for {band}")
 
+            validation_observations.extend(band_validation_observations)
+            validation_contexts.extend(band_validation_contexts)
             coadd_reference = coadd_image_plane(
                 image_observations,
                 target_header=dict(target_header),

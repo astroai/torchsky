@@ -3,12 +3,14 @@
 from pathlib import Path
 import math
 import sys
+from dataclasses import replace
 
 import pytest
 import torch
 
 from torchsky.map.field import FieldObservation
 from torchsky.map import ForwardContext
+from torchsky.map.operators import LearnedBackgroundOp, ObservationOperatorBundle
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks"))
 import bench_map_smacs0723_field_fit_joint as joint
@@ -89,3 +91,50 @@ def test_validation_scores_reject_test_before_rendering(monkeypatch):
             [ForwardContext(survey="F090W", extra={"split": "test"})], [None],
             intensity_scale=1., fit_kwargs={},
         )
+
+
+def test_validation_moves_frozen_operator_without_training_exposure(monkeypatch):
+    class Background(torch.nn.Linear):
+        def to(self, *args, **kwargs):
+            self.moved_device = kwargs["device"]
+            return super().to(*args, **kwargs)
+
+    model = torch.nn.Linear(1, 1)
+    background = Background(1, 1).requires_grad_(False).eval()
+    original = {key: value.clone() for key, value in background.state_dict().items()}
+    bundle = ObservationOperatorBundle(background=LearnedBackgroundOp(background))
+    observation = FieldObservation(
+        image=torch.ones((2, 2)), header={}, err=torch.ones((2, 2)),
+        mask=torch.ones((2, 2)),
+    )
+
+    def render(model, observation, **kwargs):
+        assert background.moved_device == next(model.parameters()).device
+        assert not background.training
+        assert not any(parameter.requires_grad for parameter in background.parameters())
+        return torch.ones_like(observation.image)
+
+    monkeypatch.setattr(joint, "render_field_observation", render)
+    scores = joint._validation_detector_scores(
+        model, [observation], [ForwardContext(survey="F090W", extra={"split": "validation"})],
+        [bundle], intensity_scale=1., fit_kwargs={},
+    )
+    assert scores[0]["chi2_per_pixel"] == 0.
+    for key, value in background.state_dict().items():
+        torch.testing.assert_close(value, original[key])
+
+
+def test_validation_scores_render_real_detector_tiles():
+    from test_map_field_streamed_tiles import Scene, observation
+    from torchsky.map.operators import field_observation_operator_bundle
+
+    obs = observation(9)
+    obs = replace(obs, err=torch.ones_like(obs.image))
+    scores = joint._validation_detector_scores(
+        Scene(), [obs], [ForwardContext(survey="F090W", extra={"split": "validation"})],
+        [field_observation_operator_bundle(obs)], intensity_scale=1.,
+        fit_kwargs={"num_spectral_samples": 2, "spatial_sampling": "gauss_legendre_2x2",
+                    "render_spatial_tile_hw": (5, 5)},
+    )
+    assert scores[0]["pixels"] == int(obs.mask.sum())
+    assert math.isfinite(scores[0]["gaussian_nll_per_pixel"])

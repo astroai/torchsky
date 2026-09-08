@@ -21,8 +21,24 @@ GPU validation session `my8tv91c`, run `depth-20260908-032847`, was created from
 `e085b5a3` using the previously working base notebook image. It uses frozen
 stationary calibration, measured passbands, two bands, a 32-pixel crop and two
 optimization steps. This checks real-data execution, not scientific convergence.
-No external comparison tools are built or invoked by this run. Its results
-are pending.
+No external comparison tools were built or invoked by this run. Follow-up
+found its ARC `b/` output directory empty and session/status/events unavailable
+(404). The persistent log ends after the CUDA-environment Torchsky build;
+there is no recorded scientific result or termination reason. Do not call
+this an out-of-memory failure without evidence.
+
+Fork CI is fully green at `ba862f17` (run `34183869145`), including all map,
+core and sphere jobs. The follow-up implementation removes avoidable retention
+of full detector SCI/noise arrays while preparing small crops, skips unused
+validation auxiliary FITS writes, and keeps validation bands without training
+overlap out of scoring. Frozen validation operators move to the scene device.
+The runner now records commands and ordinary exit status, enables Python fault
+tracebacks, and builds directly in the CUDA environment for Foam runs. A shell
+SIGKILL still cannot write an exit record. These changes address concrete
+resource and diagnostic limitations; they do not establish the old run's cause.
+The changes pass 53 focused tests, preflight and type checking (one existing
+export-list warning). Whole-band injection overrides still retain full arrays;
+the preparation memory improvement currently applies to uninjected science.
 
 Structured-noise training now supports PSF-aware tiled recomputation. It
 evaluates the likelihood on the full detector image, then re-renders each

@@ -23,6 +23,9 @@ if [[ "${dry_run}" != "1" ]]; then
 
   mkdir -p "${artifact_root}"
   exec > >(tee -a "${artifact_root}/session.log") 2>&1
+  # Persist normal exits and child-process failures before the session vanishes.
+  # SIGKILL of this shell cannot run an EXIT trap.
+  trap 'run_exit_code=$?; printf "exit_code=%s\nfinished_utc=%s\n" "${run_exit_code}" "$(date -u +%FT%TZ)" > "${artifact_root}/exit_status.txt"; echo "run_exit_code=${run_exit_code}"' EXIT
 fi
 
 echo "run_id=${run_id}"
@@ -58,6 +61,7 @@ export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
 export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED=1
+export PYTHONFAULTHANDLER=1
 export PYTHONNOUSERSITE=1
 
 # Apply the selected environment's C++ runtime after Pixi activation. Different
@@ -96,6 +100,9 @@ run() {
   if [[ "${dry_run}" = "1" ]]; then
     echo "DRY_RUN:" "$*"
   else
+    printf 'RUN:'
+    printf ' %q' "$@"
+    printf '\n'
     "$@"
   fi
 }
@@ -128,6 +135,9 @@ done
 # The editable install also builds torchsky._cpp, which every later step's
 # bare PYTHONPATH import needs.
 native_build_env=default
+if [[ "${mode}" == "foam" || "${mode}" == "foam-validation" ]]; then
+  native_build_env=smacs-cuda
+fi
 if [[ "${mode}" == "mosaic-parity" ]]; then
   native_build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}
   [[ "${native_build_env}" == "map-compat" || "${native_build_env}" == "map-compat-cuda" ]] || {

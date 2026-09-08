@@ -18,6 +18,28 @@ if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
 
+def test_depth_runner_persists_failure_status(tmp_path):
+    runner = (ROOT / "scripts/run_canfar_adass_depth.sh").read_text()
+    trap = next(line.strip() for line in runner.splitlines() if line.strip().startswith("trap "))
+    result = subprocess.run(
+        ["bash", "-c", 'artifact_root=$1\n' + trap + '\nexit 17', "check", str(tmp_path)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 17
+    assert "run_exit_code=17" in result.stdout
+    assert (tmp_path / "exit_status.txt").read_text().startswith("exit_code=17\nfinished_utc=")
+
+
+def test_depth_foam_uses_cuda_build_and_forwards_size_controls():
+    runner = (ROOT / "scripts/run_canfar_adass_depth.sh").read_text()
+    selection = runner.split("native_build_env=default", 1)[1].split('if [[ "${dry_run}"', 1)[0]
+    assert '"${mode}" == "foam"' in selection
+    assert "native_build_env=smacs-cuda" in selection
+    launcher = (ROOT / "scripts/launch_canfar_wcs_sphere.sh").read_text()
+    for name in ("FOAM_BANDS", "FOAM_CROP_SIZE", "FOAM_STEPS", "FOAM_GRID_SIDE"):
+        assert f'--env "{name}=' in launcher
+
+
 def _inspection_module() -> ModuleType:
     path = BENCHMARKS / "export_smacs0723_calibration_inspection.py"
     spec = importlib.util.spec_from_file_location("smacs_calibration_inspection", path)
