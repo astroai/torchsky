@@ -102,8 +102,22 @@ the final cluster reconstruction or the full injection comparison.
 This pilot is running as session `z93v5gab`, run
 `depth-20260908-202557`, from fork commit `5dc782d3`. The Torchsky-only job
 uses the explicitly selected working base notebook image; the comparison
-image default remains `astroai/improc:latest`. Its latest status is Running,
-with no completed science report yet. Exact observation refinement is off.
+image default remains `astroai/improc:latest`. The run failed during training.
+The inspected log recorded CUDA out-of-memory failures on the 11.54 GB slice,
+then an NVML allocator assertion in the Foam support-weight calculation.
+No completed map was produced; exact refinement was off.
+
+The follow-up preserves the 128-pixel training patch and 64-by-64 model cells,
+but renders and backpropagates 16-pixel cores with PSF margins. The per-call
+point-by-cell limit is a working-memory control, not a total GPU-memory bound.
+Unrefined Foam exports now retain the trained soft field instead of silently
+switching to hard cell ownership. These are target-grid projections with an
+assumed target PSF; validation scores describe calibrated detector predictions.
+Hard export remains reserved for explicitly exact-refined models.
+
+Fork checkpoint `25d7ae12` passed Comprehensive CI `34275561108` and the
+WCS/sphere weekly run `34349930928`. Those checks do not establish CUDA viability
+for this larger SMACS fit.
 
 Joint fits now save registered scene models immediately after fitting, before
 validation and image export. Artifacts include optimizer and sampling state,

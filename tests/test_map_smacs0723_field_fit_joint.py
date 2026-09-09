@@ -422,7 +422,7 @@ def test_joint_real_foam_fit_bounds_psf_training_and_diagnostics() -> None:
     assert kwargs["shared_sky_patch_sampling"] is True
     assert kwargs["spatial_sampling"] == "gauss_legendre_2x2"
     assert kwargs["streaming_accumulation"] is True
-    assert kwargs["diagnostic_spatial_tile_hw"] == (64, 64)
+    assert kwargs["diagnostic_spatial_tile_hw"] == (32, 32)
     assert kwargs["lr"] == pytest.approx(2.0e-2)
 
 
@@ -446,7 +446,7 @@ def test_joint_real_foam_fit_scales_tiles_with_grid_capacity() -> None:
     )
     assert fixed["training_patch_size"] == 128
     assert kwargs["training_patch_size"] == 32
-    assert kwargs["diagnostic_spatial_tile_hw"] == (32, 32)
+    assert kwargs["diagnostic_spatial_tile_hw"] == (4, 4)
 
 
 def test_joint_foam_coadd_initializer_covers_cells_and_spectral_bands() -> None:

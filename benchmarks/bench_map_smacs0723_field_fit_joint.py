@@ -1513,6 +1513,16 @@ def _joint_real_fit_kwargs(
         kwargs["streaming_accumulation"] = True
         kwargs["diagnostic_spatial_tile_hw"] = (min(tile_side, 64),) * 2
     kwargs["render_spatial_tile_hw"] = (256, 256)
+    if model_kind == "spectral_power_foam":
+        # ponytail: cap point-by-cell work, not total CUDA memory. Spectral
+        # samples retain multiple matrices and PSF margins add pixels; a sparse
+        # cell index is the upgrade for much larger grids.
+        render_side = min(
+            tile_side, 32,
+            max(1, math.isqrt(1024 * 1024 // (int(foam_grid_side) ** 2))),
+        )
+        kwargs["render_spatial_tile_hw"] = (render_side, render_side)
+        kwargs["diagnostic_spatial_tile_hw"] = (render_side, render_side)
     kwargs["observations_per_step"] = min(max(num_observations, 1), 12)
     kwargs["observation_sampling"] = "band_balanced"
     if model_kind != "spectral_power_foam":
@@ -3269,17 +3279,29 @@ def main() -> int:
                                 float(target_coordinates[:, 1].min()),
                                 float(target_coordinates[:, 1].max()),
                             ]
-                            rendered = render_spectral_power_foam_observation_exact(
-                                hard_model,
-                                target_observation,
-                                num_spectral_samples=render_num_spectral_samples,
-                                operator_kwargs={
-                                    "max_candidate_pairs": int(
-                                        args.foam_exact_max_candidate_pairs
+                            with torch.no_grad():
+                                if args.foam_exact_observation_refine:
+                                    rendered = render_spectral_power_foam_observation_exact(
+                                        hard_model, target_observation,
+                                        num_spectral_samples=render_num_spectral_samples,
+                                        operator_kwargs={
+                                            "max_candidate_pairs": int(args.foam_exact_max_candidate_pairs)
+                                        },
                                     )
-                                },
+                                    row["render_mode"] = "hard_pixel_footprint"
+                                else:
+                                    rendered = render_field_observation(
+                                        result_model, target_observation,
+                                        num_spectral_samples=render_num_spectral_samples,
+                                        spatial_sampling=fit_kwargs["spatial_sampling"],
+                                        spatial_tile_hw=fit_kwargs["render_spatial_tile_hw"],
+                                        forward_context=render_ctx,
+                                    )
+                                    row["render_mode"] = "trained_soft_pixel_quadrature"
+                            row["product_interpretation"] = (
+                                "target-grid scene with assumed target PSF; "
+                                "not a calibrated detector prediction"
                             )
-                            row["render_mode"] = "hard_pixel_footprint"
                         else:
                             rendered = render_field_observation(
                                 result_model,

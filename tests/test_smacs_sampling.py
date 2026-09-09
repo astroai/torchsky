@@ -72,6 +72,45 @@ def test_joint_inr_configuration_runs_with_psf_and_pixel_integration():
     assert math.isfinite(result.final_loss)
 
 
+def test_fixed_foam_keeps_training_patch_but_bounds_render_work():
+    kwargs = joint._joint_real_fit_kwargs(
+        "spectral_power_foam", crop_size=128, steps=200,
+        num_observations=50, foam_grid_side=64, foam_fixed_geometry=True,
+    )
+    assert kwargs["training_patch_size"] == 128
+    assert kwargs["render_spatial_tile_hw"] == (16, 16)
+    assert kwargs["diagnostic_spatial_tile_hw"] == (16, 16)
+
+
+def test_compact_foam_render_tiles_preserve_psf_prediction_and_gradient():
+    from test_field_artifacts import _foam, _header
+    from test_map_field_streamed_tiles import observation
+    from torchsky.map.field.rendering import iter_field_observation_tiles
+
+    model = _foam().float()
+    joint._set_foam_geometry_trainable(model, False)
+    model.compact_fixed_geometry = True
+    header = {**_header(), "NAXIS1": 36, "NAXIS2": 33,
+              "CRPIX1": 18.5, "CRPIX2": 17.0}
+    obs = replace(observation(33), header=header,
+                  spectral_min=4500., spectral_max=5500.)
+    kwargs = dict(num_spectral_samples=5, spatial_sampling="gauss_legendre_2x2")
+    full = joint.render_field_observation(model, obs, **kwargs)
+    full.square().sum().backward()
+    parameters = [p for p in model.parameters() if p.requires_grad]
+    expected = [p.grad.clone() for p in parameters]
+    model.zero_grad()
+    assembled = torch.empty_like(full)
+    for ys, xs, prediction in iter_field_observation_tiles(
+        model, obs, spatial_tile_hw=(16, 16), **kwargs,
+    ):
+        assembled[ys, xs] = prediction.detach()
+        prediction.square().sum().backward()
+    torch.testing.assert_close(assembled, full, rtol=2e-5, atol=2e-6)
+    for parameter, gradient in zip(parameters, expected, strict=True):
+        torch.testing.assert_close(parameter.grad, gradient, rtol=3e-5, atol=2e-5)
+
+
 def test_manifest_training_selection_fails_without_training():
     path = Path("heldout.fits")
     with pytest.raises(ValueError, match="no training exposures"):
