@@ -115,6 +115,15 @@ switching to hard cell ownership. These are target-grid projections with an
 assumed target PSF; validation scores describe calibrated detector predictions.
 Hard export remains reserved for explicitly exact-refined models.
 
+Checkpoint `3b92e55d` contains the correction. All 67 targeted sampling,
+joint-benchmark and streamed-render tests pass; preflight passes and type
+checking has zero errors (one existing warning). Replacement session `lbjhoo6j`
+was created on the currently selected CANFAR **staging** server and is Pending.
+Its run directory is `depth-20260909-softtiles-3b92e55d`. It retains the same
+six-band pilot configuration and starts from a Git bundle of the pushed commit
+on ARC, without passing GitHub credentials to the job. No replacement science
+result has been measured yet.
+
 Fork checkpoint `25d7ae12` passed Comprehensive CI `34275561108` and the
 WCS/sphere weekly run `34349930928`. Those checks do not establish CUDA viability
 for this larger SMACS fit.
