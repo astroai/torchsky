@@ -55,6 +55,9 @@ if ! command -v canfar >/dev/null; then
   echo "canfar CLI not found" >&2
   exit 1
 fi
+if [[ "${TORCHSKY_CANFAR_DRY_RUN:-0}" != "1" ]]; then
+  canfar server use production
+fi
 
 launch_one() {
   local job_mode=$1

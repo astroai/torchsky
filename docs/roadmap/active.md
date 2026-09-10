@@ -1,5 +1,31 @@
 # Active Torchsky Execution Checklist
 
+CANFAR execution uses **production only**, as requested on 2026-09-09.
+Do not submit jobs to staging or use it as a fallback.
+
+## Production follow-up — 2026-09-10
+
+Staging session `lbjhoo6j` never started: its events reported a missing storage
+mount secret. It was cancelled before the production-only instruction.
+Production replacement `byso1yb5` was created successfully but is now absent
+from session and event APIs. Its ARC directory contains only the uploaded
+bootstrap and source bundle, with no execution log, exit record or science
+products. The cause is unknown; this does not demonstrate another GPU-memory
+failure. The source bundle verifies locally as complete at `3b92e55d`.
+The next attempt records startup output and exit status before cloning the
+bundle, in its separate `depth-20260910-softtiles-r2` directory.
+That retry, production session `eihik1s9`, failed before container startup.
+Its events show successful scheduling and image pull, followed by
+`failed to initialize NVML: Driver/library version mismatch` on
+`keel-prod-g0123.arbutus.uvic.ca`. Torchsky and the bootstrap never ran.
+This is a confirmed host/runtime failure, not a reconstruction failure;
+the smaller-tile CUDA correction remains unverified on real SMACS data.
+One production retry, `pt215xlb`, landed on the same host and failed with the
+same pre-start NVIDIA mismatch. Further identical submissions are paused until
+the host is repaired or a healthy allocation is available. The launcher now
+selects production explicitly before submitting, rather than inheriting a
+possibly stale local server choice. No science run is currently in progress.
+
 ## Reconstruction work — 2026-09-07
 
 Use the existing AstroAI improc image for SMACS comparison tools.

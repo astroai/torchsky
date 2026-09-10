@@ -3468,6 +3468,7 @@ def main() -> int:
                 float(args.tile_size_deg) if tile_center is not None else None
             ),
             "crop_size": int(args.crop_size),
+            "export_dir": str(args.export_dir.resolve()),
             "optimizer_steps": int(args.steps),
             "seed": int(args.seed),
             "foam_grid_side": int(args.foam_grid_side),
