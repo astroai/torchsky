@@ -26,6 +26,23 @@ the host is repaired or a healthy allocation is available. The launcher now
 selects production explicitly before submitting, rather than inheriting a
 possibly stale local server choice. No science run is currently in progress.
 
+The visualization script now accepts joint-fit reports directly through
+`--joint-report shared-foam.json --joint-export-dir products`. It uses the
+per-band exported reference images to freeze display scales, carries detector
+validation scores separately from image differences, and applies support masks.
+The command-line export path is relative to the working directory; paths stored
+inside a report are relative to that report. Common WCS and brightness units
+are required for a joint report, including its Torchfits six-band RGB.
+The historical F090W two-step product renders successfully through this path
+and its metric legend was visually checked. Combining the historical two-band
+products is correctly rejected because their independently chosen crops have
+different WCS. This is report verification, not a new reconstruction result.
+Five focused visualization tests pass, including a six-band Torchfits RGB
+through the command-line path, relative export paths, and malformed support
+masks. Preflight passes; type checking reports zero errors and its existing
+export-list warning. Support masks are checked for WCS and shape, without
+requiring their dimensionless units to match calibrated brightness units.
+
 ## Reconstruction work — 2026-09-07
 
 Use the existing AstroAI improc image for SMACS comparison tools.

@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import re
+import textwrap
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -226,8 +227,8 @@ def _support_fingerprint(data: np.ndarray) -> str:
     return hashlib.sha256(np.ascontiguousarray(mask).tobytes()).hexdigest()
 
 
-def _validate_shared_support(products: Iterable[ProductPlane]) -> tuple[bool, str]:
-    """Require explicit common grid and units; use intersection coverage later."""
+def _validate_shared_grid(products: Iterable[ProductPlane]) -> tuple[bool, str]:
+    """Require an explicit common image grid and WCS."""
 
     items = list(products)
     if not items:
@@ -239,6 +240,17 @@ def _validate_shared_support(products: Iterable[ProductPlane]) -> tuple[bool, st
         return False, "WCS metadata is missing"
     if len(wcs) != 1:
         return False, "WCS metadata differs"
+
+    return True, "shared WCS and shape"
+
+
+def _validate_shared_support(products: Iterable[ProductPlane]) -> tuple[bool, str]:
+    """Require explicit common grid, WCS, and physical units."""
+
+    items = list(products)
+    valid_grid, reason = _validate_shared_grid(items)
+    if not valid_grid:
+        return valid_grid, reason
     units = {_units(item.header, item.metadata) for item in items}
     if len(units) != 1 or "not measured" in units:
         return False, "common physical units are missing or differ"
@@ -278,11 +290,31 @@ def _metric_text(metrics: Mapping[str, Any], *names: str) -> str:
 
 
 def _legend_text(product: ProductPlane, metrics: Mapping[str, Any]) -> str:
+    if "validation_nll_per_pixel" in metrics or "validation_chi2_per_pixel" in metrics:
+        prediction_text = (
+            f"validation NLL/pixel={_metric_text(metrics, 'validation_nll_per_pixel')}  "
+            f"chi2/pixel={_metric_text(metrics, 'validation_chi2_per_pixel')}"
+        )
+    else:
+        prediction_text = f"prediction={_metric_text(metrics, 'prediction', 'prediction_rmse')}"
+    render_details = ""
+    render_mode = product.metadata.get("render_mode")
+    product_interpretation = product.metadata.get("product_interpretation")
+    if render_mode is not None or product_interpretation is not None:
+        render_details = (
+            f"\nrender={render_mode or 'not measured'}"
+        )
+        if product_interpretation is not None:
+            render_details += "\ninterpretation=" + "\n".join(
+                textwrap.wrap(str(product_interpretation), width=42)
+            )
+        else:
+            render_details += "\ninterpretation=not measured"
     return (
         f"method={product.method}\n"
-        f"band={product.band}  units={_units(product.header, product.metadata)}\n"
+        f"band={product.band}  units={_units(product.header, product.metadata)}{render_details}\n"
         f"scale={_angular_scale(product.header, product.metadata)}  orientation={_orientation(product.header, product.metadata)}\n"
-        f"prediction={_metric_text(metrics, 'prediction', 'prediction_rmse')}  "
+        f"{prediction_text}  "
         f"PSF width={_metric_text(metrics, 'psf_width', 'psf_width_pix')}\n"
         f"flux bias={_metric_text(metrics, 'flux_bias', 'flux_bias_fraction')}  "
         f"color bias={_metric_text(metrics, 'color_bias', 'color_bias_mag')}\n"
@@ -464,6 +496,86 @@ def _product_entries(payload: Any) -> list[Mapping[str, Any]]:
     raise ValueError("product JSON must contain a list or a 'products'/'runs' list")
 
 
+def _joint_export_slug(value: Any) -> str:
+    """Match the benchmark's safe export directory component convention."""
+
+    text = str(value).strip().lower()
+    return "".join(char if char.isalnum() else "_" for char in text).strip("_") or "item"
+
+
+def _joint_products(report_path: Path, export_dir: Path | None):
+    """Adapt the joint benchmark report and exports to product manifests."""
+
+    report = _load_json(report_path)
+    experiment = report.get("experiment")
+    if not isinstance(experiment, Mapping):
+        raise ValueError("joint report must contain an experiment object")
+    export_value = export_dir if export_dir is not None else experiment.get("export_dir")
+    if not export_value:
+        raise ValueError("joint report has no export_dir; supply --joint-export-dir")
+    export_root = Path(export_value).expanduser()
+    if export_dir is None and not export_root.is_absolute():
+        export_root = report_path.parent / export_root
+    else:
+        export_root = export_root.resolve()
+
+    psf_model = experiment.get("psf_model")
+    if psf_model in (None, ""):
+        raise ValueError("joint report experiment is missing psf_model")
+    rows = report.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("joint report must contain a rows list")
+    scoring = experiment.get("validation_detector_scoring")
+    scores: Mapping[str, Any] = {}
+    if isinstance(scoring, Mapping) and scoring.get("split") == "validation":
+        value = scoring.get("scores_by_model", {})
+        if not isinstance(value, Mapping):
+            raise ValueError("joint validation scoring scores_by_model must be an object")
+        scores = value
+
+    entries: list[dict[str, Any]] = []
+    metrics: dict[str, dict[str, Any]] = {}
+    references: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("joint report rows must be objects")
+        if row.get("status") != "OK":
+            continue
+        method = str(row.get("model", "")).strip()
+        band = str(row.get("band", "")).strip().upper()
+        if not method or not band:
+            raise ValueError("successful joint report rows require model and band")
+        directory = export_root / _joint_export_slug(psf_model) / _joint_export_slug(band) / _joint_export_slug(method)
+        common = {"band": band, "support_path": str(directory / "support_mask.fits")}
+        row_metadata = {
+            key: row[key]
+            for key in ("render_mode", "product_interpretation")
+            if row.get(key) is not None
+        }
+        entries.append({**common, **row_metadata, "method": method, "path": str(directory / "prediction.fits")})
+        if band not in references:
+            entries.append({**common, "method": "baseline", "path": str(directory / "reference.fits")})
+            references.add(band)
+
+        supplied: dict[str, Any] = {}
+        model_scores = scores.get(method, [])
+        if isinstance(model_scores, list):
+            for score in model_scores:
+                if isinstance(score, Mapping) and str(score.get("band", "")).upper() == band:
+                    supplied["validation_nll_per_pixel"] = score.get("gaussian_nll_per_pixel")
+                    supplied["validation_chi2_per_pixel"] = score.get("chi2_per_pixel")
+                    break
+        if row.get("fit_time_ms") is not None:
+            supplied["runtime"] = f"joint fit {_format_value(row['fit_time_ms'] / 1000)} s"
+        memory_bytes = row.get("peak_accelerator_memory_bytes")
+        if isinstance(memory_bytes, (float, int)) and math.isfinite(float(memory_bytes)) and memory_bytes > 0:
+            supplied["memory"] = f"peak accelerator {_format_value(memory_bytes / 1024**2)} MiB"
+        metrics[f"{method}:{band}"] = supplied
+    if not references:
+        raise ValueError("joint report has no successful exported products")
+    return entries, metrics
+
+
 def _load_product_specs(entries: Iterable[Mapping[str, Any]], *, manifest_dir: Path, default_bands: list[str]) -> list[ProductPlane]:
     result: list[ProductPlane] = []
     for entry in entries:
@@ -472,6 +584,22 @@ def _load_product_specs(entries: Iterable[Mapping[str, Any]], *, manifest_dir: P
         method = str(entry.get("method", entry.get("run", "unknown")))
         path = _resolve_manifest_path(str(entry["path"]), manifest_dir=manifest_dir)
         data, header = _read_fits(path, hdu=entry.get("hdu", 0))
+        if entry.get("support_path"):
+            support_path = _resolve_manifest_path(str(entry["support_path"]), manifest_dir=manifest_dir)
+            support, support_header = _read_fits(support_path)
+            if support.ndim != 2:
+                raise ValueError(f"support mask {support_path} must be a 2D image, got {support.shape}")
+            if not np.isfinite(support).all():
+                raise ValueError(f"support mask {support_path} contains nonfinite values")
+            if not np.any(support > 0):
+                raise ValueError(f"support mask {support_path} has no supported pixels")
+            ok, reason = _validate_shared_grid([
+                ProductPlane(method, "support", support, support_header, str(support_path)),
+                ProductPlane(method, "image", data, header, str(path)),
+            ])
+            if not ok:
+                raise ValueError(f"support mask for {path}: {reason}")
+            data = np.where(np.isfinite(support) & (support > 0), data, np.nan)
         bands = [str(value).upper() for value in entry.get("bands", default_bands)]
         band = str(entry.get("band", "")).upper()
         if data.ndim == 2:
@@ -579,6 +707,8 @@ def main() -> int:
     parser.add_argument("--baseline-cube", type=Path, default=None, help="Default: smacs0723_stack_baseline.fits next to the manifest.")
     parser.add_argument("--comparison-cube", type=Path, default=None, help="Optional INR/reconstruction cube to compare against the baseline cube.")
     parser.add_argument("--products-json", type=Path, default=None, help="JSON list of individual-band or cube products with method/band/path metadata.")
+    parser.add_argument("--joint-report", type=Path, help="Joint field-fit JSON report; use its per-band references and validation scores.")
+    parser.add_argument("--joint-export-dir", type=Path, help="Joint export directory when absent from the report.")
     parser.add_argument("--product", action="append", default=[], metavar="METHOD=PATH", help="Add a product FITS file; repeat for run methods.")
     parser.add_argument("--metrics-json", type=Path, default=None, help="JSON containing supplied per-method/per-band metrics.")
     parser.add_argument("--regions-json", type=Path, help="Fixed named pixel regions: {name: [x0, y0, width, height]} on the common grid.")
@@ -589,8 +719,8 @@ def main() -> int:
     parser.add_argument("--no-synthetic-check", action="store_true", help="Skip the renderer-only synthetic diagnostic panel.")
     args = parser.parse_args()
 
-    manifest_path = args.manifest.expanduser().resolve()
-    manifest = _load_manifest(manifest_path)
+    manifest_path = (args.joint_report or args.manifest).expanduser().resolve()
+    manifest = {} if args.joint_report else _load_manifest(manifest_path)
     manifest_dir = manifest_path.parent
     output_dir = args.output_dir.expanduser().resolve() if args.output_dir is not None else manifest_dir / "quicklooks"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -598,6 +728,11 @@ def main() -> int:
         raise FileExistsError("completed report already exists; choose a new output directory")
     max_panels, dpi = max(int(args.max_panels), 1), int(args.dpi)
     bands, metrics = _default_bands(manifest), _load_json(args.metrics_json)
+    joint_entries = []
+    if args.joint_report:
+        joint_entries, joint_metrics = _joint_products(manifest_path, args.joint_export_dir)
+        metrics = {**joint_metrics, **metrics}
+        bands = list(dict.fromkeys(entry["band"] for entry in joint_entries))
 
     cutout_paths, cutout_titles = _manifest_cutout_paths(manifest, manifest_dir=manifest_dir)
     cutout_images = [_read_image(path) for path in cutout_paths]
@@ -606,30 +741,46 @@ def main() -> int:
 
     baseline_path = args.baseline_cube.expanduser().resolve() if args.baseline_cube is not None else manifest_dir / "smacs0723_stack_baseline.fits"
     summary: dict[str, Any] = {"manifest": str(manifest_path), "output_dir": str(output_dir), "cutouts_png": str(cutouts_png), "cutout_count": len(cutout_images), "synthetic_input": "renderer-only check" if not args.no_synthetic_check else "disabled"}
-    products: list[ProductPlane] = []
+    products = _load_product_specs(joint_entries, manifest_dir=manifest_dir, default_bands=bands)
     baseline: np.ndarray | None = None
-    if baseline_path.is_file():
+    if baseline_path.is_file() and not args.joint_report:
         baseline, baseline_header = _read_fits(baseline_path)
         if baseline.ndim != 3:
             raise ValueError(f"baseline cube {baseline_path} must be 3D, got {baseline.shape}")
         baseline_bands = bands[: baseline.shape[0]] if len(bands) >= baseline.shape[0] else [f"plane-{i}" for i in range(baseline.shape[0])]
         products.extend(ProductPlane("baseline", band, baseline[i], baseline_header, str(baseline_path), {}) for i, band in enumerate(baseline_bands))
+    references = [product for product in products if product.method == "baseline"]
+    if references:
+        valid_references, reference_reason = _validate_shared_support(references)
+        if not valid_references:
+            raise ValueError(f"classical reference bands do not share a common grid: {reference_reason}")
+        baseline_bands = [product.band for product in references]
         scale_path = output_dir / "display_limits.json"
         persisted: Mapping[str, Any] = {}
         prior_path = args.display_limits or scale_path
+        prior: Mapping[str, Any] = {}
+        if args.display_limits and not prior_path.is_file():
+            raise FileNotFoundError(f"display limits file does not exist: {prior_path}")
         if prior_path.is_file():
-            prior = json.loads(prior_path.read_text(encoding="utf-8"))
+            loaded_prior = json.loads(prior_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_prior, Mapping):
+                prior = loaded_prior
             if isinstance(prior, Mapping) and isinstance(prior.get("limits"), Mapping):
                 persisted = prior["limits"]
         limits = _shared_display_limits({product.band: product.data for product in products if product.method == "baseline"}, persisted=persisted)
-        with baseline_path.open("rb") as stream:
-            reference_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+        reference_hashes = []
+        reference_paths = sorted({product.path for product in references})
+        for path in reference_paths:
+            with Path(path).open("rb") as stream:
+                reference_hashes.append(hashlib.file_digest(stream, "sha256").hexdigest())
+        reference_sha256 = reference_hashes[0] if len(reference_hashes) == 1 else hashlib.sha256("".join(reference_hashes).encode()).hexdigest()
         if args.display_limits and prior.get("reference_sha256") != reference_sha256:
             raise ValueError("display scales belong to a different classical reference")
-        _write_json(scale_path, {"limits": {band: list(value) for band, value in limits.items()}, "reference": str(baseline_path), "reference_sha256": reference_sha256, "policy": "baseline frozen per band"})
+        reference_value: str | list[str] = reference_paths[0] if len(reference_paths) == 1 else reference_paths
+        _write_json(scale_path, {"limits": {band: list(value) for band, value in limits.items()}, "reference": reference_value, "reference_sha256": reference_sha256, "policy": "baseline frozen per band"})
         baseline_png = output_dir / "baseline_cube.png"
-        _save_image_grid([baseline[i] for i in range(baseline.shape[0])], [f"baseline | {band}" for band in baseline_bands], baseline_png, max_panels=max_panels, dpi=dpi, limits=[limits[band] for band in baseline_bands])
-        summary.update({"baseline_cube": str(baseline_path), "baseline_shape": list(baseline.shape), "baseline_png": str(baseline_png), "display_limits": str(scale_path)})
+        _save_image_grid([product.data for product in references], [f"baseline | {band}" for band in baseline_bands], baseline_png, max_panels=max_panels, dpi=dpi, limits=[limits[band] for band in baseline_bands])
+        summary.update({"baseline_references": [product.path for product in references], "baseline_png": str(baseline_png), "display_limits": str(scale_path)})
     else:
         limits = {}
         summary["baseline_missing"] = str(baseline_path)
