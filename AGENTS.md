@@ -311,3 +311,10 @@ Automated agents: do **not** run `pixi run ci-local` or `pixi run test` as a pus
 - **Tree-wide `ruff format --check`** is not a CI gate yet; use **`pixi run lint`** when you want Ruff to apply formatting locally.
 
 Optional: **`pre-commit install`** to mirror `.pre-commit-config.yaml` locally. **`pixi run verify`** runs **`scripts/verify_setup.py`** (torch + `torchsky.cpp` import smoke).
+
+## Env hygiene
+
+- Prefer `pixi run` / `pixi run python` over bare `python3` when Pixi exists.
+- Never `pip install --user` or install into `~/.local` / `$HOME/.local` (esp. CANFAR `/arc/home`).
+- Headless/batch: `export PYTHONNOUSERSITE=1` and `unset PYTHONPATH`.
+- On CANFAR: read skill `canfar-lab-workflow` (mounts, quotas, resources, headless, ports).
