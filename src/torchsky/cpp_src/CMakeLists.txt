@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 project(torchsky_cpp)
 
+if(DEFINED ENV{TORCHSKY_DISABLE_CPP} AND "$ENV{TORCHSKY_DISABLE_CPP}" STREQUAL "1")
+    message(STATUS "TORCHSKY_DISABLE_CPP=1: skipping native extension build")
+    return()
+endif()
+
 # PyTorch 2.13 conda builds use the C++20 library ABI.  Building this tensor
 # bridge as C++17 corrupts returned at::Tensor values even when package versions
 # match, so compile the extension with the same (or newer-compatible) standard.
