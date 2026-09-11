@@ -3,6 +3,14 @@
 CANFAR execution uses **production only**, as requested on 2026-09-09.
 Do not submit jobs to staging or use it as a fallback.
 
+Current Torchsky compute image: **`astroai/webterm:latest`**, explicitly chosen
+by the user. Production GPU check `m6vox3k4` succeeded on an H100 MIG slice
+(11,008 MiB) on `keel-prod-g0125.arbutus.uvic.ca`. The six-band reconstruction
+has resumed as production session `inf46bhb`, run
+`depth-20260911-webterm-smacs`, using verified source bundle `3b92e55d` and the
+same smaller-tile scientific configuration. Do not substitute a Skaha notebook
+image. Headless images need not appear in image listings.
+
 ## Production follow-up — 2026-09-10
 
 Staging session `lbjhoo6j` never started: its events reported a missing storage
