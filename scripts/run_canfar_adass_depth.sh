@@ -56,6 +56,7 @@ else
 fi
 
 export PIXI_HOME=/scratch/pixi
+export PIXI_BIN_DIR="${PIXI_HOME}/bin"
 export PIXI_CACHE_DIR=/scratch/pixi-cache
 export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"

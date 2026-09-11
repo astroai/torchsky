@@ -10,6 +10,12 @@ has resumed as production session `inf46bhb`, run
 `depth-20260911-webterm-smacs`, using verified source bundle `3b92e55d` and the
 same smaller-tile scientific configuration. Do not substitute a Skaha notebook
 image. Headless images need not appear in image listings.
+Session `inf46bhb` reached the GPU and cloned the source, then failed because
+Pixi's installer destination was `/usr/local/bin`. The runner now explicitly
+sets `PIXI_BIN_DIR=/scratch/pixi/bin`, overriding an inherited install location.
+Replacement production session `oga6wv27`, run
+`depth-20260911-webterm-smacs-r2`, uses that setting with the same source bundle
+and scientific configuration. Science results are still pending.
 
 ## Production follow-up — 2026-09-10
 
