@@ -15,7 +15,52 @@ Pixi's installer destination was `/usr/local/bin`. The runner now explicitly
 sets `PIXI_BIN_DIR=/scratch/pixi/bin`, overriding an inherited install location.
 Replacement production session `oga6wv27`, run
 `depth-20260911-webterm-smacs-r2`, uses that setting with the same source bundle
-and scientific configuration. Science results are still pending.
+and scientific configuration. It completed successfully on 2026-09-11 at
+14:44:36 UTC (exit 0); products were recovered locally on 2026-09-12.
+
+### Six-band result recovered — 2026-09-12
+
+Next comparison: registered SASNet adaptation, SIREN, and the existing explicit
+spectral grid on a common 32-by-32 target with six bands and frozen detector
+calibration. These three use local sky coordinates and the same 32-pixel
+PSF-aware training patches, five-point deterministic passband quadrature, and
+no auxiliary context or spectral-anchor loss. SASNet's sampling cap is derived
+from actual training pixel areas, not a synthetic benchmark's pixel scale;
+this does not assert a measured PSF bandwidth. Models record parameter counts
+and runtime; this short diagnostic is not an equal-parameter superiority test.
+All model kinds save through the common artifact path. FLAIR remains pending;
+any wavelet guidance must be built only from training data.
+
+Run `depth-20260911-webterm-smacs-r2` is **not an acceptable scientific
+reconstruction**. The 128-square-pixel pilot fit took 39,492.8 seconds
+(10.97 hours). Validation chi-square per pixel is 37.51, 23.85, 22.50,
+50.19, 49.23, and 73.43 in wavelength order. The test exposures remain untouched.
+Source-region flux ratios against the saved reference are respectively
+0.413, 0.856, 0.931, 1.130, 1.065, and 0.929. These are image comparisons,
+not injection-based flux biases; no superiority or depth claim follows.
+Common-scale images show a substantial diffuse-brightness deficit in five
+bands and poor F090W source recovery. Its cause is not yet isolated.
+
+Recovered report and 18 FITS files (prediction, reference, support in each
+band) are under `benchmarks_results/canfar_depth-20260911-webterm-smacs-r2/`.
+The existing visualizer completed on these real products, producing fixed
+reference-scale linear/asinh/difference PNGs and Torchfits six-band RGB for
+the reference and Foam. Display limits and run metadata accompany the images
+in `quicklooks/`. Resolution-matched RGB remains unmeasured.
+
+A focused independent code audit found that training and validation use the
+same detector bounding-rectangle crops, including 32-pixel margins. Validation
+counts exceed the target-grid pixel count because it scores those detector
+crops; this does not establish an untrained validation domain. The run used
+`foam_fit_target_footprint=false`. Do not silently narrow validation support
+to make these scores better.
+
+Before another long fit: isolate absolute-brightness recovery using the saved
+model and fixed operators, distinguish foreground/background conventions from
+scene loss, and measure where fit time is spent. Preserve the current failure
+as a comparison. Passband reference convention and detector pixel-response
+provenance remain unverified in the report. No new GPU run was launched during
+this recovery.
 
 ## Production follow-up — 2026-09-10
 

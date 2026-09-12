@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import io
 import math
+from pathlib import Path
 
 import pytest
 import torch
 
 from torchsky.field.frequency_adaptive import BaconField, SASNetField
+from torchsky.map.field.artifacts import load_field_artifact, save_field_artifact
+from torchsky.map.field.core import make_field_model
+from torchsky.map.field.registry import FIELD_MODEL_KINDS
 from torchsky.map.field.types import FieldDomain
 
 
@@ -179,6 +183,65 @@ def test_sasnet_requires_resolved_observation_support() -> None:
     coarse = SASNetField(_domain(), pixel_footprint_deg=0.1)
     assert coarse.mask_encoder.base_resolution == 2
     assert coarse.mask_encoder.finest_resolution == 2
+
+
+@pytest.mark.parametrize("coord_mode", ["local_tangent", "sphere_xyz"])
+def test_sasnet_factory_artifact_roundtrip(tmp_path: Path, coord_mode: str) -> None:
+    kwargs = {
+        "pixel_footprint_deg": 0.001,
+        "psf_support_deg": 0.002,
+        "num_frequencies": 8,
+        "hidden_dim": 8,
+        "mask_hidden_dim": 8,
+        "hash_levels": 2,
+        "hash_features_per_level": 2,
+        "hash_log2_size": 5,
+        "hash_base_resolution": 4,
+        "hash_finest_resolution": 16,
+    }
+    assert "sasnet" in FIELD_MODEL_KINDS
+    model = make_field_model("sasnet", _domain(coord_mode=coord_mode), **kwargs)
+    assert isinstance(model, SASNetField)
+    coordinates = _coordinates()
+    prediction = model(*coordinates).detach()
+    save_field_artifact(
+        tmp_path, model=model, model_kind="sasnet", model_kwargs=kwargs
+    )
+    loaded = load_field_artifact(tmp_path, device="cpu")
+    restored = loaded.model
+    assert isinstance(restored, SASNetField)
+    assert loaded.manifest.model_kind == "sasnet"
+    assert restored.domain == model.domain
+    assert restored.max_frequency == model.max_frequency
+    assert restored.mask_encoder.resolutions == model.mask_encoder.resolutions
+    assert torch.equal(restored.frequencies, model.frequencies)
+    assert torch.equal(restored(*coordinates), prediction)
+
+
+def test_explicit_grid_factory_artifact_roundtrip(tmp_path: Path) -> None:
+    kwargs = {"spatial_resolution": 4, "spectral_resolution": 3}
+    model = make_field_model("explicit_spectral_grid_field", _domain(), **kwargs)
+    coordinates = _coordinates()
+    prediction = model(*coordinates)
+    assert prediction.shape == coordinates[0].shape
+    assert torch.isfinite(prediction).all() and (prediction > 0).all()
+    prediction.sum().backward()
+    assert model.grid.grad is not None and torch.isfinite(model.grid.grad).all()
+    assert model.grid.grad.abs().sum() > 0
+    save_field_artifact(
+        tmp_path,
+        model=model,
+        model_kind="explicit_spectral_grid_field",
+        model_kwargs=kwargs,
+    )
+    restored = load_field_artifact(tmp_path, device="cpu").model
+    assert torch.equal(restored(*coordinates), prediction.detach())
+    with pytest.raises(ValueError, match="local_tangent"):
+        make_field_model(
+            "explicit_spectral_grid_field", _domain(coord_mode="sphere_xyz"), **kwargs
+        )
+    with pytest.raises(ValueError, match="at least 2"):
+        make_field_model("explicit_spectral_grid_field", _domain(), spatial_resolution=1)
 
 
 def test_sasnet_supports_spherical_coordinates() -> None:

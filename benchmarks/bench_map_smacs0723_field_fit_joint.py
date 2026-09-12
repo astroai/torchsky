@@ -1473,6 +1473,29 @@ def _background_subtracted_source_stats(
     }
 
 
+def _joint_sasnet_kwargs(observations: list[FieldObservation]) -> dict[str, Any]:
+    """Resolve the experimental frequency cap from actual training pixels.
+
+    The scalar area-equivalent pixel scale is a sampling control, not a measured
+    PSF bandwidth. Frozen PSFs remain in the observation operator.
+    """
+    if not observations:
+        raise ValueError("SASNet requires training observations")
+    scales = []
+    for observation in observations:
+        height, width = observation.image.shape[-2:]
+        area = pixel_area_sr_at(
+            torchsky.WCS(observation.header),
+            torch.tensor((width - 1) / 2, dtype=torch.float64),
+            torch.tensor((height - 1) / 2, dtype=torch.float64),
+        )
+        scale = float(torch.sqrt(area) * (180.0 / torch.pi))
+        if not math.isfinite(scale) or scale <= 0:
+            raise ValueError("SASNet requires finite positive training pixel areas")
+        scales.append(scale)
+    return {"pixel_footprint_deg": min(scales), "psf_support_deg": None}
+
+
 def _joint_real_fit_kwargs(
     model_kind: str,
     *,
@@ -1574,6 +1597,18 @@ def _joint_real_fit_kwargs(
             context_observations_per_step=0,
             spectral_anchor_observations_per_step=0,
             gradient_residual_weight=0.0,
+        )
+    if model_kind in {"sasnet", "sine_implicit", "explicit_spectral_grid_field"}:
+        side = min(int(crop_size), 32)
+        kwargs.update(
+            training_patch_size=side,
+            shared_sky_patch_sampling=True,
+            render_spatial_tile_hw=(side, side),
+            diagnostic_spatial_tile_hw=(side, side),
+            num_spectral_samples=5,
+            training_spectral_sampling="deterministic_quadrature",
+            spectral_anchor_loss_weight=0.0,
+            context_loss_weight=0.0,
         )
     return kwargs
 
@@ -2901,6 +2936,8 @@ def main() -> int:
                     case=REAL_JOINT_CASE,
                     size=int(args.crop_size),
                 )
+                if model_kind == "sasnet":
+                    model_kwargs.update(_joint_sasnet_kwargs(normalized_observations))
                 model_steps = int(args.steps)
             fit_kwargs = _joint_real_fit_kwargs(
                 model_kind,
@@ -2926,7 +2963,10 @@ def main() -> int:
                 fit_kwargs["lr"] = float(args.inr_lr)
             domain = (
                 local_domain
-                if model_kind in {"spectral_power_foam", "foam_initialized_inr"}
+                if model_kind in {
+                    "spectral_power_foam", "foam_initialized_inr", "sasnet",
+                    "explicit_spectral_grid_field", "sine_implicit",
+                }
                 else spherical_domain
             )
             torch.manual_seed(int(args.seed))
@@ -2956,10 +2996,23 @@ def main() -> int:
                 model = _PerExposureScalarBias(model, len(normalized_observations))
             gpu_mem_note("pre-field-fit")
             t0 = time.perf_counter()
+            progress_steps = {max(1, math.ceil(model_steps * fraction))
+                              for fraction in (0.1, 0.25, 0.5, 0.75, 1.0)}
+
+            def report_progress(step_index: int, loss: float) -> None:
+                if step_index + 1 in progress_steps:
+                    print(
+                        f"{model_kind}: step {step_index + 1}/{model_steps}, "
+                        f"loss={loss:.6g}, elapsed={time.perf_counter() - t0:.1f}s",
+                        flush=True,
+                    )
+
+            print(f"Starting {model_kind}: {model_steps} steps", flush=True)
             result = fit_field_model(
                 normalized_observations,
                 model,
                 steps=model_steps,
+                _progress_callback=report_progress,
                 **fit_kwargs,
             )
             fit_time_ms = (time.perf_counter() - t0) * 1000.0

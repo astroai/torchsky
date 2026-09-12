@@ -60,7 +60,7 @@ export PIXI_BIN_DIR="${PIXI_HOME}/bin"
 export PIXI_CACHE_DIR=/scratch/pixi-cache
 export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
-export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
+unset PYTHONPATH
 export PYTHONUNBUFFERED=1
 export PYTHONFAULTHANDLER=1
 export PYTHONNOUSERSITE=1

@@ -94,6 +94,41 @@ def test_frozen_calibrated_background_follows_scene_intensity_scale() -> None:
     assert not any(parameter.requires_grad for parameter in background.parameters())
 
 
+def test_joint_sasnet_uses_real_training_pixel_scale() -> None:
+    header = {
+        "NAXIS": 2, "NAXIS1": 4, "NAXIS2": 4,
+        "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+        "CRVAL1": 110.0, "CRVAL2": -73.0,
+        "CRPIX1": 2.5, "CRPIX2": 2.5,
+        "CDELT1": -0.031 / 3600, "CDELT2": 0.031 / 3600,
+    }
+    observation = FieldObservation(
+        image=torch.zeros((4, 4)), header=header, wavelength=15000.0,
+    )
+    kwargs = joint_benchmark._joint_sasnet_kwargs([observation])
+    assert kwargs["pixel_footprint_deg"] == pytest.approx(0.031 / 3600, rel=1e-5)
+    assert kwargs["psf_support_deg"] is None
+    with pytest.raises(ValueError, match="training observations"):
+        joint_benchmark._joint_sasnet_kwargs([])
+
+
+def test_joint_architecture_comparison_uses_matching_patch_objective() -> None:
+    keys = (
+        "training_patch_size", "shared_sky_patch_sampling",
+        "num_spectral_samples", "training_spectral_sampling", "loss_kind",
+        "spatial_sampling", "observations_per_step", "context_loss_weight",
+        "spectral_anchor_loss_weight", "render_spatial_tile_hw",
+    )
+    settings = [
+        _joint_real_fit_kwargs(kind, crop_size=32, steps=20, num_observations=30)
+        for kind in ("sasnet", "sine_implicit", "explicit_spectral_grid_field")
+    ]
+    assert all({key: setting[key] for key in keys} ==
+               {key: settings[0][key] for key in keys} for setting in settings)
+    assert settings[0]["training_patch_size"] == 32
+    assert settings[0]["pixel_samples_per_observation"] is None
+
+
 def test_calibrated_bundles_select_frozen_models_by_detector() -> None:
     observation = FieldObservation(
         image=torch.zeros((4, 4)),
