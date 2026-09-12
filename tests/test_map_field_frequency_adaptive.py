@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from torchsky.field.frequency_adaptive import BaconField, SASNetField
+from torchsky.field.frequency_adaptive import BaconField, FlairField, SASNetField
+from torchsky.map.field.frequency_adaptive import _bla_features
 from torchsky.map.field.artifacts import load_field_artifact, save_field_artifact
 from torchsky.map.field.core import make_field_model
 from torchsky.map.field.registry import FIELD_MODEL_KINDS
@@ -242,6 +243,64 @@ def test_explicit_grid_factory_artifact_roundtrip(tmp_path: Path) -> None:
         )
     with pytest.raises(ValueError, match="at least 2"):
         make_field_model("explicit_spectral_grid_field", _domain(), spatial_resolution=1)
+
+
+@pytest.mark.parametrize("beta", [0.05, 0.3])
+def test_bla_equation_and_removable_singularity_gradients(beta: float) -> None:
+    period, sigma, shift = (
+        torch.tensor(value, dtype=torch.float64) for value in (0.7, 10.0, 0.13)
+    )
+    regular = torch.tensor([-1.3, -0.1, 0.0, 0.8], dtype=torch.float64)
+    u = regular / period
+    amplitude = torch.sinc(u) / period * torch.cos(math.pi * beta * u) / (
+        1 - (2 * beta * u).square()
+    ) * torch.exp(-0.5 * (regular / sigma).square())
+    phase = 2 * math.pi * shift * regular
+    expected = torch.cat((amplitude * phase.cos(), amplitude * phase.sin()))
+    torch.testing.assert_close(_bla_features(regular, period, sigma, shift, beta), expected)
+
+    x = (torch.tensor([-1.0, 1.0], dtype=torch.float64) * period / (2 * beta)).requires_grad_()
+    features = _bla_features(x, period, sigma, shift, beta)
+    u = x.detach() / period
+    sinc_derivative = (math.pi * u * (math.pi * u).cos() - (math.pi * u).sin()) / (
+        math.pi * u.square()
+    )
+    rc = math.pi / (4 * period) * torch.sinc(u)
+    rc_derivative = math.pi / (4 * period.square()) * (
+        sinc_derivative - u.sign() * beta * torch.sinc(u)
+    )
+    envelope = torch.exp(-0.5 * (x.detach() / sigma).square())
+    amplitude = rc * envelope
+    derivative = envelope * (rc_derivative - rc * x.detach() / sigma.square())
+    phase = 2 * math.pi * shift * x.detach()
+    expected = torch.cat((amplitude * phase.cos(), amplitude * phase.sin()))
+    torch.testing.assert_close(features, expected)
+    real_grad = torch.autograd.grad(features[:2].sum(), x, retain_graph=True)[0]
+    imag_grad = torch.autograd.grad(features[2:].sum(), x)[0]
+    torch.testing.assert_close(real_grad, derivative * phase.cos() - amplitude * phase.sin() * 2 * math.pi * shift)
+    torch.testing.assert_close(imag_grad, derivative * phase.sin() + amplitude * phase.cos() * 2 * math.pi * shift)
+    assert torch.autograd.gradcheck(
+        lambda value: _bla_features(value, period, sigma, shift, beta), (x,)
+    )
+
+
+@pytest.mark.parametrize("coord_mode", ["local_tangent", "sphere_xyz"])
+def test_flair_bla_artifact_and_gradients(tmp_path: Path, coord_mode: str) -> None:
+    kwargs = {"hidden_dim": 8, "hidden_layers": 2, "period": 0.8, "sigma": 1.2}
+    model = make_field_model("flair_bla", _domain(coord_mode=coord_mode), **kwargs)
+    assert isinstance(model, FlairField)
+    prediction = model(*_coordinates())
+    assert torch.isfinite(prediction).all() and (prediction > 0).all()
+    prediction.sum().backward()
+    assert all(parameter.grad is not None and torch.isfinite(parameter.grad).all()
+               for parameter in model.parameters())
+    save_field_artifact(tmp_path, model=model, model_kind="flair_bla", model_kwargs=kwargs)
+    restored = load_field_artifact(tmp_path, device="cpu").model
+    assert torch.equal(restored(*_coordinates()), prediction.detach())
+    with pytest.raises(ValueError, match="period"):
+        FlairField(_domain(), period=0)
+    with pytest.raises(ValueError, match="sigma"):
+        FlairField(_domain(), sigma=float("nan"))
 
 
 def test_sasnet_supports_spherical_coordinates() -> None:

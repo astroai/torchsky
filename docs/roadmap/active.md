@@ -28,8 +28,23 @@ no auxiliary context or spectral-anchor loss. SASNet's sampling cap is derived
 from actual training pixel areas, not a synthetic benchmark's pixel scale;
 this does not assert a measured PSF bandwidth. Models record parameter counts
 and runtime; this short diagnostic is not an equal-parameter superiority test.
-All model kinds save through the common artifact path. FLAIR remains pending;
-any wavelet guidance must be built only from training data.
+All model kinds save through the common artifact path. The `flair_bla`
+candidate implements the published FLAIR BLA equation as paired real/imaginary
+features with real affine layers. It is an experimental adaptation, not a
+reproduction of the official complex network or full FLAIR. Its raised-cosine
+factor uses an exact sinc identity at removable singularities, without
+denominator clipping. See [paper equations 6–8](https://arxiv.org/html/2508.13544v2#S3.S3).
+No upstream implementation was copied. WEGE remains pending: any wavelet
+guidance must be built only from training data. Neither adaptive network is
+claimed strictly band-limited or scientifically validated on SMACS.
+
+Implementation `adf4c30d` is pushed to the fork's `main`. Production session
+`w3gosfx5` runs `smacs-architecture-20260912-r2` with
+`astroai/webterm:latest`; logs confirm a working H100 MIG slice, exact source
+checkout, and Pixi installed under scratch. It uses 20 steps per model and a
+30-minute timeout including setup. The first session `jl43b7ny` failed because
+the bundle checkout omitted `--branch main`; no training ran. The corrected
+checkout was verified locally before retrying. New science results are pending.
 
 Run `depth-20260911-webterm-smacs-r2` is **not an acceptable scientific
 reconstruction**. The 128-square-pixel pilot fit took 39,492.8 seconds

@@ -5521,6 +5521,10 @@ def make_field_model(
         from .frequency_adaptive import SASNetField
 
         return SASNetField(domain, **kwargs)
+    if kind == "flair_bla":
+        from .frequency_adaptive import FlairField
+
+        return FlairField(domain, **kwargs)
     if kind == "gaussian_basis":
         return GaussianBasisField(domain, **kwargs)
     if kind == "fourier_mlp":

@@ -121,7 +121,7 @@ def test_joint_architecture_comparison_uses_matching_patch_objective() -> None:
     )
     settings = [
         _joint_real_fit_kwargs(kind, crop_size=32, steps=20, num_observations=30)
-        for kind in ("sasnet", "sine_implicit", "explicit_spectral_grid_field")
+        for kind in ("sasnet", "flair_bla", "sine_implicit", "explicit_spectral_grid_field")
     ]
     assert all({key: setting[key] for key in keys} ==
                {key: settings[0][key] for key in keys} for setting in settings)

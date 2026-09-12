@@ -1598,7 +1598,9 @@ def _joint_real_fit_kwargs(
             spectral_anchor_observations_per_step=0,
             gradient_residual_weight=0.0,
         )
-    if model_kind in {"sasnet", "sine_implicit", "explicit_spectral_grid_field"}:
+    if model_kind in {
+        "sasnet", "flair_bla", "sine_implicit", "explicit_spectral_grid_field",
+    }:
         side = min(int(crop_size), 32)
         kwargs.update(
             training_patch_size=side,
@@ -2965,7 +2967,7 @@ def main() -> int:
                 local_domain
                 if model_kind in {
                     "spectral_power_foam", "foam_initialized_inr", "sasnet",
-                    "explicit_spectral_grid_field", "sine_implicit",
+                    "explicit_spectral_grid_field", "sine_implicit", "flair_bla",
                 }
                 else spherical_domain
             )
