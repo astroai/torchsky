@@ -3,6 +3,39 @@
 CANFAR execution uses **production only**, as requested on 2026-09-09.
 Do not submit jobs to staging or use it as a fallback.
 
+## Exposure-level calibration — 2026-09-13
+
+Background and PSF calibration now support exact exposure identity plus filter,
+rather than sharing detector-average parameters. Run the calibration fitter
+with `--calibration-scope exposure` (CANFAR runner: `CALIBRATION_SCOPE=exposure`).
+Legacy detector scope remains available for reproducing old comparisons;
+do not use it for the next exposure-calibrated SMACS campaign.
+
+Evidence selection, fits, checkpoints, and comparison reports retain exposure
+identity and band. The joint scene runner loads the matching exposure/filter
+models, verifies checkpoint metadata/hashes, freezes them, and reuses them for
+every cutout of that exposure. Missing matches and mixed scopes fail explicitly;
+there is no automatic detector-average fallback. Exact manifest exposure IDs
+are preserved through operator contexts and scene artifacts. Crop origins stay
+in full-detector coordinates; a nonconstant plane and PSF-coordinate regression
+checks overlapping cutouts agree and rejects another exposure/filter.
+
+Implementation checks: 36 targeted tests passed, preflight passed, typecheck
+reported zero errors and the existing `__all__` warning. A test initially tried
+to mutate frozen ForwardContext metadata; it was corrected to construct a new
+context. No CUDA or new real-data calibration-fit claim follows these checks.
+
+The actual r8 evidence manifest was recovered and audited under
+`benchmarks_results/exposure_calibration_audit/`. It has 262 exposure/band/role
+groups: 146 train-only, 56 validation-only, 60 test-only, and zero groups with
+all independent calibration splits. Thus it cannot yet run the new per-exposure
+calibration fitter under the current verification policy. Do not reassign
+science exposure splits or fit unrestricted held-out residuals to bypass this.
+Next data work: full-frame independent star/blank-sky calibration sample
+partitions and provenance, including treatment of calibration pixels in
+held-out science scoring. This is a remaining data/protocol requirement, not
+an already-completed exposure-level SMACS correction. No new GPU job launched.
+
 Current Torchsky compute image: **`astroai/webterm:latest`**, explicitly chosen
 by the user. Production GPU check `m6vox3k4` succeeded on an H100 MIG slice
 (11,008 MiB) on `keel-prod-g0125.arbutus.uvic.ca`. The six-band reconstruction

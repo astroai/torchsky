@@ -178,6 +178,55 @@ def test_calibrated_bundles_select_frozen_models_by_detector() -> None:
     assert bundles[0].background.coordinate_frame == "detector"
 
 
+def test_exposure_calibration_is_shared_across_overlapping_cutouts() -> None:
+    from torchsky.map.field.observation_ops import crop_field_observation
+
+    class Plane(torch.nn.Module):
+        def forward(self, x, y, wavelength, time):
+            return 2.0 + 0.1 * x + 0.2 * y
+
+    class IdentityPSF(torch.nn.Module):
+        kernel_size = 1
+
+        def forward(self, image, *, spatial_x, spatial_y, **kwargs):
+            assert float(spatial_x.min()) >= 100
+            assert float(spatial_y.min()) >= 200
+            return image
+
+    full = FieldObservation(
+        image=torch.zeros((8, 8)), wavelength=15000.,
+        detector_x0_pix=100., detector_y0_pix=200.,
+        header={"NAXIS": 2, "NAXIS1": 8, "NAXIS2": 8,
+                "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+                "CRVAL1": 10., "CRVAL2": 0., "CRPIX1": 4.5, "CRPIX2": 4.5,
+                "CDELT1": -0.001, "CDELT2": 0.001},
+    )
+    crops = [crop_field_observation(full, x0=x, y0=y, width=4, height=4)
+             for x, y in ((2, 1), (3, 2))]
+    context = ForwardContext(detector="NRCB4", survey="F150W",
+                             extra={"calibration_exposure_id": "/full/exposure-a.fits"})
+    psf, background = IdentityPSF(), Plane()
+    models = {("NRCB4", "/full/exposure-a.fits", "F150W"):
+              {"psf": psf, "background": background}}
+    bundles = _calibrated_operator_bundles(crops, [context, context], models)
+    assert all(bundle.psf.model is psf and bundle.background.model is background
+               for bundle in bundles)
+    images = [joint_benchmark.render_field_observation(
+        joint_benchmark._ZeroScene(torch.device("cpu")), crop,
+        num_spectral_samples=1, operator_bundle=bundle, forward_context=context,
+    ) for crop, bundle in zip(crops, bundles, strict=True)]
+    torch.testing.assert_close(images[0][1:, 1:], images[1][:-1, :-1])
+    assert float(images[0][0, 0]) == pytest.approx(2 + .1 * 102 + .2 * 201)
+    other = ForwardContext(detector="NRCB4", survey="F150W",
+                           extra={"calibration_exposure_id": "/full/exposure-b.fits"})
+    with pytest.raises(ValueError, match="no calibrated operators"):
+        _calibrated_operator_bundles([crops[0]], [other], models)
+    other = ForwardContext(detector="NRCB4", survey="F090W",
+                           extra={"calibration_exposure_id": "/full/exposure-a.fits"})
+    with pytest.raises(ValueError, match="no calibrated operators"):
+        _calibrated_operator_bundles([crops[0]], [other], models)
+
+
 def test_structured_scene_kwargs_disable_invalid_sampling_approximations() -> None:
     kwargs = _structured_scene_fit_kwargs(
         {

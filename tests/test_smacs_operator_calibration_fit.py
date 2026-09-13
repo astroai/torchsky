@@ -5,6 +5,9 @@ from pathlib import Path
 from types import ModuleType
 
 import torch
+import pytest
+
+from torchsky.calibration_evidence import load_operator_calibration_split
 
 from torchsky.map.operators import ConditionedBackgroundField, ConditionedKernelPSF
 
@@ -21,6 +24,100 @@ def _benchmark_module() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_exposure_selection_preserves_independent_splits_and_provenance(
+    tmp_path: Path,
+) -> None:
+    benchmark = _benchmark_module()
+    rows = [
+        {
+            "exposure": exposure,
+            "band": band,
+            "detector": "NRCALONG",
+            "role": role,
+            "split": split,
+            "detector_x": 500.0,
+            "detector_y": 600.0,
+            "time_mjd_utc": 60000.0,
+            "target_value": value,
+        }
+        for exposure, band, value in (
+            ("visit/a_cal.fits", "F277W", 2.0),
+            ("visit/b_cal.fits", "F277W", 99.0),
+            ("visit/a_cal.fits", "F444W", 42.0),
+        )
+        for split in ("train", "validation", "test")
+        for role in ("background", "psf")
+    ]
+    payload = {"evidence": rows}
+    selections = benchmark._calibration_groups(payload, "exposure")
+    assert selections == sorted(selections)
+    assert len(selections) == 3
+    arrays = load_operator_calibration_split(
+        payload,
+        split="train",
+        role="background",
+        detector="NRCALONG",
+        exposure_id="visit/a_cal.fits",
+        band="F277W",
+    )
+    assert arrays["target_values"].tolist() == [2.0]
+    import json
+
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps(payload))
+    group = benchmark._fit_group(
+        manifest,
+        detector="NRCALONG",
+        role="background",
+        family="stationary",
+        steps=1,
+        lr=1e-3,
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+        seed=1,
+        manifest_payload=payload,
+        minimum_slice_samples=1,
+        exposure_id="visit/a_cal.fits",
+        band="F277W",
+    )
+    checkpoint = torch.load(group["checkpoint"], weights_only=True)
+    assert checkpoint["exposure_id"] == group["exposure_id"] == "visit/a_cal.fits"
+    assert checkpoint["band"] == group["band"] == "F277W"
+    assert checkpoint["calibration_scope"] == "exposure"
+    with pytest.raises(ValueError, match="missing independent calibration evidence"):
+        benchmark._calibration_groups(
+            {"evidence": [r for r in rows if r["split"] == "train"]}, "exposure"
+        )
+    with pytest.raises(ValueError, match="exposure_id or exposure provenance"):
+        benchmark._calibration_groups(
+            {"evidence": [{"detector": "NRCALONG", "band": "F277W"}]}, "exposure"
+        )
+
+
+def test_comparisons_do_not_pool_exposures_or_bands() -> None:
+    benchmark = _benchmark_module()
+    groups = [
+        {
+            "detector": "NRCALONG",
+            "exposure_id": exposure,
+            "band": band,
+            "role": "psf",
+            "family": family,
+            "validation_report": {"terms": [{"raw_loss": loss}]},
+            "test_report": {"terms": [{"raw_loss": loss}]},
+        }
+        for exposure, band in (("a", "F277W"), ("b", "F277W"), ("a", "F444W"))
+        for family, loss in (("stationary", 2.0), ("adaptive", 1.0))
+    ]
+    comparisons = benchmark._held_out_comparisons(groups)
+    assert len(comparisons) == 3
+    assert {(row["exposure_id"], row["band"]) for row in comparisons} == {
+        ("a", "F277W"),
+        ("b", "F277W"),
+        ("a", "F444W"),
+    }
 
 
 def test_stationary_controls_are_coordinate_invariant_and_compare_held_out() -> None:
@@ -91,6 +188,4 @@ def test_stationary_controls_are_coordinate_invariant_and_compare_held_out() -> 
     )
     assert len(included) == 8
     assert skipped == []
-    assert all(
-        min(item["sample_counts"].values()) >= 2 for item in included
-    )
+    assert all(min(item["sample_counts"].values()) >= 2 for item in included)

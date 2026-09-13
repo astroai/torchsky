@@ -379,6 +379,16 @@ def _validation_detector_scores(
     return list(scores.values())
 
 
+_CalibrationKey = str | tuple[str, str, str]
+
+
+def _exposure_calibration_key(context: ForwardContext) -> tuple[str, str, str]:
+    exposure = context.extra.get("calibration_exposure_id")
+    if not isinstance(exposure, str) or not exposure.strip() or not context.survey:
+        raise ValueError("exposure calibration requires exact manifest exposure identity and band")
+    return str(context.detector or "").upper(), exposure, str(context.survey).upper()
+
+
 def _load_calibrated_operator_models(
     manifest: Path,
     fit_report: Path,
@@ -386,29 +396,46 @@ def _load_calibrated_operator_models(
     detectors: set[str],
     intensity_scale: float,
     family: str = "adaptive",
-) -> tuple[dict[str, dict[str, torch.nn.Module]], dict[str, Any]]:
+    contexts: Sequence[ForwardContext] = (),
+) -> tuple[dict[_CalibrationKey, dict[str, torch.nn.Module]], dict[str, Any]]:
     if family not in {"stationary", "adaptive"}:
         raise ValueError("calibration family must be stationary or adaptive")
     manifest = manifest.resolve()
     report = json.loads(fit_report.read_text(encoding="utf-8"))
     if report.get("manifest_sha256") != calibration_fit._sha256(manifest):
         raise ValueError("operator fit report does not match the calibration manifest")
-    indexed = {
-        (
+    scope = report.get("calibration_scope", "detector")
+    if scope not in {"detector", "exposure"}:
+        raise ValueError("unsupported calibration scope")
+    if scope == "exposure" and not contexts:
+        raise ValueError("exposure calibration requires observation contexts")
+    indexed = {}
+    for group in report["groups"]:
+        key = (
             str(group["detector"]).upper(),
+            group.get("exposure_id") if scope == "exposure" else None,
+            str(group.get("band", "")).upper() if scope == "exposure" else None,
             str(group["role"]),
             str(group["family"]),
-        ): group
-        for group in report["groups"]
-    }
-    models: dict[str, dict[str, torch.nn.Module]] = {}
+        )
+        if key in indexed:
+            raise ValueError(f"duplicate calibrated operator group {key}")
+        indexed[key] = group
+    keys: list[_CalibrationKey] = (
+        list(sorted({_exposure_calibration_key(context) for context in contexts}))
+        if scope == "exposure" else list(sorted(detectors))
+    )
+    models: dict[_CalibrationKey, dict[str, torch.nn.Module]] = {}
     audit = []
-    for detector in sorted(detectors):
-        models[detector] = {}
+    for model_key in keys:
+        detector, exposure_id, band = (
+            model_key if isinstance(model_key, tuple) else (model_key, None, None)
+        )
+        models[model_key] = {}
         for role in ("background", "psf"):
-            group = indexed.get((detector, role, family))
+            group = indexed.get((detector, exposure_id, band, role, family))
             if group is None:
-                raise ValueError(f"fit report has no {family} {detector}/{role} group")
+                raise ValueError(f"fit report has no {family} {model_key}/{role} group; independent exposure calibration is required")
             checkpoint_path = Path(group["checkpoint"])
             if calibration_fit._sha256(checkpoint_path) != group["checkpoint_sha256"]:
                 raise ValueError(f"{detector}/{role} checkpoint hash mismatch")
@@ -417,6 +444,8 @@ def _load_calibrated_operator_models(
                 split="train",
                 role=role,
                 detector=detector,
+                exposure_id=exposure_id,
+                band=band,
                 verify_hashes=True,
             )
             checkpoint = torch.load(
@@ -434,6 +463,11 @@ def _load_calibrated_operator_models(
                 or checkpoint.get("detector") != detector
                 or checkpoint.get("role") != role
                 or checkpoint.get("family") != family
+                or (scope == "exposure" and (
+                    checkpoint.get("exposure_id") != exposure_id
+                    or checkpoint.get("band") != band
+                    or checkpoint.get("calibration_scope") != "exposure"
+                ))
             ):
                 raise ValueError(f"invalid {detector}/{role} checkpoint metadata")
             model.load_state_dict(checkpoint["state_dict"])
@@ -452,10 +486,12 @@ def _load_calibrated_operator_models(
             _freeze_calibrated_operator_model(
                 model, role=role, intensity_scale=intensity_scale
             )
-            models[detector][role] = model
+            models[model_key][role] = model
             audit.append(
                 {
                     "detector": detector,
+                    "exposure_id": exposure_id,
+                    "band": band,
                     "role": role,
                     "checkpoint": str(checkpoint_path),
                     "checkpoint_sha256": group["checkpoint_sha256"],
@@ -463,6 +499,7 @@ def _load_calibrated_operator_models(
                 }
             )
     return models, {
+        "calibration_scope": scope,
         "manifest": str(manifest),
         "manifest_sha256": report["manifest_sha256"],
         "fit_report": str(fit_report.resolve()),
@@ -495,20 +532,24 @@ def _freeze_calibrated_operator_model(
 def _calibrated_operator_bundles(
     observations: list[FieldObservation],
     contexts: list[ForwardContext],
-    models: dict[str, dict[str, torch.nn.Module]],
+    models: dict[_CalibrationKey, dict[str, torch.nn.Module]],
 ) -> tuple[ObservationOperatorBundle, ...]:
     if len(observations) != len(contexts):
         raise ValueError("calibrated observations and contexts must have equal length")
     bundles = []
+    exposure_scope = any(isinstance(key, tuple) for key in models)
+    if exposure_scope and any(isinstance(key, str) for key in models):
+        raise ValueError("cannot mix exposure and detector calibration scopes")
     for observation, context in zip(observations, contexts, strict=True):
         detector = str(context.detector or "").upper()
-        if detector not in models:
-            raise ValueError(f"no calibrated operators for detector {detector!r}")
+        key = _exposure_calibration_key(context) if exposure_scope else detector
+        if key not in models:
+            raise ValueError(f"no calibrated operators for {key!r}")
         bundles.append(
             field_observation_operator_bundle(observation).with_updates(
-                psf=LearnedPSFOp(models[detector]["psf"]),
+                psf=LearnedPSFOp(models[key]["psf"]),
                 background=LearnedBackgroundOp(
-                    models[detector]["background"], coordinate_frame="detector"
+                    models[key]["background"], coordinate_frame="detector"
                 ),
             )
         )
@@ -2692,6 +2733,10 @@ def main() -> int:
                             else None
                         ),
                         extra={
+                            "calibration_exposure_id": calibration_exposure.get(
+                                "exposure_id", calibration_exposure["path"]
+                            )
+                            if calibration_exposure else None,
                             "exposure_index": obs_index,
                             "source_path": str(exposure_path),
                             "split": calibration_exposure.get("split")
@@ -2841,6 +2886,7 @@ def main() -> int:
                 detectors=detectors,
                 intensity_scale=float(intensity_scale),
                 family=args.calibration_family,
+                contexts=all_forward_contexts + validation_contexts,
             )
             calibrated_bundles = _calibrated_operator_bundles(
                 normalized_observations, all_forward_contexts, calibrated_models

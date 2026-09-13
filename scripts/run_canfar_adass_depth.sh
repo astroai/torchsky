@@ -307,6 +307,7 @@ case "${mode}" in
       --steps "${calibration_steps}" \
       --lr "${calibration_lr}" \
       --device "${calibration_device}" \
+      --calibration-scope "${CALIBRATION_SCOPE:-detector}" \
       --psf-model "${CALIBRATION_FIT_PSF_MODEL:-${fit_psf_model}}"
     gate "${CALIBRATION_FIT_OUTPUT_DIR:-${artifact_root}/fit}/operator_calibration_fit.json"
     ;;
