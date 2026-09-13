@@ -44,7 +44,45 @@ Implementation `adf4c30d` is pushed to the fork's `main`. Production session
 checkout, and Pixi installed under scratch. It uses 20 steps per model and a
 30-minute timeout including setup. The first session `jl43b7ny` failed because
 the bundle checkout omitted `--branch main`; no training ran. The corrected
-checkout was verified locally before retrying. New science results are pending.
+checkout was verified locally before retrying. It completed with exit 0 at
+2026-09-12 21:30:06 UTC. All 54 FITS images were recovered under
+`benchmarks_results/canfar_smacs-architecture-20260912-r2/`; the existing
+visualizer produced common-scale PNGs and six-band Torchfits RGBs.
+
+### Architecture diagnostic and brightness accounting
+
+All three models remain underfit after 20 steps. SASNet took 566.5 seconds,
+SIREN 185.4 seconds, and the explicit grid 140.8 seconds. Validation
+chi-square/pixel spans 8.1–278.6, 4.2–267.6, and 32.5–735.5 respectively;
+these are not converged or equal-parameter comparisons. No test exposure was
+evaluated. Source contrast was not recovered, so no model is selected.
+
+The independently recovered background checkpoints match their recorded SHA256
+hashes and have zero final-layer weights. Their constant final biases are
+0.1887137294 MJy/sr (NRCB4, shared across F090W/F150W/F200W) and
+0.1384104937 MJy/sr (NRCBLONG, shared across F277W/F356W/F444W). The scene
+exports omit these contributions, whereas the reference images include their
+own foreground convention. Comparing those directly overstates diffuse scene
+loss. As a bookkeeping diagnostic, adding the frozen constant to SASNet's
+target-grid image lowers F090W RMSE from 0.1441 to 0.0478 MJy/sr. This is not a
+new reconstruction or a calibrated detector prediction and cannot recover
+source contrast. The unchanged products and `brightness_accounting.json`
+preserve this distinction. Never fit a new offset to these reference images
+to improve the score.
+
+The shared normalization audit found no double scaling. Stationary calibration
+uses one constant per detector rather than per filter; future calibration
+comparisons must use independent blank-field evidence. The adaptive-family
+passband treatment also needs a separate review and was not used in this run.
+
+New validation diagnostics render a zero celestial scene through the same
+fixed operators and report observed/fixed/predicted-scene mean brightness,
+median observed-minus-fixed brightness and its negative fraction, in physical
+units. Non-Foam exports now use the fitted pixel quadrature and bounded tiles
+instead of silently reverting to pixel centres. A quadratic-pixel integral
+regression verifies that correction; 50 targeted tests, preflight and type
+checks pass. Existing recovered images retain their original centre-sampled
+provenance. These fixes do not establish improved source recovery.
 
 Run `depth-20260911-webterm-smacs-r2` is **not an acceptable scientific
 reconstruction**. The 128-square-pixel pilot fit took 39,492.8 seconds

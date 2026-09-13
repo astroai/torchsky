@@ -94,6 +94,30 @@ def test_frozen_calibrated_background_follows_scene_intensity_scale() -> None:
     assert not any(parameter.requires_grad for parameter in background.parameters())
 
 
+def test_joint_scene_export_integrates_a_quadratic_pixel() -> None:
+    class Quadratic(joint_benchmark._ZeroScene):
+        def forward(self, ra, dec, wavelength):
+            return ((ra - 10.0) / 0.1).square() + self.anchor
+
+    observation = FieldObservation(
+        image=torch.zeros((1, 1)), wavelength=15000.,
+        header={
+            "NAXIS": 2, "NAXIS1": 1, "NAXIS2": 1,
+            "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+            "CRVAL1": 10., "CRVAL2": 0., "CRPIX1": 1., "CRPIX2": 1.,
+            "CDELT1": -0.1, "CDELT2": 0.1,
+        },
+    )
+    result = joint_benchmark._render_joint_scene_product(
+        Quadratic(torch.device("cpu")), observation,
+        {"spatial_sampling": "gauss_legendre_2x2", "render_spatial_tile_hw": (1, 1)},
+        1, None,
+    )
+    # Integral of x**2 on [-1/2, 1/2]; centre-only export would give zero.
+    assert float(result[0, 0]) == pytest.approx(1 / 12, abs=2e-4)
+    assert not result.requires_grad
+
+
 def test_joint_sasnet_uses_real_training_pixel_scale() -> None:
     header = {
         "NAXIS": 2, "NAXIS1": 4, "NAXIS2": 4,

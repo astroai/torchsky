@@ -252,6 +252,33 @@ def _training_calibration_exposure_paths(
     return training, omitted
 
 
+class _ZeroScene(torch.nn.Module):
+    """Zero celestial brightness for measuring the fixed detector contribution."""
+
+    def __init__(self, device: torch.device) -> None:
+        super().__init__()
+        self.anchor = torch.nn.Parameter(torch.zeros((), device=device), requires_grad=False)
+
+    def forward(self, ra: torch.Tensor, dec: torch.Tensor, wavelength: Any) -> torch.Tensor:
+        return torch.zeros_like(ra) + self.anchor
+
+
+def _render_joint_scene_product(
+    model: torch.nn.Module, observation: FieldObservation,
+    fit_kwargs: dict[str, Any], num_spectral_samples: int,
+    context: ForwardContext | None,
+) -> torch.Tensor:
+    """Export using the fitted pixel integration, without detector backgrounds."""
+    with torch.no_grad():
+        return render_field_observation(
+            model, observation, num_spectral_samples=num_spectral_samples,
+            spectral_sampling="deterministic_quadrature",
+            spatial_sampling=fit_kwargs["spatial_sampling"],
+            spatial_tile_hw=fit_kwargs["render_spatial_tile_hw"],
+            forward_context=context,
+        )
+
+
 def _validation_detector_scores(
     model: torch.nn.Module,
     observations: Sequence[FieldObservation],
@@ -274,6 +301,7 @@ def _validation_detector_scores(
     model.eval()
     try:
         device = next((parameter.device for parameter in model.parameters()), torch.device("cpu"))
+        zero_scene = _ZeroScene(device).eval()
         for bundle in bundles:
             for operator in (getattr(bundle, "psf", None), getattr(bundle, "background", None)):
                 operator_model = getattr(operator, "model", None)
@@ -303,6 +331,17 @@ def _validation_detector_scores(
                 ).detach().cpu().double()
                 if prediction.shape != image.shape or not torch.isfinite(prediction[valid]).all():
                     raise ValueError("validation prediction has invalid shape or nonfinite valid pixels")
+                fixed_prediction = render_field_observation(
+                    zero_scene, observation,
+                    num_spectral_samples=int(fit_kwargs.get("num_spectral_samples", 9)),
+                    spectral_sampling="deterministic_quadrature",
+                    spatial_sampling=fit_kwargs.get("spatial_sampling", "center"),
+                    spatial_tile_hw=fit_kwargs.get("render_spatial_tile_hw", (256, 256)),
+                    forward_context=context, operator_bundle=bundle,
+                ).detach().cpu().double()
+                if fixed_prediction.shape != image.shape or not torch.isfinite(fixed_prediction[valid]).all():
+                    raise ValueError("zero-scene detector prediction is invalid")
+                available_scene = (image[valid] - fixed_prediction[valid]) * scale
                 chi2 = ((prediction[valid] - image[valid]) / err[valid]).square()
                 # Restore the density to original SCI units after train-only scaling.
                 nll = .5 * (chi2 + math.log(2 * math.pi)) + torch.log(err[valid]) + math.log(scale)
@@ -325,6 +364,12 @@ def _validation_detector_scores(
                     "pixels": count,
                     "gaussian_nll_per_pixel": float(nll.mean()),
                     "chi2_per_pixel": float(chi2.mean()),
+                    "observed_mean": float(image[valid].mean()) * scale,
+                    "fixed_detector_mean": float(fixed_prediction[valid].mean()) * scale,
+                    "predicted_scene_mean": float((prediction[valid] - fixed_prediction[valid]).mean()) * scale,
+                    "observed_minus_fixed_median": float(available_scene.median()),
+                    "observed_minus_fixed_negative_fraction": float((available_scene < 0).double().mean()),
+                    "brightness_unit": observation.value_unit,
                 })
     finally:
         model.train(was_training)
@@ -3345,12 +3390,9 @@ def main() -> int:
                                     )
                                     row["render_mode"] = "hard_pixel_footprint"
                                 else:
-                                    rendered = render_field_observation(
-                                        result_model, target_observation,
-                                        num_spectral_samples=render_num_spectral_samples,
-                                        spatial_sampling=fit_kwargs["spatial_sampling"],
-                                        spatial_tile_hw=fit_kwargs["render_spatial_tile_hw"],
-                                        forward_context=render_ctx,
+                                    rendered = _render_joint_scene_product(
+                                        result_model, target_observation, fit_kwargs,
+                                        render_num_spectral_samples, render_ctx,
                                     )
                                     row["render_mode"] = "trained_soft_pixel_quadrature"
                             row["product_interpretation"] = (
@@ -3358,13 +3400,15 @@ def main() -> int:
                                 "not a calibrated detector prediction"
                             )
                         else:
-                            rendered = render_field_observation(
-                                result_model,
-                                target_observation,
-                                num_spectral_samples=render_num_spectral_samples,
-                                forward_context=render_ctx,
+                            rendered = _render_joint_scene_product(
+                                result_model, target_observation, fit_kwargs,
+                                render_num_spectral_samples, render_ctx,
                             )
-                            row["render_mode"] = "pixel_center"
+                            row["render_mode"] = "trained_pixel_quadrature"
+                            row["product_interpretation"] = (
+                                "target-grid scene with assumed target PSF; "
+                                "excludes fixed detector background"
+                            )
                         pred = (
                             rendered.detach()
                             .cpu()

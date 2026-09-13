@@ -147,6 +147,11 @@ def test_validation_scores_use_fixed_prediction_full_mask_and_original_units(mon
     )
     assert rows[0]["pixels"] == 3
     assert rows[0]["exposures"] == 1
+    budget = rows[0]["per_exposure"][0]
+    assert budget["observed_mean"] == pytest.approx(7.)
+    assert budget["fixed_detector_mean"] == 0.
+    assert budget["observed_minus_fixed_median"] == 6.
+    assert budget["observed_minus_fixed_negative_fraction"] == 0.
     assert rows[0]["gaussian_nll_per_pixel"] == pytest.approx(
         .5 * (7. / 4. + math.log(2. * math.pi * 36.))
     )
