@@ -5,6 +5,49 @@ Do not submit jobs to staging or use it as a fallback.
 
 ## Exposure-level calibration — 2026-09-13
 
+Full-frame sample preparation now uses separate `calibration_split` labels;
+the original science `split` is never reassigned. Reproduce with
+`python -m torchsky.calibration_partitions INPUT OUTPUT` in the Pixi environment.
+Overlapping sample footprints and shared source IDs form indivisible groups
+within each exact exposure/filter. Groups are deterministically assigned to
+calibration fitting/checking partitions, with explicit insufficient-coverage
+reports. No target values or science residuals determine the assignment.
+
+Prepared actual r8 evidence:
+`benchmarks_results/exposure_calibration_audit/exposure_samples.json`, SHA256
+`890e89a006fa0f2561411f5d9d9ecd02853bc32deaef3c8d6275a4e9cfb345ce`.
+All 4,757 original science split labels are preserved. There are 116 exposures
+with structurally sufficient independent groups for both calibration roles;
+19 F090W exposures lack sufficient independent PSF groups. This coverage does
+not establish calibration accuracy. Excluded exposures require more usable
+stars or independently justified PSF predictions; no detector-average fallback.
+
+Prepared manifests carry full-detector sample footprints with interpolation
+support. The joint runner excludes all calibration samples plus the recorded
+PSF radius from science masks before training coadds, normalization and crops,
+and from held-out scoring. Exclusions must also be considered when interpreting
+coverage and eventually refitting the selected full-field product. Missing star
+pixels are not evidence of successful source recovery.
+
+The fitter uses `calibration_split` only in exposure scope, retains science
+splits, and lists excluded coverage. Use repeated `--exposure-id` arguments for
+an explicitly bounded batch; unknown or unsupported exposures are rejected.
+All 61 partition/fitter/scene/sampling tests passed. Preflight and
+type checks pass (existing `__all__` warning). Actual per-exposure fits and their
+independent residual/PSF validation still remain to run. No new GPU job launched
+during sample preparation.
+The CANFAR runner now selects `smacs-cuda` for CUDA calibration from its first
+build and accepts `CALIBRATION_EXPOSURE_IDS` for an explicit bounded batch.
+Independent review confirmed full-detector exclusion ordering and identified
+a radius-layout mismatch, now corrected. The partitions separate target pixel
+footprints within exposures; they do not establish independence of astrophysical
+sources across exposures. Production authentication expired on the next session
+check, so no new remote fit has started; renew with `canfar login`.
+Start actual exposure-level comparisons with the stationary family separately
+fitted per exposure/filter. Adaptive spatial/chromatic models still require
+the band-integrated calibration-response review identified above; do not infer
+their validity from the new sample partitions.
+
 Background and PSF calibration now support exact exposure identity plus filter,
 rather than sharing detector-average parameters. Run the calibration fitter
 with `--calibration-scope exposure` (CANFAR runner: `CALIBRATION_SCOPE=exposure`).
@@ -25,16 +68,15 @@ reported zero errors and the existing `__all__` warning. A test initially tried
 to mutate frozen ForwardContext metadata; it was corrected to construct a new
 context. No CUDA or new real-data calibration-fit claim follows these checks.
 
-The actual r8 evidence manifest was recovered and audited under
+The original, unpartitioned r8 evidence manifest was recovered and audited under
 `benchmarks_results/exposure_calibration_audit/`. It has 262 exposure/band/role
 groups: 146 train-only, 56 validation-only, 60 test-only, and zero groups with
-all independent calibration splits. Thus it cannot yet run the new per-exposure
-calibration fitter under the current verification policy. Do not reassign
+all independent calibration splits. The derived sample manifest described above
+addresses this for 116 exposures. Do not reassign
 science exposure splits or fit unrestricted held-out residuals to bypass this.
-Next data work: full-frame independent star/blank-sky calibration sample
-partitions and provenance, including treatment of calibration pixels in
-held-out science scoring. This is a remaining data/protocol requirement, not
-an already-completed exposure-level SMACS correction. No new GPU job launched.
+The remaining data requirement is independent PSF support for 19 F090W exposures.
+Prepared sample partitions are not an already-completed exposure-level SMACS
+correction. No new GPU job launched.
 
 Current Torchsky compute image: **`astroai/webterm:latest`**, explicitly chosen
 by the user. Production GPU check `m6vox3k4` succeeded on an H100 MIG slice

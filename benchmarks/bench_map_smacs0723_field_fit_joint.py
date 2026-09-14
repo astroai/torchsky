@@ -98,7 +98,7 @@ from torchsky.map.operators import (  # noqa: E402
     apply_psf_spec,
     pixel_area_sr_at,
 )
-from torchsky.calibration_evidence import load_operator_calibration_split  # noqa: E402
+from torchsky.calibration_evidence import calibration_exposure_id, load_operator_calibration_split  # noqa: E402
 from torchsky.map.operators import (  # noqa: E402
     ConditionedBackgroundField,
     LearnedBackgroundOp,
@@ -250,6 +250,30 @@ def _training_calibration_exposure_paths(
     if paths and not training:
         raise ValueError("calibration selection contains no training exposures")
     return training, omitted
+
+
+def _exclude_calibration_samples(
+    mask: np.ndarray, rows: list[dict[str, Any]], *,
+    x0: float, y0: float, psf_radius: int,
+) -> np.ndarray:
+    """Exclude full-detector sample footprints and their PSF influence region."""
+    result = mask.copy()
+    if psf_radius < 0:
+        raise ValueError("PSF exclusion radius must be nonnegative")
+    height, width = result.shape
+    for row in rows:
+        bounds = row.get("calibration_bounds_xy")
+        if bounds is None or len(bounds) != 4 or not all(math.isfinite(v) for v in bounds):
+            raise ValueError("calibration evidence requires finite footprint bounds")
+        if bounds[0] > bounds[1] or bounds[2] > bounds[3]:
+            raise ValueError("calibration footprint bounds are reversed")
+        left = max(0, math.floor(bounds[0] - psf_radius - x0))
+        right = min(width, math.ceil(bounds[1] + psf_radius - x0) + 1)
+        bottom = max(0, math.floor(bounds[2] - psf_radius - y0))
+        top = min(height, math.ceil(bounds[3] + psf_radius - y0) + 1)
+        if left < right and bottom < top:
+            result[bottom:top, left:right] = 0
+    return result
 
 
 class _ZeroScene(torch.nn.Module):
@@ -2452,6 +2476,14 @@ def main() -> int:
         if calibration_manifest_payload is not None
         else {}
     )
+    calibration_samples: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    calibration_psf_radius = 0
+    if calibration_manifest_payload and "calibration_partitioning" in calibration_manifest_payload:
+        extraction = calibration_manifest_payload["extraction"]
+        calibration_psf_radius = math.ceil(extraction.get("settings", extraction)["psf_radius_px"])
+        for sample in calibration_manifest_payload["evidence"]:
+            key = (calibration_exposure_id(sample), str(sample["band"]).upper())
+            calibration_samples.setdefault(key, []).append(sample)
     explicit_target_header = (
         dict(torchsky.read(str(args.target_header_path), return_header=True)[1])
         if args.target_header_path is not None
@@ -2604,23 +2636,6 @@ def main() -> int:
                     if science_overrides is not None
                     else None
                 )
-                if exposure_path in exposure_paths:
-                    science_path, weight_path, mask_path = _prepare_aux_files(
-                        exposure_path,
-                        tmpdir,
-                        linearize_sip=False,
-                        science_override=science_override,
-                    )
-                    image_observations.append(
-                        ImageObservation(
-                            str(science_path),
-                            hdu=0,
-                            weight_path=str(weight_path),
-                            weight_hdu=0,
-                            mask_path=str(mask_path),
-                            mask_hdu=0,
-                        )
-                    )
                 science = (
                     _read_ext(exposure_path, "SCI")
                     if science_override is None
@@ -2632,6 +2647,27 @@ def main() -> int:
                     _jwst_dq_support_and_contamination_prior(dq)
                 )
                 valid = np.isfinite(err) & (err > 0) & dq_support
+                calibration_exposure = (
+                    _calibration_exposure(calibration_lookup, exposure_path)
+                    if calibrated_operators else None
+                )
+                if calibration_samples and calibration_exposure is not None:
+                    exposure_identity = calibration_exposure.get("exposure_id", calibration_exposure["path"])
+                    valid = _exclude_calibration_samples(
+                        valid, calibration_samples.get((exposure_identity, str(band).upper()), []),
+                        x0=float(calibration_exposure["detector_bounds_xy"][0]),
+                        y0=float(calibration_exposure["detector_bounds_xy"][2]),
+                        psf_radius=calibration_psf_radius,
+                    )
+                if exposure_path in exposure_paths:
+                    science_path, weight_path, mask_path = _prepare_aux_files(
+                        exposure_path, tmpdir, linearize_sip=False,
+                        science_override=science_override, additional_mask=valid,
+                    )
+                    image_observations.append(ImageObservation(
+                        str(science_path), hdu=0, weight_path=str(weight_path),
+                        weight_hdu=0, mask_path=str(mask_path), mask_hdu=0,
+                    ))
                 weight = np.zeros_like(err, dtype=np.float32)
                 weight[valid] = 1.0 / np.square(err[valid])
                 header = dict(_sci_header(exposure_path))

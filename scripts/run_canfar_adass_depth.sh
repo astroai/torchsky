@@ -139,6 +139,9 @@ native_build_env=default
 if [[ "${mode}" == "foam" || "${mode}" == "foam-validation" ]]; then
   native_build_env=smacs-cuda
 fi
+if [[ "${mode}" == "calibration-fit" && "${CALIBRATION_FIT_DEVICE:-cpu}" == cuda* ]]; then
+  native_build_env=smacs-cuda
+fi
 if [[ "${mode}" == "mosaic-parity" ]]; then
   native_build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}
   [[ "${native_build_env}" == "map-compat" || "${native_build_env}" == "map-compat-cuda" ]] || {
@@ -299,8 +302,15 @@ case "${mode}" in
     calibration_lr=${CALIBRATION_FIT_LR:-0.001}
     calibration_device=${CALIBRATION_FIT_DEVICE:-cpu}
     test -s "${calibration_manifest}"
-    ensure_native_build
-    pixi_run default \
+    calibration_selection=()
+    if [[ -n "${CALIBRATION_EXPOSURE_IDS:-}" ]]; then
+      IFS=',' read -r -a calibration_exposure_ids <<< "${CALIBRATION_EXPOSURE_IDS}"
+      for exposure_id in "${calibration_exposure_ids[@]}"; do
+        [[ -n "${exposure_id}" ]] || { echo "empty calibration exposure ID" >&2; exit 2; }
+        calibration_selection+=(--exposure-id "${exposure_id}")
+      done
+    fi
+    pixi_run "${native_build_env}" \
       python "${source_root}/benchmarks/fit_smacs0723_operator_calibration.py" \
       --manifest "${calibration_manifest}" \
       --output-dir "${CALIBRATION_FIT_OUTPUT_DIR:-${artifact_root}/fit}" \
@@ -308,7 +318,8 @@ case "${mode}" in
       --lr "${calibration_lr}" \
       --device "${calibration_device}" \
       --calibration-scope "${CALIBRATION_SCOPE:-detector}" \
-      --psf-model "${CALIBRATION_FIT_PSF_MODEL:-${fit_psf_model}}"
+      --psf-model "${CALIBRATION_FIT_PSF_MODEL:-${fit_psf_model}}" \
+      "${calibration_selection[@]}"
     gate "${CALIBRATION_FIT_OUTPUT_DIR:-${artifact_root}/fit}/operator_calibration_fit.json"
     ;;
   calibration-inspect)

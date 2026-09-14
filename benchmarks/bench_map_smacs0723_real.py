@@ -540,6 +540,7 @@ def _prepare_aux_files(
     *,
     linearize_sip: bool,
     science_override: np.ndarray | None = None,
+    additional_mask: np.ndarray | None = None,
 ) -> tuple[Path, Path, Path]:
     header = _sci_header(exposure_path)
     if linearize_sip:
@@ -554,6 +555,10 @@ def _prepare_aux_files(
     if science.shape != err.shape or science.shape != dq.shape:
         raise ValueError("science override must match the exposure ERR/DQ shape")
     valid = np.isfinite(err) & (err > 0) & np.isfinite(dq) & (dq == 0)
+    if additional_mask is not None:
+        if additional_mask.shape != valid.shape:
+            raise ValueError("additional mask must match the full exposure shape")
+        valid &= np.isfinite(additional_mask) & (additional_mask > 0)
     weight = np.zeros_like(err, dtype=np.float32)
     weight[valid] = 1.0 / np.square(err[valid])
     mask = valid.astype(np.float32)

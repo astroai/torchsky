@@ -178,6 +178,21 @@ def test_calibrated_bundles_select_frozen_models_by_detector() -> None:
     assert bundles[0].background.coordinate_frame == "detector"
 
 
+def test_calibration_sample_exclusions_use_full_detector_coordinates() -> None:
+    mask = np.ones((12, 12), dtype=bool)
+    rows = [{"calibration_bounds_xy": [103., 104., 205., 206.]}]
+    full = joint_benchmark._exclude_calibration_samples(
+        mask, rows, x0=100., y0=200., psf_radius=1,
+    )
+    assert not full[4:8, 2:6].any()
+    assert full.sum() == mask.size - 16
+    crop = joint_benchmark._exclude_calibration_samples(
+        mask[3:9, 1:8], rows, x0=101., y0=203., psf_radius=1,
+    )
+    np.testing.assert_array_equal(crop, full[3:9, 1:8])
+    assert mask.all()
+
+
 def test_exposure_calibration_is_shared_across_overlapping_cutouts() -> None:
     from torchsky.map.field.observation_ops import crop_field_observation
 

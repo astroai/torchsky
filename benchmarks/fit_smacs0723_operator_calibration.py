@@ -464,7 +464,7 @@ def _fit_group(
         split: [
             row
             for row in manifest_payload.get("evidence", [])
-            if row.get("split") == split
+            if row.get("calibration_split" if exposure_id is not None else "split") == split
             and row.get("role") == role
             and str(row.get("detector", "")).upper() == detector
             and (exposure_id is None or calibration_exposure_id(row) == exposure_id)
@@ -719,16 +719,22 @@ def _calibration_groups(
     if scope != "exposure":
         raise ValueError("calibration scope must be detector or exposure")
     keys = set()
+    supported = payload.get("calibration_partitioning", {}).get("supported_exposures")
+    supported_keys = None if supported is None else {
+        (row["exposure"], str(row["band"]).upper()) for row in supported
+    }
     for row in rows:
         exposure_id = calibration_exposure_id(row)
         band = row.get("band")
         if not isinstance(band, str) or not band.strip():
             raise ValueError("exposure calibration requires a nonempty band")
+        if supported_keys is not None and (exposure_id, band.upper()) not in supported_keys:
+            continue
         keys.add((str(row["detector"]).upper(), exposure_id, band.upper()))
     for detector, exposure_id, band in sorted(keys):
         for role in ("background", "psf"):
             splits = {
-                row.get("split")
+                row.get("calibration_split")
                 for row in rows
                 if str(row["detector"]).upper() == detector
                 and calibration_exposure_id(row) == exposure_id
@@ -754,6 +760,8 @@ def main() -> int:
     parser.add_argument(
         "--calibration-scope", choices=("detector", "exposure"), default="detector"
     )
+    parser.add_argument("--exposure-id", action="append", default=[],
+                        help="Exact exposure identity to fit; repeat for a bounded batch.")
     parser.add_argument("--minimum-slice-samples", type=int, default=20)
     parser.add_argument(
         "--psf-model",
@@ -769,6 +777,14 @@ def main() -> int:
     if args.minimum_slice_samples < 1:
         raise ValueError("minimum_slice_samples must be positive")
     selections = _calibration_groups(payload, args.calibration_scope)
+    if args.exposure_id:
+        if args.calibration_scope != "exposure":
+            parser.error("--exposure-id requires --calibration-scope exposure")
+        requested = set(args.exposure_id)
+        missing = requested - {selection[1] for selection in selections}
+        if missing:
+            parser.error(f"requested exposures lack independent calibration coverage: {sorted(missing)}")
+        selections = [selection for selection in selections if selection[1] in requested]
     detectors = sorted({selection[0] for selection in selections})
     if not detectors:
         raise ValueError("manifest contains no train-split detector evidence")
@@ -803,6 +819,8 @@ def main() -> int:
     report = {
         "schema_version": 1,
         "calibration_scope": args.calibration_scope,
+        "calibration_partitioning": payload.get("calibration_partitioning"),
+        "requested_exposure_ids": args.exposure_id,
         "manifest": str(manifest),
         "manifest_sha256": _sha256(manifest),
         "device": str(device),

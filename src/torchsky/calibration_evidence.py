@@ -744,7 +744,7 @@ def load_operator_calibration_split(
     rows = [
         row
         for row in payload.get("evidence", [])
-        if row.get("split") == split
+        if row.get("calibration_split" if exposure_id is not None else "split") == split
         and row.get("role") == role
         and str(row.get("detector", "")).upper() == detector.upper()
         and (exposure_id is None or calibration_exposure_id(row) == exposure_id)

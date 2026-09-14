@@ -37,6 +37,7 @@ def test_exposure_selection_preserves_independent_splits_and_provenance(
             "detector": "NRCALONG",
             "role": role,
             "split": split,
+            "calibration_split": split,
             "detector_x": 500.0,
             "detector_y": 600.0,
             "time_mjd_utc": 60000.0,
