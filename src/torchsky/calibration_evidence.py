@@ -145,7 +145,9 @@ def discover_detector_calibration_positions(
         order = torch.topk(candidate_score, k=preselection).indices
         candidate_yx = candidate_yx.index_select(0, order)
         integer_positions = candidate_yx[:, [1, 0]].to(dtype=science.dtype)
-        quality_radius = max(3, math.ceil(2.5 * sigma_px))
+        # Judge the same footprint used for calibration, including neighbours
+        # that lie outside the compact detection core.
+        quality_radius = psf_radius_px
         stamps, weights, support = _registered_arrays(
             science,
             error,

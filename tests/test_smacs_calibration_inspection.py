@@ -124,6 +124,69 @@ def test_inspection_rejected_rows_remain_exposure_scoped() -> None:
     assert len(inspection._rejected_rows(payload, detector="NRCB4")) == 3
 
 
+def test_stationary_diagnostics_only_does_not_read_exposures(tmp_path, monkeypatch):
+    inspection = _inspection_module()
+    evidence = [{"role": "background", "detector": "NRCB4", "exposure_id": "a",
+                 "band": "F150W", "split": "train", "calibration_split": split,
+                 "source_id": split, "detector_x": 1, "detector_y": 2,
+                 "time_mjd_utc": 60000}
+                for split in ("train", "validation", "test")]
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"evidence": evidence, "exposures": [],
+                                    "extraction": {"rejected": []}}))
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"groups": [{"role": "background", "detector": "NRCB4",
+        "family": "stationary", "exposure_id": "a", "band": "F150W"}]}))
+    monkeypatch.setattr(inspection, "_load_background_model", lambda *a, **kw: None)
+    monkeypatch.setattr(inspection, "load_operator_calibration_split",
+                        lambda *a, **kw: {"target_values": torch.tensor([2.0])})
+    monkeypatch.setattr(inspection, "_predict", lambda *a: torch.tensor([3.0]))
+    monkeypatch.setattr(inspection, "_exposure_planes", lambda *a: pytest.fail("read raw exposure"))
+    output = tmp_path / "output"
+    readme = inspection.export_inspection_bundle(manifest, report, output,
+        exposure_id="a", band="F150W", diagnostics_only=True)
+    assert "stationary" in readme.read_text()
+    assert "adaptive" not in readme.read_text()
+    csv = (output / "background_predictions.csv").read_text()
+    assert "stationary_prediction" in csv
+    assert "adaptive" not in csv and "pruned" not in csv
+    assert (output / "model_diagnostics.png").stat().st_size > 0
+    assert not list(output.glob("cutouts*"))
+    assert not (output / "contact_sheets").exists()
+    assert json.loads((output / "provenance.json").read_text())["source_revision"]
+
+
+def test_psf_validation_diagnostics_match_masked_normalization(tmp_path, monkeypatch):
+    inspection = _inspection_module()
+    arrays = {"detector_x": torch.tensor([1.0]), "detector_y": torch.tensor([2.0]),
+              "wavelength": torch.tensor([1.5]), "time_mjd": torch.tensor([60000.0]),
+              "sample_weight": torch.ones(1), "target_kernels": torch.ones(1, 3, 3),
+              "pixel_weight": torch.ones(1, 3, 3)}
+    arrays["pixel_weight"][0, 0, 0] = 0
+    model, _ = inspection.fit_calibration._make_model(arrays, role="psf", family="stationary",
+                                                     device=torch.device("cpu"), exposure_scope=True)
+    checkpoint = tmp_path / "psf.pt"
+    torch.save({"state_dict": model.state_dict()}, checkpoint)
+    group = {"detector": "NRCB4", "role": "psf", "family": "stationary",
+             "exposure_id": "a", "band": "F150W", "checkpoint": str(checkpoint)}
+    payload = {"evidence": [dict(group, source_id="star", calibration_split="validation")]}
+    monkeypatch.setattr(inspection, "load_operator_calibration_split", lambda *a, **kw: arrays)
+    (tmp_path / "README.md").write_text("")
+    inspection._write_psf_diagnostics(tmp_path / "unused.json", payload, {"groups": [group]},
+        tmp_path, detector="NRCB4", exposure_id="a", band="F150W", per_group=2, overwrite=False)
+    target = inspection.read(str(tmp_path / "psf_validation_measured.fits"))
+    predicted = inspection.read(str(tmp_path / "psf_validation_stationary.fits"))
+    residual = inspection.read(str(tmp_path / "psf_validation_residual.fits"))
+    assert target[0, 0, 0] == predicted[0, 0, 0] == 0
+    torch.testing.assert_close(target.sum(), torch.tensor(1.0))
+    torch.testing.assert_close(predicted.sum(), torch.tensor(1.0))
+    torch.testing.assert_close(residual, predicted - target)
+    term = inspection.fit_calibration._term(model, arrays, role="psf", name="reference")
+    torch.testing.assert_close((residual.square() * arrays["pixel_weight"]).sum() / 8,
+                               term.raw_loss())
+    assert (tmp_path / "psf_validation.png").stat().st_size > 0
+
+
 def test_inspection_selects_worst_residuals_and_writes_png(tmp_path: Path) -> None:
     inspection = _inspection_module()
     accepted = [

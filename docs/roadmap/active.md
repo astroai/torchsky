@@ -5,6 +5,53 @@ Do not submit jobs to staging or use it as a fallback.
 
 ## Exposure-level calibration — 2026-09-13
 
+### Measured continuation — 2026-09-14
+
+Corrected production GPU replay `wzm5lvy6`, run
+`smacs-exposure-calibration-20260914-r2`, completed with exit 0 on an H100 MIG
+using source `09efbd17` and `astroai/webterm:latest`. All 12 checkpoints were
+recovered and hash-verified. Maximum CPU/CUDA tensor difference was
+1.91e-6; maximum relative validation-loss difference was 1.04e-6. Evidence:
+`benchmarks_results/canfar_smacs-exposure-calibration-20260914-r2/`.
+
+The same stationary calibration completed for all 116 supported exposures on
+CPU: 232 background/PSF fits, each 300 steps, summed group runtime 66.16 seconds.
+Evidence and checkpoints:
+`benchmarks_results/exposure_calibration_audit/stationary_all_supported_cpu/`.
+This timing excludes environment setup and is not a CPU/GPU performance claim.
+Calibration samples from final-test exposures are independent, excluded pixels;
+no final-test science likelihood or reconstructed image was evaluated.
+
+Supported counts are F090W 17, F150W 36, F200W 36, and 9 each for F277W,
+F356W, F444W. Crucially, **none of the F090W science-validation exposures is
+supported**. Do not silently drop them and claim a six-band validation result.
+The other 19 F090W exposures need independent PSF evidence or an explicitly
+validated calibration prediction. The automatic F090W validation kernels also
+include an off-centre feature consistent with contamination; its first-exposure
+PSF validation centroid RMS is 2.88 detector pixels and maximum enclosed-flux
+error is 0.616. Numerical fit completion does not establish usable PSFs.
+
+Six per-band diagnostic bundles now contain background measurements/residuals,
+validation PSF target/prediction/residual/weight FITS cubes, common-scale PNGs,
+metric legends, exact exposure identities, and provenance hashes. The exporter
+supports stationary-only reports and `--diagnostics-only`, avoiding full raw
+exposure downloads. Local products:
+`benchmarks_results/exposure_calibration_audit/stationary_cpu_diagnostics_v2/`.
+These are calibration diagnostics, not new cluster reconstructions. Absolute
+foreground separation and the measured-kernel pixel-response convention remain
+unverified; no flux/depth superiority claim follows.
+
+The automatic PSF selector checked a smaller detection-core patch than the
+radius-nine kernel subsequently extracted. A two-source regression reproduced
+acceptance of neighbouring objects whose calibration kernels overlap. Selection
+now checks the actual extraction footprint; the regression rejects the blend
+while retaining an isolated star. All 31 extraction/inspection/partition checks
+pass. Existing r8 evidence and derived fits remain unchanged for provenance;
+they require re-extraction and renewed scientific review before reconstruction.
+The bounded evidence audit found no local reviewed-star catalog or
+exposure-matched physical PSF product. Existing nominal STPSF files are not
+substitutes for that evidence.
+
 Production access was renewed. GPU pilot `cywobn5r`, run
 `smacs-exposure-calibration-20260913-r1`, confirmed an H100 MIG allocation and
 the pinned `fe317379` source, but stopped when the adaptive encoder demanded

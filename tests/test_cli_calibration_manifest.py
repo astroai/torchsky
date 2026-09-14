@@ -217,6 +217,20 @@ def test_extract_reviewed_calibration_evidence_persists_split_targets(
     assert result["products"]["detector_evidence"]["size_bytes"] > 0
 
 
+def test_psf_selection_checks_neighbors_across_extracted_kernel() -> None:
+    yy, xx = torch.meshgrid(torch.arange(64.), torch.arange(64.), indexing="ij")
+    star = 100 * torch.exp(-((xx - 24).square() + (yy - 24).square()) / 2)
+    neighbor = 100 * torch.exp(-((xx - 30).square() + (yy - 30).square()) / 2)
+    error = torch.ones_like(star)
+    dq = torch.zeros_like(star, dtype=torch.int16)
+    kwargs = dict(psf_fwhm_px=2.354820045, psf_radius_px=9,
+                  max_background_candidates=0)
+    isolated = discover_detector_calibration_positions(star, error, dq, **kwargs)
+    assert len(isolated) == 1
+    blended = discover_detector_calibration_positions(star + neighbor, error, dq, **kwargs)
+    assert blended == []
+
+
 def test_automatic_calibration_evidence_finds_star_and_blank_sky(
     tmp_path: Path,
 ) -> None:
