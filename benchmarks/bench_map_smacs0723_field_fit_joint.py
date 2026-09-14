@@ -481,6 +481,7 @@ def _load_calibrated_operator_models(
                 family=family,
                 device=torch.device("cpu"),
                 psf_model=str(checkpoint.get("psf_model") or "fitted_gaussian_kernel"),
+                exposure_scope=exposure_id is not None,
             )
             if (
                 checkpoint.get("schema_version") != 1

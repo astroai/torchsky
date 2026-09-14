@@ -1,4 +1,4 @@
-"""Export human-readable NRCB4 background calibration diagnostics."""
+"""Export human-readable detector or exposure background calibration diagnostics."""
 
 from __future__ import annotations
 
@@ -19,7 +19,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 import fit_smacs0723_operator_calibration as fit_calibration  # noqa: E402
-from torchsky.calibration_evidence import load_operator_calibration_split  # noqa: E402
+from torchsky.calibration_evidence import (  # noqa: E402
+    calibration_exposure_id,
+    load_operator_calibration_split,
+)
 from torchsky.io import read, write  # noqa: E402
 from torchsky.map.operators import (  # noqa: E402
     ConditionedBackgroundField,
@@ -29,7 +32,8 @@ from torchsky.viz.renderers.image import zscale_limits  # noqa: E402
 
 
 def _fit_group(
-    report: dict[str, Any], *, detector: str, role: str, family: str
+    report: dict[str, Any], *, detector: str, role: str, family: str,
+    exposure_id: str | None = None, band: str | None = None,
 ) -> dict[str, Any]:
     matches = [
         group
@@ -37,9 +41,16 @@ def _fit_group(
         if group["detector"] == detector
         and group["role"] == role
         and group["family"] == family
+        and group.get("calibration_scope", "exposure" if group.get("exposure_id") else "detector")
+        == ("exposure" if exposure_id is not None else "detector")
+        and group.get("exposure_id") == exposure_id
+        and (band is None or str(group.get("band", "")).upper() == band.upper())
     ]
     if len(matches) != 1:
-        raise ValueError(f"expected one {detector}/{role}/{family} fit group")
+        raise ValueError(
+            f"expected one {detector}/{role}/{family} fit group"
+            f" (exposure_id={exposure_id!r}, band={band!r})"
+        )
     return matches[0]
 
 
@@ -54,6 +65,8 @@ def _load_background_model(
         split="train",
         role="background",
         detector=detector,
+        exposure_id=group.get("exposure_id"),
+        band=group.get("band"),
         verify_hashes=True,
     )
     model, _ = fit_calibration._make_model(
@@ -61,6 +74,7 @@ def _load_background_model(
         role="background",
         family=str(group["family"]),
         device=torch.device("cpu"),
+        exposure_scope=group.get("exposure_id") is not None,
     )
     if not isinstance(model, ConditionedBackgroundField):
         raise TypeError("fit checkpoint did not describe a background model")
@@ -87,12 +101,16 @@ def _prediction_rows(
     report: dict[str, Any],
     *,
     detector: str,
+    exposure_id: str | None = None,
+    band: str | None = None,
 ) -> list[dict[str, Any]]:
     stationary_group = _fit_group(
-        report, detector=detector, role="background", family="stationary"
+        report, detector=detector, role="background", family="stationary",
+        exposure_id=exposure_id, band=band,
     )
     adaptive_group = _fit_group(
-        report, detector=detector, role="background", family="adaptive"
+        report, detector=detector, role="background", family="adaptive",
+        exposure_id=exposure_id, band=band,
     )
     stationary = _load_background_model(
         manifest, stationary_group, detector=detector
@@ -107,14 +125,18 @@ def _prediction_rows(
             split=split,
             role="background",
             detector=detector,
+            exposure_id=exposure_id,
+            band=band,
             verify_hashes=True,
         )
         rows = [
             row
             for row in payload["evidence"]
-            if row["split"] == split
+            if row.get("calibration_split" if exposure_id is not None else "split") == split
             and row["role"] == "background"
             and str(row["detector"]).upper() == detector
+            and (exposure_id is None or calibration_exposure_id(row) == exposure_id)
+            and (band is None or str(row.get("band", "")).upper() == band.upper())
         ]
         if len(rows) != arrays["target_values"].numel():
             raise RuntimeError("manifest row order/count does not match loaded evidence")
@@ -126,6 +148,9 @@ def _prediction_rows(
         for index, source in enumerate(rows):
             target = float(arrays["target_values"][index])
             item = dict(source)
+            if exposure_id is not None:
+                item["exposure_split"] = source["split"]
+                item["split"] = split
             item.update({"status": "accepted", "target_value": target})
             for family, values in predictions.items():
                 prediction = float(values[index])
@@ -149,7 +174,8 @@ def _exposure_lookup(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def _rejected_rows(
-    payload: dict[str, Any], *, detector: str
+    payload: dict[str, Any], *, detector: str,
+    exposure_id: str | None = None, band: str | None = None,
 ) -> list[dict[str, Any]]:
     lookup = _exposure_lookup(payload)
     output = []
@@ -160,6 +186,10 @@ def _rejected_rows(
             Path(str(source["exposure"])).name
         )
         if exposure is None or str(exposure["detector"]).upper() != detector:
+            continue
+        if exposure_id is not None and calibration_exposure_id(source) != exposure_id:
+            continue
+        if band is not None and str(exposure["band"]).upper() != band.upper():
             continue
         item = dict(source)
         item.update(
@@ -172,6 +202,9 @@ def _rejected_rows(
                 "time_mjd_utc": exposure["timing"]["midpoint_mjd_utc"],
             }
         )
+        if exposure_id is not None:
+            item["exposure_split"] = exposure["split"]
+            item["split"] = source.get("calibration_split", "unassigned")
         output.append(item)
     return output
 
@@ -254,8 +287,11 @@ def _write_contact_sheet(
     plt.close(figure)
 
 
-def _write_model_diagnostics(path: Path, rows: list[dict[str, Any]]) -> None:
+def _write_model_diagnostics(
+    path: Path, rows: list[dict[str, Any]], *, title: str = "Background calibration"
+) -> None:
     figure, axes = plt.subplots(2, 2, figsize=(12, 10))
+    figure.suptitle(title)
     colors = {"train": "#4c78a8", "validation": "#f58518", "test": "#e45756"}
     for split, color in colors.items():
         split_rows = [row for row in rows if row["split"] == split]
@@ -329,6 +365,8 @@ def _write_readme(
     selected: list[dict[str, Any]],
     *,
     detector: str,
+    exposure_id: str | None = None,
+    band: str | None = None,
 ) -> None:
     lines = [
         f"# {detector} background inspection",
@@ -345,6 +383,14 @@ def _write_readme(
         "| split | model | weighted RMSE | weighted MAE | weighted bias | n |",
         "|---|---|---:|---:|---:|---:|",
     ]
+    if exposure_id is not None:
+        lines[0] = f"# {detector} / {exposure_id} / {band} background inspection"
+        lines[2:2] = [
+            f"Exposure: `{exposure_id}`. Band: `{band}`. Metrics use `calibration_split`; "
+            "the original exposure holdout is retained as `exposure_split`. "
+            "Rejected measurements without a calibration split are marked `unassigned`.",
+            "",
+        ]
     for split in ("train", "validation", "test"):
         rows = [row for row in accepted if row["split"] == split]
         for family in ("stationary", "adaptive", "pruned"):
@@ -382,7 +428,7 @@ def _write_readme(
             "- `model_diagnostics.png`: measured/predicted, temporal, and spatial residual plots.",
             "- `contact_sheets/`: zscale-rendered CRF cutouts grouped by split, band, and acceptance.",
             "- `inspection_index.csv`: compact provenance and model-residual index for displayed cutouts.",
-            "- `background_predictions.csv`: all accepted NRCB4 background measurements and predictions.",
+            "- `background_predictions.csv`: accepted background measurements and predictions for the selected scope.",
             "- `cutouts_*.fits`: matching SCI, ERR, and DQ cubes written through Torchfits.",
             "- `regions/`: one-indexed image-coordinate DS9 boxes, one file per exposure.",
             "",
@@ -407,18 +453,27 @@ def export_inspection_bundle(
     output_dir: Path,
     *,
     detector: str = "NRCB4",
+    exposure_id: str | None = None,
+    band: str | None = None,
     per_group: int = 12,
     overwrite: bool = False,
 ) -> Path:
     detector = detector.upper()
+    if (exposure_id is None) != (band is None) or (
+        exposure_id is not None and (not exposure_id.strip() or not band or not band.strip())
+    ):
+        raise ValueError("exposure selection requires nonempty exposure_id and band together")
+    band = band.upper() if band is not None else None
     output_dir = output_dir.resolve()
     if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
         raise FileExistsError(f"refusing to overwrite non-empty {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     report = json.loads(fit_report.read_text(encoding="utf-8"))
-    accepted = _prediction_rows(manifest, payload, report, detector=detector)
-    rejected = _rejected_rows(payload, detector=detector)
+    accepted = _prediction_rows(
+        manifest, payload, report, detector=detector, exposure_id=exposure_id, band=band
+    )
+    rejected = _rejected_rows(payload, detector=detector, exposure_id=exposure_id, band=band)
     selected = _selected_rows(accepted, rejected, per_group=per_group)
     lookup = _exposure_lookup(payload)
     radius = int(payload["extraction"]["settings"]["background_radius_px"])
@@ -489,13 +544,18 @@ def export_inspection_bundle(
             "\n".join(lines) + "\n", encoding="utf-8"
         )
 
-    _write_model_diagnostics(output_dir / "model_diagnostics.png", accepted)
+    title = f"{detector} background calibration"
+    if exposure_id is not None:
+        title = f"{detector} / {exposure_id} / {band} background calibration"
+    _write_model_diagnostics(output_dir / "model_diagnostics.png", accepted, title=title)
     _write_readme(
         output_dir / "README.md",
         accepted,
         rejected,
         selected,
         detector=detector,
+        exposure_id=exposure_id,
+        band=band,
     )
     return output_dir / "README.md"
 
@@ -506,6 +566,8 @@ def main() -> int:
     parser.add_argument("--fit-report", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--detector", default="NRCB4")
+    parser.add_argument("--exposure-id", help="Exact exposure identity from the fit report; requires --band")
+    parser.add_argument("--band", help="Band for exposure-scoped fits; requires --exposure-id")
     parser.add_argument("--per-group", type=int, default=12)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -514,6 +576,8 @@ def main() -> int:
         args.fit_report.resolve(),
         args.output_dir,
         detector=args.detector,
+        exposure_id=args.exposure_id,
+        band=args.band,
         per_group=args.per_group,
         overwrite=args.overwrite,
     )

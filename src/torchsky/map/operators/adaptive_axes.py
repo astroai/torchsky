@@ -30,12 +30,13 @@ class AdaptiveAxisFeatures(nn.Module):
         length_bounds: tuple[float, float],
         num_bands: int = 4,
         initial_gate: float = 0.9,
+        constant: bool = False,
     ) -> None:
         super().__init__()
         center = float(center)
         reference_scale = float(reference_scale)
         lower, upper = map(float, length_bounds)
-        bands = int(num_bands)
+        bands = 0 if constant else int(num_bands)
         if not math.isfinite(center):
             raise ValueError("axis center must be finite")
         if not math.isfinite(reference_scale) or reference_scale <= 0.0:
@@ -56,6 +57,7 @@ class AdaptiveAxisFeatures(nn.Module):
         self.reference_scale = reference_scale
         self.length_bounds = (lower, upper)
         self.num_bands = bands
+        self.constant = bool(constant)
         self.output_dim = 1 + 2 * bands
         if bands == 0:
             base_log_lengths = torch.empty(0, dtype=torch.float64)
@@ -89,6 +91,7 @@ class AdaptiveAxisFeatures(nn.Module):
         maximum_feature_length: float | None = None,
         num_bands: int = 4,
         initial_gate: float = 0.9,
+        constant: bool = False,
     ) -> AdaptiveAxisFeatures:
         """Derive identifiable feature bounds from actual axis sampling.
 
@@ -104,6 +107,9 @@ class AdaptiveAxisFeatures(nn.Module):
         the two domain endpoints. For a spatially sparse two-dimensional
         calibration set, construct x and y axes from its marginal coordinates
         and validate holes in the joint coverage separately.
+
+        ``constant=True`` emits an exact zero feature for every query, including
+        outside the sampled coordinates.
         """
         # Setup runs once; float64 on CPU preserves sub-minute differences in MJD.
         values = (
@@ -114,6 +120,13 @@ class AdaptiveAxisFeatures(nn.Module):
         )
         values = values[torch.isfinite(values)]
         unique = torch.unique(values).sort().values
+        if constant:
+            if unique.numel() == 0:
+                raise ValueError("a constant axis requires a finite calibration coordinate")
+            # These scale/bounds are inert metadata: the feature is exactly zero.
+            return cls(center=float(unique[0]), reference_scale=1.0,
+                       length_bounds=(1.0, 2.0), constant=True,
+                       initial_gate=initial_gate)
         if unique.numel() < 3:
             raise ValueError(
                 "at least three distinct finite calibration coordinates are required"
@@ -328,6 +341,7 @@ class AdaptiveAxisFeatures(nn.Module):
             "reference_scale": self.reference_scale,
             "length_bounds": self.length_bounds,
             "num_bands": self.num_bands,
+            "constant": self.constant,
             "maximum_log_shift": self._maximum_log_shift,
         }
 
@@ -340,6 +354,7 @@ class AdaptiveAxisFeatures(nn.Module):
         length_bounds = tuple(state["length_bounds"])
         num_bands = int(state["num_bands"])
         maximum_log_shift = float(state["maximum_log_shift"])
+        constant = state.get("constant", False)
         if (
             not math.isfinite(center)
             or not math.isfinite(reference_scale)
@@ -351,12 +366,15 @@ class AdaptiveAxisFeatures(nn.Module):
             or num_bands != self.num_bands
             or not math.isfinite(maximum_log_shift)
             or maximum_log_shift < 0.0
+            or not isinstance(constant, bool)
+            or (constant and num_bands != 0)
         ):
             raise ValueError("invalid adaptive-axis checkpoint metadata")
         self.center = center
         self.reference_scale = reference_scale
         self.length_bounds = (float(length_bounds[0]), float(length_bounds[1]))
         self._maximum_log_shift = maximum_log_shift
+        self.constant = constant
 
     @property
     def gates(self) -> Tensor:
@@ -396,6 +414,8 @@ class AdaptiveAxisFeatures(nn.Module):
         )
 
     def _forward_centered(self, centered: Tensor) -> Tensor:
+        if self.constant:
+            return centered[..., None] * 0.0
         normalized = centered / self.reference_scale
         features = [normalized[..., None]]
         if self.num_bands:
@@ -434,6 +454,8 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
         spectral_bands: int = 3,
         temporal_bands: int = 2,
         initial_gate: float = 0.9,
+        spectral_constant: bool = False,
+        temporal_constant: bool = False,
     ) -> None:
         super().__init__()
         if len(spatial_center) != 2:
@@ -473,6 +495,7 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
             length_bounds=spectral_length_bounds,
             num_bands=spectral_bands,
             initial_gate=initial_gate,
+            constant=spectral_constant,
         )
         self.temporal_axis = AdaptiveAxisFeatures(
             center=float(time_center_mjd),
@@ -480,6 +503,7 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
             length_bounds=temporal_length_bounds_days,
             num_bands=temporal_bands,
             initial_gate=initial_gate,
+            constant=temporal_constant,
         )
         self.output_dim = (
             self.x_axis.output_dim
@@ -506,6 +530,8 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
         spectral_bands: int = 3,
         temporal_bands: int = 2,
         initial_gate: float = 0.9,
+        spectral_constant: bool = False,
+        temporal_constant: bool = False,
     ) -> AdaptiveSpatioSpectralTemporalEncoder:
         """Build all physical axis contracts from calibration sampling."""
         if isinstance(spatial_sample_spacing, (int, float)):
@@ -555,6 +581,7 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
             maximum_feature_length=spectral_maximum_feature_length,
             num_bands=spectral_bands,
             initial_gate=initial_gate,
+            constant=spectral_constant,
         )
         temporal_axis = AdaptiveAxisFeatures.from_samples(
             time_mjd,
@@ -562,6 +589,7 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
             maximum_feature_length=temporal_maximum_feature_length_days,
             num_bands=temporal_bands,
             initial_gate=initial_gate,
+            constant=temporal_constant,
         )
         return cls(
             spatial_center=(x_axis.center, y_axis.center),
@@ -577,6 +605,8 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
             spectral_bands=spectral_bands,
             temporal_bands=temporal_bands,
             initial_gate=initial_gate,
+            spectral_constant=spectral_constant,
+            temporal_constant=temporal_constant,
         )
 
     def regularization(
@@ -609,6 +639,7 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
             ("time_mjd", self.temporal_axis),
         ):
             diagnostics[name] = {
+                "constant": axis.constant,
                 "length_bounds": list(axis.length_bounds),
                 "length_scales": axis.length_scales.detach().cpu().tolist(),
                 "gates": axis.gates.detach().cpu().tolist(),

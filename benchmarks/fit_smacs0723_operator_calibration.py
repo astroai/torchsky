@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import time
 from typing import Any
 
 import torch
@@ -117,6 +118,7 @@ def _adaptive_encoder(
     arrays: dict[str, Tensor],
     *,
     role: str,
+    exposure_scope: bool = False,
 ) -> tuple[AdaptiveSpatioSpectralTemporalEncoder, dict[str, Any]]:
     coordinates = (
         arrays["detector_x"],
@@ -132,6 +134,8 @@ def _adaptive_encoder(
         spatial_bands=4,
         spectral_bands=3,
         temporal_bands=2,
+        spectral_constant=exposure_scope,
+        temporal_constant=exposure_scope,
     )
     evidence = (
         arrays["target_kernels"] if role == "psf" else arrays["target_values"][:, None]
@@ -187,6 +191,7 @@ def _make_model(
     family: str,
     device: torch.device,
     psf_model: str = "fitted_gaussian_kernel",
+    exposure_scope: bool = False,
 ) -> tuple[nn.Module, dict[str, Any]]:
     if family not in {"stationary", "adaptive"}:
         raise ValueError("family must be stationary or adaptive")
@@ -194,7 +199,7 @@ def _make_model(
     encoder: AdaptiveSpatioSpectralTemporalEncoder | SpatioSpectralTemporalEncoder
     initializer: dict[str, Any]
     if adaptive:
-        encoder, initializer = _adaptive_encoder(arrays, role=role)
+        encoder, initializer = _adaptive_encoder(arrays, role=role, exposure_scope=exposure_scope)
     else:
         encoder = _stationary_encoder(arrays)
         initializer = {}
@@ -448,6 +453,7 @@ def _fit_group(
     exposure_id: str | None = None,
     band: str | None = None,
 ) -> dict[str, Any]:
+    started = time.perf_counter()
     arrays = {
         split: load_operator_calibration_split(
             manifest,
@@ -481,6 +487,7 @@ def _fit_group(
         family=family,
         device=device,
         psf_model=psf_model,
+        exposure_scope=exposure_id is not None,
     )
     background_loss_weight = (
         _background_loss_weight(arrays["train"]) if role == "background" else 1.0
@@ -602,6 +609,27 @@ def _fit_group(
                     ),
                 )
             )
+    result["elapsed_seconds"] = time.perf_counter() - started
+    result["device"] = str(device)
+    # Preserve each finished calibration even if a later exposure fails.
+    group_report = checkpoint.with_suffix(".json")
+    temporary = group_report.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(group_report)
+    print(json.dumps({
+        "event": "calibration_group_completed",
+        "exposure_id": exposure_id,
+        "band": band,
+        "detector": detector,
+        "role": role,
+        "family": family,
+        "elapsed_seconds": result["elapsed_seconds"],
+        "validation_raw_loss": reports["validation"]["terms"][0]["raw_loss"],
+        "report": str(group_report),
+    }, allow_nan=False), flush=True)
     return result
 
 
@@ -758,6 +786,10 @@ def main() -> int:
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument(
+        "--family", choices=("stationary", "both"), default="both",
+        help="Fit stationary controls alone or compare both calibration families.",
+    )
+    parser.add_argument(
         "--calibration-scope", choices=("detector", "exposure"), default="detector"
     )
     parser.add_argument("--exposure-id", action="append", default=[],
@@ -794,7 +826,8 @@ def main() -> int:
     groups = []
     for detector_index, (detector, exposure_id, band) in enumerate(selections):
         for role_index, role in enumerate(("background", "psf")):
-            for family_index, family in enumerate(("stationary", "adaptive")):
+            families = ("stationary",) if args.family == "stationary" else ("stationary", "adaptive")
+            for family_index, family in enumerate(families):
                 groups.append(
                     _fit_group(
                         manifest,
@@ -819,6 +852,7 @@ def main() -> int:
     report = {
         "schema_version": 1,
         "calibration_scope": args.calibration_scope,
+        "families": list(families),
         "calibration_partitioning": payload.get("calibration_partitioning"),
         "requested_exposure_ids": args.exposure_id,
         "manifest": str(manifest),

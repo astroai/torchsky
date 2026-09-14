@@ -87,6 +87,11 @@ def test_exposure_selection_preserves_independent_splits_and_provenance(
     assert checkpoint["exposure_id"] == group["exposure_id"] == "visit/a_cal.fits"
     assert checkpoint["band"] == group["band"] == "F277W"
     assert checkpoint["calibration_scope"] == "exposure"
+    saved_group = json.loads(Path(group["checkpoint"]).with_suffix(".json").read_text())
+    assert saved_group["exposure_id"] == "visit/a_cal.fits"
+    assert saved_group["elapsed_seconds"] > 0
+    assert saved_group["device"] == "cpu"
+    assert saved_group["validation_report"] == group["validation_report"]
     with pytest.raises(ValueError, match="missing independent calibration evidence"):
         benchmark._calibration_groups(
             {"evidence": [r for r in rows if r["split"] == "train"]}, "exposure"
@@ -119,6 +124,32 @@ def test_comparisons_do_not_pool_exposures_or_bands() -> None:
         ("b", "F277W"),
         ("a", "F444W"),
     }
+
+
+def test_stationary_only_cli_never_constructs_adaptive_models(tmp_path, monkeypatch) -> None:
+    import json
+    import sys
+
+    benchmark = _benchmark_module()
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"evidence": [{"detector": "NRCB1", "split": "train"}]}))
+    calls = []
+
+    def fit_group(_manifest, **kwargs):
+        assert kwargs["family"] == "stationary"
+        group = {key: kwargs[key] for key in ("detector", "role", "family")}
+        calls.append(group)
+        return group
+
+    monkeypatch.setattr(benchmark, "_fit_group", fit_group)
+    monkeypatch.setattr(sys, "argv", ["fit", "--manifest", str(manifest),
+                                    "--output-dir", str(tmp_path / "out"),
+                                    "--family", "stationary"])
+    assert benchmark.main() == 0
+    report = json.loads((tmp_path / "out/operator_calibration_fit.json").read_text())
+    assert report["families"] == ["stationary"]
+    assert {group["role"] for group in calls} == {"background", "psf"}
+    assert report["held_out_comparisons"] == []
 
 
 def test_stationary_controls_are_coordinate_invariant_and_compare_held_out() -> None:

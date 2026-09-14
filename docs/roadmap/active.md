@@ -5,6 +5,24 @@ Do not submit jobs to staging or use it as a fallback.
 
 ## Exposure-level calibration — 2026-09-13
 
+Production access was renewed. GPU pilot `cywobn5r`, run
+`smacs-exposure-calibration-20260913-r1`, confirmed an H100 MIG allocation and
+the pinned `fe317379` source, but stopped when the adaptive encoder demanded
+three distinct wavelengths from a single exposure/filter. This is a model
+assumption failure, not GPU unavailability. Explicit constant wavelength/time
+axes now emit zero features, including across passband queries; zero harmonic
+bands alone previously retained a raw coordinate dependence. Spatially sparse
+samples still cannot support adaptive spatial fits.
+
+The fitter now offers `--family stationary` for the planned independently fitted
+exposure controls, saves each completed group's JSON beside its checkpoint,
+and reports elapsed time. The inspector selects exact exposure/filter groups
+and uses calibration partitions while preserving the science split labels.
+The six selected exposures completed 300-step stationary background and PSF fits
+locally using hash-verified recovered PSF arrays. This is a numerical check,
+not a new reconstructed cluster image or evidence of superiority. CUDA replay
+and PSF/residual diagnostics are the next checks.
+
 Full-frame sample preparation now uses separate `calibration_split` labels;
 the original science `split` is never reassigned. Reproduce with
 `python -m torchsky.calibration_partitions INPUT OUTPUT` in the Pixi environment.

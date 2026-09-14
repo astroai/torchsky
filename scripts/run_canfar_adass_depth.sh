@@ -317,6 +317,7 @@ case "${mode}" in
       --steps "${calibration_steps}" \
       --lr "${calibration_lr}" \
       --device "${calibration_device}" \
+      --family "${CALIBRATION_FIT_FAMILY:-both}" \
       --calibration-scope "${CALIBRATION_SCOPE:-detector}" \
       --psf-model "${CALIBRATION_FIT_PSF_MODEL:-${fit_psf_model}}" \
       "${calibration_selection[@]}"

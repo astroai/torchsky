@@ -10,6 +10,7 @@ from pathlib import Path
 from types import ModuleType
 
 import torch
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +53,75 @@ def _inspection_module() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_inspection_selects_exact_fit_scope() -> None:
+    inspection = _inspection_module()
+    legacy = {"detector": "NRCB4", "role": "background", "family": "stationary"}
+    scoped = [dict(legacy, exposure_id=exposure, band=band)
+              for exposure, band in (("a", "F150W"), ("b", "F150W"), ("a", "F200W"))]
+    report = {"groups": [legacy, *scoped]}
+    assert inspection._fit_group(report, **legacy) is legacy
+    assert inspection._fit_group(report, **legacy, exposure_id="a", band="f150w") is scoped[0]
+    with pytest.raises(ValueError, match="expected one"):
+        inspection._fit_group(report, **legacy, exposure_id="missing", band="F150W")
+    with pytest.raises(ValueError, match="expected one"):
+        inspection._fit_group({"groups": scoped}, **legacy)
+    with pytest.raises(ValueError, match="expected one"):
+        inspection._fit_group({"groups": [dict(legacy, calibration_scope="exposure")]}, **legacy)
+
+
+@pytest.mark.parametrize("exposure_id,band", [("a", None), (None, "F150W"), ("", "F150W")])
+def test_inspection_requires_paired_scope_selectors(tmp_path, exposure_id, band) -> None:
+    inspection = _inspection_module()
+    with pytest.raises(ValueError, match="exposure_id and band together"):
+        inspection.export_inspection_bundle(
+            tmp_path / "missing.json", tmp_path / "missing-fit.json", tmp_path / "output",
+            exposure_id=exposure_id, band=band,
+        )
+    assert not (tmp_path / "output").exists()
+
+
+def test_inspection_exposure_rows_use_calibration_split(monkeypatch) -> None:
+    inspection = _inspection_module()
+    base = {"detector": "NRCB4", "role": "background", "split": "test", "band": "F150W"}
+    evidence = [dict(base, exposure_id=exposure, calibration_split=split,
+                     source_id=f"{exposure}-{split}")
+                for exposure in ("a", "b") for split in ("train", "validation", "test")]
+    evidence.append(dict(evidence[0], band="F200W", source_id="other-band"))
+    report = {"groups": [dict(base, exposure_id="a", family=family, validation_pruning={})
+                         for family in ("stationary", "adaptive")]}
+    calls = []
+
+    def load(manifest, **kwargs):
+        calls.append(kwargs)
+        return {"target_values": torch.tensor([2.0])}
+
+    monkeypatch.setattr(inspection, "load_operator_calibration_split", load)
+    monkeypatch.setattr(inspection, "_load_background_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(inspection, "apply_operator_calibration_pruning", lambda *args: None)
+    monkeypatch.setattr(inspection, "_predict", lambda *args: torch.tensor([3.0]))
+    rows = inspection._prediction_rows(Path("unused"), {"evidence": evidence}, report,
+                                       detector="NRCB4", exposure_id="a", band="F150W")
+    assert [row["source_id"] for row in rows] == ["a-train", "a-validation", "a-test"]
+    assert [row["split"] for row in rows] == ["train", "validation", "test"]
+    assert all(row["exposure_split"] == "test" and row["pruned_residual"] == 1 for row in rows)
+    assert all(call["exposure_id"] == "a" and call["band"] == "F150W" for call in calls)
+
+
+def test_inspection_rejected_rows_remain_exposure_scoped() -> None:
+    inspection = _inspection_module()
+    exposures = [{"path": name, "resolved_path": f"/data/{name}", "filename": name,
+                  "band": band, "detector": "NRCB4", "patt_num": 1, "split": "test",
+                  "timing": {"midpoint_mjd_utc": 60000}}
+                 for name, band in (("a", "F150W"), ("b", "F150W"), ("c", "F200W"))]
+    rejected = [{"exposure": exposure["path"], "role": "background"} for exposure in exposures]
+    payload = {"exposures": exposures, "extraction": {"rejected": rejected}}
+    rows = inspection._rejected_rows(payload, detector="NRCB4", exposure_id="a", band="F150W")
+    assert len(rows) == 1
+    assert rows[0]["split"] == "unassigned"
+    assert rows[0]["exposure_split"] == "test"
+    assert len(inspection._rejected_rows(payload, detector="NRCB4")) == 3
 
 
 def test_inspection_selects_worst_residuals_and_writes_png(tmp_path: Path) -> None:
