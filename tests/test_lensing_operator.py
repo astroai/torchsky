@@ -61,8 +61,17 @@ def test_operator_shape_handling_and_validation():
     kappa_3d = torch.zeros(2, 4, 4)
     assert operator(kappa_3d).shape == (2, 4, 4)
     assert operator(kappa_3d.unsqueeze(1)).shape == (2, 1, 4, 4)
+    single = operator(torch.zeros(4, 4))
+    assert single.shape == (4, 4)
+    flux = torch.ones(3, 4, 4)
+    torch.testing.assert_close(
+        magnify_flux(flux, torch.full((4, 4), 0.1)),
+        flux * 1.2,
+        rtol=1e-6,
+        atol=0,
+    )
     with pytest.raises(ValueError, match="shape"):
-        operator(torch.zeros(4, 4))
+        operator(torch.zeros(2, 3, 4, 5))
     with pytest.raises(ValueError, match="finite"):
         operator(torch.full((1, 2, 2), float("nan")))
     with pytest.raises(ValueError, match="mode"):

@@ -48,11 +48,14 @@ def _as_kappa_map(kappa: Tensor) -> tuple[Tensor, torch.Size]:
     original = kappa.shape
     if kappa.ndim == 1:
         kappa = kappa.view(-1, 1, 1, 1)
+    elif kappa.ndim == 2:
+        kappa = kappa.unsqueeze(0).unsqueeze(0)
     elif kappa.ndim == 3:
         kappa = kappa.unsqueeze(1)
     if kappa.ndim != 4 or kappa.shape[1] != 1:
         raise ValueError(
-            f"kappa must have shape [N], [B,H,W] or [B,1,H,W], got {tuple(original)}"
+            "kappa must have shape [N], [H,W], [B,H,W] or [B,1,H,W], got "
+            f"{tuple(original)}"
         )
     if not bool(torch.isfinite(kappa).all()):
         raise ValueError("kappa must be finite")
