@@ -484,7 +484,7 @@ def _load_calibrated_operator_models(
                 exposure_scope=exposure_id is not None,
             )
             if (
-                checkpoint.get("schema_version") != 1
+                checkpoint.get("schema_version") != 2
                 or checkpoint.get("detector") != detector
                 or checkpoint.get("role") != role
                 or checkpoint.get("family") != family
@@ -495,6 +495,27 @@ def _load_calibrated_operator_models(
                 ))
             ):
                 raise ValueError(f"invalid {detector}/{role} checkpoint metadata")
+            if role == "psf":
+                pixel_response_included = checkpoint.get("pixel_response_included")
+                pixel_response_provenance = checkpoint.get(
+                    "pixel_response_provenance"
+                )
+                if (
+                    not isinstance(pixel_response_included, bool)
+                    or not isinstance(pixel_response_provenance, str)
+                    or not pixel_response_provenance.strip()
+                    or group.get("pixel_response_included")
+                    != pixel_response_included
+                    or group.get("pixel_response_provenance")
+                    != pixel_response_provenance
+                ):
+                    raise ValueError(
+                        f"invalid {detector}/psf pixel-response metadata"
+                    )
+                model._torchsky_pixel_response_included = pixel_response_included
+                model._torchsky_pixel_response_provenance = (
+                    pixel_response_provenance
+                )
             model.load_state_dict(checkpoint["state_dict"])
             if isinstance(
                 getattr(model, "encoder", None),
@@ -520,6 +541,14 @@ def _load_calibrated_operator_models(
                     "role": role,
                     "checkpoint": str(checkpoint_path),
                     "checkpoint_sha256": group["checkpoint_sha256"],
+                    **(
+                        {
+                            "pixel_response_included": pixel_response_included,
+                            "pixel_response_provenance": pixel_response_provenance,
+                        }
+                        if role == "psf"
+                        else {}
+                    ),
                     **pruning,
                 }
             )
@@ -570,15 +599,56 @@ def _calibrated_operator_bundles(
         key = _exposure_calibration_key(context) if exposure_scope else detector
         if key not in models:
             raise ValueError(f"no calibrated operators for {key!r}")
+        psf_model = models[key]["psf"]
+        pixel_response_included = getattr(
+            psf_model, "_torchsky_pixel_response_included", None
+        )
+        pixel_response_provenance = getattr(
+            psf_model, "_torchsky_pixel_response_provenance", None
+        )
+        if not isinstance(pixel_response_included, bool) or not isinstance(
+            pixel_response_provenance, str
+        ):
+            raise ValueError(
+                f"calibrated PSF for {key!r} lacks pixel-response metadata"
+            )
+        frozen = not any(parameter.requires_grad for parameter in psf_model.parameters())
+        if not frozen:
+            raise ValueError(f"calibrated PSF for {key!r} is not frozen")
         bundles.append(
             field_observation_operator_bundle(observation).with_updates(
-                psf=LearnedPSFOp(models[key]["psf"]),
+                psf=LearnedPSFOp(
+                    psf_model,
+                    frozen=True,
+                    pixel_response_included=pixel_response_included,
+                    pixel_response_provenance=pixel_response_provenance,
+                ),
                 background=LearnedBackgroundOp(
                     models[key]["background"], coordinate_frame="detector"
                 ),
             )
         )
     return tuple(bundles)
+
+
+def _spatial_sampling_for_operator_bundles(
+    requested: str,
+    bundles: Sequence[ObservationOperatorBundle],
+) -> str:
+    conventions = {
+        bundle.psf.pixel_response_included
+        for bundle in bundles
+        if isinstance(bundle.psf, LearnedPSFOp)
+    }
+    if not conventions:
+        return requested
+    if None in conventions:
+        raise ValueError("calibrated PSF pixel-response convention is unknown")
+    if len(conventions) != 1:
+        raise ValueError(
+            "one fit cannot mix calibrated PSFs with different pixel-response conventions"
+        )
+    return "center" if conventions == {True} else requested
 
 
 def _apply_learned_psf_arm(
@@ -3083,6 +3153,10 @@ def main() -> int:
                 fit_kwargs["observation_forward_contexts"] = forward_ctx_tuple
             if calibrated_bundles is not None:
                 fit_kwargs = dict(fit_kwargs)
+                fit_kwargs["spatial_sampling"] = _spatial_sampling_for_operator_bundles(
+                    str(fit_kwargs["spatial_sampling"]),
+                    (*calibrated_bundles, *validation_bundles),
+                )
                 fit_kwargs["observation_operator_bundles"] = calibrated_bundles
             if structured_bundles is not None:
                 fit_kwargs = _structured_scene_fit_kwargs(
@@ -3477,7 +3551,10 @@ def main() -> int:
                                         result_model, target_observation, fit_kwargs,
                                         render_num_spectral_samples, render_ctx,
                                     )
-                                    row["render_mode"] = "trained_soft_pixel_quadrature"
+                                    row["render_mode"] = (
+                                        "trained_soft_"
+                                        f"{fit_kwargs.get('spatial_sampling', 'center')}"
+                                    )
                             row["product_interpretation"] = (
                                 "target-grid scene with assumed target PSF; "
                                 "not a calibrated detector prediction"
@@ -3487,7 +3564,9 @@ def main() -> int:
                                 result_model, target_observation, fit_kwargs,
                                 render_num_spectral_samples, render_ctx,
                             )
-                            row["render_mode"] = "trained_pixel_quadrature"
+                            row["render_mode"] = (
+                                f"trained_{fit_kwargs.get('spatial_sampling', 'center')}"
+                            )
                             row["product_interpretation"] = (
                                 "target-grid scene with assumed target PSF; "
                                 "excludes fixed detector background"
@@ -3599,6 +3678,42 @@ def main() -> int:
         )
     )
     fail_rows.sort(key=lambda row: (str(row["model"]), str(row["band"])))
+    if calibrated_bundles is None:
+        exposure_pixel_response = [
+            (
+                getattr(observation.psf_spec, "pixel_response_included", None),
+                "unknown; no calibrated PSF operator was supplied",
+            )
+            for observation in all_field_observations
+        ]
+    else:
+        exposure_pixel_response = [
+            (
+                None if bundle.psf is None else bundle.psf.pixel_response_included,
+                None if bundle.psf is None else bundle.psf.pixel_response_provenance,
+            )
+            for bundle in calibrated_bundles
+        ]
+    if validation_bundles:
+        validation_pixel_response = [
+            (
+                None if bundle.psf is None else bundle.psf.pixel_response_included,
+                None if bundle.psf is None else bundle.psf.pixel_response_provenance,
+            )
+            for bundle in validation_bundles
+        ]
+    else:
+        validation_pixel_response = [
+            (
+                getattr(observation.psf_spec, "pixel_response_included", None),
+                "unknown; no calibrated validation PSF operator was supplied",
+            )
+            for observation in normalized_validation
+        ]
+    validation_response_values = {item[0] for item in validation_pixel_response}
+    validation_response_provenance = {
+        item[1] for item in validation_pixel_response
+    }
     payload = {
         "experiment": {
             "input_product": str(args.input_product),
@@ -3629,7 +3744,14 @@ def main() -> int:
                 "pixel_domain": "all valid pixels in detector crops overlapping the target footprint",
                 "likelihood": "diagonal Gaussian using supplied pipeline ERR squared; ignores pixel correlations and fitted structured noise",
                 "normalization": "training-only scale; NLL restored to original SCI units by adding log(scale) per pixel",
-                "pixel_response_provenance": "unknown; detector integration remains unverified",
+                "pixel_response_included": next(iter(validation_response_values))
+                if len(validation_response_values) == 1
+                else None,
+                "pixel_response_provenance": next(
+                    iter(validation_response_provenance)
+                )
+                if len(validation_response_provenance) == 1
+                else "mixed pixel-response provenance",
                 "scores_by_model": validation_scores,
             },
             "exposure_provenance": [
@@ -3637,12 +3759,17 @@ def main() -> int:
                     "source_path": context.extra.get("source_path"),
                     "photometric_header": {key: observation.header.get(key)
                         for key in ("BUNIT", "PHOTMJSR", "PIXAR_SR", "CRDS_CTX")},
-                    "pixel_response_included": getattr(observation.psf_spec, "pixel_response_included", None),
-                    "pixel_response_provenance": "unknown; independent calibration does not by itself verify detector pixel integration",
+                    "pixel_response_included": pixel_response[0],
+                    "pixel_response_provenance": pixel_response[1],
                     "measured_passband_path": context.extra.get("measured_passband_path"),
                     "measured_passband_sha256": context.extra.get("measured_passband_sha256"),
                 }
-                for observation, context in zip(all_field_observations, all_forward_contexts, strict=True)
+                for observation, context, pixel_response in zip(
+                    all_field_observations,
+                    all_forward_contexts,
+                    exposure_pixel_response,
+                    strict=True,
+                )
             ],
             "psf_arm_audit": psf_arm_audit,
             "tile_center_deg": tile_center,

@@ -3,6 +3,49 @@
 CANFAR execution uses **production only**, as requested on 2026-09-09.
 Do not submit jobs to staging or use it as a fallback.
 
+## Pixel-response contract and reducer evidence — 2026-09-17
+
+The active PSF operator now carries whether its calibrated kernel includes the
+detector pixel response. Field rendering uses that active operator contract
+rather than stale observation metadata: an effective PSF requires centre
+sampling, an optical-only PSF permits explicit pixel quadrature, and an unknown
+learned-PSF convention fails closed. Registered detector `SCI` stamps are
+labelled as effective PSFs at extraction; the convention and provenance persist
+through calibration reports/checkpoints and are verified before frozen operator
+bundles are built. Existing checkpoints without this metadata are not accepted
+for a new calibrated scene run. This resolves bookkeeping and double-integration
+risk; it does not establish PSF accuracy or repair the unsupported F090W
+validation exposures.
+
+Provisional local reducer scorecards are in
+`benchmark_results/map_reducer_streaming_medium.json` and
+`benchmark_results/map_reducer_streaming_large.json`. At 1024 square with 13
+observations, median/sigma-clipped medians were 0.250/1.094 s with
+225,771,520/439,943,168-byte peak-RSS deltas and
+68,157,440/163,577,856 exact scratch bytes. At 2048 square with 17 observations,
+they were 0.769/4.776 s with 565,321,728/1,349,074,944-byte peak-RSS deltas and
+356,515,840/855,638,016 exact scratch bytes. All four rows cleaned scratch and
+their maximum errors were at most `5.97e-8`. The artifacts explicitly record
+`git_dirty=true`; rerun them from the clean exact implementation commit before
+closing the roadmap evidence gate.
+
+Headless sessions do not count against the interactive-session cap, so the
+unidentified contributed session `qmkb4jen` is not a submission blocker. Six
+production headless parity jobs were submitted from exact pushed commit
+`32020a02a7e53f3b59d402a80498ba2e201bb715` with
+`astroai/webterm:latest` and one H100 MIG each. F277W session `rr4w3dib`
+(`depth-20260917-202638`) and F090W session `po465gbo`
+(`depth-20260917-202712`) passed CUDA/runtime setup, verified all 135 inputs,
+and entered their 9- and 36-exposure science stages. A timed-out create call
+also materialized as duplicate F277W session `wye20ahw`; it was identified and
+deleted without affecting `rr4w3dib`. F150W/F200W/F356W/F444W sessions
+`fq2adurv`/`xy9gakt9`/`k81wausr`/`gfb513zx`, and controlled retries
+`elzaw802`/`oboylyfj`/`mcbgfsz1`/`sr02mau7`, were all assigned to
+`keel-prod-g0123.arbutus.uvic.ca` and failed before container startup with an
+NVML driver/library mismatch. Further identical retries are paused until the
+node is repaired or healthy GPU capacity becomes available. These failures are
+not Torchsky results and add no accepted comparator evidence.
+
 ## Exposure-level calibration — 2026-09-13
 
 ### Measured continuation — 2026-09-14

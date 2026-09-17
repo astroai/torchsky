@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 from types import ModuleType
 
 import torch
 import pytest
+import torchsky
 
 from torchsky.calibration_evidence import load_operator_calibration_split
 
@@ -30,28 +33,53 @@ def test_exposure_selection_preserves_independent_splits_and_provenance(
     tmp_path: Path,
 ) -> None:
     benchmark = _benchmark_module()
-    rows = [
-        {
-            "exposure": exposure,
-            "band": band,
-            "detector": "NRCALONG",
-            "role": role,
-            "split": split,
-            "calibration_split": split,
-            "detector_x": 500.0,
-            "detector_y": 600.0,
-            "time_mjd_utc": 60000.0,
-            "target_value": value,
-        }
-        for exposure, band, value in (
-            ("visit/a_cal.fits", "F277W", 2.0),
-            ("visit/b_cal.fits", "F277W", 99.0),
-            ("visit/a_cal.fits", "F444W", 42.0),
-        )
-        for split in ("train", "validation", "test")
-        for role in ("background", "psf")
-    ]
-    payload = {"evidence": rows}
+    rows = []
+    for exposure, band, value in (
+        ("visit/a_cal.fits", "F277W", 2.0),
+        ("visit/b_cal.fits", "F277W", 99.0),
+        ("visit/a_cal.fits", "F444W", 42.0),
+    ):
+        for split in ("train", "validation", "test"):
+            for role in ("background", "psf"):
+                row = {
+                    "exposure": exposure,
+                    "band": band,
+                    "detector": "NRCALONG",
+                    "role": role,
+                    "split": split,
+                    "calibration_split": split,
+                    "detector_x": 500.0,
+                    "detector_y": 600.0,
+                    "time_mjd_utc": 60000.0,
+                    "target_value": value,
+                }
+                if role == "psf":
+                    row.update(
+                        target_index=0,
+                        target_kind="normalized_effective_psf",
+                        pixel_response_included=True,
+                        pixel_response_provenance="registered detector SCI stamp",
+                    )
+                rows.append(row)
+    kernels = tmp_path / "kernels.fits"
+    weights = tmp_path / "weights.fits"
+    torchsky.write(str(kernels), torch.ones((1, 3, 3)) / 9.0)
+    torchsky.write(str(weights), torch.ones((1, 3, 3)))
+    payload = {
+        "extraction": {
+            "products": {
+                "psf_kernels": {
+                    "path": str(kernels),
+                    "sha256": hashlib.sha256(kernels.read_bytes()).hexdigest(),
+                },
+                "psf_pixel_weights": {
+                    "path": str(weights),
+                    "sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
+                },
+            }
+        },
+        "evidence": rows,
+    }
     selections = benchmark._calibration_groups(payload, "exposure")
     assert selections == sorted(selections)
     assert len(selections) == 3
@@ -64,8 +92,6 @@ def test_exposure_selection_preserves_independent_splits_and_provenance(
         band="F277W",
     )
     assert arrays["target_values"].tolist() == [2.0]
-    import json
-
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps(payload))
     group = benchmark._fit_group(
@@ -92,6 +118,49 @@ def test_exposure_selection_preserves_independent_splits_and_provenance(
     assert saved_group["elapsed_seconds"] > 0
     assert saved_group["device"] == "cpu"
     assert saved_group["validation_report"] == group["validation_report"]
+    psf_group = benchmark._fit_group(
+        manifest,
+        detector="NRCALONG",
+        role="psf",
+        family="stationary",
+        steps=1,
+        lr=1e-3,
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+        seed=1,
+        manifest_payload=payload,
+        minimum_slice_samples=1,
+        exposure_id="visit/a_cal.fits",
+        band="F277W",
+    )
+    psf_checkpoint = torch.load(psf_group["checkpoint"], weights_only=True)
+    assert psf_checkpoint["schema_version"] == 2
+    assert psf_checkpoint["pixel_response_included"] is True
+    assert psf_checkpoint["pixel_response_provenance"] == "registered detector SCI stamp"
+    assert psf_group["pixel_response_included"] is True
+    assert psf_group["pixel_response_provenance"] == "registered detector SCI stamp"
+    invalid_payload = json.loads(json.dumps(payload))
+    for row in invalid_payload["evidence"]:
+        if row["role"] == "psf":
+            row["pixel_response_included"] = 1
+    invalid_manifest = tmp_path / "invalid-manifest.json"
+    invalid_manifest.write_text(json.dumps(invalid_payload))
+    with pytest.raises(ValueError, match="bool"):
+        benchmark._fit_group(
+            invalid_manifest,
+            detector="NRCALONG",
+            role="psf",
+            family="stationary",
+            steps=1,
+            lr=1e-3,
+            device=torch.device("cpu"),
+            output_dir=tmp_path,
+            seed=1,
+            manifest_payload=invalid_payload,
+            minimum_slice_samples=1,
+            exposure_id="visit/a_cal.fits",
+            band="F277W",
+        )
     with pytest.raises(ValueError, match="missing independent calibration evidence"):
         benchmark._calibration_groups(
             {"evidence": [r for r in rows if r["split"] == "train"]}, "exposure"

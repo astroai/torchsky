@@ -480,6 +480,47 @@ def _fit_group(
     }
     if any(len(rows[split]) != arrays[split]["detector_x"].numel() for split in rows):
         raise RuntimeError("manifest row order/count does not match loaded evidence")
+    psf_contract: dict[str, Any] = {}
+    if role == "psf":
+        selected_rows = [row for split_rows in rows.values() for row in split_rows]
+        convention_values = [
+            row.get(
+                "pixel_response_included",
+                True if row.get("target_kind") == "normalized_effective_psf" else None,
+            )
+            for row in selected_rows
+        ]
+        if not all(type(value) is bool for value in convention_values):
+            raise ValueError("PSF pixel_response_included values must be bool")
+        conventions = set(convention_values)
+        if conventions != {True} and conventions != {False}:
+            raise ValueError(
+                "PSF evidence must declare one consistent pixel-response convention"
+            )
+        provenance_values = [
+            row.get(
+                "pixel_response_provenance",
+                "registered detector SCI stamp"
+                if row.get("target_kind") == "normalized_effective_psf"
+                else None,
+            )
+            for row in selected_rows
+        ]
+        if not all(
+            isinstance(value, str) and value.strip() for value in provenance_values
+        ):
+            raise ValueError(
+                "PSF pixel_response_provenance values must be nonempty strings"
+            )
+        provenance = set(provenance_values)
+        if len(provenance) != 1 or None in provenance:
+            raise ValueError(
+                "PSF evidence must declare one pixel-response provenance"
+            )
+        psf_contract = {
+            "pixel_response_included": conventions.pop(),
+            "pixel_response_provenance": provenance.pop(),
+        }
     torch.manual_seed(seed)
     model, initializer = _make_model(
         arrays["train"],
@@ -533,12 +574,13 @@ def _fit_group(
     checkpoint = output_dir / f"{detector.lower()}_{role}_{family}{suffix}.pt"
     torch.save(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             **identity,
             "detector": detector,
             "role": role,
             "family": family,
             "psf_model": psf_model if role == "psf" else None,
+            **psf_contract,
             "state_dict": model.state_dict(),
         },
         checkpoint,
@@ -548,6 +590,7 @@ def _fit_group(
         "detector": detector,
         "role": role,
         "family": family,
+        **psf_contract,
         "initializer": initializer,
         "fit": fit,
         "validation_report": reports["validation"],

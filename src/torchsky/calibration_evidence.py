@@ -590,6 +590,8 @@ def extract_calibration_evidence(
                         {
                             "target_index": len(psf_kernels),
                             "target_kind": "normalized_effective_psf",
+                            "pixel_response_included": True,
+                            "pixel_response_provenance": "registered detector SCI stamp",
                             "snr": snr,
                         }
                     )

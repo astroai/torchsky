@@ -117,6 +117,10 @@ def _worker(
     maximum_error = float(torch.max(torch.abs(data - truth)).item())
     return {
         "method": method,
+        "device": "cpu",
+        "dtype": "float32",
+        "seed": None,
+        "input_identity": "analytic_linear_plane_v1",
         "size": size,
         "n_observations": n_observations,
         "output_pixels": size * size,
@@ -153,7 +157,14 @@ def _aggregate(samples: list[dict[str, Any]]) -> dict[str, Any]:
     return row
 
 
-def _metadata(*, profile: str, rows: list[dict[str, Any]], runs: int) -> dict[str, Any]:
+def _metadata(
+    *,
+    profile: str,
+    rows: list[dict[str, Any]],
+    runs: int,
+    methods: tuple[str, ...],
+    working_memory_mib: int,
+) -> dict[str, Any]:
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=ROOT,
@@ -161,6 +172,15 @@ def _metadata(*, profile: str, rows: list[dict[str, Any]], runs: int) -> dict[st
         capture_output=True,
         text=True,
     ).stdout.strip()
+    dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
     return {
         "schema": "torchsky.map_reducer_streaming_scorecard/v1",
         "profile": profile,
@@ -171,6 +191,12 @@ def _metadata(*, profile: str, rows: list[dict[str, Any]], runs: int) -> dict[st
         "torch": torch.__version__,
         "torchsky": torchsky.__version__,
         "git_commit": commit or None,
+        "git_dirty": dirty,
+        "configuration": {
+            "methods": list(methods),
+            "working_memory_mib": int(working_memory_mib),
+            **_PROFILES[profile],
+        },
         "results": rows,
     }
 
@@ -232,7 +258,13 @@ def main() -> int:
             )
             samples.append(json.loads(completed.stdout))
         rows.append(_aggregate(samples))
-    scorecard = _metadata(profile=args.profile, rows=rows, runs=args.runs)
+    scorecard = _metadata(
+        profile=args.profile,
+        rows=rows,
+        runs=args.runs,
+        methods=methods,
+        working_memory_mib=args.working_memory_mib,
+    )
     rendered = json.dumps(scorecard, indent=2, sort_keys=True)
     print(rendered)
     if args.json_out is not None:

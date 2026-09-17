@@ -22,6 +22,10 @@ def test_reducer_scorecard_worker_reports_bounded_exact_scratch() -> None:
         )
 
         assert row["method"] == method
+        assert row["device"] == "cpu"
+        assert row["dtype"] == "float32"
+        assert row["seed"] is None
+        assert row["input_identity"] == "analytic_linear_plane_v1"
         assert row["output_pixels"] == 256
         assert row["scratch_required_bytes"] == 5 * 256 * (
             5 if method == "median" else 12

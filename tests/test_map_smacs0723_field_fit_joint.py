@@ -56,6 +56,7 @@ from torchsky.map import ForwardContext  # noqa: E402
 from torchsky.map.operators import (  # noqa: E402
     LearnedBackgroundOp,
     LearnedPSFOp,
+    ObservationOperatorBundle,
     StructuredDetectorNoise,
     StructuredNoiseOp,
 )
@@ -163,6 +164,8 @@ def test_calibrated_bundles_select_frozen_models_by_detector() -> None:
     background = torch.nn.Linear(1, 1)
     psf.requires_grad_(False)
     background.requires_grad_(False)
+    psf._torchsky_pixel_response_included = True
+    psf._torchsky_pixel_response_provenance = "registered detector SCI stamp"
 
     bundles = _calibrated_operator_bundles(
         [observation],
@@ -174,8 +177,26 @@ def test_calibrated_bundles_select_frozen_models_by_detector() -> None:
     assert isinstance(bundles[0].psf, LearnedPSFOp)
     assert isinstance(bundles[0].background, LearnedBackgroundOp)
     assert bundles[0].psf.model is psf
+    assert bundles[0].psf.frozen is True
+    assert bundles[0].psf.pixel_response_included is True
+    assert bundles[0].psf.pixel_response_provenance == "registered detector SCI stamp"
     assert bundles[0].background.model is background
     assert bundles[0].background.coordinate_frame == "detector"
+    assert joint_benchmark._spatial_sampling_for_operator_bundles(
+        "gauss_legendre_2x2", bundles
+    ) == "center"
+    optical = ObservationOperatorBundle(
+        psf=LearnedPSFOp(
+            psf,
+            frozen=True,
+            pixel_response_included=False,
+            pixel_response_provenance="optical-only calibration",
+        )
+    )
+    with pytest.raises(ValueError, match="different pixel-response conventions"):
+        joint_benchmark._spatial_sampling_for_operator_bundles(
+            "gauss_legendre_2x2", (*bundles, optical)
+        )
 
 
 def test_calibration_sample_exclusions_use_full_detector_coordinates() -> None:
@@ -221,6 +242,8 @@ def test_exposure_calibration_is_shared_across_overlapping_cutouts() -> None:
     context = ForwardContext(detector="NRCB4", survey="F150W",
                              extra={"calibration_exposure_id": "/full/exposure-a.fits"})
     psf, background = IdentityPSF(), Plane()
+    psf._torchsky_pixel_response_included = True
+    psf._torchsky_pixel_response_provenance = "registered detector SCI stamp"
     models = {("NRCB4", "/full/exposure-a.fits", "F150W"):
               {"psf": psf, "background": background}}
     bundles = _calibrated_operator_bundles(crops, [context, context], models)

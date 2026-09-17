@@ -1331,7 +1331,11 @@ def test_spectral_power_foam_hard_render_supports_conditioned_operators() -> Non
     with torch.no_grad():
         background.network[-1].bias.fill_(0.25)
     bundle = ObservationOperatorBundle(
-        psf=LearnedPSFOp(psf),
+        psf=LearnedPSFOp(
+            psf,
+            pixel_response_included=False,
+            pixel_response_provenance="analytic Gaussian kernel",
+        ),
         background=LearnedBackgroundOp(background, coordinate_frame="detector"),
     )
     observation = FieldObservation(

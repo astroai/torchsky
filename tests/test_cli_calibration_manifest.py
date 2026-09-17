@@ -212,6 +212,9 @@ def test_extract_reviewed_calibration_evidence_persists_split_targets(
 
     assert {row["role"] for row in result["evidence"]} == {"psf", "background"}
     assert result["rejected"] == []
+    psf_row = next(row for row in result["evidence"] if row["role"] == "psf")
+    assert psf_row["pixel_response_included"] is True
+    assert psf_row["pixel_response_provenance"] == "registered detector SCI stamp"
     kernels = torchsky.read(result["products"]["psf_kernels"]["path"])
     torch.testing.assert_close(kernels.sum(dim=(-2, -1)), torch.ones(1))
     assert result["products"]["detector_evidence"]["size_bytes"] > 0
