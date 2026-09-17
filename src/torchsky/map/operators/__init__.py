@@ -124,6 +124,13 @@ from .learned_kernel import (
     gaussian_kernel2d,
     gaussian_kernels_from_params,
 )
+from .lensing import (
+    ConvergenceMagnification,
+    MagnificationResidual,
+    magnification_bias,
+    magnify_flux,
+    scale_source_sizes,
+)
 from .mask_weight import load_image_observation_weight_map
 from .noise import (
     ExplicitNoiseOp,
@@ -231,6 +238,7 @@ __all__ = [
     "ConditionedBackgroundField",
     "ConditionedKernelPSF",
     "ConstrainedKernelPSF",
+    "ConvergenceMagnification",
     "ExtendedResidualKernelPSF",
     "DEFAULT_LEARNED_OPERATOR_CONDITIONING",
     "LEARNED_OPERATOR_FAMILIES",
@@ -256,6 +264,7 @@ __all__ = [
     "LearnedGeometryOp",
     "LearnedInstrumentOperator",
     "LowRankChromaticPSF",
+    "MagnificationResidual",
     "LearnedNoiseOp",
     "LearnedOperatorManifest",
     "LearnedOperatorScaffold",
@@ -326,6 +335,9 @@ __all__ = [
     "gaussian_blur_variance",
     "gaussian_kernels_from_params",
     "gaussian_kernel2d",
+    "magnification_bias",
+    "magnify_flux",
+    "scale_source_sizes",
     "gaussian_kernel1d",
     "gaussian_student_t_mixture_nll",
     "gaussian_student_t_mixture_responsibilities",
