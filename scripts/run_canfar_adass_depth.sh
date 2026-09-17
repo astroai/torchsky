@@ -197,6 +197,18 @@ case "${BACKGROUND_MODEL:-none}" in
     ;;
 esac
 operator_arm_args=(--psf-model "${psf_model}" --background-model "${background_model}")
+scene_initialization=${SCENE_INITIALIZATION:-common_product}
+case "${scene_initialization}" in
+  common_product | none) ;;
+  *) echo "SCENE_INITIALIZATION must be common_product or none" >&2; exit 2 ;;
+esac
+scene_initialization_steps=${SCENE_INITIALIZATION_STEPS:-32}
+scene_initialization_lr=${SCENE_INITIALIZATION_LR:-0.05}
+scene_initialization_args=(
+  --scene-initialization "${scene_initialization}"
+  --scene-initialization-steps "${scene_initialization_steps}"
+  --scene-initialization-lr "${scene_initialization_lr}"
+)
 
 # Foam-specific arguments only apply when foam is in the model CSV.
 if [[ "${foam_selected}" = "1" ]]; then
@@ -402,6 +414,7 @@ case "${mode}" in
         "${foam_exact_refinement_args[@]+${foam_exact_refinement_args[@]}}" \
         "${operator_calibration_args[@]+${operator_calibration_args[@]}}" \
         "${operator_arm_args[@]+${operator_arm_args[@]}}" \
+        "${scene_initialization_args[@]}" \
         "${joint_calibration_args[@]}" \
         --models "${field_models}" \
         --fail-on-method-error \
@@ -476,6 +489,7 @@ case "${mode}" in
           "${foam_exact_refinement_args[@]+${foam_exact_refinement_args[@]}}" \
           "${operator_calibration_args[@]+${operator_calibration_args[@]}}" \
           "${operator_arm_args[@]+${operator_arm_args[@]}}" \
+          "${scene_initialization_args[@]}" \
           --models "${field_models}" \
           --fail-on-method-error \
           "${injection_args[@]+${injection_args[@]}}" \

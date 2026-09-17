@@ -40,9 +40,13 @@ def test_depth_foam_uses_cuda_build_and_forwards_size_controls():
     for name in ("FOAM_BANDS", "FOAM_CROP_SIZE", "FOAM_STEPS", "FOAM_GRID_SIDE",
                  "FOAM_BASIS_COUNT", "FOAM_INITIALIZE_FROM_COADD",
                  "FOAM_AFFINE_SPATIAL_BASIS", "FOAM_WHITEN_SPECTRAL_BASIS",
-                 "FOAM_TARGET_HEADER_PATH"):
+                 "FOAM_TARGET_HEADER_PATH", "SCENE_INITIALIZATION",
+                 "SCENE_INITIALIZATION_STEPS", "SCENE_INITIALIZATION_LR"):
         assert f'--env "{name}=' in launcher
     assert '--target-header-path "${FOAM_TARGET_HEADER_PATH}"' in runner
+    assert '--scene-initialization "${scene_initialization}"' in runner
+    assert '--scene-initialization-steps "${scene_initialization_steps}"' in runner
+    assert '--scene-initialization-lr "${scene_initialization_lr}"' in runner
 
 
 def _inspection_module() -> ModuleType:
