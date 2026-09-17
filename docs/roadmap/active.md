@@ -3,6 +3,19 @@
 CANFAR execution uses **production only**, as requested on 2026-09-09.
 Do not submit jobs to staging or use it as a fallback.
 
+## Short-term reconstruction objective
+
+The immediate scientific target is a high-quality continuous reconstruction
+`s(x, y, lambda)` whose integration through a specified transmission curve
+produces either higher effective resolution or higher signal-to-noise than a
+matched per-band stack. A gain counts only when measured on paired inputs and
+held-out detector pixels at equal information and compute budgets, while flux
+and colour bias remain within pre-registered limits. The synthetic
+`classical-smoke` CLI can now include both independent per-band and shared
+spectral Foam arms and emits an explicit promotion gate; this is a
+representation/SNR canary, not yet a depth claim or a substitute for the real
+detector-space comparison.
+
 ## Pixel-response contract and reducer evidence — 2026-09-17
 
 The active PSF operator now carries whether its calibrated kernel includes the

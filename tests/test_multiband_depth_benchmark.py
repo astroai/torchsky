@@ -1028,6 +1028,15 @@ def test_classical_smoke_includes_phase0_foam_row_when_requested() -> None:
     assert joint["basis_count"] >= 1
     gate_summary = artifact["target_response_gate"]
     assert gate_summary["baseline_method"] == "chi2_coadd"
+    comparison = artifact["shared_vs_independent"]
+    assert comparison["joint_method"] == "joint_foam"
+    assert comparison["independent_method"] == "independent_foam"
+    assert comparison["snr_gain_db"] == pytest.approx(
+        20.0 * math.log10(foam["image_rmse"] / joint["image_rmse"])
+    )
+    assert comparison["promotion_pass"] is False
+    assert comparison["gates"]["maximum_absolute_flux_bias"] == 0.02
+    assert comparison["gates"]["maximum_absolute_color_bias_mag"] == 0.02
     for row in (foam, joint):
         assert row["depth_claim"] is False
         assert row["statistic"] == "independent_union"
@@ -1050,6 +1059,49 @@ def test_classical_smoke_includes_phase0_foam_row_when_requested() -> None:
         )
         assert math.isfinite(float(row["image_rmse"]))
         assert math.isfinite(float(row["heldout_gaussian_nll"]))
+
+
+def test_classical_smoke_cli_exposes_joint_foam_comparison(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "shared-vs-independent.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bench_multiband_depth.py",
+            "--profile",
+            "classical-smoke",
+            "--size",
+            "16",
+            "--bands",
+            "3",
+            "--sources",
+            "3",
+            "--exposures",
+            "2",
+            "--include-foam",
+            "--foam-grid-side",
+            "5",
+            "--json-out",
+            str(output),
+        ],
+    )
+
+    assert multiband_main() == 0
+    artifact = json.loads(output.read_text())
+    assert artifact["foam_grid_side"] == 5
+    assert artifact["environment"]["git_commit"]
+    assert isinstance(artifact["environment"]["git_dirty"], bool)
+    assert artifact["environment"]["device"] == "cpu"
+    assert artifact["environment"]["dtype"] == "float32"
+    assert artifact["configuration"]["include_foam"] is True
+    assert artifact["configuration"]["foam_grid_side"] == 5
+    assert [row["method"] for row in artifact["methods"]][-2:] == [
+        "independent_foam",
+        "joint_foam",
+    ]
 
 
 def test_joint_foam_spectral_basis_preserves_continuum_but_rejects_perturbation() -> None:

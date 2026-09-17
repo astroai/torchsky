@@ -15,6 +15,8 @@ import json
 import math
 import numpy as np
 from pathlib import Path
+import platform
+import subprocess
 import tempfile
 import time
 from typing import Any, Sequence
@@ -2655,6 +2657,76 @@ def _classical_smoke_artifact(
         joint_row["depth_claim"] = False
         rows.append(joint_row)
     target_response_gate = _target_response_gate(rows, baseline_method="chi2_coadd")
+    shared_comparison = None
+    if include_foam:
+        by_method = {str(row["method"]): row for row in rows}
+        independent = by_method["independent_foam"]
+        joint = by_method["joint_foam"]
+        independent_rmse = float(independent["image_rmse"])
+        joint_rmse = float(joint["image_rmse"])
+        independent_bias = [
+            abs(float(value))
+            for value in independent["forced_photometry"][
+                "median_fractional_flux_bias"
+            ]
+        ]
+        joint_bias = [
+            abs(float(value))
+            for value in joint["forced_photometry"]["median_fractional_flux_bias"]
+        ]
+        joint_color_bias = [
+            abs(float(value))
+            for value in joint["forced_photometry"][
+                "median_adjacent_color_bias_mag"
+            ]
+        ]
+        maximum_absolute_color_bias = max(joint_color_bias, default=0.0)
+        best_independent_completeness = max(
+            float(row["detection"]["completeness"])
+            for row in rows
+            if row["method"] != "joint_foam"
+        )
+        checks = {
+            "lower_image_rmse": joint_rmse < independent_rmse,
+            "lower_heldout_gaussian_nll": float(joint["heldout_gaussian_nll"])
+            < float(independent["heldout_gaussian_nll"]),
+            "completeness_not_lower": float(joint["detection"]["completeness"])
+            >= best_independent_completeness,
+            "signal_preserved": bool(joint["target_response"]["signal_preserved"]),
+            "absolute_flux_bias_within_limit": max(joint_bias) <= 0.02,
+            "flux_bias_not_worse_than_independent": max(
+                joint_value - independent_value
+                for joint_value, independent_value in zip(
+                    joint_bias, independent_bias, strict=True
+                )
+            )
+            <= 0.01,
+            "absolute_color_bias_within_limit": maximum_absolute_color_bias <= 0.02,
+        }
+        shared_comparison = {
+            "joint_method": "joint_foam",
+            "independent_method": "independent_foam",
+            "snr_gain_db": 20.0 * math.log10(independent_rmse / joint_rmse),
+            "heldout_gaussian_nll_delta": float(joint["heldout_gaussian_nll"])
+            - float(independent["heldout_gaussian_nll"]),
+            "best_independent_completeness": best_independent_completeness,
+            "joint_completeness": float(joint["detection"]["completeness"]),
+            "maximum_absolute_flux_bias": max(joint_bias),
+            "maximum_flux_bias_excess": max(
+                joint_value - independent_value
+                for joint_value, independent_value in zip(
+                    joint_bias, independent_bias, strict=True
+                )
+            ),
+            "maximum_absolute_color_bias_mag": maximum_absolute_color_bias,
+            "gates": {
+                "maximum_absolute_flux_bias": 0.02,
+                "maximum_flux_bias_excess": 0.01,
+                "maximum_absolute_color_bias_mag": 0.02,
+            },
+            "checks": checks,
+            "promotion_pass": all(checks.values()),
+        }
     return {
         "profile": "classical-smoke",
         "depth_claim": False,
@@ -2667,6 +2739,7 @@ def _classical_smoke_artifact(
         "input_noise_sigma": noise_sigma.tolist(),
         "propagated_product_noise_sigma": product_noise_sigma.tolist(),
         "target_response_gate": target_response_gate,
+        "shared_vs_independent": shared_comparison,
         "foam_grid_side": (
             resolved_grid_side if include_foam else None
         ),
@@ -3547,6 +3620,8 @@ def main() -> int:
     parser.add_argument("--sources", type=int, default=24)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--exposures", type=int, default=4)
+    parser.add_argument("--include-foam", action="store_true")
+    parser.add_argument("--foam-grid-side", type=int, default=None)
     parser.add_argument("--input-root", type=Path, default=Path("data/jwst_smacs0723"))
     parser.add_argument("--updec-bands", default=None)
     parser.add_argument("--cutout-size", type=int, default=None)
@@ -3639,6 +3714,8 @@ def main() -> int:
             sources=args.sources,
             device=args.device,
             exposure_count=args.exposures,
+            include_foam=args.include_foam,
+            foam_grid_side=args.foam_grid_side,
         )
     elif args.profile == "updec-adass-smoke":
         smoke_bands = args.updec_bands or "F150W,F277W"
@@ -3974,6 +4051,42 @@ def main() -> int:
             if valid_mask is not None
             else None
         )
+    repository_root = Path(__file__).resolve().parents[1]
+    git_commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repository_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    git_dirty = bool(
+        subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+    artifact["environment"] = {
+        "git_commit": git_commit or None,
+        "git_dirty": git_dirty,
+        "device": str(args.device),
+        "dtype": "float32",
+        "python": platform.python_version(),
+        "torch": torch.__version__,
+        "torchsky": torchsky.__version__,
+    }
+    artifact["configuration"] = {
+        "profile": args.profile,
+        "seed": args.seed,
+        "size": args.size,
+        "bands": args.bands,
+        "sources": args.sources,
+        "exposures": args.exposures,
+        "include_foam": args.include_foam,
+        "foam_grid_side": args.foam_grid_side,
+    }
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     print(json.dumps(artifact, indent=2, sort_keys=True))
