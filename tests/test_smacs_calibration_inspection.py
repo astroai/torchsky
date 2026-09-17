@@ -255,6 +255,20 @@ def test_canfar_full_mosaic_parity_is_strict_and_torchfits_only() -> None:
     assert 'ensure_native_build "${native_build_env}"' in runner
 
 
+def test_canfar_multiband_canary_runs_shared_spectral_comparison() -> None:
+    runner = (ROOT / "scripts" / "run_canfar_adass_depth.sh").read_text(
+        encoding="utf-8"
+    )
+    canary = runner.split("  multiband-canary)", 1)[1].split(
+        "  mosaic-parity)", 1
+    )[0]
+
+    assert "--profile classical-smoke" in canary
+    assert "--include-foam" in canary
+    assert '"${TORCHSKY_DEVICE:-cuda}"' in canary
+    assert 'gate "${artifact_root}/multiband-canary.json"' in canary
+
+
 def test_canfar_depth_runner_accepts_authorized_skaha_compute_images() -> None:
     runner = (ROOT / "scripts" / "run_canfar_adass_depth.sh").read_text(
         encoding="utf-8"

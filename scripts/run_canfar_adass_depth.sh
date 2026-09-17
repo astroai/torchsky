@@ -142,7 +142,7 @@ fi
 if [[ "${mode}" == "calibration-fit" && "${CALIBRATION_FIT_DEVICE:-cpu}" == cuda* ]]; then
   native_build_env=smacs-cuda
 fi
-if [[ "${mode}" == "mosaic-parity" ]]; then
+if [[ "${mode}" == "mosaic-parity" || "${mode}" == "multiband-canary" ]]; then
   native_build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}
   [[ "${native_build_env}" == "map-compat" || "${native_build_env}" == "map-compat-cuda" ]] || {
     echo "unsupported TORCHSKY_MAP_COMPAT_ENV=${native_build_env}" >&2
@@ -599,6 +599,25 @@ case "${mode}" in
         gate "${band_root}/stackers.json"
       done
     done
+    ;;
+  multiband-canary)
+    foam_grid_args=()
+    if [[ -n "${MULTIBAND_CANARY_FOAM_GRID_SIDE:-}" ]]; then
+      foam_grid_args=(--foam-grid-side "${MULTIBAND_CANARY_FOAM_GRID_SIDE}")
+    fi
+    run pixi_run "${native_build_env}" \
+      python "${source_root}/benchmarks/bench_multiband_depth.py" \
+      --profile classical-smoke \
+      --device "${TORCHSKY_DEVICE:-cuda}" \
+      --seed "${MULTIBAND_CANARY_SEED:-101}" \
+      --size "${MULTIBAND_CANARY_SIZE:-96}" \
+      --bands "${MULTIBAND_CANARY_BANDS:-6}" \
+      --sources "${MULTIBAND_CANARY_SOURCES:-24}" \
+      --exposures "${MULTIBAND_CANARY_EXPOSURES:-4}" \
+      --include-foam \
+      "${foam_grid_args[@]}" \
+      --json-out "${artifact_root}/multiband-canary.json"
+    gate "${artifact_root}/multiband-canary.json"
     ;;
   mosaic-parity)
     # Strict full-reference module-B gate. Every backend sees the same north-up
