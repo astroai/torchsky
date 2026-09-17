@@ -137,7 +137,11 @@ done
 # bare PYTHONPATH import needs.
 native_build_env=default
 if [[ "${mode}" == "foam" || "${mode}" == "foam-validation" ]]; then
-  native_build_env=smacs-cuda
+  if [[ "${TORCHSKY_DEVICE:-auto}" == "cpu" ]]; then
+    native_build_env=test
+  else
+    native_build_env=smacs-cuda
+  fi
 fi
 if [[ "${mode}" == "calibration-fit" && "${CALIBRATION_FIT_DEVICE:-cpu}" == cuda* ]]; then
   native_build_env=smacs-cuda
@@ -385,7 +389,7 @@ case "${mode}" in
       exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
       exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
       exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
-      run pixi_run smacs-cuda \
+      run pixi_run "${native_build_env}" \
         python "${source_root}/scripts/run_local_sphere_bench.py" \
         "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
         --bands "${bands}" \
@@ -458,7 +462,7 @@ case "${mode}" in
           )
         fi
         batch_root=${module_root}/${batch}
-        run pixi_run smacs-cuda \
+        run pixi_run "${native_build_env}" \
           python "${source_root}/scripts/run_local_sphere_bench.py" \
           "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
           --bands "${bands}" \

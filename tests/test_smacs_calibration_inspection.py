@@ -36,6 +36,8 @@ def test_depth_foam_uses_cuda_build_and_forwards_size_controls():
     selection = runner.split("native_build_env=default", 1)[1].split('if [[ "${dry_run}"', 1)[0]
     assert '"${mode}" == "foam"' in selection
     assert "native_build_env=smacs-cuda" in selection
+    assert '"${TORCHSKY_DEVICE:-auto}" == "cpu"' in selection
+    assert 'run pixi_run "${native_build_env}"' in runner
     launcher = (ROOT / "scripts/launch_canfar_wcs_sphere.sh").read_text()
     for name in ("FOAM_BANDS", "FOAM_CROP_SIZE", "FOAM_STEPS", "FOAM_GRID_SIDE",
                  "FOAM_BASIS_COUNT", "FOAM_INITIALIZE_FROM_COADD",
