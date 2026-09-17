@@ -13,6 +13,7 @@ if str(BENCHMARKS) not in sys.path:
     sys.path.insert(0, str(BENCHMARKS))
 
 from bench_map_smacs0723_field_fit import (  # noqa: E402
+    _field_target_observation,
     _PerExposureScalarBias,
     _copy_header_with_crop,
     _real_fit_kwargs,
@@ -47,6 +48,9 @@ def test_field_observation_kwargs_for_band_define_non_degenerate_bandpass() -> N
     assert kwargs["band_name"] == "F277W"
     assert kwargs["spectral_min"] < kwargs["spectral_max"]
     assert kwargs["wavelength"] == kwargs["transmission_center"]
+    assert kwargs["value_unit"] == "MJy/sr"
+    assert kwargs["value_semantics"] == "surface_brightness"
+    assert kwargs["spectral_unit"] == "angstrom"
 
 
 def test_field_observation_kwargs_for_band_can_disable_bandpass() -> None:
@@ -58,6 +62,24 @@ def test_field_observation_kwargs_for_band_can_disable_bandpass() -> None:
     assert kwargs["spectral_min"] is None
     assert kwargs["spectral_max"] is None
     assert kwargs["transmission_center"] is None
+    assert kwargs["value_unit"] == "MJy/sr"
+    assert kwargs["value_semantics"] == "surface_brightness"
+    assert kwargs["spectral_unit"] == "angstrom"
+
+
+def test_field_target_gaussian_psf_is_declared_optical_only() -> None:
+    observation = _field_target_observation(
+        {
+            "NAXIS": 2, "NAXIS1": 3, "NAXIS2": 3,
+            "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+            "CRVAL1": 10.0, "CRVAL2": 0.0, "CRPIX1": 2.0, "CRPIX2": 2.0,
+            "CDELT1": -0.001, "CDELT2": 0.001,
+        },
+        band_name="F090W",
+        psf_sigma_pix=1.0,
+    )
+
+    assert observation.psf_spec.pixel_response_included is False
 
 
 def test_robust_intensity_scale_uses_weighted_rms() -> None:

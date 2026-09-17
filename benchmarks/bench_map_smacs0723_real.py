@@ -197,6 +197,9 @@ def _field_observation_kwargs_for_band(
             "transmission_center": None,
             "transmission_sigma": None,
             "band_name": str(band).upper(),
+            "value_unit": "MJy/sr",
+            "value_semantics": "surface_brightness",
+            "spectral_unit": "angstrom",
         }
     return {
         "wavelength": float(spec["wavelength_angstrom"]),
@@ -205,6 +208,9 @@ def _field_observation_kwargs_for_band(
         "transmission_center": float(spec["wavelength_angstrom"]),
         "transmission_sigma": float(spec["transmission_sigma_angstrom"]),
         "band_name": str(band).upper(),
+        "value_unit": "MJy/sr",
+        "value_semantics": "surface_brightness",
+        "spectral_unit": "angstrom",
     }
 
 

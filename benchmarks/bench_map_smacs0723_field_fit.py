@@ -156,7 +156,7 @@ def _field_target_observation(
     image = torch.zeros(
         (int(header["NAXIS2"]), int(header["NAXIS1"])), dtype=torch.float32
     )
-    return FieldObservation(
+    observation = FieldObservation(
         image=image,
         header=dict(header),
         psf_sigma_pix=float(psf_sigma_pix),
@@ -164,6 +164,9 @@ def _field_target_observation(
             band_name, observation_mode=observation_mode
         ),
     )
+    if float(psf_sigma_pix) > 0.0:
+        observation.psf_spec.pixel_response_included = False
+    return observation
 
 
 def _copy_header_with_crop(

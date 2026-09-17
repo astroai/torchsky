@@ -27,12 +27,48 @@ def test_joint_command_runs_without_gpu_memory_logging():
         env=env, capture_output=True, text=True, check=True,
     )
     assert "--independent-frozen-calibration" in result.stdout
+    assert "--scene-initialization" in result.stdout
     invalid = subprocess.run(
         [sys.executable, joint.__file__, "--not-a-valid-option"],
         env=env, capture_output=True, text=True,
     )
     assert invalid.returncode == 2
     assert "unrecognized arguments" in invalid.stderr
+
+
+def test_joint_command_rejects_unsupported_common_initializer_arm():
+    result = subprocess.run(
+        [
+            sys.executable,
+            joint.__file__,
+            "--models",
+            "sky_lambda_kplanes_field",
+            "--scene-initialization",
+            "common_product",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "use --scene-initialization none" in result.stderr
+
+
+def test_joint_command_rejects_foam_inr_without_prior_foam():
+    result = subprocess.run(
+        [
+            sys.executable,
+            joint.__file__,
+            "--models",
+            "foam_initialized_inr,spectral_power_foam",
+            "--scene-initialization",
+            "none",
+            "--foam-log-intensity-spectra",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "must follow spectral_power_foam" in result.stderr
 
 
 def test_manifest_training_selection_preserves_grouped_split():
@@ -265,6 +301,7 @@ def test_joint_artifact_replays_fitted_foam_and_records_resume_limits(tmp_path, 
                     "observation_forward_contexts": (context,)},
         run_config={"seed": 42}, contexts=[context], input_identities=[identity],
         calibration_audit=audit, intensity_scale=3., normalization_training_count=1,
+        scene_initialization={"policy": "common_product", "elapsed_ms": 12.5},
         unfrozen_extras=unfrozen, exact_refined=refined,
     )
     loaded = load_field_artifact(path)
@@ -277,6 +314,9 @@ def test_joint_artifact_replays_fitted_foam_and_records_resume_limits(tmp_path, 
     manifest = loaded.manifest.payload
     assert manifest["fit_config"]["normalization"]["intensity_scale"] == 3.
     assert manifest["fit_config"]["fit_kwargs"] == {"lr": 1.e-3}
+    assert manifest["fit_config"]["scene_initialization"] == {
+        "policy": "common_product", "elapsed_ms": 12.5,
+    }
     assert manifest["operator_manifest"]["contexts"][0]["extra"] == context.extra
     assert manifest["calibration_manifest"] == audit
     assert status["detector_replay_available"] == (not unfrozen)

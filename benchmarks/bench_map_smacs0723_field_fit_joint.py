@@ -116,6 +116,13 @@ from torchsky.map.operators import (  # noqa: E402
     profile_amplifier_row_offsets,
 )
 from torchsky.map.field.types import PSFSpec  # noqa: E402
+from torchsky.map.product import (  # noqa: E402
+    MapBandpassSpec,
+    MapProductResult,
+    MapProductSpec,
+    render_field_product,
+)
+from torchsky.spectrophotometry import Passband  # noqa: E402
 
 
 REAL_JOINT_CASE = "tpv_field_fit_deep_multiband_broad"
@@ -123,6 +130,114 @@ FOAM_FOOTPRINT_EXTENT = 0.55
 FOAM_MAX_SMOOTH_PAIRS = 64 * 1024 * 1024
 FOAM_TEMPERATURE_START_CELL_UNITS = 1.0
 FOAM_TEMPERATURE_END_CELL_UNITS = 16.0
+SCENE_INITIALIZATION_MODEL_KINDS = frozenset({
+    "coadd_bilinear",
+    "spectral_basis_field",
+    "learned_spectral_basis_field",
+    "sky_encoder_resmlp",
+    "sky_lambda_feature_field",
+    "operator_constrained_feature_field",
+    "explicit_spectral_grid_field",
+    "sine_implicit",
+    "sasnet",
+    "flair_bla",
+    "spectral_power_foam",
+    "foam_initialized_inr",
+    "diffuse_foam_hybrid",
+})
+
+
+def _save_scene_initialization_product(
+    path: Path,
+    product: MapProductResult,
+    *,
+    elapsed_ms: float,
+    pixel_response_convention: str,
+    intensity_scale: float,
+) -> dict[str, Any]:
+    if not math.isfinite(float(intensity_scale)) or float(intensity_scale) <= 0.0:
+        raise ValueError("scene initialization intensity scale must be positive")
+    path.mkdir(parents=True, exist_ok=False)
+    if product.weight is None or product.mask is None:
+        raise ValueError("scene initialization persistence requires weight and support")
+    provenance = dict(product.provenance or {})
+    value_unit = str(provenance.get("value_unit") or "unknown")
+    data_header = dict(product.header)
+    data_header["BUNIT"] = value_unit
+    data_header["TSKYSCL"] = float(intensity_scale)
+    weight_header = dict(product.header)
+    weight_header["BUNIT"] = f"1/({value_unit})^2"
+    weight_header["TSKYSCL"] = float(intensity_scale)
+    support_header = dict(product.header)
+    support_header["BUNIT"] = "1"
+    support_header["TSKYSCL"] = float(intensity_scale)
+    outputs = {
+        "data": (
+            path / "data.fits",
+            product.data * float(intensity_scale),
+            data_header,
+        ),
+        "weight": (
+            path / "weight.fits",
+            product.weight / float(intensity_scale) ** 2,
+            weight_header,
+        ),
+        "support": (
+            path / "support.fits",
+            product.mask.to(dtype=torch.float32),
+            support_header,
+        ),
+    }
+    files = {}
+    for name, (output_path, tensor, header) in outputs.items():
+        torchsky.write(
+            str(output_path), tensor.detach().cpu(), header=header,
+            overwrite=False,
+        )
+        files[name] = {
+            "path": str(output_path.resolve()),
+            "size": output_path.stat().st_size,
+            "sha256": calibration_fit._sha256(output_path),
+        }
+    bands = []
+    for band in product.product.bands:
+        metadata = {
+            "label": band.label,
+            "transmission_center": band.transmission_center,
+            "spectral_unit": band.spectral_unit,
+        }
+        if band.spectral_min is not None:
+            metadata["spectral_min"] = band.spectral_min
+            metadata["spectral_max"] = band.spectral_max
+        if band.transmission_sigma is not None:
+            metadata["transmission_sigma"] = band.transmission_sigma
+        if band.passband is not None:
+            metadata["passband_wavelength"] = band.passband.wavelength.tolist()
+            metadata["passband_throughput"] = band.passband.throughput.tolist()
+        bands.append(metadata)
+    metadata = {
+        "policy": "common_product",
+        "elapsed_ms": float(elapsed_ms),
+        "value_unit": provenance.get("value_unit"),
+        "value_semantics": product.product.value_semantics,
+        "stored_value_space": "input_surface_brightness",
+        "intensity_scale": float(intensity_scale),
+        "pixel_response_convention": str(pixel_response_convention),
+        "training_exposure_ids": list(provenance.get("training_exposure_ids", [])),
+        "initializer_model": provenance.get("initializer_model"),
+        "initializer_steps": provenance.get("initializer_steps"),
+        "initializer_lr": provenance.get("initializer_lr"),
+        "initializer_initial_loss": provenance.get("initializer_initial_loss"),
+        "initializer_final_loss": provenance.get("initializer_final_loss"),
+        "target_header": dict(product.header),
+        "shape": list(product.data.shape),
+        "bands": bands,
+        "files": files,
+    }
+    (path / "manifest.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return metadata
 
 
 def _save_joint_field_artifact(
@@ -132,6 +247,7 @@ def _save_joint_field_artifact(
     calibration_audit: dict[str, Any] | None, intensity_scale: float,
     normalization_training_count: int, unfrozen_extras: bool = False,
     exact_refined: bool = False,
+    scene_initialization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist the scene and explicitly describe external replay requirements."""
     if isinstance(result.model, _PerExposureScalarBias):
@@ -163,6 +279,7 @@ def _save_joint_field_artifact(
                     if exact_refined else result),
         fit_config={
             "fit_kwargs": scalar_fit_config, "run_config": run_config,
+            "scene_initialization": scene_initialization,
             "normalization": {
                 "intensity_scale": float(intensity_scale),
                 "training_exposures": int(normalization_training_count),
@@ -285,6 +402,363 @@ class _ZeroScene(torch.nn.Module):
 
     def forward(self, ra: torch.Tensor, dec: torch.Tensor, wavelength: Any) -> torch.Tensor:
         return torch.zeros_like(ra) + self.anchor
+
+
+def _training_scene_initialization_product(
+    observations: Sequence[FieldObservation],
+    contexts: Sequence[ForwardContext],
+    bundles: Sequence[ObservationOperatorBundle],
+    *,
+    target_header: dict[str, Any],
+    fit_kwargs: dict[str, Any],
+) -> MapProductResult:
+    """Coadd normalized training SCI minus its fixed additive detector signal."""
+    if not observations or not (len(observations) == len(contexts) == len(bundles)):
+        raise ValueError("scene initialization requires aligned training observations")
+    if any(context.extra.get("split") != "train" for context in contexts):
+        raise ValueError("scene initialization accepts only training exposures")
+    value_units = {observation.value_unit for observation in observations}
+    value_semantics = {observation.value_semantics for observation in observations}
+    spectral_units = {str(observation.spectral_unit).lower() for observation in observations}
+    if len(value_units) != 1 or None in value_units or value_semantics != {"surface_brightness"}:
+        raise ValueError(
+            "scene initialization requires the same calibrated surface-brightness unit"
+        )
+    if spectral_units not in ({"angstrom"}, {"angstroms"}, {"aa"}):
+        raise ValueError("scene initialization requires one Angstrom spectral unit")
+    records = []
+    identities = set()
+    for observation, context, bundle in zip(observations, contexts, bundles, strict=True):
+        identity = context.exposure_id or context.extra.get("source_path")
+        if not identity or identity in identities:
+            raise ValueError("scene initialization requires unique training exposure identities")
+        identities.add(identity)
+        records.append((str(identity), observation, context, bundle))
+    records.sort(key=lambda item: item[0])
+    height, width = int(target_header["NAXIS2"]), int(target_header["NAXIS1"])
+    yy, xx = torch.meshgrid(torch.arange(height, dtype=torch.float64),
+                            torch.arange(width, dtype=torch.float64), indexing="ij")
+    ra, dec = torchsky.WCS(target_header).pixel_to_world(xx, yy)
+    zero = _ZeroScene(torch.device("cpu"))
+    accumulated: dict[float, tuple[torch.Tensor, torch.Tensor]] = {}
+    with torch.no_grad():
+        for _, observation, context, bundle in records:
+            if observation.wavelength is None or observation.weight is None or observation.mask is None:
+                raise ValueError("scene initialization requires wavelength, weight and mask")
+            fixed = render_field_observation(
+                zero, observation, forward_context=context, operator_bundle=bundle,
+                num_spectral_samples=int(fit_kwargs.get("num_spectral_samples", 9)),
+                spectral_sampling="deterministic_quadrature",
+                spatial_sampling=fit_kwargs.get("spatial_sampling", "center"),
+                spatial_tile_hw=fit_kwargs.get("render_spatial_tile_hw", (256, 256)),
+            ).detach().cpu()
+            residual = observation.image.detach().cpu() - fixed
+            weight = observation.weight.detach().cpu()
+            valid = (observation.mask.detach().cpu() > 0) & torch.isfinite(residual)
+            valid &= torch.isfinite(weight) & (weight > 0)
+            weight = torch.where(valid, weight, 0.0)
+            residual = torch.where(valid, residual, 0.0)
+            px, py = torchsky.WCS(observation.header).world_to_pixel(ra, dec)
+            source_h, source_w = residual.shape
+            grid = torch.stack((2 * (px + .5) / source_w - 1,
+                                2 * (py + .5) / source_h - 1), dim=-1).float()[None]
+            # ponytail: bilinear coadds are a PSF-blurred warm start; the detector
+            # objective, rather than this interpolation, performs reconstruction.
+            projected = torch.nn.functional.grid_sample(
+                torch.stack((residual * weight, weight)).float()[None], grid,
+                mode="bilinear", padding_mode="zeros", align_corners=False,
+            )[0].double()
+            wavelength = float(observation.wavelength)
+            label = str(observation.band_name or "").strip()
+            if not label:
+                raise ValueError("scene initialization requires band names")
+            numer, denom = accumulated.setdefault(
+                wavelength,
+                (torch.zeros_like(projected[0]), torch.zeros_like(projected[1])),
+            )
+            numer.add_(projected[0])
+            denom.add_(projected[1])
+    centers = sorted(accumulated)
+    weights = torch.stack([accumulated[center][1] for center in centers])
+    data = torch.stack([accumulated[center][0] for center in centers])
+    data = torch.where(weights > 0, data / weights.clamp_min(torch.finfo(data.dtype).tiny), 0.)
+    if not bool((weights > 0).any()):
+        raise ValueError("scene initialization has no supported training pixels")
+    band_specs = {}
+    for _, observation, _, _ in records:
+        center = float(observation.wavelength)
+        label = str(observation.band_name)
+        if center in band_specs and band_specs[center].label != label:
+            raise ValueError("scene initialization band labels must match by wavelength")
+        if center in band_specs:
+            continue
+        if observation.passband is not None:
+            band_specs[center] = MapBandpassSpec(
+                label=label,
+                spectral_min=observation.spectral_min,
+                spectral_max=observation.spectral_max,
+                passband=observation.passband,
+            )
+        elif (
+            observation.transmission_wavelength is not None
+            and observation.transmission_throughput is not None
+        ):
+            band_specs[center] = MapBandpassSpec(
+                label=label,
+                spectral_min=observation.spectral_min,
+                spectral_max=observation.spectral_max,
+                passband=Passband.from_samples(
+                    observation.transmission_wavelength,
+                    observation.transmission_throughput,
+                    name=label,
+                    wavelength_unit="angstrom",
+                ),
+            )
+        else:
+            band_specs[center] = MapBandpassSpec(
+                label=label,
+                spectral_min=observation.spectral_min,
+                spectral_max=observation.spectral_max,
+                transmission_center=center,
+                transmission_sigma=observation.transmission_sigma,
+            )
+    output_dtype = observations[0].image.dtype
+    product = MapProductSpec(
+        target_header=dict(target_header),
+        bands=tuple(band_specs[center] for center in centers),
+    )
+    return MapProductResult(
+        product=product,
+        data=data.to(dtype=output_dtype),
+        weight=weights.to(dtype=output_dtype),
+        header=dict(target_header),
+        mask=weights > 0,
+        provenance={
+            "value_unit": next(iter(value_units)),
+            "value_semantics": "surface_brightness",
+            "spectral_unit": next(iter(spectral_units)),
+            "training_exposure_ids": [item[0] for item in records],
+        },
+    )
+
+
+def _initialize_joint_scene(
+    model: torch.nn.Module,
+    model_kind: str,
+    product: MapProductResult,
+    *,
+    policy: str = "common_product",
+) -> dict[str, Any]:
+    """Seed the grid image or a positive constant INR from the same sky data."""
+    if policy == "none":
+        return {"scene_initialization_policy": "none"}
+    if policy != "common_product":
+        raise ValueError(f"unsupported scene initialization policy {policy!r}")
+    assert product.weight is not None
+    valid = product.weight > 0
+    mean = float(product.data[valid].mean())
+    if not math.isfinite(mean):
+        raise ValueError("scene initialization mean must be finite")
+
+    def initialize_positive_output(
+        output: torch.nn.Linear,
+        *,
+        target: float,
+        floor: float,
+    ) -> None:
+        value = max(target - floor, torch.finfo(output.weight.dtype).eps)
+        with torch.no_grad():
+            output.weight.zero_()
+            output.bias.fill_(value + math.log(-math.expm1(-value)))
+
+    def initialize_foam(foam_model: torch.nn.Module, target: float) -> None:
+        coefficients = getattr(foam_model, "cell_coefficients", None)
+        if not isinstance(coefficients, torch.nn.Parameter):
+            raise TypeError("Foam scene initialization requires cell coefficients")
+        value = max(target, torch.finfo(coefficients.dtype).tiny)
+        log_intensity = bool(getattr(getattr(foam_model, "foam", None),
+                                     "log_intensity_spectra", False))
+        with torch.no_grad():
+            coefficients.zero_()
+            coefficients[:, 0].fill_(math.log(value) if log_intensity else value)
+            gradients = getattr(foam_model, "cell_gradient_coefficients", None)
+            if isinstance(gradients, torch.nn.Parameter):
+                gradients.zero_()
+
+    if model_kind == "explicit_spectral_grid_field":
+        model.initialize_from_product(product)
+    elif model_kind == "spectral_power_foam":
+        initialize_foam(model, mean)
+    elif model_kind == "foam_initialized_inr":
+        pass
+    elif model_kind == "diffuse_foam_hybrid":
+        diffuse = model.diffuse_field
+        diffuse_floor = float(getattr(diffuse, "intensity_floor", 1.0e-4))
+        initialize_positive_output(
+            diffuse.output,
+            target=diffuse_floor,
+            floor=diffuse_floor,
+        )
+        initialize_foam(model.localized_foam, mean - diffuse_floor)
+    elif model_kind in {"spectral_basis_field", "learned_spectral_basis_field"}:
+        floor = 1.0e-4
+        initialize_positive_output(model.bias_head, target=mean, floor=floor)
+        with torch.no_grad():
+            model.coeff_head.weight.zero_()
+            model.coeff_head.bias.zero_()
+            if model_kind == "spectral_basis_field":
+                model.spectral_amp_head[-1].weight.zero_()
+                model.spectral_amp_head[-1].bias.zero_()
+    elif model_kind in {"sky_lambda_feature_field", "operator_constrained_feature_field"}:
+        initialize_positive_output(model.base_output, target=mean, floor=1.0e-4)
+        with torch.no_grad():
+            model.refine[-1].weight.zero_()
+            model.refine[-1].bias.zero_()
+            if model_kind == "operator_constrained_feature_field":
+                model.residual_decoder[-1].weight.zero_()
+                model.residual_decoder[-1].bias.zero_()
+    else:
+        output = model.readout[-1] if model_kind == "sasnet" else model.output
+        if isinstance(output, torch.nn.Sequential):
+            output = output[-1]
+        if not isinstance(output, torch.nn.Linear):
+            raise TypeError(f"{model_kind} has no supported initialization readout")
+        floor = float(getattr(model, "intensity_floor", 1.e-4))
+        initialize_positive_output(output, target=mean, floor=floor)
+    return {
+        "scene_initialization_policy": "common_product",
+        "scene_initialization_training_mean": mean,
+        "scene_initialization_supported_pixels": float(valid.sum()),
+    }
+
+
+def _fit_training_scene_initialization_product(
+    observations: Sequence[FieldObservation],
+    contexts: Sequence[ForwardContext],
+    bundles: Sequence[ObservationOperatorBundle],
+    *,
+    target_header: dict[str, Any],
+    fit_kwargs: dict[str, Any],
+    steps: int,
+    lr: float,
+) -> MapProductResult:
+    if int(steps) <= 0:
+        raise ValueError("scene initialization steps must be positive")
+    if not math.isfinite(float(lr)) or float(lr) <= 0.0:
+        raise ValueError("scene initialization learning rate must be positive")
+    records = sorted(
+        zip(observations, contexts, bundles, strict=True),
+        key=lambda item: str(
+            item[1].exposure_id or item[1].extra.get("source_path") or ""
+        ),
+    )
+    ordered_observations = tuple(item[0] for item in records)
+    ordered_contexts = tuple(item[1] for item in records)
+    ordered_bundles = tuple(item[2] for item in records)
+    seed = _training_scene_initialization_product(
+        ordered_observations,
+        ordered_contexts,
+        ordered_bundles,
+        target_header=target_header,
+        fit_kwargs=fit_kwargs,
+    )
+    height, width = seed.product.shape
+    domain = estimate_field_domain(ordered_observations, coord_mode="local_tangent")
+    model = make_field_model(
+        "explicit_spectral_grid_field",
+        domain,
+        spatial_resolution=max(height, width),
+        spectral_resolution=max(seed.n_bands, 2),
+    )
+    model.initialize_from_product(seed)
+    parameter_states = []
+    seen_parameters = set()
+    for bundle in ordered_bundles:
+        for operator in (bundle.psf, bundle.background, bundle.noise):
+            operator_model = getattr(operator, "model", None)
+            if not isinstance(operator_model, torch.nn.Module):
+                continue
+            for parameter in operator_model.parameters():
+                if id(parameter) in seen_parameters:
+                    continue
+                seen_parameters.add(id(parameter))
+                parameter_states.append((parameter, parameter.requires_grad))
+                parameter.requires_grad_(False)
+    try:
+        result = fit_field_model(
+            ordered_observations,
+            model,
+            steps=int(steps),
+            lr=float(lr),
+            num_spectral_samples=int(fit_kwargs.get("num_spectral_samples", 9)),
+            loss_kind="mse",
+            loss_reduction="global",
+            training_spectral_sampling="deterministic_quadrature",
+            spatial_sampling=fit_kwargs.get("spatial_sampling", "center"),
+            observations_per_step=len(ordered_observations),
+            training_patch_size=None,
+            pixel_samples_per_observation=None,
+            observation_forward_contexts=ordered_contexts,
+            observation_operator_bundles=ordered_bundles,
+            render_spatial_tile_hw=fit_kwargs.get("render_spatial_tile_hw"),
+        )
+    finally:
+        for parameter, requires_grad in parameter_states:
+            parameter.requires_grad_(requires_grad)
+    latent = render_field_product(
+        result.model,
+        seed.product,
+        num_spectral_samples=int(fit_kwargs.get("num_spectral_samples", 9)),
+        spatial_sampling="center",
+        spatial_tile_hw=fit_kwargs.get("render_spatial_tile_hw"),
+    )
+    latent_data = latent.data.detach().cpu()
+    if seed.mask is not None:
+        latent_data = torch.where(seed.mask, latent_data, torch.zeros_like(latent_data))
+    return replace(
+        latent,
+        data=latent_data,
+        weight=seed.weight,
+        mask=seed.mask,
+        provenance={
+            **dict(seed.provenance or {}),
+            "initializer_model": "explicit_spectral_grid_field",
+            "initializer_steps": int(steps),
+            "initializer_lr": float(lr),
+            "initializer_initial_loss": float(result.initial_loss),
+            "initializer_final_loss": float(result.final_loss),
+        },
+    )
+
+
+def _foam_initialization_entries(
+    product: MapProductResult,
+    band_entries: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if product.mask is None:
+        raise ValueError("Foam scene initialization requires product support")
+    by_band = {str(entry["band"]): entry for entry in band_entries}
+    if len(by_band) != len(band_entries):
+        raise ValueError("Foam scene initialization requires unique band entries")
+    entries = []
+    for band_index, band in enumerate(product.product.bands):
+        label = str(band.label or "")
+        if label not in by_band:
+            raise ValueError(f"Foam scene initialization has no target for {label!r}")
+        source = by_band[label]
+        entries.append({
+            **source,
+            "target_header": dict(product.header),
+            "target_observation": replace(
+                source["target_observation"],
+                header=dict(product.header),
+                psf_sigma_pix=0.0,
+                psf_spec=PSFSpec(),
+            ),
+            "coadd_pred": product.data[band_index].detach().cpu().numpy(),
+            "support_mask": product.mask[band_index].detach().cpu().numpy(),
+        })
+    return entries
 
 
 def _render_joint_scene_product(
@@ -635,20 +1109,35 @@ def _spatial_sampling_for_operator_bundles(
     requested: str,
     bundles: Sequence[ObservationOperatorBundle],
 ) -> str:
-    conventions = {
-        bundle.psf.pixel_response_included
-        for bundle in bundles
-        if isinstance(bundle.psf, LearnedPSFOp)
-    }
-    if not conventions:
+    psfs = [bundle.psf for bundle in bundles if bundle.psf is not None]
+    if not psfs:
         return requested
+    conventions = {getattr(psf, "pixel_response_included", None) for psf in psfs}
     if None in conventions:
-        raise ValueError("calibrated PSF pixel-response convention is unknown")
+        raise ValueError("PSF pixel-response convention is unknown")
     if len(conventions) != 1:
         raise ValueError(
-            "one fit cannot mix calibrated PSFs with different pixel-response conventions"
+            "one fit cannot mix PSFs with different pixel-response conventions"
         )
-    return "center" if conventions == {True} else requested
+    if conventions == {True}:
+        return "center"
+    return "gauss_legendre_2x2" if requested == "center" else requested
+
+
+def _pixel_response_convention(
+    bundles: Sequence[ObservationOperatorBundle],
+) -> str:
+    psfs = [bundle.psf for bundle in bundles if bundle.psf is not None]
+    if not psfs:
+        return "none"
+    conventions = {getattr(psf, "pixel_response_included", None) for psf in psfs}
+    if conventions == {True}:
+        return "effective_includes_pixel_response"
+    if conventions == {False}:
+        return "optical_only"
+    if None in conventions:
+        return "unknown"
+    return "mixed"
 
 
 def _apply_learned_psf_arm(
@@ -707,11 +1196,14 @@ def _apply_learned_psf_arm(
         cell_u_pix = torch.stack((xx.reshape(-1), yy.reshape(-1)), dim=-1)
         lam_norm = (pivots[band] - pivot_lo) / max(pivot_hi - pivot_lo, 1e-9)
         lam_norm = min(max(lam_norm, 0.0), 1.0)
-        observation.psf_spec = PSFSpec.learned(
-            model,
-            base_sigma_pix=float(observation.psf_sigma_pix),
-            cell_u_pix=cell_u_pix,
-            cell_lam_norm=lam_norm,
+        observation.psf_spec = replace(
+            PSFSpec.learned(
+                model,
+                base_sigma_pix=float(observation.psf_sigma_pix),
+                cell_u_pix=cell_u_pix,
+                cell_lam_norm=lam_norm,
+            ),
+            pixel_response_included=False,
         )
     return {band: float(model.base_sigma_pix) for band, model in models.items()}
 
@@ -2189,6 +2681,14 @@ def main() -> int:
     )
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--seed", type=int, default=101)
+    parser.add_argument(
+        "--scene-initialization",
+        choices=("common_product", "none"),
+        default="common_product",
+        help="Training-only common-WCS scene initialization policy",
+    )
+    parser.add_argument("--scene-initialization-steps", type=int, default=32)
+    parser.add_argument("--scene-initialization-lr", type=float, default=5.0e-2)
     parser.add_argument("--foam-grid-side", type=int, default=32)
     parser.add_argument(
         "--foam-exact-max-candidate-pairs",
@@ -2380,11 +2880,19 @@ def main() -> int:
         "ConditionedBackgroundField from the operator calibration fit.",
     )
     args = parser.parse_args()
-    if args.foam_initialize_from_coadd and args.foam_train_geometry:
-        parser.error("coadd initialization currently requires fixed Foam geometry")
-    if args.foam_whiten_spectral_basis and not args.foam_initialize_from_coadd:
+    if args.foam_initialize_from_coadd and args.scene_initialization == "none":
+        parser.error("--foam-initialize-from-coadd conflicts with --scene-initialization none")
+    if args.scene_initialization_steps <= 0:
+        parser.error("--scene-initialization-steps must be positive")
+    if not math.isfinite(args.scene_initialization_lr) or args.scene_initialization_lr <= 0:
+        parser.error("--scene-initialization-lr must be finite and positive")
+    if args.foam_train_geometry and (
+        args.foam_initialize_from_coadd or args.foam_whiten_spectral_basis
+    ):
+        parser.error("coadd initialization and whitening require fixed Foam geometry")
+    if args.foam_whiten_spectral_basis and args.scene_initialization != "common_product":
         parser.error(
-            "--foam-whiten-spectral-basis requires --foam-initialize-from-coadd"
+            "--foam-whiten-spectral-basis requires common-product initialization"
         )
     if args.foam_exact_observation_refine and (
         args.foam_train_geometry or not args.foam_affine_spatial_basis
@@ -2395,6 +2903,7 @@ def main() -> int:
     if args.foam_log_intensity_spectra and (
         args.foam_affine_spatial_basis
         or args.foam_initialize_from_coadd
+        or args.foam_whiten_spectral_basis
         or args.foam_exact_observation_refine
     ):
         parser.error(
@@ -2505,6 +3014,17 @@ def main() -> int:
         )
     pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
     model_kinds = [part.strip() for part in str(args.models).split(",") if part.strip()]
+    unsupported_initializers = sorted(
+        set(model_kinds) - SCENE_INITIALIZATION_MODEL_KINDS
+    )
+    if args.scene_initialization == "common_product" and unsupported_initializers:
+        parser.error(
+            "common-product scene initialization does not support: "
+            + ", ".join(unsupported_initializers)
+            + "; use --scene-initialization none"
+        )
+    if "diffuse_foam_hybrid" in model_kinds and not args.foam_log_intensity_spectra:
+        parser.error("diffuse_foam_hybrid requires --foam-log-intensity-spectra")
     if (args.structured_noise_crossfit or args.foam_initialized_inr) and (
         "spectral_power_foam" not in model_kinds
     ):
@@ -2514,6 +3034,13 @@ def main() -> int:
     if args.foam_initialized_inr and "foam_initialized_inr" not in model_kinds:
         foam_index = model_kinds.index("spectral_power_foam")
         model_kinds.insert(foam_index + 1, "foam_initialized_inr")
+    if "foam_initialized_inr" in model_kinds:
+        if "spectral_power_foam" not in model_kinds or model_kinds.index(
+            "foam_initialized_inr"
+        ) < model_kinds.index("spectral_power_foam"):
+            parser.error("foam_initialized_inr must follow spectral_power_foam")
+        if not args.foam_log_intensity_spectra:
+            parser.error("foam_initialized_inr requires --foam-log-intensity-spectra")
     rows: list[dict[str, Any]] = []
     field_artifacts: dict[str, dict[str, Any]] = {}
     artifact_dir = args.artifact_dir or args.json_out.with_name(
@@ -2819,6 +3346,12 @@ def main() -> int:
                             band,
                             crop_header,
                         ),
+                        psf_spec=replace(
+                            PSFSpec.gaussian(
+                                _fitted_gaussian_psf_sigma_pix(band, crop_header)
+                            ),
+                            pixel_response_included=False,
+                        ),
                         **_field_observation_kwargs_for_band(
                             band, measured_passband_dir=args.measured_passband_dir
                         ),
@@ -3084,6 +3617,61 @@ def main() -> int:
                 ),
             }
 
+        scene_initialization_product: MapProductResult | None = None
+        scene_initialization_metadata: dict[str, Any] = {
+            "policy": str(args.scene_initialization),
+            "elapsed_ms": 0.0,
+        }
+        default_operator_bundles = tuple(
+            field_observation_operator_bundle(observation)
+            for observation in normalized_observations
+        )
+        if (
+            args.scene_initialization == "common_product"
+            and any(kind != "coadd_bilinear" for kind in model_kinds)
+        ):
+            active_initialization_bundles = (
+                structured_bundles
+                or calibrated_bundles
+                or default_operator_bundles
+            )
+            initialization_sampling = _spatial_sampling_for_operator_bundles(
+                "gauss_legendre_2x2", active_initialization_bundles
+            )
+            initialization_target = min(
+                band_entries,
+                key=lambda entry: (
+                    float(entry["target_observation"].wavelength),
+                    str(entry["band"]),
+                ),
+            )
+            initialization_start = time.perf_counter()
+            scene_initialization_product = _fit_training_scene_initialization_product(
+                normalized_observations,
+                all_forward_contexts,
+                active_initialization_bundles,
+                target_header=dict(initialization_target["target_header"]),
+                fit_kwargs={
+                    "num_spectral_samples": 9,
+                    "spatial_sampling": initialization_sampling,
+                    "render_spatial_tile_hw": (256, 256),
+                },
+                steps=int(args.scene_initialization_steps),
+                lr=float(args.scene_initialization_lr),
+            )
+            initialization_elapsed_ms = (
+                time.perf_counter() - initialization_start
+            ) * 1000.0
+            scene_initialization_metadata = _save_scene_initialization_product(
+                artifact_dir / "scene_initialization",
+                scene_initialization_product,
+                elapsed_ms=initialization_elapsed_ms,
+                pixel_response_convention=_pixel_response_convention(
+                    active_initialization_bundles
+                ),
+                intensity_scale=float(intensity_scale),
+            )
+
         artifact_paths = {
             Path(value).resolve()
             for context in all_forward_contexts + validation_contexts
@@ -3120,6 +3708,13 @@ def main() -> int:
                 continue
             if model_kind == "spectral_power_foam":
                 model_kwargs = foam_model_kwargs
+                model_steps = int(args.steps)
+            elif model_kind == "diffuse_foam_hybrid":
+                model_kwargs = {
+                    "foam": make_foam_model(),
+                    "diffuse_hidden_dim": int(args.inr_hidden_dim),
+                    "diffuse_hidden_layers": int(args.inr_hidden_layers),
+                }
                 model_steps = int(args.steps)
             elif model_kind == "foam_initialized_inr":
                 foam_reference = fitted_models["spectral_power_foam"][0]
@@ -3162,13 +3757,22 @@ def main() -> int:
                 fit_kwargs = _structured_scene_fit_kwargs(
                     fit_kwargs, num_observations=len(normalized_observations)
                 )
+                fit_kwargs["spatial_sampling"] = _spatial_sampling_for_operator_bundles(
+                    str(fit_kwargs["spatial_sampling"]), structured_bundles
+                )
                 fit_kwargs["observation_operator_bundles"] = structured_bundles
+            if calibrated_bundles is None and structured_bundles is None:
+                fit_kwargs = dict(fit_kwargs)
+                fit_kwargs["spatial_sampling"] = _spatial_sampling_for_operator_bundles(
+                    str(fit_kwargs["spatial_sampling"]), default_operator_bundles
+                )
             if model_kind == "foam_initialized_inr":
                 fit_kwargs["lr"] = float(args.inr_lr)
             domain = (
                 local_domain
                 if model_kind in {
-                    "spectral_power_foam", "foam_initialized_inr", "sasnet",
+                    "spectral_power_foam", "foam_initialized_inr",
+                    "diffuse_foam_hybrid", "sasnet",
                     "explicit_spectral_grid_field", "sine_implicit", "flair_bla",
                 }
                 else spherical_domain
@@ -3180,13 +3784,28 @@ def main() -> int:
                 else make_field_model(model_kind, domain, **model_kwargs)
             )
             gpu_mem_note("model-built")
-            initialization_diagnostics: dict[str, float] = {}
-            if model_kind == "spectral_power_foam":
-                if args.foam_initialize_from_coadd:
-                    initialization_diagnostics = _initialize_foam_from_band_coadds(
+            model_initialization_start = time.perf_counter()
+            if scene_initialization_product is None:
+                initialization_diagnostics: dict[str, Any] = {
+                    "scene_initialization_policy": "none"
+                }
+            else:
+                initialization_diagnostics = _initialize_joint_scene(
+                    model,
+                    model_kind,
+                    scene_initialization_product,
+                )
+                if (
+                    model_kind == "spectral_power_foam"
+                    and not args.foam_train_geometry
+                    and not args.foam_log_intensity_spectra
+                ):
+                    initialization_diagnostics.update(_initialize_foam_from_band_coadds(
                         model,
-                        band_entries,
-                        intensity_scale=float(intensity_scale),
+                        _foam_initialization_entries(
+                            scene_initialization_product, band_entries
+                        ),
+                        intensity_scale=1.0,
                         num_spectral_samples=int(
                             fit_kwargs.get("num_spectral_samples", 1)
                         ),
@@ -3194,8 +3813,17 @@ def main() -> int:
                             args.foam_exact_max_candidate_pairs
                         ),
                         whiten_spectral_basis=bool(args.foam_whiten_spectral_basis),
-                    )
+                    ))
                 gpu_mem_note("foam-coadd-init-done")
+            model_initialization_ms = (
+                time.perf_counter() - model_initialization_start
+            ) * 1000.0
+            initialization_diagnostics["scene_initialization_model_elapsed_ms"] = (
+                model_initialization_ms
+            )
+            initialization_diagnostics["scene_initialization_common_elapsed_ms"] = float(
+                scene_initialization_metadata["elapsed_ms"]
+            )
             if args.forward_context:
                 model = _PerExposureScalarBias(model, len(normalized_observations))
             gpu_mem_note("pre-field-fit")
@@ -3219,7 +3847,19 @@ def main() -> int:
                 _progress_callback=report_progress,
                 **fit_kwargs,
             )
-            fit_time_ms = (time.perf_counter() - t0) * 1000.0
+            prerequisite_time_ms = (
+                float(fitted_models["spectral_power_foam"][1])
+                if model_kind == "foam_initialized_inr"
+                else float(scene_initialization_metadata["elapsed_ms"])
+            )
+            initialization_diagnostics["scene_initialization_prerequisite_elapsed_ms"] = (
+                prerequisite_time_ms
+            )
+            fit_time_ms = (
+                (time.perf_counter() - t0) * 1000.0
+                + model_initialization_ms
+                + prerequisite_time_ms
+            )
             exact_refinement_diagnostics: dict[str, float] = {}
             if (
                 model_kind == "spectral_power_foam"
@@ -3253,6 +3893,12 @@ def main() -> int:
                 input_identities=artifact_inputs, calibration_audit=calibration_audit,
                 intensity_scale=intensity_scale,
                 normalization_training_count=normalization_training_count,
+                scene_initialization={
+                    **scene_initialization_metadata,
+                    "model": model_kind,
+                    "model_elapsed_ms": model_initialization_ms,
+                    "diagnostics": initialization_diagnostics,
+                },
                 unfrozen_extras=(structured_bundles is not None
                                  or args.psf_model == "learned_lowrank"),
                 exact_refined=bool(exact_refinement_diagnostics),
@@ -3349,8 +3995,11 @@ def main() -> int:
                         )
                         row["foam_initialized_from_coadd"] = bool(
                             model_kind == "spectral_power_foam"
-                            and args.foam_initialize_from_coadd
+                            and args.scene_initialization == "common_product"
                         )
+                        for diagnostic_name, diagnostic_value in fit_diagnostics.items():
+                            if diagnostic_name.startswith("scene_initialization_"):
+                                row[diagnostic_name] = diagnostic_value
                         for diagnostic_name in (
                             "foam_initialized_cell_fraction",
                             "foam_fully_covered_cell_fraction",
@@ -3732,6 +4381,7 @@ def main() -> int:
             else None,
             "normalization_training_exposures": normalization_training_count,
             "normalization_operation": "SCI/scale; ERR/scale; VAR/scale**2; no additive subtraction",
+            "scene_initialization": scene_initialization_metadata,
             "jwst_reference_convention_verified": False,
             "held_out_validation_pipeline": (
                 "unavailable: training-exposure scalar biases cannot transfer to validation"
