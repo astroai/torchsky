@@ -725,10 +725,14 @@ def test_joint_sasnet_uses_real_training_pixel_scale() -> None:
     }
     observation = FieldObservation(
         image=torch.zeros((4, 4)), header=header, wavelength=15000.0,
+        psf_sigma_pix=2.0,
     )
     kwargs = joint_benchmark._joint_sasnet_kwargs([observation])
     assert kwargs["pixel_footprint_deg"] == pytest.approx(0.031 / 3600, rel=1e-5)
-    assert kwargs["psf_support_deg"] is None
+    assert kwargs["psf_support_deg"] == pytest.approx(
+        math.sqrt(8.0 * math.log(2.0)) * 2.0 * 0.031 / 3600,
+        rel=1e-5,
+    )
     with pytest.raises(ValueError, match="training observations"):
         joint_benchmark._joint_sasnet_kwargs([])
 

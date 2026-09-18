@@ -2181,12 +2181,13 @@ def _background_subtracted_source_stats(
 def _joint_sasnet_kwargs(observations: list[FieldObservation]) -> dict[str, Any]:
     """Resolve the experimental frequency cap from actual training pixels.
 
-    The scalar area-equivalent pixel scale is a sampling control, not a measured
-    PSF bandwidth. Frozen PSFs remain in the observation operator.
+    The area-equivalent pixel scale and fitted Gaussian FWHM cap frequencies.
+    Frozen PSFs remain in the observation operator.
     """
     if not observations:
         raise ValueError("SASNet requires training observations")
     scales = []
+    psf_supports = []
     for observation in observations:
         height, width = observation.image.shape[-2:]
         area = pixel_area_sr_at(
@@ -2198,7 +2199,13 @@ def _joint_sasnet_kwargs(observations: list[FieldObservation]) -> dict[str, Any]
         if not math.isfinite(scale) or scale <= 0:
             raise ValueError("SASNet requires finite positive training pixel areas")
         scales.append(scale)
-    return {"pixel_footprint_deg": min(scales), "psf_support_deg": None}
+        sigma_pix = float(observation.psf_sigma_pix or 0.0)
+        if math.isfinite(sigma_pix) and sigma_pix > 0.0:
+            psf_supports.append(math.sqrt(8.0 * math.log(2.0)) * sigma_pix * scale)
+    return {
+        "pixel_footprint_deg": min(scales),
+        "psf_support_deg": min(psf_supports) if psf_supports else None,
+    }
 
 
 def _joint_real_fit_kwargs(
