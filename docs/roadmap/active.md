@@ -16,6 +16,38 @@ spectral Foam arms and emits an explicit promotion gate; this is a
 representation/SNR canary, not yet a depth claim or a substitute for the real
 detector-space comparison.
 
+## Common scene-initializer real-data pilot — 2026-09-18
+
+Exact pushed commit `27cd94ce5fbfd8798ac7f24118451603b20c93a1` was run on
+paired real SMACS0723 detector crops. Initialized session `qoc2xsyh` produced
+run `depth-20260918-000358`; no-init session `t6rpgosq` produced
+`depth-20260918-000423`. Both completed with exit 0 on CPU using identical 18
+F150W/F277W exposures, a 64-square crop, seed 101, four model arms, and 40 scene
+steps. Artifacts are under `/arc/projects/ots/torchsky-runs/<run-id>/b/`; the
+initialized product reports SHA-256 identities for its data, inverse variance,
+and support FITS files.
+
+The shared latent-grid initializer itself reduced its detector objective from
+`0.0527492` to `0.0176948` in 32 steps (66.5%) and cost 31.54 s on CPU. Against
+the no-init control, model initial loss decreased by 79.0% for the explicit
+grid (`0.169536` to `0.035529`), 76.3% for SIREN (`0.913162` to `0.216149`),
+30.5% for SASNet (`0.310913` to `0.216149`), and 35.4% for Foam (`1.0` to
+`0.646484`). After the same 40-step budget, final loss improved by 79.2% for the
+explicit grid (`0.167975` to `0.034962`), 95.9% for SIREN (`0.805220` to
+`0.032924`), and 41.4% for Foam (`0.381827` to `0.223604`), but worsened by
+51.4% for SASNet (`0.036649` to `0.055476`). Including initialization, elapsed
+time ratios were 2.50x, 3.20x, 1.49x, and 1.92x respectively.
+
+This is real detector training evidence, not promotion evidence. The successful
+pair used nominal Gaussian spectral responses and no held-out split. GPU attempts
+`m5zichhu`/`r6npqaem` failed before container execution with the known NVML
+driver mismatch. Strict frozen-calibration attempts `q7gazgd2`/`zyhykufz`
+correctly rejected the absent measured-passband directory, while
+`s9kb00yc`/`xkir0xq0` rejected the archived NRCB4 background checkpoint because
+its metadata predates the current fail-closed contract. A compliant calibration
+rerun and held-out detector scoring remain mandatory. The mixed SASNet result
+also blocks any claim that the common initializer is uniformly beneficial.
+
 ## Pixel-response contract and reducer evidence — 2026-09-17
 
 The active PSF operator now carries whether its calibrated kernel includes the

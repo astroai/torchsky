@@ -27,7 +27,7 @@ promotion gate.
 
 ## Current checkpoint
 
-- Pushed implementation tip: `fb8a3390cbcaf10a687fc9128d26eccff609d253`.
+- Pushed implementation tip: `27cd94ce5fbfd8798ac7f24118451603b20c93a1`.
 - GPU reconstruction canary `lxc5ook9` is running on healthy node
   `keel-prod-g0126` with an H100 MIG, 16 CPUs, and 64 GiB RAM.
 - Full F277W and F090W classical parity sessions `rr4w3dib` and `po465gbo` are
@@ -46,9 +46,22 @@ promotion gate.
   zero errors and one pre-existing `__all__` warning. The synthetic nontrivial-
   PSF regression confirms that the latent estimate predicts the detector image
   better than directly reusing the blurred coadd.
-- The Phase 1 scientific gate remains open: paired initialized-versus-none real
-  training crops and held-out flux, colour, support, and likelihood checks have
-  not yet been executed, so this implementation is not promotion evidence.
+- A paired real-data training pilot completed on 2026-09-18 at exact commit
+  `27cd94ce`: initialized session `qoc2xsyh` / run
+  `depth-20260918-000358` and no-init session `t6rpgosq` / run
+  `depth-20260918-000423`. Both used the same 18 F150W/F277W detector exposures,
+  64-square crop, seed 101, and 40-step budget. Initial loss fell by 79.0% for
+  the explicit grid, 76.3% for SIREN, 30.5% for SASNet, and 35.4% for Foam.
+  Final loss improved by 79.2%, 95.9%, and 41.4% for the explicit grid, SIREN,
+  and Foam, but worsened by 51.4% for SASNet. Initialization added 31.54 s of
+  common CPU work and raised per-model elapsed time by 1.49--3.20x.
+- This pilot does not close the Phase 1 scientific gate. It used nominal Gaussian
+  responses and no held-out split. Strict calibrated attempts failed closed
+  because the archived tree has no measured-passband files and the old NRCB4
+  background checkpoint lacks current metadata. The initializer therefore
+  remains enabled for experimentation but is not promoted as uniformly better;
+  SASNet requires a model-specific diagnosis and a newly compliant frozen-
+  calibration run must supply held-out flux, colour, support, and likelihood.
 - F090W science-validation exposures still lack acceptable independent PSF
   evidence. No six-band scientific claim may bypass or silently drop them.
 
