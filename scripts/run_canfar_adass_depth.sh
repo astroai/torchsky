@@ -136,7 +136,11 @@ done
 # The editable install also builds torchsky._cpp, which every later step's
 # bare PYTHONPATH import needs.
 native_build_env=default
-if [[ "${mode}" == "foam" || "${mode}" == "foam-validation" ]]; then
+if [[ "${mode}" == "passband-bootstrap" ]]; then
+  native_build_env=svo-bootstrap
+elif [[ "${mode}" == "calibration-fit" && "${CALIBRATION_FIT_DEVICE:-cpu}" == "cuda" ]]; then
+  native_build_env=smacs-cuda
+elif [[ "${mode}" == "foam" || "${mode}" == "foam-validation" ]]; then
   if [[ "${TORCHSKY_DEVICE:-auto}" == "cpu" ]]; then
     native_build_env=test
   else
@@ -294,6 +298,17 @@ if [[ "${psf_model}" == "learned_lowrank" ]]; then
 fi
 
 case "${mode}" in
+  passband-bootstrap)
+    passband_output_dir=${PASSBAND_OUTPUT_DIR:-/arc/projects/ots/jwst_smacs0723/data/calibration/svo}
+    passband_bands=${PASSBAND_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
+    passband_cache_dir=${PASSBAND_CACHE_DIR:-${artifact_root}/svo-cache}
+    run pixi_run svo-bootstrap \
+      python "${source_root}/scripts/bootstrap_svo_passbands.py" \
+      --output-dir "${passband_output_dir}" \
+      --bands "${passband_bands}" \
+      --cache-dir "${passband_cache_dir}"
+    gate "${passband_output_dir}/manifest.json"
+    ;;
   calibration-extract)
     calibration_input_root=${CALIBRATION_INPUT_ROOT:-${data_root}/jwst_smacs0723/aligned}
     calibration_pattern=${CALIBRATION_PATTERN:-*_crf_rshift_tweakreg.fits}

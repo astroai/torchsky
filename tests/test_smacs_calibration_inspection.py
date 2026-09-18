@@ -37,6 +37,8 @@ def test_depth_foam_uses_cuda_build_and_forwards_size_controls():
     assert '"${mode}" == "foam"' in selection
     assert "native_build_env=smacs-cuda" in selection
     assert '"${TORCHSKY_DEVICE:-auto}" == "cpu"' in selection
+    assert '"${mode}" == "calibration-fit"' in selection
+    assert '"${CALIBRATION_FIT_DEVICE:-cpu}" == "cuda"' in selection
     assert 'run pixi_run "${native_build_env}"' in runner
     launcher = (ROOT / "scripts/launch_canfar_wcs_sphere.sh").read_text()
     for name in ("FOAM_BANDS", "FOAM_CROP_SIZE", "FOAM_STEPS", "FOAM_GRID_SIDE",
@@ -49,6 +51,14 @@ def test_depth_foam_uses_cuda_build_and_forwards_size_controls():
     assert '--scene-initialization "${scene_initialization}"' in runner
     assert '--scene-initialization-steps "${scene_initialization_steps}"' in runner
     assert '--scene-initialization-lr "${scene_initialization_lr}"' in runner
+    assert 'passband-bootstrap)' in runner
+    assert 'bootstrap_svo_passbands.py' in runner
+    assert 'pixi_run svo-bootstrap' in runner
+    assert '"${depth_mode}" != "passband-bootstrap"' in launcher
+    assert '"${depth_mode}" == "calibration-fit"' in launcher
+    assert '"${CALIBRATION_FIT_DEVICE:-cpu}" == "cuda"' in launcher
+    for name in ("PASSBAND_OUTPUT_DIR", "PASSBAND_BANDS"):
+        assert f'--env "{name}=' in launcher
 
 
 def _inspection_module() -> ModuleType:

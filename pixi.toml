@@ -278,6 +278,9 @@ jwst = ">=1.17"
 stpsf = ">=1.2"
 photutils = ">=1.1"
 
+[feature.svo-bootstrap.dependencies]
+astroquery = ">=0.4.6"
+
 [feature.map-compat.dependencies]
 python = "==3.13.14"
 cmake = ">=3.21"
@@ -334,6 +337,7 @@ sht-bench = { features = ["prod", "test", "sphere-bench"], solve-group = "defaul
 cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
 smacs-cuda = { features = ["cuda", "smacs"], no-default-feature = true, solve-group = "smacs-cuda" }
 smacs = { features = ["prod", "test", "smacs"], solve-group = "smacs" }
+svo-bootstrap = { features = ["prod", "svo-bootstrap"], solve-group = "default" }
 bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
 map-compat = { features = ["prod", "bench", "sphere-bench", "map-compat"], solve-group = "map-compat" }
 map-compat-cuda = { features = ["cuda", "map-compat"], no-default-feature = true, solve-group = "map-compat-cuda" }

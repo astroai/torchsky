@@ -231,6 +231,7 @@ fi
 # in the runner.
 launch_depth() {
   local run_id="depth-${STAMP}"
+  local depth_mode="${DEPTH_MODE:-full}"
   local vos_dest="vos:sfabbro/torchsky-runs/${run_id}"
   local map_compat_env="${TORCHSKY_MAP_COMPAT_ENV:-map-compat-cuda}"
   if [[ "${TORCHSKY_DEVICE:-auto}" == "cpu" && -z "${TORCHSKY_MAP_COMPAT_ENV:-}" ]]; then
@@ -242,7 +243,7 @@ launch_depth() {
   mkdir -p "${local_out}"
 
   local src="/scratch/${run_id}-src"
-  local remote_plain="PATH=/opt/conda/bin:/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; gh auth setup-git; gh repo clone sfabbro/torchsky ${src} -- --filter=blob:none; git -C ${src} checkout --detach ${COMMIT}; bash ${src}/scripts/run_canfar_adass_depth.sh ${DEPTH_MODE:-full} ${run_id}"
+  local remote_plain="PATH=/opt/conda/bin:/opt/astroai/venv/cadc/bin:/opt/astroai/bin:/usr/local/bin:/usr/bin:/bin; gh auth setup-git; gh repo clone sfabbro/torchsky ${src} -- --filter=blob:none; git -C ${src} checkout --detach ${COMMIT}; bash ${src}/scripts/run_canfar_adass_depth.sh ${depth_mode} ${run_id}"
   local remote_cmd
   remote_cmd="$(printf '%s' "${remote_plain}" | tr ' ' '\t')"
   case "${remote_cmd}" in
@@ -276,12 +277,16 @@ launch_depth() {
     --env "SCENE_INITIALIZATION=${SCENE_INITIALIZATION:-common_product}"
     --env "SCENE_INITIALIZATION_STEPS=${SCENE_INITIALIZATION_STEPS:-32}"
     --env "SCENE_INITIALIZATION_LR=${SCENE_INITIALIZATION_LR:-0.05}"
+    --env "PASSBAND_OUTPUT_DIR=${PASSBAND_OUTPUT_DIR:-/arc/projects/ots/jwst_smacs0723/data/calibration/svo}"
+    --env "PASSBAND_BANDS=${PASSBAND_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}"
+    --env "PASSBAND_CACHE_DIR=${PASSBAND_CACHE_DIR:-}"
     --env "PSF_MODEL=${PSF_MODEL:-fitted_gaussian}"
     --env "CALIBRATION_EVIDENCE_MANIFEST=${CALIBRATION_EVIDENCE_MANIFEST:-}"
     --env "CALIBRATION_FIT_REPORT=${CALIBRATION_FIT_REPORT:-}"
     --env "MEASURED_PASSBAND_DIR=${MEASURED_PASSBAND_DIR:-}"
     --env "INDEPENDENT_FROZEN_CALIBRATION=${INDEPENDENT_FROZEN_CALIBRATION:-0}"
     --env "CALIBRATION_FAMILY=${CALIBRATION_FAMILY:-stationary}"
+    --env "CALIBRATION_FIT_DEVICE=${CALIBRATION_FIT_DEVICE:-cpu}"
     --env "BACKGROUND_MODEL=${BACKGROUND_MODEL:-none}"
     --env "COMPARATOR_TOOL=${COMPARATOR_TOOL:-swarp}"
     --env "MODULES=${MODULES:-b}"
@@ -303,7 +308,13 @@ launch_depth() {
   # only take GPU slots when the operator will actually run on CUDA.
   # TORCHSKY_CANFAR_GPUS: number of GPU slots (the foam fit itself is
   # single-device; extra slots only expose more devices to the session).
-  if [[ "${TORCHSKY_DEVICE:-auto}" != "cpu" ]]; then
+  local needs_gpu=0
+  if [[ "${depth_mode}" == "calibration-fit" ]]; then
+    [[ "${CALIBRATION_FIT_DEVICE:-cpu}" == "cuda" ]] && needs_gpu=1
+  elif [[ "${depth_mode}" != "passband-bootstrap" && "${TORCHSKY_DEVICE:-auto}" != "cpu" ]]; then
+    needs_gpu=1
+  fi
+  if [[ "${needs_gpu}" == 1 ]]; then
     create_args+=(--gpu "${TORCHSKY_CANFAR_GPUS:-1}")
   fi
   if [[ -n "${TORCHSKY_GH_TOKEN:-}" ]]; then

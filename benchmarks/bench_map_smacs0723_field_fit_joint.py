@@ -139,6 +139,7 @@ SCENE_INITIALIZATION_MODEL_KINDS = frozenset({
     "operator_constrained_feature_field",
     "explicit_spectral_grid_field",
     "sine_implicit",
+    "wire_implicit",
     "sasnet",
     "flair_bla",
     "spectral_power_foam",
@@ -566,7 +567,9 @@ def _initialize_joint_scene(
         target: float,
         floor: float,
     ) -> None:
-        value = max(target - floor, torch.finfo(output.weight.dtype).eps)
+        epsilon = torch.finfo(output.weight.dtype).eps
+        matched_target = max(target, floor + epsilon)
+        value = matched_target - floor
         with torch.no_grad():
             output.weight.zero_()
             output.bias.fill_(value + math.log(-math.expm1(-value)))
@@ -584,6 +587,35 @@ def _initialize_joint_scene(
             gradients = getattr(foam_model, "cell_gradient_coefficients", None)
             if isinstance(gradients, torch.nn.Parameter):
                 gradients.zero_()
+
+    def match_center_output(
+        field_model: torch.nn.Module,
+        output: torch.nn.Linear,
+        *,
+        target: float,
+        floor: float,
+    ) -> None:
+        epsilon = torch.finfo(output.weight.dtype).eps
+        matched_target = max(target, floor + epsilon)
+        value = matched_target - floor
+        device = output.weight.device
+        dtype = output.weight.dtype
+        domain = field_model.domain
+        ra = torch.tensor([domain.center_ra_deg], device=device, dtype=dtype)
+        dec = torch.tensor([domain.center_dec_deg], device=device, dtype=dtype)
+        wavelength = torch.tensor(
+            [domain.wavelength_center], device=device, dtype=dtype
+        )
+        with torch.no_grad():
+            output.bias.fill_(value + math.log(-math.expm1(-value)))
+            for _ in range(8):
+                prediction = field_model(ra, dec, wavelength)
+                positive = (prediction - floor).clamp_min(
+                    torch.finfo(dtype).eps
+                )
+                derivative = -torch.expm1(-positive)
+                correction = (prediction - matched_target) / derivative
+                output.bias.sub_(correction.mean())
 
     if model_kind == "explicit_spectral_grid_field":
         model.initialize_from_product(product)
@@ -624,7 +656,7 @@ def _initialize_joint_scene(
         if not isinstance(output, torch.nn.Linear):
             raise TypeError(f"{model_kind} has no supported initialization readout")
         floor = float(getattr(model, "intensity_floor", 1.e-4))
-        initialize_positive_output(output, target=mean, floor=floor)
+        match_center_output(model, output, target=mean, floor=floor)
     return {
         "scene_initialization_policy": "common_product",
         "scene_initialization_training_mean": mean,
@@ -3773,7 +3805,8 @@ def main() -> int:
                 if model_kind in {
                     "spectral_power_foam", "foam_initialized_inr",
                     "diffuse_foam_hybrid", "sasnet",
-                    "explicit_spectral_grid_field", "sine_implicit", "flair_bla",
+                    "explicit_spectral_grid_field", "sine_implicit", "wire_implicit",
+                    "flair_bla",
                 }
                 else spherical_domain
             )

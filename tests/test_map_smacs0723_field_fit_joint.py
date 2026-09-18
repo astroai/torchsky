@@ -369,6 +369,7 @@ def _constant_initialization_product(value: float = 3.0):
     ("model_kind", "model_kwargs"),
     [
         ("sine_implicit", {"hidden_dim": 4, "hidden_layers": 1}),
+        ("wire_implicit", {"hidden_dim": 4, "hidden_layers": 1}),
         (
             "sasnet",
             {
@@ -444,6 +445,56 @@ def test_joint_scene_initialization_handles_foam_and_hybrid_without_double_seed(
         rtol=0.0,
     )
     assert torch.count_nonzero(hybrid.diffuse_field.output.weight) == 0
+
+
+def test_sasnet_common_initialization_preserves_upstream_gradient_flow() -> None:
+    model = make_field_model(
+        "sasnet",
+        _initialization_domain(),
+        hidden_dim=8,
+        num_frequencies=4,
+        pixel_footprint_deg=0.001,
+        hash_levels=2,
+        hash_features_per_level=2,
+        hash_log2_size=4,
+        mask_hidden_dim=4,
+    )
+    _initialize_joint_scene(model, "sasnet", _constant_initialization_product())
+    prediction = model(
+        torch.tensor([10.0]),
+        torch.tensor([0.0]),
+        torch.tensor([15_000.0]),
+    )
+    (prediction - 4.0).square().backward()
+
+    readout_gradient = sum(
+        float(parameter.grad.abs().sum())
+        for parameter in model.readout[0].parameters()
+        if parameter.grad is not None
+    )
+    mask_gradient = sum(
+        float(parameter.grad.abs().sum())
+        for parameter in model.mask_network.parameters()
+        if parameter.grad is not None
+    )
+    assert readout_gradient > 0.0
+    assert mask_gradient > 0.0
+
+
+def test_positive_inr_initialization_handles_mean_below_floor() -> None:
+    model = make_field_model(
+        "sine_implicit", _initialization_domain(), hidden_dim=4, hidden_layers=1
+    )
+    _initialize_joint_scene(model, "sine_implicit", _constant_initialization_product(0.0))
+    prediction = model(
+        torch.tensor([10.001]),
+        torch.tensor([0.001]),
+        torch.tensor([16_000.0]),
+    )
+    (prediction - 1.0).square().backward()
+
+    assert torch.isfinite(prediction).all()
+    assert float(model.hidden[0].weight.grad.abs().sum()) > 0.0
 
 
 @pytest.mark.parametrize(
@@ -537,6 +588,10 @@ def test_joint_scene_initialization_none_policy_leaves_model_unchanged() -> None
     assert diagnostics == {"scene_initialization_policy": "none"}
     for name, value in model.state_dict().items():
         torch.testing.assert_close(value, state[name])
+
+
+def test_common_scene_initializer_allows_wire() -> None:
+    assert "wire_implicit" in joint_benchmark.SCENE_INITIALIZATION_MODEL_KINDS
 
 
 def test_scene_initialization_product_is_persisted_with_hashes(tmp_path: Path) -> None:
