@@ -1,8 +1,8 @@
 """Experimental frequency-controlled continuous-field models.
 
 These adaptations share torchsky's ``(ra, dec, wavelength) -> brightness``
-contract and observation operators. They remain outside the production model
-registry until the equal-budget scientific bakeoff is complete.
+contract and observation operators. Registry access enables experimental
+comparisons and artifact replay; it does not establish scientific superiority.
 """
 
 from __future__ import annotations
@@ -344,4 +344,77 @@ class SASNetField(_BaseFieldModel):
         return F.softplus(value) + self.intensity_floor
 
 
-__all__ = ["BaconField", "SASNetField"]
+def _bla_features(
+    x: Tensor, period: Tensor, sigma: Tensor, shift: Tensor, beta: float = 0.05
+) -> Tensor:
+    """Real/imaginary BLA features with exact removable-singularity handling."""
+    u = x / period
+    v = beta * u
+    # cos(pi*v)/(1-4*v**2) = pi/4 * (sinc(v-.5) + sinc(v+.5)).
+    raised_cosine = (math.pi / 4) * (torch.sinc(v - 0.5) + torch.sinc(v + 0.5))
+    amplitude = torch.sinc(u) / period * raised_cosine * torch.exp(
+        -0.5 * (x / sigma).square()
+    )
+    phase = 2 * math.pi * shift * x
+    return torch.cat((amplitude * torch.cos(phase), amplitude * torch.sin(phase)), dim=-1)
+
+
+class FlairField(_BaseFieldModel):
+    """Experimental BLA-only real-feature adaptation of FLAIR, without WEGE.
+
+    Implements Ko et al., arXiv:2508.13544, equations 6--8 independently.
+    Each real affine projection produces paired real/imaginary BLA features;
+    subsequent real affine layers mix those pairs. This differs from the
+    official complex-layer network. Gaussian envelopes and layer composition
+    do not give a strictly band-limited output. Factory name: ``flair_bla``.
+    """
+
+    is_strictly_band_limited = False
+
+    def __init__(
+        self,
+        domain: FieldDomain,
+        *,
+        hidden_dim: int = 64,
+        hidden_layers: int = 2,
+        period: float = 1.0,
+        sigma: float = 1.0,
+        frequency_shift: float = 0.1,
+        intensity_floor: float = 0.0,
+    ) -> None:
+        super().__init__(domain)
+        if int(hidden_dim) < 1 or int(hidden_layers) < 1:
+            raise ValueError("hidden dimensions and layers must be positive")
+        period = _positive_finite(period, name="period")
+        sigma = _positive_finite(sigma, name="sigma")
+        if not math.isfinite(frequency_shift):
+            raise ValueError("frequency_shift must be finite")
+        if not math.isfinite(intensity_floor) or intensity_floor < 0:
+            raise ValueError("intensity_floor must be finite and non-negative")
+        self.intensity_floor = float(intensity_floor)
+        self.hidden = nn.ModuleList(
+            nn.Linear(self.coord_dim if layer == 0 else 2 * int(hidden_dim), int(hidden_dim))
+            for layer in range(int(hidden_layers))
+        )
+        self.log_period = nn.Parameter(torch.full((int(hidden_layers),), math.log(period)))
+        self.log_sigma = nn.Parameter(torch.full((int(hidden_layers),), math.log(sigma)))
+        self.frequency_shift = nn.Parameter(
+            torch.full((int(hidden_layers),), float(frequency_shift))
+        )
+        self.output = nn.Linear(2 * int(hidden_dim), 1)
+
+    def forward(
+        self, ra_deg: Tensor, dec_deg: Tensor, wavelength_angstrom: Tensor | float
+    ) -> Tensor:
+        features = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom).to(
+            device=self.output.weight.device, dtype=self.output.weight.dtype
+        )
+        for index, layer in enumerate(self.hidden):
+            features = _bla_features(
+                layer(features), self.log_period[index].exp(),
+                self.log_sigma[index].exp(), self.frequency_shift[index],
+            )
+        return F.softplus(self.output(features).squeeze(-1)) + self.intensity_floor
+
+
+__all__ = ["BaconField", "SASNetField", "FlairField"]

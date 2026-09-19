@@ -3,6 +3,234 @@
 CANFAR execution uses **production only**, as requested on 2026-09-09.
 Do not submit jobs to staging or use it as a fallback.
 
+## Short-term reconstruction objective
+
+The immediate scientific target is a high-quality continuous reconstruction
+`s(x, y, lambda)` whose integration through a specified transmission curve
+produces either higher effective resolution or higher signal-to-noise than a
+matched per-band stack. A gain counts only when measured on paired inputs and
+held-out detector pixels at equal information and compute budgets, while flux
+and colour bias remain within pre-registered limits. The synthetic
+`classical-smoke` CLI can now include both independent per-band and shared
+spectral Foam arms and emits an explicit promotion gate; this is a
+representation/SNR canary, not yet a depth claim or a substitute for the real
+detector-space comparison.
+
+## Common scene-initializer real-data pilot — 2026-09-18
+
+Exact pushed commit `27cd94ce5fbfd8798ac7f24118451603b20c93a1` was run on
+paired real SMACS0723 detector crops. Initialized session `qoc2xsyh` produced
+run `depth-20260918-000358`; no-init session `t6rpgosq` produced
+`depth-20260918-000423`. Both completed with exit 0 on CPU using identical 18
+F150W/F277W exposures, a 64-square crop, seed 101, four model arms, and 40 scene
+steps. Artifacts are under `/arc/projects/ots/torchsky-runs/<run-id>/b/`; the
+initialized product reports SHA-256 identities for its data, inverse variance,
+and support FITS files.
+
+The shared latent-grid initializer itself reduced its detector objective from
+`0.0527492` to `0.0176948` in 32 steps (66.5%) and cost 31.54 s on CPU. Against
+the no-init control, model initial loss decreased by 79.0% for the explicit
+grid (`0.169536` to `0.035529`), 76.3% for SIREN (`0.913162` to `0.216149`),
+30.5% for SASNet (`0.310913` to `0.216149`), and 35.4% for Foam (`1.0` to
+`0.646484`). After the same 40-step budget, final loss improved by 79.2% for the
+explicit grid (`0.167975` to `0.034962`), 95.9% for SIREN (`0.805220` to
+`0.032924`), and 41.4% for Foam (`0.381827` to `0.223604`), but worsened by
+51.4% for SASNet (`0.036649` to `0.055476`). Including initialization, elapsed
+time ratios were 2.50x, 3.20x, 1.49x, and 1.92x respectively.
+
+This is real detector training evidence, not promotion evidence. The successful
+pair used nominal Gaussian spectral responses and no held-out split. GPU attempts
+`m5zichhu`/`r6npqaem` failed before container execution with the known NVML
+driver mismatch. Strict frozen-calibration attempts `q7gazgd2`/`zyhykufz`
+correctly rejected the absent measured-passband directory, while
+`s9kb00yc`/`xkir0xq0` rejected the archived NRCB4 background checkpoint because
+its metadata predates the current fail-closed contract. A compliant calibration
+rerun and held-out detector scoring remain mandatory. The mixed SASNet result
+also blocks any claim that the common initializer is uniformly beneficial.
+
+## Pixel-response contract and reducer evidence — 2026-09-17
+
+The active PSF operator now carries whether its calibrated kernel includes the
+detector pixel response. Field rendering uses that active operator contract
+rather than stale observation metadata: an effective PSF requires centre
+sampling, an optical-only PSF permits explicit pixel quadrature, and an unknown
+learned-PSF convention fails closed. Registered detector `SCI` stamps are
+labelled as effective PSFs at extraction; the convention and provenance persist
+through calibration reports/checkpoints and are verified before frozen operator
+bundles are built. Existing checkpoints without this metadata are not accepted
+for a new calibrated scene run. This resolves bookkeeping and double-integration
+risk; it does not establish PSF accuracy or repair the unsupported F090W
+validation exposures.
+
+Provisional local reducer scorecards are in
+`benchmark_results/map_reducer_streaming_medium.json` and
+`benchmark_results/map_reducer_streaming_large.json`. At 1024 square with 13
+observations, median/sigma-clipped medians were 0.250/1.094 s with
+225,771,520/439,943,168-byte peak-RSS deltas and
+68,157,440/163,577,856 exact scratch bytes. At 2048 square with 17 observations,
+they were 0.769/4.776 s with 565,321,728/1,349,074,944-byte peak-RSS deltas and
+356,515,840/855,638,016 exact scratch bytes. All four rows cleaned scratch and
+their maximum errors were at most `5.97e-8`. The artifacts explicitly record
+`git_dirty=true`; rerun them from the clean exact implementation commit before
+closing the roadmap evidence gate.
+
+Headless sessions do not count against the interactive-session cap, so the
+unidentified contributed session `qmkb4jen` is not a submission blocker. Six
+production headless parity jobs were submitted from exact pushed commit
+`32020a02a7e53f3b59d402a80498ba2e201bb715` with
+`astroai/webterm:latest` and one H100 MIG each. F277W session `rr4w3dib`
+(`depth-20260917-202638`) and F090W session `po465gbo`
+(`depth-20260917-202712`) passed CUDA/runtime setup, verified all 135 inputs,
+and entered their 9- and 36-exposure science stages. A timed-out create call
+also materialized as duplicate F277W session `wye20ahw`; it was identified and
+deleted without affecting `rr4w3dib`. F150W/F200W/F356W/F444W sessions
+`fq2adurv`/`xy9gakt9`/`k81wausr`/`gfb513zx`, and controlled retries
+`elzaw802`/`oboylyfj`/`mcbgfsz1`/`sr02mau7`, were all assigned to
+`keel-prod-g0123.arbutus.uvic.ca` and failed before container startup with an
+NVML driver/library mismatch. Further identical retries are paused until the
+node is repaired or healthy GPU capacity becomes available. These failures are
+not Torchsky results and add no accepted comparator evidence.
+
+## Exposure-level calibration — 2026-09-13
+
+### Measured continuation — 2026-09-14
+
+Corrected production GPU replay `wzm5lvy6`, run
+`smacs-exposure-calibration-20260914-r2`, completed with exit 0 on an H100 MIG
+using source `09efbd17` and `astroai/webterm:latest`. All 12 checkpoints were
+recovered and hash-verified. Maximum CPU/CUDA tensor difference was
+1.91e-6; maximum relative validation-loss difference was 1.04e-6. Evidence:
+`benchmarks_results/canfar_smacs-exposure-calibration-20260914-r2/`.
+
+The same stationary calibration completed for all 116 supported exposures on
+CPU: 232 background/PSF fits, each 300 steps, summed group runtime 66.16 seconds.
+Evidence and checkpoints:
+`benchmarks_results/exposure_calibration_audit/stationary_all_supported_cpu/`.
+This timing excludes environment setup and is not a CPU/GPU performance claim.
+Calibration samples from final-test exposures are independent, excluded pixels;
+no final-test science likelihood or reconstructed image was evaluated.
+
+Supported counts are F090W 17, F150W 36, F200W 36, and 9 each for F277W,
+F356W, F444W. Crucially, **none of the F090W science-validation exposures is
+supported**. Do not silently drop them and claim a six-band validation result.
+The other 19 F090W exposures need independent PSF evidence or an explicitly
+validated calibration prediction. The automatic F090W validation kernels also
+include an off-centre feature consistent with contamination; its first-exposure
+PSF validation centroid RMS is 2.88 detector pixels and maximum enclosed-flux
+error is 0.616. Numerical fit completion does not establish usable PSFs.
+
+Six per-band diagnostic bundles now contain background measurements/residuals,
+validation PSF target/prediction/residual/weight FITS cubes, common-scale PNGs,
+metric legends, exact exposure identities, and provenance hashes. The exporter
+supports stationary-only reports and `--diagnostics-only`, avoiding full raw
+exposure downloads. Local products:
+`benchmarks_results/exposure_calibration_audit/stationary_cpu_diagnostics_v2/`.
+These are calibration diagnostics, not new cluster reconstructions. Absolute
+foreground separation and the measured-kernel pixel-response convention remain
+unverified; no flux/depth superiority claim follows.
+
+The automatic PSF selector checked a smaller detection-core patch than the
+radius-nine kernel subsequently extracted. A two-source regression reproduced
+acceptance of neighbouring objects whose calibration kernels overlap. Selection
+now checks the actual extraction footprint; the regression rejects the blend
+while retaining an isolated star. All 31 extraction/inspection/partition checks
+pass. Existing r8 evidence and derived fits remain unchanged for provenance;
+they require re-extraction and renewed scientific review before reconstruction.
+The bounded evidence audit found no local reviewed-star catalog or
+exposure-matched physical PSF product. Existing nominal STPSF files are not
+substitutes for that evidence.
+
+Production access was renewed. GPU pilot `cywobn5r`, run
+`smacs-exposure-calibration-20260913-r1`, confirmed an H100 MIG allocation and
+the pinned `fe317379` source, but stopped when the adaptive encoder demanded
+three distinct wavelengths from a single exposure/filter. This is a model
+assumption failure, not GPU unavailability. Explicit constant wavelength/time
+axes now emit zero features, including across passband queries; zero harmonic
+bands alone previously retained a raw coordinate dependence. Spatially sparse
+samples still cannot support adaptive spatial fits.
+
+The fitter now offers `--family stationary` for the planned independently fitted
+exposure controls, saves each completed group's JSON beside its checkpoint,
+and reports elapsed time. The inspector selects exact exposure/filter groups
+and uses calibration partitions while preserving the science split labels.
+The six selected exposures completed 300-step stationary background and PSF fits
+locally using hash-verified recovered PSF arrays. This is a numerical check,
+not a new reconstructed cluster image or evidence of superiority. CUDA replay
+and PSF/residual diagnostics are the next checks.
+
+Full-frame sample preparation now uses separate `calibration_split` labels;
+the original science `split` is never reassigned. Reproduce with
+`python -m torchsky.calibration_partitions INPUT OUTPUT` in the Pixi environment.
+Overlapping sample footprints and shared source IDs form indivisible groups
+within each exact exposure/filter. Groups are deterministically assigned to
+calibration fitting/checking partitions, with explicit insufficient-coverage
+reports. No target values or science residuals determine the assignment.
+
+Prepared actual r8 evidence:
+`benchmarks_results/exposure_calibration_audit/exposure_samples.json`, SHA256
+`890e89a006fa0f2561411f5d9d9ecd02853bc32deaef3c8d6275a4e9cfb345ce`.
+All 4,757 original science split labels are preserved. There are 116 exposures
+with structurally sufficient independent groups for both calibration roles;
+19 F090W exposures lack sufficient independent PSF groups. This coverage does
+not establish calibration accuracy. Excluded exposures require more usable
+stars or independently justified PSF predictions; no detector-average fallback.
+
+Prepared manifests carry full-detector sample footprints with interpolation
+support. The joint runner excludes all calibration samples plus the recorded
+PSF radius from science masks before training coadds, normalization and crops,
+and from held-out scoring. Exclusions must also be considered when interpreting
+coverage and eventually refitting the selected full-field product. Missing star
+pixels are not evidence of successful source recovery.
+
+The fitter uses `calibration_split` only in exposure scope, retains science
+splits, and lists excluded coverage. Use repeated `--exposure-id` arguments for
+an explicitly bounded batch; unknown or unsupported exposures are rejected.
+All 61 partition/fitter/scene/sampling tests passed. Preflight and
+type checks pass (existing `__all__` warning). Actual per-exposure fits and their
+independent residual/PSF validation still remain to run. No new GPU job launched
+during sample preparation.
+The CANFAR runner now selects `smacs-cuda` for CUDA calibration from its first
+build and accepts `CALIBRATION_EXPOSURE_IDS` for an explicit bounded batch.
+Independent review confirmed full-detector exclusion ordering and identified
+a radius-layout mismatch, now corrected. The partitions separate target pixel
+footprints within exposures; they do not establish independence of astrophysical
+sources across exposures. Production authentication expired on the next session
+check, so no new remote fit has started; renew with `canfar login`.
+Start actual exposure-level comparisons with the stationary family separately
+fitted per exposure/filter. Adaptive spatial/chromatic models still require
+the band-integrated calibration-response review identified above; do not infer
+their validity from the new sample partitions.
+
+Background and PSF calibration now support exact exposure identity plus filter,
+rather than sharing detector-average parameters. Run the calibration fitter
+with `--calibration-scope exposure` (CANFAR runner: `CALIBRATION_SCOPE=exposure`).
+Legacy detector scope remains available for reproducing old comparisons;
+do not use it for the next exposure-calibrated SMACS campaign.
+
+Evidence selection, fits, checkpoints, and comparison reports retain exposure
+identity and band. The joint scene runner loads the matching exposure/filter
+models, verifies checkpoint metadata/hashes, freezes them, and reuses them for
+every cutout of that exposure. Missing matches and mixed scopes fail explicitly;
+there is no automatic detector-average fallback. Exact manifest exposure IDs
+are preserved through operator contexts and scene artifacts. Crop origins stay
+in full-detector coordinates; a nonconstant plane and PSF-coordinate regression
+checks overlapping cutouts agree and rejects another exposure/filter.
+
+Implementation checks: 36 targeted tests passed, preflight passed, typecheck
+reported zero errors and the existing `__all__` warning. A test initially tried
+to mutate frozen ForwardContext metadata; it was corrected to construct a new
+context. No CUDA or new real-data calibration-fit claim follows these checks.
+
+The original, unpartitioned r8 evidence manifest was recovered and audited under
+`benchmarks_results/exposure_calibration_audit/`. It has 262 exposure/band/role
+groups: 146 train-only, 56 validation-only, 60 test-only, and zero groups with
+all independent calibration splits. The derived sample manifest described above
+addresses this for 116 exposures. Do not reassign
+science exposure splits or fit unrestricted held-out residuals to bypass this.
+The remaining data requirement is independent PSF support for 19 F090W exposures.
+Prepared sample partitions are not an already-completed exposure-level SMACS
+correction. No new GPU job launched.
+
 Current Torchsky compute image: **`astroai/webterm:latest`**, explicitly chosen
 by the user. Production GPU check `m6vox3k4` succeeded on an H100 MIG slice
 (11,008 MiB) on `keel-prod-g0125.arbutus.uvic.ca`. The six-band reconstruction
@@ -15,7 +243,105 @@ Pixi's installer destination was `/usr/local/bin`. The runner now explicitly
 sets `PIXI_BIN_DIR=/scratch/pixi/bin`, overriding an inherited install location.
 Replacement production session `oga6wv27`, run
 `depth-20260911-webterm-smacs-r2`, uses that setting with the same source bundle
-and scientific configuration. Science results are still pending.
+and scientific configuration. It completed successfully on 2026-09-11 at
+14:44:36 UTC (exit 0); products were recovered locally on 2026-09-12.
+
+### Six-band result recovered — 2026-09-12
+
+Next comparison: registered SASNet adaptation, SIREN, and the existing explicit
+spectral grid on a common 32-by-32 target with six bands and frozen detector
+calibration. These three use local sky coordinates and the same 32-pixel
+PSF-aware training patches, five-point deterministic passband quadrature, and
+no auxiliary context or spectral-anchor loss. SASNet's sampling cap is derived
+from actual training pixel areas, not a synthetic benchmark's pixel scale;
+this does not assert a measured PSF bandwidth. Models record parameter counts
+and runtime; this short diagnostic is not an equal-parameter superiority test.
+All model kinds save through the common artifact path. The `flair_bla`
+candidate implements the published FLAIR BLA equation as paired real/imaginary
+features with real affine layers. It is an experimental adaptation, not a
+reproduction of the official complex network or full FLAIR. Its raised-cosine
+factor uses an exact sinc identity at removable singularities, without
+denominator clipping. See [paper equations 6–8](https://arxiv.org/html/2508.13544v2#S3.S3).
+No upstream implementation was copied. WEGE remains pending: any wavelet
+guidance must be built only from training data. Neither adaptive network is
+claimed strictly band-limited or scientifically validated on SMACS.
+
+Implementation `adf4c30d` is pushed to the fork's `main`. Production session
+`w3gosfx5` runs `smacs-architecture-20260912-r2` with
+`astroai/webterm:latest`; logs confirm a working H100 MIG slice, exact source
+checkout, and Pixi installed under scratch. It uses 20 steps per model and a
+30-minute timeout including setup. The first session `jl43b7ny` failed because
+the bundle checkout omitted `--branch main`; no training ran. The corrected
+checkout was verified locally before retrying. It completed with exit 0 at
+2026-09-12 21:30:06 UTC. All 54 FITS images were recovered under
+`benchmarks_results/canfar_smacs-architecture-20260912-r2/`; the existing
+visualizer produced common-scale PNGs and six-band Torchfits RGBs.
+
+### Architecture diagnostic and brightness accounting
+
+All three models remain underfit after 20 steps. SASNet took 566.5 seconds,
+SIREN 185.4 seconds, and the explicit grid 140.8 seconds. Validation
+chi-square/pixel spans 8.1–278.6, 4.2–267.6, and 32.5–735.5 respectively;
+these are not converged or equal-parameter comparisons. No test exposure was
+evaluated. Source contrast was not recovered, so no model is selected.
+
+The independently recovered background checkpoints match their recorded SHA256
+hashes and have zero final-layer weights. Their constant final biases are
+0.1887137294 MJy/sr (NRCB4, shared across F090W/F150W/F200W) and
+0.1384104937 MJy/sr (NRCBLONG, shared across F277W/F356W/F444W). The scene
+exports omit these contributions, whereas the reference images include their
+own foreground convention. Comparing those directly overstates diffuse scene
+loss. As a bookkeeping diagnostic, adding the frozen constant to SASNet's
+target-grid image lowers F090W RMSE from 0.1441 to 0.0478 MJy/sr. This is not a
+new reconstruction or a calibrated detector prediction and cannot recover
+source contrast. The unchanged products and `brightness_accounting.json`
+preserve this distinction. Never fit a new offset to these reference images
+to improve the score.
+
+The shared normalization audit found no double scaling. Stationary calibration
+uses one constant per detector rather than per filter; future calibration
+comparisons must use independent blank-field evidence. The adaptive-family
+passband treatment also needs a separate review and was not used in this run.
+
+New validation diagnostics render a zero celestial scene through the same
+fixed operators and report observed/fixed/predicted-scene mean brightness,
+median observed-minus-fixed brightness and its negative fraction, in physical
+units. Non-Foam exports now use the fitted pixel quadrature and bounded tiles
+instead of silently reverting to pixel centres. A quadratic-pixel integral
+regression verifies that correction; 50 targeted tests, preflight and type
+checks pass. Existing recovered images retain their original centre-sampled
+provenance. These fixes do not establish improved source recovery.
+
+Run `depth-20260911-webterm-smacs-r2` is **not an acceptable scientific
+reconstruction**. The 128-square-pixel pilot fit took 39,492.8 seconds
+(10.97 hours). Validation chi-square per pixel is 37.51, 23.85, 22.50,
+50.19, 49.23, and 73.43 in wavelength order. The test exposures remain untouched.
+Source-region flux ratios against the saved reference are respectively
+0.413, 0.856, 0.931, 1.130, 1.065, and 0.929. These are image comparisons,
+not injection-based flux biases; no superiority or depth claim follows.
+Common-scale images show a substantial diffuse-brightness deficit in five
+bands and poor F090W source recovery. Its cause is not yet isolated.
+
+Recovered report and 18 FITS files (prediction, reference, support in each
+band) are under `benchmarks_results/canfar_depth-20260911-webterm-smacs-r2/`.
+The existing visualizer completed on these real products, producing fixed
+reference-scale linear/asinh/difference PNGs and Torchfits six-band RGB for
+the reference and Foam. Display limits and run metadata accompany the images
+in `quicklooks/`. Resolution-matched RGB remains unmeasured.
+
+A focused independent code audit found that training and validation use the
+same detector bounding-rectangle crops, including 32-pixel margins. Validation
+counts exceed the target-grid pixel count because it scores those detector
+crops; this does not establish an untrained validation domain. The run used
+`foam_fit_target_footprint=false`. Do not silently narrow validation support
+to make these scores better.
+
+Before another long fit: isolate absolute-brightness recovery using the saved
+model and fixed operators, distinguish foreground/background conventions from
+scene loss, and measure where fit time is spent. Preserve the current failure
+as a comparison. Passband reference convention and detector pixel-response
+provenance remain unverified in the report. No new GPU run was launched during
+this recovery.
 
 ## Production follow-up — 2026-09-10
 

@@ -87,14 +87,23 @@ def _validate_pixel_response(
     operator_bundle: ObservationOperatorBundle | None = None,
 ) -> None:
     bundle = _resolve_operator_bundle(observation, operator_bundle)
-    if (
-        bundle.psf is not None
-        and observation.psf_spec is not None
-        and observation.psf_spec.pixel_response_included is True
-        and spatial_sampling != "center"
-    ):
+    if bundle.psf is None or spatial_sampling == "center":
+        return
+    pixel_response_included = bundle.psf.pixel_response_included
+    if pixel_response_included is True:
         raise ValueError(
             "PSF already includes pixel response; use spatial_sampling='center'"
+        )
+    learned_spec = (
+        observation.psf_spec is not None
+        and observation.psf_spec.mode == "learned_lowrank"
+    )
+    if (
+        isinstance(bundle.psf, LearnedPSFOp) or learned_spec
+    ) and pixel_response_included is None:
+        raise ValueError(
+            "learned PSF pixel response convention is unknown; record whether the "
+            "calibrated kernel includes detector pixel response"
         )
 
 
@@ -1018,6 +1027,11 @@ def render_spectral_power_foam_observation_exact(
     """Hard-render a spectral Power Foam through target pixels and common operators."""
     if observation.image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
+    _validate_pixel_response(
+        observation,
+        "gauss_legendre_2x2",
+        operator_bundle=operator_bundle,
+    )
     normalized_spatial_coordinates = getattr(
         model,
         "normalized_spatial_coordinates",

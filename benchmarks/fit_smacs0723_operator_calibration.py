@@ -7,12 +7,16 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import time
 from typing import Any
 
 import torch
 from torch import Tensor, nn
 
-from torchsky.calibration_evidence import load_operator_calibration_split
+from torchsky.calibration_evidence import (
+    calibration_exposure_id,
+    load_operator_calibration_split,
+)
 from torchsky.map.operators import (
     AdaptiveSpatioSpectralTemporalEncoder,
     BackgroundCalibrationTerm,
@@ -27,6 +31,7 @@ from torchsky.map.operators import (
     operator_calibration_validation_pruning_report,
     operator_calibration_score_report,
 )
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -113,6 +118,7 @@ def _adaptive_encoder(
     arrays: dict[str, Tensor],
     *,
     role: str,
+    exposure_scope: bool = False,
 ) -> tuple[AdaptiveSpatioSpectralTemporalEncoder, dict[str, Any]]:
     coordinates = (
         arrays["detector_x"],
@@ -128,11 +134,11 @@ def _adaptive_encoder(
         spatial_bands=4,
         spectral_bands=3,
         temporal_bands=2,
+        spectral_constant=exposure_scope,
+        temporal_constant=exposure_scope,
     )
     evidence = (
-        arrays["target_kernels"]
-        if role == "psf"
-        else arrays["target_values"][:, None]
+        arrays["target_kernels"] if role == "psf" else arrays["target_values"][:, None]
     )
     weight = arrays["sample_weight"].to(dtype=torch.float64)
     whitened = _whiten_evidence(evidence, weight)
@@ -185,6 +191,7 @@ def _make_model(
     family: str,
     device: torch.device,
     psf_model: str = "fitted_gaussian_kernel",
+    exposure_scope: bool = False,
 ) -> tuple[nn.Module, dict[str, Any]]:
     if family not in {"stationary", "adaptive"}:
         raise ValueError("family must be stationary or adaptive")
@@ -192,7 +199,7 @@ def _make_model(
     encoder: AdaptiveSpatioSpectralTemporalEncoder | SpatioSpectralTemporalEncoder
     initializer: dict[str, Any]
     if adaptive:
-        encoder, initializer = _adaptive_encoder(arrays, role=role)
+        encoder, initializer = _adaptive_encoder(arrays, role=role, exposure_scope=exposure_scope)
     else:
         encoder = _stationary_encoder(arrays)
         initializer = {}
@@ -259,7 +266,8 @@ def _term(
     }
     if role == "psf":
         if not isinstance(
-            model, (ConditionedKernelPSF, ExtendedResidualKernelPSF, LowRankChromaticPSF)
+            model,
+            (ConditionedKernelPSF, ExtendedResidualKernelPSF, LowRankChromaticPSF),
         ):
             raise TypeError("PSF calibration requires a conditioned kernel PSF")
         return PSFCalibrationTerm(
@@ -442,13 +450,18 @@ def _fit_group(
     manifest_payload: dict[str, Any],
     minimum_slice_samples: int,
     psf_model: str = "fitted_gaussian_kernel",
+    exposure_id: str | None = None,
+    band: str | None = None,
 ) -> dict[str, Any]:
+    started = time.perf_counter()
     arrays = {
         split: load_operator_calibration_split(
             manifest,
             split=split,
             role=role,
             detector=detector,
+            exposure_id=exposure_id,
+            band=band,
             verify_hashes=True,
         )
         for split in ("train", "validation", "test")
@@ -457,14 +470,57 @@ def _fit_group(
         split: [
             row
             for row in manifest_payload.get("evidence", [])
-            if row.get("split") == split
+            if row.get("calibration_split" if exposure_id is not None else "split") == split
             and row.get("role") == role
             and str(row.get("detector", "")).upper() == detector
+            and (exposure_id is None or calibration_exposure_id(row) == exposure_id)
+            and (band is None or str(row.get("band", "")).upper() == band)
         ]
         for split in ("train", "validation", "test")
     }
     if any(len(rows[split]) != arrays[split]["detector_x"].numel() for split in rows):
         raise RuntimeError("manifest row order/count does not match loaded evidence")
+    psf_contract: dict[str, Any] = {}
+    if role == "psf":
+        selected_rows = [row for split_rows in rows.values() for row in split_rows]
+        convention_values = [
+            row.get(
+                "pixel_response_included",
+                True if row.get("target_kind") == "normalized_effective_psf" else None,
+            )
+            for row in selected_rows
+        ]
+        if not all(type(value) is bool for value in convention_values):
+            raise ValueError("PSF pixel_response_included values must be bool")
+        conventions = set(convention_values)
+        if conventions != {True} and conventions != {False}:
+            raise ValueError(
+                "PSF evidence must declare one consistent pixel-response convention"
+            )
+        provenance_values = [
+            row.get(
+                "pixel_response_provenance",
+                "registered detector SCI stamp"
+                if row.get("target_kind") == "normalized_effective_psf"
+                else None,
+            )
+            for row in selected_rows
+        ]
+        if not all(
+            isinstance(value, str) and value.strip() for value in provenance_values
+        ):
+            raise ValueError(
+                "PSF pixel_response_provenance values must be nonempty strings"
+            )
+        provenance = set(provenance_values)
+        if len(provenance) != 1 or None in provenance:
+            raise ValueError(
+                "PSF evidence must declare one pixel-response provenance"
+            )
+        psf_contract = {
+            "pixel_response_included": conventions.pop(),
+            "pixel_response_provenance": provenance.pop(),
+        }
     torch.manual_seed(seed)
     model, initializer = _make_model(
         arrays["train"],
@@ -472,6 +528,7 @@ def _fit_group(
         family=family,
         device=device,
         psf_model=psf_model,
+        exposure_scope=exposure_id is not None,
     )
     background_loss_weight = (
         _background_loss_weight(arrays["train"]) if role == "background" else 1.0
@@ -505,22 +562,35 @@ def _fit_group(
         )
         for split in ("validation", "test")
     }
-    checkpoint = output_dir / f"{detector.lower()}_{role}_{family}.pt"
+    identity = {"calibration_scope": "detector" if exposure_id is None else "exposure"}
+    if exposure_id is not None:
+        identity.update(exposure_id=exposure_id, band=band)
+    suffix = (
+        ""
+        if exposure_id is None
+        else "_"
+        + hashlib.sha256(json.dumps([exposure_id, band]).encode("utf-8")).hexdigest()
+    )
+    checkpoint = output_dir / f"{detector.lower()}_{role}_{family}{suffix}.pt"
     torch.save(
         {
-            "schema_version": 1,
+            "schema_version": 2,
+            **identity,
             "detector": detector,
             "role": role,
             "family": family,
             "psf_model": psf_model if role == "psf" else None,
+            **psf_contract,
             "state_dict": model.state_dict(),
         },
         checkpoint,
     )
     result: dict[str, Any] = {
+        **identity,
         "detector": detector,
         "role": role,
         "family": family,
+        **psf_contract,
         "initializer": initializer,
         "fit": fit,
         "validation_report": reports["validation"],
@@ -582,28 +652,57 @@ def _fit_group(
                     ),
                 )
             )
+    result["elapsed_seconds"] = time.perf_counter() - started
+    result["device"] = str(device)
+    # Preserve each finished calibration even if a later exposure fails.
+    group_report = checkpoint.with_suffix(".json")
+    temporary = group_report.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(group_report)
+    print(json.dumps({
+        "event": "calibration_group_completed",
+        "exposure_id": exposure_id,
+        "band": band,
+        "detector": detector,
+        "role": role,
+        "family": family,
+        "elapsed_seconds": result["elapsed_seconds"],
+        "validation_raw_loss": reports["validation"]["terms"][0]["raw_loss"],
+        "report": str(group_report),
+    }, allow_nan=False), flush=True)
     return result
 
 
 def _held_out_comparisons(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     indexed = {
-        (group["detector"], group["role"], group["family"]): group
+        (
+            group["detector"],
+            group["role"],
+            group.get("exposure_id", ""),
+            group.get("band", ""),
+            group["family"],
+        ): group
         for group in groups
     }
     comparisons = []
-    for detector, role, family in sorted(indexed):
+    for detector, role, exposure_id, band, family in sorted(indexed):
         if family != "adaptive":
             continue
-        stationary = indexed[(detector, role, "stationary")]
-        adaptive = indexed[(detector, role, "adaptive")]
+        stationary = indexed[(detector, role, exposure_id, band, "stationary")]
+        adaptive = indexed[(detector, role, exposure_id, band, "adaptive")]
         comparison: dict[str, Any] = {"detector": detector, "role": role}
+        if exposure_id:
+            comparison.update(
+                exposure_id=exposure_id, band=band, calibration_scope="exposure"
+            )
         for split in ("validation", "test"):
             stationary_loss = float(
                 stationary[f"{split}_report"]["terms"][0]["raw_loss"]
             )
-            adaptive_loss = float(
-                adaptive[f"{split}_report"]["terms"][0]["raw_loss"]
-            )
+            adaptive_loss = float(adaptive[f"{split}_report"]["terms"][0]["raw_loss"])
             ratio = adaptive_loss / max(
                 stationary_loss, torch.finfo(torch.float64).tiny
             )
@@ -621,15 +720,21 @@ def _held_out_slice_comparisons(
     groups: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     indexed = {
-        (group["detector"], group["role"], group["family"]): group
+        (
+            group["detector"],
+            group["role"],
+            group.get("exposure_id", ""),
+            group.get("band", ""),
+            group["family"],
+        ): group
         for group in groups
     }
     comparisons = []
-    for detector, role, family in sorted(indexed):
+    for detector, role, exposure_id, band, family in sorted(indexed):
         if family != "adaptive":
             continue
-        stationary = indexed[(detector, role, "stationary")]
-        adaptive = indexed[(detector, role, "adaptive")]
+        stationary = indexed[(detector, role, exposure_id, band, "stationary")]
+        adaptive = indexed[(detector, role, exposure_id, band, "adaptive")]
         stationary_slices = {
             (item["kind"], item["label"]): item
             for item in stationary["held_out_slices"]["included"]
@@ -645,13 +750,15 @@ def _held_out_slice_comparisons(
                 "metadata": item["metadata"],
                 "sample_counts": item["sample_counts"],
             }
+            if exposure_id:
+                comparison.update(
+                    exposure_id=exposure_id, band=band, calibration_scope="exposure"
+                )
             for split in ("validation", "test"):
                 stationary_loss = float(
                     control["reports"][split]["terms"][0]["raw_loss"]
                 )
-                adaptive_loss = float(
-                    item["reports"][split]["terms"][0]["raw_loss"]
-                )
+                adaptive_loss = float(item["reports"][split]["terms"][0]["raw_loss"])
                 ratio = adaptive_loss / max(
                     stationary_loss, torch.finfo(torch.float64).tiny
                 )
@@ -665,6 +772,54 @@ def _held_out_slice_comparisons(
     return comparisons
 
 
+def _calibration_groups(
+    payload: dict[str, Any], scope: str
+) -> list[tuple[str, str | None, str | None]]:
+    rows = payload.get("evidence", [])
+    if scope == "detector":
+        return [
+            (detector, None, None)
+            for detector in sorted(
+                {
+                    str(row["detector"]).upper()
+                    for row in rows
+                    if row.get("split") == "train"
+                }
+            )
+        ]
+    if scope != "exposure":
+        raise ValueError("calibration scope must be detector or exposure")
+    keys = set()
+    supported = payload.get("calibration_partitioning", {}).get("supported_exposures")
+    supported_keys = None if supported is None else {
+        (row["exposure"], str(row["band"]).upper()) for row in supported
+    }
+    for row in rows:
+        exposure_id = calibration_exposure_id(row)
+        band = row.get("band")
+        if not isinstance(band, str) or not band.strip():
+            raise ValueError("exposure calibration requires a nonempty band")
+        if supported_keys is not None and (exposure_id, band.upper()) not in supported_keys:
+            continue
+        keys.add((str(row["detector"]).upper(), exposure_id, band.upper()))
+    for detector, exposure_id, band in sorted(keys):
+        for role in ("background", "psf"):
+            splits = {
+                row.get("calibration_split")
+                for row in rows
+                if str(row["detector"]).upper() == detector
+                and calibration_exposure_id(row) == exposure_id
+                and str(row["band"]).upper() == band
+                and row.get("role") == role
+            }
+            missing = {"train", "validation", "test"} - splits
+            if missing:
+                raise ValueError(
+                    f"exposure {exposure_id!r}, band {band}, {role}: missing independent calibration evidence splits {sorted(missing)}; exposure-level holdouts cannot be pooled or reassigned"
+                )
+    return sorted(keys)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -673,6 +828,15 @@ def main() -> int:
     parser.add_argument("--lr", type=float, default=1.0e-3)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--seed", type=int, default=1729)
+    parser.add_argument(
+        "--family", choices=("stationary", "both"), default="both",
+        help="Fit stationary controls alone or compare both calibration families.",
+    )
+    parser.add_argument(
+        "--calibration-scope", choices=("detector", "exposure"), default="detector"
+    )
+    parser.add_argument("--exposure-id", action="append", default=[],
+                        help="Exact exposure identity to fit; repeat for a bounded batch.")
     parser.add_argument("--minimum-slice-samples", type=int, default=20)
     parser.add_argument(
         "--psf-model",
@@ -687,26 +851,32 @@ def main() -> int:
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     if args.minimum_slice_samples < 1:
         raise ValueError("minimum_slice_samples must be positive")
-    detectors = sorted(
-        {
-            str(row["detector"]).upper()
-            for row in payload.get("evidence", [])
-            if row.get("split") == "train"
-        }
-    )
+    selections = _calibration_groups(payload, args.calibration_scope)
+    if args.exposure_id:
+        if args.calibration_scope != "exposure":
+            parser.error("--exposure-id requires --calibration-scope exposure")
+        requested = set(args.exposure_id)
+        missing = requested - {selection[1] for selection in selections}
+        if missing:
+            parser.error(f"requested exposures lack independent calibration coverage: {sorted(missing)}")
+        selections = [selection for selection in selections if selection[1] in requested]
+    detectors = sorted({selection[0] for selection in selections})
     if not detectors:
         raise ValueError("manifest contains no train-split detector evidence")
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     device = _device(args.device)
     groups = []
-    for detector_index, detector in enumerate(detectors):
+    for detector_index, (detector, exposure_id, band) in enumerate(selections):
         for role_index, role in enumerate(("background", "psf")):
-            for family_index, family in enumerate(("stationary", "adaptive")):
+            families = ("stationary",) if args.family == "stationary" else ("stationary", "adaptive")
+            for family_index, family in enumerate(families):
                 groups.append(
                     _fit_group(
                         manifest,
                         detector=detector,
+                        exposure_id=exposure_id,
+                        band=band,
                         role=role,
                         family=family,
                         steps=args.steps,
@@ -724,6 +894,10 @@ def main() -> int:
                 )
     report = {
         "schema_version": 1,
+        "calibration_scope": args.calibration_scope,
+        "families": list(families),
+        "calibration_partitioning": payload.get("calibration_partitioning"),
+        "requested_exposure_ids": args.exposure_id,
         "manifest": str(manifest),
         "manifest_sha256": _sha256(manifest),
         "device": str(device),

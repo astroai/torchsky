@@ -60,7 +60,7 @@ export PIXI_BIN_DIR="${PIXI_HOME}/bin"
 export PIXI_CACHE_DIR=/scratch/pixi-cache
 export TORCHSKY_DATA="${data_root}"
 export PATH="${PIXI_HOME}/bin:${PATH}"
-export PYTHONPATH="${source_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
+unset PYTHONPATH
 export PYTHONUNBUFFERED=1
 export PYTHONFAULTHANDLER=1
 export PYTHONNOUSERSITE=1
@@ -136,10 +136,21 @@ done
 # The editable install also builds torchsky._cpp, which every later step's
 # bare PYTHONPATH import needs.
 native_build_env=default
-if [[ "${mode}" == "foam" || "${mode}" == "foam-validation" ]]; then
+if [[ "${mode}" == "passband-bootstrap" ]]; then
+  native_build_env=svo-bootstrap
+elif [[ "${mode}" == "calibration-fit" && "${CALIBRATION_FIT_DEVICE:-cpu}" == "cuda" ]]; then
+  native_build_env=smacs-cuda
+elif [[ "${mode}" == "foam" || "${mode}" == "foam-validation" ]]; then
+  if [[ "${TORCHSKY_DEVICE:-auto}" == "cpu" ]]; then
+    native_build_env=test
+  else
+    native_build_env=smacs-cuda
+  fi
+fi
+if [[ "${mode}" == "calibration-fit" && "${CALIBRATION_FIT_DEVICE:-cpu}" == cuda* ]]; then
   native_build_env=smacs-cuda
 fi
-if [[ "${mode}" == "mosaic-parity" ]]; then
+if [[ "${mode}" == "mosaic-parity" || "${mode}" == "multiband-canary" ]]; then
   native_build_env=${TORCHSKY_MAP_COMPAT_ENV:-map-compat}
   [[ "${native_build_env}" == "map-compat" || "${native_build_env}" == "map-compat-cuda" ]] || {
     echo "unsupported TORCHSKY_MAP_COMPAT_ENV=${native_build_env}" >&2
@@ -194,6 +205,18 @@ case "${BACKGROUND_MODEL:-none}" in
     ;;
 esac
 operator_arm_args=(--psf-model "${psf_model}" --background-model "${background_model}")
+scene_initialization=${SCENE_INITIALIZATION:-common_product}
+case "${scene_initialization}" in
+  common_product | none) ;;
+  *) echo "SCENE_INITIALIZATION must be common_product or none" >&2; exit 2 ;;
+esac
+scene_initialization_steps=${SCENE_INITIALIZATION_STEPS:-32}
+scene_initialization_lr=${SCENE_INITIALIZATION_LR:-0.05}
+scene_initialization_args=(
+  --scene-initialization "${scene_initialization}"
+  --scene-initialization-steps "${scene_initialization_steps}"
+  --scene-initialization-lr "${scene_initialization_lr}"
+)
 
 # Foam-specific arguments only apply when foam is in the model CSV.
 if [[ "${foam_selected}" = "1" ]]; then
@@ -275,6 +298,17 @@ if [[ "${psf_model}" == "learned_lowrank" ]]; then
 fi
 
 case "${mode}" in
+  passband-bootstrap)
+    passband_output_dir=${PASSBAND_OUTPUT_DIR:-/arc/projects/ots/jwst_smacs0723/data/calibration/svo}
+    passband_bands=${PASSBAND_BANDS:-F090W,F150W,F200W,F277W,F356W,F444W}
+    passband_cache_dir=${PASSBAND_CACHE_DIR:-${artifact_root}/svo-cache}
+    run pixi_run svo-bootstrap \
+      python "${source_root}/scripts/bootstrap_svo_passbands.py" \
+      --output-dir "${passband_output_dir}" \
+      --bands "${passband_bands}" \
+      --cache-dir "${passband_cache_dir}"
+    gate "${passband_output_dir}/manifest.json"
+    ;;
   calibration-extract)
     calibration_input_root=${CALIBRATION_INPUT_ROOT:-${data_root}/jwst_smacs0723/aligned}
     calibration_pattern=${CALIBRATION_PATTERN:-*_crf_rshift_tweakreg.fits}
@@ -299,15 +333,25 @@ case "${mode}" in
     calibration_lr=${CALIBRATION_FIT_LR:-0.001}
     calibration_device=${CALIBRATION_FIT_DEVICE:-cpu}
     test -s "${calibration_manifest}"
-    ensure_native_build
-    pixi_run default \
+    calibration_selection=()
+    if [[ -n "${CALIBRATION_EXPOSURE_IDS:-}" ]]; then
+      IFS=',' read -r -a calibration_exposure_ids <<< "${CALIBRATION_EXPOSURE_IDS}"
+      for exposure_id in "${calibration_exposure_ids[@]}"; do
+        [[ -n "${exposure_id}" ]] || { echo "empty calibration exposure ID" >&2; exit 2; }
+        calibration_selection+=(--exposure-id "${exposure_id}")
+      done
+    fi
+    pixi_run "${native_build_env}" \
       python "${source_root}/benchmarks/fit_smacs0723_operator_calibration.py" \
       --manifest "${calibration_manifest}" \
       --output-dir "${CALIBRATION_FIT_OUTPUT_DIR:-${artifact_root}/fit}" \
       --steps "${calibration_steps}" \
       --lr "${calibration_lr}" \
       --device "${calibration_device}" \
-      --psf-model "${CALIBRATION_FIT_PSF_MODEL:-${fit_psf_model}}"
+      --family "${CALIBRATION_FIT_FAMILY:-both}" \
+      --calibration-scope "${CALIBRATION_SCOPE:-detector}" \
+      --psf-model "${CALIBRATION_FIT_PSF_MODEL:-${fit_psf_model}}" \
+      "${calibration_selection[@]}"
     gate "${CALIBRATION_FIT_OUTPUT_DIR:-${artifact_root}/fit}/operator_calibration_fit.json"
     ;;
   calibration-inspect)
@@ -360,7 +404,7 @@ case "${mode}" in
       exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
       exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
       exact_preconditioner=${FOAM_EXACT_PRECONDITIONER:-auto}
-      run pixi_run smacs-cuda \
+      run pixi_run "${native_build_env}" \
         python "${source_root}/scripts/run_local_sphere_bench.py" \
         "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
         --bands "${bands}" \
@@ -389,6 +433,7 @@ case "${mode}" in
         "${foam_exact_refinement_args[@]+${foam_exact_refinement_args[@]}}" \
         "${operator_calibration_args[@]+${operator_calibration_args[@]}}" \
         "${operator_arm_args[@]+${operator_arm_args[@]}}" \
+        "${scene_initialization_args[@]}" \
         "${joint_calibration_args[@]}" \
         --models "${field_models}" \
         --fail-on-method-error \
@@ -432,7 +477,7 @@ case "${mode}" in
           )
         fi
         batch_root=${module_root}/${batch}
-        run pixi_run smacs-cuda \
+        run pixi_run "${native_build_env}" \
           python "${source_root}/scripts/run_local_sphere_bench.py" \
           "${source_root}/benchmarks/bench_map_smacs0723_field_fit_joint.py" \
           --bands "${bands}" \
@@ -463,6 +508,7 @@ case "${mode}" in
           "${foam_exact_refinement_args[@]+${foam_exact_refinement_args[@]}}" \
           "${operator_calibration_args[@]+${operator_calibration_args[@]}}" \
           "${operator_arm_args[@]+${operator_arm_args[@]}}" \
+          "${scene_initialization_args[@]}" \
           --models "${field_models}" \
           --fail-on-method-error \
           "${injection_args[@]+${injection_args[@]}}" \
@@ -586,6 +632,25 @@ case "${mode}" in
         gate "${band_root}/stackers.json"
       done
     done
+    ;;
+  multiband-canary)
+    foam_grid_args=()
+    if [[ -n "${MULTIBAND_CANARY_FOAM_GRID_SIDE:-}" ]]; then
+      foam_grid_args=(--foam-grid-side "${MULTIBAND_CANARY_FOAM_GRID_SIDE}")
+    fi
+    run pixi_run "${native_build_env}" \
+      python "${source_root}/benchmarks/bench_multiband_depth.py" \
+      --profile classical-smoke \
+      --device "${TORCHSKY_DEVICE:-cuda}" \
+      --seed "${MULTIBAND_CANARY_SEED:-101}" \
+      --size "${MULTIBAND_CANARY_SIZE:-96}" \
+      --bands "${MULTIBAND_CANARY_BANDS:-6}" \
+      --sources "${MULTIBAND_CANARY_SOURCES:-24}" \
+      --exposures "${MULTIBAND_CANARY_EXPOSURES:-4}" \
+      --include-foam \
+      "${foam_grid_args[@]}" \
+      --json-out "${artifact_root}/multiband-canary.json"
+    gate "${artifact_root}/multiband-canary.json"
     ;;
   mosaic-parity)
     # Strict full-reference module-B gate. Every backend sees the same north-up

@@ -245,7 +245,15 @@ def field_observation_operator_bundle(
     return ObservationOperatorBundle(
         geometry=geometry,
         spectral_response=ExplicitSpectralResponseOp() if has_spectral else None,
-        psf=ExplicitPSFOp() if has_psf else None,
+        psf=(
+            ExplicitPSFOp(
+                pixel_response_included=getattr(
+                    psf_spec, "pixel_response_included", None
+                )
+            )
+            if has_psf
+            else None
+        ),
         radiometry=ExplicitRadiometryOp() if has_radiometry else None,
         background=DetectorBackgroundOp() if has_background else None,
         mask_weight=ExplicitMaskWeightOp() if has_mask_weight else None,

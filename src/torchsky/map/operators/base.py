@@ -39,7 +39,19 @@ class SpectralResponseOp(ObservationOperator):
 
 @dataclass
 class PSFOp(ObservationOperator):
-    pass
+    pixel_response_included: bool | None = None
+    pixel_response_provenance: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.pixel_response_included is not None and not isinstance(
+            self.pixel_response_included, bool
+        ):
+            raise TypeError("pixel_response_included must be bool or None")
+        if self.pixel_response_provenance is not None and (
+            not isinstance(self.pixel_response_provenance, str)
+            or not self.pixel_response_provenance.strip()
+        ):
+            raise TypeError("pixel_response_provenance must be a nonempty string or None")
 
 
 @dataclass

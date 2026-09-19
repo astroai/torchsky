@@ -381,6 +381,9 @@ These tasks protect every later INR/Foam result from operator or memory errors.
   v2 (`5` and `12` bytes per observation-pixel respectively) and fail before
   consuming projections when free capacity is insufficient.
 - [ ] Record medium/large reducer runtime, peak RSS, and scratch-usage scorecards.
+  Provisional 1024/2048-square CPU artifacts now record all three measurements
+  and exact scratch cleanup, but retain `git_dirty=true`; rerun from the clean
+  implementation commit before closing this evidence gate.
 
 ## P1 — Full Bounded Power-Foam Representation
 

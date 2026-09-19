@@ -13,8 +13,20 @@ from .base import PSFOp
 
 @dataclass
 class ExplicitPSFOp(PSFOp):
-    def __init__(self, *, name: str = "explicit_psf") -> None:
-        super().__init__(name=name, learned=False)
+    def __init__(
+        self,
+        *,
+        name: str = "explicit_psf",
+        pixel_response_included: bool | None = None,
+        pixel_response_provenance: str | None = None,
+    ) -> None:
+        super().__init__(
+            name=name,
+            learned=False,
+            frozen=True,
+            pixel_response_included=pixel_response_included,
+            pixel_response_provenance=pixel_response_provenance,
+        )
 
 
 @dataclass
@@ -22,9 +34,21 @@ class LearnedPSFOp(PSFOp):
     model: nn.Module | None = None
 
     def __init__(
-        self, model: nn.Module | None = None, *, name: str = "learned_psf"
+        self,
+        model: nn.Module | None = None,
+        *,
+        name: str = "learned_psf",
+        frozen: bool = False,
+        pixel_response_included: bool | None = None,
+        pixel_response_provenance: str | None = None,
     ) -> None:
-        super().__init__(name=name, learned=True)
+        super().__init__(
+            name=name,
+            learned=True,
+            frozen=frozen,
+            pixel_response_included=pixel_response_included,
+            pixel_response_provenance=pixel_response_provenance,
+        )
         self.model = model
 
 

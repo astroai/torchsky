@@ -237,6 +237,22 @@ def los_barycentric_beta(unit_xyz: Tensor, tt_mjd: Tensor) -> Tensor:
     return -approaching / C_M_S
 
 
+def zeta_berv_from_sky(ra_deg: float, dec_deg: float, tt_mjd: float) -> float:
+    """Approximate line-of-sight BERV rapidity for an explicitly TT epoch.
+
+    Convenience scalar wrapper: ICRS sky position plus TT MJD in, rapidity
+    ``ζ_BERV = atanh(v_BERV / c)`` out with the USPM sign convention
+    (``v_BERV > 0``: observer receding). A generic MJD without a time scale
+    is not enough to certify a topocentric correction, so callers must pass
+    an explicit TT epoch.
+    """
+    from .wcs.frames import radec_to_unit
+
+    unit = radec_to_unit(torch.tensor(float(ra_deg)), torch.tensor(float(dec_deg)))
+    beta = los_barycentric_beta(unit, torch.tensor(float(tt_mjd)))
+    return float(zeta_from_beta(beta))
+
+
 def dimming_f_lambda(one_plus_z: Tensor | float) -> Tensor:
     """``F_λ`` density dimming ``1 / (1+z)``."""
     factor = require_one_plus_z(torch.as_tensor(one_plus_z))

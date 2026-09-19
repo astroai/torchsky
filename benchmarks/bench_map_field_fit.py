@@ -15,8 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torch.nn.functional as F
-from torch import Tensor, nn
+from torch import Tensor
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -59,8 +58,8 @@ from torchsky.map import (  # noqa: E402
 from torchsky.map.field import (  # noqa: E402
     FIELD_MODEL_KINDS,
     SpectralPowerFoamField,
-    _BaseFieldModel,
 )
+from torchsky.map.field.core import ExplicitSpectralGridField  # noqa: E402
 from torchsky.field.frequency_adaptive import BaconField, SASNetField  # noqa: E402
 from torchsky.map.operators.psf import gaussian_support_radius  # noqa: E402
 from torchsky.spectral import SpectralAxis  # noqa: E402
@@ -166,199 +165,6 @@ class CaseSpec:
     spectral_axis: SpectralAxis
     spectral_bin_edges: Tensor | None
     observations: tuple[ObservationSpec, ...]
-    family: str = "field_fit"
-
-
-def _sample_feature_volume(volume: Tensor, coords_unit: Tensor) -> Tensor:
-    flat = coords_unit.reshape(-1, 3).to(dtype=volume.dtype, device=volume.device)
-    grid = torch.stack(
-        [
-            2.0 * flat[:, 0] - 1.0,
-            2.0 * flat[:, 1] - 1.0,
-            2.0 * flat[:, 2] - 1.0,
-        ],
-        dim=-1,
-    ).view(1, -1, 1, 1, 3)
-    sampled = F.grid_sample(
-        volume.unsqueeze(0),
-        grid,
-        mode="bilinear",
-        padding_mode="border",
-        align_corners=True,
-    )
-    return sampled.squeeze(0).squeeze(0).reshape(*coords_unit.shape[:-1])
-
-
-class ExplicitSpectralGridField(_BaseFieldModel):
-    """Benchmark-local multiframe pixel-grid baseline."""
-
-    def __init__(
-        self,
-        domain: FieldDomain,
-        *,
-        spatial_resolution: int = 48,
-        spectral_resolution: int = 8,
-    ) -> None:
-        super().__init__(domain)
-        self.spatial_resolution = int(spatial_resolution)
-        self.spectral_resolution = int(spectral_resolution)
-        self.grid = nn.Parameter(
-            1.0e-3
-            * torch.randn(
-                1,
-                self.spectral_resolution,
-                self.spatial_resolution,
-                self.spatial_resolution,
-            )
-        )
-
-    def _grid_world_coords(self) -> tuple[Tensor, Tensor, Tensor]:
-        device = self.grid.device
-        dtype = self.grid.dtype
-        xs = torch.linspace(
-            -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
-        )
-        ys = torch.linspace(
-            -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
-        )
-        ls = torch.linspace(
-            -1.0, 1.0, steps=self.spectral_resolution, device=device, dtype=dtype
-        )
-        yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-        wavelengths = float(self.domain.wavelength_center) + ls * float(
-            self.domain.wavelength_scale
-        )
-        cos_dec = math.cos(math.radians(float(self.domain.center_dec_deg)))
-        dra = xx * float(self.domain.spatial_scale_deg) / max(cos_dec, 1.0e-6)
-        dec = yy * float(self.domain.spatial_scale_deg) + float(
-            self.domain.center_dec_deg
-        )
-        ra = dra + float(self.domain.center_ra_deg)
-        return ra, dec, wavelengths
-
-    def initialize_from_product(self, product: MapProductResult) -> None:
-        if self.coord_mode != "local_tangent":
-            raise ValueError(
-                "ExplicitSpectralGridField initialization requires local_tangent"
-            )
-        target_wcs = torchsky.WCS(product.header)
-        ra_grid, dec_grid, wavelengths = self._grid_world_coords()
-        px, py = target_wcs.world_to_pixel(ra_grid, dec_grid)
-        target_width = max(int(product.header["NAXIS1"]) - 1, 1)
-        target_height = max(int(product.header["NAXIS2"]) - 1, 1)
-        x_norm = 2.0 * (px / target_width) - 1.0
-        y_norm = 2.0 * (py / target_height) - 1.0
-        sample_grid = (
-            torch.stack([x_norm, y_norm], dim=-1).unsqueeze(0).to(dtype=self.grid.dtype)
-        )
-        band_centers = []
-        for band in product.product.bands:
-            if band.transmission_center is not None:
-                band_centers.append(float(band.transmission_center))
-            elif band.spectral_min is not None and band.spectral_max is not None:
-                band_centers.append(
-                    0.5 * (float(band.spectral_min) + float(band.spectral_max))
-                )
-            else:
-                raise ValueError(
-                    "MapProductSpec band requires center or bounds for initialization"
-                )
-        centers = torch.tensor(
-            band_centers, device=self.grid.device, dtype=self.grid.dtype
-        )
-        data = product.data.to(device=self.grid.device, dtype=self.grid.dtype)
-        sampled_planes = []
-        for plane in data:
-            sampled = (
-                F.grid_sample(
-                    plane.unsqueeze(0).unsqueeze(0),
-                    sample_grid,
-                    mode="bilinear",
-                    padding_mode="border",
-                    align_corners=True,
-                )
-                .squeeze(0)
-                .squeeze(0)
-            )
-            sampled_planes.append(sampled)
-        sampled_cube = torch.stack(sampled_planes, dim=0)
-        interp_planes = []
-        for wavelength in wavelengths:
-            if wavelength <= centers[0]:
-                interp_planes.append(sampled_cube[0])
-                continue
-            if wavelength >= centers[-1]:
-                interp_planes.append(sampled_cube[-1])
-                continue
-            upper_idx = int(torch.searchsorted(centers, wavelength).item())
-            lower_idx = max(upper_idx - 1, 0)
-            lam0 = centers[lower_idx]
-            lam1 = centers[upper_idx]
-            alpha = (wavelength - lam0) / torch.clamp(lam1 - lam0, min=1.0e-6)
-            interp_planes.append(
-                (1.0 - alpha) * sampled_cube[lower_idx]
-                + alpha * sampled_cube[upper_idx]
-            )
-        init_cube = torch.stack(interp_planes, dim=0).unsqueeze(0)
-        with torch.no_grad():
-            self.grid.copy_(
-                torch.log(
-                    torch.clamp(
-                        torch.expm1(torch.clamp(init_cube, min=1.0e-4)), min=1.0e-6
-                    )
-                )
-            )
-
-    def _coords_unit(
-        self,
-        ra_deg: Tensor,
-        dec_deg: Tensor,
-        wavelength_angstrom: Tensor | float,
-    ) -> Tensor:
-        if self.coord_mode != "local_tangent":
-            raise ValueError(
-                "ExplicitSpectralGridField requires local_tangent coordinates"
-            )
-        return self._unit_box_coords(ra_deg, dec_deg, wavelength_angstrom).to(
-            dtype=self.grid.dtype
-        )
-
-    def forward(
-        self,
-        ra_deg: Tensor,
-        dec_deg: Tensor,
-        wavelength_angstrom: Tensor | float,
-    ) -> Tensor:
-        coords_unit = self._coords_unit(ra_deg, dec_deg, wavelength_angstrom)
-        sampled = _sample_feature_volume(self.grid, coords_unit)
-        return F.softplus(sampled) + 1.0e-4
-
-    def render_bandpass(
-        self,
-        ra_deg: Tensor,
-        dec_deg: Tensor,
-        wavelengths: Tensor,
-        weights: Tensor,
-    ) -> Tensor:
-        norm_weights = weights.to(dtype=self.grid.dtype)
-        norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
-        rendered = [
-            self.forward(
-                ra_deg,
-                dec_deg,
-                torch.as_tensor(
-                    float(wavelength.item()),
-                    device=ra_deg.device,
-                    dtype=self.grid.dtype,
-                ),
-            )
-            for wavelength in wavelengths
-        ]
-        return torch.sum(
-            torch.stack(rendered, dim=0) * norm_weights.view(-1, *([1] * ra_deg.ndim)),
-            dim=0,
-        )
-
     family: str = "field_fit"
 
 

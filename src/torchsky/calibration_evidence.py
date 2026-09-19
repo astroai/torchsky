@@ -145,7 +145,9 @@ def discover_detector_calibration_positions(
         order = torch.topk(candidate_score, k=preselection).indices
         candidate_yx = candidate_yx.index_select(0, order)
         integer_positions = candidate_yx[:, [1, 0]].to(dtype=science.dtype)
-        quality_radius = max(3, math.ceil(2.5 * sigma_px))
+        # Judge the same footprint used for calibration, including neighbours
+        # that lie outside the compact detection core.
+        quality_radius = psf_radius_px
         stamps, weights, support = _registered_arrays(
             science,
             error,
@@ -280,7 +282,9 @@ def discover_detector_calibration_positions(
     return psf_rows + background_rows
 
 
-def _finite_float(row: dict[str, str], name: str, *, default: float | None = None) -> float:
+def _finite_float(
+    row: dict[str, str], name: str, *, default: float | None = None
+) -> float:
     value = row.get(name, "").strip()
     if not value and default is not None:
         return default
@@ -306,7 +310,9 @@ def read_reviewed_sky_catalog(path: Path) -> list[dict[str, Any]]:
     for index, raw in enumerate(raw_rows):
         source_id = raw.get("source_id", "").strip()
         if not source_id or source_id in seen:
-            raise ValueError(f"catalog row {index}: source_id must be nonempty and unique")
+            raise ValueError(
+                f"catalog row {index}: source_id must be nonempty and unique"
+            )
         seen.add(source_id)
         role = raw.get("role", "").strip().lower()
         if role not in _ROLES:
@@ -343,12 +349,8 @@ def _registered_arrays(
 ) -> tuple[Tensor, Tensor, Tensor]:
     clean_science = torch.where(valid, science, torch.zeros_like(science))
     clean_error = torch.where(valid, error, torch.ones_like(error))
-    stamps = registered_image_stamps(
-        clean_science, positions, radius_px=radius_px
-    )
-    error_stamps = registered_image_stamps(
-        clean_error, positions, radius_px=radius_px
-    )
+    stamps = registered_image_stamps(clean_science, positions, radius_px=radius_px)
+    error_stamps = registered_image_stamps(clean_error, positions, radius_px=radius_px)
     support = registered_image_stamps(
         valid.to(science.dtype), positions, radius_px=radius_px
     ).clamp(0.0, 1.0)
@@ -463,9 +465,7 @@ def extract_calibration_evidence(
     }
     existing = [path for path in product_paths.values() if path.exists()]
     if existing and not overwrite:
-        raise FileExistsError(
-            f"refusing to overwrite {existing[0]}; pass --overwrite"
-        )
+        raise FileExistsError(f"refusing to overwrite {existing[0]}; pass --overwrite")
 
     psf_kernels: list[Tensor] = []
     psf_weights: list[Tensor] = []
@@ -478,13 +478,14 @@ def extract_calibration_evidence(
         science = read(str(path), hdu="SCI").detach().to(torch.float32)
         error = read(str(path), hdu="ERR").detach().to(torch.float32)
         dq = read(str(path), hdu="DQ").detach()
-        if science.ndim != 2 or error.shape != science.shape or dq.shape != science.shape:
+        if (
+            science.ndim != 2
+            or error.shape != science.shape
+            or dq.shape != science.shape
+        ):
             raise ValueError(f"{path}: SCI, ERR, and DQ must be matching 2D images")
         valid = (
-            torch.isfinite(science)
-            & torch.isfinite(error)
-            & (error > 0)
-            & (dq == 0)
+            torch.isfinite(science) & torch.isfinite(error) & (error > 0) & (dq == 0)
         )
         if catalog is None:
             candidates = discover_detector_calibration_positions(
@@ -589,6 +590,8 @@ def extract_calibration_evidence(
                         {
                             "target_index": len(psf_kernels),
                             "target_kind": "normalized_effective_psf",
+                            "pixel_response_included": True,
+                            "pixel_response_provenance": "registered detector SCI stamp",
                             "snr": snr,
                         }
                     )
@@ -627,9 +630,7 @@ def extract_calibration_evidence(
             overwrite=overwrite,
         )
         generated_paths["psf_kernels"] = product_paths["psf_kernels"]
-        generated_paths["psf_pixel_weights"] = product_paths[
-            "psf_pixel_weights"
-        ]
+        generated_paths["psf_pixel_weights"] = product_paths["psf_pixel_weights"]
         write(
             str(product_paths["psf_pixel_weights"]),
             torch.stack(psf_weights),
@@ -650,9 +651,7 @@ def extract_calibration_evidence(
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(background_rows)
-        generated_paths["background_targets"] = product_paths[
-            "background_targets"
-        ]
+        generated_paths["background_targets"] = product_paths["background_targets"]
 
     products = {
         name: {
@@ -727,9 +726,15 @@ def load_operator_calibration_split(
     split: str,
     role: str,
     detector: str,
+    exposure_id: str | None = None,
+    band: str | None = None,
     verify_hashes: bool = True,
 ) -> dict[str, Tensor]:
-    """Load one detector/role/split as tensors ready for a calibration term."""
+    """Load detector evidence, optionally restricted to an exact exposure and band."""
+    if exposure_id is not None and (
+        not exposure_id.strip() or not band or not band.strip()
+    ):
+        raise ValueError("exposure selection requires nonempty exposure_id and band")
     if split not in {"train", "validation", "test"}:
         raise ValueError("split must be train, validation, or test")
     role = role.lower()
@@ -743,12 +748,21 @@ def load_operator_calibration_split(
     rows = [
         row
         for row in payload.get("evidence", [])
-        if row.get("split") == split
+        if row.get("calibration_split" if exposure_id is not None else "split") == split
         and row.get("role") == role
         and str(row.get("detector", "")).upper() == detector.upper()
+        and (exposure_id is None or calibration_exposure_id(row) == exposure_id)
+        and (band is None or str(row.get("band", "")).upper() == band.upper())
     ]
     if not rows:
-        raise ValueError(f"no {split} {role} evidence for detector {detector}")
+        raise ValueError(
+            f"no {split} {role} evidence for detector {detector}"
+            + (
+                f", exposure {exposure_id!r}, band {band}; independent split evidence is required"
+                if exposure_id is not None
+                else ""
+            )
+        )
 
     def product_path(name: str) -> Path:
         try:
@@ -768,7 +782,10 @@ def load_operator_calibration_split(
             [row["detector_y"] for row in rows], dtype=torch.float64
         ),
         "wavelength": torch.tensor(
-            [nircam_imaging_band(row["band"]).pivot_wavelength_angstrom for row in rows],
+            [
+                nircam_imaging_band(row["band"]).pivot_wavelength_angstrom
+                for row in rows
+            ],
             dtype=torch.float64,
         ),
         "time_mjd": torch.tensor(
@@ -780,9 +797,9 @@ def load_operator_calibration_split(
     }
     if role == "psf":
         indices = torch.tensor([row["target_index"] for row in rows], dtype=torch.long)
-        result["target_kernels"] = read(
-            str(product_path("psf_kernels"))
-        ).index_select(0, indices)
+        result["target_kernels"] = read(str(product_path("psf_kernels"))).index_select(
+            0, indices
+        )
         result["pixel_weight"] = read(
             str(product_path("psf_pixel_weights"))
         ).index_select(0, indices)
@@ -793,7 +810,18 @@ def load_operator_calibration_split(
     return result
 
 
+def calibration_exposure_id(row: dict[str, Any]) -> str:
+    """Return the explicit exposure identity; legacy evidence stores it as exposure."""
+    value = row.get("exposure_id", row.get("exposure"))
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            "exposure calibration requires a nonempty exposure_id or exposure provenance field"
+        )
+    return value
+
+
 __all__ = [
+    "calibration_exposure_id",
     "discover_detector_calibration_positions",
     "extract_calibration_evidence",
     "extract_reviewed_calibration_evidence",

@@ -10,9 +10,13 @@ from torch import nn
 from torchsky.map.field import rendering
 from torchsky.map.field.training import fit_field_model
 from torchsky.map.field.types import FieldObservation, PSFSpec
-from torchsky.map.operators.bundle import field_observation_operator_bundle
+from torchsky.map.operators.bundle import (
+    ObservationOperatorBundle,
+    field_observation_operator_bundle,
+)
 from torchsky.map.operators.background import LearnedBackgroundOp
 from torchsky.map.operators.noise import StructuredDetectorNoise, StructuredNoiseOp
+from torchsky.map.operators.psf import LearnedPSFOp
 
 
 class Scene(nn.Module):
@@ -25,6 +29,13 @@ class Scene(nn.Module):
         return self.net(
             torch.stack(((ra - 1) * 10, dec * 10, wavelength / 2), -1)
         ).squeeze(-1)
+
+
+class IdentityLearnedPSF(nn.Module):
+    kernel_size = 1
+
+    def forward(self, image, **_kwargs):
+        return image
 
 
 def observation(side=33):
@@ -329,6 +340,81 @@ def test_effective_psf_rejects_double_pixel_integration():
         )
 
 
+def test_active_learned_effective_psf_rejects_double_pixel_integration():
+    obs = replace(
+        observation(9),
+        psf_spec=PSFSpec(
+            mode="kernel2d",
+            kernel2d=torch.ones(3, 3),
+            pixel_response_included=False,
+        ),
+    )
+    bundle = ObservationOperatorBundle(
+        psf=LearnedPSFOp(
+            IdentityLearnedPSF(), pixel_response_included=True, frozen=True
+        )
+    )
+    with pytest.raises(ValueError, match="pixel response"):
+        rendering.render_field_observation(
+            Scene(),
+            obs,
+            operator_bundle=bundle,
+            spatial_sampling="gauss_legendre_2x2",
+        )
+    prediction = rendering.render_field_observation(
+        Scene(), obs, operator_bundle=bundle, spatial_sampling="center"
+    )
+    assert prediction.shape == obs.image.shape
+
+
+def test_active_learned_psf_requires_known_pixel_response_for_quadrature():
+    obs = replace(observation(9), psf_spec=None)
+    unknown = ObservationOperatorBundle(
+        psf=LearnedPSFOp(IdentityLearnedPSF(), frozen=True)
+    )
+    with pytest.raises(ValueError, match="pixel response convention is unknown"):
+        rendering.render_field_observation(
+            Scene(),
+            obs,
+            operator_bundle=unknown,
+            spatial_sampling="gauss_legendre_2x2",
+        )
+    optical = ObservationOperatorBundle(
+        psf=LearnedPSFOp(
+            IdentityLearnedPSF(), pixel_response_included=False, frozen=True
+        )
+    )
+    prediction = rendering.render_field_observation(
+        Scene(),
+        obs,
+        operator_bundle=optical,
+        spatial_sampling="gauss_legendre_2x2",
+    )
+    assert prediction.shape == obs.image.shape
+
+
+def test_learned_psf_spec_requires_known_pixel_response_for_quadrature():
+    spec = PSFSpec.learned(IdentityLearnedPSF(), base_sigma_pix=1.0)
+    obs = replace(observation(9), psf_spec=spec)
+    with pytest.raises(ValueError, match="pixel response convention is unknown"):
+        rendering.render_field_observation(
+            Scene(), obs, spatial_sampling="gauss_legendre_2x2"
+        )
+
+
+def test_exact_foam_render_rejects_effective_psf_after_pixel_integration():
+    obs = replace(observation(9), psf_spec=None)
+    bundle = ObservationOperatorBundle(
+        psf=LearnedPSFOp(
+            IdentityLearnedPSF(), pixel_response_included=True, frozen=True
+        )
+    )
+    with pytest.raises(ValueError, match="pixel response"):
+        rendering.render_spectral_power_foam_observation_exact(
+            Scene(), obs, operator_bundle=bundle
+        )
+
+
 def test_zero_pixel_samples_disable_sampling_and_negatives_fail():
     class RecordingScene(Scene):
         def __init__(self):
@@ -366,8 +452,6 @@ def test_streamed_tiles_reject_full_image_auxiliary_losses(unsupported):
 
 
 def test_disabled_psf_bundle_does_not_reject_pixel_quadrature():
-    from torchsky.map.operators.bundle import ObservationOperatorBundle
-
     obs = observation(9)
     obs.psf_spec.pixel_response_included = True
     explicit_none = ObservationOperatorBundle()
