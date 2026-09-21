@@ -83,6 +83,38 @@ def _initialization_header(*, crpix1: float = 2.0) -> dict[str, float | int | st
     }
 
 
+@pytest.mark.parametrize("angle", [0.0, 30.0])
+def test_detector_crop_scores_only_target_footprint(angle: float) -> None:
+    from bench_map_smacs0723_field_fit import _crop_field_inputs_to_target
+
+    source = dict(_initialization_header(), NAXIS1=64, NAXIS2=64,
+                  CRPIX1=32.5, CRPIX2=32.5)
+    c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    target = dict(source, NAXIS1=8, NAXIS2=8, CRPIX1=4.5, CRPIX2=4.5,
+                  CD1_1=-0.001*c, CD1_2=0.001*s,
+                  CD2_1=0.001*s, CD2_2=0.001*c)
+    target.pop("CDELT1")
+    target.pop("CDELT2")
+    science = np.arange(64*64, dtype=np.float32).reshape(64, 64)
+    mask = np.ones_like(science)
+    mask[32, 32] = 0
+    result = _crop_field_inputs_to_target(
+        image=science, weight=np.full_like(science, 2), mask=mask,
+        header=source, target_header=target,
+    )
+    assert result is not None
+    image, weight, cropped_mask, header = result
+    # Analytic tangent-plane rotation, independent of WCS round trips.
+    yy, xx = np.indices(image.shape)
+    x0, y0 = int(header["SUBSTRT1"])-1, int(header["SUBSTRT2"])-1
+    dx, dy = xx+x0-31.5, yy+y0-31.5
+    inside = (np.abs(c*dx+s*dy) < 4) & (np.abs(-s*dx+c*dy) < 4)
+    np.testing.assert_array_equal(weight, 2*inside)
+    np.testing.assert_array_equal(cropped_mask, inside*mask[y0:y0+len(yy), x0:x0+image.shape[1]])
+    np.testing.assert_array_equal(image, science[y0:y0+len(yy), x0:x0+image.shape[1]])
+    assert image.size > inside.sum()  # PSF halo is retained, not scored.
+
+
 def _initialization_observation(
     value: float,
     *,

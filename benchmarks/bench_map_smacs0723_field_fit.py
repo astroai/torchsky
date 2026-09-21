@@ -206,11 +206,11 @@ def _crop_field_inputs_to_target(
     width = int(target_header["NAXIS1"])
     tx = torch.tensor(
         [0.0, float(width - 1), float(width - 1), 0.0, 0.5 * float(width - 1)],
-        dtype=torch.float32,
+        dtype=torch.float64,
     )
     ty = torch.tensor(
         [0.0, 0.0, float(height - 1), float(height - 1), 0.5 * float(height - 1)],
-        dtype=torch.float32,
+        dtype=torch.float64,
     )
     ra, dec = target_wcs.pixel_to_world(tx, ty)
     sx, sy = source_wcs.world_to_pixel(ra, dec)
@@ -225,10 +225,25 @@ def _crop_field_inputs_to_target(
     y1 = min(int(np.ceil(np.max(sy_np[valid]))) + int(margin) + 1, image.shape[-2])
     if x1 <= x0 or y1 <= y0:
         return None
+    # Retain the PSF halo, but fit and score only detector centres in the target.
+    yy, xx = torch.meshgrid(
+        torch.arange(y0, y1, dtype=torch.float64),
+        torch.arange(x0, x1, dtype=torch.float64),
+        indexing="ij",
+    )
+    ra, dec = source_wcs.pixel_to_world(xx, yy)
+    target_x, target_y = target_wcs.world_to_pixel(ra, dec)
+    inside = (
+        torch.isfinite(target_x) & torch.isfinite(target_y)
+        & (target_x >= -0.5) & (target_x < width - 0.5)
+        & (target_y >= -0.5) & (target_y < height - 0.5)
+    ).cpu().numpy()
+    if not np.any(inside & (mask[y0:y1, x0:x1] > 0)):
+        return None
     return (
         image[y0:y1, x0:x1].copy(),
-        weight[y0:y1, x0:x1].copy(),
-        mask[y0:y1, x0:x1].copy(),
+        np.where(inside, weight[y0:y1, x0:x1], 0),
+        np.where(inside, mask[y0:y1, x0:x1], 0),
         _copy_header_with_crop(header, x0=x0, y0=y0, width=x1 - x0, height=y1 - y0),
     )
 

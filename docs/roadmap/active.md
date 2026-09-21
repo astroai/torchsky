@@ -16,6 +16,56 @@ spectral Foam arms and emits an explicit promotion gate; this is a
 representation/SNR canary, not yet a depth claim or a substitute for the real
 detector-space comparison.
 
+## Calibrated held-out reconstruction submission — 2026-09-21
+
+Submitted production session `qo9mg18r`, run `smacs-recon-20260921-r1`,
+using `images.canfar.net/astroai/webterm:latest`, 8 CPU cores, 32 GiB RAM,
+and one GPU. The exact committed source is
+`9d13aab1c5a578960a599cadcbdda04cdd345916`; unrelated working-tree edits are
+excluded from its Git bundle. Source, bootstrap script, and exposure selection
+are preserved under `/arc/projects/ots/torchsky-runs/smacs-recon-20260921-r1/`.
+
+The run refits stationary exposure-level PSF/background operators using the
+existing spatially partitioned calibration evidence, then compares
+`explicit_spectral_grid_field` and `sine_implicit` with common scene
+initialization and 150 optimization steps. F150W/F277W use the fixed
+`20260908-six-band-pilot-inputs/target_128.fits` footprint: 25 training exposures
+and 10 validation exposures. PATT_NUM 6 and 9 are excluded from both calibration
+fitting and reconstruction in this run. Measured SVO passband files were found
+in `/arc/projects/ots/jwst_smacs0723/data/calibration/svo`; the application will
+validate their contents when loading them. This is a two-band experiment, not
+a full-cluster or six-band result. Reusing the older calibration samples does
+not establish that their empirical PSFs are free of contamination.
+
+The GPU run completed with exit 0 at `2026-09-21T09:48:42Z`. The target
+footprint overlapped five training and two validation exposures per band;
+the larger selected inventory includes short-wave detectors outside this
+region. The grid and SIREN fits took 184 and 271 seconds respectively,
+including the shared 47-second initialization prerequisite. Both exports have
+poor source contrast; neither is accepted as an improved reconstruction.
+
+Inspection found that detector crop margins and rotated bounding-box corners
+were included in both fitting and validation, outside the initialized/exported
+target region. Consequently the original validation numbers do not describe
+only the claimed footprint. The crop helper now preserves these pixels for PSF
+rendering but zeros their weights and masks using the target pixel-edge
+footprint. A regression check compares aligned and rotated WCS masks against
+an independent analytic rotation. Patch-training loss and full-image loss also
+measure different samples and must not be compared as an optimization curve.
+
+Recovered FITS files, original reports and common-scale PNGs are under
+`benchmarks_results/canfar_smacs-recon-20260921-r1/`. The calibration samples
+still need stronger PSF/background validation; correcting the footprint alone
+does not establish the cause of the poor reconstruction. The three September
+17 sessions remain listed as Running; their available ARC logs do not
+establish completed comparisons.
+
+After successful completion, render common-scale panels with
+`scripts/visualize_smacs0723_products.py --joint-report <run>/b/shared-foam.json
+--joint-export-dir <run>/b/products --output-dir <run>/b/quicklooks
+--max-panels 2 --no-synthetic-check`. The renderer includes held-out prediction
+metrics; unmeasured flux/color/PSF metrics must remain labelled as such.
+
 ## Common scene-initializer real-data pilot — 2026-09-18
 
 Exact pushed commit `27cd94ce5fbfd8798ac7f24118451603b20c93a1` was run on
