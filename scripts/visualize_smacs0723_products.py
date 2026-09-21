@@ -328,6 +328,17 @@ def _grid_shape(n_panel: int) -> tuple[int, int]:
     return int(np.ceil(max(n_panel, 1) / cols)), cols
 
 
+def _wrap_title(title: str, *, width: int = 48) -> str:
+    """Keep multiline panel titles inside their axes."""
+
+    return "\n".join(
+        "\n".join(textwrap.wrap(line, width=width, break_long_words=False, break_on_hyphens=False))
+        if line
+        else ""
+        for line in title.splitlines()
+    )
+
+
 def _cmap_with_missing(name: str) -> Any:
     return plt.get_cmap(name).with_extremes(bad=MISSING_COLOR)
 
@@ -354,7 +365,7 @@ def _save_image_grid(
     for index, (ax, image, title) in enumerate(zip(axes.ravel()[:len(shown_images)], shown_images, shown_titles, strict=True)):
         lo, hi = shown_limits[index] if index < len(shown_limits) else _display_limits(image)
         ax.imshow(image, origin="lower", cmap=image_cmap, vmin=lo, vmax=hi)
-        ax.set_title(title, fontsize=8)
+        ax.set_title(_wrap_title(title), fontsize=7.5, linespacing=1.0)
         ax.axis("off")
     fig.tight_layout()
     fig.savefig(output_path, dpi=dpi)

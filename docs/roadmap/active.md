@@ -60,6 +60,16 @@ does not establish the cause of the poor reconstruction. The three September
 17 sessions remain listed as Running; their available ARC logs do not
 establish completed comparisons.
 
+Correction `3779086ee6402b3b4bc5b45e54b482be0e98bd81` is pushed to the fork's
+`main`. All 61 focused joint-reconstruction tests passed, together with
+preflight checks and the commit-time type check. Controlled rerun
+`smacs-recon-20260921-r2` / session `gcxn0g80` reuses the completed r1
+calibration report and otherwise retains the same reconstruction settings.
+Its container started on production node `keel-prod-g0125` and `nvidia-smi`
+confirmed an H100 allocation; no reconstructed r2 result is available yet.
+The old and new aggregate losses cover different pixel sets, so improvement
+must be assessed on common pixels rather than their raw totals.
+
 After successful completion, render common-scale panels with
 `scripts/visualize_smacs0723_products.py --joint-report <run>/b/shared-foam.json
 --joint-export-dir <run>/b/products --output-dir <run>/b/quicklooks
