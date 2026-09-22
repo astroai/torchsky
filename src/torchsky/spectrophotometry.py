@@ -19,6 +19,24 @@ import torch
 _C_ANGSTROM_PER_SECOND = 2.99792458e18
 _AB_ZERO_UJY = 3.631e9
 
+#: Devices whose framework implements ``float64``. MPS does not: asking for it
+#: raises instead of rounding, so every tensor this module holds has to ask.
+_FLOAT64_DEVICES = frozenset({"cpu", "cuda"})
+
+
+def _working_dtype(tensor: torch.Tensor) -> torch.dtype:
+    """The precision a passband or spectrum is held in on its own device.
+
+    Double precision is the default -- narrow passbands need it and passband
+    samples are calibration metadata -- but a device without ``float64`` gets the
+    tensor's own floating dtype, which is the same integral at the precision the
+    caller chose rather than an exception.
+    """
+
+    if tensor.device.type in _FLOAT64_DEVICES:
+        return torch.float64
+    return tensor.dtype if tensor.is_floating_point() else torch.get_default_dtype()
+
 WavelengthUnit = Literal["angstrom", "nm"]
 PhotometryOutput = Literal["mean_f_lambda", "f_nu_microjy", "ab_mag"]
 
@@ -33,8 +51,11 @@ class Passband:
     wavelength_unit: WavelengthUnit = "angstrom"
 
     def __post_init__(self) -> None:
-        wavelength = torch.as_tensor(self.wavelength, dtype=torch.float64).reshape(-1)
-        throughput = torch.as_tensor(self.throughput, dtype=torch.float64).reshape(-1)
+        wavelength = torch.as_tensor(self.wavelength).reshape(-1)
+        throughput = torch.as_tensor(self.throughput).reshape(-1)
+        dtype = _working_dtype(wavelength)
+        wavelength = wavelength.to(dtype=dtype)
+        throughput = throughput.to(dtype=dtype)
         if self.wavelength_unit not in ("angstrom", "nm"):
             raise ValueError("wavelength_unit must be 'angstrom' or 'nm'")
         if wavelength.numel() < 2 or wavelength.shape != throughput.shape:
@@ -65,8 +86,11 @@ class Passband:
         wavelength_unit: WavelengthUnit = "angstrom",
     ) -> Passband:
         """Canonicalize an unsorted curve, averaging duplicate wavelengths."""
-        values = torch.as_tensor(wavelength, dtype=torch.float64).reshape(-1)
-        response = torch.as_tensor(throughput, dtype=torch.float64).reshape(-1)
+        values = torch.as_tensor(wavelength).reshape(-1)
+        response = torch.as_tensor(throughput).reshape(-1)
+        dtype = _working_dtype(values)
+        values = values.to(dtype=dtype)
+        response = response.to(dtype=dtype)
         if values.shape != response.shape:
             raise ValueError("wavelength and throughput must have matching shapes")
         order = torch.argsort(values)
@@ -288,8 +312,11 @@ def synthetic_photometry(
         raise ValueError("output must be 'mean_f_lambda', 'f_nu_microjy', or 'ab_mag'")
     if not 0.0 <= min_coverage <= 1.0:
         raise ValueError("min_coverage must be between zero and one")
-    wave = torch.as_tensor(wavelength, dtype=torch.float64)
-    flux = torch.as_tensor(flux_lambda, dtype=torch.float64, device=wave.device)
+    wave = torch.as_tensor(wavelength)
+    flux = torch.as_tensor(flux_lambda, device=wave.device)
+    dtype = _working_dtype(wave)
+    wave = wave.to(dtype=dtype)
+    flux = flux.to(dtype=dtype)
     if flux.ndim < 1:
         raise ValueError("flux_lambda must include a spectral axis")
     n_wave = flux.shape[-1]
@@ -538,7 +565,20 @@ def _covered_grid(
     right = torch.minimum(hi, pb_wave[-1])
     spectrum_inside = wave[(wave >= left) & (wave <= right)]
     grid = torch.cat((grid, left[None], right[None], spectrum_inside))
-    grid = torch.unique(torch.sort(grid).values)
+    grid = torch.sort(grid).values
+    # Deduplicate with a mask rather than ``torch.unique``. The grid can carry a
+    # gradient -- a spectrum's wavelengths move with a fitted velocity, which is
+    # the whole point of integrating on them -- and ``unique`` has no backward,
+    # so it silently made the photometry of a differentiable spectrum
+    # undifferentiable. Exact duplicates are what have to go: a repeated node is
+    # harmless to the trapezoid, but the interpolation below divides by
+    # ``x1 - x0`` and would return inf or NaN on one. Selecting the kept nodes
+    # leaves the derivative of each of them intact, and removes the same values
+    # ``unique`` did.
+    keep = torch.ones_like(grid, dtype=torch.bool)
+    if grid.numel() > 1:
+        keep[1:] = grid[1:] != grid[:-1]
+    grid = grid[keep]
     response = _linear_interpolate(pb_wave, pb_response.unsqueeze(0), grid).squeeze(0)
     covered_weight = torch.trapezoid(response * grid, grid)
     coverage = covered_weight / full_weight
@@ -548,12 +588,20 @@ def _covered_grid(
 def _linear_interpolate(
     x: torch.Tensor, y: torch.Tensor, query: torch.Tensor
 ) -> torch.Tensor:
+    """Linear interpolation of ``y(x)`` at ``query``.
+
+    The batched branch indexes with the query positions directly rather than
+    ``gather``ing an expanded copy of them. That is not a stylistic choice: the
+    MPS backend silently returns the *unexpanded* row for an expanded index
+    tensor, so the gallery of gathered values came back as zeros with no error
+    raised -- a passband response of zero everywhere inside the band, which
+    reads as a measured absence of flux rather than as a bug.
+    """
+
     index = torch.searchsorted(x, query).clamp(1, x.numel() - 1)
     x0, x1 = x[index - 1], x[index]
     fraction = (query - x0) / (x1 - x0)
     if y.ndim == 1:
         return y[index - 1] + fraction * (y[index] - y[index - 1])
-    index0 = (index - 1).expand(y.shape[0], -1)
-    index1 = index.expand(y.shape[0], -1)
-    y0, y1 = torch.gather(y, 1, index0), torch.gather(y, 1, index1)
+    y0, y1 = y[:, index - 1], y[:, index]
     return y0 + fraction.unsqueeze(0) * (y1 - y0)
