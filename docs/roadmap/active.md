@@ -37,8 +37,12 @@ repeated spectral-index gradient accumulation across all sources. Ten targeted
 tests pass, including old/new predictions and all parameter/input gradients.
 At 1024 queries, 1024 sources and four spectral nodes, a single-thread CPU
 forward/backward measurement improved from 56.97 to 33.41 ms (1.70 times).
-This is not yet CUDA evidence or a completed Gaussian reconstruction. A short
-real-data GPU probe must establish runtime before another long splat fit.
+This is not yet CUDA evidence or a completed Gaussian reconstruction. Production
+session `ezfwpgsh` runs a 20-step real-data probe from commit `9333addc`, under
+`/arc/projects/ots/torchsky-runs/smacs-splat-probe-20260922/`, with a 30-minute
+process limit. Measure training separately from initialization before another
+long splat fit. At the latest log inspection, the separate joint grid reached
+150/600 steps in 128 seconds and SIREN had entered training on H100 GPUs.
 
 ### Bounded representation screen — 2026-09-22
 
