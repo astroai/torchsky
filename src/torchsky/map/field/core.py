@@ -1669,17 +1669,26 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         )
 
     def _grid_world_coords(self) -> tuple[Tensor, Tensor, Tensor]:
+        """Invert the forward tanh mapping at grid nodes.
+
+        Endpoints use the nearest representable value inside (-1, 1),
+        since the exact inverse there is infinite.
+        """
         device = self.grid.device
         dtype = self.grid.dtype
+        bound = torch.nextafter(
+            torch.ones((), device=device, dtype=dtype),
+            torch.zeros((), device=device, dtype=dtype),
+        )
         xs = torch.linspace(
             -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
-        )
+        ).clamp(-bound, bound).atanh()
         ys = torch.linspace(
             -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
-        )
+        ).clamp(-bound, bound).atanh()
         ls = torch.linspace(
             -1.0, 1.0, steps=self.spectral_resolution, device=device, dtype=dtype
-        )
+        ).clamp(-bound, bound).atanh()
         yy, xx = torch.meshgrid(ys, xs, indexing="ij")
         wavelengths = float(self.domain.wavelength_center) + ls * float(
             self.domain.wavelength_scale

@@ -87,6 +87,25 @@ common level retained in the scene. Absolute astronomical foreground remains
 unestablished. The original `calibrated` convention remains available for
 replaying previous runs.
 
+The opt-in relative-background implementation is pushed as `6a6ad7cf`.
+It evaluates frozen backgrounds at full-exposure training calibration sample
+locations, weights by the recorded calibration sample weights, and shifts
+each band's training and validation backgrounds by the same constant. The
+report records sample counts, weights, exposure identities and the retained
+level in MJy/sr. All 62 focused reconstruction tests pass, including validation
+independence and preservation of relative exposure offsets. Run
+`smacs-recon-20260921-r3` uses exactly this commit and changes only
+`BACKGROUND_REFERENCE=training_mean` relative to r2; it reuses r1 calibration.
+
+A separate initializer correction in `ExplicitSpectralGridField` inverts the
+forward tanh coordinate mapping when locating grid nodes. Previously the
+initializer sampled linear coordinates, which displaced nonuniform spatial
+and spectral structure. Finite endpoint inverses use the nearest representable
+values inside (-1,1); spectral samples outside the supplied bands retain the
+existing nearest-band extrapolation. Forward evaluation is unchanged, so old
+checkpoints retain their meaning. This correction is deliberately excluded
+from r3 to separate the effects of initialization and background convention.
+
 After successful completion, render common-scale panels with
 `scripts/visualize_smacs0723_products.py --joint-report <run>/b/shared-foam.json
 --joint-export-dir <run>/b/products --output-dir <run>/b/quicklooks
