@@ -5,6 +5,46 @@ Do not submit jobs to staging or use it as a fallback.
 
 ## Short-term reconstruction objective
 
+### Bounded representation screen — 2026-09-22
+
+Commit `62425ea392d16815d856186a0d27ab3be0e7fd01` adds opt-in Gaussian
+splats to `GaussianBasisField` while preserving the old basis/checkpoint
+behavior. Splats are positive additive elliptical components, with learned
+centres, covariance and spectral amplitudes, followed by the existing frozen
+detector response. Coefficients integrate brightness over normalized tangent
+coordinates; they are not calibrated catalogue fluxes in Jy. Query chunks use
+recomputation to bound retained training intermediates.
+
+The joint benchmark now accepts validated model constructor overrides and an
+explicit optimizer learning rate, recording effective settings in reports and
+artifacts. Eighty focused Gaussian/grid/joint tests passed, including flux,
+gradients, source recovery, replay and override application. Preflight passed;
+type checking reports no errors and the existing `__all__` warning.
+
+Three production GPU experiments are prepared under
+`/arc/projects/ots/torchsky-runs/smacs-screen-20260922/experiments.json`, sharing
+one exact-source bundle and the existing calibration evidence/report:
+
+| Run suffix | Representation | Steps | Learning rate |
+|---|---|---|---|
+| `f150w` | independent 256×256 grid, 2 spectral nodes | 600 | 0.01 |
+| `f277w` | independent 256×256 grid, 2 spectral nodes | 600 | 0.01 |
+| `joint` | 1024 splats/4 spectral nodes; 256×256 joint grid/4 nodes; SIREN width 128/3 layers | 600 each | 0.003 |
+
+Submitted sessions: `z5634bn5` (joint), `rf0nu561` (F150W), and `plxeo00o`
+(F277W). The joint container started on production node `keel-prod-g0123`,
+passed `nvidia-smi`, and is building the source environment. The independent
+jobs have been accepted; no completed screen results have been inspected yet.
+
+Run IDs have prefix `smacs-screen-20260922-`. The image remains
+`astroai/webterm:latest`, with one GPU per job, the same 128-square output
+footprint, measured passbands, frozen exposure calibration, `training_mean`
+background reference and untouched final test. This is an accuracy-versus-cost
+screen, not an equal-parameter comparison. A single bad baseline does not
+delay the independent representation screen. FLAIR/SASNet and Foam remain on
+the subsequent comparison list. No real-data splat improvement is established
+by the synthetic checks or by submitting these jobs.
+
 The immediate scientific target is a high-quality continuous reconstruction
 `s(x, y, lambda)` whose integration through a specified transmission curve
 produces either higher effective resolution or higher signal-to-noise than a
