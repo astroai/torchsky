@@ -1991,9 +1991,12 @@ class GaussianBasisField(_BaseFieldModel):
         lam = coords[:, 2].clamp(self.spectral_knots[0], self.spectral_knots[-1])
         upper = torch.searchsorted(self.spectral_knots, lam.contiguous()).clamp(1, self.spectral_knots.numel() - 1)
         alpha = (lam - self.spectral_knots[upper - 1]) / (self.spectral_knots[upper] - self.spectral_knots[upper - 1])
-        flux = F.softplus(self.amplitudes)
-        amplitude = flux[:, upper - 1].T * (1 - alpha[:, None]) + flux[:, upper].T * alpha[:, None]
-        return (basis * amplitude).sum(dim=-1)
+        # Sum sources before interpolation to avoid repeated spectral-index
+        # scatter-adds over every source during the backward pass.
+        spectrum = basis @ F.softplus(self.amplitudes)
+        lower_flux = spectrum.gather(1, (upper - 1)[:, None]).squeeze(1)
+        upper_flux = spectrum.gather(1, upper[:, None]).squeeze(1)
+        return lower_flux * (1 - alpha) + upper_flux * alpha
 
     @torch.no_grad()
     def initialize_from_product(self, product: MapProductResult) -> None:

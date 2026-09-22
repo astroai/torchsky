@@ -5,6 +5,41 @@ Do not submit jobs to staging or use it as a fallback.
 
 ## Short-term reconstruction objective
 
+### Recovered screen results and Gaussian runtime repair — 2026-09-22
+
+The independent-band runs below completed successfully. On identical validation
+exposures and valid pixel counts, chi-squared per pixel changed from the earlier
+`smacs-recon-20260922-r4` joint grid as follows:
+
+| Band | Earlier joint grid | Independent grid | Reduction |
+|---|---:|---:|---:|
+| F150W | 2.63771 | 1.71545 | 35.0% |
+| F277W | 11.23952 | 3.54216 | 68.5% |
+
+This is improved prediction on this small field, with uncertainty in its
+generality: capacity, learning rate, steps and band coupling changed together.
+Only two validation exposures per band were evaluated; no confidence interval,
+injected flux/color accuracy or depth improvement is established. Final test
+exposures remain untouched. Fits took 241 and 203 seconds including shared
+initialization. FITS prediction/reference/residual/support/source-mask products
+and common-scale PNGs were recovered locally under
+`benchmarks_results/smacs-independent-screen-20260922/`; original reports are
+under `benchmarks_results/canfar_smacs-screen-20260922-{f150w,f277w}/b/`.
+The combined display report is derived; original reports retain full provenance.
+
+The joint session `z5634bn5` exited 124 at its three-hour limit. Gaussian splats
+reached step 150 at 8653 seconds; joint grid and SIREN never started. They now
+have independent production sessions, `gm351fmq` (joint grid) and `e9pifj0t`
+(SIREN), using the same pinned source and previously recorded settings.
+
+Gaussian evaluation now sums source spectra before interpolation, removing
+repeated spectral-index gradient accumulation across all sources. Ten targeted
+tests pass, including old/new predictions and all parameter/input gradients.
+At 1024 queries, 1024 sources and four spectral nodes, a single-thread CPU
+forward/backward measurement improved from 56.97 to 33.41 ms (1.70 times).
+This is not yet CUDA evidence or a completed Gaussian reconstruction. A short
+real-data GPU probe must establish runtime before another long splat fit.
+
 ### Bounded representation screen — 2026-09-22
 
 Commit `62425ea392d16815d856186a0d27ab3be0e7fd01` adds opt-in Gaussian
