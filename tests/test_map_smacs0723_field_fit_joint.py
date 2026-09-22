@@ -723,6 +723,74 @@ def test_frozen_calibrated_background_follows_scene_intensity_scale() -> None:
     assert not any(parameter.requires_grad for parameter in background.parameters())
 
 
+def test_training_mean_background_reference_uses_only_calibration_training_samples(monkeypatch):
+    def background(value):
+        encoder = SpatioSpectralTemporalEncoder(
+            spatial_center=(0., 0.), spatial_scale=(1., 1.),
+            wavelength_center=15000., spectral_scale=1000.,
+            time_center_mjd=59737., temporal_scale_days=1.,
+            spatial_frequencies=0, spectral_frequencies=0, temporal_frequencies=0,
+        )
+        model = ConditionedBackgroundField(encoder, hidden_dim=2, hidden_layers=1)
+        with torch.no_grad():
+            model.network[-1].bias.fill_(value)
+        model.requires_grad_(False)
+        return model
+
+    contexts = [
+        ForwardContext(survey="F150W", detector="NRCB1", extra={
+            "calibration_exposure_id": identity, "split": split,
+        })
+        for identity, split in (("a", "train"), ("b", "train"), ("v", "validation"))
+    ]
+    requested = []
+
+    def load(manifest, **kwargs):
+        assert kwargs["split"] == "train" and kwargs["role"] == "background"
+        requested.append(kwargs["exposure_id"])
+        assert kwargs["exposure_id"] in {"a", "b"}
+        return {
+            "detector_x": torch.tensor([0., 1.]), "detector_y": torch.zeros(2),
+            "wavelength": torch.full((2,), 15000.), "time_mjd": torch.full((2,), 59737.),
+            "sample_weight": torch.tensor([1., 1.] if kwargs["exposure_id"] == "a" else [3., 3.]),
+        }
+
+    monkeypatch.setattr(joint_benchmark, "load_operator_calibration_split", load)
+    offsets = []
+    for validation_value in (100., -100.):
+        models = {("NRCB1", identity, "F150W"): {"background": background(value)}
+                  for identity, value in (("a", 2.), ("b", 6.), ("v", validation_value))}
+        models[("NRCB1", "v_alias", "F150W")] = models[("NRCB1", "v", "F150W")]
+        audit = joint_benchmark._reference_calibrated_backgrounds_to_training_mean(
+            models, contexts, manifest=Path("unused.json"), intensity_scale=10.,
+        )
+        values = [float(models[("NRCB1", identity, "F150W")]["background"].network[-1].bias)
+                  for identity in ("a", "b", "v")]
+        assert values == pytest.approx([-3., 1., validation_value - 5.])
+        assert (2 * values[0] + 6 * values[1]) / 8 == pytest.approx(0.)
+        assert values[1] - values[0] == pytest.approx(4.)
+        band = audit["bands"]["F150W"]
+        assert band["sample_weight_sum"] == 8.
+        assert band["sample_count"] == 4
+        assert band["offset_mjy_sr"] == 50.
+        offsets.append(band["offset_normalized"])
+    assert offsets == [5., 5.]
+    assert requested == ["a", "b", "a", "b"]
+
+    shared = background(2.)
+    with pytest.raises(ValueError, match="exposure scope"):
+        joint_benchmark._reference_calibrated_backgrounds_to_training_mean(
+            {"NRCB1": {"background": shared}}, contexts,
+            manifest=Path("unused.json"), intensity_scale=10.,
+        )
+    with pytest.raises(ValueError, match="across bands"):
+        joint_benchmark._reference_calibrated_backgrounds_to_training_mean(
+            {("NRCB1", "a", "F150W"): {"background": shared},
+             ("NRCB1", "v", "F277W"): {"background": shared}},
+            contexts, manifest=Path("unused.json"), intensity_scale=10.,
+        )
+
+
 def test_joint_scene_export_integrates_a_quadratic_pixel() -> None:
     class Quadratic(joint_benchmark._ZeroScene):
         def forward(self, ra, dec, wavelength):

@@ -66,9 +66,26 @@ preflight checks and the commit-time type check. Controlled rerun
 `smacs-recon-20260921-r2` / session `gcxn0g80` reuses the completed r1
 calibration report and otherwise retains the same reconstruction settings.
 Its container started on production node `keel-prod-g0125` and `nvidia-smi`
-confirmed an H100 allocation; no reconstructed r2 result is available yet.
+confirmed an H100 allocation. It completed with exit 0 at
+`2026-09-21T22:36:44Z`; FITS and reports were recovered under
+`benchmarks_results/canfar_smacs-recon-20260921-r2/`. Source contrast remains
+poor. On the corrected validation footprint, grid chi-square per pixel is
+2.390 (F150W) and 11.496 (F277W); SIREN gives 2.476 and 12.914. These are
+descriptive scores without paired uncertainty intervals, not a depth claim.
 The old and new aggregate losses cover different pixel sets, so improvement
 must be assessed on common pixels rather than their raw totals.
+
+The fixed calibration backgrounds exceed the median validation SCI in all
+four overlapping exposures; 57–82% of valid pixels have negative SCI minus
+background. The calibration targets are planes fitted to raw SCI and contain
+a common sky level. This motivates the planned explicit relative-background
+convention, but negative medians do not prove a zero-scene optimum under a
+weighted detector likelihood. A `training_mean` experiment must derive its
+per-band reference solely from full-exposure training calibration samples,
+apply the same reference to held-out exposure operators, and record the
+common level retained in the scene. Absolute astronomical foreground remains
+unestablished. The original `calibrated` convention remains available for
+replaying previous runs.
 
 After successful completion, render common-scale panels with
 `scripts/visualize_smacs0723_products.py --joint-report <run>/b/shared-foam.json

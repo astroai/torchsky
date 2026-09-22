@@ -376,6 +376,11 @@ case "${mode}" in
     ;;
   foam)
     joint_calibration_args=(--calibration-family "${CALIBRATION_FAMILY:-stationary}")
+    case "${BACKGROUND_REFERENCE:-calibrated}" in
+      calibrated | training_mean)
+        joint_calibration_args+=(--background-reference "${BACKGROUND_REFERENCE:-calibrated}") ;;
+      *) echo "BACKGROUND_REFERENCE must be calibrated or training_mean" >&2; exit 2 ;;
+    esac
     if [[ -n "${FOAM_TARGET_HEADER_PATH:-}" ]]; then
       joint_calibration_args+=(--target-header-path "${FOAM_TARGET_HEADER_PATH}")
     fi

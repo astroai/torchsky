@@ -1089,6 +1089,84 @@ def _freeze_calibrated_operator_model(
     model.eval()
 
 
+def _reference_calibrated_backgrounds_to_training_mean(
+    models: dict[_CalibrationKey, dict[str, torch.nn.Module]],
+    contexts: Sequence[ForwardContext],
+    *,
+    manifest: Path | dict[str, Any],
+    intensity_scale: float,
+) -> dict[str, Any]:
+    """Choose a relative background gauge from independent training evidence."""
+    if not math.isfinite(intensity_scale) or intensity_scale <= 0:
+        raise ValueError("background reference requires a positive intensity scale")
+    model_bands: dict[int, str] = {}
+    for key, operators in models.items():
+        if not isinstance(key, tuple) or len(key) != 3:
+            raise ValueError("training_mean background reference requires exposure scope")
+        model = operators.get("background")
+        if not isinstance(model, ConditionedBackgroundField) or any(
+            parameter.requires_grad for parameter in model.parameters()
+        ):
+            raise ValueError("background reference requires frozen learned backgrounds")
+        if not isinstance(model.network[-1], torch.nn.Linear):
+            raise TypeError("background model must end with a linear layer")
+        if model_bands.setdefault(id(model), key[2]) != key[2]:
+            raise ValueError("background reference cannot share models across bands")
+    training_keys = sorted({
+        _exposure_calibration_key(context) for context in contexts
+        if context.extra.get("split") == "train"
+    })
+    bands: dict[str, Any] = {}
+    with torch.no_grad():
+        for key in training_keys:
+            detector, exposure_id, band = key
+            model = models[key]["background"]
+            parameter = next(model.parameters())
+            arrays = load_operator_calibration_split(
+                manifest, split="train", role="background", detector=detector,
+                exposure_id=exposure_id, band=band, verify_hashes=True,
+            )
+            coordinates = [arrays[name].to(parameter) for name in
+                           ("detector_x", "detector_y", "wavelength", "time_mjd")]
+            values = model(*coordinates).detach().cpu().double()
+            weights = arrays["sample_weight"].detach().cpu().double()
+            if (values.shape != weights.shape or not torch.isfinite(values).all()
+                    or not torch.isfinite(weights).all() or bool((weights < 0).any())
+                    or float(weights.sum()) <= 0):
+                raise ValueError("background reference requires finite positive-weight evidence")
+            entry = bands.setdefault(band, {
+                "weighted_sum": 0., "sample_weight_sum": 0., "sample_count": 0,
+                "training_exposures": [],
+            })
+            weight_sum = float(weights.sum())
+            entry["weighted_sum"] += float((values * weights).sum())
+            entry["sample_weight_sum"] += weight_sum
+            entry["sample_count"] += int(weights.numel())
+            entry["training_exposures"].append({
+                "detector": detector, "exposure_id": exposure_id,
+                "sample_count": int(weights.numel()), "sample_weight_sum": weight_sum,
+            })
+        if not bands or any(band not in bands for band in model_bands.values()):
+            raise ValueError("background reference needs training evidence in every band")
+        for entry in bands.values():
+            offset = entry.pop("weighted_sum") / entry["sample_weight_sum"]
+            entry["offset_normalized"] = offset
+            entry["offset_mjy_sr"] = offset * float(intensity_scale)
+        shifted = set()
+        for key, operators in models.items():
+            model = operators["background"]
+            if id(model) not in shifted:
+                model.network[-1].bias.sub_(bands[key[2]]["offset_normalized"])
+                shifted.add(id(model))
+    return {
+        "policy": "training_mean",
+        "evidence": "science-training exposures; full-exposure calibration train samples",
+        "transformation": "after intensity normalization subtract band offset from final background readout bias once per model, including validation models",
+        "absolute_foreground": "unestablished; common pedestal retained in scene",
+        "bands": bands,
+    }
+
+
 def _calibrated_operator_bundles(
     observations: list[FieldObservation],
     contexts: list[ForwardContext],
@@ -2918,6 +2996,11 @@ def main() -> int:
         help="No additional background model, or the independently fitted "
         "ConditionedBackgroundField from the operator calibration fit.",
     )
+    parser.add_argument(
+        "--background-reference", choices=("calibrated", "training_mean"),
+        default="calibrated",
+        help="Keep calibrated levels or retain the common training background pedestal in the scene",
+    )
     args = parser.parse_args()
     if args.foam_initialize_from_coadd and args.scene_initialization == "none":
         parser.error("--foam-initialize-from-coadd conflicts with --scene-initialization none")
@@ -3026,6 +3109,10 @@ def main() -> int:
         None if args.tile_ra is None else (float(args.tile_ra), float(args.tile_dec))
     )
     calibrated_operators = args.operator_calibration_manifest is not None
+    if args.background_reference == "training_mean" and (
+        not calibrated_operators or args.background_model != "learned"
+    ):
+        parser.error("--background-reference training_mean requires calibrated learned backgrounds")
     if args.independent_frozen_calibration and (
         not calibrated_operators
         or args.measured_passband_dir is None
@@ -3567,6 +3654,14 @@ def main() -> int:
                 family=args.calibration_family,
                 contexts=all_forward_contexts + validation_contexts,
             )
+            if args.background_reference == "training_mean":
+                calibration_audit["background_reference"] = (
+                    _reference_calibrated_backgrounds_to_training_mean(
+                        calibrated_models, all_forward_contexts + validation_contexts,
+                        manifest=calibration_manifest_payload,
+                        intensity_scale=float(intensity_scale),
+                    )
+                )
             calibrated_bundles = _calibrated_operator_bundles(
                 normalized_observations, all_forward_contexts, calibrated_models
             )
@@ -4258,7 +4353,11 @@ def main() -> int:
                             )
                             row["product_interpretation"] = (
                                 "target-grid scene with assumed target PSF; "
-                                "excludes fixed detector background"
+                                + (
+                                    "retains common training foreground pedestal; absolute foreground unestablished"
+                                    if args.background_reference == "training_mean"
+                                    else "excludes fixed detector background"
+                                )
                             )
                         pred = (
                             rendered.detach()
@@ -4411,6 +4510,7 @@ def main() -> int:
             "module": str(args.module),
             "psf_model": str(args.psf_model),
             "background_model": str(args.background_model),
+            "background_reference": str(args.background_reference),
             "independent_frozen_calibration": bool(args.independent_frozen_calibration),
             "calibration_family": args.calibration_family,
             "spectral_response_convention": "constant_I_nu_photon_mean_T_over_lambda"
