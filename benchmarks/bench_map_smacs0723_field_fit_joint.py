@@ -131,6 +131,7 @@ FOAM_MAX_SMOOTH_PAIRS = 64 * 1024 * 1024
 FOAM_TEMPERATURE_START_CELL_UNITS = 1.0
 FOAM_TEMPERATURE_END_CELL_UNITS = 16.0
 SCENE_INITIALIZATION_MODEL_KINDS = frozenset({
+    "gaussian_basis",
     "coadd_bilinear",
     "spectral_basis_field",
     "learned_spectral_basis_field",
@@ -617,7 +618,7 @@ def _initialize_joint_scene(
                 correction = (prediction - matched_target) / derivative
                 output.bias.sub_(correction.mean())
 
-    if model_kind == "explicit_spectral_grid_field":
+    if model_kind in {"explicit_spectral_grid_field", "gaussian_basis"}:
         model.initialize_from_product(product)
     elif model_kind == "spectral_power_foam":
         initialize_foam(model, mean)
@@ -2295,7 +2296,12 @@ def _joint_real_fit_kwargs(
     foam_grid_side: int = 16,
     foam_lr: float = 2.0e-2,
     foam_fixed_geometry: bool = False,
+    optimizer_lr: float | None = None,
 ) -> dict[str, Any]:
+    if optimizer_lr is not None and (
+        not math.isfinite(optimizer_lr) or optimizer_lr <= 0
+    ):
+        raise ValueError("optimizer_lr must be finite and positive")
     kwargs = _field_fit_kwargs_for_model(
         model_kind,
         case=REAL_JOINT_CASE,
@@ -2402,6 +2408,8 @@ def _joint_real_fit_kwargs(
             spectral_anchor_loss_weight=0.0,
             context_loss_weight=0.0,
         )
+    if optimizer_lr is not None:
+        kwargs["lr"] = float(optimizer_lr)
     return kwargs
 
 
@@ -2757,8 +2765,46 @@ def _format_markdown(
     return "\n".join(lines) + "\n"
 
 
+def _parse_model_kwargs(value: str) -> dict[str, dict[str, Any]]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError("model kwargs must be valid JSON") from exc
+    if not isinstance(parsed, dict) or any(
+        not isinstance(kwargs, dict) for kwargs in parsed.values()
+    ):
+        raise argparse.ArgumentTypeError("model kwargs must map model names to objects")
+    return parsed
+
+
+def _comparison_model_kwargs(
+    model_kind: str, defaults: dict[str, Any], overrides: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    return {**defaults, **overrides.get(model_kind, {})}
+
+
+def _report_configuration(value: Any) -> Any:
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu().tolist()
+    if isinstance(value, torch.nn.Module):
+        return {"model_class": type(value).__name__, "source": "fitted Foam dependency"}
+    if isinstance(value, dict):
+        return {key: _report_configuration(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_report_configuration(item) for item in value]
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--model-kwargs", type=_parse_model_kwargs, default={},
+        help='JSON constructor overrides by model, e.g. {"gaussian_basis":{"splat":true}}',
+    )
+    parser.add_argument(
+        "--optimizer-lr", type=float, default=None,
+        help="Explicit learning rate for all compared scenes, overriding model defaults",
+    )
     parser.add_argument("--bands", default="F090W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
     parser.add_argument(
@@ -3002,6 +3048,10 @@ def main() -> int:
         help="Keep calibrated levels or retain the common training background pedestal in the scene",
     )
     args = parser.parse_args()
+    if args.optimizer_lr is not None and (
+        not math.isfinite(args.optimizer_lr) or args.optimizer_lr <= 0
+    ):
+        parser.error("--optimizer-lr must be finite and positive")
     if args.foam_initialize_from_coadd and args.scene_initialization == "none":
         parser.error("--foam-initialize-from-coadd conflicts with --scene-initialization none")
     if args.scene_initialization_steps <= 0:
@@ -3140,6 +3190,9 @@ def main() -> int:
         )
     pattern_numbers = tuple(int(value) for value in _parse_csv(args.patt_nums))
     model_kinds = [part.strip() for part in str(args.models).split(",") if part.strip()]
+    unused_overrides = set(args.model_kwargs) - (set(model_kinds) - {"coadd_bilinear"})
+    if unused_overrides:
+        parser.error("--model-kwargs has models not fitted: " + ", ".join(sorted(unused_overrides)))
     unsupported_initializers = sorted(
         set(model_kinds) - SCENE_INITIALIZATION_MODEL_KINDS
     )
@@ -3169,6 +3222,7 @@ def main() -> int:
             parser.error("foam_initialized_inr requires --foam-log-intensity-spectra")
     rows: list[dict[str, Any]] = []
     field_artifacts: dict[str, dict[str, Any]] = {}
+    effective_model_configs: dict[str, dict[str, Any]] = {}
     artifact_dir = args.artifact_dir or args.json_out.with_name(
         f"{args.json_out.stem}_artifacts"
     )
@@ -3694,6 +3748,9 @@ def main() -> int:
             initial_intensity=float(args.foam_initial_intensity),
         )
         foam_model_kwargs["compact_fixed_geometry"] = not bool(args.foam_train_geometry)
+        foam_model_kwargs = _comparison_model_kwargs(
+            "spectral_power_foam", foam_model_kwargs, args.model_kwargs,
+        )
 
         def make_foam_model() -> torch.nn.Module:
             model = make_field_model(
@@ -3868,10 +3925,12 @@ def main() -> int:
                 if model_kind == "sasnet":
                     model_kwargs.update(_joint_sasnet_kwargs(normalized_observations))
                 model_steps = int(args.steps)
+            model_kwargs = _comparison_model_kwargs(model_kind, model_kwargs, args.model_kwargs)
             fit_kwargs = _joint_real_fit_kwargs(
                 model_kind,
                 crop_size=int(args.crop_size),
                 steps=model_steps,
+                optimizer_lr=args.optimizer_lr,
                 num_observations=len(normalized_observations),
                 foam_grid_side=int(args.foam_grid_side),
                 foam_lr=float(args.foam_lr),
@@ -3900,8 +3959,17 @@ def main() -> int:
                 fit_kwargs["spatial_sampling"] = _spatial_sampling_for_operator_bundles(
                     str(fit_kwargs["spatial_sampling"]), default_operator_bundles
                 )
-            if model_kind == "foam_initialized_inr":
+            if model_kind == "foam_initialized_inr" and args.optimizer_lr is None:
                 fit_kwargs["lr"] = float(args.inr_lr)
+            effective_model_configs[model_kind] = _report_configuration({
+                "model_kwargs": model_kwargs,
+                "fit_kwargs": {
+                    "steps": model_steps,
+                    **{key: value for key, value in fit_kwargs.items() if key not in {
+                        "observation_forward_contexts", "observation_operator_bundles",
+                    }},
+                },
+            })
             domain = (
                 local_domain
                 if model_kind in {
@@ -3909,6 +3977,7 @@ def main() -> int:
                     "diffuse_foam_hybrid", "sasnet",
                     "explicit_spectral_grid_field", "sine_implicit", "wire_implicit",
                     "flair_bla",
+                    "gaussian_basis",
                 }
                 else spherical_domain
             )
@@ -4633,6 +4702,7 @@ def main() -> int:
         ],
         "operator_calibration": calibration_audit,
         "field_artifacts": field_artifacts,
+        "effective_model_configs": effective_model_configs,
         "psf_arm_audit": psf_arm_audit,
         "structured_noise_crossfit": noise_crossfit_audit,
         "rows": ok_rows + fail_rows,

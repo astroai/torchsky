@@ -1932,14 +1932,42 @@ class WireImplicitField(_BaseFieldModel):
 
 
 class GaussianBasisField(_BaseFieldModel):
+    """Gaussian field; opt-in ``splat`` uses additive elliptical sky sources.
+
+    Splat amplitudes integrate brightness over normalized tangent-coordinate
+    area (not physical catalog flux; that requires solid-angle conversion),
+    with positive linear spectral interpolation and constant extrapolation.
+    PSF convolution belongs to the observation operator, not this latent field.
+    The default retains the original three-dimensional basis/checkpoint layout.
+    """
+
     def __init__(
         self,
         domain: FieldDomain,
         *,
         num_basis: int = 24,
         init_scale: float = 0.35,
+        splat: bool = False,
+        spectral_resolution: int = 8,
+        query_chunk_size: int = 2048,
     ) -> None:
         super().__init__(domain)
+        self.splat = bool(splat)
+        if int(num_basis) < 1 or not math.isfinite(init_scale) or init_scale <= 0:
+            raise ValueError("num_basis and init_scale must be positive")
+        if self.splat:
+            if domain.coord_mode != "local_tangent":
+                raise ValueError("Gaussian splats require local_tangent coordinates")
+            if spectral_resolution < 2 or query_chunk_size < 1:
+                raise ValueError("spectral_resolution >= 2 and query_chunk_size >= 1 required")
+            self.query_chunk_size = int(query_chunk_size)
+            self.centers = nn.Parameter(torch.empty(int(num_basis), 2))
+            self.log_scales = nn.Parameter(torch.full((int(num_basis), 2), math.log(init_scale)))
+            self.shear = nn.Parameter(torch.zeros(int(num_basis)))
+            self.amplitudes = nn.Parameter(torch.full((int(num_basis), int(spectral_resolution)), -5.0))
+            self.register_buffer("spectral_knots", torch.linspace(-1.0, 1.0, int(spectral_resolution)))
+            nn.init.uniform_(self.centers, -1.0, 1.0)
+            return
         self.centers = nn.Parameter(torch.empty(int(num_basis), 3))
         self.log_scales = nn.Parameter(
             torch.full((int(num_basis), 3), math.log(init_scale))
@@ -1952,6 +1980,77 @@ class GaussianBasisField(_BaseFieldModel):
         nn.init.uniform_(self.centers, -1.0, 1.0)
         nn.init.uniform_(self.amplitudes, -0.05, 0.05)
 
+    def _splat_values(self, coords: Tensor) -> Tensor:
+        scales = self.log_scales.exp()
+        diff = coords[:, None, :2] - self.centers
+        x = diff[..., 0] / scales[:, 0]
+        y = (diff[..., 1] - self.shear * diff[..., 0]) / scales[:, 1]
+        basis = torch.exp(-0.5 * (x.square() + y.square())) / (
+            2.0 * math.pi * scales.prod(dim=-1)
+        )
+        lam = coords[:, 2].clamp(self.spectral_knots[0], self.spectral_knots[-1])
+        upper = torch.searchsorted(self.spectral_knots, lam.contiguous()).clamp(1, self.spectral_knots.numel() - 1)
+        alpha = (lam - self.spectral_knots[upper - 1]) / (self.spectral_knots[upper] - self.spectral_knots[upper - 1])
+        flux = F.softplus(self.amplitudes)
+        amplitude = flux[:, upper - 1].T * (1 - alpha[:, None]) + flux[:, upper].T * alpha[:, None]
+        return (basis * amplitude).sum(dim=-1)
+
+    @torch.no_grad()
+    def initialize_from_product(self, product: MapProductResult) -> None:
+        if not self.splat:
+            raise ValueError("product initialization requires splat=True")
+        device, dtype = self.centers.device, self.centers.dtype
+        data = product.data.to(device=device, dtype=dtype)
+        if data.ndim != 3 or not torch.isfinite(data).all():
+            raise ValueError("splat initialization requires a finite band/image cube")
+        bands = []
+        for band in product.product.bands:
+            if band.transmission_center is not None:
+                bands.append(float(band.transmission_center))
+            elif band.spectral_min is not None and band.spectral_max is not None:
+                bands.append(0.5 * (float(band.spectral_min) + float(band.spectral_max)))
+            else:
+                raise ValueError("initialization bands require centers or bounds")
+        wavelengths = torch.tensor(bands, device=device, dtype=dtype)
+        if len(bands) != data.shape[0] or not bands or not torch.isfinite(wavelengths).all():
+            raise ValueError("initialization requires one finite wavelength per image")
+        wavelengths, order = wavelengths.sort()
+        if wavelengths.numel() > 1 and torch.any(wavelengths.diff() <= 0):
+            raise ValueError("initialization wavelengths must be distinct")
+        count = self.centers.shape[0]
+        height, width = data.shape[-2:]
+        columns = min(count, max(1, int(math.ceil(math.sqrt(count * width / height)))))
+        rows = int(math.ceil(count / columns))
+        indices = torch.arange(count, device=device, dtype=dtype)
+        px = (indices.remainder(columns) + 0.5) * width / columns - 0.5
+        py = (indices.div(columns, rounding_mode="floor") + 0.5) * height / rows - 0.5
+        wcs = WCS(product.header)
+        ra, dec = wcs.pixel_to_world(px.to(torch.float64), py.to(torch.float64))
+        coords = self._encoded_coords(ra, dec, self.domain.wavelength_center).to(dtype)
+        self.centers.copy_(coords[:, :2])
+        # ponytail: a source lattice seeds the fit, not a deconvolution; the shared
+        # detector operator and subsequent optimization recover intrinsic widths.
+        ra_x, dec_x = wcs.pixel_to_world((px + width / columns).double(), py.double())
+        ra_y, dec_y = wcs.pixel_to_world(px.double(), (py + height / rows).double())
+        dx = self._encoded_coords(ra_x, dec_x, self.domain.wavelength_center).to(dtype)[:, :2] - coords[:, :2]
+        dy = self._encoded_coords(ra_y, dec_y, self.domain.wavelength_center).to(dtype)[:, :2] - coords[:, :2]
+        area = (dx[:, 0] * dy[:, 1] - dx[:, 1] * dy[:, 0]).abs().clamp_min(torch.finfo(dtype).tiny)
+        spacing = torch.stack((dx.norm(dim=-1), dy.norm(dim=-1)), dim=-1)
+        self.log_scales.copy_((0.5 * spacing).clamp_min(torch.finfo(dtype).eps).log())
+        self.shear.zero_()
+        grid = torch.stack((2 * (px + 0.5) / width - 1, 2 * (py + 0.5) / height - 1), dim=-1).view(1, 1, count, 2)
+        samples = F.grid_sample(data[order].unsqueeze(0), grid, align_corners=False, padding_mode="border")[0, :, 0].T.clamp_min(0)
+        knots = torch.linspace(wavelengths[0], wavelengths[-1], self.spectral_knots.numel(), device=device, dtype=dtype)
+        if len(bands) == 1:
+            sampled = samples.expand(-1, knots.numel())
+        else:
+            upper = torch.searchsorted(wavelengths, knots).clamp(1, len(bands) - 1)
+            alpha = (knots - wavelengths[upper - 1]) / (wavelengths[upper] - wavelengths[upper - 1])
+            sampled = samples[:, upper - 1] * (1 - alpha) + samples[:, upper] * alpha
+            self.spectral_knots.copy_((knots - self.domain.wavelength_center) / self.domain.wavelength_scale)
+        flux = (sampled * area[:, None]).clamp_min(torch.finfo(dtype).eps)
+        self.amplitudes.copy_(flux + torch.log(-torch.expm1(-flux)))
+
     def forward(
         self,
         ra_deg: Tensor,
@@ -1961,6 +2060,19 @@ class GaussianBasisField(_BaseFieldModel):
         coords = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom).to(
             dtype=self.centers.dtype
         )
+        if self.splat:
+            flat = coords.reshape(-1, 3)
+            if flat.shape[0] == 0:
+                return coords[..., 0]
+            # Checkpoint each query chunk to bound saved basis activations in training.
+            from torch.utils.checkpoint import checkpoint
+
+            outputs = [
+                checkpoint(self._splat_values, chunk, use_reentrant=False)
+                if torch.is_grad_enabled() else self._splat_values(chunk)
+                for chunk in flat.split(self.query_chunk_size)
+            ]
+            return torch.cat(outputs).reshape(coords.shape[:-1])
         diff = coords.unsqueeze(-2) - self.centers
         scales = F.softplus(self.log_scales) + 1.0e-3
         # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2

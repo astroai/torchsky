@@ -1,5 +1,40 @@
 # Torchsky Execution Roadmap
 
+## Bounded reconstruction comparison — 2026-09-22
+
+Add **Gaussian splatting** to the independent-band grid, joint grid, SIREN,
+FLAIR/SASNet and Foam comparisons. Astronomical splats are additive positive
+elliptical surface-brightness components with learned positions, shapes and
+spectral amplitudes. They pass through the same frozen detector operator as
+every other representation; they do not use opaque alpha compositing or
+replace the measured PSF. Preserve the previous Gaussian-basis model for
+checkpoint replay.
+
+Advance two tracks concurrently rather than waiting indefinitely for a
+perfect baseline:
+
+1. Fit independent F150W and F277W grids with explicit spatial resolution and
+   learning rate, using the established exposure split and calibration. Bound
+   this first comparison to 600 steps per band and one GPU per run. Diagnose
+   a failed run, but do not repeatedly tune it before testing other models.
+2. Screen joint grid, Gaussian splats and a larger SIREN on the same region,
+   with recorded parameter counts, effective optimizer settings and elapsed
+   time. Start with 600 steps. Keep measured passbands, masks, background
+   reference and PSFs fixed. FLAIR/SASNet and Foam remain subsequent comparison
+   arms rather than being silently dropped.
+
+These initial screens compare accuracy versus compute, not equal parameter
+budgets. Follow promising candidates with matched budgets and injection-based
+flux/color recovery. Report failed or flat solutions alongside successful
+ones. Stop increasing training budgets when validation has stopped improving;
+do not infer convergence from the last random patch loss. The final test stays
+untouched. Keep the common sky level explicit, and treat splat components as a
+representation rather than a physical source catalogue without recovery tests.
+
+The next decision is which representation warrants six-band and finer-grid
+work, using held-out detector prediction and source recovery together. A
+sharper-looking image alone is insufficient.
+
 ## Accepted execution plan — 2026-09-05
 
 This section supersedes earlier scheduling, branch, calibration-default, and

@@ -376,6 +376,12 @@ case "${mode}" in
     ;;
   foam)
     joint_calibration_args=(--calibration-family "${CALIBRATION_FAMILY:-stationary}")
+    if [[ -n "${MODEL_KWARGS:-}" ]]; then
+      joint_calibration_args+=(--model-kwargs "${MODEL_KWARGS}")
+    fi
+    if [[ -n "${OPTIMIZER_LR:-}" ]]; then
+      joint_calibration_args+=(--optimizer-lr "${OPTIMIZER_LR}")
+    fi
     case "${BACKGROUND_REFERENCE:-calibrated}" in
       calibrated | training_mean)
         joint_calibration_args+=(--background-reference "${BACKGROUND_REFERENCE:-calibrated}") ;;

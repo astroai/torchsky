@@ -1282,6 +1282,64 @@ def test_joint_real_fit_kwargs_preserve_psf_with_streamed_tiles() -> None:
     assert kwargs["render_spatial_tile_hw"] == (256, 256)
 
 
+@pytest.mark.parametrize("kind", ["spectral_basis_field", "explicit_spectral_grid_field", "gaussian_basis"])
+def test_comparison_optimizer_override_survives_model_caps(kind: str) -> None:
+    kwargs = _joint_real_fit_kwargs(
+        kind, crop_size=32, steps=4, num_observations=2, optimizer_lr=0.03,
+    )
+    assert kwargs["lr"] == 0.03
+    assert kwargs["pixel_samples_per_observation"] is None
+    parameter = torch.nn.Parameter(torch.tensor(1.0))
+    optimizer = torch.optim.Adam([parameter], lr=kwargs["lr"])
+    parameter.square().backward()
+    optimizer.step()
+    assert float(parameter.detach()) == pytest.approx(0.97)
+
+
+@pytest.mark.parametrize("value", [0.0, -0.1, float("nan"), float("inf")])
+def test_comparison_optimizer_override_rejects_invalid(value: float) -> None:
+    with pytest.raises(ValueError, match="finite and positive"):
+        _joint_real_fit_kwargs(
+            "gaussian_basis", crop_size=32, steps=4, num_observations=2,
+            optimizer_lr=value,
+        )
+
+
+def test_comparison_constructor_override_reaches_model_and_report() -> None:
+    overrides = joint_benchmark._parse_model_kwargs('{"gaussian_basis":{"num_basis":7}}')
+    defaults = {"num_basis":24, "init_scale":0.35}
+    kwargs = joint_benchmark._comparison_model_kwargs("gaussian_basis", defaults, overrides)
+    model = make_field_model("gaussian_basis", _initialization_domain(), **kwargs)
+    assert model.centers.shape[0] == 7
+    assert defaults["num_basis"] == 24
+    report = joint_benchmark._report_configuration({"model_kwargs":kwargs})
+    assert json.loads(json.dumps(report))["model_kwargs"]["num_basis"] == 7
+    with pytest.raises(TypeError):
+        make_field_model("gaussian_basis", _initialization_domain(), bogus_parameter=1)
+
+
+def test_comparison_gaussian_splat_uses_product_initialization() -> None:
+    overrides = joint_benchmark._parse_model_kwargs(
+        '{"gaussian_basis":{"splat":true,"num_basis":4,"spectral_resolution":3}}'
+    )
+    kwargs = joint_benchmark._comparison_model_kwargs("gaussian_basis", {}, overrides)
+    model = make_field_model("gaussian_basis", _initialization_domain(), **kwargs)
+    centers = model.centers.detach().clone()
+    diagnostics = _initialize_joint_scene(model, "gaussian_basis", _constant_initialization_product())
+    assert diagnostics["scene_initialization_policy"] == "common_product"
+    assert model.amplitudes.shape == (4, 3)
+    assert not torch.equal(centers, model.centers)
+    assert torch.isfinite(model.amplitudes).all()
+
+
+@pytest.mark.parametrize("value", ['[]', '{"gaussian_basis":1}', 'invalid'])
+def test_comparison_constructor_override_rejects_nonmapping(value: str) -> None:
+    import argparse
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        joint_benchmark._parse_model_kwargs(value)
+
+
 def test_joint_real_foam_fit_bounds_psf_training_and_diagnostics() -> None:
     kwargs = _joint_real_fit_kwargs(
         "spectral_power_foam",
