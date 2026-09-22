@@ -97,6 +97,22 @@ independence and preservation of relative exposure offsets. Run
 `smacs-recon-20260921-r3` uses exactly this commit and changes only
 `BACKGROUND_REFERENCE=training_mean` relative to r2; it reuses r1 calibration.
 
+R3 completed with exit 0 at `2026-09-22T05:41:14Z`. Its training-derived
+references are 0.213848 MJy/sr (F150W, 34 calibration samples) and 0.099628
+MJy/sr (F277W, 25 samples). On identical validation exposure identities and
+pixel counts, chi-square per pixel changed as follows (lower is better):
+
+| Model | F150W r2 → r3 | F277W r2 → r3 |
+|---|---|---|
+| Grid | 2.390 → 2.956 (+23.7%) | 11.496 → 11.473 (-0.2%) |
+| SIREN | 2.476 → 2.580 (+4.2%) | 12.914 → 12.162 (-5.8%) |
+
+This is mixed evidence, without uncertainty intervals; only two validation
+exposures overlap each band. Source contrast remains inadequate. The change
+retains a common brightness level but does not establish better astronomical
+recovery. Original reports and the paired numeric comparison are stored under
+`benchmarks_results/canfar_smacs-recon-20260921-r3/`.
+
 A separate initializer correction in `ExplicitSpectralGridField` inverts the
 forward tanh coordinate mapping when locating grid nodes. Previously the
 initializer sampled linear coordinates, which displaced nonuniform spatial
@@ -105,6 +121,12 @@ values inside (-1,1); spectral samples outside the supplied bands retain the
 existing nearest-band extrapolation. Forward evaluation is unchanged, so old
 checkpoints retain their meaning. This correction is deliberately excluded
 from r3 to separate the effects of initialization and background convention.
+It is pushed as `211b423c`; all 64 combined grid/joint reconstruction tests,
+preflight and commit-time type checks pass. Run `smacs-recon-20260922-r4`
+uses this commit with the same settings as r3. The submission client timed
+out, but production session `r5n2zil6` was subsequently confirmed Running
+with a working NVIDIA allocation and source environment build underway.
+No duplicate session was submitted and no r4 scientific result is available yet.
 
 After successful completion, render common-scale panels with
 `scripts/visualize_smacs0723_products.py --joint-report <run>/b/shared-foam.json
