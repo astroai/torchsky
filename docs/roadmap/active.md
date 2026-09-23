@@ -7,12 +7,26 @@ Do not submit jobs to staging or use it as a fallback.
 
 ### What is failing, and the corrective experiment — 2026-09-22
 
+Implementation `70550d3d` is pushed to the fork's main. Focused verification:
+174 tests passed, four CUDA checks skipped locally; preflight passed and type
+checking found zero errors (the existing `__all__` warning remains). The older
+renderer fails the new high-declination narrow-source regression; the repaired
+path preserves both brightness and parameter gradients.
+
+Submitted on September 23 using production `astroai/webterm:latest`:
+`lnkscol1` (`smacs-precision-20260922-patch`, same 600-step grid settings as
+the completed screen) and `s9pi373l` (`smacs-precision-20260922-full`, differing
+only by full-observation training). Both pin `70550d3d`, share the persisted
+source bundle under `/arc/projects/ots/torchsky-runs/smacs-precision-20260922/`,
+and limit each fitting process to one hour. They run the CPU/CUDA precision
+tests after reconstruction. No corrected real-data result has been claimed.
+
 The separate joint grid and SIREN runs completed. Validation chi-squared per
 pixel is 2.0318/4.2696 for the joint grid and 2.5782/12.0295 for SIREN
 (F150W/F277W). SIREN's source-contrast slopes against the reference are only
 0.023/0.054: this configuration is nearly flat despite 600 updates. It is not
 competitive. The 20-step splat probe completed at 33.56 seconds per step,
-with validation 2.6000/3.2736 and contrast slopes 0.819/0.936. Its stronger
+with validation 2.6000/3.2736 and contrast slopes 0.936/0.819. Its stronger
 image contrast is not a universal validation improvement and not injected
 flux recovery. Another unmeasured 600-step splat run is not justified.
 
