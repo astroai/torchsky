@@ -5,6 +5,41 @@ Do not submit jobs to staging or use it as a fallback.
 
 ## Short-term reconstruction objective
 
+### What is failing, and the corrective experiment — 2026-09-22
+
+The separate joint grid and SIREN runs completed. Validation chi-squared per
+pixel is 2.0318/4.2696 for the joint grid and 2.5782/12.0295 for SIREN
+(F150W/F277W). SIREN's source-contrast slopes against the reference are only
+0.023/0.054: this configuration is nearly flat despite 600 updates. It is not
+competitive. The 20-step splat probe completed at 33.56 seconds per step,
+with validation 2.6000/3.2736 and contrast slopes 0.819/0.936. Its stronger
+image contrast is not a universal validation improvement and not injected
+flux recovery. Another unmeasured 600-step splat run is not justified.
+
+Two concrete problems were identified:
+
+- The renderer rounded absolute WCS coordinates to float32 before forming
+  local offsets. At this field, actual encoder errors reach 0.217/0.314 target
+  pixels in RA/Dec. Grid initialization also missed its own nodes by about
+  0.29 grid cells. CPU/CUDA paths now retain coordinate precision until local
+  encoding, keeping brightness parameters float32. The MPS float32 coordinate
+  limitation remains. Custom models must cast *local features* to their layer
+  dtype instead of assuming the renderer supplies float32 sky coordinates.
+- Shared random patches do not sample every pixel equally. In a fully valid
+  128-square image with 32-square patches, inclusion probabilities differ by
+  up to ninefold. The new `--full-observation-training` option (runner variable
+  `FULL_OBSERVATION_TRAINING=1`) uses existing streamed, PSF-aware rendering
+  over all valid pixels of selected exposures. It preserves the global
+  weighted objective without retaining full-image activations.
+
+First repeat the joint grid with corrected coordinates and otherwise unchanged
+settings. Separately compare the full-observation option. Do not attribute
+improvement to the precision correction until the real-data comparison returns.
+The nominal 256 grid spans only about 118 intervals over the footprint because
+of domain padding and tanh coordinates; representation resolution, initializer
+quality and SIREN frequency remain subsequent issues. Frozen PSF/background
+calibration may still be imperfect, but these results do not isolate its error.
+
 ### Recovered screen results and Gaussian runtime repair — 2026-09-22
 
 The independent-band runs below completed successfully. On identical validation

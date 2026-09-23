@@ -1296,6 +1296,20 @@ def test_comparison_optimizer_override_survives_model_caps(kind: str) -> None:
     assert float(parameter.detach()) == pytest.approx(0.97)
 
 
+@pytest.mark.parametrize("kind", ["explicit_spectral_grid_field", "sine_implicit", "gaussian_basis"])
+def test_full_observation_comparison_uses_all_pixels_and_bounded_tiles(kind):
+    kwargs = _joint_real_fit_kwargs(
+        kind, crop_size=128, steps=4, num_observations=10,
+        full_observation_training=True,
+    )
+    assert kwargs["training_patch_size"] is None
+    assert kwargs["shared_sky_patch_sampling"] is False
+    assert kwargs["pixel_samples_per_observation"] is None
+    assert kwargs["streaming_accumulation"] is True
+    assert kwargs["render_spatial_tile_hw"] is not None
+    assert kwargs["loss_reduction"] == "global"
+
+
 @pytest.mark.parametrize("value", [0.0, -0.1, float("nan"), float("inf")])
 def test_comparison_optimizer_override_rejects_invalid(value: float) -> None:
     with pytest.raises(ValueError, match="finite and positive"):

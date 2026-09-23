@@ -21,6 +21,8 @@ def domain() -> FieldDomain:
 
 
 def _make_contract_model(kind: str, domain: FieldDomain):
+    if kind == "sasnet":
+        return make_field_model(kind, domain, pixel_footprint_deg=0.001)
     if kind in {
         "spectral_power_foam",
         "foam_initialized_inr",
@@ -55,13 +57,14 @@ def _make_contract_model(kind: str, domain: FieldDomain):
 
 
 @pytest.mark.parametrize("kind", FIELD_MODEL_KINDS)
-def test_registered_field_model_contract(kind: str, domain: FieldDomain) -> None:
+@pytest.mark.parametrize("coordinate_dtype", [torch.float32, torch.float64])
+def test_registered_field_model_contract(kind: str, domain: FieldDomain, coordinate_dtype) -> None:
     """Every registered candidate has the same minimum evaluation contract."""
     torch.manual_seed(8912)
     model = _make_contract_model(kind, domain)
-    ra = torch.tensor([149.999, 150.0, 150.001], dtype=torch.float32)
-    dec = torch.tensor([1.999, 2.0, 2.001], dtype=torch.float32)
-    wavelength = torch.tensor([5200.0, 5600.0, 6000.0], dtype=torch.float32)
+    ra = torch.tensor([149.999, 150.0, 150.001], dtype=coordinate_dtype)
+    dec = torch.tensor([1.999, 2.0, 2.001], dtype=coordinate_dtype)
+    wavelength = torch.tensor([5200.0, 5600.0, 6000.0], dtype=coordinate_dtype)
 
     output = model(ra, dec, wavelength)
     assert isinstance(output, torch.Tensor)

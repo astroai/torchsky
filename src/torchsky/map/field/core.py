@@ -1675,7 +1675,9 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         since the exact inverse there is infinite.
         """
         device = self.grid.device
-        dtype = self.grid.dtype
+        # Absolute celestial coordinates need more precision than brightness
+        # parameters: round only after subtracting the field centre.
+        dtype = torch.float32 if device.type == "mps" else torch.float64
         bound = torch.nextafter(
             torch.ones((), device=device, dtype=dtype),
             torch.zeros((), device=device, dtype=dtype),

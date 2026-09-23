@@ -382,6 +382,9 @@ case "${mode}" in
     if [[ -n "${OPTIMIZER_LR:-}" ]]; then
       joint_calibration_args+=(--optimizer-lr "${OPTIMIZER_LR}")
     fi
+    if [[ "${FULL_OBSERVATION_TRAINING:-0}" == "1" ]]; then
+      joint_calibration_args+=(--full-observation-training)
+    fi
     case "${BACKGROUND_REFERENCE:-calibrated}" in
       calibrated | training_mean)
         joint_calibration_args+=(--background-reference "${BACKGROUND_REFERENCE:-calibrated}") ;;

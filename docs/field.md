@@ -19,6 +19,13 @@ For map products and classical stacks, see [map.md](map.md). For the Charbonnier
 4. **`field.fit(observations, model, ...)`** runs the built-in optimizer loop, or compose your own loop with **`field.render(...)`** / **`field.sample(...)`**.
 5. **`field.render(...)`** produces observation predictions, cubes, or HEALPix products; **`field.sample(...)`** evaluates explicit sky-coordinate samples.
 
+CPU and CUDA rendering preserve the WCS precision of absolute sky coordinates.
+For custom models, subtract the sky centre and normalize coordinates before
+casting those local features to the neural layer's dtype. Casting absolute
+RA/Dec to float32 first can discard subpixel structure. Brightness tensors and
+model parameters may remain float32. MPS still uses float32 sky coordinates;
+fine angular structure on that device has not been verified.
+
 Runnable references:
 
 - [examples/example_map_field_survey_split.py](../examples/example_map_field_survey_split.py)

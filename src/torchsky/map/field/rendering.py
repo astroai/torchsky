@@ -1,4 +1,9 @@
-"""Rendering and evaluation helpers for continuous field models."""
+"""Rendering and evaluation helpers for continuous field models.
+
+Sky coordinates retain WCS precision until the model encodes local coordinates;
+models should cast their encoded features to their parameter dtype. MPS grids
+remain float32 because MPS cannot represent absolute sky coordinates in float64.
+"""
 
 from __future__ import annotations
 
@@ -347,8 +352,6 @@ def _conditioned_background_map(
                 observation,
                 exposure_pose,
             )
-            spatial_x = spatial_x.to(dtype=torch.float32)
-            spatial_y = spatial_y.to(dtype=torch.float32)
         patch = torch.zeros_like(spatial_x, dtype=torch.float32)
         for wavelength, weight in zip(wavelengths, weights, strict=True):
             patch += background_model(
@@ -444,13 +447,11 @@ def _render_spatially_integrated_distribution(
                 observation,
                 exposure_pose,
             )
-            ra32 = ra_deg.to(dtype=torch.float32)
-            dec32 = dec_deg.to(dtype=torch.float32)
             if callable(render_distribution):
                 node_mean, node_logvar = _call_render_bandpass_distribution(
                     model,
-                    ra32,
-                    dec32,
+                    ra_deg,
+                    dec_deg,
                     wavelengths,
                     weights,
                     forward_context=forward_context,
@@ -462,8 +463,8 @@ def _render_spatially_integrated_distribution(
                 for wavelength in wavelengths:
                     mean, logvar = _call_forward_distribution(
                         model,
-                        ra32,
-                        dec32,
+                        ra_deg,
+                        dec_deg,
                         wavelength,
                         forward_context=forward_context,
                     )
@@ -598,8 +599,8 @@ def render_field_observation_distribution(
     if callable(render_bandpass_distribution):
         mean, logvar = _call_render_bandpass_distribution(
             model,
-            ra_deg.to(dtype=torch.float32),
-            dec_deg.to(dtype=torch.float32),
+            ra_deg,
+            dec_deg,
             wavelengths,
             weights,
             forward_context=forward_context,
@@ -612,8 +613,8 @@ def render_field_observation_distribution(
             for wavelength in wavelengths:
                 mean, logvar = _call_forward_distribution(
                     model,
-                    ra_deg.to(dtype=torch.float32),
-                    dec_deg.to(dtype=torch.float32),
+                    ra_deg,
+                    dec_deg,
                     wavelength,
                     forward_context=forward_context,
                 )
@@ -720,8 +721,8 @@ def render_field_samples_distribution(
     if callable(render_bandpass_distribution):
         return _call_render_bandpass_distribution(
             model,
-            ra_deg.to(dtype=torch.float32),
-            dec_deg.to(dtype=torch.float32),
+            ra_deg,
+            dec_deg,
             wavelengths,
             weights,
             forward_context=forward_context,
@@ -733,8 +734,8 @@ def render_field_samples_distribution(
         for wavelength in wavelengths:
             mean, logvar = _call_forward_distribution(
                 model,
-                ra_deg.to(dtype=torch.float32),
-                dec_deg.to(dtype=torch.float32),
+                ra_deg,
+                dec_deg,
                 wavelength,
                 forward_context=forward_context,
             )
@@ -858,11 +859,11 @@ def render_field_observation(
             "use_func_vmap is not supported when model.render_bandpass is defined"
         )
     if center_coordinates is not None:
-        center_ra32 = center_coordinates[0].to(dtype=torch.float32)
-        center_dec32 = center_coordinates[1].to(dtype=torch.float32)
-        H, W = int(center_ra32.shape[-2]), int(center_ra32.shape[-1])
+        center_ra = center_coordinates[0]
+        center_dec = center_coordinates[1]
+        H, W = int(center_ra.shape[-2]), int(center_ra.shape[-1])
     else:
-        center_ra32 = center_dec32 = None
+        center_ra = center_dec = None
         H, W = _header_shape(
             observation.header,
             fallback=(int(image.shape[-2]), int(image.shape[-1])),
@@ -881,9 +882,9 @@ def render_field_observation(
                     (y1 - y0, x1 - x0), device=device, dtype=torch.float32
                 )
                 for offset_x, offset_y, spatial_weight in spatial_nodes:
-                    if center_ra32 is not None and center_dec32 is not None:
-                        ra_p = center_ra32[y0:y1, x0:x1]
-                        dec_p = center_dec32[y0:y1, x0:x1]
+                    if center_ra is not None and center_dec is not None:
+                        ra_p = center_ra[y0:y1, x0:x1]
+                        dec_p = center_dec[y0:y1, x0:x1]
                     else:
                         ra_p, dec_p = _tile_world_coordinate_grid(
                             observation,
@@ -901,8 +902,6 @@ def render_field_observation(
                             observation,
                             exposure_pose,
                         )
-                        ra_p = ra_p.to(dtype=torch.float32)
-                        dec_p = dec_p.to(dtype=torch.float32)
                     if use_func_vmap:
                         plane = _evaluate_field_plane_func_vmap(
                             model,
@@ -944,9 +943,9 @@ def render_field_observation(
     for y0, y1, x0, x1 in tiles:
         patch = torch.zeros((y1 - y0, x1 - x0), device=device, dtype=torch.float32)
         for offset_x, offset_y, spatial_weight in spatial_nodes:
-            if center_ra32 is not None and center_dec32 is not None:
-                ra_p = center_ra32[y0:y1, x0:x1]
-                dec_p = center_dec32[y0:y1, x0:x1]
+            if center_ra is not None and center_dec is not None:
+                ra_p = center_ra[y0:y1, x0:x1]
+                dec_p = center_dec[y0:y1, x0:x1]
             else:
                 ra_p, dec_p = _tile_world_coordinate_grid(
                     observation,
@@ -964,8 +963,6 @@ def render_field_observation(
                     observation,
                     exposure_pose,
                 )
-                ra_p = ra_p.to(dtype=torch.float32)
-                dec_p = dec_p.to(dtype=torch.float32)
             if callable(render_bandpass):
                 node_plane = _call_render_bandpass(
                     model,
@@ -1253,8 +1250,8 @@ def render_field_samples(
     if callable(render_bandpass):
         return _call_render_bandpass(
             model,
-            ra_deg.to(dtype=torch.float32),
-            dec_deg.to(dtype=torch.float32),
+            ra_deg,
+            dec_deg,
             wavelengths,
             weights,
             forward_context=forward_context,
@@ -1264,8 +1261,8 @@ def render_field_samples(
         spectral_samples.append(
             _call_scalar_field_forward(
                 model,
-                ra_deg.to(dtype=torch.float32),
-                dec_deg.to(dtype=torch.float32),
+                ra_deg,
+                dec_deg,
                 wavelength,
                 forward_context=forward_context,
             )
@@ -1317,8 +1314,8 @@ def evaluate_field_coordinates_vmapped(
         raise RuntimeError(
             "evaluate_field_coordinates_vmapped requires PyTorch 2.x torch.func"
         ) from e
-    ra = torch.as_tensor(ra_deg).reshape(-1).to(dtype=torch.float32)
-    dec = torch.as_tensor(dec_deg).reshape(-1).to(dtype=torch.float32)
+    ra = torch.as_tensor(ra_deg).reshape(-1)
+    dec = torch.as_tensor(dec_deg).reshape(-1)
     wl = torch.as_tensor(wavelength_angstrom)
     if wl.ndim == 0:
         wl = wl.expand(ra.shape[0]).to(dtype=torch.float32, device=ra.device)
@@ -1355,8 +1352,8 @@ def _evaluate_field_plane_func_vmap(
 ) -> Tensor:
     """One wavelength slice; ``ra_grid``/``dec_grid`` share shape (outputs that shape)."""
     shape = tuple(ra_grid.shape)
-    ra_f = ra_grid.to(dtype=torch.float32).reshape(-1)
-    dec_f = dec_grid.to(dtype=torch.float32).reshape(-1)
+    ra_f = ra_grid.reshape(-1)
+    dec_f = dec_grid.reshape(-1)
     n = int(ra_f.shape[0])
     dev = ra_f.device
     wl0 = torch.as_tensor(wavelength, dtype=torch.float32, device=dev)
@@ -1385,8 +1382,8 @@ def _field_hypercube_spectral_stack(
     """Stack wavelength planes for one spatial patch (``ra_grid`` shape = ``dec_grid`` shape)."""
     nw = int(wavelengths.shape[0])
     hw_shape = tuple(ra_grid.shape)
-    ra_f = ra_grid.to(dtype=torch.float32)
-    dec_f = dec_grid.to(dtype=torch.float32)
+    ra_f = ra_grid
+    dec_f = dec_grid
     chunk = int(spectral_chunk)
     if chunk <= 0 or chunk >= nw:
         chunk = nw
@@ -1481,8 +1478,8 @@ def render_field_cube(
         return torch.empty(
             (0, *tuple(ra_deg.shape)), device=device, dtype=torch.float32
         )
-    ra_f = ra_deg.to(dtype=torch.float32)
-    dec_f = dec_deg.to(dtype=torch.float32)
+    ra_f = ra_deg
+    dec_f = dec_deg
     H, W = int(ra_f.shape[0]), int(ra_f.shape[1])
     tiles: list[tuple[int, int, int, int]]
     if spatial_tile_hw is None:
@@ -1543,8 +1540,9 @@ def render_field_healpix(
         i1 = min(i0 + chunk_sp, npix)
         ipix = ipix_full[i0:i1]
         ra, dec = _healpix_wcs.pix2ang(nside_i, ipix, nest=nest, lonlat=True)
-        ra = ra.to(device=dev, dtype=torch.float32)
-        dec = dec.to(device=dev, dtype=torch.float32)
+        coordinate_dtype = torch.float32 if dev.type == "mps" else ra.dtype
+        ra = ra.to(device=dev, dtype=coordinate_dtype)
+        dec = dec.to(device=dev, dtype=coordinate_dtype)
         sub = _field_hypercube_spectral_stack(
             model,
             ra,

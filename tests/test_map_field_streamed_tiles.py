@@ -27,7 +27,7 @@ class Scene(nn.Module):
     def forward(self, ra, dec, wavelength):
         wavelength = torch.broadcast_to(wavelength, ra.shape)
         return self.net(
-            torch.stack(((ra - 1) * 10, dec * 10, wavelength / 2), -1)
+            torch.stack(((ra - 1) * 10, dec * 10, wavelength / 2), -1).to(self.net[0].weight.dtype)
         ).squeeze(-1)
 
 

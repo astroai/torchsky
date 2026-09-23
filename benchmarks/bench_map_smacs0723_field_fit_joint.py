@@ -2297,6 +2297,7 @@ def _joint_real_fit_kwargs(
     foam_lr: float = 2.0e-2,
     foam_fixed_geometry: bool = False,
     optimizer_lr: float | None = None,
+    full_observation_training: bool = False,
 ) -> dict[str, Any]:
     if optimizer_lr is not None and (
         not math.isfinite(optimizer_lr) or optimizer_lr <= 0
@@ -2410,6 +2411,13 @@ def _joint_real_fit_kwargs(
         )
     if optimizer_lr is not None:
         kwargs["lr"] = float(optimizer_lr)
+    if full_observation_training:
+        kwargs.update(
+            training_patch_size=None,
+            shared_sky_patch_sampling=False,
+            pixel_samples_per_observation=None,
+            streaming_accumulation=True,
+        )
     return kwargs
 
 
@@ -2804,6 +2812,10 @@ def main() -> int:
     parser.add_argument(
         "--optimizer-lr", type=float, default=None,
         help="Explicit learning rate for all compared scenes, overriding model defaults",
+    )
+    parser.add_argument(
+        "--full-observation-training", action="store_true",
+        help="Fit every valid pixel in selected exposures with streamed PSF-aware tiles",
     )
     parser.add_argument("--bands", default="F090W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
@@ -3931,6 +3943,7 @@ def main() -> int:
                 crop_size=int(args.crop_size),
                 steps=model_steps,
                 optimizer_lr=args.optimizer_lr,
+                full_observation_training=args.full_observation_training,
                 num_observations=len(normalized_observations),
                 foam_grid_side=int(args.foam_grid_side),
                 foam_lr=float(args.foam_lr),
