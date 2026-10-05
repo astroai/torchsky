@@ -3,9 +3,257 @@
 CANFAR execution uses **production only**, as requested on 2026-09-09.
 Do not submit jobs to staging or use it as a fallback.
 
+## Next-model handoff checkpoint — 2026-09-29
+
+**State:** the bounded SMACS grid-density experiment is complete. Both the
+1024-square and 512-square target-footprint grids are rejected by the paired
+depth/effective-resolution screen. Do not launch another density sweep, a
+four-cells-per-output-pixel arm, a six-band expansion or a 20-batch expansion.
+The local checkout is intentionally dirty and ahead of `upstream/main`; preserve
+all tracked and untracked work. The local scorecards are not immutable until
+committed. Use the ARC run roots and exact source/scorer identities below as the
+provenance anchors.
+
+**Immediate implementation:** build a one-band, direct-linear surface-brightness
+operator for `ExplicitSpectralGridField` coefficients with fixed calibration.
+It must expose matched forward and adjoint actions over native detector
+observations, masks and inverse variances, preferably through
+`BoundObservationOperator` / `BoundObservationOperatorSet`. Do not apply linear
+CG to `model.grid`: the current field evaluates `softplus(grid) + 1e-4`, so its
+stored parameters are nonlinear. Choose and record the fixed band response,
+pixel-response/PSF convention, damping or regularization, positivity policy and
+null-space treatment before solving. Existing `loss_reduction="per_band"` is
+only Adam loss aggregation, not this inverse solver.
+
+**Test-first boundary:** before any new CANFAR job, require forward linearity,
+the adjoint dot-product identity, zero mask/weight exclusion, full-versus-tiled
+parity, fixed PSF and passband parity, deterministic exposure-order/chunk-size
+behavior, tiny known-scene recovery against a dense least-squares oracle, CG
+residual/tolerance checks and CPU/CUDA parity. Then wire one bounded per-band
+comparison against the existing Adam path and report objective convergence,
+noise amplification, flux, centroid and effective FWHM. Stop if any operator
+identity fails, the normal system lacks an explicit damping/LSQR plan, the
+timing/memory pilot exceeds its budget or paired fidelity gates regress.
+
+**Reusable code:** generic matrix-free normal actions and CG live in
+`src/torchsky/map/solvers.py`; the image-plane VJP binder in
+`src/torchsky/map/operators/inverse.py` is a useful pattern but is not yet a
+native-detector explicit-grid adapter. Foam's exact PCG path solves different
+cell geometry and must not be relabelled as the missing grid solver. Add the new
+focused regression module as `tests/test_explicit_grid_solver.py`, following
+`tests/test_map_solvers.py` and `tests/test_map_operator_chunking.py`.
+
+**Immutable evidence:** reconstruction run
+`arc:projects/ots/torchsky-runs/smacs-grid-val-footprint512-20260929-r1/`,
+scoring root
+`arc:projects/ots/torchsky-runs/smacs-grid-val-footprint512-20260929-r1/score-vs-control-20260929-r2/`,
+science source `95a11d8454986d58f212a56d5a312d650dcced17`, scorer SHA-256
+`7885bef5283acbdbc624fa9532e95d5a69ac7f9dc80cce8c60e0a30e18e81c4b`.
+Compact recovered outputs are in
+`benchmarks_results/smacs-grid-validation-20260929-r1/`; the local scorecard
+candidate is `benchmarks/scorecards/20260928_smacs_grid_mapping_validation.*`.
+
+**Verification after the bounded solver change:** run the focused grid, joint
+benchmark, solver, chunking and new explicit-grid-solver tests, followed by
+`pixi run preflight-push` and `pixi run typecheck`. `pixi run ci-local` remains
+human-opt-in. Do not commit, push or launch production work without the relevant
+authorization.
+
 ## Short-term reconstruction objective
 
-### What is failing, and the corrective experiment — 2026-09-22
+### Evidence-first implementation update — 2026-09-24
+
+**End goal:** produce a Torchsky reconstruction that is deeper than the frozen
+classical/Drizzle reference at the same false-positive density, while preserving
+the same or better independently measured effective resolution. A prettier image
+is useful only when flux, color, morphology, diffuse emission and uncertainty
+remain scientifically faithful.
+
+The local evidence inventory is complete enough to choose the first controlled
+change. A fixed-scale contact sheet is at
+`benchmarks_results/smacs-evidence-20260924/contact-sheet.png`; it is a working
+artifact, not an immutable run report. Recovered real-data summaries rank as:
+
+| Existing result | Validation χ²/pixel F150W / F277W | Mean source contrast | Mean source flux ratio | Fit time | Evidence classification |
+|---|---:|---:|---:|---:|---|
+| Independent explicit grids | 1.7154 / 3.5422 | 0.555 / 0.649 | 0.875 / 0.925 | 241 s / 203 s | Best completed grid validation; bands were fitted separately |
+| Joint explicit grid | 2.0318 / 4.2696 | 0.546 / 0.581 | 0.835 / 0.900 | 565 s | Reproducible joint reference; under-resolved |
+| Joint SIREN | 2.5782 / 12.0295 | 0.023 / 0.054 | 0.102 / 0.232 | 1,060 s | Flat/underfit; do not extend this configuration |
+| Gaussian splats, 20 steps | 2.6000 / 3.2736 | 0.936 / 0.819 | 0.999 / 0.933 | 728 s | Strong contrast but visible blank-sky texture; not accepted as deeper |
+
+The recovered July 29 six-band “Torchsky Drizzle” image is identified as archived
+run `20260729-smacs-torchsky-drizzle-aa0aa21`. Its provenance records the original
+ARC VOSpace URI and SHA-256 for every SCI/WHT band, so product identity is
+recoverable. The quicklook metadata nevertheless labels the same combined FITS
+path as both baseline and method and records no metrics. It is therefore a
+display/reference candidate, not yet an independent scientific comparator, and
+still needs user confirmation as the intended “earlier good” result. The
+precision patch remains a correctness repair with no demonstrated quality gain;
+the timed-out full run has no recovered local final report.
+
+The first code change addresses the measured grid-capacity defect without
+changing architecture: `ExplicitSpectralGridField` can now map cells linearly
+over explicit tangent-plane target bounds, while omitted bounds retain the legacy
+tanh mapping for checkpoint compatibility. The SMACS benchmark computes target
+bounds plus a configurable Gaussian-PSF halo, records actual target intervals and
+mean angular cell spacing, and exposes the change through
+`GRID_FIT_TARGET_FOOTPRINT=1` and `GRID_PSF_MARGIN_SIGMA`. The CANFAR launcher now
+forwards both controls. This is implemented and covered locally; it is not yet a
+real-data improvement claim. Verification is **120 focused tests passed**,
+`pixi run preflight-push` passed, and `pixi run typecheck` reported zero errors
+with the existing `__all__` warning.
+
+Applying the new diagnostic to the frozen 128×128 target header
+(0.0630 arcsec/pixel) and the widest fitted control PSF (0.09555 arcsec FWHM)
+gives **245.13 target intervals** and **0.03290 arcsec/cell** for a 256 grid with
+a four-sigma halo. The completed real-data control corrected the earlier
+estimate: the legacy mapping provided **47.13 intervals**, or **0.17113
+arcsec/cell**, over the same target. This proves the mapping change increases
+useful target sampling by a factor of 5.20. At equal 17×17×2 parameter count, a
+deterministic narrow-source interpolation check reduced RMSE from 0.1478 with the
+legacy mapping to 0.0103 with explicit bounds. Both are synthetic/geometric
+evidence; neither proves recovered real-data resolution.
+
+CANFAR and VOS command-line clients are unpinned Pixi dependencies and were
+verified through `pixi run canfar`, `pixi run vcp`, and `pixi run vls`. Real data
+and reconstruction remain production-CANFAR GPU work only. ARC storage is also
+accessible, more slowly, through VOS commands such as
+`pixi run vls arc:projects/...` and `pixi run vcp arc:projects/...`; a headless
+session remains preferable for large or compute-adjacent inspection.
+
+The matched 600-step geometry experiment was launched on production CANFAR on
+2026-09-24 using H100 MIG GPU headless sessions and the same packaged source
+commit `b2cc91a58fd553ad9b9deb5f1554457116003c38`:
+
+| Arm | Run | Session | Mapping | Status |
+|---|---|---|---|---|
+| Control | `smacs-grid-control-20260924-r1` | `lclv179y` | legacy tanh domain | completed, exit 0 |
+| Treatment | `smacs-grid-footprint-20260924-r1` | `nzs78f4r` | target footprint plus four-sigma PSF halo | completed, exit 0 |
+
+Both arms use F150W/F277W, module B, PATT `{1,2,3,4,5,7,8}`, the 128-pixel
+target, seed 101, a 256×256×4 grid, common-product initialization, stationary
+frozen calibration, fitted Gaussian PSFs, learned background, LR 0.003 and 600
+steps. The package is stored at
+`arc:projects/ots/torchsky-runs/smacs-grid-mapping-20260924/` with source hashes.
+The local paired comparator `benchmarks/compare_smacs_grid_mapping.py` rejects
+non-mapping configuration changes and reports validation, fidelity, sampling,
+runtime and memory deltas. Its output is explicitly screening-only: injection
+scoring remains required for depth and effective-resolution claims.
+
+The target-footprint mapping improved F150W source contrast RMSE by 7.6%, source
+flux ratio from 0.831 to 0.859 and support RMSE by 5.4%, but worsened held-out
+F150W Gaussian NLL by 0.69% and χ²/pixel by 1.42%. In F277W it improved Gaussian
+NLL by 6.1%, χ²/pixel by 5.9%, source contrast RMSE by 8.0%, source flux ratio
+from 0.894 to 0.924 and support RMSE by 7.9%. Fit time rose from 479 s to 544 s
+with unchanged peak accelerator memory. Common-scale images show no obvious new
+blank-sky texture. Blank-sky residual NMAD fell from 0.006286 to 0.006221 in
+F150W and from 0.002234 to 0.002184 in F277W; horizontal lag-1 correlation rose
+from 0.228 to 0.256 in F150W and was effectively unchanged (0.567 to 0.568) in
+F277W. The result is promising but mixed, not an acceptance result.
+
+The first exploratory paired injection launch (`kjopcswe`, `m0tktfks`) failed
+closed before fitting because the stale wrapper selected only held-out PATT
+`{3,8}`, leaving no training exposures under the frozen calibration split. The
+runner now forwards the same model kwargs, optimizer, mapping, passband,
+background-reference and frozen-calibration controls in `foam-validation` as in
+`foam`, and its default selection includes train `{1,2,4,5,7}` plus validation
+`{3,8}` while the benchmark preserves the split internally.
+
+Replacement sessions `qsmlqs3c` (legacy control) and `f3ux7nq1`
+(target-footprint treatment) also failed before the main fit. Their saved
+initialization products showed finite positive weights but NaN scene values;
+the cause was the explicit grid's numerically unstable `log(expm1(x))`
+inverse-softplus initialization, which overflows for ordinary bright MJy/sr
+pixels. The initializer now uses the algebraically equivalent stable form
+`x + log(-expm1(-x))`, with local regressions at brightness 1000 and through
+the fitted warm-start path.
+
+Replacement sessions `brhmilwt` (legacy) and `lc6sn09r` (target footprint)
+completed with exit code 0 from packaged source commit
+`5d7978ead61edbb853b611ce6c022870f5157ae6`. They used blank plus three frozen
+validation batches, F150W/F277W, 512-pixel products, 200 steps per batch and a
+1024×1024×4 grid. All 524,275 supported initializer pixels were finite and the
+common initializer loss fell from 0.074314 to 0.041853. At the matched 95%
+purity gate, however, the footprint grid was shallower: pooled completeness
+fell from 0.4405 to 0.3929 and the corrected faintward `m50` fell from 28.50 AB
+(95% bootstrap interval 28.25--28.67) to 28.25 AB (28.17--28.50). Bright-bin
+measured effective FWHM changed from 4.790 to 5.085 pixels in F150W and from
+4.875 to 4.466 pixels in F277W, so resolution improved in only one band. The
+1024-square footprint mapping therefore fails the combined depth/resolution
+screen and will not expand to six bands or 20 batches.
+
+The bounded 512×512×4 footprint treatment completed with exit code 0 in
+production session `xjb93a1r`, run
+`smacs-grid-val-footprint512-20260929-r1`, from exact packaged commit
+`95a11d8454986d58f212a56d5a312d650dcced17`. All four batches were finite and
+used the frozen factors; measured cell spacing was 0.06377 arcsec. At the 95%
+purity gate, pooled completeness improved from 0.4405 for legacy to 0.4643 and
+`m50` tied at 28.50 AB with the same 28.25--28.67 bootstrap interval. F150W
+effective FWHM nevertheless worsened from 4.790 to 5.042 pixels, while F277W
+improved from 4.875 to 4.529 pixels. Both negative-lobe fractions increased.
+The candidate therefore fails the non-worse-resolution-in-both-bands gate and
+is rejected. The denser 1024-square footprint grid had already failed, so no
+four-cells-per-output-pixel treatment is justified. Scoring session `mlv5wipx`
+completed with exit code 0; its four configuration audits allow only the
+declared mapping/bounds and 1024-to-512 spatial-resolution differences. Compact
+results are under `benchmarks_results/smacs-grid-validation-20260929-r1/` and
+remain screening-only, not a depth claim.
+
+### Verified results and handoff — 2026-09-23
+
+**Next actions:** follow the ordered checkboxes and acceptance criteria in
+[the recovery plan](next.md#smacs-evidence-first-reconstruction-plan--2026-09-24).
+The user requested this handoff for continuation with another model. No further
+implementation or CANFAR jobs were launched for that earlier handoff.
+
+Latest remote inspection found both precision experiments finished:
+
+| Configuration | F150W validation χ²/pixel | F277W validation χ²/pixel | Outcome |
+|---|---:|---:|---|
+| Earlier joint grid, `smacs-screen-20260922-joint-grid` | 2.031778 | 4.269615 | Completed |
+| Precision-corrected patch grid, `smacs-precision-20260922-patch` | 2.033924 | 4.276796 | Completed; no demonstrated improvement |
+| Precision-corrected full-image grid, `smacs-precision-20260922-full` | not measured | not measured | Timed out; no final report |
+| Independent-band grids, `smacs-screen-20260922-{f150w,f277w}` | 1.715447 | 3.542159 | Best completed grid reference here; settings differ |
+
+The precision-corrected patch run (`lnkscol1`, source `70550d3d`) exited zero
+at `2026-09-23T16:42:37Z`; its CPU/CUDA precision checks report **8 passed**.
+Fit time including initialization was 581.3 seconds. Source contrast against
+the image reference is 0.5412/0.5741 (F150W/F277W); source flux ratios are
+0.8311/0.8941. These are reference-dependent image diagnostics, not independent
+injection recovery. The full-image run (`s9pi373l`, same source) exited **124**
+at `2026-09-23T17:29:25Z`; no final `b/shared-foam.json` or precision-test log
+exists. Inspect its bootstrap log and partial artifacts before any restart.
+
+Evidence lives under `/arc/projects/ots/torchsky-runs/<run-id>/`:
+`bootstrap_exit_status.txt`, `bootstrap.log`, `precision-tests.log` when present,
+and `b/shared-foam.json`. Historical code pin remains `70550d3d`; the fork's
+documentation checkpoint before this handoff is `20148926`.
+
+**Established:** premature coordinate rounding was a numerical defect, but its
+repair did not improve these real-data metrics. Grid and SIREN underfit source
+structure; nominal grid size overstates useful resolution; initialization is
+unequal; patch sampling is nonuniform; full-image and splat costs are excessive.
+**Unresolved:** how much remaining error comes from PSF, background, photometric
+calibration, correlated noise, model capacity or optimization. Do not claim
+that any one of these is the principal physical cause without controlled tests.
+The user's earlier preferred reconstruction has not yet been identified and
+matched; claims about being better/worse than that specific version are pending.
+
+Recovered PNGs/FITS for independent grids, joint grid, SIREN and splats are under
+`benchmarks_results/canfar_smacs-screen-20260922-*/b/` and
+`benchmarks_results/canfar_smacs-splat-probe-20260922/b/`; the independent combined
+display is under `benchmarks_results/smacs-independent-screen-20260922/`.
+These local results are not a substitute for immutable ARC reports. Display
+scales for the three later methods reuse the independent display's frozen file.
+
+Preserve unrelated edits in `AGENTS.md`, `docs/reviews/autonomous_refactor_launch.md`,
+`tests/test_spectrophotometry.py`, and `.freebuff/`. The previous documentation
+commit encountered a broken pre-commit cache and a fresh-cache Python 3.14 pip
+failure; its commit hook was bypassed after review, while normal pre-push passed.
+The substantive implementation commit passed its hooks. Do not mistake that
+local tooling issue for a scientific test failure.
+
+### Historical corrective experiment submission — 2026-09-22
 
 Implementation `70550d3d` is pushed to the fork's main. Focused verification:
 174 tests passed, four CUDA checks skipped locally; preflight passed and type

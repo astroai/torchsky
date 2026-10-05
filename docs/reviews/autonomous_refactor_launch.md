@@ -2,12 +2,18 @@
 
 This file is the handoff contract for the scheduled Codex refactor run.
 
+Current repository policy in `AGENTS.md` and verification tiers in
+`.cursor/harness/config.json` take precedence over this launch plan. Before
+resuming the historical queue below, check each item against the current code
+and ownership rules; FITS I/O and caches now belong to `torchfits`.
+
 ## Launch Contract
 
 - Start date: May 8, 2026 in the `America/Vancouver` timezone.
 - Runtime model: Codex with `gpt-5.5`, reasoning effort `xhigh`.
 - Target branch: `codex/autonomous-refactor-2026-05`.
-- Workspace: `/Users/fabbros/src/sfabbro/torchsky`.
+- Workspace: the current `torchsky` checkout (`git rev-parse --show-toplevel`);
+  on this machine, `/Users/fabbros/src/astroai/torchsky`.
 - Restart cadence: once per day for about one month.
 - Primary state file: `docs/reviews/autonomous_refactor_log.md`.
 
@@ -68,7 +74,8 @@ Then:
 5. Keep changes small enough that focused tests can run in the same session.
 6. Update the log with the exact work done, tests run, failures, next step, and
    how the slice supports the North Star.
-7. Commit only coherent green slices. Push only after `pixi run ci-local` passes.
+7. Commit only coherent green slices. Before pushing, follow the pre-push gate
+   in `AGENTS.md`; the full local suite requires human opt-in.
 
 Do not wait for the maintainer. Make conservative choices that preserve existing
 public behavior and import compatibility.
@@ -123,8 +130,12 @@ For every slice:
 
 - Run the narrowest relevant tests first with `pixi run -e test -- pytest ...`.
 - Run `pixi run preflight-push` before committing non-doc code.
-- Run `pixi run ci-local` before pushing.
-- If a full gate is too slow or fails for unrelated baseline reasons, record the
+- Run `pixi run preflight-push` before pushing, plus targeted behavior tests and
+  `pixi run typecheck` when Python types or public signatures changed.
+- For documentation-only edits, review the diff and instruction consistency;
+  pytest is unnecessary.
+- Run `pixi run ci-local` only with human opt-in, as specified by `verify_full`.
+- If a required check is blocked or fails for unrelated baseline reasons, record the
   command, failure summary, and residual risk in the log.
 
 ## Commit Policy
@@ -132,7 +143,7 @@ For every slice:
 Use clear commits on `codex/autonomous-refactor-2026-05`. A good commit shape is:
 
 ```text
-refactor(io): extract FITS cache facade
+refactor(map): simplify observation operator composition
 ```
 
 Commit messages should explain behavior preservation and tests. Avoid committing
@@ -143,7 +154,8 @@ the checkpoint.
 
 The branch is review-ready when:
 
-- `pixi run ci-local` passes on the branch.
+- The pre-push checks in `AGENTS.md` pass and applicable GitHub CI checks pass.
+  Record the result of `pixi run ci-local` if the maintainer opted into it.
 - The log has a final summary of completed queue items and remaining risks.
 - Public import compatibility is tested for any moved surface.
 - Docs describe the promoted architecture and any compatibility aliases.

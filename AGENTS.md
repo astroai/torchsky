@@ -2,6 +2,25 @@
 
 This file gives repository-specific operating guidance for coding agents and maintainers working in `torchsky`.
 
+## Agent workflow and instruction precedence
+
+- Follow the user's current scope. A request for a plan or review authorizes
+  that deliverable; an implementation request authorizes the edits and relevant
+  checks needed to finish it.
+- Within repository guidance, this file defines current policy and
+  `.cursor/harness/config.json` defines verification tiers. Older launch plans,
+  review notes, and skill defaults must not override them. Treat historical
+  work queues as context; check current ownership and implementation before
+  resuming an item.
+- Use the harness loop: plan, execute, verify, improve. Read
+  `.cursor/harness/playbook.md` and the tier configuration before implementation.
+- Proceed with routine, reversible work within the authorized scope. Ask only
+  when missing information materially changes the result or an action needs
+  authorization; continue independent work while waiting. If a skill causes a
+  pause, identify the exact instruction and explain why it applies.
+- Preserve unrelated working-tree changes. Keep diffs focused and report what
+  changed, the checks actually run, and any unresolved failures.
+
 ## Mission
 
 `torchsky` is building a torch-native astronomy stack for:
@@ -89,7 +108,9 @@ Those packages belong in **tests** (oracles) and **benchmarks** (baselines).
 (`astropy_interop`, `gwcs_live`, JPL/TLE) stay opt-in and are not imported by
 default `torchsky.wcs`.
 
-Use **astropy** (except `astropy.io.fits`; never Python `fitsio`), **healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical_geometry**, **pandas**, etc., only in:
+Apart from explicitly opt-in interoperability adapters described above, use
+**astropy** (except `astropy.io.fits`; never Python `fitsio`), **healpy**, **hpgeom**,
+**healsparse**, **astropy-healpix**, **spherical_geometry**, **pandas**, etc., only in:
 
 - **`tests/`** (fixtures, parity, regression),
 - **`benchmarks/`**,
@@ -303,10 +324,19 @@ The git **pre-push** hook (`pixi run setup-hooks`) runs **`pixi run preflight-pu
 Automated agents: do **not** run `pixi run ci-local` or `pixi run test` as a push blocker. Before push:
 
 1. `pixi run preflight-push` (the hook runs this again)
-2. Targeted tests for files you changed: `pixi run -e test -- pytest tests/test_foo.py`
+2. Targeted tests for behavior you changed: `pixi run -e test -- pytest tests/test_foo.py`. Documentation-only edits need a diff and consistency review, not pytest.
 3. `pixi run typecheck` when Python types or public signatures changed (pre-commit also runs pyright)
 
-`pixi run ci-local` remains the optional local copy of GitHub `build-test` (preflight + typecheck + pytest `-n auto`, map tests excluded). Use it before a release, after a risky cross-cutting change, or when you want the suite locally. Do not put the test suite back in the pre-push hook.
+`pixi run ci-local` remains the optional local copy of GitHub `build-test`
+(preflight + typecheck + pytest `-n auto`, map tests excluded). It is the
+`verify_full` tier and requires human opt-in; a release or risky cross-cutting
+change can justify recommending it, but does not authorize an automatic run.
+Never auto-run full benchmark suites or `torchregress-harness`. Do not put the
+test suite back in the pre-push hook.
+
+Once the required checks pass, stop testing unless new changes, failures, or
+unresolved concerns justify more checks. Record unrelated baseline failures
+without expanding the task to fix them or claiming the gate passed.
 
 - **Tree-wide `ruff format --check`** is not a CI gate yet; use **`pixi run lint`** when you want Ruff to apply formatting locally.
 

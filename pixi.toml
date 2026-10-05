@@ -208,6 +208,8 @@ python = "==3.13.14"
 
 [feature.prod.pypi-dependencies]
 torchfits = "==1.0.0"
+canfar = "*"
+vos = "*"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]

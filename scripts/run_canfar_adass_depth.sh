@@ -297,6 +297,44 @@ if [[ "${psf_model}" == "learned_lowrank" ]]; then
   fit_psf_model=learned_lowrank
 fi
 
+joint_calibration_args=()
+if [[ "${mode}" == "foam" || "${mode}" == "foam-validation" ]]; then
+  joint_calibration_args=(--calibration-family "${CALIBRATION_FAMILY:-stationary}")
+  if [[ -n "${MODEL_KWARGS:-}" ]]; then
+    joint_calibration_args+=(--model-kwargs "${MODEL_KWARGS}")
+  fi
+  if [[ -n "${OPTIMIZER_LR:-}" ]]; then
+    joint_calibration_args+=(--optimizer-lr "${OPTIMIZER_LR}")
+  fi
+  if [[ "${FULL_OBSERVATION_TRAINING:-0}" == "1" ]]; then
+    joint_calibration_args+=(--full-observation-training)
+  fi
+  case "${GRID_FIT_TARGET_FOOTPRINT:-0}" in
+    0) ;;
+    1) joint_calibration_args+=(--grid-fit-target-footprint) ;;
+    *) echo "GRID_FIT_TARGET_FOOTPRINT must be 0 or 1" >&2; exit 2 ;;
+  esac
+  if [[ -n "${GRID_PSF_MARGIN_SIGMA:-}" ]]; then
+    joint_calibration_args+=(--grid-psf-margin-sigma "${GRID_PSF_MARGIN_SIGMA}")
+  fi
+  case "${BACKGROUND_REFERENCE:-calibrated}" in
+    calibrated | training_mean)
+      joint_calibration_args+=(--background-reference "${BACKGROUND_REFERENCE:-calibrated}") ;;
+    *) echo "BACKGROUND_REFERENCE must be calibrated or training_mean" >&2; exit 2 ;;
+  esac
+  if [[ -n "${FOAM_TARGET_HEADER_PATH:-}" ]]; then
+    joint_calibration_args+=(--target-header-path "${FOAM_TARGET_HEADER_PATH}")
+  fi
+  if [[ -n "${MEASURED_PASSBAND_DIR:-}" ]]; then
+    joint_calibration_args+=(--measured-passband-dir "${MEASURED_PASSBAND_DIR}")
+  fi
+  case "${INDEPENDENT_FROZEN_CALIBRATION:-0}" in
+    0) ;;
+    1) joint_calibration_args+=(--independent-frozen-calibration) ;;
+    *) echo "INDEPENDENT_FROZEN_CALIBRATION must be 0 or 1" >&2; exit 2 ;;
+  esac
+fi
+
 case "${mode}" in
   passband-bootstrap)
     passband_output_dir=${PASSBAND_OUTPUT_DIR:-/arc/projects/ots/jwst_smacs0723/data/calibration/svo}
@@ -375,32 +413,6 @@ case "${mode}" in
     gate "${artifact_root}/inspection/cutouts_science.fits"
     ;;
   foam)
-    joint_calibration_args=(--calibration-family "${CALIBRATION_FAMILY:-stationary}")
-    if [[ -n "${MODEL_KWARGS:-}" ]]; then
-      joint_calibration_args+=(--model-kwargs "${MODEL_KWARGS}")
-    fi
-    if [[ -n "${OPTIMIZER_LR:-}" ]]; then
-      joint_calibration_args+=(--optimizer-lr "${OPTIMIZER_LR}")
-    fi
-    if [[ "${FULL_OBSERVATION_TRAINING:-0}" == "1" ]]; then
-      joint_calibration_args+=(--full-observation-training)
-    fi
-    case "${BACKGROUND_REFERENCE:-calibrated}" in
-      calibrated | training_mean)
-        joint_calibration_args+=(--background-reference "${BACKGROUND_REFERENCE:-calibrated}") ;;
-      *) echo "BACKGROUND_REFERENCE must be calibrated or training_mean" >&2; exit 2 ;;
-    esac
-    if [[ -n "${FOAM_TARGET_HEADER_PATH:-}" ]]; then
-      joint_calibration_args+=(--target-header-path "${FOAM_TARGET_HEADER_PATH}")
-    fi
-    if [[ -n "${MEASURED_PASSBAND_DIR:-}" ]]; then
-      joint_calibration_args+=(--measured-passband-dir "${MEASURED_PASSBAND_DIR}")
-    fi
-    case "${INDEPENDENT_FROZEN_CALIBRATION:-0}" in
-      0) ;;
-      1) joint_calibration_args+=(--independent-frozen-calibration) ;;
-      *) echo "INDEPENDENT_FROZEN_CALIBRATION must be 0 or 1" >&2; exit 2 ;;
-    esac
     for module in "${modules[@]+${modules[@]}}"; do
       module_root="${artifact_root}/${module}"
       mkdir -p "${module_root}"
@@ -470,7 +482,7 @@ case "${mode}" in
       extent=${FOAM_EXTENT:-0.55}
       foam_lr=${FOAM_LR:-0.02}
       seed=${FOAM_SEED:-101}
-      patt_nums=${FOAM_PATT_NUMS:-3,8}
+      patt_nums=${FOAM_PATT_NUMS:-1,2,3,4,5,7,8}
       exact_operator_storage=${FOAM_EXACT_OPERATOR_STORAGE:-model}
       exact_observation_batch_size=${FOAM_EXACT_OBSERVATION_BATCH_SIZE:-auto}
       exact_max_iterations=${FOAM_EXACT_MAX_ITERATIONS:-50}
@@ -523,6 +535,7 @@ case "${mode}" in
           "${operator_calibration_args[@]+${operator_calibration_args[@]}}" \
           "${operator_arm_args[@]+${operator_arm_args[@]}}" \
           "${scene_initialization_args[@]}" \
+          "${joint_calibration_args[@]}" \
           --models "${field_models}" \
           --fail-on-method-error \
           "${injection_args[@]+${injection_args[@]}}" \

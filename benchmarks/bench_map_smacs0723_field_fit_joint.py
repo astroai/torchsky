@@ -71,6 +71,7 @@ DEFAULT_MARKDOWN_OUT = DATA / "benchmark_results" / "smacs0723_field_fit_joint.m
 DEFAULT_EXPORT_DIR = DATA / "benchmark_results" / "smacs0723_field_fit_joint_exports"
 
 import torchsky  # noqa: E402
+from torchsky.map.field.core import ExplicitSpectralGridField  # noqa: E402
 from torchsky.map import (  # noqa: E402
     FieldObservation,
     ForwardContext,
@@ -1388,34 +1389,35 @@ def _regular_foam_model_kwargs(
     return result
 
 
-def _foam_target_footprint_bounds(
+def _target_boundary_world(header: dict[str, Any]) -> torch.Tensor:
+    width = int(header.get("NAXIS1", 0))
+    height = int(header.get("NAXIS2", 0))
+    if width <= 0 or height <= 0:
+        raise ValueError("target WCS requires positive NAXIS1/NAXIS2")
+    # ponytail: 17 samples per edge bound ordinary distorted imaging WCS;
+    # upgrade to adaptive extrema only if a high-order WCS violates the box.
+    x = torch.linspace(-0.5, width - 0.5, 17, dtype=torch.float64)
+    y = torch.linspace(-0.5, height - 0.5, 17, dtype=torch.float64)
+    boundary = torch.cat(
+        (
+            torch.stack((x, torch.full_like(x, -0.5)), dim=-1),
+            torch.stack((torch.full_like(y, width - 0.5), y), dim=-1),
+            torch.stack((x, torch.full_like(x, height - 0.5)), dim=-1),
+            torch.stack((torch.full_like(y, -0.5), y), dim=-1),
+        )
+    )
+    return torchsky.WCS(header).pixel_to_world(boundary)
+
+
+def _target_footprint_local_bounds_deg(
     domain: Any,
     band_entries: list[dict[str, Any]],
-) -> tuple[tuple[float, float], tuple[float, float]]:
-    """Return target-WCS bounds in the Foam's normalized tangent plane."""
+) -> tuple[float, float, float, float]:
     if not band_entries:
         raise ValueError("band_entries must not be empty")
-    boundary_world: list[torch.Tensor] = []
-    for entry in band_entries:
-        header = dict(entry["target_header"])
-        width = int(header.get("NAXIS1", 0))
-        height = int(header.get("NAXIS2", 0))
-        if width <= 0 or height <= 0:
-            raise ValueError("target WCS requires positive NAXIS1/NAXIS2")
-        # ponytail: 17 samples per edge bound ordinary distorted imaging WCS;
-        # upgrade to adaptive extrema only if a high-order WCS violates the box.
-        x = torch.linspace(-0.5, width - 0.5, 17, dtype=torch.float64)
-        y = torch.linspace(-0.5, height - 0.5, 17, dtype=torch.float64)
-        boundary = torch.cat(
-            (
-                torch.stack((x, torch.full_like(x, -0.5)), dim=-1),
-                torch.stack((torch.full_like(y, width - 0.5), y), dim=-1),
-                torch.stack((x, torch.full_like(x, height - 0.5)), dim=-1),
-                torch.stack((torch.full_like(y, -0.5), y), dim=-1),
-            )
-        )
-        boundary_world.append(torchsky.WCS(header).pixel_to_world(boundary))
-    world = torch.cat(boundary_world)
+    world = torch.cat(
+        [_target_boundary_world(dict(entry["target_header"])) for entry in band_entries]
+    )
     delta_ra = (
         torch.remainder(
             world[:, 0] - float(domain.center_ra_deg) + 180.0,
@@ -1423,16 +1425,91 @@ def _foam_target_footprint_bounds(
         )
         - 180.0
     )
-    x = (
-        delta_ra
-        * math.cos(math.radians(float(domain.center_dec_deg)))
-        / float(domain.spatial_scale_deg)
-    )
-    y = (world[:, 1] - float(domain.center_dec_deg)) / float(domain.spatial_scale_deg)
+    x = delta_ra * math.cos(math.radians(float(domain.center_dec_deg)))
+    y = world[:, 1] - float(domain.center_dec_deg)
     return (
-        (float(torch.min(x)), float(torch.max(x))),
-        (float(torch.min(y)), float(torch.max(y))),
+        float(torch.min(x)),
+        float(torch.max(x)),
+        float(torch.min(y)),
+        float(torch.max(y)),
     )
+
+
+def _foam_target_footprint_bounds(
+    domain: Any,
+    band_entries: list[dict[str, Any]],
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Return target-WCS bounds in the Foam's normalized tangent plane."""
+    x_min, x_max, y_min, y_max = _target_footprint_local_bounds_deg(
+        domain, band_entries
+    )
+    scale = float(domain.spatial_scale_deg)
+    return (
+        (x_min / scale, x_max / scale),
+        (y_min / scale, y_max / scale),
+    )
+
+
+def _grid_target_footprint_bounds(
+    domain: Any,
+    band_entries: list[dict[str, Any]],
+    *,
+    margin_sigma: float = 4.0,
+) -> tuple[float, float, float, float]:
+    """Return target bounds in tangent-plane degrees with a Gaussian PSF halo."""
+    if not math.isfinite(float(margin_sigma)) or margin_sigma < 0.0:
+        raise ValueError("margin_sigma must be finite and non-negative")
+    x_min, x_max, y_min, y_max = _target_footprint_local_bounds_deg(
+        domain, band_entries
+    )
+    fwhm_values = [float(entry["fitted_psf_fwhm_arcsec"]) for entry in band_entries]
+    if not all(math.isfinite(value) and value >= 0.0 for value in fwhm_values):
+        raise ValueError("fitted_psf_fwhm_arcsec must be finite and non-negative")
+    fwhm_arcsec = max(fwhm_values)
+    sigma_deg = fwhm_arcsec / math.sqrt(8.0 * math.log(2.0)) / 3600.0
+    margin_deg = float(margin_sigma) * sigma_deg
+    return (
+        x_min - margin_deg,
+        x_max + margin_deg,
+        y_min - margin_deg,
+        y_max + margin_deg,
+    )
+
+
+def _grid_target_sampling_diagnostics(
+    model: ExplicitSpectralGridField,
+    target_header: dict[str, Any],
+) -> dict[str, Any]:
+    world = _target_boundary_world(target_header).to(model.grid.device)
+    wavelength = torch.full_like(world[:, 0], float(model.domain.wavelength_center))
+    unit = model._coords_unit(world[:, 0], world[:, 1], wavelength)
+    x_span = float(unit[:, 0].max() - unit[:, 0].min())
+    y_span = float(unit[:, 1].max() - unit[:, 1].min())
+    local = model._encoded_coords(world[:, 0], world[:, 1], wavelength)
+    scale = float(model.domain.spatial_scale_deg)
+    x_width_arcsec = float((local[:, 0].max() - local[:, 0].min()) * scale * 3600.0)
+    y_width_arcsec = float((local[:, 1].max() - local[:, 1].min()) * scale * 3600.0)
+    intervals_x = x_span * (model.spatial_resolution - 1)
+    intervals_y = y_span * (model.spatial_resolution - 1)
+    if (
+        not math.isfinite(intervals_x)
+        or not math.isfinite(intervals_y)
+        or intervals_x <= 0.0
+        or intervals_y <= 0.0
+    ):
+        raise ValueError("target WCS must span positive finite grid intervals")
+    return {
+        "grid_spatial_mapping": (
+            "target_footprint_linear"
+            if model.spatial_bounds_local_deg is not None
+            else "legacy_tanh_domain"
+        ),
+        "grid_spatial_bounds_local_deg": model.spatial_bounds_local_deg,
+        "grid_target_intervals_x": intervals_x,
+        "grid_target_intervals_y": intervals_y,
+        "grid_mean_cell_arcsec_x": x_width_arcsec / intervals_x,
+        "grid_mean_cell_arcsec_y": y_width_arcsec / intervals_y,
+    }
 
 
 def _foam_training_tile_side(*, crop_size: int, grid_side: int) -> int:
@@ -2817,6 +2894,17 @@ def main() -> int:
         "--full-observation-training", action="store_true",
         help="Fit every valid pixel in selected exposures with streamed PSF-aware tiles",
     )
+    parser.add_argument(
+        "--grid-fit-target-footprint",
+        action="store_true",
+        help="Map explicit grid cells linearly over the target WCS plus a PSF halo",
+    )
+    parser.add_argument(
+        "--grid-psf-margin-sigma",
+        type=float,
+        default=4.0,
+        help="Gaussian PSF halo around target-footprint grid bounds",
+    )
     parser.add_argument("--bands", default="F090W,F277W,F356W,F444W")
     parser.add_argument("--module", default="b")
     parser.add_argument(
@@ -3750,6 +3838,15 @@ def main() -> int:
             if args.foam_fit_target_footprint
             else None
         )
+        grid_bounds = (
+            _grid_target_footprint_bounds(
+                local_domain,
+                band_entries,
+                margin_sigma=float(args.grid_psf_margin_sigma),
+            )
+            if args.grid_fit_target_footprint
+            else None
+        )
         foam_model_kwargs = _regular_foam_model_kwargs(
             grid_side=int(args.foam_grid_side),
             basis_count=int(args.foam_basis_count),
@@ -3936,6 +4033,8 @@ def main() -> int:
                 )
                 if model_kind == "sasnet":
                     model_kwargs.update(_joint_sasnet_kwargs(normalized_observations))
+                if model_kind == "explicit_spectral_grid_field" and grid_bounds is not None:
+                    model_kwargs["spatial_bounds_local_deg"] = grid_bounds
                 model_steps = int(args.steps)
             model_kwargs = _comparison_model_kwargs(model_kind, model_kwargs, args.model_kwargs)
             fit_kwargs = _joint_real_fit_kwargs(
@@ -4198,6 +4297,13 @@ def main() -> int:
                                 if parameter.requires_grad
                             )
                         )
+                        grid_model = getattr(result_model, "inner", result_model)
+                        if isinstance(grid_model, ExplicitSpectralGridField):
+                            row.update(
+                                _grid_target_sampling_diagnostics(
+                                    grid_model, dict(target_header)
+                                )
+                            )
                         row["spectral_samples"] = int(
                             fit_kwargs.get("num_spectral_samples", 1)
                         )
@@ -4663,6 +4769,8 @@ def main() -> int:
             "foam_train_geometry": bool(args.foam_train_geometry),
             "foam_initialize_from_coadd": bool(args.foam_initialize_from_coadd),
             "foam_fit_target_footprint": bool(args.foam_fit_target_footprint),
+            "grid_fit_target_footprint": bool(args.grid_fit_target_footprint),
+            "grid_psf_margin_sigma": float(args.grid_psf_margin_sigma),
             "foam_whiten_spectral_basis": bool(args.foam_whiten_spectral_basis),
             "foam_exact_observation_refine": bool(args.foam_exact_observation_refine),
             "foam_exact_operator_storage": str(args.foam_exact_operator_storage),

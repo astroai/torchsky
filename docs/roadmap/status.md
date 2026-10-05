@@ -4,7 +4,18 @@
 > APIs, start with [`../api.md`](../api.md). For shipped-work history, use
 > [`history.md`](history.md).
 
-Last updated: 2026-07-27.
+SMACS continuation updated: 2026-09-29. Other subsystem entries below retain
+their 2026-07-27 audit date.
+
+For current SMACS work, follow [the evidence-first reconstruction actions](next.md#smacs-evidence-first-reconstruction-plan--2026-09-24)
+and [the next-model handoff checkpoint](active.md#next-model-handoff-checkpoint--2026-09-29).
+The precision repair is verified but has not improved real-data reconstruction;
+full-image training timed out. Matched injection screens reject both the
+1024-square and 512-square target-footprint grids: neither is deeper than legacy
+at matched purity, and both worsen F150W effective FWHM despite improving F277W.
+The next bounded task is a test-first, one-band linear explicit-grid
+forward/adjoint and weighted inverse solve with frozen calibration. Scientific
+quality remains unestablished.
 
 ## Mission And Ownership
 

@@ -1,5 +1,17 @@
 # Continuous Cube Reconstruction Execution Plan
 
+## Current continuation order — 2026-09-23
+
+Follow [the SMACS evidence-first reconstruction plan](next.md#smacs-evidence-first-reconstruction-plan--2026-09-24)
+for the next work, and [verified results](active.md#verified-results-and-handoff--2026-09-23)
+for evidence and run identities. These supersede the older checkpoint and sprint
+ordering below; the scientific objective and fidelity requirements remain.
+The precision-only experiment completed without a meaningful improvement; the
+full-image experiment timed out. Begin by recovering its cost/failure evidence
+and identifying the earlier good reference, then verify the observation model,
+useful grid resolution, sampling objective and initialization before another
+architecture sweep. No representation has passed final SMACS quality criteria.
+
 ## Objective
 
 Produce a calibrated continuous scene estimate `s(x, y, lambda)` from the six
@@ -25,7 +37,7 @@ Transmission curves outside that span, or spectral structure finer than the
 measured response permits, must be labelled extrapolative and cannot enter the
 promotion gate.
 
-## Current checkpoint
+## Historical checkpoint — 2026-09-18 (not live session status)
 
 - Pushed implementation tip: `27cd94ce5fbfd8798ac7f24118451603b20c93a1`.
 - GPU reconstruction canary `lxc5ook9` is running on healthy node

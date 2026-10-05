@@ -6,7 +6,8 @@ Loops the already-generic detection/validation builders from
 selects the winning cell on validation batches only (pre-registered gate:
 selection on validation, test scored once afterwards). The report carries a
 ``psf_mode`` axis; a learned-PSF cell cannot win unless it also beats the
-analytic arm's held-out calibration gate.
+analytic arm's held-out calibration gate, and a measured candidate cannot win
+with worse effective FWHM than the first listed method.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import torchsky
 
 from bench_multiband_depth import (
     _updec_classical_detection_artifact,
+    _updec_effective_psf_artifact,
     _updec_classical_validation_artifact,
     _updec_control_union_artifact,
     common_support_mask,
@@ -153,6 +155,70 @@ def _stage_method_products(
     return work_root
 
 
+def _measure_effective_psfs(
+    staged: dict[tuple[str, str], Path],
+    methods: list[tuple[str, str]],
+    bands: tuple[str, ...],
+    manifest_path: Path,
+    output_root: Path,
+) -> list[dict[str, Any]]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    magnitudes = [float(value) for value in manifest["reference_ab_magnitude"]]
+    if not magnitudes or not all(math.isfinite(value) for value in magnitudes):
+        raise ValueError("effective-PSF manifest magnitudes must be finite")
+    calibration_magnitude = min(magnitudes)
+    selected = [
+        index
+        for index, value in enumerate(magnitudes)
+        if value == calibration_magnitude
+    ]
+    source_count = len(magnitudes)
+    calibration_manifest = {}
+    for key, value in manifest.items():
+        if isinstance(value, list) and len(value) == source_count:
+            calibration_manifest[key] = [value[index] for index in selected]
+        elif isinstance(value, dict):
+            calibration_manifest[key] = {
+                child_key: (
+                    [child_value[index] for index in selected]
+                    if isinstance(child_value, list)
+                    and len(child_value) == source_count
+                    else child_value
+                )
+                for child_key, child_value in value.items()
+            }
+        else:
+            calibration_manifest[key] = value
+    calibration_manifest["source_count"] = len(selected)
+    output_root.mkdir(parents=True, exist_ok=True)
+    calibration_manifest_path = output_root / "brightest-injection-manifest.json"
+    calibration_manifest_path.write_text(
+        json.dumps(calibration_manifest, indent=2, sort_keys=True) + "\n"
+    )
+
+    rows = []
+    for psf_mode, model_kind in methods:
+        method = f"{psf_mode}__{model_kind}"
+        artifact = _updec_effective_psf_artifact(
+            positive_product_root=staged[(psf_mode, model_kind)] / "validation-000",
+            blank_product_root=staged[(psf_mode, model_kind)] / "blank",
+            injection_manifest_path=calibration_manifest_path,
+            output_dir=output_root,
+            bands=bands,
+            methods=(method,),
+            radius_px=9,
+        )
+        rows.extend(
+            {
+                **row,
+                "calibration_ab_magnitude": calibration_magnitude,
+                "calibration_source_count": len(selected),
+            }
+            for row in artifact["rows"]
+        )
+    return rows
+
+
 def _magnitude_bins(completeness: dict[str, Any]) -> tuple[list[float], list[float]]:
     magnitudes = sorted(float(key) for key in completeness)
     values = [
@@ -163,15 +229,19 @@ def _magnitude_bins(completeness: dict[str, Any]) -> tuple[list[float], list[flo
 
 
 def _m50(magnitudes: list[float], completeness: list[float]) -> float:
-    """Interpolated magnitude at 50% completeness (NaN if never reached)."""
-    for index, value in enumerate(completeness):
-        if value >= 0.5:
-            if index == 0:
-                return magnitudes[0]
-            low_m, low_c = magnitudes[index - 1], completeness[index - 1]
-            high_m, high_c = magnitudes[index], value
-            fraction = (0.5 - low_c) / max(high_c - low_c, 1e-12)
-            return low_m + fraction * (high_m - low_m)
+    """Interpolate the faintward 50% completeness crossing."""
+    if len(magnitudes) != len(completeness) or not magnitudes:
+        return float("nan")
+    for index in range(len(completeness) - 1):
+        bright_c = completeness[index]
+        faint_c = completeness[index + 1]
+        if bright_c >= 0.5 and faint_c < 0.5:
+            bright_m = magnitudes[index]
+            faint_m = magnitudes[index + 1]
+            fraction = (bright_c - 0.5) / max(bright_c - faint_c, 1e-12)
+            return bright_m + fraction * (faint_m - bright_m)
+    if completeness[-1] == 0.5:
+        return magnitudes[-1]
     return float("nan")
 
 
@@ -248,11 +318,41 @@ def _select(
         if row["target_purity_reached"]
         and math.isfinite(row["m50_ci"]["m50"])
         and _heldout_gate(row["psf_mode"], calibration_fit_report)
+        and row.get("resolution_gate_pass") is not False
     ]
     if not eligible:
         return None, rows
     winner = max(eligible, key=lambda row: row["m50_ci"]["m50"])
     return winner, rows
+
+
+def _copy_selected_cell_products(
+    *,
+    input_root: Path,
+    out_dir: Path,
+    module: str,
+    bands: tuple[str, ...],
+    winner: dict[str, Any] | None,
+) -> None:
+    if winner is None:
+        return
+    import shutil
+
+    for band in bands:
+        source = (
+            input_root
+            / module
+            / BATCHES[0]
+            / "products"
+            / winner["psf_mode"]
+            / band
+            / winner["model_kind"]
+        )
+        destination = out_dir / "best_cell_products" / band
+        destination.mkdir(parents=True, exist_ok=True)
+        for name in ("prediction.png", "reference.png", "residual.png"):
+            if (source / name).is_file():
+                shutil.copy2(source / name, destination / f"{band}_{name}")
 
 
 def main() -> int:
@@ -261,13 +361,14 @@ def main() -> int:
     parser.add_argument(
         "--methods",
         required=True,
-        help="CSV of psf_mode/model_kind cells, e.g. "
-        "fitted_gaussian/spectral_power_foam,learned_lowrank/spectral_power_foam",
+        help="CSV of psf_mode/model_kind cells; the first cell is the "
+        "effective-resolution reference",
     )
     parser.add_argument("--validation-root", type=Path, required=True)
     parser.add_argument("--module", default="b")
     parser.add_argument("--bands", default=",".join(DEFAULT_BANDS))
     parser.add_argument("--effective-psf-root", type=Path, default=None)
+    parser.add_argument("--measure-effective-psfs", action="store_true")
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--detection-threshold", type=float, default=5.0)
     parser.add_argument("--target-purity", type=float, default=0.95)
@@ -279,6 +380,8 @@ def main() -> int:
     )
     parser.add_argument("--seed", type=int, default=1729)
     args = parser.parse_args()
+    if args.measure_effective_psfs and args.effective_psf_root is not None:
+        parser.error("--measure-effective-psfs conflicts with --effective-psf-root")
 
     input_root = args.input_root.expanduser().resolve()
     validation_root = args.validation_root.expanduser().resolve()
@@ -343,13 +446,18 @@ def main() -> int:
     )
     manifest_audit = _audit_manifest_support(manifests, support)
 
-    # Effective PSFs: shared across cells so resolution is matched by
-    # construction; the operator arm differs through the predictions.
-    effective_psf_root = (
-        args.effective_psf_root.expanduser().resolve()
-        if getattr(args, "effective_psf_root", None)
-        else validation_root / "effective_psfs"
-    )
+    effective_psf_rows = None
+    if args.measure_effective_psfs:
+        effective_psf_root = out_dir / "effective_psfs"
+        effective_psf_rows = _measure_effective_psfs(
+            staged, methods, bands, manifests[0], effective_psf_root
+        )
+    else:
+        effective_psf_root = (
+            args.effective_psf_root.expanduser().resolve()
+            if args.effective_psf_root is not None
+            else validation_root / "effective_psfs"
+        )
 
     controls: dict[str, dict[str, Any]] = {}
     validations: dict[str, dict[str, Any]] = {}
@@ -409,10 +517,28 @@ def main() -> int:
     union_path = out_dir / "model_control_union.json"
     union_path.write_text(json.dumps(union, indent=2) + "\n")
 
+    fwhm_by_method: dict[str, dict[str, float]] = {}
+    for row in effective_psf_rows or []:
+        fwhm_by_method.setdefault(str(row["method"]), {})[str(row["band"])] = float(
+            row["gaussian_equivalent_fwhm_px"]
+        )
+    resolution_reference_method = f"{methods[0][0]}__{methods[0][1]}"
+    reference_fwhm = fwhm_by_method.get(resolution_reference_method)
+
     per_method = []
     for psf_mode, model_kind in methods:
         method = f"{psf_mode}__{model_kind}"
         validation = validations[method]
+        method_fwhm = fwhm_by_method.get(method)
+        if reference_fwhm is None:
+            resolution_gate_pass = None
+        elif method_fwhm is None or set(method_fwhm) != set(reference_fwhm):
+            raise ValueError(f"incomplete effective-PSF metrics for {method}")
+        else:
+            resolution_gate_pass = all(
+                method_fwhm[band] <= reference_fwhm[band] + 1.0e-12
+                for band in reference_fwhm
+            )
         # Cluster bootstrap over the builders' per-batch completeness curves;
         # pooling would collapse every draw to the same m50 (zero-width CI).
         batch_curves = [
@@ -438,6 +564,8 @@ def main() -> int:
                 "heldout_gate_pass": _heldout_gate(
                     psf_mode, calibration_fit_report
                 ),
+                "resolution_gate_pass": resolution_gate_pass,
+                "effective_psf_fwhm_px_by_band": method_fwhm,
             }
         )
     winner, per_method = _select(
@@ -464,9 +592,13 @@ def main() -> int:
         ),
         "selection_rule": (
             "validation-batches-only: purity gate, held-out calibration gate "
-            "for learned PSF arms, then largest bootstrap-median m50"
+            "for learned PSF arms, non-worse measured effective FWHM than the "
+            "first method when available, then largest bootstrap-median m50"
         ),
         "per_method": per_method,
+        "resolution_reference_method": (
+            resolution_reference_method if reference_fwhm is not None else None
+        ),
         "target_purity": args.target_purity,
         "detection_threshold": args.detection_threshold,
         "bootstrap_draws": BOOTSTRAP_DRAWS,
@@ -478,6 +610,7 @@ def main() -> int:
         },
         "manifest_audit": manifest_audit,
         "effective_psf_root": str(effective_psf_root),
+        "effective_psf": effective_psf_rows,
         "calibration_fit_report": (
             str(calibration_fit_report) if calibration_fit_report else None
         ),
@@ -501,29 +634,32 @@ def main() -> int:
         m50s = [row["m50_ci"]["m50"] for row in per_method]
         lows = [row["m50_ci"]["m50"] - row["m50_ci"]["ci95_low"] for row in per_method]
         highs = [row["m50_ci"]["ci95_high"] - row["m50_ci"]["m50"] for row in per_method]
-        ax.barh(names, m50s, xerr=[lows, highs], color="steelblue")
+        ax.errorbar(m50s, names, xerr=[lows, highs], fmt="o", color="steelblue")
+        finite_limits = [
+            value
+            for value in (
+                *m50s,
+                *[magnitude - error for magnitude, error in zip(m50s, lows)],
+                *[magnitude + error for magnitude, error in zip(m50s, highs)],
+            )
+            if math.isfinite(value)
+        ]
+        if finite_limits:
+            margin = max(0.1, 0.15 * (max(finite_limits) - min(finite_limits)))
+            ax.set_xlim(min(finite_limits) - margin, max(finite_limits) + margin)
         ax.set_xlabel("50% completeness magnitude (AB)")
         ax.set_title(f"Depth per cell (module {args.module}), validation batches")
         fig.tight_layout()
         fig.savefig(out_dir / "depth_comparison.png", dpi=150)
     except Exception as exc:  # matplotlib missing or empty rows: non-fatal
         print(f"depth figure skipped: {exc}")
-    best = max(per_method, key=lambda row: row["m50_ci"]["m50"]) if per_method else None
-    if best is not None:
-        # Copy the winning cell's images next to the report so the result is
-        # directly viewable (PNGs), not just JSON.
-        import shutil
-
-        for band in bands:
-            src = (
-                input_root / args.module / BATCHES[0] / "products"
-                / best["psf_mode"] / band / best["model_kind"]
-            )
-            dst = out_dir / "best_cell_products" / band
-            dst.mkdir(parents=True, exist_ok=True)
-            for name in ("prediction.png", "reference.png", "residual.png"):
-                if (src / name).is_file():
-                    shutil.copy2(src / name, dst / f"{band}_{name}")
+    _copy_selected_cell_products(
+        input_root=input_root,
+        out_dir=out_dir,
+        module=args.module,
+        bands=bands,
+        winner=winner,
+    )
     summary_path = out_dir / "model_selection.json"
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n"
@@ -541,18 +677,36 @@ def main() -> int:
             else "- selected: none (no cell passed the gates)"
         ),
         "",
-        "| method | psf_mode | purity gate | m50 | 95% CI | heldout gate |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "| method | psf_mode | purity gate | resolution gate | m50 | 95% CI | heldout gate |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in per_method:
         ci = row["m50_ci"]
         lines.append(
             f"| {row['method']} | {row['psf_mode']} "
             f"| {row['target_purity_reached']} "
+            f"| {row['resolution_gate_pass']} "
             f"| {ci['m50']:.3f} "
             f"| [{ci['ci95_low']:.3f}, {ci['ci95_high']:.3f}] "
             f"| {row['heldout_gate_pass']} |"
         )
+    if effective_psf_rows:
+        lines.extend(
+            [
+                "",
+                f"Resolution reference: `{resolution_reference_method}`.",
+                "",
+                "| method | band | FWHM (px) | negative lobe fraction | flux bias |",
+                "| --- | --- | ---: | ---: | ---: |",
+            ]
+        )
+        for row in effective_psf_rows:
+            lines.append(
+                f"| {row['method']} | {row['band']} "
+                f"| {row['gaussian_equivalent_fwhm_px']:.3f} "
+                f"| {row['negative_lobe_fraction']:.3f} "
+                f"| {row['median_fractional_flux_bias']:.3f} |"
+            )
     (out_dir / "model_selection.md").write_text("\n".join(lines) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True, allow_nan=False))
     return 0

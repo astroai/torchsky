@@ -1,6 +1,323 @@
 # Torchsky Execution Roadmap
 
-## Bounded reconstruction comparison — 2026-09-22
+## SMACS evidence-first reconstruction plan — 2026-09-24
+
+**End goal:** beat the frozen classical/Drizzle reference in depth at matched
+false-positive density while preserving the same or better independently
+measured effective resolution. “Prettier” is accepted only with faithful flux,
+color, morphology, diffuse-light and uncertainty recovery. No new science result
+is accepted merely because software tests pass. Current evidence and exact run
+identities are in
+[active.md](active.md#evidence-first-implementation-update--2026-09-24).
+
+### 1. Recover evidence and establish the reference before further tuning
+
+- [ ] Recover reports, logs, configurations, checkpoints and products for both
+  precision experiments. The patch run completed; the full-image run timed out.
+  Inspect its last completed step and saved state before restarting anything.
+- [x] Inventory local recovered products and create a fixed-scale contact sheet.
+  The July 29 six-band product is the strongest visual candidate, but its metadata
+  aliases baseline and method to the same FITS file and provides no metrics.
+- [x] Identify the archived candidate as
+  `20260729-smacs-torchsky-drizzle-aa0aa21`; local provenance records ARC URIs
+  and SHA-256 checksums for every SCI/WHT band.
+- [ ] Confirm this is the user's intended earlier good reconstruction. Compare it
+  with current outputs on the same sky
+  footprint, masks, WCS, units and fixed stretch. If it cannot be identified,
+  ask which product the user means; do not substitute an arbitrary weak run.
+- [ ] Freeze independent F150W/F277W grids and the strongest existing classical
+  reconstruction as current references. Recover existing official comparator
+  products; do not rebuild SWarp/Montage/Drizzle. Verify input/code identities.
+- [ ] Create one compact results table with per-band/per-exposure likelihood,
+  reference-image contrast, injection-based flux/color errors, effective PSF,
+  diffuse recovery, runtime and memory. Missing measurements stay missing.
+  Preserve failed/time-limited runs and configuration differences in the table.
+
+**Acceptance:** replay of a saved model reproduces its recorded predictions
+and metrics within a declared numerical tolerance; every comparison identifies
+whether it shares data, response, initialization, parameter budget and compute.
+The precision correction is retained for correctness, but its current real-data
+result is classified as no demonstrated improvement.
+
+### 2. Establish a trustworthy observation model independently of architecture
+
+- [ ] Run matched point, extended, blended and diffuse synthetic scenes through
+  an independently generated forward model. Include known exposure-dependent
+  offsets/planes, PSF widths/wings/centroids, photometric scales and small WCS
+  shifts. Test exact calibration, deliberately wrong calibration, and recovered
+  calibration separately; do not fit all nuisance terms freely with the scene.
+- [ ] Check calibrated MJy/sr, variance scaling, pixel areas, flux conservation,
+  measured passband integration with the reference-spectrum convention, and
+  exactly-once pixel response. Check forward/adjoint and tiled/full predictions
+  and gradients. Re-run the new fine-coordinate tests on CUDA; archive results.
+- [ ] Validate PSFs on independent stars across detector position and exposures;
+  report centroid, width, wings and encircled energy. Audit whether registered
+  inputs already include resampling/pixel response. Distinguish nominal Gaussian
+  controls from calibrated effective PSFs in plots and metadata.
+- [ ] Validate background planes in full detector coordinates with independent
+  calibration samples, including transfer into multiple cutouts. Keep relative
+  offsets at weighted zero mean. Test extended-light attenuation explicitly;
+  retain celestial diffuse emission in the scene and state the unresolved
+  absolute foreground. Optical foregrounds and detector backgrounds retain
+  their distinct response paths.
+- [ ] Estimate relative throughput corrections only with independent evidence
+  and a fixed reference exposure. Do not change measured passbands or inflate
+  variance to compensate for model residuals. Report residual correlations and
+  whether diagonal ERR adequately describes the registered data.
+
+**Acceptance:** noiseless known-scene predictions agree to numerical accuracy;
+noisy recovery has calibrated uncertainty and the flux/color limits in step 7.
+Perturbations produce their expected residual signatures, and calibrated
+corrections recover them without erasing injected diffuse light. Held-out
+science residuals never determine their own PSF/background/photometric model.
+
+### 3. Repair useful spatial resolution and establish the grid ceiling
+
+- [x] Add measurement of actual angular cell spacing across each target and PSF
+  halo; report it alongside nominal tensor dimensions. The current tanh/domain
+  mapping wastes grid capacity: nominal 256 gives roughly 118 intervals over
+  the footprint, and 48 gives roughly 22.
+- [x] Add an explicit target-footprint spatial mapping to the existing grid,
+  including a configurable PSF margin. Omitted bounds preserve the old mapping,
+  so existing checkpoints are not silently reinterpreted.
+- [x] Measure the new diagnostics on the frozen real-data target: a 256 grid
+  changes from 47.13 target intervals (0.17113 arcsec/cell) to 245.13 intervals
+  (0.03290 arcsec/cell) with the four-sigma fitted-PSF halo. The completed
+  control corrected the earlier legacy estimate.
+- [x] Compare legacy versus target-footprint reconstruction with every other
+  factor fixed. The footprint mapping improves source/reference fidelity in
+  both bands and detector validation in F277W, but F150W validation is 0.7–1.4%
+  worse; classify the first screen as promising but mixed.
+- [x] Compare physical sampling at one and two cells per output pixel. The 512²
+  footprint grid ties legacy `m50` but worsens F150W effective FWHM; the 1024²
+  grid is shallower and also worsens F150W effective FWHM. Both increase
+  negative-lobe fractions. A four-cell treatment is not justified by this
+  stopping rule; denser sampling is not recovered resolution.
+- [ ] With fixed calibration, establish a strong independent-band solution of
+  the weighted inverse problem. Use existing matrix-free response/adjoint and
+  an appropriate solver where available; any positivity/regularization choice
+  is explicit. Compare objective convergence with Adam instead of assuming
+  a fixed update count is enough. Keep noise amplification visible.
+
+**Acceptance:** coordinate/node round trips pass at SMACS angular scales;
+independent known-source recovery meets fidelity limits; increasing resolution
+has a measured benefit or reaches a documented plateau. If the grid cannot
+recover the synthetic scene, diagnose the operator/solver before neural tuning.
+
+**Single-variable experiment card:** use the saved joint-grid command and source
+identity, F150W/F277W, module B, aligned inputs, PATT `{1,2,3,4,5,7,8}`, 128-pixel
+best-overlap target, seed 101, 256×256×4 grid, common-product initialization,
+stationary frozen calibration, fitted Gaussian PSFs, learned background,
+training-mean background reference, center sampling, Adam/cosine at LR 0.003,
+and the existing train/validation split. Change only
+`GRID_FIT_TARGET_FOOTPRINT=1` with `GRID_PSF_MARGIN_SIGMA=4.0`.
+
+The earlier 600-step control already established a roughly nine-minute fit, so
+the redundant ≤20-step timing pilot was skipped. A fresh matched pair was
+launched on production CANFAR on 2026-09-24: control session `lclv179y` and
+target-footprint session `nzs78f4r`, both from packaged source commit
+`b2cc91a58fd553ad9b9deb5f1554457116003c38`. Compare their completed reports
+with:
+
+```bash
+pixi run -e test -- python benchmarks/compare_smacs_grid_mapping.py \
+  --control benchmarks_results/smacs-grid-control-20260924-r1/b/shared-foam.json \
+  --treatment benchmarks_results/smacs-grid-footprint-20260924-r1/b/shared-foam.json \
+  --json-out benchmarks_results/smacs-grid-mapping-20260924-r1/comparison.json \
+  --markdown-out benchmarks_results/smacs-grid-mapping-20260924-r1/comparison.md
+```
+
+Advance the mapping only if held-out detector likelihood and source
+flux/contrast do not materially regress and fixed-stretch blank-sky structure
+does not increase. Effective PSF and matched-resolution injection metrics remain
+required before any deeper-than-Drizzle claim.
+
+The first exploratory injection launch (`kjopcswe`, `m0tktfks`) failed before
+fitting because the wrapper selected only held-out PATT `{3,8}` and therefore
+had no training exposures under the frozen calibration split. That stale
+default is fixed. The next pair (`qsmlqs3c`, `f3ux7nq1`) exposed a second
+independent failure: `log(expm1(x))` overflowed while initializing an explicit
+grid from bright MJy/sr values, producing a NaN warm-start cube before the main
+fit. The inverse softplus is now evaluated stably and covered by bright-data
+regressions.
+
+Sessions `brhmilwt` (legacy) and `lc6sn09r` (footprint) then completed at exact
+commit `5d7978ead61edbb853b611ce6c022870f5157ae6`. The 1024-square footprint grid
+fails the exploratory selection gate: at at least 95% purity its `m50` is 28.25
+AB versus 28.50 AB for legacy, pooled completeness is 0.3929 versus 0.4405, and
+F150W effective FWHM is 5.085 versus 4.790 pixels. F277W FWHM improves to 4.466
+from 4.875 pixels, but one-band improvement does not satisfy the same-or-better
+resolution requirement. Do not expand this candidate.
+
+- [x] Run the staged 512×512×4 footprint treatment against the completed legacy
+  control. Production session `xjb93a1r` completed all four frozen batches from
+  package `95a11d8454986d58f212a56d5a312d650dcced17`; scoring session `mlv5wipx`
+  completed the 95%-purity and effective-FWHM gates. Pooled completeness rose
+  from 0.4405 to 0.4643 and `m50` tied at 28.50 AB, but F150W FWHM worsened from
+  4.790 to 5.042 pixels despite F277W improving from 4.875 to 4.529 pixels. The
+  treatment fails the two-band resolution gate and is rejected. Advance to the
+  independent-band weighted inverse problem rather than another density sweep.
+
+#### Handoff: first bounded inverse-solver slice
+
+- [ ] Add a one-band direct-linear explicit-grid state and native-detector
+  operator adapter. Reuse `BoundObservationOperator` or
+  `BoundObservationOperatorSet`; do not solve the existing softplus-transformed
+  `ExplicitSpectralGridField.grid` with linear CG.
+- [ ] Write the operator tests first in `tests/test_explicit_grid_solver.py`:
+  linearity, adjoint dot product, masked/zero-weight exclusion, full/tiled
+  equality, fixed PSF and band-response parity, exposure-order/chunk invariance,
+  CPU/CUDA parity and tiny known-scene recovery against a dense oracle.
+- [ ] Declare the inverse problem before implementation: direct intensity state,
+  fixed per-band spectral response, effective-PSF pixel-response convention,
+  diagonal inverse-variance weights, damping/regularization, positivity policy
+  and null-space behavior. Use LSQR/LSMR rather than CG if the chosen system is
+  not demonstrably positive definite.
+- [ ] After local identities pass, wire one bounded independent-band benchmark
+  path with frozen calibration. Compare solver residual and objective convergence
+  against Adam, and persist iteration count, normal-operator applications,
+  timing, memory and noise-amplification diagnostics.
+- [ ] Run the focused grid/joint/solver/chunking/new-solver tests, then
+  `pixi run preflight-push` and `pixi run typecheck`. Do not auto-run
+  `pixi run ci-local`.
+
+**Stop before production:** any failed linearity/adjoint/finite/tiled test;
+unknown PSF pixel-response or bandpass normalization; undeclared rank deficiency
+or positivity semantics; unstable tighter-tolerance/chunk-size behavior; a
+timing or memory budget overrun; or failed paired flux, color or effective-FWHM
+gates. Do not repeat the 512/1024 footprint sweep, add a four-cell density arm,
+or expand the rejected mapping to six bands or 20 batches.
+
+### 4. Correct training coverage without making fits impractically slow
+
+- [ ] Profile the timed-out full-image run: separate WCS, scene evaluation,
+  spectral integration, PSF, backward, I/O and diagnostic costs, plus memory.
+  Compare measured full-observation objective and gradients with the reference.
+- [ ] Prefer exact accumulation over PSF-aware tiles with one optimizer update
+  after the complete selected-observation objective. Cache only invariant
+  coordinates/response products, respecting device memory and autograd.
+- [ ] If stochastic tiles are needed, use known nonzero inclusion probabilities
+  and the full-observation normalization. Verify the expected sampled gradient
+  against the full gradient on masked/unequal-weight/unequal-footprint cases.
+  Uniform patch origins alone do not make pixel inclusion uniform; patch-local
+  weight normalization is not automatically an unbiased objective.
+- [ ] Record full training and validation objectives at saved checkpoints,
+  not just the last sampled patch loss. Preserve optimizer/RNG/scheduler state
+  and export partial results before a wall-time limit.
+
+**Acceptance:** tiled/full predictions and gradients agree; any sampled method
+matches the full gradient within Monte Carlo uncertainty. A measured short GPU
+pilot predicts a feasible run budget before a long fit is authorized by the
+existing plan. A timeout supplies a recoverable checkpoint and failure report.
+
+### 5. Make initialization and representation comparisons fair
+
+- [ ] Quantify each model's error immediately after initialization. Grids and
+  splats currently inherit structure; SIREN is only adjusted near mean brightness.
+  Report this inequality rather than calling all starts equivalent.
+- [ ] Test image-informed INR initialization using only the common training
+  product, alongside a cold-start control. Count initialization parameters,
+  training work and time in the total budget. Verify it preserves information
+  rather than merely improving the initial scalar loss.
+- [ ] Require each candidate to fit a small known scene with the calibrated
+  operator before a real-data run. For SIREN, verify spatial frequency coverage,
+  parameter gradients, conditioning and optimization; width alone already failed.
+- [ ] Screen independent/joint grids, SIREN, FLAIR, SASNet, Foam, Gaussian splats
+  and diffuse/Foam hybrid with fixed data and response. Check implementations
+  against the actual intended architecture; record adaptations explicitly.
+  Keep hybrid components diagnostic, not physical decompositions.
+- [ ] For splats, measure spatial-evaluation cost and background texture/blank
+  sky false positives. Consider spatial indexing or bounded-tail support only
+  with quantified flux/gradient error. Test component density/width conditioning;
+  do not hide mottling with a different PNG stretch.
+
+**Acceptance:** candidates recover the known scene and beat their own initial
+prediction without violating fidelity. Compare both matched total parameter/
+optimization budgets and quality versus elapsed time. Predeclare one bounded
+screen and at most one evidence-based repair per failed configuration before
+parking it; record why it failed and advance the other candidates.
+
+### 6. Use controlled real-data experiments and explicit decisions
+
+- [ ] Change one factor at a time: spatial mapping, training coverage,
+  initialization, representation, then independently supported calibration.
+  Use paired seeds/inputs and the same independently frozen operator.
+- [ ] Keep train PATT `{1,2,4,5,7}`, validation `{3,8}`, final test `{6,9}`.
+  Split before normalization or calibration statistics. Two validation exposures
+  per band are insufficient for broad uncertainty claims; do not bootstrap
+  correlated pixels as independent evidence. Use paired injection batches and
+  exposure/region-aware uncertainty, stating the small-sample limitation.
+- [ ] Classify each change as improved, worse or uncertain. Selection requires
+  validation detector likelihood plus scientific fidelity; sharper images,
+  lower training loss or fewer residuals alone are insufficient.
+
+**Decision:** advance only candidates whose fidelity passes and whose validation
+improvement is supported by paired uncertainty. An interval overlapping no
+change is uncertain. A fidelity failure rejects the claimed improvement even
+when detector likelihood is lower. Do not use the final test to tune choices.
+
+### 7. Demonstrate quality before six-band/full-cluster claims
+
+- [ ] Start small injections during steps 2–5; for final evidence run at least
+  20 paired batches and 800 continuum injections across at least seven flux
+  levels and the four fixed science regions. Include independent injection
+  PSFs, blends, dropouts, extended and diffuse sources, blank sky, negative
+  injections and shuffled-band controls.
+- [ ] Require bright-source flux bias ≤2% and adjacent-band color bias ≤0.02 mag
+  for the declared continuum population, with paired confidence intervals.
+  Predeclare diffuse-light recovery and uncertainty-coverage tolerances before
+  evaluating them. Measure depth at matched effective resolution and false
+  positive density; report completeness/purity and noise correlations.
+- [ ] Expand passing candidates to all bands and full detector footprints.
+  Resolve missing independent F090W validation calibration rather than dropping
+  those exposures. Verify seams, edges, spatially varying response and memory.
+- [ ] Produce brightness/support/coverage/uncertainty/residual/background/PSF
+  FITS through Torchfits; common-scale linear/asinh and signed-residual PNGs;
+  fixed-region comparisons and learning curves at 0%, 10%, 25%, 50%, 75%, 100%.
+  Legends include units, orientation, angular scale, error, PSF, flux/color,
+  runtime/memory; unknown values say “not measured.”
+- [ ] Produce fixed-stretch false-color RGB with Torchfits: blue F090W/F150W,
+  green F200W/F277W, red F356W/F444W averages, with native and independently
+  resolution-matched versions. Keep the classical-reference display scales.
+- [ ] Compare published UPDC as a secondary photometric/morphological reference,
+  not truth. Injected-depth competition requires UPDC on identical injected
+  inputs. Select on validation, evaluate the untouched test once, then refit
+  the selected configuration on all exposures. Broader claims need another field.
+
+### Handoff and resource discipline
+
+- Continue on `sfabbro/torchsky` main; preserve unrelated working-tree changes.
+  Read current ownership before editing. No force pushes or upstream publication.
+- Use `AI-Zone-GPT-6-Sol-US` on high for difficult numerical/scientific work and
+  `AI-Zone-GPT-6-Luna-US` on high for bounded routine work. Both deployments
+  returned 404 in this session, so continue locally rather than retrying them in
+  a loop; resume delegation when the deployments exist.
+- Production CANFAR only, `images.canfar.net/astroai/webterm:latest`, one GPU for
+  initial validation; up to six independent single-GPU runs when justified.
+  If GPUs are unavailable, stop and ask the user. No staging/CPU fallback.
+- Invoke CANFAR and VOS tools from the repository environment: `pixi run canfar`,
+  `pixi run vcp`, and `pixi run vls`. Keep these dependencies unpinned in
+  `pixi.toml`; the lockfile records the resolved environment. ARC paths are
+  available through slower VOS commands such as `vls arc:projects/...` and
+  `vcp arc:projects/...`; use mounted `/arc/projects/...` inside sessions for
+  large or compute-adjacent access.
+- Local execution is limited to code checks, synthetic tests and lightweight
+  evidence inspection. All real-data, CUDA and heavy reconstruction work runs in
+  production CANFAR headless sessions with `PYTHONNOUSERSITE=1` and no `PYTHONPATH`.
+- Before each long run, state its question, fixed factors, predicted cost,
+  checkpoint schedule, stopping rule and next decision. Start with a ≤20-step
+  timing pilot; do not launch a run whose estimate exceeds its declared budget.
+  Stop at the budget or a predeclared validation plateau, preserve results,
+  and move to another independent task rather than repeatedly extending it.
+- Keep immutable run reports and update `active.md` after reading actual outputs.
+  Do not describe submitted jobs as scientific progress. Use focused tests,
+  preflight and changed-signature type checks; no automatic full suite.
+- **Remaining first-session deliverables:** recover the full-run failure,
+  confirm the July 29 reference with the user, and measure the CANFAR timing
+  breakdown. The local evidence inventory, grid-spacing measurement and
+  single-variable experiment card are complete. No architecture sweep first.
+
+## Historical bounded reconstruction comparison — 2026-09-22
 
 Add **Gaussian splatting** to the independent-band grid, joint grid, SIREN,
 FLAIR/SASNet and Foam comparisons. Astronomical splats are additive positive
