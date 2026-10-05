@@ -121,72 +121,21 @@ def zscale_limits(
     Samples the image, fits a line to the sorted intensities in the
     central part of the distribution, and returns (z1, z2) display limits.
     """
-    flat = arr.flatten()
-    # Remove NaNs and Infs
-    valid = flat[torch.isfinite(flat)]
-    if valid.numel() == 0:
-        return 0.0, 1.0
+    from ...transforms import _zscale_bounds_tensor
 
-    # Sub-sample for speed
-    if valid.numel() > n_samples:
-        step = max(1, valid.numel() // n_samples)
-        sample = valid[::step]
-    else:
-        sample = valid
-
-    sample, _ = torch.sort(sample)
-    n = sample.numel()
-    if n < min_npixels:
-        return float(sample[0].item()), float(sample[-1].item())
-
-    # Iterative sigma-clipped linear fit
-    good = torch.ones(n, dtype=torch.bool, device=sample.device)
-    x = torch.arange(n, dtype=torch.float64, device=sample.device)
-    y = sample.to(torch.float64)
-
-    for _ in range(max_iterations):
-        xg = x[good]
-        yg = y[good]
-        ng = int(xg.numel())
-        if ng < min_npixels:
-            break
-        xm = xg.mean()
-        ym = yg.mean()
-        slope = ((xg - xm) * (yg - ym)).sum() / ((xg - xm) ** 2).sum().clamp_min(1e-30)
-        intercept = ym - slope * xm
-        residuals = y - (slope * x + intercept)
-        sigma = float(residuals[good].std().item())
-        if sigma < 1e-10:
-            break
-        new_good = torch.abs(residuals) < krej * sigma
-        if int(new_good.sum().item()) < min_npixels:
-            break
-        if float(new_good.sum().item()) / n < 1.0 - max_reject:
-            break
-        good = new_good
-
-    xg = x[good]
-    yg = y[good]
-    if xg.numel() < 2:
-        return float(sample[n // 4].item()), float(sample[3 * n // 4].item())
-
-    xm = xg.mean()
-    ym = yg.mean()
-    slope = float(
-        (((xg - xm) * (yg - ym)).sum() / ((xg - xm) ** 2).sum().clamp_min(1e-30)).item()
+    bounds = _zscale_bounds_tensor(
+        arr,
+        contrast=contrast,
+        n_samples=n_samples,
+        max_reject=max_reject,
+        min_npixels=min_npixels,
+        krej=krej,
+        max_iterations=max_iterations,
     )
-    intercept = float(ym.item()) - slope * float(xm.item())
-
-    center = n / 2.0
-    z1 = max(float(sample[0].item()), intercept + slope * (0.0 - center) / contrast)
-    z2 = min(float(sample[-1].item()), intercept + slope * (n - center) / contrast)
-
-    if z2 <= z1:
-        med = float(torch.median(sample).item())
-        std = float(sample.float().std().item())
-        z1, z2 = med - 3 * std, med + 3 * std
-
-    return float(z1), float(z2)
+    if bounds is None:
+        return 0.0, 1.0
+    z1, z2 = bounds
+    return float(z1.item()), float(z2.item())
 
 
 def percentile_limits(

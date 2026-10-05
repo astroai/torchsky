@@ -325,10 +325,13 @@ def synthetic_photometry(
         if wave.numel() != n_wave:
             raise ValueError("wavelength length must match flux_lambda's last axis")
         waves = wave.reshape(1, -1).expand(max(int(flux.numel() // n_wave), 1), -1)
-        shared = True
+        shared = flux.numel() > 0
     elif wave.shape == flux.shape:
         waves = wave.reshape(-1, n_wave)
-        shared = bool(torch.allclose(waves, waves[:1]))
+        shared = waves.shape[0] > 0 and (
+            waves.shape[0] == 1
+            or (not waves.requires_grad and bool(torch.equal(waves, waves[:1])))
+        )
     else:
         raise ValueError("wavelength must be 1D or the same shape as flux_lambda")
     batch = flux.reshape(-1, n_wave)
@@ -553,32 +556,18 @@ def _covered_grid(
     pb_response = passband.throughput.to(device=wave.device, dtype=wave.dtype)
     full_weight = torch.trapezoid(pb_response * pb_wave, pb_wave)
     lo, hi = wave[0], wave[-1]
-    inside = (pb_wave >= lo) & (pb_wave <= hi)
-    if hi <= pb_wave[0] or lo >= pb_wave[-1]:
+    left = torch.maximum(lo, pb_wave[0])
+    right = torch.minimum(hi, pb_wave[-1])
+    if not bool(right > left):
         return (
             pb_wave[:0],
             pb_response[:0],
             torch.zeros((), dtype=wave.dtype, device=wave.device),
         )
-    grid = pb_wave[inside]
-    left = torch.maximum(lo, pb_wave[0])
-    right = torch.minimum(hi, pb_wave[-1])
-    spectrum_inside = wave[(wave >= left) & (wave <= right)]
-    grid = torch.cat((grid, left[None], right[None], spectrum_inside))
+    pb_inside = pb_wave[(pb_wave > left) & (pb_wave < right)]
+    spectrum_inside = wave[(wave > left) & (wave < right)]
+    grid = torch.cat((left[None], pb_inside, spectrum_inside, right[None]))
     grid = torch.sort(grid).values
-    # Deduplicate with a mask rather than ``torch.unique``. The grid can carry a
-    # gradient -- a spectrum's wavelengths move with a fitted velocity, which is
-    # the whole point of integrating on them -- and ``unique`` has no backward,
-    # so it silently made the photometry of a differentiable spectrum
-    # undifferentiable. Exact duplicates are what have to go: a repeated node is
-    # harmless to the trapezoid, but the interpolation below divides by
-    # ``x1 - x0`` and would return inf or NaN on one. Selecting the kept nodes
-    # leaves the derivative of each of them intact, and removes the same values
-    # ``unique`` did.
-    keep = torch.ones_like(grid, dtype=torch.bool)
-    if grid.numel() > 1:
-        keep[1:] = grid[1:] != grid[:-1]
-    grid = grid[keep]
     response = _linear_interpolate(pb_wave, pb_response.unsqueeze(0), grid).squeeze(0)
     covered_weight = torch.trapezoid(response * grid, grid)
     coverage = covered_weight / full_weight

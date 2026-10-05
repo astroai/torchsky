@@ -42,8 +42,15 @@ class SurveyInfo:
     image: object  # cached Tensor (ref, not copied)
 
 
-def _survey_id(path: str, hdu: int, stretch: str, cmap: str) -> str:
-    key = f"{path}:{hdu}:{stretch}:{cmap}"
+def _survey_id(
+    path: str,
+    hdu: int,
+    stretch: str,
+    cmap: str,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+) -> str:
+    key = f"{path}:{hdu}:{stretch}:{cmap}:{vmin}:{vmax}"
     return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
@@ -85,7 +92,7 @@ def _register_survey_sync(
     root: Path = request.app.state.root_dir
     abs_path = str(resolve_under_root(root, path))
 
-    sid = _survey_id(abs_path, hdu, stretch, cmap)
+    sid = _survey_id(abs_path, hdu, stretch, cmap, vmin, vmax)
     surveys = _get_surveys(request)
 
     if sid in surveys:

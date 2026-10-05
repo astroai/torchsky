@@ -930,8 +930,11 @@ class Spectrum1D:
 
     def resample(self, new_wavelength: torch.Tensor) -> "Spectrum1D":
         """Resample spectrum to new wavelength grid."""
-        current_wave = self.wavelength.to(device=self.flux.device, dtype=torch.float64)
-        target_wave = new_wavelength.to(device=self.flux.device, dtype=torch.float64)
+        work_dtype = (
+            torch.float32 if self.flux.device.type == "mps" else torch.float64
+        )
+        current_wave = self.wavelength.to(device=self.flux.device, dtype=work_dtype)
+        target_wave = new_wavelength.to(device=self.flux.device, dtype=work_dtype)
         if current_wave.ndim != 1 or target_wave.ndim != 1:
             raise ValueError("wavelength grids must be 1D")
         if current_wave.numel() < 2:
@@ -1095,24 +1098,25 @@ class DataCube:
         """Extract 2D slice at specific wavelength."""
         wave = self.spectral_axis.to_wavelength()
 
-        if width is None:
-            # Find closest wavelength
-            idx = torch.argmin(torch.abs(wave - wavelength))
-            if self.spectral_axis_index == 0:
-                return self.data[idx, :, :]
-            elif self.spectral_axis_index == 1:
-                return self.data[:, idx, :]
-            elif self.spectral_axis_index == 2:
-                return self.data[:, :, idx]
-        else:
-            # Average over wavelength range
+        if width is not None:
             mask = torch.abs(wave - wavelength) <= width / 2
-            if self.spectral_axis_index == 0:
-                return torch.mean(self.data[mask, :, :], dim=0)
-            elif self.spectral_axis_index == 1:
-                return torch.mean(self.data[:, mask, :], dim=1)
-            elif self.spectral_axis_index == 2:
-                return torch.mean(self.data[:, :, mask], dim=2)
+            if bool(mask.any()):
+                if self.spectral_axis_index == 0:
+                    return torch.mean(self.data[mask, :, :], dim=0)
+                elif self.spectral_axis_index == 1:
+                    return torch.mean(self.data[:, mask, :], dim=1)
+                elif self.spectral_axis_index == 2:
+                    return torch.mean(self.data[:, :, mask], dim=2)
+
+        # Find closest wavelength (or fallback when width window contains no channels)
+        idx = torch.argmin(torch.abs(wave - wavelength))
+        if self.spectral_axis_index == 0:
+            return self.data[idx, :, :]
+        elif self.spectral_axis_index == 1:
+            return self.data[:, idx, :]
+        elif self.spectral_axis_index == 2:
+            return self.data[:, :, idx]
+        raise ValueError("Invalid spectral_axis_index")
 
     def to(self, device: torch.device) -> "DataCube":
         """Move cube to device."""
@@ -1124,6 +1128,11 @@ class DataCube:
                 type=self.spectral_axis.type,
                 rest_frequency=self.spectral_axis.rest_frequency,
                 redshift=self.spectral_axis.redshift,
+                bin_edges=(
+                    self.spectral_axis.bin_edges.to(device)
+                    if self.spectral_axis.bin_edges is not None
+                    else None
+                ),
             ),
             spatial_wcs=self.spatial_wcs,
             ivar=self.ivar.to(device) if self.ivar is not None else None,

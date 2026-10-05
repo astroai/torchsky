@@ -249,24 +249,16 @@ def _f99_uv_k(x: Tensor, r_v: Tensor) -> Tensor:
 def f99_a_lambda(wave_angstrom: Tensor, a_v: Tensor, r_v: Tensor) -> Tensor:
     """Fitzpatrick (1999) ``A(λ)``; wavelengths in Angstrom."""
     x = 10000.0 / wave_angstrom.clamp_min(1e-6)
-    r_flat = r_v.reshape(-1)
-    x_flat = x.reshape(-1)
-    a_flat = a_v.reshape(-1)
-    n = int(x_flat.numel())
-    if r_flat.numel() == 1 and n != 1:
-        r_flat = r_flat.expand(n)
-    elif r_flat.numel() != n:
-        r_flat = r_v.expand_as(x).reshape(-1)
-    if a_flat.numel() == 1 and n != 1:
-        a_flat = a_flat.expand(n)
-    elif a_flat.numel() != n:
-        a_flat = a_v.expand_as(x).reshape(-1)
+    x_b, a_b, r_b = torch.broadcast_tensors(x, a_v, r_v)
+    x_flat = x_b.reshape(-1)
+    a_flat = a_b.reshape(-1)
+    r_flat = r_b.reshape(-1)
     k_knots = _f99_kknots(r_flat)
     k_opt = _natural_cubic_eval(x_flat, k_knots)
     a_opt = (a_flat / r_flat) * (k_opt + r_flat)
     a_uv = a_flat * (1.0 + _f99_uv_k(x_flat, r_flat) / r_flat)
     out = torch.where(x_flat < _F99_UV_JOIN, a_opt, a_uv)
-    return out.reshape(wave_angstrom.shape)
+    return out.reshape(x_b.shape)
 
 
 def calzetti_k_ebv(wave_angstrom: Tensor, r_v: Tensor) -> Tensor:
@@ -308,14 +300,11 @@ def _align_scale(scale: Tensor, wave: Tensor) -> Tensor:
     becomes ``[B, 1]``, not a last-axis alignment of ``B`` with ``L``.
     """
     aligned = scale.to(device=wave.device, dtype=wave.dtype)
-    while aligned.ndim < wave.ndim:
+    if aligned.ndim == 0:
+        return aligned
+    if aligned.ndim == wave.ndim and aligned.shape[-1] != 1:
         aligned = aligned.unsqueeze(-1)
-    if (
-        aligned.ndim == wave.ndim
-        and aligned.shape != wave.shape
-        and aligned.shape[-1] != 1
-        and aligned.shape[-1] != wave.shape[-1]
-    ):
+    while aligned.ndim < wave.ndim:
         aligned = aligned.unsqueeze(-1)
     return aligned
 

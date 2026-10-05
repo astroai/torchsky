@@ -132,35 +132,8 @@ class FLRW:
 
 
 @dataclass(frozen=True)
-class FlatWCDM:
+class FlatWCDM(FLRW):
     """Flat wCDM. ``w0=-1`` is ΛCDM."""
-
-    H0: float = PLANCK18_H0
-    Om0: float = PLANCK18_OM0
-    w0: float = PLANCK18_W0
-
-    def e(self, z: Tensor) -> Tensor:
-        return e_of_z(z, om0=self.Om0, w0=self.w0)
-
-    def comoving_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
-        return comoving_distance(
-            z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps
-        )
-
-    def luminosity_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
-        return luminosity_distance(
-            z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps
-        )
-
-    def angular_diameter_distance(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
-        return angular_diameter_distance(
-            z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps
-        )
-
-    def distance_modulus(self, z: Tensor, *, n_steps: int = 2048) -> Tensor:
-        return distance_modulus(
-            z, H0=self.H0, om0=self.Om0, w0=self.w0, n_steps=n_steps
-        )
 
 
 def e_of_z(
@@ -255,7 +228,7 @@ def comoving_distance(
     if z_t.numel() == 0:
         return z_t
     z_nonneg = _nonnegative_redshift(z_t)
-    z_limit = z_nonneg.amax() * 1.01 + 1e-5
+    z_limit = z_nonneg.detach().amax() * 1.01 + 1e-5
     table_size = max(int(n_steps), 2)
     z_grid = (
         torch.linspace(0.0, 1.0, table_size, device=z_t.device, dtype=z_t.dtype)

@@ -19,6 +19,85 @@ class AsinhStretch:
         scale = self.Q / self.a
         return torch.asinh(scale * tensor) / math.asinh(scale)
 
+def _zscale_bounds_tensor(
+    tensor: Tensor,
+    *,
+    contrast: float = 0.25,
+    n_samples: int = 600,
+    max_reject: float = 0.5,
+    min_npixels: int = 5,
+    krej: float = 2.5,
+    max_iterations: int = 5,
+) -> tuple[Tensor, Tensor] | None:
+    flat = tensor.flatten()
+    valid = flat[torch.isfinite(flat)]
+    if valid.numel() == 0:
+        return None
+
+    if valid.numel() > n_samples:
+        step = max(1, valid.numel() // n_samples)
+        sample = valid[::step]
+    else:
+        sample = valid
+
+    sample, _ = torch.sort(sample)
+    n = sample.numel()
+    if n < min_npixels:
+        return sample[0], sample[-1]
+
+    work_dtype = torch.float32 if sample.device.type == "mps" else torch.float64
+    good = torch.ones(n, dtype=torch.bool, device=sample.device)
+    x = torch.arange(n, dtype=work_dtype, device=sample.device)
+    y = sample.to(work_dtype)
+    for _ in range(max_iterations):
+        xg = x[good]
+        yg = y[good]
+        if xg.numel() < min_npixels:
+            break
+        xm = xg.mean()
+        ym = yg.mean()
+        slope = ((xg - xm) * (yg - ym)).sum() / (
+            (xg - xm) ** 2
+        ).sum().clamp_min(1e-30)
+        intercept = ym - slope * xm
+        residuals = y - (slope * x + intercept)
+        sigma = residuals[good].std()
+        if float(sigma.item()) < 1e-10:
+            break
+        new_good = torch.abs(residuals) < krej * sigma
+        if int(new_good.sum().item()) < min_npixels:
+            break
+        if float(new_good.sum().item()) / n < 1.0 - max_reject:
+            break
+        good = new_good
+
+    xg = x[good]
+    yg = y[good]
+    if xg.numel() < 2:
+        return sample[n // 4], sample[3 * n // 4]
+
+    xm = xg.mean()
+    ym = yg.mean()
+    slope = ((xg - xm) * (yg - ym)).sum() / (
+        (xg - xm) ** 2
+    ).sum().clamp_min(1e-30)
+    intercept = ym - slope * xm
+    center = n / 2.0
+    z1 = torch.maximum(
+        sample[0],
+        (intercept + slope * (0.0 - center) / contrast).to(sample.dtype),
+    )
+    z2 = torch.minimum(
+        sample[-1],
+        (intercept + slope * (n - center) / contrast).to(sample.dtype),
+    )
+    if bool(z2 <= z1):
+        median = torch.median(sample)
+        std = sample.float().std().to(dtype=sample.dtype)
+        z1, z2 = median - 3.0 * std, median + 3.0 * std
+    return z1, z2
+
+
 class ZScale:
 
     def __init__(self, contrast: float = 0.25, max_reject: float = 0.5):
@@ -30,75 +109,12 @@ class ZScale:
         self.max_reject = max_reject
 
     def __call__(self, tensor: Tensor) -> Tensor:
-        flat = tensor.flatten()
-        valid = flat[torch.isfinite(flat)]
-        if valid.numel() == 0:
+        bounds = _zscale_bounds_tensor(
+            tensor, contrast=self.contrast, max_reject=self.max_reject
+        )
+        if bounds is None:
             return torch.zeros_like(tensor)
-
-        if valid.numel() > 600:
-            step = max(1, valid.numel() // 600)
-            sample = valid[::step]
-        else:
-            sample = valid
-
-        sample, _ = torch.sort(sample)
-        n = sample.numel()
-        if n < 5:
-            z1, z2 = sample[0], sample[-1]
-        else:
-            good = torch.ones(n, dtype=torch.bool, device=sample.device)
-            x = torch.arange(n, dtype=torch.float64, device=sample.device)
-            y = sample.to(torch.float64)
-            for _ in range(5):
-                xg = x[good]
-                yg = y[good]
-                if xg.numel() < 5:
-                    break
-                xm = xg.mean()
-                ym = yg.mean()
-                slope = ((xg - xm) * (yg - ym)).sum() / (
-                    (xg - xm) ** 2
-                ).sum().clamp_min(1e-30)
-                intercept = ym - slope * xm
-                residuals = y - (slope * x + intercept)
-                sigma = residuals[good].std()
-                if float(sigma.item()) < 1e-10:
-                    break
-                new_good = torch.abs(residuals) < 2.5 * sigma
-                if int(new_good.sum().item()) < 5:
-                    break
-                if float(new_good.sum().item()) / n < 1.0 - self.max_reject:
-                    break
-                good = new_good
-
-            xg = x[good]
-            yg = y[good]
-            if xg.numel() < 2:
-                z1, z2 = sample[n // 4], sample[3 * n // 4]
-            else:
-                xm = xg.mean()
-                ym = yg.mean()
-                slope = ((xg - xm) * (yg - ym)).sum() / (
-                    (xg - xm) ** 2
-                ).sum().clamp_min(1e-30)
-                intercept = ym - slope * xm
-                center = n / 2.0
-                z1 = torch.maximum(
-                    sample[0],
-                    (intercept + slope * (0.0 - center) / self.contrast).to(
-                        sample.dtype
-                    ),
-                )
-                z2 = torch.minimum(
-                    sample[-1],
-                    (intercept + slope * (n - center) / self.contrast).to(
-                        sample.dtype
-                    ),
-                )
-                if bool(z2 <= z1):
-                    median = torch.median(sample)
-                    std = sample.float().std().to(dtype=sample.dtype)
-                    z1, z2 = median - 3.0 * std, median + 3.0 * std
+        z1, z2 = bounds
 
         # Prevent division by zero
         range_val = z2 - z1
@@ -330,8 +346,6 @@ class RandomRotation:
         self.interpolation = interpolation
 
     def __call__(self, tensor: Tensor) -> Tensor:
-        import math
-
         angle = torch.rand(1).item() * 360.0
         theta = math.radians(angle)
 

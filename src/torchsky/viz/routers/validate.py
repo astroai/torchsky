@@ -101,7 +101,7 @@ def _register_pair_sync(request: Request, pair: ValidationPair) -> JSONResponse:
             )
 
     pid = hashlib.sha256(
-        f"{pair.truth_path}:{pair.model_path}:{pair.sigma_path}".encode()
+        f"{pair.truth_path}:{pair.truth_hdu}:{pair.model_path}:{pair.model_hdu}:{pair.sigma_path}:{pair.sigma_hdu}".encode()
     ).hexdigest()
     pairs = _pairs(request)
     _evict_validation_fifo(request, pairs, pid)

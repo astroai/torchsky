@@ -183,3 +183,32 @@ def test_evaluate_throughput_lvf_and_gaussian() -> None:
     assert lvf[0, 0].item() == pytest.approx(1.0)
     assert lvf[1, 2].item() == pytest.approx(1.0)
 
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="MPS is not available on this machine"
+)
+@torch.no_grad()
+def test_mps_spectrum_matches_the_cpu_integral() -> None:
+    """A device without ``float64`` integrates instead of raising, and agrees.
+
+    Two device-specific traps are covered at once. The MPS framework raises on a
+    ``float64`` conversion rather than rounding, so a spectrum living there is
+    integrated in its own precision. And it returns the *unexpanded* row for an
+    expanded index tensor, which turned a gathered passband response into zeros
+    with no error -- a band that looks measured and empty. Comparing against the
+    CPU double-precision integral catches both: one raises, the other disagrees.
+    """
+    wave = torch.linspace(4000.0, 6000.0, 41)
+    band = Passband(
+        torch.linspace(4000.0, 6000.0, 9),
+        torch.tensor([0.0, 0.2, 0.6, 0.9, 1.0, 0.7, 0.3, 0.1, 0.0]),
+    )
+    flux = 3.5 + 0.4 * torch.sin((wave - 4000.0) / 240.0)
+    reference = synthetic_photometry(wave, flux, band)
+    on_device = synthetic_photometry(wave.to("mps"), flux.to("mps"), band)
+
+    assert on_device.value.device.type == "mps"
+    assert bool(on_device.valid.item())
+    assert on_device.value.item() == pytest.approx(reference.value.item(), rel=1e-4)
+    assert on_device.coverage.item() == pytest.approx(reference.coverage.item(), rel=1e-4)

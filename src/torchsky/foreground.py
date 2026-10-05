@@ -126,14 +126,16 @@ def dib_optical_depth(
     """
     if not (len(bands) == len(tau_per_ebv) == len(sigma_angstrom)):
         raise ValueError("bands, tau_per_ebv, and sigma_angstrom must align")
+    from .extinction import _align_scale
+
     wave = torch.as_tensor(wave_angstrom)
-    scale = torch.as_tensor(strength_scale, device=wave.device, dtype=wave.dtype)
-    ebv_t = torch.as_tensor(ebv, device=wave.device, dtype=wave.dtype)
-    if ebv_t.ndim == wave.ndim - 1 and wave.ndim > 1:
-        ebv_t = ebv_t.unsqueeze(-1)
-    if scale.ndim == ebv_t.ndim - 1 and ebv_t.ndim > 0:
-        scale = scale.unsqueeze(-1)
-    tau = torch.zeros_like(ebv_t)
+    ebv_t = _align_scale(torch.as_tensor(ebv), wave)
+    scale = _align_scale(torch.as_tensor(strength_scale), wave)
+    tau = torch.zeros(
+        torch.broadcast_shapes(wave.shape, ebv_t.shape, scale.shape),
+        device=wave.device,
+        dtype=wave.dtype,
+    )
     for center, tau_0, sigma in zip(bands, tau_per_ebv, sigma_angstrom):
         gaussian = torch.exp(-0.5 * ((wave - center) / sigma) ** 2)
         tau = tau + tau_0 * ebv_t * scale * gaussian

@@ -113,22 +113,29 @@ def _world_to_sample_grid(
 
     Returns (grid_x, grid_y) ready for F.grid_sample, and a validity mask.
     """
-    # WCS world_to_pixel: (ra, dec) tensors → (x, y) pixel coords (FITS 1-based)
-    x_pix, y_pix = wcs.world_to_pixel_2d(lon.reshape(-1), lat.reshape(-1))
+    #Project (lon, lat) -> 0-based pixel coordinates
+    x_pix, y_pix = wcs.world_to_pixel(lon.reshape(-1), lat.reshape(-1), origin=0)
 
-    # Normalize to [-1, 1] for grid_sample (converts from FITS 1-based)
-    # FITS pixel convention: pixel 1 = image edge
-    grid_x = (x_pix - 1) / (image_w - 1) * 2.0 - 1.0
-    grid_y = (y_pix - 1) / (image_h - 1) * 2.0 - 1.0
+    # Normalize 0-based pixel centers [0, W-1] to [-1, 1] for grid_sample(align_corners=True)
+    grid_x = (
+        x_pix / (image_w - 1) * 2.0 - 1.0
+        if image_w > 1
+        else torch.zeros_like(x_pix)
+    )
+    grid_y = (
+        y_pix / (image_h - 1) * 2.0 - 1.0
+        if image_h > 1
+        else torch.zeros_like(y_pix)
+    )
 
     # Validity: pixels that fall inside the image
     valid = (
         torch.isfinite(grid_x)
         & torch.isfinite(grid_y)
-        & (grid_x >= -1.0)
-        & (grid_x <= 1.0)
-        & (grid_y >= -1.0)
-        & (grid_y <= 1.0)
+        & (x_pix >= 0.0)
+        & (x_pix <= max(image_w - 1, 0))
+        & (y_pix >= 0.0)
+        & (y_pix <= max(image_h - 1, 0))
     )
     # Clamp to avoid grid_sample complaints
     grid_x = grid_x.clamp(-1.0, 1.0)
@@ -182,7 +189,7 @@ def render_hips_tile(
     # Compute (lon, lat) for each pixel of this tile
     try:
         lon, lat = _tile_lon_lat(order, pix, tile_size)
-    except Exception:
+    except (ValueError, RuntimeError):
         return None
 
     lon = lon.to(torch.float64)
@@ -191,14 +198,16 @@ def render_hips_tile(
     # Project to FITS pixel coordinates
     try:
         grid_x, grid_y, valid = _world_to_sample_grid(lon, lat, wcs, image_h, image_w)
-    except Exception:
+    except (ValueError, RuntimeError):
         return None
 
     if not valid.any():
         return None  # tile entirely outside image
 
     # Build grid for F.grid_sample: (1, 1, tile_size^2, 2)
-    grid = torch.stack([grid_x, grid_y], dim=-1).float()
+    grid = torch.stack([grid_x, grid_y], dim=-1).to(
+        device=image.device, dtype=torch.float32
+    )
     grid = grid.reshape(1, tile_size * tile_size, 1, 2)
 
     # Extract pixel values using bilinear interpolation
@@ -210,7 +219,7 @@ def render_hips_tile(
     sampled = sampled.squeeze().reshape(tile_size, tile_size)
 
     # Mask out-of-bounds pixels
-    valid_2d = valid.reshape(tile_size, tile_size)
+    valid_2d = valid.to(device=image.device).reshape(tile_size, tile_size)
     sampled = sampled.masked_fill(~valid_2d, float("nan"))
 
     # Apply stretch and encode

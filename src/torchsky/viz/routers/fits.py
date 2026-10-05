@@ -86,15 +86,15 @@ def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
     abs_path = str(_resolve_path(root, path))
 
     try:
-        hdul = open_fits(abs_path)
-        hdu_list = [
-            {
-                "index": i,
-                "name": getattr(h, "name", f"HDU{i}"),
-                "type": type(h).__name__,
-            }
-            for i, h in enumerate(hdul)
-        ]
+        with open_fits(abs_path) as hdul:
+            hdu_list = [
+                {
+                    "index": i,
+                    "name": getattr(h, "name", f"HDU{i}"),
+                    "type": type(h).__name__,
+                }
+                for i, h in enumerate(hdul)
+            ]
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")
     except Exception as e:
