@@ -216,6 +216,8 @@ class OutlierConfig:
     snr: tuple[float, float] = (5.0, 4.0)
     scale: tuple[float, float] = (1.2, 0.7)
     min_floor: float = 0.0
+    grow: int = 1
+    mode: Literal["mask", "weight_zero", "flag_only"] = "mask"
 
 
 @dataclass(frozen=True)
@@ -854,16 +856,16 @@ def _load_observation_weight_map(
     return load_image_observation_weight_map(obs, image, device=device)
 
 
-def _apply_observation_calibration(
+def _effective_observation_photometric_scale(
     obs: ImageObservation,
-    image: Tensor,
-    source_weight: Tensor,
-) -> tuple[Tensor, Tensor]:
+    hdr: dict | None = None,
+) -> float:
     scale = float(obs.photometric_scale)
     flux_kw = getattr(obs, "flux_scale_keyword", None)
     exptime_kw = getattr(obs, "exposure_time_keyword", None)
     if flux_kw is not None or exptime_kw is not None:
-        hdr = getattr(obs, "header", None)
+        if not isinstance(hdr, dict):
+            hdr = getattr(obs, "header", None)
         if not isinstance(hdr, dict):
             hdr = _observation_header_for_area_scaling(obs)
         if flux_kw is not None and flux_kw in hdr:
@@ -873,6 +875,17 @@ def _apply_observation_calibration(
             if not math.isfinite(exptime) or exptime <= 0.0:
                 raise ValueError(f"Header {exptime_kw} must be finite and positive")
             scale = scale / exptime
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("Observation photometric_scale must be finite and positive")
+    return scale
+
+
+def _apply_observation_calibration(
+    obs: ImageObservation,
+    image: Tensor,
+    source_weight: Tensor,
+) -> tuple[Tensor, Tensor]:
+    scale = _effective_observation_photometric_scale(obs)
     return apply_image_observation_calibration(
         photometric_scale=scale,
         background_offset=obs.background_offset,
@@ -3810,20 +3823,36 @@ def coadd_image_plane(
             numer.zero_()
             denom.zero_()
             overlap_count.zero_()
+            corr_pixel_area_sr = None
+            if value_semantics == "flux":
+                prepared = ensure_prepared_target()
+                if prepared.pixel_area_sr is None:
+                    raise RuntimeError("target pixel area is required for flux semantics")
+                corr_pixel_area_sr = prepared.pixel_area_sr
             for i, ps in enumerate(projected_store):
                 w = ps["weight"]
                 overlap_contrib = ps["overlap"]
                 tw = ps["target_window"]
+                pa_slice = corr_pixel_area_sr
                 if tw is None:
-                    numer.add_(corrected[i] * w)
-                    denom.add_(w)
-                    overlap_count.add_(overlap_contrib)
+                    corr_numer = corrected[i] * w
                 else:
                     y0, y1, x0, x1 = tw
-                    if y1 > y0 and x1 > x0:
-                        numer[y0:y1, x0:x1].add_(corrected[i][y0:y1, x0:x1] * w)
-                        denom[y0:y1, x0:x1].add_(w)
-                        overlap_count[y0:y1, x0:x1].add_(overlap_contrib)
+                    corr_numer = corrected[i][y0:y1, x0:x1] * w
+                    if pa_slice is not None:
+                        pa_slice = pa_slice[y0:y1, x0:x1]
+                accumulate_projected_observation(
+                    numer,
+                    denom,
+                    overlap_count,
+                    projected_numer=corr_numer,
+                    projected_weight=w,
+                    projected_overlap=overlap_contrib,
+                    stacking_method=stacking_method,
+                    value_semantics=value_semantics,
+                    pixel_area_sr=pa_slice,
+                    target_window=tw,
+                )
 
     if stacking_method == "median":
         if spilled_median_result is not None:
@@ -4662,8 +4691,9 @@ def _propagate_observation_variance_components(
             image, header_dict_obs = load_observation_image_and_header(
                 obs, device=read_dev
             )
+            image_dev = image.to(device=device, dtype=torch.float32)
             if comp is None:
-                comp_t = torch.zeros_like(image, device=device, dtype=torch.float32)
+                comp_t = torch.zeros_like(image_dev)
             elif isinstance(comp, Tensor):
                 comp_t = validate_image_plane_2d(comp).to(
                     device=device, dtype=torch.float32
@@ -4675,37 +4705,35 @@ def _propagate_observation_variance_components(
                 comp_t = validate_image_plane_2d(comp_raw).to(
                     device=device, dtype=torch.float32
                 )
-            # Propagate std = sqrt(max(var, 0)) through linear resampling, or project var directly:
-            # In JWST/Roman stcal.resample, each variance plane is resampled with weight W_i
-            # and accumulated as sum(W_i^2 * V_i) / (sum W_i)^2.
-            var_obs = Observation(
-                data=comp_t,
-                wcs=header_dict_obs,
-                weight=obs.weight,
-                photometric_scale=obs.photometric_scale,
-                background_offset=0.0,
-                weight_map=obs.weight_map,
-                weight_path=obs.weight_path,
-                weight_hdu=obs.weight_hdu,
-                weight_type=obs.weight_type,
-                weight_thresh=obs.weight_thresh,
-                weight_is_inverse_variance=obs.weight_is_inverse_variance,
-                mask=obs.mask,
-                mask_path=obs.mask_path,
-                mask_hdu=obs.mask_hdu,
-                good_bits=obs.good_bits,
-                primary_beam=obs.primary_beam,
-                primary_beam_path=obs.primary_beam_path,
-                primary_beam_hdu=obs.primary_beam_hdu,
-                flux_scale_keyword=obs.flux_scale_keyword,
-                exposure_time_keyword=obs.exposure_time_keyword,
-                gain_keyword=obs.gain_keyword,
-                exposure_time=obs.exposure_time,
-            )
             source_wcs = WCS(header_dict_obs)
+            s_eff = _effective_observation_photometric_scale(obs, header_dict_obs)
+            # _apply_observation_calibration multiplies data by s_eff once;
+            # pre-multiplying by s_eff yields s_eff^2 * var_raw in calibrated units.
+            scaled_var = comp_t * float(s_eff)
+            if value_semantics == "flux":
+                src_area = pixel_area_sr_map(
+                    source_wcs,
+                    (int(comp_t.shape[0]), int(comp_t.shape[1])),
+                    device=device,
+                )
+                scaled_var = scaled_var / torch.clamp(
+                    torch.square(src_area),
+                    min=torch.finfo(src_area.dtype).tiny,
+                )
+            scaled_var = torch.where(
+                torch.isfinite(image_dev),
+                scaled_var,
+                torch.full_like(scaled_var, float("nan")),
+            )
+            var_obs = dataclasses.replace(
+                obs,
+                data=scaled_var,
+                wcs=header_dict_obs,
+                background_offset=0.0,
+            )
             proj = _project_observation_to_target_chunk(
                 var_obs,
-                image=comp_t,
+                image=scaled_var,
                 header_dict_obs=header_dict_obs,
                 source_wcs=source_wcs,
                 prepared_target=prepared_target,
@@ -4969,6 +4997,32 @@ def _blot_spatial_derivative(blotted: Tensor) -> Tensor:
     )
 
 
+def _load_existing_observation_valid_mask(
+    obs: Observation,
+    image_shape: tuple[int, int],
+    device: torch.device,
+) -> Tensor | None:
+    from .operators.mask_weight import _load_or_validate_aux_plane
+
+    mask = _load_or_validate_aux_plane(
+        obs.mask,
+        obs.mask_path,
+        obs.mask_hdu,
+        image_shape=image_shape,
+        device=device,
+        label="Mask",
+        preserve_integer=True,
+    )
+    if mask is None:
+        return None
+    if obs.good_bits is not None:
+        dq = mask.to(device=device, dtype=torch.int64)
+        return (dq & (~int(obs.good_bits))) == 0
+    if mask.dtype == torch.bool:
+        return mask.to(device=device, dtype=torch.bool)
+    return mask.to(device=device, dtype=torch.float32) > 0.0
+
+
 def detect_outliers(
     observations: Sequence[Observation],
     coadd_result: MapResult | None = None,
@@ -4979,6 +5033,7 @@ def detect_outliers(
     scale_primary: float | None = None,
     scale_neighbor: float | None = None,
     min_floor: float | None = None,
+    grow: int | None = None,
     kernel: Literal[
         "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
     ]
@@ -5001,7 +5056,9 @@ def detect_outliers(
         scale_neighbor if scale_neighbor is not None else cfg.scale[1]
     )
     floor_val = float(min_floor if min_floor is not None else cfg.min_floor)
+    grow_px = int(grow if grow is not None else cfg.grow)
     blot_kernel = kernel if kernel is not None else cfg.blot_kernel
+    should_update = bool(update_masks and cfg.mode != "flag_only")
 
     map_device = _resolve_map_device(device)
     if coadd_result is None:
@@ -5026,14 +5083,15 @@ def detect_outliers(
     updated_observations: list[Observation] = []
     read_dev = str(map_device)
     for obs, blotted in zip(observations, blotted_list):
-        raw_img, _ = load_observation_image_and_header(obs, device=read_dev)
+        raw_img, hdr = load_observation_image_and_header(obs, device=read_dev)
         raw_img_dev = raw_img.to(device=map_device, dtype=torch.float32)
         src_w = _load_observation_weight_map(obs, raw_img_dev, device=map_device)
         cal_img, cal_w = _apply_observation_calibration(obs, raw_img_dev, src_w)
+        s_eff = _effective_observation_photometric_scale(obs, hdr)
         grad = _blot_spatial_derivative(blotted)
         diff = torch.abs(cal_img - blotted)
 
-        # Estimate per-pixel 1-sigma noise from variance planes, weight map, or robust MAD
+        # Estimate per-pixel 1-sigma noise in calibrated units from variance planes, weight map, or robust MAD
         noise_sigma: Tensor | None = None
         if obs.var_poisson is not None or obs.var_rnoise is not None:
             var_tot = torch.zeros_like(cal_img)
@@ -5045,9 +5103,9 @@ def detect_outliers(
                 var_tot = var_tot + obs.var_rnoise.to(
                     device=map_device, dtype=torch.float32
                 )
-            noise_sigma = torch.sqrt(torch.clamp(var_tot, min=1e-12))
+            noise_sigma = float(s_eff) * torch.sqrt(torch.clamp(var_tot, min=1e-12))
         elif (
-            obs.weight_map is not None
+            (obs.weight_map is not None or obs.weight_path is not None)
             and obs.weight_type in ("ivm", "rms", "variance")
         ) or obs.weight_is_inverse_variance:
             noise_sigma = torch.where(
@@ -5071,13 +5129,14 @@ def detect_outliers(
         thresh_primary = c_prim * grad + s_prim * noise_sigma + floor_val
         thresh_neighbor = c_neigh * grad + s_neigh * noise_sigma + floor_val
         primary_cr = (diff > thresh_primary) & torch.isfinite(cal_img)
-        if primary_cr.any():
+        if grow_px > 0 and bool(primary_cr.any()):
+            k_size = 2 * grow_px + 1
             dilated = (
                 F.max_pool2d(
                     primary_cr.to(dtype=torch.float32).unsqueeze(0).unsqueeze(0),
-                    kernel_size=3,
+                    kernel_size=k_size,
                     stride=1,
-                    padding=1,
+                    padding=grow_px,
                 )
                 .squeeze(0)
                 .squeeze(0)
@@ -5089,24 +5148,52 @@ def detect_outliers(
         else:
             cr_mask = primary_cr
         outlier_masks.append(cr_mask)
-        if update_masks:
-            if isinstance(obs.mask, Tensor):
-                if obs.good_bits is not None:
-                    dq = obs.mask.to(device=map_device, dtype=torch.int64)
-                    prev_valid = (dq & (~int(obs.good_bits))) == 0
-                elif obs.mask.dtype == torch.bool:
-                    prev_valid = obs.mask.to(device=map_device, dtype=torch.bool)
-                else:
-                    prev_valid = obs.mask.to(device=map_device, dtype=torch.float32) > 0.0
-                valid_mask = prev_valid & (~cr_mask)
-            else:
-                valid_mask = ~cr_mask
+        if should_update:
+            obs_shape = (int(raw_img_dev.shape[0]), int(raw_img_dev.shape[1]))
+            prev_valid = _load_existing_observation_valid_mask(
+                obs, obs_shape, map_device
+            )
+            valid_mask = (~cr_mask) if prev_valid is None else (prev_valid & (~cr_mask))
+            new_wmap = obs.weight_map
+            if cfg.mode == "weight_zero" and isinstance(obs.weight_map, Tensor):
+                new_wmap = torch.where(
+                    ~cr_mask,
+                    obs.weight_map.to(device=map_device),
+                    torch.zeros_like(obs.weight_map.to(device=map_device)),
+                )
             updated_observations.append(
-                dataclasses.replace(obs, mask=valid_mask, good_bits=None)
+                dataclasses.replace(
+                    obs,
+                    mask=valid_mask,
+                    good_bits=None,
+                    weight_map=new_wmap,
+                )
             )
         else:
             updated_observations.append(obs)
     return outlier_masks, updated_observations
+
+
+def _robust_scalar_sky(image: Tensor, bad_mask: Tensor | None, *, clip_sigma: float = 3.0, clip_iterations: int = 3) -> float:
+    valid = torch.isfinite(image)
+    if bad_mask is not None:
+        valid = valid & (~bad_mask.to(device=image.device, dtype=torch.bool))
+    vals = image[valid].to(dtype=torch.float32)
+    if vals.numel() == 0:
+        return 0.0
+    for _ in range(max(int(clip_iterations), 1)):
+        if vals.numel() < 3:
+            break
+        med = torch.median(vals)
+        mad = torch.median(torch.abs(vals - med))
+        sigma = 1.482602218505602 * mad
+        if float(sigma.item()) <= 1e-12:
+            break
+        keep = torch.abs(vals - med) <= float(clip_sigma) * sigma
+        if not bool(keep.any()) or int(keep.sum().item()) == int(vals.numel()):
+            break
+        vals = vals[keep]
+    return float(torch.median(vals).item())
 
 
 def match_sky(
@@ -5119,19 +5206,25 @@ def match_sky(
         "planar",
         "mesh",
         "per_exposure",
+        "local",
+        "global",
+        "match",
+        "global+match",
         "overlap_constant",
         "overlap_planar",
         "overlap_mesh",
+        "none",
     ]
     | None = None,
     mesh_size: int | None = None,
     regularization: float | None = None,
-    apply: bool = True,
+    apply: bool | None = None,
     device: torch.device | str | None = None,
 ) -> tuple[list[Observation], dict[str, Any]]:
     """Solve and optionally subtract sky background across exposures.
 
-    Supports both single-exposure mesh background estimation (``mode="per_exposure"``)
+    Supports single-exposure mesh background estimation (``"per_exposure"`` / ``"local"``),
+    JWST/Roman ``stcal.skymatch`` global modes (``"global"``, ``"match"``, ``"global+match"``),
     and global overlap-graph rectification (``"constant"``, ``"planar"``, ``"mesh"``).
     """
     if not observations:
@@ -5140,6 +5233,7 @@ def match_sky(
     raw_mode = mode if mode is not None else cfg.mode
     if raw_mode == "none":
         return list(observations), {"mode": "none"}
+    should_apply = bool(cfg.subtract if apply is None else apply)
     resolved_mesh = int(mesh_size if mesh_size is not None else cfg.mesh_size)
     resolved_reg = float(
         regularization if regularization is not None else cfg.regularization
@@ -5147,7 +5241,7 @@ def match_sky(
     map_device = _resolve_map_device(device)
     read_dev = str(map_device)
 
-    if raw_mode == "per_exposure":
+    if raw_mode in ("per_exposure", "local"):
         estimator = MeshSkyEstimator(
             block_size=resolved_mesh,
             statistic=cfg.stat,
@@ -5159,29 +5253,70 @@ def match_sky(
         for obs in observations:
             img, hdr = load_observation_image_and_header(obs, device=read_dev)
             img_dev = img.to(device=map_device, dtype=torch.float32)
+            obs_shape = (int(img_dev.shape[0]), int(img_dev.shape[1]))
             bad_mask = ~torch.isfinite(img_dev)
-            if isinstance(obs.mask, Tensor):
-                if obs.good_bits is not None:
-                    dq = obs.mask.to(device=map_device, dtype=torch.int64)
-                    obs_bad = (dq & (~int(obs.good_bits))) != 0
-                elif obs.mask.dtype == torch.bool:
-                    obs_bad = ~obs.mask.to(device=map_device, dtype=torch.bool)
-                else:
-                    obs_bad = ~(obs.mask.to(device=map_device, dtype=torch.float32) > 0.0)
-                bad_mask = bad_mask | obs_bad
+            prev_valid = _load_existing_observation_valid_mask(
+                obs, obs_shape, map_device
+            )
+            if prev_valid is not None:
+                bad_mask = bad_mask | (~prev_valid)
             bg = estimator(img_dev, bad_mask if bool(bad_mask.any()) else None)
             backgrounds.append(bg)
-            if apply:
+            if should_apply:
                 updated.append(
-                    dataclasses.replace(obs, data=img_dev - bg, wcs=hdr, path=None)
+                    dataclasses.replace(obs, data=img_dev - bg, header=hdr)
                 )
             else:
                 updated.append(obs)
-        return updated, {"mode": "per_exposure", "backgrounds": backgrounds}
+        return updated, {"mode": raw_mode, "backgrounds": backgrounds}
 
-    # Global overlap-graph sky matching ("constant", "planar", or "mesh")
+    if raw_mode == "global":
+        sky_levels: list[float] = []
+        scales: list[float] = []
+        for obs in observations:
+            img, hdr = load_observation_image_and_header(obs, device=read_dev)
+            img_dev = img.to(device=map_device, dtype=torch.float32)
+            src_w = _load_observation_weight_map(obs, img_dev, device=map_device)
+            cal_img, cal_w = _apply_observation_calibration(obs, img_dev, src_w)
+            s_eff = _effective_observation_photometric_scale(obs, hdr)
+            scales.append(s_eff)
+            sky_levels.append(
+                _robust_scalar_sky(
+                    cal_img,
+                    ~(cal_w > 0.0),
+                    clip_sigma=cfg.clip_sigma,
+                    clip_iterations=cfg.clip_iterations,
+                )
+            )
+        global_sky = min(sky_levels) if sky_levels else 0.0
+        offsets_t = torch.full(
+            (len(observations),),
+            float(global_sky),
+            dtype=torch.float32,
+            device=map_device,
+        )
+        updated_global: list[Observation] = []
+        for obs, s_eff in zip(observations, scales):
+            if should_apply:
+                updated_global.append(
+                    dataclasses.replace(
+                        obs,
+                        background_offset=float(obs.background_offset)
+                        + float(global_sky) / float(s_eff),
+                    )
+                )
+            else:
+                updated_global.append(obs)
+        return updated_global, {
+            "mode": "global",
+            "global_sky": float(global_sky),
+            "per_exposure_sky": sky_levels,
+            "offsets": offsets_t,
+        }
+
+    # Global overlap-graph sky matching ("constant"/"match"/"global+match", "planar", or "mesh")
     corrector_mode: Literal["constant", "planar", "mesh"]
-    if raw_mode in ("constant", "overlap_constant"):
+    if raw_mode in ("constant", "overlap_constant", "match", "global+match"):
         corrector_mode = "constant"
     elif raw_mode in ("planar", "overlap_planar"):
         corrector_mode = "planar"
@@ -5211,18 +5346,35 @@ def match_sky(
 
     if corrector_mode == "constant":
         offsets = corrector.fit_offsets(images, masks)
+        if raw_mode == "global+match":
+            equalized_skies = [
+                _robust_scalar_sky(
+                    img - off,
+                    msk,
+                    clip_sigma=cfg.clip_sigma,
+                    clip_iterations=cfg.clip_iterations,
+                )
+                for img, msk, off in zip(images, masks, offsets)
+            ]
+            global_base = min(equalized_skies) if equalized_skies else 0.0
+            offsets = offsets + float(global_base)
         updated_obs: list[Observation] = []
         for obs, off in zip(observations, offsets.tolist()):
-            if apply:
+            if should_apply:
+                s_eff = _effective_observation_photometric_scale(obs)
                 updated_obs.append(
                     dataclasses.replace(
                         obs,
-                        background_offset=float(obs.background_offset) + float(off),
+                        background_offset=float(obs.background_offset)
+                        + float(off) / float(s_eff),
                     )
                 )
             else:
                 updated_obs.append(obs)
-        return updated_obs, {"mode": "constant", "offsets": offsets}
+        return updated_obs, {
+            "mode": "global+match" if raw_mode == "global+match" else "constant",
+            "offsets": offsets,
+        }
 
     if corrector_mode == "planar":
         planes = corrector.fit_planes(images, masks)
@@ -5231,9 +5383,10 @@ def match_sky(
         H_c, W_c = coadd_shape
         updated_obs = []
         for idx, obs in enumerate(observations):
-            if apply:
+            if should_apply:
                 img, hdr = load_observation_image_and_header(obs, device=read_dev)
                 img_dev = img.to(device=map_device, dtype=torch.float32)
+                s_eff = _effective_observation_photometric_scale(obs, hdr)
                 obs_wcs = WCS(hdr)
                 obs_shape = (int(img_dev.shape[0]), int(img_dev.shape[1]))
                 ra_grid, dec_grid = _build_target_world_grid(
@@ -5252,11 +5405,9 @@ def match_sky(
                 a_i = planes[idx, 0]
                 bx_i = planes[idx, 1]
                 by_i = planes[idx, 2]
-                plane_obs = a_i + bx_i * u + by_i * v
+                plane_obs = (a_i + bx_i * u + by_i * v) / float(s_eff)
                 updated_obs.append(
-                    dataclasses.replace(
-                        obs, data=img_dev - plane_obs, wcs=hdr, path=None
-                    )
+                    dataclasses.replace(obs, data=img_dev - plane_obs, header=hdr)
                 )
             else:
                 updated_obs.append(obs)
@@ -5265,9 +5416,10 @@ def match_sky(
     corrections = corrector.fit_corrections(images, masks)
     updated_obs = []
     for obs, corr in zip(observations, corrections):
-        if apply:
+        if should_apply:
             img, hdr = load_observation_image_and_header(obs, device=read_dev)
             img_dev = img.to(device=map_device, dtype=torch.float32)
+            s_eff = _effective_observation_photometric_scale(obs, hdr)
             corr_obs = blot(
                 corr,
                 target_hdr,
@@ -5278,7 +5430,9 @@ def match_sky(
             )
             assert isinstance(corr_obs, Tensor)
             updated_obs.append(
-                dataclasses.replace(obs, data=img_dev - corr_obs, wcs=hdr, path=None)
+                dataclasses.replace(
+                    obs, data=img_dev - corr_obs / float(s_eff), header=hdr
+                )
             )
         else:
             updated_obs.append(obs)
@@ -5338,15 +5492,29 @@ def coadd(
 
     bg_est = background_estimator
     sky_corr = cross_exposure_sky_corrector
-    if sky is not None and sky.mode != "none":
-        if sky.mode == "per_exposure":
+    obs_to_stack = list(observations)
+    target_header = _coerce_target_header(target)
+
+    if sky is not None and sky.mode != "none" and sky.subtract:
+        if sky.mode in ("per_exposure", "local"):
             bg_est = MeshSkyEstimator(
                 block_size=sky.mesh_size,
                 statistic=sky.stat,
                 mesh_filter_size=sky.smooth_scale,
                 self_mask_sigma=sky.clip_sigma,
             )
-        elif sky.mode in ("constant", "overlap_constant"):
+        elif (
+            sky.mode in ("global", "global+match")
+            or resolved_method not in ("weighted_mean", "mean", "median")
+        ):
+            obs_to_stack, _ = match_sky(
+                obs_to_stack,
+                target=target_header,
+                config=sky,
+                apply=True,
+                device=device,
+            )
+        elif sky.mode in ("constant", "overlap_constant", "match"):
             sky_corr = CrossExposureSkyCorrector(
                 mesh_size=sky.mesh_size,
                 regularization=sky.regularization,
@@ -5366,9 +5534,6 @@ def coadd(
             )
         else:
             raise ValueError(f"Unsupported SkyConfig.mode: {sky.mode!r}")
-
-    obs_to_stack = list(observations)
-    target_header = _coerce_target_header(target)
 
     if outliers is not None and outliers.enabled:
         init_coadd = coadd_image_plane(

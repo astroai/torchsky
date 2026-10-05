@@ -8,6 +8,7 @@ from torchsky.io import write
 from torchsky.map import (
     Observation,
     OutlierConfig,
+    ResampleConfig,
     SkyConfig,
     StackConfig,
     aperture_uncertainty,
@@ -294,3 +295,80 @@ def test_scamp_sidecar_head_and_multiband_cube_and_aperture(tmp_path: Path) -> N
     ct = plan_cube([obs_sidecar], spectral_axis=[5000.0], device="cpu")
     cb = coadd_cube([obs_sidecar], ct, device="cpu")
     assert cb.data.shape == (1, *ct.spatial_target.shape)
+
+
+def test_variance_flux_semantics_photometric_scale_and_stcal_sky_modes() -> None:
+    hdr = _tan_header((16, 16), crval=(45.0, 10.0), cdelt=0.001)
+    img = torch.ones((16, 16), dtype=torch.float32) * 10.0
+    vp = torch.ones((16, 16), dtype=torch.float32) * 4.0
+
+    # With identical WCS (Omega_tgt == Omega_src) and photometric_scale=2.0,
+    # calibrated data is 2 * 10 = 20 and calibrated variance is 2^2 * 4 = 16
+    obs_flux = Observation(
+        data=img,
+        wcs=hdr,
+        photometric_scale=2.0,
+        var_poisson=vp,
+    )
+    res_flux = coadd(
+        [obs_flux],
+        hdr,
+        resample=ResampleConfig(kernel="bilinear", semantics="flux"),
+        device="cpu",
+    )
+    assert res_flux.var_poisson is not None
+    torch.testing.assert_close(
+        res_flux.data[4:-4, 4:-4],
+        torch.full((8, 8), 20.0),
+        atol=1e-4,
+        rtol=1e-4,
+    )
+    torch.testing.assert_close(
+        res_flux.var_poisson[4:-4, 4:-4],
+        torch.full((8, 8), 16.0),
+        atol=1e-3,
+        rtol=1e-3,
+    )
+
+    # stcal sky modes ("global", "global+match") and photometric_scale consistency
+    obs_s1 = Observation(data=img + 5.0, wcs=hdr, photometric_scale=2.0)
+    obs_s2 = Observation(data=img + 15.0, wcs=hdr, photometric_scale=2.0)
+    matched_gm, info_gm = match_sky([obs_s1, obs_s2], mode="global+match", device="cpu")
+    assert info_gm["mode"] == "global+match"
+    res_gm = coadd(matched_gm, hdr, device="cpu")
+    torch.testing.assert_close(res_gm.data, torch.zeros_like(img), atol=1e-4, rtol=0.0)
+
+    # SkyConfig combined with non-linear stacking methods (sigma_clipped, chi2)
+    res_sc = coadd(
+        [obs_s1, obs_s2],
+        hdr,
+        sky=SkyConfig(mode="match"),
+        stack=StackConfig(method="sigma_clipped"),
+        device="cpu",
+    )
+    torch.testing.assert_close(
+        res_sc.data,
+        torch.full_like(img, 30.0),
+        atol=1e-4,
+        rtol=0.0,
+    )
+
+    # OutlierConfig with grow=0 and mode="weight_zero"
+    noisy = img.clone()
+    noisy[8, 8] = 500.0
+    obs_cr = [
+        Observation(data=noisy, wcs=hdr, weight_map=torch.ones_like(img)),
+        Observation(data=img.clone(), wcs=hdr, weight_map=torch.ones_like(img)),
+        Observation(data=img.clone(), wcs=hdr, weight_map=torch.ones_like(img)),
+    ]
+    cr_masks, updated_obs = detect_outliers(
+        obs_cr,
+        config=OutlierConfig(snr=(5.0, 3.0), scale=(1.2, 0.7), grow=0, mode="weight_zero"),
+        device="cpu",
+    )
+    assert int(cr_masks[0].sum().item()) == 1
+    assert updated_obs[0].mask is not None
+    assert not bool(updated_obs[0].mask[8, 8].item())
+    assert updated_obs[0].weight_map is not None
+    assert float(updated_obs[0].weight_map[8, 8].item()) == 0.0
+

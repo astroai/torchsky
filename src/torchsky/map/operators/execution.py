@@ -59,26 +59,16 @@ def stack_inputs_from_projected_observation(
     if stacking_method == "weighted_mean":
         return projected_numer, projected_weight
     if stacking_method == "chi2":
-        chi2_weight = projected_weight
-        if value_semantics == "flux":
-            if pixel_area_sr is None:
-                raise RuntimeError("target pixel area is required for flux semantics")
-            chi2_weight = projected_weight / torch.clamp(
-                torch.square(pixel_area_sr),
-                min=torch.finfo(pixel_area_sr.dtype).tiny,
-            )
         chi2_numer = torch.where(
             projected_weight > 0.0,
-            torch.square(projected_numer) / projected_weight
-            if value_semantics != "flux"
-            else torch.square(projected_numer)
+            torch.square(projected_numer)
             / torch.clamp(
                 projected_weight,
                 min=torch.finfo(projected_weight.dtype).tiny,
             ),
             torch.zeros_like(projected_numer),
         )
-        support = (chi2_weight > 0.0).to(dtype=torch.float32)
+        support = (projected_weight > 0.0).to(dtype=torch.float32)
         return chi2_numer, support
     projected_image = torch.where(
         projected_weight > 0.0,
@@ -1130,8 +1120,12 @@ def accumulate_projected_observation(
         device=contrib_numer.device,
     )
     overlap_coeffs = (coeffs_t > 0.0).to(dtype=projected_overlap.dtype)
-    numer_contrib = coeffs_t * contrib_numer.unsqueeze(0)
     denom_contrib = coeffs_t * contrib_weight.unsqueeze(0)
+    numer_contrib = (
+        contrib_numer.unsqueeze(0).expand_as(denom_contrib)
+        if stacking_method in ("min", "max")
+        else coeffs_t * contrib_numer.unsqueeze(0)
+    )
     overlap_contrib = overlap_coeffs * projected_overlap.unsqueeze(0)
     if target_window is None:
         _accumulate_slice(
