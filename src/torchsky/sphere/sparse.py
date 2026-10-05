@@ -793,8 +793,15 @@ class SparseHealpixMap:
         *,
         method: Literal["nearest", "bilinear"] = "bilinear",
     ) -> Tensor:
-        lon_t = torch.as_tensor(lon_deg, dtype=torch.float64)
-        lat_t = torch.as_tensor(lat_deg, dtype=torch.float64)
+        work_dtype = (
+            torch.float32 if self.values.device.type == "mps" else torch.float64
+        )
+        lon_t = torch.as_tensor(
+            lon_deg, dtype=work_dtype, device=self.values.device
+        )
+        lat_t = torch.as_tensor(
+            lat_deg, dtype=work_dtype, device=self.values.device
+        )
         lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
         shape = lon_t.shape
         lon_f = lon_t.reshape(-1)
@@ -824,18 +831,41 @@ class SparseHealpixMap:
         accum = torch.zeros(
             out_shape, dtype=self.values.dtype, device=self.values.device
         )
-        wsum = torch.zeros((lon_f.numel(),), dtype=w4.dtype, device=self.values.device)
+        wsum = torch.zeros(
+            out_shape, dtype=w4.dtype, device=self.values.device
+        )
 
         if self.pixels.numel() > 0:
+            stored_fill = (
+                torch.as_tensor(
+                    self.fill_value,
+                    dtype=self.values.dtype,
+                    device=self.values.device,
+                )
+                if self.values.is_floating_point()
+                else None
+            )
             for k in range(4):
                 idx, ok = self._global_to_local(pix4[k])
                 safe_idx = torch.where(ok, idx, torch.zeros_like(idx))
                 vals = self.values.index_select(-1, safe_idx)
                 wk = w4[k]
                 wshape = [1] * (vals.ndim - 1) + [wk.shape[-1]]
-                contrib = vals * wk.reshape(wshape)
-                accum = accum + torch.where(ok, contrib, torch.zeros_like(contrib))
-                wsum = wsum + torch.where(ok, wk, torch.zeros_like(wk))
+                wk_b = wk.reshape(wshape).expand_as(vals)
+                valid_val = ok.reshape(wshape).expand_as(vals)
+                if stored_fill is not None:
+                    valid_val = (
+                        valid_val
+                        & torch.isfinite(vals)
+                        & (vals != stored_fill)
+                    )
+                safe_vals = torch.where(
+                    valid_val, vals, torch.zeros_like(vals)
+                )
+                accum = accum + safe_vals * wk_b
+                wsum = wsum + torch.where(
+                    valid_val, wk_b, torch.zeros_like(wk_b)
+                )
 
         out = torch.full(
             out_shape,
@@ -845,8 +875,7 @@ class SparseHealpixMap:
         )
         nz = wsum > 0
         safe_wsum = torch.where(nz, wsum, torch.ones_like(wsum))
-        wshape = [1] * (accum.ndim - 1) + [-1]
-        filled = accum / safe_wsum.reshape(wshape)
+        filled = accum / safe_wsum
         out = torch.where(nz, filled, out)
         return out.reshape(*self.values.shape[:-1], *shape)
 

@@ -40,8 +40,9 @@ def uniq2nest(uniq: int | Tensor) -> tuple[Tensor, Tensor]:
     # 4 * 4^order + pix = uniq
     # 4^order = uniq // 4 (approx)
     # order = log4(uniq // 4)
+    log_dtype = torch.float32 if u.device.type == "mps" else torch.float64
     order = torch.div(
-        torch.log2(torch.div(u, 4, rounding_mode="floor").to(torch.float64)),
+        torch.log2(torch.div(u, 4, rounding_mode="floor").to(log_dtype)),
         2.0,
         rounding_mode="floor",
     ).to(torch.int64)
@@ -54,7 +55,8 @@ def _max_order_from_uniq(uniq: Tensor) -> int:
     if uniq.numel() == 0:
         return 0
     nside, _ = uniq2nest(uniq.max())
-    return int(torch.log2(nside.to(torch.float64)).item())
+    log_dtype = torch.float32 if nside.device.type == "mps" else torch.float64
+    return int(torch.log2(nside.to(log_dtype)).item())
 
 
 def _uniq_to_ranges(uniq: Tensor, max_order: int) -> list[tuple[int, int]]:
@@ -62,10 +64,13 @@ def _uniq_to_ranges(uniq: Tensor, max_order: int) -> list[tuple[int, int]]:
         return []
 
     nsides, pix_nested = uniq2nest(uniq)
-    orders = torch.log2(nsides.to(torch.float64)).to(torch.int64)
-    shifts = 2 * (max_order - orders)
-    starts = pix_nested << shifts
-    ends = (pix_nested + 1) << shifts
+    log_dtype = torch.float32 if nsides.device.type == "mps" else torch.float64
+    orders = torch.log2(nsides.to(log_dtype)).to(torch.int64)
+    up_shifts = (2 * (max_order - orders)).clamp_min(0)
+    down_shifts = (2 * (orders - max_order)).clamp_min(0)
+    pix_at_order = pix_nested >> down_shifts
+    starts = pix_at_order << up_shifts
+    ends = (pix_at_order + 1) << up_shifts
 
     sort_idx = torch.argsort(starts)
     starts = starts[sort_idx]

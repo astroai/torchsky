@@ -2002,15 +2002,30 @@ def query_box(
     lat_lo = min(float(lat_min), float(lat_max))
     lat_hi = max(float(lat_min), float(lat_max))
 
+    lon_span = (
+        lon_max - lon_min
+        if lon_min <= lon_max
+        else (lon_max - lon_min) % 360.0
+    )
+
     if inclusive:
         pad_deg = max_pixel_radius(nside, degrees=True)
         lat_lo -= pad_deg
         lat_hi += pad_deg
-        lon_min -= pad_deg
-        lon_max += pad_deg
+        max_abs_lat = max(abs(lat_lo), abs(lat_hi))
+        if max_abs_lat >= 90.0:
+            lon_span = 360.0
+        else:
+            lon_pad_deg = pad_deg / max(
+                math.cos(math.radians(max_abs_lat)), 1e-6
+            )
+            lon_min -= lon_pad_deg
+            lon_max += lon_pad_deg
+            lon_span += 2.0 * lon_pad_deg
     lat_lo = max(-90.0, lat_lo)
     lat_hi = min(90.0, lat_hi)
 
+    full_lon = lon_span >= 360.0 - 1e-12
     lon_min = lon_min % 360.0
     lon_max = lon_max % 360.0
     wraps = lon_min > lon_max
@@ -2034,11 +2049,12 @@ def query_box(
         pix = cand[start : start + chunk_size]
         lon, lat = pix2ang(nside, pix, nest=nest, lonlat=True)
         lat_keep = (lat >= lat_lo) & (lat <= lat_hi)
-        if wraps:
-            lon_keep = (lon >= lon_min) | (lon <= lon_max)
+        if full_lon:
+            keep = lat_keep
+        elif wraps:
+            keep = lat_keep & ((lon >= lon_min) | (lon <= lon_max))
         else:
-            lon_keep = (lon >= lon_min) & (lon <= lon_max)
-        keep = lat_keep & lon_keep
+            keep = lat_keep & (lon >= lon_min) & (lon <= lon_max)
         if torch.any(keep):
             parts.append(pix[keep])
     if not parts:

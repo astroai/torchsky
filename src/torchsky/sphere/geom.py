@@ -351,26 +351,6 @@ def _planar_point_in_polygon(
     return (crossings.to(torch.int64).sum(dim=1) % 2) == 1
 
 
-def _initial_bearing_rad(
-    lon1_deg: Tensor | float,
-    lat1_deg: Tensor | float,
-    lon2_deg: Tensor | float,
-    lat2_deg: Tensor | float,
-) -> Tensor:
-    lon1 = torch.deg2rad(torch.as_tensor(lon1_deg))
-    lat1 = torch.deg2rad(torch.as_tensor(lat1_deg))
-    lon2 = torch.deg2rad(torch.as_tensor(lon2_deg))
-    lat2 = torch.deg2rad(torch.as_tensor(lat2_deg))
-    lon1, lat1, lon2, lat2 = torch.broadcast_tensors(lon1, lat1, lon2, lat2)
-
-    dlon = lon2 - lon1
-    y = torch.sin(dlon) * torch.cos(lat2)
-    x = torch.cos(lat1) * torch.sin(lat2) - torch.sin(lat1) * torch.cos(
-        lat2
-    ) * torch.cos(dlon)
-    return torch.atan2(y, x)
-
-
 def _destination_lonlat_deg(
     lon_deg: Tensor | float,
     lat_deg: Tensor | float,
@@ -424,24 +404,6 @@ def _signed_area_2d(xy: "np.ndarray") -> float:
     x = xy[:, 0]
     y = xy[:, 1]
     return 0.5 * float(np.sum(x * np.roll(y, -1) - y * np.roll(x, -1)))
-
-
-def _is_point_in_triangle_2d(
-    p: "np.ndarray",
-    a: "np.ndarray",
-    b: "np.ndarray",
-    c: "np.ndarray",
-    eps: float = 1e-15,
-) -> bool:
-    v0 = c - a
-    v1 = b - a
-    v2 = p - a
-    den = (v0[0] * v1[1]) - (v1[0] * v0[1])
-    if abs(den) < eps:
-        return False
-    u = (v2[0] * v1[1] - v1[0] * v2[1]) / den
-    v = (v0[0] * v2[1] - v2[0] * v0[1]) / den
-    return (u >= -eps) and (v >= -eps) and (u + v <= 1.0 + eps)
 
 
 def _is_point_in_triangle_2d_vec(
@@ -1289,39 +1251,55 @@ class SphericalBox:
         inclusive: bool = True,
         atol_deg: float = 1e-10,
     ) -> Tensor:
-        lon_t = torch.as_tensor(lon_deg, dtype=torch.float64)
-        lat_t = torch.as_tensor(lat_deg, dtype=torch.float64)
+        lon_t = _as_geom_tensor(lon_deg)
+        lat_t = _as_geom_tensor(lat_deg, like=lon_t)
+        lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
 
-        # Wrap longitude to handle crosses of the zero meridian
-        lon_wrapped = wrap_longitude(
-            lon_t, center_deg=(self.lon_min + self.lon_max) / 2
-        )
+        if self.lon_min > self.lon_max:
+            lon_0_360 = torch.remainder(lon_t, 360.0)
+            lo = self.lon_min % 360.0
+            hi = self.lon_max % 360.0
+            if inclusive:
+                lon_mask = (lon_0_360 >= lo - atol_deg) | (
+                    lon_0_360 <= hi + atol_deg
+                )
+            else:
+                lon_mask = (lon_0_360 > lo + atol_deg) | (
+                    lon_0_360 < hi - atol_deg
+                )
+        elif self.lon_max - self.lon_min >= 360.0:
+            lon_mask = torch.ones_like(lon_t, dtype=torch.bool)
+        else:
+            lon_wrapped = wrap_longitude(
+                lon_t, center_deg=(self.lon_min + self.lon_max) / 2
+            )
+            if inclusive:
+                lon_mask = (lon_wrapped >= self.lon_min - atol_deg) & (
+                    lon_wrapped <= self.lon_max + atol_deg
+                )
+            else:
+                lon_mask = (lon_wrapped > self.lon_min + atol_deg) & (
+                    lon_wrapped < self.lon_max - atol_deg
+                )
 
         if inclusive:
-            mask = (
-                (lon_wrapped >= self.lon_min - atol_deg)
-                & (lon_wrapped <= self.lon_max + atol_deg)
-                & (lat_t >= self.lat_min - atol_deg)
-                & (lat_t <= self.lat_max + atol_deg)
+            lat_mask = (lat_t >= self.lat_min - atol_deg) & (
+                lat_t <= self.lat_max + atol_deg
             )
         else:
-            mask = (
-                (lon_wrapped > self.lon_min + atol_deg)
-                & (lon_wrapped < self.lon_max - atol_deg)
-                & (lat_t > self.lat_min + atol_deg)
-                & (lat_t < self.lat_max - atol_deg)
+            lat_mask = (lat_t > self.lat_min + atol_deg) & (
+                lat_t < self.lat_max - atol_deg
             )
-        return mask
+        return lon_mask & lat_mask
 
     def query_pixels(self, nside: int, *, nest: bool = False) -> Tensor:
         return _healpix.query_box(
             nside,
             self.lon_min,
-            self.lon_max,
             self.lat_min,
+            self.lon_max,
             self.lat_max,
             nest=nest,
-            lonlat=True,
         )
 
     def pixelize(self, nside: int, *, nest: bool = False) -> PixelizedRegion:
