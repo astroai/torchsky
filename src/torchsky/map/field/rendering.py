@@ -595,7 +595,6 @@ def render_field_observation_distribution(
         ra_deg, dec_deg, observation, exposure_pose
     )
     render_bandpass_distribution = getattr(model, "render_bandpass_distribution", None)
-    operators_applied = False
     if callable(render_bandpass_distribution):
         mean, logvar = _call_render_bandpass_distribution(
             model,
@@ -637,8 +636,6 @@ def render_field_observation_distribution(
             raise ValueError(
                 "field model does not provide an explicit predictive distribution"
             )
-    if operators_applied:
-        return mean.to(dtype=image.dtype), logvar.to(dtype=image.dtype)
     if operator_bundle.psf is not None:
         mean = apply_psf_spec(mean, observation.psf_spec)
         variance = apply_psf_variance_spec(torch.exp(logvar), observation.psf_spec)
@@ -808,7 +805,7 @@ def render_field_observation(
     device = next((p.device for p in model.parameters()), default_compute_device())
     spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
     center_coordinates: tuple[Tensor, Tensor] | None = None
-    if spatial_sampling == "center" and spatial_tile_hw is None:
+    if spatial_sampling == "center":
         ra_deg, dec_deg = _coordinate_grid(
             observation,
             shape=tuple(image.shape),

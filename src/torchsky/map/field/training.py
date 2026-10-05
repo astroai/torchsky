@@ -65,6 +65,7 @@ from .observation_ops import (
 )
 from .quality import _aggregate_quality_metrics, field_image_quality_metrics
 from .rendering import (
+    field_model_has_predictive_distribution,
     iter_field_observation_tiles,
     render_field_observation,
     render_field_observation_distribution,
@@ -379,7 +380,7 @@ def compute_field_fit_diagnostics(
                 torch.rand(
                     n_samples,
                     generator=gen,
-                    dtype=torch.float64,
+                    dtype=torch.float32 if device.type == "mps" else torch.float64,
                     device=device,
                 )
                 - 0.5
@@ -388,7 +389,7 @@ def compute_field_fit_diagnostics(
                 torch.rand(
                     n_samples,
                     generator=gen,
-                    dtype=torch.float64,
+                    dtype=torch.float32 if device.type == "mps" else torch.float64,
                     device=device,
                 )
                 - 0.5
@@ -412,7 +413,7 @@ def compute_field_fit_diagnostics(
                 torch.rand(
                     n_samples,
                     generator=gen,
-                    dtype=torch.float64,
+                    dtype=torch.float32 if device.type == "mps" else torch.float64,
                     device=device,
                 )
                 - 0.5
@@ -542,8 +543,7 @@ def compute_field_fit_diagnostics(
                         psf_corr = float(r_num / r_den)
                         psf_residual_correlations.append(psf_corr)
 
-                forward_distribution = getattr(model, "forward_distribution", None)
-                if callable(forward_distribution) and spatial_tile_hw is None:
+                if field_model_has_predictive_distribution(model) and spatial_tile_hw is None:
                     _pred_mean, pred_logvar = render_field_observation_distribution(
                         model,
                         observation,

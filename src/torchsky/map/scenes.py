@@ -305,11 +305,12 @@ class ContinuousFieldModel(SceneRepresentation):
                 target,
                 device=kwargs.get("device"),
             )
-        from .field.rendering import render_field_observation_distribution
+        from .field.rendering import (
+            field_model_has_predictive_distribution,
+            render_field_observation_distribution,
+        )
 
-        if callable(
-            getattr(self.model, "render_bandpass_distribution", None)
-        ) or callable(getattr(self.model, "forward_distribution", None)):
+        if field_model_has_predictive_distribution(self.model):
             return render_field_observation_distribution(
                 self.model,
                 observation,

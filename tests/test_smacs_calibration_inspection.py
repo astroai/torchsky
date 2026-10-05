@@ -44,9 +44,12 @@ def test_depth_foam_uses_cuda_build_and_forwards_size_controls():
     for name in ("FOAM_BANDS", "FOAM_CROP_SIZE", "FOAM_STEPS", "FOAM_GRID_SIDE",
                  "FOAM_BASIS_COUNT", "FOAM_INITIALIZE_FROM_COADD",
                  "FOAM_AFFINE_SPATIAL_BASIS", "FOAM_WHITEN_SPECTRAL_BASIS",
-                 "FOAM_TARGET_HEADER_PATH", "SCENE_INITIALIZATION",
+                 "FOAM_TARGET_HEADER_PATH", "GRID_FIT_TARGET_FOOTPRINT",
+                 "GRID_PSF_MARGIN_SIGMA", "SCENE_INITIALIZATION",
                  "SCENE_INITIALIZATION_STEPS", "SCENE_INITIALIZATION_LR"):
         assert f'--env "{name}=' in launcher
+    assert '--grid-fit-target-footprint' in runner
+    assert '--grid-psf-margin-sigma "${GRID_PSF_MARGIN_SIGMA}"' in runner
     assert '--target-header-path "${FOAM_TARGET_HEADER_PATH}"' in runner
     assert '--scene-initialization "${scene_initialization}"' in runner
     assert '--scene-initialization-steps "${scene_initialization_steps}"' in runner
@@ -59,6 +62,14 @@ def test_depth_foam_uses_cuda_build_and_forwards_size_controls():
     assert '"${CALIBRATION_FIT_DEVICE:-cpu}" == "cuda"' in launcher
     for name in ("PASSBAND_OUTPUT_DIR", "PASSBAND_BANDS"):
         assert f'--env "{name}=' in launcher
+
+
+def test_depth_foam_validation_forwards_joint_grid_controls():
+    runner = (ROOT / "scripts/run_canfar_adass_depth.sh").read_text()
+    validation = runner.split("  foam-validation)", 1)[1].split("  foam-score)", 1)[0]
+
+    assert '"${joint_calibration_args[@]}"' in validation
+    assert "FOAM_PATT_NUMS:-1,2,3,4,5,7,8" in validation
 
 
 def _inspection_module() -> ModuleType:

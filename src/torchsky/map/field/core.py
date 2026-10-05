@@ -73,11 +73,14 @@ from .types import (
 )
 
 
-def _gaussian_kernel1d(sigma_pix: float, *, device: torch.device) -> Tensor:
-    radius = max(1, int(math.ceil(3.0 * float(sigma_pix))))
-    x = torch.arange(-radius, radius + 1, dtype=torch.float32, device=device)
-    kernel = torch.exp(-0.5 * torch.square(x / float(sigma_pix)))
-    return kernel / torch.clamp(kernel.sum(), min=1e-8)
+def _point_bandpass_features(lam: Tensor, num_frequencies: int) -> Tensor:
+    zeros = torch.zeros_like(lam)
+    feats = [lam, zeros, zeros, zeros]
+    for scale_idx in range(1, max(int(num_frequencies), 0) + 1):
+        phase = (math.pi * float(scale_idx)) * lam
+        feats.append(torch.sin(phase))
+        feats.append(torch.cos(phase))
+    return torch.stack(feats, dim=-1)
 
 
 def _gaussian_blur(image: Tensor, sigma_pix: float) -> Tensor:
@@ -1650,6 +1653,7 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         *,
         spatial_resolution: int = 48,
         spectral_resolution: int = 8,
+        spatial_bounds_local_deg: Sequence[float] | None = None,
     ) -> None:
         super().__init__(domain)
         if self.coord_mode != "local_tangent":
@@ -1658,6 +1662,16 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         self.spectral_resolution = int(spectral_resolution)
         if self.spatial_resolution < 2 or self.spectral_resolution < 2:
             raise ValueError("grid resolutions must be at least 2")
+        self.spatial_bounds_local_deg: tuple[float, float, float, float] | None = None
+        if spatial_bounds_local_deg is not None:
+            if len(spatial_bounds_local_deg) != 4:
+                raise ValueError("spatial_bounds_local_deg must contain four values")
+            bounds = tuple(float(value) for value in spatial_bounds_local_deg)
+            if not all(math.isfinite(value) for value in bounds):
+                raise ValueError("spatial_bounds_local_deg must be finite")
+            if bounds[0] >= bounds[1] or bounds[2] >= bounds[3]:
+                raise ValueError("spatial_bounds_local_deg bounds must be increasing")
+            self.spatial_bounds_local_deg = bounds
         self.grid = nn.Parameter(
             1.0e-3
             * torch.randn(
@@ -1669,10 +1683,10 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         )
 
     def _grid_world_coords(self) -> tuple[Tensor, Tensor, Tensor]:
-        """Invert the forward tanh mapping at grid nodes.
+        """Return world coordinates for the configured grid nodes.
 
-        Endpoints use the nearest representable value inside (-1, 1),
-        since the exact inverse there is infinite.
+        Legacy spatial and all spectral endpoints use the nearest representable
+        value inside (-1, 1), since the exact inverse tanh there is infinite.
         """
         device = self.grid.device
         # Absolute celestial coordinates need more precision than brightness
@@ -1682,12 +1696,24 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             torch.ones((), device=device, dtype=dtype),
             torch.zeros((), device=device, dtype=dtype),
         )
-        xs = torch.linspace(
-            -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
-        ).clamp(-bound, bound).atanh()
-        ys = torch.linspace(
-            -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
-        ).clamp(-bound, bound).atanh()
+        if self.spatial_bounds_local_deg is None:
+            xs = torch.linspace(
+                -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
+            ).clamp(-bound, bound).atanh()
+            ys = torch.linspace(
+                -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
+            ).clamp(-bound, bound).atanh()
+            spatial_scale = float(self.domain.spatial_scale_deg)
+            xs = xs * spatial_scale
+            ys = ys * spatial_scale
+        else:
+            x_min, x_max, y_min, y_max = self.spatial_bounds_local_deg
+            xs = torch.linspace(
+                x_min, x_max, steps=self.spatial_resolution, device=device, dtype=dtype
+            )
+            ys = torch.linspace(
+                y_min, y_max, steps=self.spatial_resolution, device=device, dtype=dtype
+            )
         ls = torch.linspace(
             -1.0, 1.0, steps=self.spectral_resolution, device=device, dtype=dtype
         ).clamp(-bound, bound).atanh()
@@ -1696,10 +1722,8 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             self.domain.wavelength_scale
         )
         cos_dec = math.cos(math.radians(float(self.domain.center_dec_deg)))
-        dra = xx * float(self.domain.spatial_scale_deg) / max(cos_dec, 1.0e-6)
-        dec = yy * float(self.domain.spatial_scale_deg) + float(
-            self.domain.center_dec_deg
-        )
+        dra = xx / max(cos_dec, 1.0e-6)
+        dec = yy + float(self.domain.center_dec_deg)
         ra = dra + float(self.domain.center_ra_deg)
         return ra, dec, wavelengths
 
@@ -1749,6 +1773,9 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             )
             sampled_planes.append(sampled)
         sampled_cube = torch.stack(sampled_planes, dim=0)
+        order = torch.argsort(centers)
+        centers = centers[order]
+        sampled_cube = sampled_cube[order]
         interp_planes = []
         for wavelength in wavelengths:
             if wavelength <= centers[0]:
@@ -1768,13 +1795,8 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             )
         init_cube = torch.stack(interp_planes, dim=0).unsqueeze(0)
         with torch.no_grad():
-            self.grid.copy_(
-                torch.log(
-                    torch.clamp(
-                        torch.expm1(torch.clamp(init_cube, min=1.0e-4)), min=1.0e-6
-                    )
-                )
-            )
+            init_cube = torch.clamp(init_cube, min=1.0e-4)
+            self.grid.copy_(init_cube + torch.log(-torch.expm1(-init_cube)))
 
     def _coords_unit(
         self,
@@ -1786,9 +1808,17 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             raise ValueError(
                 "ExplicitSpectralGridField requires local_tangent coordinates"
             )
-        return self._unit_box_coords(ra_deg, dec_deg, wavelength_angstrom).to(
-            dtype=self.grid.dtype
-        )
+        if self.spatial_bounds_local_deg is None:
+            coords = self._unit_box_coords(ra_deg, dec_deg, wavelength_angstrom)
+        else:
+            encoded = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom)
+            scale = float(self.domain.spatial_scale_deg)
+            x_min, x_max, y_min, y_max = self.spatial_bounds_local_deg
+            x_unit = (encoded[..., 0] * scale - x_min) / (x_max - x_min)
+            y_unit = (encoded[..., 1] * scale - y_min) / (y_max - y_min)
+            wavelength_unit = 0.5 * (torch.tanh(encoded[..., 2]) + 1.0)
+            coords = torch.stack((x_unit, y_unit, wavelength_unit), dim=-1)
+        return coords.to(dtype=self.grid.dtype)
 
     def forward(
         self,
@@ -2264,48 +2294,6 @@ class SpectralBasisField(_BaseFieldModel):
         else:
             return torch.stack([torch.ones_like(lam), lam, lam * lam], dim=-1)
 
-    def _spectral_basis_bandpass_average(
-        self,
-        lower_wavelength: float,
-        upper_wavelength: float,
-        *,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> Tensor:
-        lower = (
-            float(lower_wavelength) - float(self.domain.wavelength_center)
-        ) / float(self.domain.wavelength_scale)
-        upper = (
-            float(upper_wavelength) - float(self.domain.wavelength_center)
-        ) / float(self.domain.wavelength_scale)
-        if upper < lower:
-            raise ValueError("bandpass upper wavelength must be >= lower wavelength")
-        if upper == lower:
-            lam = torch.tensor([lower], device=device, dtype=dtype)
-            return self._spectral_basis(lam).squeeze(0).to(dtype=dtype)
-        delta = upper - lower
-        basis_terms: list[Tensor] = [
-            torch.tensor(1.0, device=device, dtype=dtype),
-            torch.tensor(0.5 * (lower + upper), device=device, dtype=dtype),
-            torch.tensor(
-                (lower * lower + lower * upper + upper * upper) / 3.0,
-                device=device,
-                dtype=dtype,
-            ),
-        ]
-        if self.num_spectral_frequencies > 0:
-            for scale_idx in range(1, self.num_spectral_frequencies + 1):
-                omega = math.pi * float(scale_idx)
-                sin_avg = (math.cos(omega * lower) - math.cos(omega * upper)) / (
-                    omega * delta
-                )
-                cos_avg = (math.sin(omega * upper) - math.sin(omega * lower)) / (
-                    omega * delta
-                )
-                basis_terms.append(torch.tensor(sin_avg, device=device, dtype=dtype))
-                basis_terms.append(torch.tensor(cos_avg, device=device, dtype=dtype))
-        return torch.stack(basis_terms, dim=0)
-
     def forward(
         self,
         ra_deg: Tensor,
@@ -2539,17 +2527,24 @@ class BandpassConditionedField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
-        wavelength = torch.as_tensor(
+        spatial_latent = self._spatial_latent(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        )
+        lam = self._normalized_wavelength(
             wavelength_angstrom,
             device=ra_deg.device,
             dtype=self.output.weight.dtype,
+            shape=ra_deg.shape,
         )
-        if wavelength.ndim == 0:
-            wavelengths = wavelength.view(1)
-        else:
-            wavelengths = wavelength.reshape(-1)
-        weights = torch.ones_like(wavelengths)
-        return self.render_bandpass(ra_deg, dec_deg, wavelengths, weights)
+        bandpass_latent = self.bandpass_hidden(
+            _point_bandpass_features(lam, self.num_bandpass_frequencies)
+        )
+        out = self.output(torch.cat([spatial_latent, bandpass_latent], dim=-1)).squeeze(
+            -1
+        )
+        return F.softplus(out) + 1.0e-4
 
 
 class LearnedSpectralBasisField(_BaseFieldModel):
@@ -2795,17 +2790,33 @@ class SkyEncoderBandpassField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
-        wavelength = torch.as_tensor(
+        dtype = self.output.weight.dtype
+        ra64 = ra_deg.to(dtype=torch.float64)
+        dec64 = dec_deg.to(dtype=torch.float64)
+        wavelength_grid = torch.as_tensor(
             wavelength_angstrom,
             device=ra_deg.device,
-            dtype=torch.float32,
+            dtype=torch.float64,
         )
-        if wavelength.ndim == 0:
-            wavelengths = wavelength.view(1)
-        else:
-            wavelengths = wavelength.reshape(-1)
-        weights = torch.ones_like(wavelengths)
-        return self.render_bandpass(ra_deg, dec_deg, wavelengths, weights)
+        if wavelength_grid.shape != ra64.shape:
+            wavelength_grid = torch.broadcast_to(wavelength_grid, ra64.shape)
+        encoded = self.encoder(
+            ra64,
+            dec64,
+            wavelength=wavelength_grid,
+        ).to(dtype=dtype)
+        lam = self._normalized_wavelength(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=dtype,
+            shape=ra_deg.shape,
+        )
+        bandpass_latent = self.bandpass_hidden(
+            _point_bandpass_features(lam, self.num_bandpass_frequencies)
+        )
+        hidden = self.hidden(torch.cat([encoded, bandpass_latent], dim=-1))
+        out = self.output(hidden).squeeze(-1)
+        return F.softplus(out) + 1.0e-4
 
 
 class ConditionedSpectralField(_BaseFieldModel):
@@ -4448,16 +4459,6 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
-        wavelength = torch.as_tensor(
-            wavelength_angstrom,
-            device=ra_deg.device,
-            dtype=torch.float32,
-        )
-        if wavelength.ndim == 0:
-            wavelengths = wavelength.view(1)
-        else:
-            wavelengths = wavelength.reshape(-1)
-        weights = torch.ones_like(wavelengths)
         spatial_raw = self._spatial_coords(
             ra_deg,
             dec_deg,
@@ -4480,11 +4481,21 @@ class SkyLambdaFeatureField(_BaseFieldModel):
             lam,
         )
         hidden = self._aggregate_scale_stack(scale_hidden, context)
-        coarse_hidden = scale_hidden[..., 0, :] if self.coarse_fine_readout else None
-        global_hidden = self._global_hidden(ra_deg, dec_deg, wavelength_angstrom)
-        bandpass_latent = self.bandpass_context(
-            self._bandpass_features(wavelengths, weights)
+        one_weight = torch.ones(1, device=hidden.device, dtype=hidden.dtype)
+        hidden = self._aggregate_hidden_stack(hidden.unsqueeze(0), one_weight)
+        coarse_hidden = (
+            self._aggregate_hidden_stack(
+                scale_hidden[..., 0, :].unsqueeze(0), one_weight
+            )
+            if self.coarse_fine_readout
+            else None
         )
+        global_hidden = self._global_hidden(ra_deg, dec_deg, wavelength_angstrom)
+        if global_hidden is not None:
+            global_hidden = self._aggregate_hidden_stack(
+                global_hidden.unsqueeze(0), one_weight
+            )
+        bandpass_latent = self.bandpass_context(_point_bandpass_features(lam, 4))
         return self._decode_hidden(
             hidden, bandpass_latent, global_hidden, coarse_hidden
         )
@@ -4495,16 +4506,6 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> tuple[Tensor, Tensor]:
-        wavelength = torch.as_tensor(
-            wavelength_angstrom,
-            device=ra_deg.device,
-            dtype=torch.float32,
-        )
-        if wavelength.ndim == 0:
-            wavelengths = wavelength.view(1)
-        else:
-            wavelengths = wavelength.reshape(-1)
-        weights = torch.ones_like(wavelengths)
         spatial_raw = self._spatial_coords(
             ra_deg,
             dec_deg,
@@ -4527,11 +4528,21 @@ class SkyLambdaFeatureField(_BaseFieldModel):
             lam,
         )
         hidden = self._aggregate_scale_stack(scale_hidden, context)
-        coarse_hidden = scale_hidden[..., 0, :] if self.coarse_fine_readout else None
-        global_hidden = self._global_hidden(ra_deg, dec_deg, wavelength_angstrom)
-        bandpass_latent = self.bandpass_context(
-            self._bandpass_features(wavelengths, weights)
+        one_weight = torch.ones(1, device=hidden.device, dtype=hidden.dtype)
+        hidden = self._aggregate_hidden_stack(hidden.unsqueeze(0), one_weight)
+        coarse_hidden = (
+            self._aggregate_hidden_stack(
+                scale_hidden[..., 0, :].unsqueeze(0), one_weight
+            )
+            if self.coarse_fine_readout
+            else None
         )
+        global_hidden = self._global_hidden(ra_deg, dec_deg, wavelength_angstrom)
+        if global_hidden is not None:
+            global_hidden = self._aggregate_hidden_stack(
+                global_hidden.unsqueeze(0), one_weight
+            )
+        bandpass_latent = self.bandpass_context(_point_bandpass_features(lam, 4))
         return self._decode_distribution(
             hidden,
             bandpass_latent,
@@ -4997,17 +5008,14 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
-        wavelength = torch.as_tensor(
-            wavelength_angstrom,
-            device=ra_deg.device,
-            dtype=torch.float32,
-        )
-        wavelengths = (
-            wavelength.reshape(-1) if wavelength.ndim > 0 else wavelength.view(1)
-        )
-        weights = torch.ones_like(wavelengths)
         shared_hidden, coeffs, fine_hidden = self._shared_hidden_and_coeffs(
             ra_deg, dec_deg
+        )
+        lam = self._normalized_log_wavelength(
+            wavelength_angstrom,
+            device=ra_deg.device,
+            dtype=shared_hidden.dtype,
+            shape=ra_deg.shape,
         )
         basis = self._spectral_basis(
             wavelength_angstrom,
@@ -5016,15 +5024,13 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
             shape=ra_deg.shape,
         )
         spectral_context = self._spectral_context_from_basis(coeffs, basis)
-        bandpass_latent = self.bandpass_context(
-            self._bandpass_features(wavelengths, weights)
-        )
+        bandpass_latent = self.bandpass_context(_point_bandpass_features(lam, 4))
         return self._decode_with_bandpass(
             shared_hidden,
             fine_hidden,
             spectral_context,
             bandpass_latent,
-            support_scale=self._bandpass_support_scale(wavelengths, weights),
+            support_scale=0.0,
         )
 
     def render_bandpass(
@@ -5613,17 +5619,64 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
-        wavelength = torch.as_tensor(
+        dtype = self.experts[0].base_output.weight.dtype
+        spatial_raw = self._spatial_coords(
+            ra_deg,
+            dec_deg,
             wavelength_angstrom,
-            device=ra_deg.device,
-            dtype=torch.float32,
-        )
-        if wavelength.ndim == 0:
-            wavelengths = wavelength.view(1)
-        else:
-            wavelengths = wavelength.reshape(-1)
-        weights = torch.ones_like(wavelengths)
-        return self.render_bandpass(ra_deg, dec_deg, wavelengths, weights)
+        ).to(dtype=dtype)
+        spatial_unit = self._spatial_unit_box_coords(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=dtype)
+        local_xys = self._atlas_local_xy(spatial_unit[..., :2])
+        atlas_weights = self._atlas_weights(
+            ra_deg,
+            dec_deg,
+            wavelength_angstrom,
+        ).to(dtype=dtype)
+        one_weight = torch.ones(1, device=spatial_raw.device, dtype=dtype)
+        preds = []
+        for expert_idx, expert in enumerate(self.experts):
+            lam = expert._normalized_wavelength(
+                wavelength_angstrom,
+                device=spatial_raw.device,
+                dtype=dtype,
+                shape=spatial_raw.shape[:-1],
+            )
+            local_spatial_raw, local_spatial_unit, lam = self._expert_local_components(
+                expert,
+                spatial_raw,
+                spatial_unit,
+                lam,
+                local_xys[..., expert_idx, :],
+            )
+            hidden = expert._scale_hidden_from_components(
+                local_spatial_raw,
+                local_spatial_unit,
+                lam,
+            )
+            mixed_hidden = expert._aggregate_hidden_stack(
+                hidden.unsqueeze(0), one_weight
+            )
+            bandpass_latent = expert.bandpass_context(
+                _point_bandpass_features(lam, 4)
+            )
+            global_hidden = expert._global_hidden_from_components(
+                local_spatial_raw, lam
+            )
+            mixed_global_hidden = (
+                expert._aggregate_hidden_stack(global_hidden.unsqueeze(0), one_weight)
+                if global_hidden is not None
+                else None
+            )
+            preds.append(
+                expert._decode_hidden(
+                    mixed_hidden, bandpass_latent, mixed_global_hidden
+                )
+            )
+        return torch.sum(atlas_weights * torch.stack(preds, dim=-1), dim=-1)
 
 
 def make_field_model(

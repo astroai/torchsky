@@ -17,15 +17,20 @@ def huber_location(
     reweighted step.  Vectorised over all batch dimensions.
     """
     with torch.no_grad():
-        med = torch.sort(x, dim=dim).values[..., x.shape[dim] // 2, None]
+        mid = x.shape[dim] // 2
+        med = torch.select(torch.sort(x, dim=dim).values, dim, mid).unsqueeze(dim)
         r = x - med
-        mad = torch.sort(r.abs(), dim=dim).values[..., x.shape[dim] // 2, None].clamp(min=1e-10)
+        mad = (
+            torch.select(torch.sort(r.abs(), dim=dim).values, dim, mid)
+            .unsqueeze(dim)
+            .clamp(min=1e-10)
+        )
     scale = mad * 1.4826
     thresh = delta * scale
     w = torch.where(
         r.abs() <= thresh,
         torch.ones_like(r),
-        thresh / r.abs(),
+        thresh / r.abs().clamp_min(1e-10),
     )
     num = (w * x).sum(dim=dim, keepdim=keepdim)
     den = w.sum(dim=dim, keepdim=keepdim).clamp(min=1e-10)
@@ -41,9 +46,14 @@ def tukey_location(
 ) -> Tensor:
     """One-step Tukey bisquare robust location estimate along *dim*."""
     with torch.no_grad():
-        med = torch.sort(x, dim=dim).values[..., x.shape[dim] // 2, None]
+        mid = x.shape[dim] // 2
+        med = torch.select(torch.sort(x, dim=dim).values, dim, mid).unsqueeze(dim)
         r = x - med
-        mad = torch.sort(r.abs(), dim=dim).values[..., x.shape[dim] // 2, None].clamp(min=1e-10)
+        mad = (
+            torch.select(torch.sort(r.abs(), dim=dim).values, dim, mid)
+            .unsqueeze(dim)
+            .clamp(min=1e-10)
+        )
     scale = mad * 1.4826
     u = r / (delta * scale)
     u_sq = u**2

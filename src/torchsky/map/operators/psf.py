@@ -182,7 +182,12 @@ def _cell_kernels_from_spec(
     lam_norm = float(getattr(psf_spec, "cell_lam_norm", 0.5))
     n_cells = int(getattr(model, "n_cells", 1))
     if u_pix is None:
-        u_pix = torch.zeros((n_cells, 2), device=device, dtype=dtype)
+        node_uvw = getattr(model, "node_uvw", None)
+        extent_pix = getattr(model, "extent_pix", None)
+        if isinstance(node_uvw, Tensor) and isinstance(extent_pix, Tensor):
+            u_pix = (node_uvw * extent_pix).to(device=device, dtype=dtype)
+        else:
+            u_pix = torch.zeros((n_cells, 2), device=device, dtype=dtype)
     else:
         u_pix = u_pix.to(device=device, dtype=dtype)
         if u_pix.shape != (n_cells, 2):
@@ -226,11 +231,10 @@ def _tent_weight(
     )
 
 
-def _learned_cells(
-    psf_spec: object, height: int, width: int, dtype: torch.dtype, device: torch.device
-) -> list[tuple[int, int, Tensor, Tensor, Tensor, Tensor, int, int]]:
-    """Per-cell kernels, write windows, and separable tent weights."""
-    kernels = _cell_kernels_from_spec(psf_spec, device=device, dtype=dtype)
+def _build_blended_cells(
+    kernels: Tensor, height: int, width: int, dtype: torch.dtype, device: torch.device
+) -> list[tuple[int, int, int, int, Tensor, Tensor, int, int]]:
+    """Per-cell write windows, separable tent weights, and kernels."""
     n_cells, ky, kx = (int(v) for v in kernels.shape)
     grid_side, cell_h, cell_w, _, _ = _cell_geometry(n_cells, height, width)
     pad_y, pad_x = ky // 2, kx // 2
@@ -268,6 +272,14 @@ def _learned_cells(
             )
             idx += 1
     return cells
+
+
+def _learned_cells(
+    psf_spec: object, height: int, width: int, dtype: torch.dtype, device: torch.device
+) -> list[tuple[int, int, int, int, Tensor, Tensor, int, int]]:
+    """Per-cell kernels, write windows, and separable tent weights."""
+    kernels = _cell_kernels_from_spec(psf_spec, device=device, dtype=dtype)
+    return _build_blended_cells(kernels, height, width, dtype, device)
 
 
 def _require_frozen_learned_psf(psf_spec: object) -> None:

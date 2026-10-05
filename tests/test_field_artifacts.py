@@ -18,6 +18,7 @@ from torchsky.map.field import (
     make_field_model,
     save_field_artifact,
 )
+from torchsky.map.field.core import ExplicitSpectralGridField
 from torchsky.map.plan import build_map_input_identity
 
 
@@ -139,6 +140,42 @@ def test_field_artifact_roundtrips_foam_without_tensor_json(tmp_path: Path) -> N
     assert loaded.model._temperature == 6.0
     for name, parameter in model.state_dict().items():
         torch.testing.assert_close(parameter, loaded.model.state_dict()[name])
+    ra = torch.tensor([11.999, 12.001], dtype=torch.float64)
+    dec = torch.tensor([-3.001, -2.999], dtype=torch.float64)
+    wavelength = torch.tensor([4800.0, 5200.0], dtype=torch.float64)
+    torch.testing.assert_close(
+        loaded.model(ra, dec, wavelength),
+        model(ra, dec, wavelength),
+    )
+
+
+def test_field_artifact_roundtrips_explicit_grid_spatial_bounds(tmp_path: Path) -> None:
+    kwargs = {
+        "spatial_resolution": 5,
+        "spectral_resolution": 3,
+        "spatial_bounds_local_deg": (-0.01, 0.02, -0.03, 0.04),
+    }
+    model = make_field_model(
+        "explicit_spectral_grid_field", _foam_domain(), **kwargs
+    )
+    assert isinstance(model, ExplicitSpectralGridField)
+    artifact_path = tmp_path / "grid-artifact"
+    manifest = save_field_artifact(
+        artifact_path,
+        model=model,
+        model_kind="explicit_spectral_grid_field",
+        model_kwargs=kwargs,
+    )
+
+    assert manifest.model_kwargs["spatial_bounds_local_deg"] == [
+        -0.01,
+        0.02,
+        -0.03,
+        0.04,
+    ]
+    loaded = load_field_artifact(artifact_path, device="cpu")
+    assert isinstance(loaded.model, ExplicitSpectralGridField)
+    assert loaded.model.spatial_bounds_local_deg == (-0.01, 0.02, -0.03, 0.04)
     ra = torch.tensor([11.999, 12.001], dtype=torch.float64)
     dec = torch.tensor([-3.001, -2.999], dtype=torch.float64)
     wavelength = torch.tensor([4800.0, 5200.0], dtype=torch.float64)

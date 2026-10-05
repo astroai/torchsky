@@ -11,7 +11,9 @@ from .stats import huber_location, tukey_location
 
 
 _STATISTIC_REGISTRY = {
-    "median": lambda x, dim: torch.sort(x, dim=dim).values[..., x.shape[dim] // 2],
+    "median": lambda x, dim: torch.select(
+        torch.sort(x, dim=dim).values, dim, x.shape[dim] // 2
+    ),
     "huber": lambda x, dim: huber_location(x, dim=dim),
     "tukey": lambda x, dim: tukey_location(x, dim=dim),
 }
@@ -21,11 +23,12 @@ def _gaussian_kernel_2d(
     kernel_size: int,
     device: torch.device,
     sigma: float | None = None,
+    dtype: torch.dtype = torch.float32,
 ) -> Tensor:
     if sigma is None:
         sigma = kernel_size / 3.0
     k = kernel_size // 2
-    x = torch.arange(-k, k + 1, dtype=torch.float32, device=device)
+    x = torch.arange(-k, k + 1, dtype=dtype, device=device)
     g = torch.exp(-0.5 * (x / sigma) ** 2)
     g = g / g.sum()
     return (g[:, None] * g[None, :])[None, None, :, :]
@@ -278,8 +281,11 @@ class MeshSkyEstimator:
                 )
                 values = image[y_index[:, None], x_index].reshape(-1)
                 if bool(values.isnan().any()):
-                    fill = torch.nanmedian(values)
-                    values = torch.where(values.isnan(), fill, values)
+                    valid_vals = values[~values.isnan()]
+                    if valid_vals.numel() == 0:
+                        mesh[row, column] = float("nan")
+                        continue
+                    values = valid_vals
                 mesh[row, column] = statistic(values, dim=-1)
         return self._fill_empty_mesh_cells(mesh)
 
@@ -346,12 +352,22 @@ class MeshSkyEstimator:
         return xp.unfold(0, bh, stride).unfold(1, bw, stride)
 
     def _reduce_mesh(self, flat: Tensor) -> Tensor:
-        has_nan = flat.isnan().any()
-        if has_nan:
-            fill = torch.nanmedian(flat, dim=-1).values[..., None]
-            flat = torch.where(flat.isnan(), fill, flat)
         stat_fn = _STATISTIC_REGISTRY[self.statistic]
-        mesh = stat_fn(flat, dim=-1)
+        nan_mask = flat.isnan()
+        if not bool(nan_mask.any()):
+            return stat_fn(flat, dim=-1)
+        cell_has_nan = nan_mask.any(dim=-1)
+        mesh = torch.full(
+            flat.shape[:-1], float("nan"), dtype=flat.dtype, device=flat.device
+        )
+        clean_cells = ~cell_has_nan
+        if bool(clean_cells.any()):
+            mesh[clean_cells] = stat_fn(flat[clean_cells], dim=-1)
+        for idx in torch.nonzero(cell_has_nan, as_tuple=False):
+            r, c = int(idx[0].item()), int(idx[1].item())
+            valid_vals = flat[r, c][~nan_mask[r, c]]
+            if valid_vals.numel() > 0:
+                mesh[r, c] = stat_fn(valid_vals, dim=-1)
         return self._fill_empty_mesh_cells(mesh)
 
     @staticmethod
@@ -396,9 +412,17 @@ class MeshSkyEstimator:
             assert fk is not None
             k = fk
             sigma = k / 3.0
-            kernel = _gaussian_kernel_2d(k, device=mesh.device, sigma=sigma)
+            kernel = _gaussian_kernel_2d(
+                k, device=mesh.device, sigma=sigma, dtype=mesh.dtype
+            )
             pad = k // 2
-            return F.conv2d(mesh[None, None], kernel, padding=pad)[0, 0]
+            pad_mode = (
+                "reflect"
+                if (pad < mesh.shape[-2] and pad < mesh.shape[-1])
+                else "replicate"
+            )
+            mp = F.pad(mesh[None, None], (pad, pad, pad, pad), mode=pad_mode)
+            return F.conv2d(mp, kernel)[0, 0]
 
         return mesh
 

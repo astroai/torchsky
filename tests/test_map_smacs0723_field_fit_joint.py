@@ -42,6 +42,8 @@ from bench_map_smacs0723_field_fit_joint import (  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _background_subtracted_source_stats  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _foam_training_tile_side  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _foam_target_footprint_bounds  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import _grid_target_footprint_bounds  # noqa: E402
+from bench_map_smacs0723_field_fit_joint import _grid_target_sampling_diagnostics  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _initialize_foam_from_band_coadds  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _refine_foam_from_observations_exact  # noqa: E402
 from bench_map_smacs0723_field_fit_joint import _joint_real_fit_kwargs  # noqa: E402
@@ -81,6 +83,90 @@ def _initialization_header(*, crpix1: float = 2.0) -> dict[str, float | int | st
         "CRVAL1": 10.0, "CRVAL2": 0.0, "CRPIX1": crpix1, "CRPIX2": 2.0,
         "CDELT1": -0.001, "CDELT2": 0.001,
     }
+
+
+def test_grid_target_footprint_bounds_add_gaussian_psf_halo() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=0.0,
+        spatial_scale_deg=0.01,
+        wavelength_center=15_000.0,
+        wavelength_scale=6_000.0,
+        coord_mode="local_tangent",
+    )
+    entries = [
+        {
+            "target_header": _initialization_header(),
+            "fitted_psf_fwhm_arcsec": 0.12,
+        }
+    ]
+    normalized_x, normalized_y = _foam_target_footprint_bounds(domain, entries)
+    bounds = _grid_target_footprint_bounds(domain, entries, margin_sigma=4.0)
+    margin_deg = 4.0 * 0.12 / math.sqrt(8.0 * math.log(2.0)) / 3600.0
+
+    assert bounds == pytest.approx(
+        (
+            normalized_x[0] * domain.spatial_scale_deg - margin_deg,
+            normalized_x[1] * domain.spatial_scale_deg + margin_deg,
+            normalized_y[0] * domain.spatial_scale_deg - margin_deg,
+            normalized_y[1] * domain.spatial_scale_deg + margin_deg,
+        )
+    )
+
+
+@pytest.mark.parametrize("fwhm", [-0.1, float("nan")])
+def test_grid_target_footprint_bounds_reject_invalid_psf(fwhm: float) -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=0.0,
+        spatial_scale_deg=0.01,
+        wavelength_center=15_000.0,
+        wavelength_scale=6_000.0,
+        coord_mode="local_tangent",
+    )
+    entries = [
+        {
+            "target_header": _initialization_header(),
+            "fitted_psf_fwhm_arcsec": fwhm,
+        }
+    ]
+
+    with pytest.raises(ValueError, match="fitted_psf_fwhm_arcsec"):
+        _grid_target_footprint_bounds(domain, entries)
+
+
+def test_grid_target_sampling_diagnostics_reports_target_intervals() -> None:
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=0.0,
+        spatial_scale_deg=0.01,
+        wavelength_center=15_000.0,
+        wavelength_scale=6_000.0,
+        coord_mode="local_tangent",
+    )
+    entries = [
+        {
+            "target_header": _initialization_header(),
+            "fitted_psf_fwhm_arcsec": 0.12,
+        }
+    ]
+    bounds = _grid_target_footprint_bounds(domain, entries, margin_sigma=0.0)
+    model = make_field_model(
+        "explicit_spectral_grid_field",
+        domain,
+        spatial_resolution=5,
+        spectral_resolution=3,
+        spatial_bounds_local_deg=bounds,
+    )
+    diagnostics = _grid_target_sampling_diagnostics(
+        model, _initialization_header()
+    )
+
+    assert diagnostics["grid_spatial_mapping"] == "target_footprint_linear"
+    assert diagnostics["grid_target_intervals_x"] == pytest.approx(4.0)
+    assert diagnostics["grid_target_intervals_y"] == pytest.approx(4.0)
+    assert diagnostics["grid_mean_cell_arcsec_x"] == pytest.approx(2.7)
+    assert diagnostics["grid_mean_cell_arcsec_y"] == pytest.approx(2.7)
 
 
 @pytest.mark.parametrize("angle", [0.0, 30.0])
@@ -376,6 +462,24 @@ def test_latent_scene_initialization_is_order_invariant() -> None:
 
     torch.testing.assert_close(ordered.data, reversed_product.data, rtol=0.0, atol=0.0)
     assert ordered.provenance == reversed_product.provenance
+
+
+def test_latent_scene_initialization_stays_finite_for_bright_data() -> None:
+    observation = _initialization_observation(1000.0)
+    context = ForwardContext(exposure_id="train", extra={"split": "train"})
+    product = joint_benchmark._fit_training_scene_initialization_product(
+        [observation],
+        [context],
+        [field_observation_operator_bundle(observation)],
+        target_header=_initialization_header(),
+        fit_kwargs={"num_spectral_samples": 1, "spatial_sampling": "center"},
+        steps=1,
+        lr=0.01,
+    )
+
+    assert torch.isfinite(product.data).all()
+    assert math.isfinite(product.provenance["initializer_initial_loss"])
+    assert math.isfinite(product.provenance["initializer_final_loss"])
 
 
 def _initialization_domain() -> FieldDomain:

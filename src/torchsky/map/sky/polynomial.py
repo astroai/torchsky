@@ -405,7 +405,7 @@ class PolynomialSkyModel:
             w = torch.where(
                 u.abs() <= thresh,
                 torch.ones_like(u),
-                thresh / u.abs(),
+                thresh / u.abs().clamp_min(1e-10),
             )
         else:
             delta = torch.tensor(4.685, device=y.device, dtype=y.dtype)
