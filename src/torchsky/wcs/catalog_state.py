@@ -20,6 +20,7 @@ from .frames import (
     convert_celestial,
     propagate_proper_motion,
     propagate_space_motion,
+    radec_to_unit,
 )
 
 Representation = Literal["lonlat_deg", "unit_xyz", "barycentric_au"]
@@ -32,6 +33,22 @@ def _as_f64(value: Any) -> Tensor:
     if isinstance(value, Tensor):
         return value.to(dtype=_work_dtype(value.device))
     return torch.as_tensor(value, dtype=torch.float64)
+
+
+def _tangent_basis(lon: Tensor, lat: Tensor) -> tuple[Tensor, Tensor]:
+    lon, lat = torch.broadcast_tensors(
+        lon * (torch.pi / 180.0), lat * (torch.pi / 180.0)
+    )
+    east = torch.stack((-torch.sin(lon), torch.cos(lon), torch.zeros_like(lon)), dim=-1)
+    north = torch.stack(
+        (
+            -torch.sin(lat) * torch.cos(lon),
+            -torch.sin(lat) * torch.sin(lon),
+            torch.cos(lat),
+        ),
+        dim=-1,
+    )
+    return east, north
 
 
 @dataclass
@@ -108,14 +125,47 @@ class CatalogState:
     def to_frame(
         self, frame: str, *, tt_mjd: Tensor | float | None = None
     ) -> CatalogState:
+        destination = canonical_celestial_frame(frame)
+        if destination == self.frame:
+            return replace(self)
+        pm_lon, pm_lat = self.pm_lon_coslat_mas_yr, self.pm_lat_mas_yr
+        if (pm_lon is None) != (pm_lat is None):
+            raise ValueError("frame conversion requires both proper-motion components")
+        if pm_lon is not None and "FK4" in (self.frame, destination):
+            raise ValueError(
+                "FK4 proper-motion conversion requires an unsupported time-dependent astrometric transform"
+            )
         lon, lat = convert_celestial(
             self.lon,
             self.lat,
             from_frame=self.frame,
-            to_frame=frame,
+            to_frame=destination,
             tt_mjd=tt_mjd,
         )
-        return replace(self, lon=lon, lat=lat, frame=canonical_celestial_frame(frame))
+        if pm_lon is not None and pm_lat is not None:
+            # The supported non-FK4 conversions are rigid Cartesian rotations.
+            axes_lon, axes_lat = convert_celestial(
+                self.lon.new_tensor([0.0, 90.0, 0.0]),
+                self.lon.new_tensor([0.0, 0.0, 90.0]),
+                from_frame=self.frame,
+                to_frame=destination,
+                tt_mjd=tt_mjd,
+            )
+            rotation = radec_to_unit(axes_lon, axes_lat)
+            east, north = _tangent_basis(self.lon, self.lat)
+            velocity = pm_lon.unsqueeze(-1) * east + pm_lat.unsqueeze(-1) * north
+            rotated = velocity @ rotation
+            east_out, north_out = _tangent_basis(lon, lat)
+            pm_lon = (rotated * east_out).sum(dim=-1)
+            pm_lat = (rotated * north_out).sum(dim=-1)
+        return replace(
+            self,
+            lon=lon,
+            lat=lat,
+            frame=destination,
+            pm_lon_coslat_mas_yr=pm_lon,
+            pm_lat_mas_yr=pm_lat,
+        )
 
     def propagate_angular(self, epoch: Tensor | float) -> CatalogState:
         if self.pm_lon_coslat_mas_yr is None or self.pm_lat_mas_yr is None:
@@ -130,7 +180,9 @@ class CatalogState:
             source_epoch_jyear=self.epoch,
             target_epoch_jyear=epoch,
         )
-        return replace(self, lon=lon, lat=lat, epoch=_to_device(_as_f64(epoch), lon.device))
+        return replace(
+            self, lon=lon, lat=lat, epoch=_to_device(_as_f64(epoch), lon.device)
+        )
 
     def propagate_physical(self, epoch: Tensor | float) -> CatalogState:
         if (

@@ -152,6 +152,9 @@ inline double wrap_rad_2pi(double v) {
     if (r < 0.0) {
         r += TWO_PI;
     }
+    if (r >= TWO_PI) {
+        r = 0.0;
+    }
     return r;
 }
 
@@ -159,6 +162,9 @@ inline double wrap_deg_360(double v) {
     double r = std::fmod(v, 360.0);
     if (r < 0.0) {
         r += 360.0;
+    }
+    if (r >= 360.0) {
+        r = 0.0;
     }
     return r;
 }
@@ -1163,138 +1169,12 @@ static torch::Tensor healpix_neighbors_cpu_impl(
                 }
 
                 if (output_nest) {
-                    dst[row_off + m] = xyf_to_nest(npface, x, y, f);
+                    dst[row_off + m] = static_cast<int64_t>(
+                        static_cast<uint64_t>(f * npface) + spread_x[static_cast<size_t>(x)] + spread_y[static_cast<size_t>(y)]
+                    );
                 } else {
                     dst[row_off + m] = xyf_to_ring(nside, ncap, npix, nl4, x, y, f);
                 }
-            }
-        }
-    };
-
-    if (n >= PARALLEL_MIN_ELEMS) {
-        at::parallel_for(0, n, 8192, compute_block);
-    } else {
-        compute_block(0, n);
-    }
-
-    auto shape = pix_in.sizes().vec();
-    shape.push_back(8);
-    return out.reshape(shape);
-}
-
-static torch::Tensor healpix_neighbors_nested_cpu_impl(int64_t nside, const torch::Tensor& pix_in) {
-    if (!is_valid_nside(nside)) {
-        throw std::runtime_error("nside must be a positive power of two");
-    }
-    if (!pix_in.device().is_cpu()) {
-        throw std::runtime_error("healpix_neighbors_cpu expects CPU tensor");
-    }
-    if (pix_in.scalar_type() != torch::kInt64) {
-        throw std::runtime_error("healpix_neighbors_cpu expects int64 tensor");
-    }
-
-    auto pix = pix_in.contiguous().reshape({-1});
-    const int64_t n = pix.numel();
-    auto out = torch::full({n, 8}, static_cast<int64_t>(-1), torch::TensorOptions().dtype(torch::kInt64));
-    if (n == 0) {
-        auto shape = pix_in.sizes().vec();
-        shape.push_back(8);
-        return out.reshape(shape);
-    }
-
-    const int64_t npface = nside * nside;
-    const int64_t npix = 12 * nside * nside;
-    const int64_t nsm1 = nside - 1;
-    std::vector<uint64_t> spread_x(static_cast<size_t>(nside));
-    std::vector<uint64_t> spread_y(static_cast<size_t>(nside));
-    for (int64_t i = 0; i < nside; ++i) {
-        spread_x[static_cast<size_t>(i)] = spread_bits_u64(static_cast<uint64_t>(i));
-        spread_y[static_cast<size_t>(i)] = spread_bits_u64(static_cast<uint64_t>(i)) << 1;
-    }
-
-    const int64_t* in = pix.data_ptr<int64_t>();
-    int64_t* dst = out.data_ptr<int64_t>();
-    const int64_t min_pix = pix.min().item<int64_t>();
-    const int64_t max_pix = pix.max().item<int64_t>();
-    if (min_pix < 0 || max_pix >= npix) {
-        throw std::runtime_error("pixel index out of range for nside");
-    }
-
-    auto compute_block = [&](int64_t begin, int64_t end) {
-        for (int64_t i = begin; i < end; ++i) {
-            const int64_t p = in[i];
-            int64_t ix;
-            int64_t iy;
-            int64_t face_num;
-            nest_to_xyf(npface, p, ix, iy, face_num);
-
-            const int64_t row_off = i * 8;
-            if (ix > 0 && ix < nsm1 && iy > 0 && iy < nsm1) {
-                // Interior pixels stay on the same face; skip boundary machinery.
-                const uint64_t face_base = static_cast<uint64_t>(face_num * npface);
-                const uint64_t sxm = spread_x[static_cast<size_t>(ix - 1)];
-                const uint64_t sx0 = spread_x[static_cast<size_t>(ix)];
-                const uint64_t sxp = spread_x[static_cast<size_t>(ix + 1)];
-                const uint64_t sym = spread_y[static_cast<size_t>(iy - 1)];
-                const uint64_t sy0 = spread_y[static_cast<size_t>(iy)];
-                const uint64_t syp = spread_y[static_cast<size_t>(iy + 1)];
-
-                dst[row_off + 0] = static_cast<int64_t>(face_base + sxm + sy0); // SW
-                dst[row_off + 1] = static_cast<int64_t>(face_base + sxm + syp); // W
-                dst[row_off + 2] = static_cast<int64_t>(face_base + sx0 + syp); // NW
-                dst[row_off + 3] = static_cast<int64_t>(face_base + sxp + syp); // N
-                dst[row_off + 4] = static_cast<int64_t>(face_base + sxp + sy0); // NE
-                dst[row_off + 5] = static_cast<int64_t>(face_base + sxp + sym); // E
-                dst[row_off + 6] = static_cast<int64_t>(face_base + sx0 + sym); // SE
-                dst[row_off + 7] = static_cast<int64_t>(face_base + sxm + sym); // S
-                continue;
-            }
-
-            const int64_t band = face_num >> 2;
-            for (int64_t m = 0; m < 8; ++m) {
-                int64_t x = ix + NB_XOFFSET[m];
-                int64_t y = iy + NB_YOFFSET[m];
-                int64_t f = face_num;
-
-                if (x < 0 || x > nsm1 || y < 0 || y > nsm1) {
-                    int64_t nbnum = 4;
-                    if (x < 0) {
-                        x += nside;
-                        nbnum -= 1;
-                    } else if (x >= nside) {
-                        x -= nside;
-                        nbnum += 1;
-                    }
-                    if (y < 0) {
-                        y += nside;
-                        nbnum -= 3;
-                    } else if (y >= nside) {
-                        y -= nside;
-                        nbnum += 3;
-                    }
-
-                    f = NB_FACEARRAY[nbnum][face_num];
-                    if (f < 0) {
-                        dst[row_off + m] = -1;
-                        continue;
-                    }
-
-                    const int64_t bits = NB_SWAPARRAY[nbnum][band];
-                    if ((bits & 1) != 0) {
-                        x = nside - x - 1;
-                    }
-                    if ((bits & 2) != 0) {
-                        y = nside - y - 1;
-                    }
-                    if ((bits & 4) != 0) {
-                        const int64_t t = x;
-                        x = y;
-                        y = t;
-                    }
-                }
-                dst[row_off + m] = static_cast<int64_t>(
-                    static_cast<uint64_t>(f * npface) + spread_x[static_cast<size_t>(x)] + spread_y[static_cast<size_t>(y)]
-                );
             }
         }
     };
@@ -1315,7 +1195,7 @@ torch::Tensor healpix_neighbors_ring_cpu(int64_t nside, const torch::Tensor& pix
 }
 
 torch::Tensor healpix_neighbors_nested_cpu(int64_t nside, const torch::Tensor& pix_nest) {
-    return healpix_neighbors_nested_cpu_impl(nside, pix_nest);
+    return healpix_neighbors_cpu_impl(nside, pix_nest, true, true);
 }
 
 torch::Tensor healpix_scalar_alm2map_direct_cpu(

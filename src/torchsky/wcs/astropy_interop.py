@@ -73,7 +73,9 @@ def catalog_state_to_astropy(state: CatalogState) -> SkyCoord:
         )
         kwargs["pm_dec"] = icrs.pm_lat_mas_yr.detach().cpu().numpy() * u.mas / u.yr
     if icrs.parallax_mas is not None:
-        kwargs["distance"] = (1000.0 / icrs.parallax_mas.detach().cpu().numpy()) * u.pc
+        plx_np = icrs.parallax_mas.detach().cpu().numpy()
+        if (plx_np > 0.0).all():
+            kwargs["distance"] = (1000.0 / plx_np) * u.pc
     if icrs.radial_velocity_km_s is not None:
         kwargs["radial_velocity"] = (
             icrs.radial_velocity_km_s.detach().cpu().numpy() * u.km / u.s

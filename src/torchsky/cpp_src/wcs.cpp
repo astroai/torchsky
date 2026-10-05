@@ -445,8 +445,10 @@ std::pair<torch::Tensor, torch::Tensor> wcs_zenithal_project(
     } else if (proj_code == "ARC") {
         theta = 90.0 - r;
     } else if (proj_code == "ZEA") {
+        auto invalid = r_rad > 2.0;
         auto val = (r_rad / 2.0).clamp(-1.0, 1.0);
         theta = 90.0 - 2.0 * val.asin() * R2D;
+        theta = torch::where(invalid, torch::full_like(theta, std::numeric_limits<double>::quiet_NaN()), theta);
     } else if (proj_code == "STG") {
         theta = 90.0 - 2.0 * (r_rad / 2.0).atan() * R2D;
     } else {
@@ -2040,9 +2042,14 @@ void wcs_pixel_to_world_fused_cpu(
             theta = std::atan2(1.0, std::max(r_rad, 1e-15)) * R2D;
         } else if (proj_code == "SIN") {
             double r = std::sqrt(xi_deg * xi_deg + eta_deg * eta_deg);
-            double r_rad = std::min(r * D2R, 1.0);
-            phi = std::atan2(-xi_deg, -eta_deg) * R2D;
-            theta = std::acos(r_rad) * R2D;
+            double r_rad = r * D2R;
+            if (r_rad > 1.0) {
+                phi = std::nan("");
+                theta = std::nan("");
+            } else {
+                phi = std::atan2(-xi_deg, -eta_deg) * R2D;
+                theta = std::acos(r_rad) * R2D;
+            }
         } else if (proj_code == "ARC") {
             // Zenithal equidistant: R = hypot(xi, eta) in degrees; theta = 90 - R.
             double r = std::sqrt(xi_deg * xi_deg + eta_deg * eta_deg);
@@ -2070,16 +2077,24 @@ void wcs_pixel_to_world_fused_cpu(
             double eta_scale = 90.0 * (hpx_K / hpx_H);
             double eta_boundary = eta_scale * (2.0 / 3.0);
             double abs_eta = std::abs(eta_deg);
-            if (abs_eta <= eta_boundary) {
+            if (abs_eta > 90.0) {
+                phi = std::nan("");
+                theta = std::nan("");
+            } else if (abs_eta <= eta_boundary) {
                 phi = xi_deg;
                 theta = std::asin(std::max(-1.0, std::min(1.0, eta_deg / eta_scale))) * R2D;
             } else {
                 double sigma = std::max(0.0, (90.0 - abs_eta) / (90.0 - eta_boundary));
                 double xc = std::round((xi_deg - 45.0) / 90.0) * 90.0 + 45.0;
                 double dx_hpx = xi_deg - xc;
-                phi = xc + (sigma > 1e-12 ? dx_hpx / sigma : 0.0);
-                double s_theta = (eta_deg >= 0 ? 1.0 : -1.0) * (1.0 - (sigma * sigma) / 3.0);
-                theta = std::asin(std::max(-1.0, std::min(1.0, s_theta))) * R2D;
+                if (std::abs(dx_hpx) > 45.0 * sigma + 1e-8) {
+                    phi = std::nan("");
+                    theta = std::nan("");
+                } else {
+                    phi = xc + (sigma > 1e-12 ? dx_hpx / sigma : 0.0);
+                    double s_theta = (eta_deg >= 0 ? 1.0 : -1.0) * (1.0 - (sigma * sigma) / 3.0);
+                    theta = std::asin(std::max(-1.0, std::min(1.0, s_theta))) * R2D;
+                }
             }
         } else if (proj_code == "CAR") {
             phi = xi_deg;
@@ -2090,12 +2105,18 @@ void wcs_pixel_to_world_fused_cpu(
             phi = (std::abs(cos_theta) > 1e-12) ? (xi_deg / cos_theta) : 0.0;
         } else if (proj_code == "MOL") {
             double sqrt2 = std::sqrt(2.0);
-            double sin_gamma = std::max(-1.0, std::min(1.0, (eta_deg * D2R) / sqrt2));
-            double gamma = std::asin(sin_gamma);
-            double cos_gamma = std::cos(gamma);
-            double t_val = (2.0 * gamma + std::sin(2.0 * gamma)) / WCS_PI;
-            theta = std::asin(std::max(-1.0, std::min(1.0, t_val))) * R2D;
-            phi = (std::abs(cos_gamma) > 1e-12) ? (xi_deg * WCS_PI / (2.0 * sqrt2 * cos_gamma)) : 0.0;
+            double y_rad = eta_deg * D2R;
+            if (std::abs(y_rad) > sqrt2 + 1e-9) {
+                phi = std::nan("");
+                theta = std::nan("");
+            } else {
+                double sin_gamma = std::max(-1.0, std::min(1.0, y_rad / sqrt2));
+                double gamma = std::asin(sin_gamma);
+                double cos_gamma = std::cos(gamma);
+                double t_val = (2.0 * gamma + std::sin(2.0 * gamma)) / WCS_PI;
+                theta = std::asin(std::max(-1.0, std::min(1.0, t_val))) * R2D;
+                phi = (std::abs(cos_gamma) > 1e-12) ? (xi_deg * WCS_PI / (2.0 * sqrt2 * cos_gamma)) : 0.0;
+            }
         } else if (proj_code == "PCO") {
             // Inverse PCO: Newton on G(theta) in radians.
             double big_x = xi_deg * D2R;

@@ -16,7 +16,13 @@ from .cylindrical import project_cylindrical, deproject_cylindrical
 from .allsky import project_allsky, deproject_allsky
 from .conic import project_conic, deproject_conic
 from .quadcube import project_quadcube, deproject_quadcube
-from .legacy import invert_tnx_plane, project_tnx, project_zpx
+from .legacy import (
+    deproject_zpx,
+    extract_zpx_params,
+    invert_tnx_plane,
+    project_tnx,
+    project_zpx,
+)
 from .spectral import (
     canonical_spectral_type,
     frequency_to_spectral as _frequency_to_spectral,
@@ -30,7 +36,6 @@ from .frames import (
     convert_celestial as _convert_celestial,
     precess_fk5 as _precess_fk5,
 )
-from .utils import solve_newton_raphson
 
 _HAS_TORCH_SINCOS = hasattr(torch, "sincos")
 
@@ -428,6 +433,9 @@ class WCS:
 
             self.wat_data[1] = parse_wat_keywords(header, prefix="WAT1")
             self.wat_data[2] = parse_wat_keywords(header, prefix="WAT2")
+            if self.wcs_params.get("CTYPE1", "").strip().upper().endswith("ZPX"):
+                for k, v in extract_zpx_params(self.wat_data).items():
+                    self.wcs_params.setdefault(k, v)
 
     def _parse_sip(self, header: Dict[str, Any]) -> None:
         """Parse SIP distortion keywords."""
@@ -1725,12 +1733,16 @@ class WCS:
             elif self._is_arc:
                 theta = 90.0 - r
             elif self._is_zea:
+                invalid_zea = (r * self._d2r) > 2.0
                 theta = (
                     90.0
                     - 2.0
                     * torch.asin(torch.clamp((r * self._d2r) * 0.5, -1.0, 1.0))
                     * self._r2d
                 )
+                nan = torch.full_like(theta, float("nan"))
+                phi = torch.where(invalid_zea, nan, phi)
+                theta = torch.where(invalid_zea, nan, theta)
             else:
                 theta = 90.0 - 2.0 * torch.atan((r * self._d2r) * 0.5) * self._r2d
         elif self._is_sin:
@@ -2014,115 +2026,6 @@ class WCS:
         core_fn = self._compiled_pixel_to_world_2d_fn or self._pixel_to_world_2d_core
         return core_fn(x, y, float(origin))
 
-    def _pixel_to_world_cpp(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-        """C++ fast path for projections."""
-        device_ok = xi.device.type == "cpu" and eta.device.type == "cpu"
-        dtype_ok = xi.dtype == torch.float64 and eta.dtype == torch.float64
-        use_cpp_inputs = device_ok and dtype_ok
-        if use_cpp_inputs:
-            xi_cpp = self._contiguous_if_needed(xi)
-            eta_cpp = self._contiguous_if_needed(eta)
-        else:
-            xi_cpp = xi
-            eta_cpp = eta
-
-        if self._proj_code in self.ZENITHAL_CODES:
-            if self._cpp_zenithal_project is not None and device_ok and dtype_ok:
-                phi, theta = self._cpp_zenithal_project(
-                    xi_cpp, eta_cpp, self._proj_code
-                )
-                # Match Python zenithal convention (phi sign).
-                phi = -phi
-            else:
-                phi, theta = project_zenithal(
-                    xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                )
-            return self._spherical_rotation_optimized(phi, theta, self._native_type)
-
-        if self._proj_code in self.CYLINDRICAL_CODES:
-            lambda_param = self.wcs_params.get("PV2_1", 1.0)
-            if self._cpp_cylindrical_project is not None and device_ok and dtype_ok:
-                phi, theta = self._cpp_cylindrical_project(
-                    xi_cpp, eta_cpp, self._proj_code, lambda_param
-                )
-            else:
-                phi, theta = project_cylindrical(
-                    xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                )
-            return self._spherical_rotation_optimized(phi, theta, self._native_type)
-
-        if self._proj_code == "AIT":
-            if self._cpp_ait_project is not None and device_ok and dtype_ok:
-                phi, theta = self._cpp_ait_project(xi_cpp, eta_cpp)
-            else:
-                phi, theta = project_allsky(
-                    xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                )
-            return self._spherical_rotation_optimized(phi, theta, self._native_type)
-
-        if self._proj_code == "MOL":
-            if self._cpp_mol_project is not None and device_ok and dtype_ok:
-                # Exact MOL domain prefilter: validity depends only on |eta| <= sqrt(2) rad.
-                # When benchmarking random image coordinates, most points are outside the
-                # projection domain; processing only the valid subset avoids unnecessary
-                # projection work while preserving exact results.
-                valid_eta = torch.abs(eta_cpp) <= self._mol_abs_eta_max
-                if bool(valid_eta.all()):
-                    phi, theta = self._cpp_mol_project(xi_cpp, eta_cpp)
-                elif not bool(valid_eta.any()):
-                    nan = torch.full_like(xi, float("nan"))
-                    return nan, nan.clone()
-                else:
-                    phi = torch.full_like(xi, float("nan"))
-                    theta = torch.full_like(eta, float("nan"))
-                    phi_v, theta_v = self._cpp_mol_project(
-                        xi_cpp[valid_eta], eta_cpp[valid_eta]
-                    )
-                    ra_v, dec_v = self._spherical_rotation_finite_only(phi_v, theta_v)
-                    ra = torch.full_like(xi, float("nan"))
-                    dec = torch.full_like(eta, float("nan"))
-                    ra[valid_eta] = ra_v
-                    dec[valid_eta] = dec_v
-                    return ra, dec
-            else:
-                phi, theta = project_allsky(
-                    xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                )
-            return self._spherical_rotation_finite_only(phi, theta)
-
-        if self._proj_code == "HPX":
-            H = self._hpx_h
-            K = self._hpx_k
-            if self._cpp_hpx_project is not None and device_ok and dtype_ok:
-                # Exact HPX eta-domain prefilter; xi bounds still depend on eta and are
-                # validated inside the projection kernel.
-                valid_eta = torch.abs(eta_cpp) <= self._hpx_eta_pole
-                if bool(valid_eta.all()):
-                    phi, theta = self._cpp_hpx_project(xi_cpp, eta_cpp, H, K)
-                elif not bool(valid_eta.any()):
-                    nan = torch.full_like(xi, float("nan"))
-                    return nan, nan.clone()
-                else:
-                    phi = torch.full_like(xi, float("nan"))
-                    theta = torch.full_like(eta, float("nan"))
-                    phi_v, theta_v = self._cpp_hpx_project(
-                        xi_cpp[valid_eta], eta_cpp[valid_eta], H, K
-                    )
-                    ra_v, dec_v = self._spherical_rotation_finite_only(phi_v, theta_v)
-                    ra = torch.full_like(xi, float("nan"))
-                    dec = torch.full_like(eta, float("nan"))
-                    ra[valid_eta] = ra_v
-                    dec[valid_eta] = dec_v
-                    return ra, dec
-            else:
-                phi, theta = project_allsky(
-                    xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                )
-            return self._spherical_rotation_finite_only(phi, theta)
-
-        phi, theta = self._project_native_coords(xi, eta)
-        return self._spherical_rotation_optimized(phi, theta, self._native_type)
-
     def _native_from_ait_fast(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         """Fast AIT inverse projection: intermediate (deg) -> native (deg)."""
         X = xi * self._d2r
@@ -2145,122 +2048,6 @@ class WCS:
         phi.masked_fill_(~valid, float("nan"))
         theta.masked_fill_(~valid, float("nan"))
         return phi, theta
-
-    def _native_from_mol_fast(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-        """Fast MOL inverse projection: intermediate (deg) -> native (deg)."""
-        valid = torch.abs(eta) <= self._mol_abs_eta_max
-        if bool(valid.all()):
-            xv = xi * self._d2r
-            yv = eta * self._d2r
-            sin_gamma = torch.clamp(yv / self._sqrt2, -1.0, 1.0)
-            gamma = torch.asin(sin_gamma)
-            cos_gamma = torch.cos(gamma)
-            t_val = (2.0 * gamma + 2.0 * sin_gamma * cos_gamma) / math.pi
-            theta = torch.asin(torch.clamp(t_val, -1.0, 1.0)) * self._r2d
-            denom = 2.0 * self._sqrt2 * cos_gamma
-            phi = torch.zeros_like(xi)
-            good = torch.abs(denom) >= 1e-12
-            if bool(good.any()):
-                phi[good] = (math.pi * xv[good] / denom[good]) * self._r2d
-            return phi, theta
-
-        phi = torch.full_like(xi, float("nan"))
-        theta = torch.full_like(eta, float("nan"))
-        if bool(valid.any()):
-            xv = (xi[valid]) * self._d2r
-            yv = (eta[valid]) * self._d2r
-            sin_gamma = torch.clamp(yv / self._sqrt2, -1.0, 1.0)
-            gamma = torch.asin(sin_gamma)
-            cos_gamma = torch.cos(gamma)
-            t_val = (2.0 * gamma + 2.0 * sin_gamma * cos_gamma) / math.pi
-            theta[valid] = torch.asin(torch.clamp(t_val, -1.0, 1.0)) * self._r2d
-            denom = 2.0 * self._sqrt2 * cos_gamma
-            phi_v = torch.zeros_like(xv)
-            good = torch.abs(denom) >= 1e-12
-            if bool(good.any()):
-                phi_v[good] = (math.pi * xv[good] / denom[good]) * self._r2d
-            phi[valid] = phi_v
-        return phi, theta
-
-    def _native_from_hpx_fast(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-        """Fast HPX inverse projection: intermediate (deg) -> native (deg)."""
-        abs_eta = torch.abs(eta)
-        invalid = abs_eta > self._hpx_eta_pole
-        mask_eq = (~invalid) & (abs_eta <= self._hpx_eta_boundary)
-        mask_pol = (~invalid) & (~mask_eq)
-
-        s_theta_eq = torch.clamp(eta * self._hpx_inv_eta_scale, -1.0, 1.0)
-        theta_eq = torch.asin(s_theta_eq) * self._r2d
-
-        sigma = torch.clamp(
-            (self._hpx_eta_pole - abs_eta) * self._hpx_inv_polar_denom, min=0.0
-        )
-        s_theta_pol = torch.sign(eta) * (1.0 - (sigma * sigma) / 3.0)
-        theta_pol = torch.asin(torch.clamp(s_theta_pol, -1.0, 1.0)) * self._r2d
-        xc = torch.round((xi - 45.0) / 90.0) * 90.0 + 45.0
-        dx = xi - xc
-        sigma_safe = torch.where(
-            torch.abs(sigma) < 1e-12, torch.ones_like(sigma), sigma
-        )
-        phi_pol = xc + dx / sigma_safe
-        invalid = invalid | (mask_pol & (torch.abs(dx) > (45.0 * sigma + 1e-8)))
-
-        nan = torch.full_like(xi, float("nan"))
-        phi = torch.where(invalid, nan, torch.where(mask_eq, xi, phi_pol))
-        theta = torch.where(invalid, nan, torch.where(mask_eq, theta_eq, theta_pol))
-        return phi, theta
-
-    def _intermediate_from_ait_fast(
-        self, phi: Tensor, theta: Tensor
-    ) -> Tuple[Tensor, Tensor]:
-        """Fast AIT forward projection: native (deg) -> intermediate (deg)."""
-        phi_wrapped = _wrap_lon180_checked(phi)
-        phi_rad = phi_wrapped * self._d2r
-        theta_rad = theta * self._d2r
-        cos_theta = torch.cos(theta_rad)
-        sin_theta = torch.sin(theta_rad)
-        half_phi = phi_rad * 0.5
-        denom = torch.sqrt(
-            torch.clamp(0.5 * (1.0 + cos_theta * torch.cos(half_phi)), min=1e-12)
-        )
-        xi = 2.0 * cos_theta * torch.sin(half_phi) / denom * self._r2d
-        eta = sin_theta / denom * self._r2d
-        return xi, eta
-
-    def _intermediate_from_mol_fast(
-        self, phi: Tensor, theta: Tensor
-    ) -> Tuple[Tensor, Tensor]:
-        """Fast MOL forward projection: native (deg) -> intermediate (deg)."""
-        phi_wrapped = _wrap_lon180_checked(phi)
-        phi_rad = phi_wrapped * self._d2r
-        theta_rad = theta * self._d2r
-        target = math.pi * torch.sin(theta_rad)
-        gamma = theta_rad.clone()
-        for _ in range(5):
-            sin_2g = torch.sin(2.0 * gamma)
-            cos_2g = torch.cos(2.0 * gamma)
-            res = 2.0 * gamma + sin_2g - target
-            gamma = gamma - res / (2.0 + 2.0 * cos_2g + 1e-12)
-        xi = 2.0 * self._sqrt2 * phi_rad * torch.cos(gamma) / math.pi * self._r2d
-        eta = self._sqrt2 * torch.sin(gamma) * self._r2d
-        return xi, eta
-
-    def _intermediate_from_hpx_fast(
-        self, phi: Tensor, theta: Tensor
-    ) -> Tuple[Tensor, Tensor]:
-        """Fast HPX forward projection: native (deg) -> intermediate (deg)."""
-        phi_w = _wrap_lon180_checked(phi)
-        s_theta = torch.sin(theta * self._d2r)
-        abs_s = torch.abs(s_theta)
-        mask_eq = abs_s <= (2.0 / 3.0)
-        sigma = torch.sqrt(torch.clamp(3.0 * (1.0 - abs_s), min=0.0))
-        eta_pol = torch.sign(s_theta) * (
-            self._hpx_eta_pole - (self._hpx_eta_pole - self._hpx_eta_boundary) * sigma
-        )
-        xc = torch.round((phi_w - 45.0) / 90.0) * 90.0 + 45.0
-        xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
-        eta = torch.where(mask_eq, self._hpx_eta_scale * s_theta, eta_pol)
-        return xi, eta
 
     def _world_to_pixel_2d_core(
         self,
@@ -2431,6 +2218,8 @@ class WCS:
             xi, eta = deproject_zenithal(
                 phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
             )
+        elif self._is_zpx:
+            xi, eta = deproject_zpx(phi, theta, self.wcs_params, self.wat_data)
         else:
             # Fallback: dispatch to the appropriate deproject function.
             if self._project_native_kind == "zenithal":
@@ -2462,7 +2251,7 @@ class WCS:
                 xi, eta = self.tpv.invert_affine_exact(xi, eta)
             else:
                 xi, eta = self.tpv.invert(xi, eta)
-        if self._is_tnx or self._is_zpx:
+        if self._is_tnx:
             xi, eta = invert_tnx_plane(xi, eta, self.wat_data)
 
         # 4. Inverse Linear (CD matrix)
@@ -4493,11 +4282,6 @@ class WCS:
 
         return ra, dec
 
-    def _dispatch_projection(self, xi, eta, proj_code):
-        # Dispatch logic moved here
-        phi, theta = self._project_native_coords(xi, eta)
-        return phi, theta, self._project_native_type
-
     def _spherical_rotation(
         self, phi: Tensor, theta: Tensor, native_type: str = "pole"
     ) -> Tuple[Tensor, Tensor]:
@@ -4809,7 +4593,7 @@ class WCS:
         if len(args) == 1:
             world = self._as_wcs_coord(args[0])
 
-            # Fast path for 2D spatial with (N, 2) tensor input
+            # Fast path for 2D spatial with (..., 2) tensor input
             if self.naxis == 2 and self._is_spatial:
                 stack_inv = self._compiled_stack_world_to_pixel
                 if stack_inv is not None and origin in stack_inv:
@@ -4818,7 +4602,7 @@ class WCS:
                     pix_flat = stack_inv[origin](wf)
                     return pix_flat.view(world.shape)
                 px, py = self._world_to_pixel_2d_fast(
-                    world[:, 0], world[:, 1], iterative=iterative, origin=origin
+                    world[..., 0], world[..., 1], iterative=iterative, origin=origin
                 )
                 return torch.stack([px, py], dim=-1)
         else:
@@ -4845,131 +4629,19 @@ class WCS:
             rel_flat = torch.matmul(self.cd_inv_full, (linear_world - self.crval).T).T
             pix_internal_flat = rel_flat + self.crpix
         else:
-            use_direct_hpx = (
-                self._proj_code == "HPX"
-                and self.sip is None
-                and not self._is_tpv
-                and not self._is_tnx
-                and not self._is_zpx
+            pix_internal_flat = self._alloc_pix_internal_like(world_flat)
+            px_1, py_1 = self._world_to_pixel_2d_fast(
+                world_flat[:, 0],
+                world_flat[:, 1],
+                iterative=iterative,
+                origin=1.0,
             )
-
-            if use_direct_hpx:
-                # Direct HPX inverse avoids Newton seam branch failures and is faster.
-                ra = world_flat[:, 0]
-                dec = world_flat[:, 1]
-                phi, theta = self._inverse_spherical_rotation(
-                    ra, dec, self._native_type
-                )
-                xi, eta = deproject_allsky(phi, theta, "HPX", self.wcs_params)
-
-                pix_internal_flat = self._alloc_pix_internal_like(world_flat)
-                (
-                    pix_internal_flat[:, 0],
-                    pix_internal_flat[:, 1],
-                ) = self._apply_cd_inv_2d(xi, eta)
+            if self._pixel_affine_matrix is not None:
+                src_x, src_y = self._corrected_pixels_to_source(px_1, py_1, origin=1.0)
             else:
-                analytic_projections = (
-                    "TAN",
-                    "SIN",
-                    "ARC",
-                    "AIT",
-                    "MOL",
-                    "CEA",
-                    "MER",
-                    "ZEA",
-                    "STG",
-                    "SFL",
-                    "CAR",
-                    "CYP",
-                )
-                use_analytic = (
-                    self._proj_code in analytic_projections
-                    and self.sip is None
-                    and not self._is_tpv
-                    and not self._is_tnx
-                    and not self._is_zpx
-                )
-
-                if use_analytic:
-                    if self._proj_code == "TAN":
-                        pix_internal_flat = self._world_to_pixel_analytic_tan(
-                            world_flat
-                        )
-                    elif self._proj_code == "SIN":
-                        pix_internal_flat = self._world_to_pixel_analytic_sin(
-                            world_flat
-                        )
-                    elif self._proj_code == "ARC":
-                        pix_internal_flat = self._world_to_pixel_analytic_arc(
-                            world_flat
-                        )
-                    elif self._proj_code == "AIT":
-                        pix_internal_flat = self._world_to_pixel_analytic_ait(
-                            world_flat
-                        )
-                    elif self._proj_code == "MOL":
-                        pix_internal_flat = self._world_to_pixel_analytic_mol(
-                            world_flat
-                        )
-                    elif self._proj_code == "CEA":
-                        pix_internal_flat = self._world_to_pixel_analytic_cea(
-                            world_flat
-                        )
-                    elif self._proj_code == "MER":
-                        pix_internal_flat = self._world_to_pixel_analytic_mer(
-                            world_flat
-                        )
-                    elif self._proj_code == "ZEA":
-                        pix_internal_flat = self._world_to_pixel_analytic_zea(
-                            world_flat
-                        )
-                    elif self._proj_code == "STG":
-                        pix_internal_flat = self._world_to_pixel_analytic_stg(
-                            world_flat
-                        )
-                    else:
-                        pix_internal_flat = self._alloc_pix_internal_like(world_flat)
-                        (
-                            pix_internal_flat[:, 0],
-                            pix_internal_flat[:, 1],
-                        ) = self._world_to_pixel_2d_fast(
-                            world_flat[:, 0],
-                            world_flat[:, 1],
-                            iterative=False,
-                            origin=1.0,
-                        )
-                else:
-                    pix_internal_flat = self._world_to_pixel_analytic_tan(world_flat)
-
-                    if iterative:
-                        ra = world_flat[:, 0]
-                        dec = world_flat[:, 1]
-                        x_guess = pix_internal_flat[:, 0]
-                        y_guess = pix_internal_flat[:, 1]
-
-                        constant_extra_pixels = pix_internal_flat[:, 2:]
-
-                        def solver_wrapper(px, py):
-                            full_pixels = torch.zeros_like(pix_internal_flat)
-                            full_pixels[:, 0] = px
-                            full_pixels[:, 1] = py
-                            if self.naxis >= 3:
-                                full_pixels[:, 2:] = constant_extra_pixels
-
-                            world_res = self.pixel_to_world(full_pixels, origin=1)
-                            return world_res[:, 0], world_res[:, 1]
-
-                        x, y, _, _ = solve_newton_raphson(
-                            func=solver_wrapper,
-                            target_ra=ra,
-                            target_dec=dec,
-                            initial_x=x_guess,
-                            initial_y=y_guess,
-                            max_iter=20,
-                            tol=1e-11,
-                        )
-                        pix_internal_flat[:, 0] = x
-                        pix_internal_flat[:, 1] = y
+                src_x, src_y = px_1, py_1
+            pix_internal_flat[:, 0] = src_x
+            pix_internal_flat[:, 1] = src_y
 
         # 3. Handle extra axes (NAXIS > 2) for non-spatial WCS
         if not is_spatial and self.naxis >= 3:
@@ -4995,216 +4667,3 @@ class WCS:
             return tuple(pix[..., i] for i in range(self.naxis))
         return pix
 
-    def _world_to_pixel_analytic_tan(self, world: Tensor) -> Tensor:
-        """Analytic inverse for TAN projection (Gnomonic).
-
-        This is the EXACT inverse - no iteration needed for TAN.
-        """
-
-        # world is (N, NAXIS)
-        ra = world[:, 0]
-        dec = world[:, 1]
-
-        # Initial results same shape as input, but only spatial axes will be populated
-        pix_internal = self._alloc_pix_internal_like(world)
-
-        xi, eta = self._tan_intermediate_from_radec(ra, dec)
-
-        # Inverse Linear (2x2)
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal
-
-    def _world_to_pixel_analytic_sin(self, world: Tensor) -> Tensor:
-        """Analytic inverse for SIN projection (Orthographic).
-
-        SIN projection: R = cos(theta), so xi = -R*sin(phi), eta = -R*cos(phi).
-        Using direction cosines: u = cos(theta)*sin(phi), v = cos(theta)*cos(phi), w = sin(theta).
-        For SIN: xi = u * deg, eta = v * deg.
-        """
-        deg = self._r2d
-
-        ra = world[:, 0]
-        dec = world[:, 1]
-        pix_internal = self._alloc_pix_internal_like(world)
-
-        # Get native coordinates via inverse spherical rotation
-        phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
-
-        phi_rad = phi * self._d2r
-        theta_rad = theta * self._d2r
-
-        cos_theta = torch.cos(theta_rad)
-        sin_phi = torch.sin(phi_rad)
-        cos_phi = torch.cos(phi_rad)
-
-        xi = -cos_theta * sin_phi * deg
-        eta = -cos_theta * cos_phi * deg
-
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal
-
-    def _world_to_pixel_analytic_arc(self, world: Tensor) -> Tensor:
-        """Analytic inverse for ARC projection (Zenithal Equidistant).
-
-        ARC: R = 90 - theta (in degrees), so xi = -R*sin(-phi), eta = -R*cos(-phi).
-        Using direction cosines: theta = arcsin(w), phi = atan2(u, -v).
-        """
-
-        ra = world[:, 0]
-        dec = world[:, 1]
-        pix_internal = self._alloc_pix_internal_like(world)
-
-        # Get native coordinates via inverse spherical rotation
-        phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
-
-        R = 90.0 - theta
-
-        phi_rad = phi * self._d2r
-        xi = -R * torch.sin(phi_rad)
-        eta = -R * torch.cos(phi_rad)
-
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal
-
-    def _world_to_pixel_analytic_ait(self, world: Tensor) -> Tensor:
-        """Analytic inverse for AIT projection (Hammer-Aitoff).
-
-        AIT is an equal-area all-sky projection.
-        Forward: x = 2 * cos(theta) * sin(phi/2) / sqrt((1+cos(theta)*cos(phi/2)))
-                 y = sin(theta) / sqrt((1+cos(theta)*cos(phi/2)))
-
-        Inverse requires solving for phi, theta from x, y.
-        """
-        ra = world[:, 0]
-        dec = world[:, 1]
-        pix_internal = self._alloc_pix_internal_like(world)
-        if self._use_center_equator_fast:
-            phi = torch.remainder(ra - self.alpha0 + 180.0, 360.0) - 180.0
-            theta = dec
-        else:
-            phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
-
-        # AIT forward:
-        # c = sqrt((1 + cos(theta)*cos(phi/2)) / 2)
-        # xi = 2 * cos(theta) * sin(phi/2) / c * (180/pi)
-        # eta = sin(theta) / c * (180/pi)
-
-        # For inverse from (phi, theta) to (xi, eta):
-        phi_rad = phi * self._d2r
-        theta_rad = theta * self._d2r
-        half_phi = phi_rad * 0.5
-        cos_theta = torch.cos(theta_rad)
-        cos_half_phi = torch.cos(half_phi)
-
-        denom = torch.sqrt(0.5 * (1.0 + cos_theta * cos_half_phi))
-
-        xi = 2.0 * cos_theta * torch.sin(half_phi) / denom * self._r2d
-        eta = torch.sin(theta_rad) / denom * self._r2d
-
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal
-
-    def _world_to_pixel_analytic_mol(self, world: Tensor) -> Tensor:
-        """Analytic inverse for MOL projection (Mollweide)."""
-        ra = world[:, 0]
-        dec = world[:, 1]
-        pix_internal = self._alloc_pix_internal_like(world)
-
-        if self._use_center_equator_fast:
-            phi = _wrap_lon180_checked(ra - self.alpha0)
-            theta = dec
-        else:
-            phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
-
-        xi, eta = deproject_allsky(
-            phi, theta, "MOL", self._pv1_tensor, self._pv2_tensor
-        )
-
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal
-
-    def _world_to_pixel_analytic_cea(self, world: Tensor) -> Tensor:
-        """Analytic inverse for CEA projection (Cylindrical Equal Area)."""
-        ra = world[:, 0]
-        dec = world[:, 1]
-        pix_internal = self._alloc_pix_internal_like(world)
-
-        if self._use_center_equator_fast:
-            xi = torch.remainder(ra - self.alpha0 + 180.0, 360.0) - 180.0
-            eta = self._cea_eta_scale * torch.sin(dec * self._d2r)
-        else:
-            phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
-            xi, eta = deproject_cylindrical(
-                phi, theta, "CEA", self._pv1_tensor, self._pv2_tensor
-            )
-
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal
-
-    def _world_to_pixel_analytic_mer(self, world: Tensor) -> Tensor:
-        """Analytic inverse for MER projection (Mercator)."""
-        ra = world[:, 0]
-        dec = world[:, 1]
-        pix_internal = self._alloc_pix_internal_like(world)
-
-        if self._use_center_equator_fast:
-            phi = _wrap_lon180_checked(ra - self.alpha0)
-            theta = dec
-        else:
-            phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
-
-        xi, eta = deproject_cylindrical(
-            phi, theta, "MER", self._pv1_tensor, self._pv2_tensor
-        )
-
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal
-
-    def _world_to_pixel_analytic_zea(self, world: Tensor) -> Tensor:
-        """Analytic inverse for ZEA projection (Zenithal Equal Area)."""
-
-        ra = world[:, 0]
-        dec = world[:, 1]
-        pix_internal = self._alloc_pix_internal_like(world)
-
-        # Get native coordinates via inverse spherical rotation
-        phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
-
-        theta_rad = theta * self._d2r
-        r = 2.0 * torch.rad2deg(torch.sin((math.pi / 2.0 - theta_rad) / 2.0))
-
-        phi_rad = phi * self._d2r
-        xi = -r * torch.sin(phi_rad)
-        eta = -r * torch.cos(phi_rad)
-
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal
-
-    def _world_to_pixel_analytic_stg(self, world: Tensor) -> Tensor:
-        """Analytic inverse for STG projection (Stereographic)."""
-
-        ra = world[:, 0]
-        dec = world[:, 1]
-        pix_internal = self._alloc_pix_internal_like(world)
-
-        # Get native coordinates via inverse spherical rotation
-        phi, theta = self._inverse_spherical_rotation(ra, dec, self._native_type)
-
-        theta_rad = theta * self._d2r
-        r = 2.0 * torch.rad2deg(torch.tan((math.pi / 2.0 - theta_rad) / 2.0))
-
-        phi_rad = phi * self._d2r
-        xi = -r * torch.sin(phi_rad)
-        eta = -r * torch.cos(phi_rad)
-
-        pix_internal[:, 0], pix_internal[:, 1] = self._apply_cd_inv_2d(xi, eta)
-
-        return pix_internal

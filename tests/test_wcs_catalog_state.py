@@ -30,6 +30,70 @@ def test_catalog_state_frame_roundtrip() -> None:
     torch.testing.assert_close(back.lat, state.lat, atol=1e-8, rtol=0.0)
 
 
+def test_catalog_state_rotates_proper_motion_with_the_frame() -> None:
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+
+    state = CatalogState(
+        lon=torch.tensor([10.0, 120.0, 359.9, 45.0], dtype=torch.float64),
+        lat=torch.tensor([20.0, -5.0, 89.9, -89.9], dtype=torch.float64),
+        pm_lon_coslat_mas_yr=torch.tensor([10.0, -30.0, 100.0, 5.0]),
+        pm_lat_mas_yr=torch.tensor([20.0, 40.0, -10.0, 15.0]),
+    )
+    expected = SkyCoord(
+        ra=state.lon.numpy() * u.deg,
+        dec=state.lat.numpy() * u.deg,
+        pm_ra_cosdec=state.pm_lon_coslat_mas_yr.numpy() * u.mas / u.yr,
+        pm_dec=state.pm_lat_mas_yr.numpy() * u.mas / u.yr,
+    ).galactic
+    galactic = state.to_frame("GALACTIC")
+    torch.testing.assert_close(
+        galactic.pm_lon_coslat_mas_yr,
+        torch.tensor(expected.pm_l_cosb.to_value(u.mas / u.yr)),
+        atol=2e-5,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        galactic.pm_lat_mas_yr,
+        torch.tensor(expected.pm_b.to_value(u.mas / u.yr)),
+        atol=2e-5,
+        rtol=0.0,
+    )
+    back = galactic.to_frame("ICRS")
+    torch.testing.assert_close(back.pm_lon_coslat_mas_yr, state.pm_lon_coslat_mas_yr)
+    torch.testing.assert_close(back.pm_lat_mas_yr, state.pm_lat_mas_yr)
+
+
+@pytest.mark.parametrize("frame", ["GALACTIC", "ECLIPTIC", "ECLIPTIC_OF_DATE"])
+def test_frame_motion_rotation_preserves_magnitude_and_gradients(frame) -> None:
+    lon = torch.tensor([10.0, 120.0], dtype=torch.float64, requires_grad=True)
+    pm_lon = torch.tensor([10.0, -30.0], dtype=torch.float64, requires_grad=True)
+    state = CatalogState(
+        lon=lon,
+        lat=[20.0, -5.0],
+        pm_lon_coslat_mas_yr=pm_lon,
+        pm_lat_mas_yr=[20.0, 40.0],
+    )
+    out = state.to_frame(frame, tt_mjd=60000.0)
+    torch.testing.assert_close(
+        torch.hypot(out.pm_lon_coslat_mas_yr, out.pm_lat_mas_yr),
+        torch.tensor([500.0, 2500.0], dtype=torch.float64).sqrt(),
+    )
+    grads = torch.autograd.grad(out.pm_lon_coslat_mas_yr.sum(), (lon, pm_lon))
+    assert all(torch.isfinite(grad).all() for grad in grads)
+
+
+def test_catalog_state_refuses_partial_or_unsupported_motion_conversion() -> None:
+    partial = CatalogState(lon=10.0, lat=20.0, pm_lat_mas_yr=1.0)
+    with pytest.raises(ValueError, match="both proper.motion"):
+        partial.to_frame("GALACTIC")
+    complete = CatalogState(
+        lon=10.0, lat=20.0, pm_lon_coslat_mas_yr=1.0, pm_lat_mas_yr=2.0
+    )
+    with pytest.raises(ValueError, match="FK4"):
+        complete.to_frame("FK4")
+
+
 def test_catalog_state_refuses_incomplete_space_motion() -> None:
     state = CatalogState(
         lon=10.0,
@@ -270,7 +334,9 @@ def test_observed_altaz_stays_on_accelerator() -> None:
         torch.testing.assert_close(
             alt.cpu().to(torch.float64), alt_cpu, atol=atol, rtol=0.0
         )
-        daz = torch.remainder(az.cpu().to(torch.float64) - az_cpu + 180.0, 360.0) - 180.0
+        daz = (
+            torch.remainder(az.cpu().to(torch.float64) - az_cpu + 180.0, 360.0) - 180.0
+        )
         torch.testing.assert_close(daz, torch.zeros_like(daz), atol=atol, rtol=0.0)
 
 
@@ -287,9 +353,7 @@ def test_iau2006_and_transform_stay_on_accelerator() -> None:
     az_cpu, alt_cpu = observed_altaz(
         state_cpu, obstime_mjd_utc=utc, site=site, eop=eop, pn="iau2006"
     )
-    xyz_cpu = icrs_to_itrs_xyz(
-        state_cpu, obstime_mjd_utc=utc, eop=eop, pn="iau2006"
-    )
+    xyz_cpu = icrs_to_itrs_xyz(state_cpu, obstime_mjd_utc=utc, eop=eop, pn="iau2006")
     lon_cpu, lat_cpu = transform(10.0, 20.0, from_frame="ICRS", to_frame="GALACTIC")
     for device in devices:
         state = CatalogState(
@@ -308,7 +372,9 @@ def test_iau2006_and_transform_stay_on_accelerator() -> None:
         torch.testing.assert_close(
             alt.cpu().to(torch.float64), alt_cpu, atol=atol, rtol=0.0
         )
-        daz = torch.remainder(az.cpu().to(torch.float64) - az_cpu + 180.0, 360.0) - 180.0
+        daz = (
+            torch.remainder(az.cpu().to(torch.float64) - az_cpu + 180.0, 360.0) - 180.0
+        )
         torch.testing.assert_close(daz, torch.zeros_like(daz), atol=atol, rtol=0.0)
         xyz = icrs_to_itrs_xyz(
             state, obstime_mjd_utc=_on_accel(utc, device), eop=eop, pn="iau2006"

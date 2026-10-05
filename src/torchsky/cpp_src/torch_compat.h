@@ -44,6 +44,9 @@ inline torch::Tensor python_to_tensor(nb::object obj) {
 
 inline torch::Tensor as_f64_contig(nb::object obj) {
     auto t = python_to_tensor(obj);
+    if (!t.device().is_cpu()) {
+        throw std::runtime_error("Expected a CPU tensor");
+    }
     if (t.scalar_type() != torch::kFloat64) {
         t = t.to(torch::kFloat64);
     }

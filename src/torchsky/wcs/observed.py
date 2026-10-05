@@ -19,6 +19,9 @@ from torch import Tensor
 from .catalog_state import CatalogState
 from .frames import ARCSEC_TO_RAD, D2R, R2D, _as_tensor, _work_dtype, _wrap360
 from .iau2006 import (
+    _rx,
+    _ry,
+    _rz,
     apply_refraction,
     apply_stellar_aberration,
     cirs_matrix,
@@ -83,6 +86,21 @@ _WGS84_F = 1.0 / 298.257223563
 _WGS84_E2 = _WGS84_F * (2.0 - _WGS84_F)
 
 
+def _wgs84_itrs_m(lon_rad: Tensor, lat_rad: Tensor, height_m: Tensor) -> Tensor:
+    """WGS84 geodetic to ITRS metres. Stellar AltAz does not use the vector."""
+    sin_lat = torch.sin(lat_rad)
+    n = _WGS84_A_M / torch.sqrt(1.0 - _WGS84_E2 * sin_lat * sin_lat)
+    cos_lat = torch.cos(lat_rad)
+    return torch.stack(
+        (
+            (n + height_m) * cos_lat * torch.cos(lon_rad),
+            (n + height_m) * cos_lat * torch.sin(lon_rad),
+            (n * (1.0 - _WGS84_E2) + height_m) * sin_lat,
+        ),
+        dim=-1,
+    )
+
+
 def _era_rad_from_ut1_mjd(ut1_mjd: Tensor) -> Tensor:
     """IAU 2000 Earth rotation angle (SOFA era00), radians."""
     tu = ut1_mjd - MJD_J2000
@@ -91,52 +109,11 @@ def _era_rad_from_ut1_mjd(ut1_mjd: Tensor) -> Tensor:
     return torch.remainder(era, 2.0 * torch.pi)
 
 
-def _rx(angle: Tensor) -> Tensor:
-    c = torch.cos(angle)
-    s = torch.sin(angle)
-    z = torch.zeros((), dtype=angle.dtype, device=angle.device)
-    o = torch.ones((), dtype=angle.dtype, device=angle.device)
-    return torch.stack(
-        (
-            torch.stack((o, z, z)),
-            torch.stack((z, c, s)),
-            torch.stack((z, -s, c)),
-        )
-    )
-
-
-def _ry(angle: Tensor) -> Tensor:
-    c = torch.cos(angle)
-    s = torch.sin(angle)
-    z = torch.zeros((), dtype=angle.dtype, device=angle.device)
-    o = torch.ones((), dtype=angle.dtype, device=angle.device)
-    return torch.stack(
-        (
-            torch.stack((c, z, -s)),
-            torch.stack((z, o, z)),
-            torch.stack((s, z, c)),
-        )
-    )
-
-
-def _rz(angle: Tensor) -> Tensor:
-    c = torch.cos(angle)
-    s = torch.sin(angle)
-    z = torch.zeros((), dtype=angle.dtype, device=angle.device)
-    o = torch.ones((), dtype=angle.dtype, device=angle.device)
-    return torch.stack(
-        (
-            torch.stack((c, s, z)),
-            torch.stack((-s, c, z)),
-            torch.stack((z, z, o)),
-        )
-    )
-
-
 def _polar_motion_matrix(xp_arcsec: Tensor, yp_arcsec: Tensor) -> Tensor:
     """SOFA pom00 with TIO locator s' = 0: Rz(0) Ry(-xp) Rx(-yp)."""
-    xp = xp_arcsec * ARCSEC_TO_RAD
-    yp = yp_arcsec * ARCSEC_TO_RAD
+    xp, yp = torch.broadcast_tensors(
+        xp_arcsec * ARCSEC_TO_RAD, yp_arcsec * ARCSEC_TO_RAD
+    )
     return _ry(-xp) @ _rx(-yp)
 
 
@@ -151,21 +128,6 @@ def _geodetic_normal_east_north(
     north = torch.stack((-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1)
     up = torch.stack((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat), dim=-1)
     return east, north, up
-
-
-def _wgs84_itrs_m(lon_rad: Tensor, lat_rad: Tensor, height_m: Tensor) -> Tensor:
-    """WGS84 geodetic to ITRS metres. Stellar AltAz does not use the vector."""
-    sin_lat = torch.sin(lat_rad)
-    n = _WGS84_A_M / torch.sqrt(1.0 - _WGS84_E2 * sin_lat * sin_lat)
-    cos_lat = torch.cos(lat_rad)
-    return torch.stack(
-        (
-            (n + height_m) * cos_lat * torch.cos(lon_rad),
-            (n + height_m) * cos_lat * torch.sin(lon_rad),
-            (n * (1.0 - _WGS84_E2) + height_m) * sin_lat,
-        ),
-        dim=-1,
-    )
 
 
 def _unit_xyz_from_lonlat_deg(lon_deg: Tensor, lat_deg: Tensor) -> Tensor:
@@ -373,7 +335,7 @@ def icrs_to_cirs_xyz(
     utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
     v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
     tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="CIRS")
-    return torch.matmul(cirs_matrix(tt), v.reshape(-1, 3).T).T.reshape(v.shape)
+    return (cirs_matrix(tt) @ v.unsqueeze(-1)).squeeze(-1)
 
 
 def icrs_to_tete_xyz(
@@ -390,7 +352,7 @@ def icrs_to_tete_xyz(
     utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
     v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
     tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="TETE")
-    return torch.matmul(npb_matrix(tt), v.reshape(-1, 3).T).T.reshape(v.shape)
+    return (npb_matrix(tt) @ v.unsqueeze(-1)).squeeze(-1)
 
 
 def _icrs_unit_to_itrs(
@@ -407,7 +369,7 @@ def _icrs_unit_to_itrs(
     v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
     if pn == "iau2006":
         tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="pn='iau2006'")
-        v = torch.matmul(cirs_matrix(tt), v.reshape(-1, 3).T).T.reshape(v.shape)
+        v = (cirs_matrix(tt) @ v.unsqueeze(-1)).squeeze(-1)
     era = _era_rad_from_ut1_mjd(ut1.to(dtype=dtype))
     xp = eop.xp_arcsec
     yp = eop.yp_arcsec
@@ -415,7 +377,7 @@ def _icrs_unit_to_itrs(
     xp_t = z if xp is None else xp.to(device=device, dtype=dtype)
     yp_t = z if yp is None else yp.to(device=device, dtype=dtype)
     r_itrs = _polar_motion_matrix(xp_t, yp_t) @ _rz(era)
-    return torch.matmul(r_itrs, v.reshape(-1, 3).T).T.reshape(v.shape)
+    return (r_itrs @ v.unsqueeze(-1)).squeeze(-1)
 
 
 def _vector_altaz(

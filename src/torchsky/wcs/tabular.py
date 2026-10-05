@@ -263,16 +263,14 @@ class CoupledTabularLookupWCS:
         world_raw = torch.as_tensor(world)
         if world_raw.is_complex():
             raise ValueError("world grid must be real-valued")
-        dtype = torch.promote_types(
-            torch.float64,
-            world_raw.dtype if world_raw.is_floating_point() else torch.float64,
-        )
+        default_float = torch.float32 if device.type == "mps" else torch.float64
+        dtype = world_raw.dtype if world_raw.is_floating_point() else default_float
+        for axis in axis_tuple:
+            dtype = torch.promote_types(dtype, axis.dtype)
+        if device.type == "mps" and dtype == torch.float64:
+            dtype = torch.float32
         axes = [axis.to(device=device, dtype=dtype) for axis in axis_tuple]
-        world_t = world_raw.to(device=device)
-        if not world_t.is_floating_point():
-            world_t = world_t.to(dtype=dtype)
-        else:
-            world_t = world_t.to(dtype=dtype)
+        world_t = world_raw.to(device=device, dtype=dtype)
         if world_t.ndim == len(axes):
             world_t = world_t.unsqueeze(-1)
         if world_t.ndim != len(axes) + 1:

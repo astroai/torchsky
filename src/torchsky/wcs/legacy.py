@@ -284,7 +284,13 @@ def project_zpx(
     """
     ZPX: WAT ``lngcor`` / ``latcor`` in the intermediate plane, then ZPN zenithal.
     """
-    pv2 = _dict_to_pv_tensor(params, axis=2)
+    merged = dict(params) if params else {}
+    if wat_data:
+        for k, v in extract_zpx_params(wat_data).items():
+            merged.setdefault(k, v)
+    pv2 = _dict_to_pv_tensor(merged, axis=2)
+    if pv2 is not None:
+        pv2 = pv2.to(device=xi.device, dtype=xi.dtype)
     dxi, deta = _tnx_delta_plane(xi, eta, wat_data)
     return project_zenithal(xi + dxi, eta + deta, "ZPN", pv2=pv2)
 
@@ -298,6 +304,13 @@ def deproject_zpx(
     """Inverse of :func:`project_zpx` (ZPN deproject, then undo WAT plane offsets)."""
     from .zenithal import deproject_zenithal
 
-    pv2_eff = _dict_to_pv_tensor(params, axis=2)
+    merged = dict(params) if params else {}
+    if wat_data:
+        for k, v in extract_zpx_params(wat_data).items():
+            merged.setdefault(k, v)
+    pv2_eff = _dict_to_pv_tensor(merged, axis=2)
+    if pv2_eff is not None:
+        pv2_eff = pv2_eff.to(device=phi.device, dtype=phi.dtype)
     xi_c, eta_c = deproject_zenithal(phi, theta, "ZPN", pv2=pv2_eff)
     return invert_tnx_plane(xi_c, eta_c, wat_data)
+

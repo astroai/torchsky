@@ -62,42 +62,45 @@ def iau2006_fw_angles(tt_mjd: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
 def _rx(angle: Tensor) -> Tensor:
     c = torch.cos(angle)
     s = torch.sin(angle)
-    z = torch.zeros((), dtype=angle.dtype, device=angle.device)
-    o = torch.ones((), dtype=angle.dtype, device=angle.device)
+    z = torch.zeros_like(c)
+    o = torch.ones_like(c)
     return torch.stack(
         (
-            torch.stack((o, z, z)),
-            torch.stack((z, c, s)),
-            torch.stack((z, -s, c)),
-        )
+            torch.stack((o, z, z), dim=-1),
+            torch.stack((z, c, s), dim=-1),
+            torch.stack((z, -s, c), dim=-1),
+        ),
+        dim=-2,
     )
 
 
 def _ry(angle: Tensor) -> Tensor:
     c = torch.cos(angle)
     s = torch.sin(angle)
-    z = torch.zeros((), dtype=angle.dtype, device=angle.device)
-    o = torch.ones((), dtype=angle.dtype, device=angle.device)
+    z = torch.zeros_like(c)
+    o = torch.ones_like(c)
     return torch.stack(
         (
-            torch.stack((c, z, -s)),
-            torch.stack((z, o, z)),
-            torch.stack((s, z, c)),
-        )
+            torch.stack((c, z, -s), dim=-1),
+            torch.stack((z, o, z), dim=-1),
+            torch.stack((s, z, c), dim=-1),
+        ),
+        dim=-2,
     )
 
 
 def _rz(angle: Tensor) -> Tensor:
     c = torch.cos(angle)
     s = torch.sin(angle)
-    z = torch.zeros((), dtype=angle.dtype, device=angle.device)
-    o = torch.ones((), dtype=angle.dtype, device=angle.device)
+    z = torch.zeros_like(c)
+    o = torch.ones_like(c)
     return torch.stack(
         (
-            torch.stack((c, s, z)),
-            torch.stack((-s, c, z)),
-            torch.stack((z, z, o)),
-        )
+            torch.stack((c, s, z), dim=-1),
+            torch.stack((-s, c, z), dim=-1),
+            torch.stack((z, z, o), dim=-1),
+        ),
+        dim=-2,
     )
 
 
@@ -321,7 +324,7 @@ def _c2ixys(cip_x: Tensor, cip_y: Tensor, s: Tensor) -> Tensor:
 def cirs_matrix(tt_mjd: Tensor) -> Tensor:
     """GCRS → CIRS (SOFA c2i06a)."""
     rnpb = npb_matrix(tt_mjd, nutation=True)
-    cip_x, cip_y = rnpb[2, 0], rnpb[2, 1]
+    cip_x, cip_y = rnpb[..., 2, 0], rnpb[..., 2, 1]
     s = cio_locator_s06(tt_mjd, cip_x, cip_y)
     return _c2ixys(cip_x, cip_y, s)
 

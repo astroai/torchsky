@@ -213,7 +213,13 @@ def _fit_once(
 
     if geometry == "general":
         design = torch.cat(
-            [source, torch.ones((source.shape[0], 1), dtype=source.dtype)], dim=1
+            [
+                source,
+                torch.ones(
+                    (source.shape[0], 1), dtype=source.dtype, device=source.device
+                ),
+            ],
+            dim=1,
         )
         sol = _solve_weighted_linear(design, target, weights)
         matrix = sol[:2, :].T
