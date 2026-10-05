@@ -337,6 +337,10 @@ def test_map_config_validators_share_public_option_sets() -> None:
         "mean",
         "median",
         "sigma_clipped",
+        "chi2",
+        "min",
+        "max",
+        "sum",
     )
     with pytest.raises(ValueError, match="resampling_kernel"):
         validate_map_resampling_kernel("unsupported")

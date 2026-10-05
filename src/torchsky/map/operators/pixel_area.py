@@ -25,14 +25,18 @@ def pixel_area_sr_at(wcs, x: Tensor, y: Tensor) -> Tensor:
     Jacobian follows the same convention as :func:`pixel_area_sr_map`, but
     avoids constructing a full detector-sized area map for sparse footprints.
     """
+    wcs_dev = getattr(wcs, "device", None)
     if not isinstance(x, Tensor) and not isinstance(y, Tensor):
-        x = torch.as_tensor(x, dtype=torch.float64)
-        y = torch.as_tensor(y, dtype=torch.float64)
+        target_dev = wcs_dev if isinstance(wcs_dev, torch.device) else torch.device("cpu")
+        out_dev = target_dev
     else:
         reference = x if isinstance(x, Tensor) else y
         assert isinstance(reference, Tensor)
-        x = torch.as_tensor(x, dtype=torch.float64, device=reference.device)
-        y = torch.as_tensor(y, dtype=torch.float64, device=reference.device)
+        out_dev = reference.device
+        target_dev = wcs_dev if isinstance(wcs_dev, torch.device) else reference.device
+    coord_dtype = torch.float32 if target_dev.type == "mps" else torch.float64
+    x = torch.as_tensor(x, dtype=coord_dtype, device=target_dev)
+    y = torch.as_tensor(y, dtype=coord_dtype, device=target_dev)
     x, y = torch.broadcast_tensors(x, y)
     ra_c, dec_c = wcs.pixel_to_world(x, y)
     ra_dx, dec_dx = wcs.pixel_to_world(x + 1.0, y)
@@ -44,7 +48,7 @@ def pixel_area_sr_at(wcs, x: Tensor, y: Tensor) -> Tensor:
     ddec_dy = dec_dy - dec_c
     det_deg2 = torch.abs(dra_dx * ddec_dy - dra_dy * ddec_dx)
     d2r = torch.pi / 180.0
-    return torch.clamp(det_deg2 * (d2r * d2r), min=1e-16)
+    return torch.clamp(det_deg2 * (d2r * d2r), min=1e-16).to(device=out_dev)
 
 
 def pixel_area_sr_map(
@@ -63,15 +67,21 @@ def pixel_area_sr_map(
     if _is_undistorted_tan(wcs):
         rep = representative_pixel_area_sr(wcs, shape, device=device)
         return torch.full((height, width), rep, dtype=torch.float32, device=device)
+    wcs_dev = getattr(wcs, "device", device)
+    if not isinstance(wcs_dev, torch.device):
+        wcs_dev = torch.device(wcs_dev)
+    coord_dtype = torch.float32 if wcs_dev.type == "mps" else torch.float64
     area_sr = torch.empty(height, width, dtype=torch.float32, device=device)
     for y_start in range(0, height, chunk_size):
         y_end = min(y_start + chunk_size, height)
         y, x = torch.meshgrid(
-            torch.arange(y_start, y_end, dtype=torch.float64, device=device),
-            torch.arange(width, dtype=torch.float64, device=device),
+            torch.arange(y_start, y_end, dtype=coord_dtype, device=wcs_dev),
+            torch.arange(width, dtype=coord_dtype, device=wcs_dev),
             indexing="ij",
         )
-        area_sr[y_start:y_end] = pixel_area_sr_at(wcs, x, y).to(torch.float32)
+        area_sr[y_start:y_end] = pixel_area_sr_at(wcs, x, y).to(
+            device=device, dtype=torch.float32
+        )
     return area_sr
 
 
@@ -83,8 +93,12 @@ def representative_pixel_area_sr(
 ) -> float:
     """Estimate a representative central-pixel solid angle in steradians."""
     height, width = int(shape[0]), int(shape[1])
-    y = torch.tensor([(max(height - 1, 0)) * 0.5], dtype=torch.float64, device=device)
-    x = torch.tensor([(max(width - 1, 0)) * 0.5], dtype=torch.float64, device=device)
+    wcs_dev = getattr(wcs, "device", device)
+    if not isinstance(wcs_dev, torch.device):
+        wcs_dev = torch.device(wcs_dev)
+    coord_dtype = torch.float32 if wcs_dev.type == "mps" else torch.float64
+    y = torch.tensor([(max(height - 1, 0)) * 0.5], dtype=coord_dtype, device=wcs_dev)
+    x = torch.tensor([(max(width - 1, 0)) * 0.5], dtype=coord_dtype, device=wcs_dev)
     ra_c, dec_c = wcs.pixel_to_world(x, y)
     ra_dx, dec_dx = wcs.pixel_to_world(x + 1.0, y)
     ra_dy, dec_dy = wcs.pixel_to_world(x, y + 1.0)

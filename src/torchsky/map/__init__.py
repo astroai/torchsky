@@ -10,8 +10,36 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
+from . import plan as _plan_module  # noqa: F401 — pre-populate sys.modules["torchsky.map.plan"]
+
+
+def plan(*args: Any, **kwargs: Any) -> Any:
+    """Plan a 2D target WCS grid covering a sequence of observations."""
+    from .image_plane import plan as _plan_fn
+
+    return _plan_fn(*args, **kwargs)
+
+
 _EXPORTS: dict[str, tuple[str, str]] = {
-    # Public API Facade (11 entries)
+    # Clean Public API Facade
+    "Observation": ("torchsky.map.image_plane", "Observation"),
+    "Target": ("torchsky.map.image_plane", "Target"),
+    "CubeTarget": ("torchsky.map.image_plane", "CubeTarget"),
+    "ResampleConfig": ("torchsky.map.image_plane", "ResampleConfig"),
+    "SkyConfig": ("torchsky.map.image_plane", "SkyConfig"),
+    "OutlierConfig": ("torchsky.map.image_plane", "OutlierConfig"),
+    "StackConfig": ("torchsky.map.image_plane", "StackConfig"),
+    "plan": ("torchsky.map.image_plane", "plan"),
+    "plan_cube": ("torchsky.map.image_plane", "plan_cube"),
+    "resample": ("torchsky.map.image_plane", "resample"),
+    "blot": ("torchsky.map.image_plane", "blot"),
+    "detect_outliers": ("torchsky.map.image_plane", "detect_outliers"),
+    "match_sky": ("torchsky.map.image_plane", "match_sky"),
+    "coadd": ("torchsky.map.image_plane", "coadd"),
+    "coadd_multiband": ("torchsky.map.image_plane", "coadd_multiband"),
+    "coadd_cube": ("torchsky.map.image_plane", "coadd_cube"),
+    "aperture_uncertainty": ("torchsky.map.image_plane", "aperture_uncertainty"),
+    # Legacy / Explicit Public API Facade
     "coadd_image_plane": ("torchsky.map.image_plane", "coadd_image_plane"),
     "coadd_image_plane_cube": ("torchsky.map.image_plane", "coadd_image_plane_cube"),
     "coadd_image_plane_multiband": (
@@ -61,6 +89,10 @@ _EXPORTS: dict[str, tuple[str, str]] = {
         "plan_image_plane_cube_target_from_header",
     ),
     "plan_image_plane_target": ("torchsky.map.image_plane", "plan_image_plane_target"),
+    "CrossExposureSkyCorrector": (
+        "torchsky.map.sky.corrector",
+        "CrossExposureSkyCorrector",
+    ),
     "MapUncertaintyMode": ("torchsky.map.product", "MapUncertaintyMode"),
     "build_map_benchmark_markdown": (
         "torchsky.map.product",
@@ -455,6 +487,12 @@ def __getattr__(name: str) -> Any:
     if name in _EXPORTS:
         module_name, attr_name = _EXPORTS[name]
         module = import_module(module_name)
+        if module_name == "torchsky.map.plan":
+            # Python binds the submodule `plan` into package globals() on import;
+            # restore the public `plan` function from `torchsky.map.image_plane`.
+            globals()["plan"] = getattr(
+                import_module("torchsky.map.image_plane"), "plan"
+            )
         value = getattr(module, attr_name)
         globals()[name] = value
         return value
@@ -483,14 +521,31 @@ def __dir__() -> list[str]:
 if TYPE_CHECKING:
     from .plan import MapPlanV2 as MapPlanV2, load_map_plan as load_map_plan
     from .image_plane import (
+        CubeTarget as CubeTarget,
         MapApertureUncertainty as MapApertureUncertainty,
         MapResult as MapResult,
         MultiBandMapResult as MultiBandMapResult,
+        Observation as Observation,
+        OutlierConfig as OutlierConfig,
+        ResampleConfig as ResampleConfig,
+        SkyConfig as SkyConfig,
         SpectralCubeMapResult as SpectralCubeMapResult,
+        StackConfig as StackConfig,
+        Target as Target,
+        aperture_uncertainty as aperture_uncertainty,
+        blot as blot,
+        coadd as coadd,
+        coadd_cube as coadd_cube,
         coadd_image_plane as coadd_image_plane,
         coadd_image_plane_cube as coadd_image_plane_cube,
         coadd_image_plane_multiband as coadd_image_plane_multiband,
+        coadd_multiband as coadd_multiband,
+        detect_outliers as detect_outliers,
         evaluate_image_plane_aperture_uncertainty as evaluate_image_plane_aperture_uncertainty,
+        match_sky as match_sky,
+        plan as plan,
+        plan_cube as plan_cube,
+        resample as resample,
     )
     from .product import (
         MapBandpassSpec as MapBandpassSpec,
@@ -500,10 +555,28 @@ if TYPE_CHECKING:
         render_field_ensemble_product as render_field_ensemble_product,
         stack_map_product as stack_map_product,
     )
+    from .sky.corrector import CrossExposureSkyCorrector as CrossExposureSkyCorrector
     from .target import TargetRenderSpec as TargetRenderSpec
 
 
 __all__ = [
+    "Observation",
+    "Target",
+    "CubeTarget",
+    "ResampleConfig",
+    "SkyConfig",
+    "OutlierConfig",
+    "StackConfig",
+    "plan",
+    "plan_cube",
+    "resample",
+    "blot",
+    "detect_outliers",
+    "match_sky",
+    "coadd",
+    "coadd_multiband",
+    "coadd_cube",
+    "aperture_uncertainty",
     "coadd_image_plane",
     "coadd_image_plane_cube",
     "coadd_image_plane_multiband",

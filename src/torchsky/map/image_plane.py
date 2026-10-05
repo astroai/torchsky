@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 import math
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -25,7 +26,7 @@ from ..wcs import WCS
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
 from .operators.background import SkyBackgroundOp
-from .sky import CrossExposureSkyCorrector
+from .sky import CrossExposureSkyCorrector, MeshSkyEstimator
 from .operators.bundle import ObservationOperatorBundle
 from .operators.geometry import ForwardSplatGeometryOp
 from .operators.config import (
@@ -79,10 +80,12 @@ from .windowing import (
 )
 from .operators.radiometry import apply_image_observation_calibration
 from .operators.resampling import (
+    evaluate_tan_projective_homography,
     finalize_periodic_resampled_weighted,
     infer_diagonal_scale_shift_pixel_map,
     infer_fft_translation_shift_yx,
     infer_linear_affine_pixel_map,
+    infer_tan_projective_homography,
     sample_image_plane_batched_channels,
     sample_image_plane_diagonal_variance,
 )
@@ -94,9 +97,25 @@ from .spectral_nonuniform import resample_nonuniform_spectral_2d
 
 # Header probe for area scaling: recoverable failures when reading metadata only.
 from .io_utils import (
-    read_image_plane_observation,
+    load_observation_image_and_header as _io_load_observation_image_and_header,
+    read_image_plane_observation as _io_read_image_plane_observation,
     _observation_header_for_area_scaling,
 )
+
+
+def read_image_plane_observation(
+    path: str,
+    hdu: int | str | None,
+    device: str,
+) -> tuple[Tensor, dict]:
+    return _io_read_image_plane_observation(path, hdu, device, read_fn=read)
+
+
+def load_observation_image_and_header(
+    obs: object,
+    device: str | torch.device,
+) -> tuple[Tensor, dict]:
+    return _io_load_observation_image_and_header(obs, device, read_fn=read)
 
 
 def _resolve_map_device(device: torch.device | str | None) -> torch.device:
@@ -119,7 +138,7 @@ _HEADER_PROBE_EXC: tuple[type[BaseException], ...] = (
 
 @dataclass
 class ImageObservation:
-    path: str
+    path: str | None = None
     hdu: int | str | None = None
     weight: float = 1.0
     photometric_scale: float = 1.0
@@ -137,6 +156,78 @@ class ImageObservation:
     primary_beam_path: str | None = None
     primary_beam_hdu: int | str | None = None
     weight_is_inverse_variance: bool = False
+    data: Tensor | None = None
+    header: dict[str, Any] | None = None
+    wcs: WCS | dict[str, Any] | None = None
+    weight_map: Tensor | None = None
+    mask: Tensor | None = None
+    primary_beam: Tensor | None = None
+    weight_type: str = "weight"
+    weight_thresh: float | None = None
+    good_bits: int | None = None
+    var_poisson: Tensor | None = None
+    var_rnoise: Tensor | None = None
+    var_flat: Tensor | None = None
+    flux_scale_keyword: str | None = None
+    exposure_time_keyword: str | None = None
+    gain_keyword: str | None = None
+    exposure_time: float | None = None
+    head_path: str | None = None
+    use_sidecar_head: bool = False
+
+
+Observation = ImageObservation
+
+
+@dataclass(frozen=True)
+class ResampleConfig:
+    """Configuration for single-exposure or mosaic resampling."""
+
+    kernel: MapResamplingKernel = "bilinear"
+    pixfrac: float = 1.0
+    semantics: MapValueSemantics = "surface_brightness"
+    area_scaling: bool | None = None
+
+
+@dataclass(frozen=True)
+class SkyConfig:
+    """Configuration for per-exposure, overlap, planar, or mesh sky matching."""
+
+    mode: str = "none"
+    stat: str = "huber"
+    mesh_size: int = 64
+    smooth_scale: int = 3
+    regularization: float = 1e-4
+    clip_sigma: float = 3.0
+    clip_iterations: int = 3
+    subtract: bool = True
+
+
+@dataclass(frozen=True)
+class OutlierConfig:
+    """Configuration for AstroDrizzle / stcal-compatible cosmic-ray outlier detection."""
+
+    enabled: bool = True
+    pixfrac: float = 1.0
+    combine: str = "median"
+    blot_kernel: Literal[
+        "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
+    ] = "bilinear"
+    snr: tuple[float, float] = (5.0, 4.0)
+    scale: tuple[float, float] = (1.2, 0.7)
+    min_floor: float = 0.0
+
+
+@dataclass(frozen=True)
+class StackConfig:
+    """Configuration for multi-exposure stacking and uncertainty propagation."""
+
+    method: MapStackingMethod = "weighted_mean"
+    clip_sigma: float = 4.0
+    clip_iterations: int = 3
+    tile_hw: tuple[int, int] | None = None
+    footprint_order: int | None = None
+    scratch_dir: str | Path | None = None
 
 
 @dataclass
@@ -151,6 +242,13 @@ class MapResult:
     overlap_count: Tensor | None = None
     coverage_moc: MOC | None = None
     observation_mocs: tuple[MOC, ...] | None = None
+    var_poisson: Tensor | None = None
+    var_rnoise: Tensor | None = None
+    var_flat: Tensor | None = None
+
+    @property
+    def wcs(self) -> WCS:
+        return WCS(self.header)
 
 
 @dataclass(frozen=True)
@@ -206,6 +304,13 @@ class PlannedImagePlaneTarget:
     header: dict
     shape: tuple[int, int]
 
+    @property
+    def wcs(self) -> WCS:
+        return WCS(self.header)
+
+
+Target = PlannedImagePlaneTarget
+
 
 @dataclass
 class BandMetadataTable:
@@ -246,6 +351,9 @@ class PlannedImagePlaneCubeTarget:
 
     def to_band_table(self) -> dict[str, object]:
         return self.band_metadata.to_dict()
+
+
+CubeTarget = PlannedImagePlaneCubeTarget
 
 
 @dataclass
@@ -480,7 +588,38 @@ def _is_conservative_kernel(kernel: MapResamplingKernel) -> bool:
 
 
 def _is_splat_kernel(kernel: MapResamplingKernel) -> bool:
-    return kernel in {"splat_point", "splat_box"}
+    return kernel in {
+        "splat_point",
+        "splat_box",
+        "drizzle_turbo",
+        "drizzle_gaussian",
+        "drizzle_lanczos2",
+        "drizzle_lanczos3",
+    }
+
+
+def _convert_world_between_wcs(
+    lon: Tensor,
+    lat: Tensor,
+    from_wcs: WCS,
+    to_wcs: WCS,
+) -> tuple[Tensor, Tensor]:
+    from_frame = getattr(from_wcs, "celestial_frame", "ICRS")
+    to_frame = getattr(to_wcs, "celestial_frame", "ICRS")
+    from_eq = getattr(from_wcs, "celestial_equinox", None)
+    to_eq = getattr(to_wcs, "celestial_equinox", None)
+    if from_frame == to_frame and (
+        from_eq == to_eq or from_frame in {"ICRS", "GALACTIC", "ECLIPTIC"}
+    ):
+        return lon, lat
+    orig_shape = lon.shape
+    lon_c, lat_c = from_wcs.convert_celestial(
+        lon.reshape(-1),
+        lat.reshape(-1),
+        to_frame,
+        to_equinox=to_eq,
+    )
+    return lon_c.reshape(orig_shape), lat_c.reshape(orig_shape)
 
 
 _FORWARD_SOURCE_RATIO = 0.2  # use forward projection when source < 20% of target
@@ -532,6 +671,7 @@ def _interpolate_forward_mapping_from_coarse(
 
     yy, xx = torch.meshgrid(y_coarse, x_coarse, indexing="ij")
     ra_c, dec_c = target_wcs.pixel_to_world(xx, yy)
+    ra_c, dec_c = _convert_world_between_wcs(ra_c, dec_c, target_wcs, source_wcs)
     x_src_c, y_src_c = source_wcs.world_to_pixel(ra_c, dec_c)
 
     if stride == 1:
@@ -719,8 +859,22 @@ def _apply_observation_calibration(
     image: Tensor,
     source_weight: Tensor,
 ) -> tuple[Tensor, Tensor]:
+    scale = float(obs.photometric_scale)
+    flux_kw = getattr(obs, "flux_scale_keyword", None)
+    exptime_kw = getattr(obs, "exposure_time_keyword", None)
+    if flux_kw is not None or exptime_kw is not None:
+        hdr = getattr(obs, "header", None)
+        if not isinstance(hdr, dict):
+            hdr = _observation_header_for_area_scaling(obs)
+        if flux_kw is not None and flux_kw in hdr:
+            scale = scale * float(hdr[flux_kw])
+        if exptime_kw is not None and exptime_kw in hdr:
+            exptime = float(hdr[exptime_kw])
+            if not math.isfinite(exptime) or exptime <= 0.0:
+                raise ValueError(f"Header {exptime_kw} must be finite and positive")
+            scale = scale / exptime
     return apply_image_observation_calibration(
-        photometric_scale=obs.photometric_scale,
+        photometric_scale=scale,
         background_offset=obs.background_offset,
         image=image,
         source_weight=source_weight,
@@ -779,7 +933,9 @@ def _resample_weighted_to_target(
         "nearest",
         "bilinear",
         "bicubic",
+        "lanczos2",
         "lanczos3",
+        "lanczos4",
         "lanczos5",
         "mitchell_netravali",
         "catmull_rom",
@@ -1219,11 +1375,16 @@ def _resample_weighted_to_target(
     def _sample_on_world_grid(
         ra_deg: Tensor, dec_deg: Tensor
     ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
-        flat_ra = ra_deg.reshape(-1)
-        flat_dec = dec_deg.reshape(-1)
+        ra_conv, dec_conv = _convert_world_between_wcs(
+            ra_deg, dec_deg, target.wcs, source_wcs
+        )
+        flat_ra = ra_conv.reshape(-1)
+        flat_dec = dec_conv.reshape(-1)
         if (
             bool(getattr(source_wcs, "_is_tpv", False))
             and getattr(source_wcs, "sip", None) is None
+            and getattr(target.wcs, "celestial_frame", "ICRS")
+            == getattr(source_wcs, "celestial_frame", "ICRS")
         ):
             source_cap_radius_deg = _tpv_source_cap_radius_deg(
                 source_wcs,
@@ -1259,6 +1420,20 @@ def _resample_weighted_to_target(
         if target.ra_deg is not None:
             return _sample_on_world_grid(target.ra_deg, target.dec_deg)
         h_tgt, w_tgt = int(target.shape[0]), int(target.shape[1])
+        if not _requires_roundtrip_validity_check(source_wcs):
+            homography = infer_tan_projective_homography(
+                source_wcs, target.wcs, (h_tgt, w_tgt)
+            )
+            if homography is not None:
+                x_src, y_src = evaluate_tan_projective_homography(
+                    homography,
+                    h_tgt,
+                    w_tgt,
+                    device=image.device,
+                )
+                return _sample_on_source_grid(
+                    x_src, y_src, flat_ra=None, flat_dec=None
+                )
         if min(h_tgt, w_tgt) < 500 or _requires_roundtrip_validity_check(source_wcs):
             ra_g, dec_g = _build_target_world_grid(
                 target.wcs,
@@ -1291,6 +1466,9 @@ def _resample_weighted_to_target(
     )
     flat_dec = torch.cat(
         [sub_dec.reshape(-1) for _, sub_dec in quadrature_world_grids], dim=0
+    )
+    flat_ra, flat_dec = _convert_world_between_wcs(
+        flat_ra, flat_dec, target.wcs, source_wcs
     )
     x_src_all, y_src_all = source_wcs.world_to_pixel(flat_ra, flat_dec)
     x_src_b = x_src_all.reshape(len(quadrature_world_grids), *target.shape)
@@ -1338,6 +1516,30 @@ def _validated_map_stacking_method(
     return validate_map_stacking_method(stacking_method)
 
 
+def _drizzle_separable_1d_weight(
+    delta: Tensor,
+    *,
+    kernel: MapResamplingKernel,
+    pixfrac: float,
+) -> Tensor:
+    scale = max(float(pixfrac), 1.0e-6)
+    u = delta / scale
+    if kernel == "drizzle_gaussian":
+        # FWHM = pixfrac => sigma = pixfrac / (2 * sqrt(2 * ln(2)))
+        sigma_u = 1.0 / (2.0 * math.sqrt(2.0 * math.log(2.0)))
+        return torch.where(
+            torch.abs(u) <= 2.5,
+            torch.exp(-0.5 * torch.square(u / sigma_u)),
+            torch.zeros_like(u),
+        )
+    a = 2.0 if kernel == "drizzle_lanczos2" else 3.0
+    return torch.where(
+        torch.abs(u) < a,
+        torch.sinc(u) * torch.sinc(u / a),
+        torch.zeros_like(u),
+    )
+
+
 def _forward_project_weighted_to_target(
     image: Tensor,
     source_weight: Tensor,
@@ -1356,7 +1558,6 @@ def _forward_project_weighted_to_target(
 
     image = validate_image_plane_2d(image).to(dtype=torch.float32)
     source_weight = validate_image_plane_2d(source_weight).to(dtype=torch.float32)
-    h_src, w_src = image.shape
 
     if value_semantics == "flux":
         source_area_sr = pixel_area_sr_map(
@@ -1422,6 +1623,9 @@ def _forward_project_weighted_to_target(
         )
 
         ra_deg, dec_deg = source_wcs.pixel_to_world(x_chunk, y_chunk)
+        ra_deg, dec_deg = _convert_world_between_wcs(
+            ra_deg, dec_deg, source_wcs, target.wcs
+        )
         x_tgt, y_tgt = target.wcs.world_to_pixel(ra_deg, dec_deg)
         x_tgt = x_tgt.to(dtype=torch.float32)
         y_tgt = y_tgt.to(dtype=torch.float32)
@@ -1447,6 +1651,70 @@ def _forward_project_weighted_to_target(
             flat_weight.scatter_add_(0, idx, weight_chunk[inside])
             if flat_variance_weight is not None and variance_chunk is not None:
                 flat_variance_weight.scatter_add_(0, idx, variance_chunk[inside])
+            continue
+
+        if resampling_kernel in {
+            "drizzle_gaussian",
+            "drizzle_lanczos2",
+            "drizzle_lanczos3",
+        }:
+            footprint = max(float(drizzle_pixfrac), 1e-6)
+            base_r = (
+                2.5
+                if resampling_kernel == "drizzle_gaussian"
+                else (2.0 if resampling_kernel == "drizzle_lanczos2" else 3.0)
+            )
+            radius = max(1, int(math.ceil(base_r * footprint)))
+            xc = torch.round(x_tgt).to(dtype=torch.int64)
+            yc = torch.round(y_tgt).to(dtype=torch.int64)
+            offsets = list(range(-radius, radius + 1))
+            wx_list = [
+                _drizzle_separable_1d_weight(
+                    (xc + off).to(dtype=torch.float32) - x_tgt,
+                    kernel=resampling_kernel,
+                    pixfrac=footprint,
+                )
+                for off in offsets
+            ]
+            wy_list = [
+                _drizzle_separable_1d_weight(
+                    (yc + off).to(dtype=torch.float32) - y_tgt,
+                    kernel=resampling_kernel,
+                    pixfrac=footprint,
+                )
+                for off in offsets
+            ]
+            sum_wx = torch.clamp(torch.stack(wx_list, dim=0).sum(dim=0), min=1.0e-12)
+            sum_wy = torch.clamp(torch.stack(wy_list, dim=0).sum(dim=0), min=1.0e-12)
+            wx_list = [w / sum_wx for w in wx_list]
+            wy_list = [w / sum_wy for w in wy_list]
+            for off_y, wy in zip(offsets, wy_list, strict=True):
+                iy = yc + off_y
+                if not bool(((iy >= 0) & (iy < height)).any()):
+                    continue
+                for off_x, wx in zip(offsets, wx_list, strict=True):
+                    ix = xc + off_x
+                    frac = wx * wy
+                    inside = (
+                        (ix >= 0)
+                        & (ix < width)
+                        & (iy >= 0)
+                        & (iy < height)
+                        & (frac > 0.0)
+                    )
+                    if not bool(inside.any()):
+                        continue
+                    idx = iy[inside] * width + ix[inside]
+                    flat_numer.scatter_add_(0, idx, numer_chunk[inside] * frac[inside])
+                    flat_weight.scatter_add_(
+                        0, idx, weight_chunk[inside] * frac[inside]
+                    )
+                    if flat_variance_weight is not None and variance_chunk is not None:
+                        flat_variance_weight.scatter_add_(
+                            0,
+                            idx,
+                            variance_chunk[inside] * torch.square(frac[inside]),
+                        )
             continue
 
         footprint = max(float(drizzle_pixfrac), 1e-6)
@@ -1505,7 +1773,18 @@ def _forward_project_weighted_to_target(
     return numer, weight
 
 
-def _validated_spectral_axis(axis: SpectralAxis) -> SpectralAxis:
+def _validated_spectral_axis(
+    axis: SpectralAxis | Sequence[float] | Tensor,
+    *,
+    default_unit: str = "Angstrom",
+    default_type: str = "WAVE",
+) -> SpectralAxis:
+    if not isinstance(axis, SpectralAxis):
+        axis = SpectralAxis(
+            values=torch.as_tensor(axis, dtype=torch.float64),
+            unit=default_unit,
+            type=default_type,
+        )
     values = axis.values.to(dtype=torch.float64)
     if values.ndim != 1 or values.numel() == 0:
         raise ValueError("Spectral axis must be one-dimensional and non-empty")
@@ -1744,8 +2023,8 @@ def _project_observation_to_target_chunk(
         raise ValueError("Observation weights must be positive")
 
     if image is None or header_dict_obs is None:
-        image, header_dict_obs = read_image_plane_observation(
-            obs.path, hdu=obs.hdu, device=str(device)
+        image, header_dict_obs = load_observation_image_and_header(
+            obs, device=str(device)
         )
     image = image.to(device=device)
     if prepared_observation is None:
@@ -2068,6 +2347,25 @@ def _adaptive_tangent_boundary(
     return torch.stack(output, dim=0)
 
 
+def _resolve_plan_frame_prefixes(
+    frame: str,
+) -> tuple[str, str, str, str | None, float | None]:
+    norm = str(frame).strip().lower()
+    if norm in {"icrs", "equatorial", "j2000"}:
+        return "ICRS", "RA--", "DEC-", "ICRS", None
+    if norm == "fk5":
+        return "FK5", "RA--", "DEC-", "FK5", 2000.0
+    if norm in {"fk4", "b1950"}:
+        return "FK4", "RA--", "DEC-", "FK4", 1950.0
+    if norm in {"galactic", "gal"}:
+        return "GALACTIC", "GLON", "GLAT", None, None
+    if norm in {"ecliptic", "ecl"}:
+        return "ECLIPTIC", "ELON", "ELAT", None, None
+    raise ValueError(
+        f"Unsupported coordinate frame {frame!r}; expected 'icrs', 'fk5', 'fk4', 'galactic', or 'ecliptic'"
+    )
+
+
 def _plan_union_footprint_target(
     observations: Sequence[ImageObservation],
     *,
@@ -2075,15 +2373,37 @@ def _plan_union_footprint_target(
     padding: float = 1.05,
     tolerance_px: float = 0.25,
     max_depth: int = 20,
+    projection: str = "TAN",
+    frame: str = "icrs",
+    center: str | tuple[float, float] = "union",
+    pixel_scale: str | float = "median",
+    pixel_scale_arcsec: float | None = None,
+    shape: tuple[int, int] | None = None,
+    rotation_deg: float = 0.0,
 ) -> tuple[dict, tuple[int, int]]:
-    """Plan one rotation- and RA-seam-safe TAN grid for all observations."""
+    """Plan one rotation- and RA-seam-safe grid for all observations."""
     if not math.isfinite(float(padding)) or float(padding) < 1.0:
         raise ValueError("footprint_padding must be finite and at least 1.0")
     if not math.isfinite(float(tolerance_px)) or float(tolerance_px) <= 0.0:
         raise ValueError("footprint_tolerance_px must be finite and positive")
     if int(max_depth) < 1:
         raise ValueError("footprint_max_depth must be positive")
+    proj_code = str(projection).strip().upper()
+    target_frame, ctype1_prefix, ctype2_prefix, radesys, equinox = (
+        _resolve_plan_frame_prefixes(frame)
+    )
+    is_default_tan = (
+        proj_code == "TAN"
+        and target_frame == "ICRS"
+        and center == "union"
+        and pixel_scale == "median"
+        and pixel_scale_arcsec is None
+        and shape is None
+        and float(rotation_deg) == 0.0
+    )
+
     footprints: list[Tensor] = []
+    obs_centers: list[tuple[float, float]] = []
     pixel_scales: list[float] = []
     footprint_records: list[tuple[WCS, int, int]] = []
     for observation in observations:
@@ -2107,66 +2427,213 @@ def _plan_union_footprint_target(
             raise RuntimeError(
                 f"Could not determine finite footprint for {observation.path}"
             )
+        if getattr(wcs, "celestial_frame", "ICRS") != target_frame or (
+            equinox is not None and getattr(wcs, "celestial_equinox", None) != equinox
+        ):
+            lon_c, lat_c = wcs.convert_celestial(
+                footprint[:, 0],
+                footprint[:, 1],
+                target_frame,
+                to_equinox=equinox,
+            )
+            footprint = torch.stack((lon_c, lat_c), dim=-1)
         determinant = torch.linalg.det(
             wcs.cd.detach().to(device="cpu", dtype=torch.float64)
         )
-        pixel_scale = math.sqrt(abs(float(determinant)))
-        if not math.isfinite(pixel_scale) or pixel_scale <= 0.0:
+        obs_scale = math.sqrt(abs(float(determinant)))
+        if not math.isfinite(obs_scale) or obs_scale <= 0.0:
             raise RuntimeError(
                 f"Could not determine a non-singular spatial pixel scale for {observation.path}"
             )
         footprints.append(footprint)
-        pixel_scales.append(pixel_scale)
+        obs_centers.append(_spherical_union_center(footprint))
+        pixel_scales.append(obs_scale)
         footprint_records.append((wcs, height, width))
     if not footprints:
         raise RuntimeError("Could not determine any observation footprints")
 
     footprint = torch.cat(footprints, dim=0)
-    center_ra, center_dec = _spherical_union_center(footprint)
-    pixel_scale = float(torch.tensor(pixel_scales, dtype=torch.float64).median())
-    tangent_boundaries = [
-        _adaptive_tangent_boundary(
-            wcs,
-            height=height,
-            width=width,
-            center_ra_deg=center_ra,
-            center_dec_deg=center_dec,
-            pixel_scale_deg=pixel_scale,
-            tolerance_px=float(tolerance_px),
-            max_depth=int(max_depth),
+    if isinstance(center, tuple):
+        center_ra = float(center[0]) % 360.0
+        center_dec = float(center[1])
+    elif str(center).strip().lower() == "most":
+        best_idx = 0
+        best_score = -1.0
+        for idx_i, (ra_i, dec_i) in enumerate(obs_centers):
+            score = 0.0
+            for idx_j, (ra_j, dec_j) in enumerate(obs_centers):
+                sep = _angular_separation_deg(ra_i, dec_i, ra_j, dec_j)
+                score += 1.0 / (1.0 + (sep / max(pixel_scales[idx_j] * 512.0, 1e-3)) ** 2)
+            if score > best_score:
+                best_score = score
+                best_idx = idx_i
+        center_ra, center_dec = obs_centers[best_idx]
+    elif str(center).strip().lower() == "union":
+        center_ra, center_dec = _spherical_union_center(footprint)
+    else:
+        raise ValueError(
+            f"Unsupported center={center!r}; expected 'union', 'most', or (lon_deg, lat_deg)"
         )
-        for wcs, height, width in footprint_records
-    ]
-    tangent_boundary = torch.cat(tangent_boundaries, dim=0)
-    xi = tangent_boundary[:, 0]
-    eta = tangent_boundary[:, 1]
-    xi_mid = 0.5 * float(xi.min() + xi.max())
-    eta_mid = 0.5 * float(eta.min() + eta.max())
-    chord_margin_deg = float(tolerance_px) * pixel_scale
-    xi_half = (0.5 * float(xi.max() - xi.min()) + chord_margin_deg) * float(padding)
-    eta_half = (0.5 * float(eta.max() - eta.min()) + chord_margin_deg) * float(padding)
-    xi_min, xi_max = xi_mid - xi_half, xi_mid + xi_half
-    eta_min, eta_max = eta_mid - eta_half, eta_mid + eta_half
-    naxis1 = max(1, int(math.ceil((xi_max - xi_min) / pixel_scale)))
-    naxis2 = max(1, int(math.ceil((eta_max - eta_min) / pixel_scale)))
-    header: dict = {
+
+    if pixel_scale_arcsec is not None:
+        resolved_scale = float(pixel_scale_arcsec) / 3600.0
+    elif isinstance(pixel_scale, (int, float)):
+        resolved_scale = float(pixel_scale)
+    else:
+        scale_mode = str(pixel_scale).strip().lower()
+        if scale_mode == "median":
+            resolved_scale = float(
+                torch.tensor(pixel_scales, dtype=torch.float64).median()
+            )
+        elif scale_mode == "min":
+            resolved_scale = float(min(pixel_scales))
+        elif scale_mode == "max":
+            resolved_scale = float(max(pixel_scales))
+        else:
+            raise ValueError(
+                f"Unsupported pixel_scale={pixel_scale!r}; expected 'median', 'min', 'max', or a positive float"
+            )
+    if not math.isfinite(resolved_scale) or resolved_scale <= 0.0:
+        raise ValueError("pixel_scale must be finite and positive")
+
+    if is_default_tan:
+        tangent_boundaries = [
+            _adaptive_tangent_boundary(
+                wcs,
+                height=height,
+                width=width,
+                center_ra_deg=center_ra,
+                center_dec_deg=center_dec,
+                pixel_scale_deg=resolved_scale,
+                tolerance_px=float(tolerance_px),
+                max_depth=int(max_depth),
+            )
+            for wcs, height, width in footprint_records
+        ]
+        tangent_boundary = torch.cat(tangent_boundaries, dim=0)
+        xi = tangent_boundary[:, 0]
+        eta = tangent_boundary[:, 1]
+        xi_mid = 0.5 * float(xi.min() + xi.max())
+        eta_mid = 0.5 * float(eta.min() + eta.max())
+        chord_margin_deg = float(tolerance_px) * resolved_scale
+        xi_half = (0.5 * float(xi.max() - xi.min()) + chord_margin_deg) * float(padding)
+        eta_half = (0.5 * float(eta.max() - eta.min()) + chord_margin_deg) * float(
+            padding
+        )
+        xi_min, xi_max = xi_mid - xi_half, xi_mid + xi_half
+        eta_min, eta_max = eta_mid - eta_half, eta_mid + eta_half
+        naxis1 = max(1, int(math.ceil((xi_max - xi_min) / resolved_scale)))
+        naxis2 = max(1, int(math.ceil((eta_max - eta_min) / resolved_scale)))
+        header: dict = {
+            "NAXIS": 2,
+            "NAXIS1": naxis1,
+            "NAXIS2": naxis2,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CUNIT1": "deg",
+            "CUNIT2": "deg",
+            "CRVAL1": center_ra,
+            "CRVAL2": center_dec,
+            "CRPIX1": 0.5 + xi_max / resolved_scale,
+            "CRPIX2": 0.5 - eta_min / resolved_scale,
+            "CD1_1": -resolved_scale,
+            "CD1_2": 0.0,
+            "CD2_1": 0.0,
+            "CD2_2": resolved_scale,
+        }
+        return header, (naxis2, naxis1)
+
+    rot_rad = math.radians(float(rotation_deg))
+    cos_r = math.cos(rot_rad)
+    sin_r = math.sin(rot_rad)
+    cd1_1 = -resolved_scale * cos_r
+    cd1_2 = -resolved_scale * sin_r
+    cd2_1 = -resolved_scale * sin_r
+    cd2_2 = resolved_scale * cos_r
+
+    probe_header: dict[str, Any] = {
         "NAXIS": 2,
-        "NAXIS1": naxis1,
-        "NAXIS2": naxis2,
-        "CTYPE1": "RA---TAN",
-        "CTYPE2": "DEC--TAN",
+        "NAXIS1": 100,
+        "NAXIS2": 100,
+        "CTYPE1": f"{ctype1_prefix}-{proj_code}",
+        "CTYPE2": f"{ctype2_prefix}-{proj_code}",
         "CUNIT1": "deg",
         "CUNIT2": "deg",
         "CRVAL1": center_ra,
         "CRVAL2": center_dec,
-        "CRPIX1": 0.5 + xi_max / pixel_scale,
-        "CRPIX2": 0.5 - eta_min / pixel_scale,
-        "CD1_1": -pixel_scale,
-        "CD1_2": 0.0,
-        "CD2_1": 0.0,
-        "CD2_2": pixel_scale,
+        "CRPIX1": 1.0,
+        "CRPIX2": 1.0,
+        "CD1_1": cd1_1,
+        "CD1_2": cd1_2,
+        "CD2_1": cd2_1,
+        "CD2_2": cd2_2,
     }
-    return header, (naxis2, naxis1)
+    if radesys is not None:
+        probe_header["RADESYS"] = radesys
+    if equinox is not None:
+        probe_header["Equinox"] = equinox
+        probe_header["EQUINOX"] = equinox
+        del probe_header["Equinox"]
+    if proj_code in {"COE", "COO", "COD", "COP", "BON"}:
+        probe_header["PV2_1"] = center_dec if abs(center_dec) >= 1.0 else 45.0
+    elif proj_code == "HPX":
+        probe_header["PV2_1"] = 4.0
+        probe_header["PV2_2"] = 3.0
+    probe_wcs = WCS(probe_header)
+
+    if shape is not None:
+        naxis2, naxis1 = int(shape[0]), int(shape[1])
+        if naxis1 <= 0 or naxis2 <= 0:
+            raise ValueError("shape dimensions must be positive")
+        probe_header["NAXIS1"] = naxis1
+        probe_header["NAXIS2"] = naxis2
+        probe_header["CRPIX1"] = 0.5 * (naxis1 + 1)
+        probe_header["CRPIX2"] = 0.5 * (naxis2 + 1)
+        return probe_header, (naxis2, naxis1)
+
+    boundary_world: list[Tensor] = []
+    t_steps = torch.linspace(0.0, 1.0, 33, dtype=torch.float64)
+    for wcs, height, width in footprint_records:
+        w_lim = float(width) - 0.5
+        h_lim = float(height) - 0.5
+        e0 = torch.stack((-0.5 + (w_lim + 0.5) * t_steps, torch.full_like(t_steps, -0.5)), dim=-1)
+        e1 = torch.stack((torch.full_like(t_steps, w_lim), -0.5 + (h_lim + 0.5) * t_steps), dim=-1)
+        e2 = torch.stack((w_lim - (w_lim + 0.5) * t_steps, torch.full_like(t_steps, h_lim)), dim=-1)
+        e3 = torch.stack((torch.full_like(t_steps, -0.5), h_lim - (h_lim + 0.5) * t_steps), dim=-1)
+        edges_pix = torch.cat((e0, e1, e2, e3), dim=0)
+        lon_e, lat_e = wcs.pixel_to_world(edges_pix[:, 0], edges_pix[:, 1])
+        lon_e = lon_e.detach().to(device="cpu", dtype=torch.float64)
+        lat_e = lat_e.detach().to(device="cpu", dtype=torch.float64)
+        if getattr(wcs, "celestial_frame", "ICRS") != target_frame or (
+            equinox is not None and getattr(wcs, "celestial_equinox", None) != equinox
+        ):
+            lon_e, lat_e = wcs.convert_celestial(
+                lon_e, lat_e, target_frame, to_equinox=equinox
+            )
+        boundary_world.append(torch.stack((lon_e, lat_e), dim=-1))
+
+    all_world = torch.cat(boundary_world, dim=0)
+    px, py = probe_wcs.world_to_pixel(all_world[:, 0], all_world[:, 1])
+    finite = torch.isfinite(px) & torch.isfinite(py)
+    if not bool(finite.any()):
+        raise RuntimeError(
+            f"Observation footprints could not be projected into {proj_code}"
+        )
+    px = px[finite]
+    py = py[finite]
+    px_mid = 0.5 * float(px.min() + px.max())
+    py_mid = 0.5 * float(py.min() + py.max())
+    px_half = (0.5 * float(px.max() - px.min()) + float(tolerance_px)) * float(padding)
+    py_half = (0.5 * float(py.max() - py.min()) + float(tolerance_px)) * float(padding)
+    px_min, px_max = px_mid - px_half, px_mid + px_half
+    py_min, py_max = py_mid - py_half, py_mid + py_half
+    naxis1 = max(1, int(math.ceil(px_max - px_min)))
+    naxis2 = max(1, int(math.ceil(py_max - py_min)))
+    probe_header["NAXIS1"] = naxis1
+    probe_header["NAXIS2"] = naxis2
+    probe_header["CRPIX1"] = 1.0 - px_min + 0.5
+    probe_header["CRPIX2"] = 1.0 - py_min + 0.5
+    return probe_header, (naxis2, naxis1)
 
 
 def plan_image_plane_target(
@@ -2180,6 +2647,13 @@ def plan_image_plane_target(
     footprint_tolerance_px: float = 0.25,
     footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,
+    projection: str = "TAN",
+    frame: str = "icrs",
+    center: str | tuple[float, float] = "union",
+    pixel_scale: str | float = "median",
+    pixel_scale_arcsec: float | None = None,
+    shape: tuple[int, int] | None = None,
+    rotation_deg: float = 0.0,
 ) -> PlannedImagePlaneTarget:
     if not observations:
         raise ValueError("At least one observation is required")
@@ -2187,25 +2661,32 @@ def plan_image_plane_target(
         raise ValueError("max_footprint_pixels must be positive")
 
     if union_footprint or reference_index is None:
-        header, shape = _plan_union_footprint_target(
+        header, planned_shape = _plan_union_footprint_target(
             observations,
             device=device,
             padding=footprint_padding,
             tolerance_px=footprint_tolerance_px,
             max_depth=footprint_max_depth,
+            projection=projection,
+            frame=frame,
+            center=center,
+            pixel_scale=pixel_scale,
+            pixel_scale_arcsec=pixel_scale_arcsec,
+            shape=shape,
+            rotation_deg=rotation_deg,
         )
         if (
             max_footprint_pixels is not None
-            and shape[0] * shape[1] > max_footprint_pixels
+            and planned_shape[0] * planned_shape[1] > max_footprint_pixels
         ):
             raise RuntimeError(
-                f"Union footprint output {shape[0]}×{shape[1]} "
-                f"({shape[0] * shape[1] / 1e6:.1f} MPix) exceeds --max-footprint-pixels="
+                f"Union footprint output {planned_shape[0]}×{planned_shape[1]} "
+                f"({planned_shape[0] * planned_shape[1] / 1e6:.1f} MPix) exceeds --max-footprint-pixels="
                 f"{max_footprint_pixels}"
             )
         final_shape = target_shape_from_header(
             header_overrides or {},
-            fallback=shape,
+            fallback=planned_shape,
         )
         return PlannedImagePlaneTarget(
             header=normalized_header_for_shape(
@@ -2221,22 +2702,21 @@ def plan_image_plane_target(
 
     ref = observations[reference_index]
     read_dev = str(_resolve_map_device(device))
-    image, header = read(ref.path, hdu=ref.hdu, return_header=True, device=read_dev)
-    image = validate_image_plane_2d(image)
-    shape = tuple(image.shape)
-    shape = target_shape_from_header(header_overrides or {}, fallback=shape)
+    image, header = load_observation_image_and_header(ref, device=read_dev)
+    shape_out = tuple(image.shape) if shape is None else (int(shape[0]), int(shape[1]))
+    shape_out = target_shape_from_header(header_overrides or {}, fallback=shape_out)
     normalized_header = normalized_header_for_shape(
         dict(header),
-        shape,
+        shape_out,
         overrides=header_overrides,
     )
-    return PlannedImagePlaneTarget(header=normalized_header, shape=shape)
+    return PlannedImagePlaneTarget(header=normalized_header, shape=shape_out)
 
 
 def plan_image_plane_cube_target(
     observations: Sequence[ImageObservation],
     *,
-    reference_index: int = 0,
+    reference_index: int | None = 0,
     header_overrides: Optional[dict] = None,
     spectral_axis: SpectralAxis | None = None,
     spectral_bin_edges: Tensor | None = None,
@@ -2311,7 +2791,7 @@ def plan_image_plane_cube_target_from_header(
     observations: Sequence[ImageObservation],
     spectral_header: dict,
     *,
-    reference_index: int = 0,
+    reference_index: int | None = 0,
     header_overrides: Optional[dict] = None,
     use_header_bin_edges: bool = True,
     device: torch.device | str | None = None,
@@ -2327,6 +2807,79 @@ def plan_image_plane_cube_target_from_header(
         spectral_axis=spectral_axis,
         spectral_bin_edges=spectral_bin_edges,
         device=device,
+    )
+
+
+def plan(
+    observations: Sequence[ImageObservation],
+    *,
+    projection: str = "TAN",
+    frame: str = "icrs",
+    center: str | tuple[float, float] = "union",
+    pixel_scale: str | float = "median",
+    pixel_scale_arcsec: float | None = None,
+    shape: tuple[int, int] | None = None,
+    rotation_deg: float = 0.0,
+    padding: float = 1.05,
+    reference_index: int | None = None,
+    header_overrides: Optional[dict] = None,
+    max_pixels: int | None = None,
+    device: torch.device | str | None = None,
+) -> PlannedImagePlaneTarget:
+    """Plan a 2D celestial target grid from a set of observations."""
+    return plan_image_plane_target(
+        observations,
+        reference_index=reference_index,
+        header_overrides=header_overrides,
+        device=device,
+        union_footprint=(reference_index is None),
+        footprint_padding=padding,
+        max_footprint_pixels=max_pixels,
+        projection=projection,
+        frame=frame,
+        center=center,
+        pixel_scale=pixel_scale,
+        pixel_scale_arcsec=pixel_scale_arcsec,
+        shape=shape,
+        rotation_deg=rotation_deg,
+    )
+
+
+def plan_cube(
+    observations: Sequence[ImageObservation],
+    *,
+    spectral_axis: SpectralAxis | None = None,
+    spectral_bin_edges: Tensor | None = None,
+    spectral_header: dict | None = None,
+    spectral_unit: str = "Angstrom",
+    spectral_type: str = "WAVE",
+    reference_index: int | None = None,
+    header_overrides: Optional[dict] = None,
+    padding: float = 1.05,
+    max_pixels: int | None = None,
+    device: torch.device | str | None = None,
+) -> PlannedImagePlaneCubeTarget:
+    """Plan a 3D spatial-spectral target cube from a set of observations."""
+    if spectral_header is not None:
+        return plan_image_plane_cube_target_from_header(
+            observations,
+            spectral_header,
+            reference_index=reference_index,
+            header_overrides=header_overrides,
+            device=device,
+        )
+    return plan_image_plane_cube_target(
+        observations,
+        reference_index=reference_index,
+        header_overrides=header_overrides,
+        spectral_axis=spectral_axis,
+        spectral_bin_edges=spectral_bin_edges,
+        spectral_unit=spectral_unit,
+        spectral_type=spectral_type,
+        device=device,
+        union_footprint=(reference_index is None),
+        footprint_padding=padding,
+        max_footprint_pixels=max_pixels,
     )
 
 
@@ -2398,14 +2951,10 @@ def _coadd_image_plane_spatial_tiles(
                     image = validate_image_plane_2d(first_image).to(device=device)
                     header_dict_obs = dict(first_header)
                 else:
-                    image, header = read(
-                        obs.path,
-                        hdu=obs.hdu,
-                        return_header=True,
-                        device=read_dev,
+                    image, header_dict_obs = load_observation_image_and_header(
+                        obs, device=read_dev
                     )
-                    image = validate_image_plane_2d(image).to(device=device)
-                    header_dict_obs = dict(header)
+                    image = image.to(device=device)
                 prepared_observation = prepare_image_observation_data(
                     obs,
                     image,
@@ -2626,11 +3175,10 @@ def _coadd_image_plane_spatial_tiles(
                 image = validate_image_plane_2d(first_image).to(device=device)
                 header_dict_obs = dict(first_header)
             else:
-                image, header = read(
-                    obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+                image, header_dict_obs = load_observation_image_and_header(
+                    obs, device=read_dev
                 )
-                image = validate_image_plane_2d(image).to(device=device)
-                header_dict_obs = dict(header)
+                image = image.to(device=device)
             prepared_observation = prepare_image_observation_data(
                 obs,
                 image,
@@ -2834,11 +3382,9 @@ def coadd_image_plane(
     map_device = _resolve_map_device(device)
     read_dev = str(map_device)
     first = observations[0]
-    first_image, first_header = read(
-        first.path, hdu=first.hdu, return_header=True, device=read_dev
+    first_image, first_header = load_observation_image_and_header(
+        first, device=read_dev
     )
-    first_image = validate_image_plane_2d(first_image)
-    first_header = dict(first_header)
     if target_header is not None and "CRVAL1" in target_header:
         target_shape = target_shape_from_header(
             target_header,
@@ -2965,11 +3511,9 @@ def coadd_image_plane(
             image = first_image
             header_dict_obs = dict(first_header)
         else:
-            image, header = read(
-                obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+            image, header_dict_obs = load_observation_image_and_header(
+                obs, device=read_dev
             )
-            image = validate_image_plane_2d(image)
-            header_dict_obs = dict(header)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None
@@ -3034,11 +3578,9 @@ def coadd_image_plane(
             image = first_image
             header_dict_obs = dict(first_header)
         else:
-            image, header = read(
-                obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+            image, header_dict_obs = load_observation_image_and_header(
+                obs, device=read_dev
             )
-            image = validate_image_plane_2d(image)
-            header_dict_obs = dict(header)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None
@@ -3149,11 +3691,9 @@ def coadd_image_plane(
                 image = first_image
                 header_dict_obs = dict(first_header)
             else:
-                image, header = read(
-                    obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+                image, header_dict_obs = load_observation_image_and_header(
+                    obs, device=read_dev
                 )
-                image = validate_image_plane_2d(image)
-                header_dict_obs = dict(header)
             need_prepared_target = (
                 value_semantics == "flux"
                 or footprint_order is not None
@@ -3248,9 +3788,24 @@ def coadd_image_plane(
             for ps in projected_store:
                 n = ps["numer"]
                 w = ps["weight"]
+                tw = ps["target_window"]
                 img = torch.where(w > 0.0, n / w, torch.zeros_like(n))
-                images.append(img)
-                masks.append(~(w > 0.0))
+                if tw is None:
+                    images.append(img)
+                    masks.append(~(w > 0.0))
+                else:
+                    y0, y1, x0, x1 = tw
+                    full_img = torch.zeros(
+                        target_shape, dtype=img.dtype, device=img.device
+                    )
+                    full_valid = torch.zeros(
+                        target_shape, dtype=torch.bool, device=img.device
+                    )
+                    if y1 > y0 and x1 > x0:
+                        full_img[y0:y1, x0:x1] = img
+                        full_valid[y0:y1, x0:x1] = w > 0.0
+                    images.append(full_img)
+                    masks.append(~full_valid)
             corrected = cross_exposure_sky_corrector.correct(images, masks)
             numer.zero_()
             denom.zero_()
@@ -3258,16 +3813,15 @@ def coadd_image_plane(
             for i, ps in enumerate(projected_store):
                 w = ps["weight"]
                 overlap_contrib = ps["overlap"]
-                corrected_numer = corrected[i] * w
                 tw = ps["target_window"]
                 if tw is None:
-                    numer.add_(corrected_numer)
+                    numer.add_(corrected[i] * w)
                     denom.add_(w)
                     overlap_count.add_(overlap_contrib)
                 else:
                     y0, y1, x0, x1 = tw
                     if y1 > y0 and x1 > x0:
-                        numer[y0:y1, x0:x1].add_(corrected_numer)
+                        numer[y0:y1, x0:x1].add_(corrected[i][y0:y1, x0:x1] * w)
                         denom[y0:y1, x0:x1].add_(w)
                         overlap_count[y0:y1, x0:x1].add_(overlap_contrib)
 
@@ -3365,12 +3919,18 @@ _FINITE_APERTURE_COVARIANCE_KERNELS = frozenset(
         "nearest",
         "bilinear",
         "bicubic",
+        "lanczos2",
         "lanczos3",
+        "lanczos4",
         "lanczos5",
         "mitchell_netravali",
         "catmull_rom",
         "drizzle_point",
         "drizzle_square",
+        "drizzle_turbo",
+        "drizzle_gaussian",
+        "drizzle_lanczos2",
+        "drizzle_lanczos3",
         "conservative_polygon",
         "splat_point",
         "splat_box",
@@ -3512,13 +4072,10 @@ def evaluate_image_plane_aperture_uncertainty(
         )
 
     read_device = str(map_device)
-    first_image, first_header = read(
-        observations[0].path,
-        hdu=observations[0].hdu,
-        return_header=True,
-        device=read_device,
+    first_image, first_header = load_observation_image_and_header(
+        observations[0], device=read_device
     )
-    first_image = validate_image_plane_2d(first_image).to(device=map_device)
+    first_image = first_image.to(device=map_device)
     first_header = dict(first_header)
     if value_semantics != "surface_brightness":
         apply_area_scaling = False
@@ -3560,14 +4117,10 @@ def evaluate_image_plane_aperture_uncertainty(
             image = first_image
             observation_header = first_header
         else:
-            image, loaded_header = read(
-                observation.path,
-                hdu=observation.hdu,
-                return_header=True,
-                device=read_device,
+            image, observation_header = load_observation_image_and_header(
+                observation, device=read_device
             )
-            image = validate_image_plane_2d(image).to(device=map_device)
-            observation_header = dict(loaded_header)
+            image = image.to(device=map_device)
         prepared = prepare_image_observation_data(
             observation,
             image,
@@ -3835,13 +4388,10 @@ def coadd_image_plane_cube(
         observation_names,
     )
 
-    first_image, first_header = read(
-        observations[0].path,
-        hdu=observations[0].hdu,
-        return_header=True,
+    first_image, first_header = load_observation_image_and_header(
+        observations[0],
         device=read_dev,
     )
-    first_image = validate_image_plane_2d(first_image)
     device = map_device
     header_dict = dict(target.header)
     target_shape = target.shape
@@ -3893,11 +4443,9 @@ def coadd_image_plane_cube(
             image = first_image
             header_dict_obs = dict(first_header)
         else:
-            image, header = read(
-                obs.path, hdu=obs.hdu, return_header=True, device=read_dev
+            image, header_dict_obs = load_observation_image_and_header(
+                obs, device=read_dev
             )
-            image = validate_image_plane_2d(image)
-            header_dict_obs = dict(header)
         need_prepared_target = (
             value_semantics == "flux"
             or footprint_order is not None
@@ -4054,3 +4602,950 @@ def coadd_image_plane_multiband(
         coverage_mocs=cube.coverage_mocs,
         band_observation_counts=cube.band_metadata.observation_count,
     )
+
+
+# ---------------------------------------------------------------------------
+# Clean top-level mapmaking API
+# ---------------------------------------------------------------------------
+
+
+def _coerce_target_header(
+    target: Target | CubeTarget | Mapping[str, Any] | WCS | None,
+) -> dict[str, Any] | None:
+    if target is None:
+        return None
+    if isinstance(target, (PlannedImagePlaneTarget, PlannedImagePlaneCubeTarget)):
+        return dict(target.header)
+    if isinstance(target, WCS):
+        return target.to_header()
+    if isinstance(target, Mapping):
+        return dict(target)
+    raise TypeError(
+        f"target must be a Target, CubeTarget, header dict, WCS, or None; got {type(target).__name__}"
+    )
+
+
+def _propagate_observation_variance_components(
+    observations: Sequence[Observation],
+    *,
+    target_header: dict[str, Any],
+    target_shape: tuple[int, int],
+    resampling_kernel: MapResamplingKernel,
+    drizzle_pixfrac: float,
+    value_semantics: MapValueSemantics,
+    device: torch.device,
+) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
+    has_poisson = any(obs.var_poisson is not None for obs in observations)
+    has_rnoise = any(obs.var_rnoise is not None for obs in observations)
+    has_flat = any(obs.var_flat is not None for obs in observations)
+    if not (has_poisson or has_rnoise or has_flat):
+        return None, None, None
+
+    target_wcs = WCS(target_header)
+    prepared_target = _prepare_target(
+        header=target_header,
+        target_wcs=target_wcs,
+        target_shape=target_shape,
+        device=device,
+        include_pixel_area=(value_semantics == "flux"),
+        include_representative_pixel_area=False,
+        include_quadrature=(value_semantics == "flux"),
+        include_world_grid=False,
+    )
+
+    def _accumulate_component(attr_name: str) -> Tensor:
+        var_num = torch.zeros(target_shape, dtype=torch.float32, device=device)
+        var_den = torch.zeros(target_shape, dtype=torch.float32, device=device)
+        read_dev = str(device)
+        for obs in observations:
+            comp = getattr(obs, attr_name)
+            image, header_dict_obs = load_observation_image_and_header(
+                obs, device=read_dev
+            )
+            if comp is None:
+                comp_t = torch.zeros_like(image, device=device, dtype=torch.float32)
+            elif isinstance(comp, Tensor):
+                comp_t = validate_image_plane_2d(comp).to(
+                    device=device, dtype=torch.float32
+                )
+            else:
+                comp_raw, _ = read(
+                    str(comp), hdu=obs.hdu, return_header=True, device=read_dev
+                )
+                comp_t = validate_image_plane_2d(comp_raw).to(
+                    device=device, dtype=torch.float32
+                )
+            # Propagate std = sqrt(max(var, 0)) through linear resampling, or project var directly:
+            # In JWST/Roman stcal.resample, each variance plane is resampled with weight W_i
+            # and accumulated as sum(W_i^2 * V_i) / (sum W_i)^2.
+            var_obs = Observation(
+                data=comp_t,
+                wcs=header_dict_obs,
+                weight=obs.weight,
+                photometric_scale=obs.photometric_scale,
+                background_offset=0.0,
+                weight_map=obs.weight_map,
+                weight_path=obs.weight_path,
+                weight_hdu=obs.weight_hdu,
+                weight_type=obs.weight_type,
+                weight_thresh=obs.weight_thresh,
+                weight_is_inverse_variance=obs.weight_is_inverse_variance,
+                mask=obs.mask,
+                mask_path=obs.mask_path,
+                mask_hdu=obs.mask_hdu,
+                good_bits=obs.good_bits,
+                primary_beam=obs.primary_beam,
+                primary_beam_path=obs.primary_beam_path,
+                primary_beam_hdu=obs.primary_beam_hdu,
+                flux_scale_keyword=obs.flux_scale_keyword,
+                exposure_time_keyword=obs.exposure_time_keyword,
+                gain_keyword=obs.gain_keyword,
+                exposure_time=obs.exposure_time,
+            )
+            source_wcs = WCS(header_dict_obs)
+            proj = _project_observation_to_target_chunk(
+                var_obs,
+                image=comp_t,
+                header_dict_obs=header_dict_obs,
+                source_wcs=source_wcs,
+                prepared_target=prepared_target,
+                target_header=target_header,
+                target_shape=target_shape,
+                device=device,
+                footprint_order=None,
+                resampling_kernel=resampling_kernel,
+                value_semantics="surface_brightness",
+                drizzle_pixfrac=drizzle_pixfrac,
+                background_estimator=None,
+            )
+            w = proj.weight
+            v_est = torch.where(w > 0.0, proj.numer / w, torch.zeros_like(proj.numer))
+            if value_semantics == "flux" and prepared_target.pixel_area_sr is not None:
+                pa = prepared_target.pixel_area_sr
+                if proj.target_window is not None:
+                    y0, y1, x0, x1 = proj.target_window
+                    pa = pa[y0:y1, x0:x1]
+                v_est = v_est * torch.square(pa)
+            contrib_num = torch.square(w) * torch.clamp(v_est, min=0.0)
+            if proj.target_window is None:
+                var_num.add_(contrib_num)
+                var_den.add_(w)
+            else:
+                y0, y1, x0, x1 = proj.target_window
+                if y1 > y0 and x1 > x0:
+                    var_num[y0:y1, x0:x1].add_(contrib_num)
+                    var_den[y0:y1, x0:x1].add_(w)
+        safe_den_sq = torch.clamp(
+            torch.square(var_den), min=torch.finfo(var_den.dtype).tiny
+        )
+        return torch.where(
+            var_den > 0.0, var_num / safe_den_sq, torch.zeros_like(var_num)
+        )
+
+    vp = _accumulate_component("var_poisson") if has_poisson else None
+    vr = _accumulate_component("var_rnoise") if has_rnoise else None
+    vf = _accumulate_component("var_flat") if has_flat else None
+    return vp, vr, vf
+
+
+def resample(
+    observation: Observation | Sequence[Observation],
+    target: Target | Mapping[str, Any] | WCS | None = None,
+    *,
+    config: ResampleConfig | None = None,
+    kernel: MapResamplingKernel | None = None,
+    pixfrac: float | None = None,
+    semantics: MapValueSemantics | None = None,
+    footprint_order: int | None = None,
+    device: torch.device | str | None = None,
+) -> MapResult | list[MapResult]:
+    """Resample one or more observations onto a common target WCS grid without stacking."""
+    cfg = config or ResampleConfig()
+    resolved_kernel = kernel if kernel is not None else cfg.kernel
+    resolved_pixfrac = pixfrac if pixfrac is not None else cfg.pixfrac
+    resolved_semantics = semantics if semantics is not None else cfg.semantics
+    single = isinstance(observation, ImageObservation)
+    obs_list = [observation] if single else list(observation)
+    if not obs_list:
+        raise ValueError("At least one Observation is required")
+    target_header = _coerce_target_header(target)
+    if target_header is None and len(obs_list) > 1:
+        target_header = dict(plan(obs_list, device=device).header)
+
+    results: list[MapResult] = []
+    for obs in obs_list:
+        res = coadd_image_plane(
+            [obs],
+            target_header=target_header,
+            footprint_order=footprint_order,
+            resampling_kernel=resolved_kernel,
+            value_semantics=resolved_semantics,
+            stacking_method="weighted_mean",
+            drizzle_pixfrac=resolved_pixfrac,
+            device=device,
+        )
+        vp, vr, vf = _propagate_observation_variance_components(
+            [obs],
+            target_header=res.header,
+            target_shape=tuple(res.data.shape),
+            resampling_kernel=resolved_kernel,
+            drizzle_pixfrac=resolved_pixfrac,
+            value_semantics=resolved_semantics,
+            device=res.data.device,
+        )
+        if vp is not None or vr is not None or vf is not None:
+            res = dataclasses.replace(res, var_poisson=vp, var_rnoise=vr, var_flat=vf)
+        results.append(res)
+    return results[0] if single else results
+
+
+def blot(
+    coadd_or_data: MapResult | Tensor,
+    source_or_target: Observation
+    | Sequence[Observation]
+    | Target
+    | Mapping[str, Any]
+    | WCS,
+    *,
+    target: Observation
+    | Sequence[Observation]
+    | Target
+    | Mapping[str, Any]
+    | WCS
+    | None = None,
+    kernel: Literal[
+        "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
+    ] = "bilinear",
+    semantics: MapValueSemantics = "surface_brightness",
+    device: torch.device | str | None = None,
+) -> Tensor | list[Tensor]:
+    """Inverse-project (blot) a clean coadd back into one or more distorted exposure frames.
+
+    Supports both:
+    - ``blot(coadd_result, observations, kernel=..., semantics=...)``
+    - ``blot(coadd_tensor, coadd_wcs_or_header, target=observations, ...)``
+    """
+    semantics = _validated_map_value_semantics(semantics)
+    if kernel not in (
+        "bilinear",
+        "bicubic",
+        "lanczos2",
+        "lanczos3",
+        "lanczos4",
+        "nearest",
+    ):
+        raise ValueError(
+            "blot kernel must be one of 'bilinear', 'bicubic', 'lanczos2', 'lanczos3', 'lanczos4', or 'nearest'"
+        )
+    if isinstance(coadd_or_data, MapResult):
+        coadd_tensor = coadd_or_data.data
+        coadd_header = dict(coadd_or_data.header)
+        blot_target = source_or_target if target is None else target
+    else:
+        coadd_tensor = validate_image_plane_2d(coadd_or_data)
+        if target is None:
+            raise ValueError(
+                "When passing a raw Tensor to blot(), specify coadd WCS/header as second argument and target=... as keyword"
+            )
+        if isinstance(source_or_target, (ImageObservation, Sequence)) and not isinstance(
+            source_or_target, Mapping
+        ):
+            raise TypeError(
+                "Second argument must be coadd Target/header/WCS when first argument is a raw Tensor"
+            )
+        coerced = _coerce_target_header(source_or_target)
+        assert coerced is not None
+        coadd_header = coerced
+        blot_target = target
+
+    map_device = (
+        coadd_tensor.device if device is None else _resolve_map_device(device)
+    )
+    coadd_img = coadd_tensor.to(device=map_device, dtype=torch.float32)
+    coadd_wcs = WCS(coadd_header)
+    coadd_shape = (int(coadd_img.shape[0]), int(coadd_img.shape[1]))
+    h_c, w_c = coadd_shape
+
+    def _blot_single(
+        dest: Observation | Target | Mapping[str, Any] | WCS,
+    ) -> Tensor:
+        if isinstance(dest, ImageObservation):
+            obs_img, obs_hdr = load_observation_image_and_header(
+                dest, device=str(map_device)
+            )
+            dest_shape = (int(obs_img.shape[0]), int(obs_img.shape[1]))
+            dest_hdr = dict(obs_hdr)
+        else:
+            coerced_dest = _coerce_target_header(dest)
+            if coerced_dest is None:
+                raise ValueError("blot destination cannot be None")
+            dest_hdr = coerced_dest
+            dest_shape = target_shape_from_header(dest_hdr, fallback=coadd_shape)
+        dest_wcs = WCS(dest_hdr)
+        dest_prep = _prepare_target(
+            header=dest_hdr,
+            target_wcs=dest_wcs,
+            target_shape=dest_shape,
+            device=map_device,
+            include_pixel_area=(semantics == "flux"),
+            include_representative_pixel_area=False,
+            include_quadrature=False,
+            include_world_grid=False,
+        )
+        ra_grid, dec_grid = _build_target_world_grid(
+            dest_wcs, dest_shape[0], dest_shape[1], device=map_device
+        )
+        flat_ra = ra_grid.reshape(-1)
+        flat_dec = dec_grid.reshape(-1)
+        flat_ra, flat_dec = _convert_world_between_wcs(
+            flat_ra, flat_dec, dest_wcs, coadd_wcs
+        )
+        src_x_flat, src_y_flat = coadd_wcs.world_to_pixel(flat_ra, flat_dec)
+        src_x = src_x_flat.reshape(dest_shape)
+        src_y = src_y_flat.reshape(dest_shape)
+        in_bounds = (
+            (src_x >= 0.0)
+            & (src_x <= float(w_c - 1))
+            & (src_y >= 0.0)
+            & (src_y <= float(h_c - 1))
+        )
+        clean_coadd = (
+            torch.nan_to_num(coadd_img, nan=0.0, posinf=0.0, neginf=0.0)
+            if not bool(torch.isfinite(coadd_img).all())
+            else coadd_img
+        )
+        x_norm = (2.0 * src_x / max(w_c - 1, 1)) - 1.0
+        y_norm = (2.0 * src_y / max(h_c - 1, 1)) - 1.0
+        grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
+        sampled = sample_image_plane_batched_channels(
+            clean_coadd.unsqueeze(0),
+            x_src=src_x,
+            y_src=src_y,
+            grid=grid,
+            kernel=kernel,
+        )[0]
+        sampled = torch.where(in_bounds, sampled, torch.zeros_like(sampled))
+        if semantics == "flux":
+            assert dest_prep.pixel_area_sr is not None
+            coadd_area = pixel_area_sr_map(
+                coadd_wcs, coadd_shape, device=map_device
+            )
+            coadd_area_at_dest = (
+                F.grid_sample(
+                    coadd_area.unsqueeze(0).unsqueeze(0),
+                    grid.unsqueeze(0),
+                    mode="bilinear",
+                    padding_mode="border",
+                    align_corners=True,
+                )
+                .squeeze(0)
+                .squeeze(0)
+            )
+            area_ratio = dest_prep.pixel_area_sr / torch.clamp(
+                coadd_area_at_dest, min=torch.finfo(torch.float32).tiny
+            )
+            sampled = sampled * area_ratio
+        return sampled
+
+    if isinstance(blot_target, Sequence) and not isinstance(
+        blot_target, (Mapping, str, bytes)
+    ):
+        return [_blot_single(item) for item in blot_target]
+    return _blot_single(blot_target)  # type: ignore[arg-type]
+
+
+def _blot_spatial_derivative(blotted: Tensor) -> Tensor:
+    """Compute AstroDrizzle / JWST stcal local spatial gradient max(|dI/dx|, |dI/dy|)."""
+    H, W = blotted.shape
+    padded = F.pad(
+        blotted.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode="replicate"
+    ).squeeze(0).squeeze(0)
+    dx_left = torch.abs(blotted - padded[1 : H + 1, 0:W])
+    dx_right = torch.abs(blotted - padded[1 : H + 1, 2 : W + 2])
+    dy_up = torch.abs(blotted - padded[0:H, 1 : W + 1])
+    dy_down = torch.abs(blotted - padded[2 : H + 2, 1 : W + 1])
+    return torch.maximum(
+        torch.maximum(dx_left, dx_right), torch.maximum(dy_up, dy_down)
+    )
+
+
+def detect_outliers(
+    observations: Sequence[Observation],
+    coadd_result: MapResult | None = None,
+    *,
+    config: OutlierConfig | None = None,
+    snr_primary: float | None = None,
+    snr_neighbor: float | None = None,
+    scale_primary: float | None = None,
+    scale_neighbor: float | None = None,
+    min_floor: float | None = None,
+    kernel: Literal[
+        "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
+    ]
+    | None = None,
+    update_masks: bool = True,
+    device: torch.device | str | None = None,
+) -> tuple[list[Tensor], list[Observation]]:
+    """Detect cosmic rays and transient outliers via AstroDrizzle / JWST blot + spatial derivative test.
+
+    Returns ``(outlier_masks, updated_observations)`` where ``outlier_masks[i]`` is a boolean
+    tensor with ``True`` at detected cosmic-ray/outlier pixels in exposure ``i``.
+    """
+    if not observations:
+        raise ValueError("At least one Observation is required")
+    cfg = config or OutlierConfig()
+    s_prim = float(snr_primary if snr_primary is not None else cfg.snr[0])
+    s_neigh = float(snr_neighbor if snr_neighbor is not None else cfg.snr[1])
+    c_prim = float(scale_primary if scale_primary is not None else cfg.scale[0])
+    c_neigh = float(
+        scale_neighbor if scale_neighbor is not None else cfg.scale[1]
+    )
+    floor_val = float(min_floor if min_floor is not None else cfg.min_floor)
+    blot_kernel = kernel if kernel is not None else cfg.blot_kernel
+
+    map_device = _resolve_map_device(device)
+    if coadd_result is None:
+        coadd_result = coadd_image_plane(
+            observations,
+            stacking_method="median" if len(observations) >= 3 else "weighted_mean",
+            resampling_kernel="bilinear",
+            value_semantics="surface_brightness",
+            device=map_device,
+        )
+
+    blotted_list = blot(
+        coadd_result,
+        list(observations),
+        kernel=blot_kernel,
+        semantics="surface_brightness",
+        device=map_device,
+    )
+    assert isinstance(blotted_list, list)
+
+    outlier_masks: list[Tensor] = []
+    updated_observations: list[Observation] = []
+    read_dev = str(map_device)
+    for obs, blotted in zip(observations, blotted_list):
+        raw_img, _ = load_observation_image_and_header(obs, device=read_dev)
+        raw_img_dev = raw_img.to(device=map_device, dtype=torch.float32)
+        src_w = _load_observation_weight_map(obs, raw_img_dev, device=map_device)
+        cal_img, cal_w = _apply_observation_calibration(obs, raw_img_dev, src_w)
+        grad = _blot_spatial_derivative(blotted)
+        diff = torch.abs(cal_img - blotted)
+
+        # Estimate per-pixel 1-sigma noise from variance planes, weight map, or robust MAD
+        noise_sigma: Tensor | None = None
+        if obs.var_poisson is not None or obs.var_rnoise is not None:
+            var_tot = torch.zeros_like(cal_img)
+            if isinstance(obs.var_poisson, Tensor):
+                var_tot = var_tot + obs.var_poisson.to(
+                    device=map_device, dtype=torch.float32
+                )
+            if isinstance(obs.var_rnoise, Tensor):
+                var_tot = var_tot + obs.var_rnoise.to(
+                    device=map_device, dtype=torch.float32
+                )
+            noise_sigma = torch.sqrt(torch.clamp(var_tot, min=1e-12))
+        elif (
+            obs.weight_map is not None
+            and obs.weight_type in ("ivm", "rms", "variance")
+        ) or obs.weight_is_inverse_variance:
+            noise_sigma = torch.where(
+                cal_w > 0.0,
+                torch.rsqrt(torch.clamp(cal_w, min=1e-12)),
+                torch.full_like(cal_img, float("inf")),
+            )
+        if noise_sigma is None:
+            finite_diff = diff[torch.isfinite(diff)]
+            if finite_diff.numel() > 0:
+                mad_sigma = torch.clamp(
+                    1.4826 * torch.median(finite_diff), min=1e-6
+                )
+            else:
+                mad_sigma = torch.tensor(1.0, device=map_device, dtype=torch.float32)
+            noise_sigma = torch.clamp(
+                torch.sqrt(torch.clamp(torch.abs(blotted), min=0.0) + mad_sigma**2),
+                min=float(mad_sigma.item()),
+            )
+
+        thresh_primary = c_prim * grad + s_prim * noise_sigma + floor_val
+        thresh_neighbor = c_neigh * grad + s_neigh * noise_sigma + floor_val
+        primary_cr = (diff > thresh_primary) & torch.isfinite(cal_img)
+        if primary_cr.any():
+            dilated = (
+                F.max_pool2d(
+                    primary_cr.to(dtype=torch.float32).unsqueeze(0).unsqueeze(0),
+                    kernel_size=3,
+                    stride=1,
+                    padding=1,
+                )
+                .squeeze(0)
+                .squeeze(0)
+                > 0.0
+            )
+            cr_mask = primary_cr | (
+                dilated & (diff > thresh_neighbor) & torch.isfinite(cal_img)
+            )
+        else:
+            cr_mask = primary_cr
+        outlier_masks.append(cr_mask)
+        if update_masks:
+            if isinstance(obs.mask, Tensor):
+                if obs.good_bits is not None:
+                    dq = obs.mask.to(device=map_device, dtype=torch.int64)
+                    prev_valid = (dq & (~int(obs.good_bits))) == 0
+                elif obs.mask.dtype == torch.bool:
+                    prev_valid = obs.mask.to(device=map_device, dtype=torch.bool)
+                else:
+                    prev_valid = obs.mask.to(device=map_device, dtype=torch.float32) > 0.0
+                valid_mask = prev_valid & (~cr_mask)
+            else:
+                valid_mask = ~cr_mask
+            updated_observations.append(
+                dataclasses.replace(obs, mask=valid_mask, good_bits=None)
+            )
+        else:
+            updated_observations.append(obs)
+    return outlier_masks, updated_observations
+
+
+def match_sky(
+    observations: Sequence[Observation],
+    *,
+    target: Target | Mapping[str, Any] | WCS | None = None,
+    config: SkyConfig | None = None,
+    mode: Literal[
+        "constant",
+        "planar",
+        "mesh",
+        "per_exposure",
+        "overlap_constant",
+        "overlap_planar",
+        "overlap_mesh",
+    ]
+    | None = None,
+    mesh_size: int | None = None,
+    regularization: float | None = None,
+    apply: bool = True,
+    device: torch.device | str | None = None,
+) -> tuple[list[Observation], dict[str, Any]]:
+    """Solve and optionally subtract sky background across exposures.
+
+    Supports both single-exposure mesh background estimation (``mode="per_exposure"``)
+    and global overlap-graph rectification (``"constant"``, ``"planar"``, ``"mesh"``).
+    """
+    if not observations:
+        raise ValueError("At least one Observation is required")
+    cfg = config or SkyConfig(mode="overlap_constant")
+    raw_mode = mode if mode is not None else cfg.mode
+    if raw_mode == "none":
+        return list(observations), {"mode": "none"}
+    resolved_mesh = int(mesh_size if mesh_size is not None else cfg.mesh_size)
+    resolved_reg = float(
+        regularization if regularization is not None else cfg.regularization
+    )
+    map_device = _resolve_map_device(device)
+    read_dev = str(map_device)
+
+    if raw_mode == "per_exposure":
+        estimator = MeshSkyEstimator(
+            block_size=resolved_mesh,
+            statistic=cfg.stat,
+            mesh_filter_size=cfg.smooth_scale,
+            self_mask_sigma=cfg.clip_sigma,
+        )
+        updated: list[Observation] = []
+        backgrounds: list[Tensor] = []
+        for obs in observations:
+            img, hdr = load_observation_image_and_header(obs, device=read_dev)
+            img_dev = img.to(device=map_device, dtype=torch.float32)
+            bad_mask = ~torch.isfinite(img_dev)
+            if isinstance(obs.mask, Tensor):
+                if obs.good_bits is not None:
+                    dq = obs.mask.to(device=map_device, dtype=torch.int64)
+                    obs_bad = (dq & (~int(obs.good_bits))) != 0
+                elif obs.mask.dtype == torch.bool:
+                    obs_bad = ~obs.mask.to(device=map_device, dtype=torch.bool)
+                else:
+                    obs_bad = ~(obs.mask.to(device=map_device, dtype=torch.float32) > 0.0)
+                bad_mask = bad_mask | obs_bad
+            bg = estimator(img_dev, bad_mask if bool(bad_mask.any()) else None)
+            backgrounds.append(bg)
+            if apply:
+                updated.append(
+                    dataclasses.replace(obs, data=img_dev - bg, wcs=hdr, path=None)
+                )
+            else:
+                updated.append(obs)
+        return updated, {"mode": "per_exposure", "backgrounds": backgrounds}
+
+    # Global overlap-graph sky matching ("constant", "planar", or "mesh")
+    corrector_mode: Literal["constant", "planar", "mesh"]
+    if raw_mode in ("constant", "overlap_constant"):
+        corrector_mode = "constant"
+    elif raw_mode in ("planar", "overlap_planar"):
+        corrector_mode = "planar"
+    elif raw_mode in ("mesh", "overlap_mesh"):
+        corrector_mode = "mesh"
+    else:
+        raise ValueError(f"Unsupported sky matching mode: {raw_mode!r}")
+
+    target_hdr = _coerce_target_header(target)
+    if target_hdr is None:
+        target_hdr = dict(plan(observations, device=map_device).header)
+    resampled_list = resample(
+        observations,
+        target_hdr,
+        kernel="bilinear",
+        semantics="surface_brightness",
+        device=map_device,
+    )
+    assert isinstance(resampled_list, list)
+    images = [r.data for r in resampled_list]
+    masks = [~(r.weight > 0.0) for r in resampled_list]
+    corrector = CrossExposureSkyCorrector(
+        mesh_size=resolved_mesh,
+        regularization=resolved_reg,
+        mode=corrector_mode,
+    )
+
+    if corrector_mode == "constant":
+        offsets = corrector.fit_offsets(images, masks)
+        updated_obs: list[Observation] = []
+        for obs, off in zip(observations, offsets.tolist()):
+            if apply:
+                updated_obs.append(
+                    dataclasses.replace(
+                        obs,
+                        background_offset=float(obs.background_offset) + float(off),
+                    )
+                )
+            else:
+                updated_obs.append(obs)
+        return updated_obs, {"mode": "constant", "offsets": offsets}
+
+    if corrector_mode == "planar":
+        planes = corrector.fit_planes(images, masks)
+        coadd_wcs = WCS(target_hdr)
+        coadd_shape = (int(images[0].shape[0]), int(images[0].shape[1]))
+        H_c, W_c = coadd_shape
+        updated_obs = []
+        for idx, obs in enumerate(observations):
+            if apply:
+                img, hdr = load_observation_image_and_header(obs, device=read_dev)
+                img_dev = img.to(device=map_device, dtype=torch.float32)
+                obs_wcs = WCS(hdr)
+                obs_shape = (int(img_dev.shape[0]), int(img_dev.shape[1]))
+                ra_grid, dec_grid = _build_target_world_grid(
+                    obs_wcs, obs_shape[0], obs_shape[1], device=map_device
+                )
+                flat_ra = ra_grid.reshape(-1)
+                flat_dec = dec_grid.reshape(-1)
+                flat_ra, flat_dec = _convert_world_between_wcs(
+                    flat_ra, flat_dec, obs_wcs, coadd_wcs
+                )
+                cx_flat, cy_flat = coadd_wcs.world_to_pixel(flat_ra, flat_dec)
+                cx = cx_flat.reshape(obs_shape)
+                cy = cy_flat.reshape(obs_shape)
+                u = (cx / max(W_c - 1, 1)) * 2.0 - 1.0
+                v = (cy / max(H_c - 1, 1)) * 2.0 - 1.0
+                a_i = planes[idx, 0]
+                bx_i = planes[idx, 1]
+                by_i = planes[idx, 2]
+                plane_obs = a_i + bx_i * u + by_i * v
+                updated_obs.append(
+                    dataclasses.replace(
+                        obs, data=img_dev - plane_obs, wcs=hdr, path=None
+                    )
+                )
+            else:
+                updated_obs.append(obs)
+        return updated_obs, {"mode": "planar", "planes": planes}
+
+    corrections = corrector.fit_corrections(images, masks)
+    updated_obs = []
+    for obs, corr in zip(observations, corrections):
+        if apply:
+            img, hdr = load_observation_image_and_header(obs, device=read_dev)
+            img_dev = img.to(device=map_device, dtype=torch.float32)
+            corr_obs = blot(
+                corr,
+                target_hdr,
+                target=obs,
+                kernel="bilinear",
+                semantics="surface_brightness",
+                device=map_device,
+            )
+            assert isinstance(corr_obs, Tensor)
+            updated_obs.append(
+                dataclasses.replace(obs, data=img_dev - corr_obs, wcs=hdr, path=None)
+            )
+        else:
+            updated_obs.append(obs)
+    return updated_obs, {"mode": "mesh", "corrections": corrections}
+
+
+def coadd(
+    observations: Sequence[Observation],
+    target: Target | Mapping[str, Any] | WCS | None = None,
+    *,
+    resample: ResampleConfig | None = None,
+    sky: SkyConfig | None = None,
+    outliers: OutlierConfig | None = None,
+    stack: StackConfig | None = None,
+    kernel: MapResamplingKernel | None = None,
+    pixfrac: float | None = None,
+    semantics: MapValueSemantics | None = None,
+    method: MapStackingMethod | None = None,
+    clip_sigma: float | None = None,
+    clip_iterations: int | None = None,
+    footprint_order: int | None = None,
+    spatial_tile_hw: tuple[int, int] | None = None,
+    surface_brightness_area_scaling: bool | None = None,
+    output_path: str | None = None,
+    scratch_dir: str | Path | None = None,
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+    cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
+    device: torch.device | str | None = None,
+) -> MapResult:
+    """Unified 2D image-plane mosaic / coadd entry point.
+
+    Accepts either structured configuration objects (``resample``, ``sky``, ``outliers``, ``stack``)
+    or direct keyword arguments (``kernel``, ``pixfrac``, ``semantics``, ``method``).
+    """
+    r_cfg = resample or ResampleConfig()
+    s_cfg = stack or StackConfig()
+    resolved_kernel = kernel if kernel is not None else r_cfg.kernel
+    resolved_pixfrac = pixfrac if pixfrac is not None else r_cfg.pixfrac
+    resolved_semantics = semantics if semantics is not None else r_cfg.semantics
+    resolved_method = method if method is not None else s_cfg.method
+    resolved_clip_sigma = clip_sigma if clip_sigma is not None else s_cfg.clip_sigma
+    resolved_clip_iter = (
+        clip_iterations if clip_iterations is not None else s_cfg.clip_iterations
+    )
+    resolved_area_scaling = (
+        surface_brightness_area_scaling
+        if surface_brightness_area_scaling is not None
+        else r_cfg.area_scaling
+    )
+    resolved_tile_hw = (
+        spatial_tile_hw if spatial_tile_hw is not None else s_cfg.tile_hw
+    )
+    resolved_footprint_order = (
+        footprint_order if footprint_order is not None else s_cfg.footprint_order
+    )
+    resolved_scratch = scratch_dir if scratch_dir is not None else s_cfg.scratch_dir
+
+    bg_est = background_estimator
+    sky_corr = cross_exposure_sky_corrector
+    if sky is not None and sky.mode != "none":
+        if sky.mode == "per_exposure":
+            bg_est = MeshSkyEstimator(
+                block_size=sky.mesh_size,
+                statistic=sky.stat,
+                mesh_filter_size=sky.smooth_scale,
+                self_mask_sigma=sky.clip_sigma,
+            )
+        elif sky.mode in ("constant", "overlap_constant"):
+            sky_corr = CrossExposureSkyCorrector(
+                mesh_size=sky.mesh_size,
+                regularization=sky.regularization,
+                mode="constant",
+            )
+        elif sky.mode in ("planar", "overlap_planar"):
+            sky_corr = CrossExposureSkyCorrector(
+                mesh_size=sky.mesh_size,
+                regularization=sky.regularization,
+                mode="planar",
+            )
+        elif sky.mode in ("mesh", "overlap_mesh"):
+            sky_corr = CrossExposureSkyCorrector(
+                mesh_size=sky.mesh_size,
+                regularization=sky.regularization,
+                mode="mesh",
+            )
+        else:
+            raise ValueError(f"Unsupported SkyConfig.mode: {sky.mode!r}")
+
+    obs_to_stack = list(observations)
+    target_header = _coerce_target_header(target)
+
+    if outliers is not None and outliers.enabled:
+        init_coadd = coadd_image_plane(
+            obs_to_stack,
+            target_header=target_header,
+            resampling_kernel="bilinear",
+            value_semantics="surface_brightness",
+            stacking_method="median" if len(obs_to_stack) >= 3 else "weighted_mean",
+            device=device,
+        )
+        _, obs_to_stack = detect_outliers(
+            obs_to_stack,
+            init_coadd,
+            config=outliers,
+            update_masks=True,
+            device=device,
+        )
+
+    result = coadd_image_plane(
+        obs_to_stack,
+        target_header=target_header,
+        output_path=output_path,
+        footprint_order=resolved_footprint_order,
+        resampling_kernel=resolved_kernel,
+        value_semantics=resolved_semantics,
+        stacking_method=resolved_method,
+        drizzle_pixfrac=resolved_pixfrac,
+        clip_sigma=resolved_clip_sigma,
+        clip_iterations=resolved_clip_iter,
+        spatial_tile_hw=resolved_tile_hw,
+        surface_brightness_area_scaling=resolved_area_scaling,
+        device=device,
+        scratch_dir=resolved_scratch,
+        background_estimator=bg_est,
+        cross_exposure_sky_corrector=sky_corr,
+    )
+    if resolved_method == "weighted_mean":
+        vp, vr, vf = _propagate_observation_variance_components(
+            obs_to_stack,
+            target_header=result.header,
+            target_shape=tuple(result.data.shape),
+            resampling_kernel=resolved_kernel,
+            drizzle_pixfrac=resolved_pixfrac,
+            value_semantics=resolved_semantics,
+            device=result.data.device,
+        )
+        if vp is not None or vr is not None or vf is not None:
+            result = dataclasses.replace(
+                result, var_poisson=vp, var_rnoise=vr, var_flat=vf
+            )
+    return result
+
+
+def coadd_multiband(
+    observations: Sequence[Observation],
+    target: Target | Mapping[str, Any] | WCS | None = None,
+    *,
+    resample: ResampleConfig | None = None,
+    stack: StackConfig | None = None,
+    kernel: MapResamplingKernel | None = None,
+    semantics: MapValueSemantics | None = None,
+    method: MapStackingMethod | None = None,
+    footprint_order: int | None = None,
+    spectral_unit: str = "Angstrom",
+    spectral_type: str = "WAVE",
+    device: torch.device | str | None = None,
+) -> MultiBandMapResult:
+    """Clean multi-band image-plane coadd entry point."""
+    r_cfg = resample or ResampleConfig()
+    s_cfg = stack or StackConfig()
+    return coadd_image_plane_multiband(
+        observations,
+        target_header=_coerce_target_header(target),
+        footprint_order=footprint_order
+        if footprint_order is not None
+        else s_cfg.footprint_order,
+        resampling_kernel=kernel if kernel is not None else r_cfg.kernel,
+        value_semantics=semantics if semantics is not None else r_cfg.semantics,
+        stacking_method=method if method is not None else s_cfg.method,
+        spectral_unit=spectral_unit,
+        spectral_type=spectral_type,
+        device=device,
+    )
+
+
+def coadd_cube(
+    observations: Sequence[Observation],
+    target: CubeTarget | Target | Mapping[str, Any] | WCS | None = None,
+    *,
+    resample: ResampleConfig | None = None,
+    stack: StackConfig | None = None,
+    kernel: MapResamplingKernel | None = None,
+    pixfrac: float | None = None,
+    semantics: MapValueSemantics | None = None,
+    method: MapStackingMethod | None = None,
+    footprint_order: int | None = None,
+    spectral_axis: SpectralAxis | Sequence[float] | Tensor | None = None,
+    spectral_bin_edges: Sequence[float] | Tensor | None = None,
+    spectral_unit: str = "Angstrom",
+    spectral_type: str = "WAVE",
+    background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+    device: torch.device | str | None = None,
+) -> SpectralCubeMapResult:
+    """Clean spectral-cube image-plane coadd entry point."""
+    r_cfg = resample or ResampleConfig()
+    s_cfg = stack or StackConfig()
+    if isinstance(target, PlannedImagePlaneCubeTarget) and spectral_axis is None and spectral_bin_edges is None:
+        return coadd_image_plane_cube(
+            observations,
+            target=target,
+            footprint_order=footprint_order
+            if footprint_order is not None
+            else s_cfg.footprint_order,
+            resampling_kernel=kernel if kernel is not None else r_cfg.kernel,
+            value_semantics=semantics if semantics is not None else r_cfg.semantics,
+            stacking_method=method if method is not None else s_cfg.method,
+            drizzle_pixfrac=pixfrac if pixfrac is not None else r_cfg.pixfrac,
+            spectral_unit=spectral_unit,
+            spectral_type=spectral_type,
+            device=device,
+            background_estimator=background_estimator,
+        )
+    if isinstance(target, PlannedImagePlaneCubeTarget):
+        target_hdr = dict(target.header)
+        if spectral_axis is None:
+            spectral_axis = target.spectral_axis
+        if spectral_bin_edges is None:
+            spectral_bin_edges = target.spectral_bin_edges
+    else:
+        target_hdr = _coerce_target_header(target)
+    return coadd_image_plane_cube(
+        observations,
+        target_header=target_hdr,
+        footprint_order=footprint_order
+        if footprint_order is not None
+        else s_cfg.footprint_order,
+        resampling_kernel=kernel if kernel is not None else r_cfg.kernel,
+        value_semantics=semantics if semantics is not None else r_cfg.semantics,
+        stacking_method=method if method is not None else s_cfg.method,
+        drizzle_pixfrac=pixfrac if pixfrac is not None else r_cfg.pixfrac,
+        spectral_axis=spectral_axis,
+        spectral_bin_edges=spectral_bin_edges,
+        spectral_unit=spectral_unit,
+        spectral_type=spectral_type,
+        device=device,
+        background_estimator=background_estimator,
+    )
+
+
+def aperture_uncertainty(
+    observations: Sequence[Observation],
+    result: MapResult,
+    aperture_weights: Tensor,
+    *,
+    resample: ResampleConfig | None = None,
+    kernel: MapResamplingKernel | None = None,
+    pixfrac: float | None = None,
+    semantics: MapValueSemantics | None = None,
+    spatial_tile_hw: tuple[int, int] | None = None,
+    surface_brightness_area_scaling: bool | None = None,
+    device: torch.device | str | None = None,
+) -> MapApertureUncertainty:
+    """Clean alias for ``evaluate_image_plane_aperture_uncertainty``."""
+    r_cfg = resample or ResampleConfig()
+    return evaluate_image_plane_aperture_uncertainty(
+        observations,
+        result,
+        aperture_weights,
+        resampling_kernel=kernel if kernel is not None else r_cfg.kernel,
+        value_semantics=semantics if semantics is not None else r_cfg.semantics,
+        drizzle_pixfrac=pixfrac if pixfrac is not None else r_cfg.pixfrac,
+        spatial_tile_hw=spatial_tile_hw,
+        surface_brightness_area_scaling=(
+            surface_brightness_area_scaling
+            if surface_brightness_area_scaling is not None
+            else r_cfg.area_scaling
+        ),
+        device=device,
+    )
+

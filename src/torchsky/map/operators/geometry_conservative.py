@@ -6,7 +6,7 @@ import torch
 from torch import Tensor
 
 from .geometry import ConservativePolygonRemapOp
-from .geometry_drizzle import _batch_quad_pixel_areas
+from .geometry_drizzle import _batch_quads_pixel_areas
 
 
 def _exact_conservative_polygon_project(
@@ -16,6 +16,7 @@ def _exact_conservative_polygon_project(
     target,
     *,
     value_semantics: str,
+    drizzle_pixfrac: float = 1.0,
     pixel_area_sr_map_fn,
     representative_pixel_area_fn,
     chunk_pixels: int,
@@ -54,7 +55,7 @@ def _exact_conservative_polygon_project(
     )
     width = int(target.shape[1])
     height = int(target.shape[0])
-    half = 0.5
+    half = 0.5 * max(float(drizzle_pixfrac), 1e-6)
 
     for start in range(0, int(xs.numel()), int(chunk_pixels)):
         end = min(start + int(chunk_pixels), int(xs.numel()))
@@ -84,48 +85,70 @@ def _exact_conservative_polygon_project(
         numer_chunk = numer_chunk[finite]
         weight_chunk = weight_chunk[finite]
 
-        for idx in range(int(x_tgt.shape[0])):
-            quad_x = x_tgt[idx]
-            quad_y = y_tgt[idx]
-            area = 0.5 * torch.abs(
+        for quad_start in range(0, int(x_tgt.shape[0]), 32_768):
+            quad_end = min(quad_start + 32_768, int(x_tgt.shape[0]))
+            quad_x = x_tgt[quad_start:quad_end]
+            quad_y = y_tgt[quad_start:quad_end]
+            quad_numer = numer_chunk[quad_start:quad_end]
+            quad_weight = weight_chunk[quad_start:quad_end]
+            areas = 0.5 * torch.abs(
                 torch.sum(
-                    quad_x * torch.roll(quad_y, shifts=-1)
-                    - torch.roll(quad_x, shifts=-1) * quad_y
+                    quad_x * torch.roll(quad_y, shifts=-1, dims=1)
+                    - torch.roll(quad_x, shifts=-1, dims=1) * quad_y,
+                    dim=1,
                 )
             )
-            if not (area > 0.0):
+            min_x = torch.ceil(quad_x.min(dim=1).values - 0.5).to(torch.int64)
+            max_x = torch.floor(quad_x.max(dim=1).values + 0.5).to(torch.int64)
+            min_y = torch.ceil(quad_y.min(dim=1).values - 0.5).to(torch.int64)
+            max_y = torch.floor(quad_y.max(dim=1).values + 0.5).to(torch.int64)
+            min_x.clamp_(min=0)
+            max_x.clamp_(max=width - 1)
+            min_y.clamp_(min=0)
+            max_y.clamp_(max=height - 1)
+            nx = (max_x - min_x + 1).clamp(min=0)
+            ny = (max_y - min_y + 1).clamp(min=0)
+            counts = torch.where(areas > 0.0, nx * ny, torch.zeros_like(nx))
+            pair_count = int(counts.sum().item())
+            if pair_count == 0:
                 continue
-            min_x = max(int(torch.ceil(quad_x.min() - 0.5).item()), 0)
-            max_x = min(int(torch.floor(quad_x.max() + 0.5).item()), width - 1)
-            min_y = max(int(torch.ceil(quad_y.min() - 0.5).item()), 0)
-            max_y = min(int(torch.floor(quad_y.max() + 0.5).item()), height - 1)
-            if min_x > max_x or min_y > max_y:
-                continue
-            cy = torch.arange(
-                min_y, max_y + 1, dtype=torch.float64, device=image.device
+            owners = torch.repeat_interleave(
+                torch.arange(quad_x.shape[0], device=image.device), counts
             )
-            cx = torch.arange(
-                min_x, max_x + 1, dtype=torch.float64, device=image.device
+            starts = torch.cumsum(counts, dim=0) - counts
+            local = torch.arange(
+                pair_count, device=image.device
+            ) - torch.repeat_interleave(starts, counts)
+            owner_nx = nx[owners]
+            center_x = min_x[owners] + torch.remainder(local, owner_nx)
+            center_y = min_y[owners] + torch.div(
+                local, owner_nx, rounding_mode="floor"
             )
-            gy, gx = torch.meshgrid(cy, cx, indexing="ij")
-            centers = torch.stack((gx.reshape(-1), gy.reshape(-1)), dim=-1)
-            overlaps = _batch_quad_pixel_areas(quad_x, quad_y, centers)
-            valid = overlaps > 0.0
-            if not valid.any():
+            centers = torch.stack((center_x, center_y), dim=1).to(torch.float64)
+            overlaps = _batch_quads_pixel_areas(
+                quad_x[owners], quad_y[owners], centers
+            )
+            overlap_valid = overlaps > 0.0
+            if not bool(overlap_valid.any()):
                 continue
-            vc = centers[valid]
-            vo = overlaps[valid]
-            i_idx = (
-                vc[:, 1].to(dtype=torch.int64) * width + vc[:, 0].to(dtype=torch.int64)
-            ).to(dtype=torch.int64)
-            c_coeff = (vo / area).to(dtype=torch.float32)
-            flat_numer.scatter_add_(0, i_idx, numer_chunk[idx] * c_coeff)
-            flat_weight.scatter_add_(0, i_idx, weight_chunk[idx] * c_coeff)
+            owners = owners[overlap_valid]
+            center_x = center_x[overlap_valid]
+            center_y = center_y[overlap_valid]
+            output_index = center_y * width + center_x
+            coefficients = (overlaps[overlap_valid] / areas[owners]).to(
+                dtype=torch.float32
+            )
+            flat_numer.scatter_add_(
+                0, output_index, quad_numer[owners] * coefficients
+            )
+            flat_weight.scatter_add_(
+                0, output_index, quad_weight[owners] * coefficients
+            )
             if flat_variance_weight is not None:
                 flat_variance_weight.scatter_add_(
                     0,
-                    i_idx,
-                    weight_chunk[idx] * torch.square(c_coeff),
+                    output_index,
+                    quad_weight[owners] * torch.square(coefficients),
                 )
 
     numer = flat_numer.reshape(target.shape)
@@ -151,6 +174,7 @@ def conservative_polygon_project(
     target,
     *,
     value_semantics: str,
+    drizzle_pixfrac: float = 1.0,
     pixel_area_sr_map_fn,
     representative_pixel_area_fn,
     chunk_pixels: int,
@@ -168,6 +192,7 @@ def conservative_polygon_project(
         source_wcs,
         target,
         value_semantics=value_semantics,
+        drizzle_pixfrac=drizzle_pixfrac,
         pixel_area_sr_map_fn=pixel_area_sr_map_fn,
         representative_pixel_area_fn=representative_pixel_area_fn,
         chunk_pixels=chunk_pixels,

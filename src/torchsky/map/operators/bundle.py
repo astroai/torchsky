@@ -79,7 +79,9 @@ def geometry_op_for_kernel(kernel: str) -> GeometryOp:
         "nearest",
         "bilinear",
         "bicubic",
+        "lanczos2",
         "lanczos3",
+        "lanczos4",
         "lanczos5",
         "mitchell_netravali",
         "catmull_rom",
@@ -89,7 +91,14 @@ def geometry_op_for_kernel(kernel: str) -> GeometryOp:
         return ExactDrizzleGeometryOp()
     if kernel == "conservative_polygon":
         return ConservativePolygonRemapOp()
-    if kernel in {"splat_point", "splat_box"}:
+    if kernel in {
+        "splat_point",
+        "splat_box",
+        "drizzle_turbo",
+        "drizzle_gaussian",
+        "drizzle_lanczos2",
+        "drizzle_lanczos3",
+    }:
         return ForwardSplatGeometryOp()
     if kernel in {
         "fft_shift",
@@ -166,14 +175,33 @@ def image_observation_operator_bundle(
         getattr(observation, name, None) is not None
         for name in ("sky_background", "instrument_background", "detector_background")
     )
-    has_radiometry = float(getattr(observation, "photometric_scale", 1.0)) != 1.0
+    has_radiometry = float(getattr(observation, "photometric_scale", 1.0)) != 1.0 or any(
+        getattr(observation, name, None) is not None
+        for name in ("flux_scale_keyword", "exposure_time_keyword", "gain_keyword")
+    )
     has_mask_weight = float(getattr(observation, "weight", 1.0)) != 1.0 or any(
         getattr(observation, name, None) is not None
-        for name in ("weight_path", "mask_path", "primary_beam_path")
-    )
+        for name in (
+            "weight_path",
+            "mask_path",
+            "primary_beam_path",
+            "weight_map",
+            "mask",
+            "primary_beam",
+            "var_poisson",
+            "var_rnoise",
+            "var_flat",
+            "weight_thresh",
+        )
+    ) or str(getattr(observation, "weight_type", "weight")) != "weight"
     has_noise = (
         getattr(observation, "weight_path", None) is not None
+        or getattr(observation, "weight_map", None) is not None
+        or getattr(observation, "var_poisson", None) is not None
+        or getattr(observation, "var_rnoise", None) is not None
+        or getattr(observation, "var_flat", None) is not None
         or bool(getattr(observation, "weight_is_inverse_variance", False))
+        or str(getattr(observation, "weight_type", "weight")) in {"ivm", "rms", "variance", "background"}
     )
     return ObservationOperatorBundle(
         geometry=geometry_op_for_kernel(resampling_kernel),

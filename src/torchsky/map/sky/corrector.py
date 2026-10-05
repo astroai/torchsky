@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from .estimator import MeshSkyEstimator
+from .polynomial import CompactPolynomialSkyModel, PolynomialSkyModel
 
 
 class _CompactDifferenceModel(Protocol):
@@ -44,17 +45,56 @@ def _valid_pixels(
     return valid
 
 
-def _overlap_edges(valid: Sequence[Tensor]) -> list[tuple[int, int, Tensor, int]]:
-    edges: list[tuple[int, int, Tensor, int]] = []
-    # ponytail: O(n^2) is bounded for one exposure group; use a footprint index
-    # before applying this to survey-wide plate graphs.
+def _support_bbox(mask_2d: Tensor) -> tuple[int, int, int, int] | None:
+    row_any = mask_2d.any(dim=1)
+    if not bool(row_any.any()):
+        return None
+    col_any = mask_2d.any(dim=0)
+    rows = torch.nonzero(row_any, as_tuple=False).squeeze(-1)
+    cols = torch.nonzero(col_any, as_tuple=False).squeeze(-1)
+    return (
+        int(rows[0].item()),
+        int(rows[-1].item()) + 1,
+        int(cols[0].item()),
+        int(cols[-1].item()) + 1,
+    )
+
+
+def _overlap_edges_with_bboxes(
+    valid: Sequence[Tensor],
+) -> list[tuple[int, int, Tensor, int, tuple[int, int, int, int]]]:
+    bboxes = [_support_bbox(v) for v in valid]
+    edges: list[tuple[int, int, Tensor, int, tuple[int, int, int, int]]] = []
     for left in range(len(valid)):
+        box_l = bboxes[left]
+        if box_l is None:
+            continue
+        ly0, ly1, lx0, lx1 = box_l
         for right in range(left + 1, len(valid)):
-            overlap = valid[left] & valid[right]
-            count = int(overlap.sum().item())
+            box_r = bboxes[right]
+            if box_r is None:
+                continue
+            ry0, ry1, rx0, rx1 = box_r
+            iy0 = max(ly0, ry0)
+            iy1 = min(ly1, ry1)
+            ix0 = max(lx0, rx0)
+            ix1 = min(lx1, rx1)
+            if iy1 <= iy0 or ix1 <= ix0:
+                continue
+            sub_overlap = valid[left][iy0:iy1, ix0:ix1] & valid[right][iy0:iy1, ix0:ix1]
+            count = int(sub_overlap.sum().item())
             if count > 0:
-                edges.append((left, right, overlap, count))
+                overlap = torch.zeros_like(valid[left], dtype=torch.bool)
+                overlap[iy0:iy1, ix0:ix1] = sub_overlap
+                edges.append((left, right, overlap, count, (iy0, iy1, ix0, ix1)))
     return edges
+
+
+def _overlap_edges(valid: Sequence[Tensor]) -> list[tuple[int, int, Tensor, int]]:
+    return [
+        (left, right, overlap, count)
+        for left, right, overlap, count, _ in _overlap_edges_with_bboxes(valid)
+    ]
 
 
 def _require_anchor_connected(
@@ -120,25 +160,87 @@ def _solve_anchored_graph(
     )
 
 
+def _fit_planar_coefficients_on_bbox(
+    diff_sub: Tensor,
+    support_sub: Tensor,
+    *,
+    full_shape: tuple[int, int],
+    bbox: tuple[int, int, int, int],
+) -> Tensor:
+    """Fit Chebyshev order-1 plane [c0, cx, cy] on a supported bbox slice."""
+    height, width = int(full_shape[0]), int(full_shape[1])
+    iy0, iy1, ix0, ix1 = bbox
+    device = diff_sub.device
+    dtype = torch.float32 if device.type == "mps" else torch.float64
+    ys, xs = torch.nonzero(support_sub, as_tuple=True)
+    vals = diff_sub[ys, xs].to(dtype=dtype)
+    if vals.numel() == 0:
+        return torch.zeros(3, device=device, dtype=diff_sub.dtype)
+    med = torch.median(vals)
+    abs_dev = torch.abs(vals - med)
+    mad = torch.median(abs_dev)
+    sigma = 1.482602218505602 * mad
+    if float(sigma.item()) > 1e-12:
+        u = abs_dev / (1.345 * sigma)
+        w = torch.where(u <= 1.0, torch.ones_like(u), 1.0 / u)
+    else:
+        w = torch.ones_like(vals)
+    if vals.numel() < 3:
+        out = torch.zeros(3, device=device, dtype=diff_sub.dtype)
+        out[0] = med.to(dtype=diff_sub.dtype)
+        return out
+    gx = (2.0 * (xs.to(dtype=dtype) + float(ix0)) / max(width - 1, 1)) - 1.0
+    gy = (2.0 * (ys.to(dtype=dtype) + float(iy0)) / max(height - 1, 1)) - 1.0
+    basis = torch.stack((torch.ones_like(gx), gx, gy), dim=-1)
+    sqrt_w = torch.sqrt(w).unsqueeze(-1)
+    sol = torch.linalg.lstsq(
+        basis * sqrt_w,
+        (vals * sqrt_w.squeeze(-1)).unsqueeze(-1),
+        rcond=None,
+    ).solution.squeeze(-1)
+    if not bool(torch.isfinite(sol).all()):
+        out = torch.zeros(3, device=device, dtype=diff_sub.dtype)
+        out[0] = med.to(dtype=diff_sub.dtype)
+        return out
+    return sol.to(dtype=diff_sub.dtype)
+
+
 class CrossExposureSkyCorrector:
     """Rectify overlapping exposures with an anchored weighted graph solve.
 
     Pairwise differences are measured only where both projected exposures have
     valid support. Observation zero is the explicit gauge anchor. ``correct``
-    fits a smooth difference plane for every overlap edge and solves the same
-    graph at every output pixel, preserving structure shared by the exposures.
+    fits a smooth difference model (mesh, planar ``Ax + By + C``, or constant
+    offset) for every overlap edge and solves the anchored graph, preserving
+    structure shared by the exposures.
     """
 
     def __init__(
         self,
         estimator: Callable[..., Tensor] | None = None,
+        *,
+        mode: str = "mesh",
+        mesh_size: int = 128,
+        regularization: float = 1e-6,
     ) -> None:
+        if mode not in ("mesh", "constant", "planar"):
+            raise ValueError(
+                f"unknown CrossExposureSkyCorrector mode {mode!r}; "
+                "choose from 'mesh', 'constant', 'planar'"
+            )
         self._estimator = estimator
+        self.mode = mode
+        self.mesh_size = int(mesh_size)
+        self.regularization = float(regularization)
 
     def _get_estimator(self) -> Callable[..., Tensor]:
         if self._estimator is not None:
             return self._estimator
-        return MeshSkyEstimator(block_size=128, statistic="median")
+        if self.mode == "constant":
+            return PolynomialSkyModel(order=0, statistic="huber")
+        if self.mode == "planar":
+            return PolynomialSkyModel(order=1, statistic="huber")
+        return MeshSkyEstimator(block_size=self.mesh_size, statistic="median")
 
     def fit_offsets(
         self,
@@ -149,17 +251,52 @@ class CrossExposureSkyCorrector:
         if not images:
             return torch.empty(0)
         valid = _valid_pixels(images, masks)
-        edges = _overlap_edges(valid)
+        edges_bbox = _overlap_edges_with_bboxes(valid)
+        edges = [(left, right, ov, c) for left, right, ov, c, _ in edges_bbox]
         _require_anchor_connected(len(images), edges)
         if len(images) == 1:
             return images[0].new_zeros(1)
         differences = torch.stack(
             [
-                torch.median((images[right] - images[left])[overlap])
-                for left, right, overlap, _ in edges
+                torch.median(
+                    (
+                        images[right][iy0:iy1, ix0:ix1]
+                        - images[left][iy0:iy1, ix0:ix1]
+                    )[ov[iy0:iy1, ix0:ix1]]
+                )
+                for left, right, ov, _, (iy0, iy1, ix0, ix1) in edges_bbox
             ]
         )
         return _solve_anchored_graph(len(images), edges, differences)
+
+    def fit_planes(
+        self,
+        images: list[Tensor],
+        masks: list[Tensor | None] | None = None,
+    ) -> Tensor:
+        """Return (N, 3) Chebyshev order-1 plane coefficients [c0, cx, cy] relative to obs 0."""
+        if not images:
+            return torch.empty((0, 3))
+        valid = _valid_pixels(images, masks)
+        edges_bbox = _overlap_edges_with_bboxes(valid)
+        edges = [(left, right, ov, c) for left, right, ov, c, _ in edges_bbox]
+        _require_anchor_connected(len(images), edges)
+        if len(images) == 1:
+            return images[0].new_zeros((1, 3))
+        full_shape = (int(images[0].shape[0]), int(images[0].shape[1]))
+        edge_coeffs = torch.stack(
+            [
+                _fit_planar_coefficients_on_bbox(
+                    images[right][iy0:iy1, ix0:ix1] - images[left][iy0:iy1, ix0:ix1],
+                    ov[iy0:iy1, ix0:ix1],
+                    full_shape=full_shape,
+                    bbox=(iy0, iy1, ix0, ix1),
+                )
+                for left, right, ov, _, (iy0, iy1, ix0, ix1) in edges_bbox
+            ],
+            dim=0,
+        )
+        return _solve_anchored_graph(len(images), edges, edge_coeffs)
 
     def fit_difference_model(
         self,
@@ -214,6 +351,24 @@ class CrossExposureSkyCorrector:
         """Subtract smooth overlap-difference corrections from all exposures."""
         if not images:
             return []
+        if self._estimator is None and self.mode == "constant":
+            offsets = self.fit_offsets(images, masks)
+            return [
+                image - offsets[index].to(dtype=image.dtype)
+                for index, image in enumerate(images)
+            ]
+        if self._estimator is None and self.mode == "planar":
+            coeffs = self.fit_planes(images, masks)
+            h, w = int(images[0].shape[0]), int(images[0].shape[1])
+            out: list[Tensor] = []
+            for index, image in enumerate(images):
+                plane = CompactPolynomialSkyModel(
+                    coefficients=coeffs[index].to(dtype=image.dtype),
+                    image_shape=(h, w),
+                    order=1,
+                ).render_window(0, h, 0, w)
+                out.append(image - plane)
+            return out
         valid = _valid_pixels(images, masks)
         edges = _overlap_edges(valid)
         _require_anchor_connected(len(images), edges)
@@ -232,3 +387,14 @@ class CrossExposureSkyCorrector:
             len(images), edges, difference_models
         )
         return [image - corrections[index] for index, image in enumerate(images)]
+
+    def fit_corrections(
+        self,
+        images: list[Tensor],
+        masks: list[Tensor | None] | None = None,
+    ) -> list[Tensor]:
+        """Return additive 2D sky correction maps for each exposure."""
+        if not images:
+            return []
+        corrected = self.correct(images, masks)
+        return [img - corr for img, corr in zip(images, corrected)]

@@ -16,7 +16,7 @@ from .operators.pixel_area import (
     representative_pixel_area_sr,
     wrapped_delta_ra_deg,
 )
-from .operators.execution import source_bbox_on_target
+from .operators.execution import source_bbox_on_target, wcs_has_distortion
 from .operators.config import MapValueSemantics
 
 _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS = 1_500_000
@@ -268,11 +268,15 @@ def _window_large_tan_target(
     target_header: dict,
     value_semantics: MapValueSemantics,
 ) -> tuple[_PreparedImagePlaneTarget | None, tuple[int, int, int, int] | None]:
-    if value_semantics != "surface_brightness":
+    if wcs_has_distortion(target.wcs):
         return target, None
     min_pixels = _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
     edge_samples = _LARGE_TAN_WINDOWING_EDGE_SAMPLES
-    margin_pixels = _LARGE_TAN_WINDOWING_MARGIN_PIXELS
+    margin_pixels = (
+        max(_LARGE_TAN_WINDOWING_MARGIN_PIXELS, 6)
+        if value_semantics == "flux"
+        else _LARGE_TAN_WINDOWING_MARGIN_PIXELS
+    )
 
     if int(target.shape[0]) * int(target.shape[1]) < min_pixels:
         return target, None

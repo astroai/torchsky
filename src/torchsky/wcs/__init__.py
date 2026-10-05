@@ -5,7 +5,7 @@ from .alignment import (
     fit_affine_2d,
     fit_sky_affine,
 )
-from .core import WCS as WCS
+from .core import DistortionLookupTable as DistortionLookupTable, WCS as WCS
 from .detector_astrometry import (
     AffineFreeResidualGrid2D,
     DetectorToSkyTransform,
@@ -78,6 +78,7 @@ __all__ = [
     "CoupledTabularLookupWCS",
     "DetectorToSkyTransform",
     "DetectorToTangentTransform",
+    "DistortionLookupTable",
     "EarthOrientation",
     "FrozenDetectorEpochTables",
     "GWCSGridSamplingResult",

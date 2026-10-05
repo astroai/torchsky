@@ -66,6 +66,23 @@ def test_top_level_namespaces_expose_science_modules() -> None:
 
 def test_map_root_keeps_workflow_api_small() -> None:
     assert set(torchsky.map.__all__) == {
+        "Observation",
+        "Target",
+        "CubeTarget",
+        "ResampleConfig",
+        "SkyConfig",
+        "OutlierConfig",
+        "StackConfig",
+        "plan",
+        "plan_cube",
+        "resample",
+        "blot",
+        "detect_outliers",
+        "match_sky",
+        "coadd",
+        "coadd_multiband",
+        "coadd_cube",
+        "aperture_uncertainty",
         "coadd_image_plane",
         "coadd_image_plane_cube",
         "coadd_image_plane_multiband",

@@ -49,9 +49,26 @@ def keys_cubic_weight(x: Tensor, *, b: float, c: float) -> Tensor:
     )
 
 
+_CUSTOM_LANCZOS_KERNELS = frozenset({"lanczos2", "lanczos3", "lanczos4", "lanczos5"})
+_CUSTOM_SEPARABLE_KERNELS = frozenset(
+    {
+        "lanczos2",
+        "lanczos3",
+        "lanczos4",
+        "lanczos5",
+        "mitchell_netravali",
+        "catmull_rom",
+    }
+)
+
+
 def kernel_support(kernel: MapResamplingKernel) -> int:
+    if kernel == "lanczos2":
+        return 2
     if kernel == "lanczos3":
         return 3
+    if kernel == "lanczos4":
+        return 4
     if kernel == "lanczos5":
         return 5
     if kernel in {"mitchell_netravali", "catmull_rom"}:
@@ -60,8 +77,12 @@ def kernel_support(kernel: MapResamplingKernel) -> int:
 
 
 def kernel_weight(kernel: MapResamplingKernel, x: Tensor) -> Tensor:
+    if kernel == "lanczos2":
+        return lanczos_weight(x, a=2)
     if kernel == "lanczos3":
         return lanczos_weight(x, a=3)
+    if kernel == "lanczos4":
+        return lanczos_weight(x, a=4)
     if kernel == "lanczos5":
         return lanczos_weight(x, a=5)
     if kernel == "mitchell_netravali":
@@ -139,7 +160,7 @@ def custom_separable_sample(
     dy = y_batch.unsqueeze(-1) - ys.to(dtype=work.dtype)
     wx = kernel_weight(kernel, dx)
     wy = kernel_weight(kernel, dy)
-    if kernel in {"lanczos3", "lanczos5"}:
+    if kernel in _CUSTOM_LANCZOS_KERNELS:
         wx = _normalize_lanczos_coefficients(wx)
         wy = _normalize_lanczos_coefficients(wy)
 
@@ -180,7 +201,7 @@ def sample_image_plane(
 ) -> Tensor:
     if image.ndim != 2 or not image.is_floating_point():
         raise ValueError("image-plane sampling expects a floating 2D image")
-    if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
+    if kernel in _CUSTOM_SEPARABLE_KERNELS:
         return custom_separable_sample(
             image,
             x_src=x_src,
@@ -210,7 +231,7 @@ def sample_image_plane_channels(
 ) -> Tensor:
     if image.ndim != 3 or not image.is_floating_point():
         raise ValueError("channel sampling expects floating [C, H, W] input")
-    if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
+    if kernel in _CUSTOM_SEPARABLE_KERNELS:
         return custom_separable_sample(
             image,
             x_src=x_src,
@@ -277,7 +298,7 @@ def sample_image_plane_batched_channels(
             grid=grid,
             kernel=kernel,
         )
-    if kernel in {"lanczos3", "lanczos5", "mitchell_netravali", "catmull_rom"}:
+    if kernel in _CUSTOM_SEPARABLE_KERNELS:
         return custom_separable_sample(
             image,
             x_src=x_src,
@@ -330,12 +351,7 @@ def _axis_interpolation_coefficients(
             b=0.0,
             c=0.75,
         )
-    elif kernel in {
-        "lanczos3",
-        "lanczos5",
-        "mitchell_netravali",
-        "catmull_rom",
-    }:
+    elif kernel in _CUSTOM_SEPARABLE_KERNELS:
         support = kernel_support(kernel)
         base = torch.floor(safe_coordinate).to(dtype=torch.int64)
         offsets = torch.arange(
@@ -349,7 +365,7 @@ def _axis_interpolation_coefficients(
             kernel,
             safe_coordinate.unsqueeze(-1) - indices.to(dtype=coordinate.dtype),
         )
-        if kernel in {"lanczos3", "lanczos5"}:
+        if kernel in _CUSTOM_LANCZOS_KERNELS:
             coefficients = _normalize_lanczos_coefficients(coefficients)
     else:
         raise ValueError(
@@ -499,15 +515,174 @@ def sample_image_plane_diagonal_variance(
     return torch.sum(sampled_variance * torch.square(coefficients), dim=(-1, -2))
 
 
+def _wcs_has_any_distortion(wcs: WCS) -> bool:
+    return (
+        getattr(wcs, "sip", None) is not None
+        or getattr(wcs, "cpdis1", None) is not None
+        or getattr(wcs, "cpdis2", None) is not None
+        or getattr(wcs, "det2im1", None) is not None
+        or getattr(wcs, "det2im2", None) is not None
+        or bool(getattr(wcs, "_is_tpv", False))
+        or bool(getattr(wcs, "_is_tnx", False))
+        or bool(getattr(wcs, "_is_zpx", False))
+    )
+
+
+def _tan_homography_factors(wcs: WCS) -> tuple[Tensor, Tensor] | None:
+    if not bool(getattr(wcs, "_is_tan", False)) or _wcs_has_any_distortion(wcs):
+        return None
+    cd = wcs.cd.detach().to(device="cpu", dtype=torch.float64)
+    det_cd = float(torch.linalg.det(cd).item())
+    if not math.isfinite(det_cd) or abs(det_cd) < 1e-20:
+        return None
+    cd_inv = torch.linalg.inv(cd)
+    crpix = wcs.crpix.detach().to(device="cpu", dtype=torch.float64)
+    p0_x = float(crpix[0].item()) - 1.0
+    p0_y = float(crpix[1].item()) - 1.0
+    px = torch.tensor(
+        [
+            p0_x,
+            p0_x + float(cd_inv[0, 0].item()),
+            p0_x + float(cd_inv[0, 1].item()),
+        ],
+        dtype=torch.float64,
+        device=wcs.device,
+    )
+    py = torch.tensor(
+        [
+            p0_y,
+            p0_y + float(cd_inv[1, 0].item()),
+            p0_y + float(cd_inv[1, 1].item()),
+        ],
+        dtype=torch.float64,
+        device=wcs.device,
+    )
+    ra_deg, dec_deg = wcs.pixel_to_world(px, py)
+    ra = torch.deg2rad(ra_deg.detach().to(device="cpu", dtype=torch.float64))
+    dec = torch.deg2rad(dec_deg.detach().to(device="cpu", dtype=torch.float64))
+    if not bool(torch.isfinite(ra).all() and torch.isfinite(dec).all()):
+        return None
+    cos_d = torch.cos(dec)
+    vecs = torch.stack(
+        (cos_d * torch.cos(ra), cos_d * torch.sin(ra), torch.sin(dec)),
+        dim=0,
+    )  # (3, 3) where columns are points 0, 1, 2
+    s = math.pi / 180.0
+    scale = math.sqrt(1.0 + s * s)
+    r0 = vecs[:, 0]
+    q1 = (scale * vecs[:, 1] - r0) / s
+    q2 = (scale * vecs[:, 2] - r0) / s
+    q_mat = torch.stack((q1, q2, r0), dim=1)  # (3, 3)
+
+    s_cd = s * cd
+    shift = torch.tensor([1.0 - float(crpix[0].item()), 1.0 - float(crpix[1].item())], dtype=torch.float64)
+    trans = s_cd @ shift
+    a_mat = torch.eye(3, dtype=torch.float64)
+    a_mat[:2, :2] = s_cd
+    a_mat[:2, 2] = trans
+    return q_mat, a_mat
+
+
+def infer_tan_projective_homography(
+    source_wcs: WCS,
+    target_wcs: WCS,
+    shape_hw: tuple[int, int],
+) -> Tensor | None:
+    """Return exact 3x3 projective homography H from target TAN pixels to source TAN pixels."""
+    if getattr(source_wcs, "celestial_frame", "ICRS") != getattr(
+        target_wcs, "celestial_frame", "ICRS"
+    ) or getattr(source_wcs, "celestial_equinox", None) != getattr(
+        target_wcs, "celestial_equinox", None
+    ):
+        return None
+    src_factors = _tan_homography_factors(source_wcs)
+    tgt_factors = _tan_homography_factors(target_wcs)
+    if src_factors is None or tgt_factors is None:
+        return None
+    q_src, a_src = src_factors
+    q_tgt, a_tgt = tgt_factors
+    if (
+        float(source_wcs.alpha0) == float(target_wcs.alpha0)
+        and float(source_wcs.delta0) == float(target_wcs.delta0)
+        and float(getattr(source_wcs, "phi_p", 180.0))
+        == float(getattr(target_wcs, "phi_p", 180.0))
+    ):
+        q_rot = torch.eye(3, dtype=torch.float64)
+    else:
+        q_rot = q_src.T @ q_tgt
+    h_mat = torch.linalg.solve(a_src, q_rot @ a_tgt)
+    if not bool(torch.isfinite(h_mat).all()):
+        return None
+    if abs(float(h_mat[2, 2].item())) > 1e-12:
+        h_mat = h_mat / h_mat[2, 2]
+    rounded = torch.round(h_mat)
+    h_mat = torch.where(torch.abs(h_mat - rounded) < 1e-13, rounded, h_mat)
+
+    h, w = int(shape_hw[0]), int(shape_hw[1])
+    jx_cpu = torch.tensor(
+        [0.0, float(w - 1), float(w - 1) * 0.5, 0.0, float(w - 1)],
+        dtype=torch.float64,
+    )
+    iy_cpu = torch.tensor(
+        [0.0, 0.0, float(h - 1) * 0.5, float(h - 1), float(h - 1)],
+        dtype=torch.float64,
+    )
+    denom = h_mat[2, 0] * jx_cpu + h_mat[2, 1] * iy_cpu + h_mat[2, 2]
+    if bool((denom <= 1e-3).any()):
+        return None
+    xh = (h_mat[0, 0] * jx_cpu + h_mat[0, 1] * iy_cpu + h_mat[0, 2]) / denom
+    yh = (h_mat[1, 0] * jx_cpu + h_mat[1, 1] * iy_cpu + h_mat[1, 2]) / denom
+
+    ra, dec = target_wcs.pixel_to_world(
+        jx_cpu.to(device=target_wcs.device),
+        iy_cpu.to(device=target_wcs.device),
+    )
+    xs, ys = source_wcs.world_to_pixel(
+        ra.to(device=source_wcs.device),
+        dec.to(device=source_wcs.device),
+    )
+    xs_cpu = xs.detach().to(device="cpu", dtype=torch.float64)
+    ys_cpu = ys.detach().to(device="cpu", dtype=torch.float64)
+    if not bool(torch.isfinite(xs_cpu).all() and torch.isfinite(ys_cpu).all()):
+        return None
+    tol = (
+        2e-3
+        if (source_wcs.device.type == "mps" or target_wcs.device.type == "mps")
+        else 1e-5
+    )
+    if float(torch.max(torch.abs(xh - xs_cpu)).item()) > tol:
+        return None
+    if float(torch.max(torch.abs(yh - ys_cpu)).item()) > tol:
+        return None
+    return h_mat
+
+
+def evaluate_tan_projective_homography(
+    homography: Tensor,
+    height: int,
+    width: int,
+    *,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    """Evaluate 3x3 projective homography on [0..height-1] x [0..width-1] using 1D outer sums."""
+    compute_dtype = torch.float32 if device.type == "mps" else torch.float64
+    h_mat = homography.to(device=device, dtype=compute_dtype)
+    x_row = torch.arange(width, dtype=compute_dtype, device=device).unsqueeze(0)
+    y_col = torch.arange(height, dtype=compute_dtype, device=device).unsqueeze(1)
+    denom = (h_mat[2, 0] * x_row) + (h_mat[2, 1] * y_col + h_mat[2, 2])
+    inv_denom = torch.reciprocal(denom)
+    x_src = ((h_mat[0, 0] * x_row) + (h_mat[0, 1] * y_col + h_mat[0, 2])) * inv_denom
+    y_src = ((h_mat[1, 0] * x_row) + (h_mat[1, 1] * y_col + h_mat[1, 2])) * inv_denom
+    return x_src, y_src
+
+
 def infer_fft_translation_shift_yx(
     source_wcs: WCS,
     target_wcs: WCS,
     shape_hw: tuple[int, int],
 ) -> tuple[float, float]:
     """Infer ``(shift_y, shift_x)`` for translation FFT resampling."""
-    if getattr(source_wcs, "sip", None) is not None or bool(
-        getattr(source_wcs, "_is_tpv", False)
-    ):
+    if _wcs_has_any_distortion(source_wcs):
         raise ValueError(
             "fft_shift requires a linear astrometric frame (no SIP or TPV on the source WCS)"
         )
@@ -548,9 +723,7 @@ def infer_diagonal_scale_shift_pixel_map(
     shape_hw: tuple[int, int],
 ) -> tuple[float, float, float, float]:
     """Infer ``(scale_x, shift_x, scale_y, shift_y)`` for a diagonal affine map."""
-    if getattr(source_wcs, "sip", None) is not None or bool(
-        getattr(source_wcs, "_is_tpv", False)
-    ):
+    if _wcs_has_any_distortion(source_wcs):
         raise ValueError(
             "fft_diagonal_affine requires a linear astrometric frame (no SIP or TPV on source)"
         )
@@ -601,9 +774,7 @@ def infer_linear_affine_pixel_map(
     shape_hw: tuple[int, int],
 ) -> tuple[float, float, float, float, float, float]:
     """Infer a full 2x2 affine source-pixel map from target pixel coordinates."""
-    if getattr(source_wcs, "sip", None) is not None or bool(
-        getattr(source_wcs, "_is_tpv", False)
-    ):
+    if _wcs_has_any_distortion(source_wcs):
         raise ValueError(
             "periodic_linear_affine requires a linear astrometric frame (no SIP or TPV on source)"
         )

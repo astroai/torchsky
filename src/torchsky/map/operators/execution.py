@@ -58,6 +58,28 @@ def stack_inputs_from_projected_observation(
     """Convert projected numerator/weight tensors into stack inputs."""
     if stacking_method == "weighted_mean":
         return projected_numer, projected_weight
+    if stacking_method == "chi2":
+        chi2_weight = projected_weight
+        if value_semantics == "flux":
+            if pixel_area_sr is None:
+                raise RuntimeError("target pixel area is required for flux semantics")
+            chi2_weight = projected_weight / torch.clamp(
+                torch.square(pixel_area_sr),
+                min=torch.finfo(pixel_area_sr.dtype).tiny,
+            )
+        chi2_numer = torch.where(
+            projected_weight > 0.0,
+            torch.square(projected_numer) / projected_weight
+            if value_semantics != "flux"
+            else torch.square(projected_numer)
+            / torch.clamp(
+                projected_weight,
+                min=torch.finfo(projected_weight.dtype).tiny,
+            ),
+            torch.zeros_like(projected_numer),
+        )
+        support = (chi2_weight > 0.0).to(dtype=torch.float32)
+        return chi2_numer, support
     projected_image = torch.where(
         projected_weight > 0.0,
         projected_numer / projected_weight,
@@ -346,16 +368,48 @@ def _overlap_graph_edges(
 ) -> list[tuple[int, int, int]]:
     n_obs, height, width = mapped_weight.shape
     tile_height, tile_width = tile_hw
+    bboxes: list[tuple[int, int, int, int] | None] = []
+    for obs_idx in range(n_obs):
+        by0 = height
+        by1 = 0
+        bx0 = width
+        bx1 = 0
+        for y0 in range(0, height, tile_height):
+            y1 = min(y0 + tile_height, height)
+            for x0 in range(0, width, tile_width):
+                x1 = min(x0 + tile_width, width)
+                tile_valid = mapped_weight[obs_idx, y0:y1, x0:x1] > 0.0
+                if not bool(tile_valid.any()):
+                    continue
+                ys, xs = torch.nonzero(tile_valid, as_tuple=True)
+                by0 = min(by0, y0 + int(ys.min().item()))
+                by1 = max(by1, y0 + int(ys.max().item()) + 1)
+                bx0 = min(bx0, x0 + int(xs.min().item()))
+                bx1 = max(bx1, x0 + int(xs.max().item()) + 1)
+        bboxes.append((by0, by1, bx0, bx1) if (by1 > by0 and bx1 > bx0) else None)
+
     edges: list[tuple[int, int, int]] = []
-    # ponytail: pair testing is O(n^2); replace it with projected-footprint
-    # indexing before using one correction group for survey-wide plate sets.
     for left in range(n_obs):
+        box_l = bboxes[left]
+        if box_l is None:
+            continue
+        ly0, ly1, lx0, lx1 = box_l
         for right in range(left + 1, n_obs):
+            box_r = bboxes[right]
+            if box_r is None:
+                continue
+            ry0, ry1, rx0, rx1 = box_r
+            iy0 = max(ly0, ry0)
+            iy1 = min(ly1, ry1)
+            ix0 = max(lx0, rx0)
+            ix1 = min(lx1, rx1)
+            if iy1 <= iy0 or ix1 <= ix0:
+                continue
             count = 0
-            for y0 in range(0, height, tile_height):
-                for x0 in range(0, width, tile_width):
-                    y1 = min(y0 + tile_height, height)
-                    x1 = min(x0 + tile_width, width)
+            for y0 in range(iy0, iy1, tile_height):
+                for x0 in range(ix0, ix1, tile_width):
+                    y1 = min(y0 + tile_height, iy1)
+                    x1 = min(x0 + tile_width, ix1)
                     overlap = (mapped_weight[left, y0:y1, x0:x1] > 0.0) & (
                         mapped_weight[right, y0:y1, x0:x1] > 0.0
                     )
@@ -993,6 +1047,35 @@ def spilled_sigma_clipped_stack(
     )
 
 
+def _accumulate_slice(
+    numer_slice: Tensor,
+    denom_slice: Tensor,
+    overlap_slice: Tensor,
+    contrib_numer: Tensor,
+    contrib_weight: Tensor,
+    overlap_contrib: Tensor,
+    *,
+    stacking_method: str,
+) -> None:
+    if stacking_method in ("min", "max"):
+        supported = contrib_weight > 0.0
+        if bool(supported.any()):
+            had_support = denom_slice > 0.0
+            combined = (
+                torch.minimum(numer_slice, contrib_numer)
+                if stacking_method == "min"
+                else torch.maximum(numer_slice, contrib_numer)
+            )
+            updated = torch.where(had_support, combined, contrib_numer)
+            numer_slice.copy_(torch.where(supported, updated, numer_slice))
+            denom_slice.add_(contrib_weight)
+            overlap_slice.add_(overlap_contrib)
+        return
+    numer_slice.add_(contrib_numer)
+    denom_slice.add_(contrib_weight)
+    overlap_slice.add_(overlap_contrib)
+
+
 def accumulate_projected_observation(
     numer: Tensor,
     denom: Tensor,
@@ -1018,16 +1101,28 @@ def accumulate_projected_observation(
     if coeffs is None:
         overlap_contrib = projected_overlap
         if target_window is None:
-            numer.add_(contrib_numer)
-            denom.add_(contrib_weight)
-            overlap_count.add_(overlap_contrib)
+            _accumulate_slice(
+                numer,
+                denom,
+                overlap_count,
+                contrib_numer,
+                contrib_weight,
+                overlap_contrib,
+                stacking_method=stacking_method,
+            )
             return
         y0, y1, x0, x1 = target_window
         if y1 <= y0 or x1 <= x0:
             return
-        numer[y0:y1, x0:x1].add_(contrib_numer)
-        denom[y0:y1, x0:x1].add_(contrib_weight)
-        overlap_count[y0:y1, x0:x1].add_(overlap_contrib)
+        _accumulate_slice(
+            numer[y0:y1, x0:x1],
+            denom[y0:y1, x0:x1],
+            overlap_count[y0:y1, x0:x1],
+            contrib_numer,
+            contrib_weight,
+            overlap_contrib,
+            stacking_method=stacking_method,
+        )
         return
     coeffs_t = torch.as_tensor(
         coeffs,
@@ -1039,16 +1134,28 @@ def accumulate_projected_observation(
     denom_contrib = coeffs_t * contrib_weight.unsqueeze(0)
     overlap_contrib = overlap_coeffs * projected_overlap.unsqueeze(0)
     if target_window is None:
-        numer.add_(numer_contrib)
-        denom.add_(denom_contrib)
-        overlap_count.add_(overlap_contrib)
+        _accumulate_slice(
+            numer,
+            denom,
+            overlap_count,
+            numer_contrib,
+            denom_contrib,
+            overlap_contrib,
+            stacking_method=stacking_method,
+        )
         return
     y0, y1, x0, x1 = target_window
     if y1 <= y0 or x1 <= x0:
         return
-    numer[:, y0:y1, x0:x1].add_(numer_contrib)
-    denom[:, y0:y1, x0:x1].add_(denom_contrib)
-    overlap_count[:, y0:y1, x0:x1].add_(overlap_contrib)
+    _accumulate_slice(
+        numer[:, y0:y1, x0:x1],
+        denom[:, y0:y1, x0:x1],
+        overlap_count[:, y0:y1, x0:x1],
+        numer_contrib,
+        denom_contrib,
+        overlap_contrib,
+        stacking_method=stacking_method,
+    )
 
 
 def finalize_projected_stack(
@@ -1072,6 +1179,20 @@ def finalize_projected_stack(
                 "median stacking requires projected image/support buffers"
             )
         return masked_median_stack(median_images, median_support)
+    if stacking_method in ("sum", "min", "max"):
+        coadd = torch.where(
+            denom > 0.0,
+            numer,
+            torch.zeros_like(numer),
+        )
+        return coadd, denom
+    if stacking_method == "chi2":
+        coadd = torch.where(
+            denom > 0.0,
+            torch.sqrt(torch.clamp(numer / denom, min=0.0)),
+            torch.zeros_like(numer),
+        )
+        return coadd, denom
     if stacking_method == "weighted_mean" and value_semantics == "flux":
         if pixel_area_sr is None:
             raise RuntimeError("target pixel area is required for flux semantics")
@@ -1210,6 +1331,7 @@ def project_image_observation_geometry(
             source_wcs,
             target,
             value_semantics=value_semantics,
+            drizzle_pixfrac=drizzle_pixfrac,
             pixel_area_sr_map_fn=pixel_area_sr_map_fn,
             representative_pixel_area_fn=representative_pixel_area_fn,
             chunk_pixels=chunk_pixels,
@@ -1314,4 +1436,13 @@ def is_plain_tan_header(header: Mapping[str, object]) -> bool:
 
 def wcs_has_distortion(wcs) -> bool:
     """Return True when a WCS carries distortion terms unsupported by fast policies."""
-    return getattr(wcs, "sip", None) is not None or bool(getattr(wcs, "_is_tpv", False))
+    return (
+        getattr(wcs, "sip", None) is not None
+        or getattr(wcs, "cpdis1", None) is not None
+        or getattr(wcs, "cpdis2", None) is not None
+        or getattr(wcs, "det2im1", None) is not None
+        or getattr(wcs, "det2im2", None) is not None
+        or bool(getattr(wcs, "_is_tpv", False))
+        or bool(getattr(wcs, "_is_tnx", False))
+        or bool(getattr(wcs, "_is_zpx", False))
+    )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import torch
 from torch import Tensor
@@ -152,15 +152,133 @@ def write_map_product(
     return tuple(name for name, _, _ in planes)
 
 
+def _parse_scamp_head_file(
+    head_path: str | Path,
+    hdu: int | str | None = None,
+) -> dict[str, Any]:
+    """Parse a SCAMP/SWarp ASCII `.head` sidecar file into a header dictionary."""
+    text = Path(head_path).read_text(encoding="utf-8", errors="replace")
+    blocks: list[dict[str, Any]] = []
+    current: dict[str, Any] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("COMMENT", "HISTORY")):
+            continue
+        if line == "END" or line.startswith("END "):
+            blocks.append(current)
+            current = {}
+            continue
+        if "=" not in raw_line:
+            continue
+        key_part, val_part = raw_line.split("=", 1)
+        key = key_part.strip().upper()
+        if not key:
+            continue
+        # Strip inline FITS comment outside quotes
+        val_str = val_part.strip()
+        if val_str.startswith("'"):
+            end_quote = val_str.find("'", 1)
+            if end_quote != -1:
+                current[key] = val_str[1:end_quote].strip()
+                continue
+        if "/" in val_str:
+            val_str = val_str.split("/", 1)[0].strip()
+        if val_str in ("T", "True", "true"):
+            current[key] = True
+        elif val_str in ("F", "False", "false"):
+            current[key] = False
+        else:
+            try:
+                if "." in val_str or "E" in val_str.upper() or "D" in val_str.upper():
+                    current[key] = float(val_str.replace("D", "E").replace("d", "e"))
+                else:
+                    current[key] = int(val_str)
+            except ValueError:
+                current[key] = val_str.strip("'\" ")
+    if current:
+        blocks.append(current)
+    if not blocks:
+        return {}
+    if isinstance(hdu, int) and 0 <= hdu < len(blocks):
+        return blocks[hdu]
+    return blocks[0]
+
+
+def _resolve_observation_sidecar_header(obs: object) -> dict[str, Any]:
+    head_path = getattr(obs, "head_path", None)
+    if head_path is not None:
+        return _parse_scamp_head_file(head_path, getattr(obs, "hdu", None))
+    if bool(getattr(obs, "use_sidecar_head", False)):
+        obs_path = getattr(obs, "path", None)
+        if obs_path is not None:
+            candidate = Path(str(obs_path)).with_suffix(".head")
+            if candidate.is_file():
+                return _parse_scamp_head_file(candidate, getattr(obs, "hdu", None))
+    return {}
+
+
 def read_image_plane_observation(
     path: str,
     hdu: int | str | None,
     device: str,
+    *,
+    read_fn: Callable[..., Any] | None = None,
 ) -> tuple[Tensor, dict]:
     """Load observation image and header, validating shape to be 2D."""
-    image, header = read(path, hdu=hdu, return_header=True, device=device)
+    reader = read if read_fn is None else read_fn
+    image, header = reader(path, hdu=hdu, return_header=True, device=device)
     image = validate_image_plane_2d(image)
     return image, dict(header)
+
+
+def load_observation_image_and_header(
+    obs: object,
+    device: str | torch.device,
+    *,
+    read_fn: Callable[..., Any] | None = None,
+) -> tuple[Tensor, dict]:
+    """Load an observation's 2D image and header from in-memory tensors or FITS path."""
+    dev_str = str(device)
+    data = getattr(obs, "data", None)
+    if data is not None:
+        image = validate_image_plane_2d(torch.as_tensor(data)).to(device=dev_str)
+        hdr: dict[str, Any] = {}
+        obs_wcs = getattr(obs, "wcs", None)
+        if obs_wcs is not None and hasattr(obs_wcs, "to_header"):
+            hdr.update(obs_wcs.to_header())
+        elif isinstance(obs_wcs, dict):
+            hdr.update(obs_wcs)
+        obs_header = getattr(obs, "header", None)
+        if isinstance(obs_header, dict):
+            hdr.update(obs_header)
+        sidecar = _resolve_observation_sidecar_header(obs)
+        if sidecar:
+            hdr.update(sidecar)
+        hdr.setdefault("NAXIS", 2)
+        hdr["NAXIS1"] = int(image.shape[1])
+        hdr["NAXIS2"] = int(image.shape[0])
+        return image, hdr
+
+    path = getattr(obs, "path", None)
+    if path is None:
+        raise ValueError(
+            "Observation must provide either in-memory `data` or a FITS `path`"
+        )
+    image, hdr = read_image_plane_observation(
+        str(path), getattr(obs, "hdu", None), dev_str, read_fn=read_fn
+    )
+    obs_wcs = getattr(obs, "wcs", None)
+    if obs_wcs is not None and hasattr(obs_wcs, "to_header"):
+        hdr.update(obs_wcs.to_header())
+    elif isinstance(obs_wcs, dict):
+        hdr.update(obs_wcs)
+    obs_header = getattr(obs, "header", None)
+    if isinstance(obs_header, dict):
+        hdr.update(obs_header)
+    sidecar = _resolve_observation_sidecar_header(obs)
+    if sidecar:
+        hdr.update(sidecar)
+    return image, hdr
 
 
 def _observation_header_for_area_scaling(
@@ -171,14 +289,49 @@ def _observation_header_for_area_scaling(
     """Read minimal header cards needed for area scaling computation."""
     if cached_header is not None:
         return dict(cached_header)
+    data = getattr(obs, "data", None)
+    if data is not None:
+        image = validate_image_plane_2d(torch.as_tensor(data))
+        hdr: dict[str, Any] = {}
+        obs_wcs = getattr(obs, "wcs", None)
+        if obs_wcs is not None and hasattr(obs_wcs, "to_header"):
+            hdr.update(obs_wcs.to_header())
+        elif isinstance(obs_wcs, dict):
+            hdr.update(obs_wcs)
+        obs_header = getattr(obs, "header", None)
+        if isinstance(obs_header, dict):
+            hdr.update(obs_header)
+        sidecar = _resolve_observation_sidecar_header(obs)
+        if sidecar:
+            hdr.update(sidecar)
+        hdr.setdefault("NAXIS", 2)
+        hdr["NAXIS1"] = int(image.shape[1])
+        hdr["NAXIS2"] = int(image.shape[0])
+        return hdr
+    hdr_out: dict[str, Any] | None = None
     try:
         hdu = getattr(obs, "hdu", None)
         path = getattr(obs, "path")
-        if isinstance(hdu, int) or hdu is None:
-            return dict(Header(_cpp.read_header_dict(path, 0 if hdu is None else hdu)))
+        if path is not None and (isinstance(hdu, int) or hdu is None):
+            hdr_out = dict(
+                Header(_cpp.read_header_dict(str(path), 0 if hdu is None else hdu))
+            )
     except _HEADER_PROBE_EXC:
-        pass
-    path = getattr(obs, "path")
-    hdu = getattr(obs, "hdu", None)
-    _, header = read(path, hdu=hdu, return_header=True)
-    return dict(header)
+        hdr_out = None
+    if hdr_out is None:
+        path = getattr(obs, "path")
+        hdu = getattr(obs, "hdu", None)
+        _, header = read(str(path), hdu=hdu, return_header=True)
+        hdr_out = dict(header)
+    obs_wcs = getattr(obs, "wcs", None)
+    if obs_wcs is not None and hasattr(obs_wcs, "to_header"):
+        hdr_out.update(obs_wcs.to_header())
+    elif isinstance(obs_wcs, dict):
+        hdr_out.update(obs_wcs)
+    obs_header = getattr(obs, "header", None)
+    if isinstance(obs_header, dict):
+        hdr_out.update(obs_header)
+    sidecar = _resolve_observation_sidecar_header(obs)
+    if sidecar:
+        hdr_out.update(sidecar)
+    return hdr_out
