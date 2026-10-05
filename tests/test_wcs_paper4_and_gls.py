@@ -139,3 +139,48 @@ def test_paper4_distortion_lookup_table_roundtrip_and_astropy_parity() -> None:
     px_back, py_back = ts_wcs.world_to_pixel(ra_ts, dec_ts)
     torch.testing.assert_close(px_back, px, atol=1e-6, rtol=0.0)
     torch.testing.assert_close(py_back, py, atol=1e-6, rtol=0.0)
+
+    # Post-init attribute assignment (standard astropy.wcs.WCS pattern) must
+    # invalidate cached undistorted fast-path flags and match constructor kwargs
+    ts_wcs_post = WCS(hdr)
+    ts_wcs_post.det2im1 = det2im1
+    ts_wcs_post.det2im2 = det2im2
+    ts_wcs_post.cpdis1 = cpdis1
+    ts_wcs_post.cpdis2 = cpdis2
+    ra_post, dec_post = ts_wcs_post.pixel_to_world(px, py)
+    torch.testing.assert_close(ra_post, ra_ts, atol=1e-12, rtol=0.0)
+    torch.testing.assert_close(dec_post, dec_ts, atol=1e-12, rtol=0.0)
+    px_post, py_post = ts_wcs_post.world_to_pixel(ra_post, dec_post)
+    torch.testing.assert_close(px_post, px, atol=1e-6, rtol=0.0)
+    torch.testing.assert_close(py_post, py, atol=1e-6, rtol=0.0)
+
+
+def test_car_sip_and_sfl_sip_at_equator_apply_sip_inversion() -> None:
+    for proj in ("CAR", "SFL", "MER"):
+        hdr = {
+            "NAXIS": 2,
+            "NAXIS1": 64,
+            "NAXIS2": 64,
+            "CTYPE1": f"RA---{proj}-SIP",
+            "CTYPE2": f"DEC--{proj}-SIP",
+            "CRPIX1": 32.0,
+            "CRPIX2": 32.0,
+            "CRVAL1": 180.0,
+            "CRVAL2": 0.0,
+            "CD1_1": -0.01,
+            "CD1_2": 0.0,
+            "CD2_1": 0.0,
+            "CD2_2": 0.01,
+            "A_ORDER": 2,
+            "B_ORDER": 2,
+            "A_2_0": 1.5e-4,
+            "B_0_2": -1.2e-4,
+        }
+        w = WCS(hdr)
+        x = torch.tensor([12.0, 24.0, 48.0], dtype=torch.float64)
+        y = torch.tensor([16.0, 40.0, 52.0], dtype=torch.float64)
+        ra, dec = w.pixel_to_world(x, y)
+        x_back, y_back = w.world_to_pixel(ra, dec)
+        torch.testing.assert_close(x_back, x, atol=1e-5, rtol=0.0)
+        torch.testing.assert_close(y_back, y, atol=1e-5, rtol=0.0)
+

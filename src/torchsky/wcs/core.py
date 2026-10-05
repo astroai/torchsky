@@ -177,8 +177,11 @@ class DistortionLookupTable:
     def get_offset(self, x: Any, y: Any) -> Any:
         """Astropy-compatible offset lookup at 1-based FITS pixel coordinates `(x, y)`."""
         if isinstance(x, Tensor) or isinstance(y, Tensor):
-            xt = torch.as_tensor(x, dtype=torch.float64)
-            yt = torch.as_tensor(y, dtype=xt.dtype, device=xt.device)
+            ref = x if isinstance(x, Tensor) else y
+            assert isinstance(ref, Tensor)
+            dt = torch.float32 if ref.device.type == "mps" else torch.float64
+            xt = torch.as_tensor(x, dtype=dt, device=ref.device)
+            yt = torch.as_tensor(y, dtype=dt, device=ref.device)
             return self.eval_tensor(xt, yt)
         xt = torch.as_tensor(x, dtype=torch.float64)
         yt = torch.as_tensor(y, dtype=torch.float64)
@@ -856,6 +859,20 @@ class WCS:
         stacked = torch.stack((x0, y0), dim=-1)
         new = torch.matmul(stacked, self._pixel_affine_matrix.T) + self._pixel_affine_offset
         return new[..., 0] + origin_f, new[..., 1] + origin_f
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        if name in ("cpdis1", "cpdis2", "det2im1", "det2im2") and value is not None:
+            object.__setattr__(self, "_use_fast_tan", False)
+            object.__setattr__(self, "_use_center_equator_fast", False)
+            object.__setattr__(self, "_cpp_direct_static_ok", False)
+            object.__setattr__(self, "_cpp_p2w_direct_kind", "")
+            object.__setattr__(self, "_cpp_w2p_direct_kind", "")
+            object.__setattr__(self, "_has_cpp_direct_p2w", False)
+            object.__setattr__(self, "_has_cpp_direct_w2p", False)
+            object.__setattr__(self, "_can_use_fused_p2w_static", False)
+            object.__setattr__(self, "_can_use_fused_w2p_static", False)
+            object.__setattr__(self, "_compiled_pixel_to_world_2d_fn", None)
 
     def _has_paper4_lut(self) -> bool:
         return (
@@ -2290,57 +2307,58 @@ class WCS:
         Designed to be graph-break free for torch.compile.
         """
         # Common center-equator specializations avoid full spherical rotation.
-        if self._use_center_equator_fast and self._is_car:
-            xi = _wrap_lon180(ra - self.alpha0)
-            eta = dec
-            rel_x = self._cdi00 * xi + self._cdi01 * eta
-            rel_y = self._cdi10 * xi + self._cdi11 * eta
-            px = rel_x + self._crpix0 - (1.0 - origin)
-            py = rel_y + self._crpix1 - (1.0 - origin)
-            return self._source_pixels_to_corrected(px, py, origin)
-        if self._use_center_equator_fast and self._is_sfl:
-            phi = _wrap_lon180(ra - self.alpha0)
-            theta = dec
-            xi = phi * torch.cos(theta * self._d2r)
-            eta = theta
-            rel_x = self._cdi00 * xi + self._cdi01 * eta
-            rel_y = self._cdi10 * xi + self._cdi11 * eta
-            px = rel_x + self._crpix0 - (1.0 - origin)
-            py = rel_y + self._crpix1 - (1.0 - origin)
-            return self._source_pixels_to_corrected(px, py, origin)
-        if self._use_center_equator_fast and self._is_cea:
-            phi = _wrap_lon180(ra - self.alpha0)
-            theta = dec
-            xi = phi
-            eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
-            rel_x = self._cdi00 * xi + self._cdi01 * eta
-            rel_y = self._cdi10 * xi + self._cdi11 * eta
-            px = rel_x + self._crpix0 - (1.0 - origin)
-            py = rel_y + self._crpix1 - (1.0 - origin)
-            return self._source_pixels_to_corrected(px, py, origin)
-        if self._use_center_equator_fast and self._is_mer:
-            phi = _wrap_lon180(ra - self.alpha0)
-            theta = dec
-            xi = phi
-            tan_arg = torch.tan((45.0 + theta * 0.5) * self._d2r)
-            tan_arg = torch.clamp(tan_arg, min=1e-12)
-            eta = self._r2d * torch.log(tan_arg)
-            rel_x = self._cdi00 * xi + self._cdi01 * eta
-            rel_y = self._cdi10 * xi + self._cdi11 * eta
-            px = rel_x + self._crpix0 - (1.0 - origin)
-            py = rel_y + self._crpix1 - (1.0 - origin)
-            return self._source_pixels_to_corrected(px, py, origin)
-        if self._use_center_equator_fast and self._is_cyp:
-            phi = _wrap_lon180(ra - self.alpha0)
-            theta = dec
-            xi, eta = deproject_cylindrical(
-                phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
-            )
-            rel_x = self._cdi00 * xi + self._cdi01 * eta
-            rel_y = self._cdi10 * xi + self._cdi11 * eta
-            px = rel_x + self._crpix0 - (1.0 - origin)
-            py = rel_y + self._crpix1 - (1.0 - origin)
-            return self._source_pixels_to_corrected(px, py, origin)
+        if self._use_center_equator_fast and self.sip is None:
+            if self._is_car:
+                xi = _wrap_lon180(ra - self.alpha0)
+                eta = dec
+                rel_x = self._cdi00 * xi + self._cdi01 * eta
+                rel_y = self._cdi10 * xi + self._cdi11 * eta
+                px = rel_x + self._crpix0 - (1.0 - origin)
+                py = rel_y + self._crpix1 - (1.0 - origin)
+                return self._source_pixels_to_corrected(px, py, origin)
+            if self._is_sfl:
+                phi = _wrap_lon180(ra - self.alpha0)
+                theta = dec
+                xi = phi * torch.cos(theta * self._d2r)
+                eta = theta
+                rel_x = self._cdi00 * xi + self._cdi01 * eta
+                rel_y = self._cdi10 * xi + self._cdi11 * eta
+                px = rel_x + self._crpix0 - (1.0 - origin)
+                py = rel_y + self._crpix1 - (1.0 - origin)
+                return self._source_pixels_to_corrected(px, py, origin)
+            if self._is_cea:
+                phi = _wrap_lon180(ra - self.alpha0)
+                theta = dec
+                xi = phi
+                eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
+                rel_x = self._cdi00 * xi + self._cdi01 * eta
+                rel_y = self._cdi10 * xi + self._cdi11 * eta
+                px = rel_x + self._crpix0 - (1.0 - origin)
+                py = rel_y + self._crpix1 - (1.0 - origin)
+                return self._source_pixels_to_corrected(px, py, origin)
+            if self._is_mer:
+                phi = _wrap_lon180(ra - self.alpha0)
+                theta = dec
+                xi = phi
+                tan_arg = torch.tan((45.0 + theta * 0.5) * self._d2r)
+                tan_arg = torch.clamp(tan_arg, min=1e-12)
+                eta = self._r2d * torch.log(tan_arg)
+                rel_x = self._cdi00 * xi + self._cdi01 * eta
+                rel_y = self._cdi10 * xi + self._cdi11 * eta
+                px = rel_x + self._crpix0 - (1.0 - origin)
+                py = rel_y + self._crpix1 - (1.0 - origin)
+                return self._source_pixels_to_corrected(px, py, origin)
+            if self._is_cyp:
+                phi = _wrap_lon180(ra - self.alpha0)
+                theta = dec
+                xi, eta = deproject_cylindrical(
+                    phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
+                )
+                rel_x = self._cdi00 * xi + self._cdi01 * eta
+                rel_y = self._cdi10 * xi + self._cdi11 * eta
+                px = rel_x + self._crpix0 - (1.0 - origin)
+                py = rel_y + self._crpix1 - (1.0 - origin)
+                return self._source_pixels_to_corrected(px, py, origin)
 
         # 1. Inverse Spherical Rotation (Celestial -> Native)
         if self._is_gls:
