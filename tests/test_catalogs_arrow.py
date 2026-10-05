@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pyarrow as pa
+import pytest
 import torch
 
 from torchsky.catalogs import (
@@ -12,6 +13,77 @@ from torchsky.catalogs import (
     crossmatch_sky_from_arrow,
     crossmatch_sky_streamed,
 )
+
+
+def test_arrow_crossmatch_preserves_input_row_indices_after_tiling() -> None:
+    table = pa.table({"ra": [220.0, 10.0], "dec": [0.0, 0.0]})
+    result = crossmatch_sky_from_arrow(table, table, radius_arcsec=1.0)
+    assert result.left_index.tolist() == [0, 1]
+    assert result.right_index.tolist() == [0, 1]
+
+
+@pytest.mark.parametrize("source_kind", ["table", "reader", "file"])
+@pytest.mark.parametrize("find", ["best", "all"])
+def test_arrow_crossmatch_keeps_rows_and_native_ids_across_batches(
+    source_kind, find, tmp_path
+) -> None:
+    left = pa.table({"ra": [220.0, 10.0, 220.0, 359.9999, 60.0], "dec": [0.0] * 5})
+    right = pa.table(
+        {
+            "ra": [60.0, 220.0, 10.0, 0.0001, 220.0],
+            "dec": [0.0] * 5,
+            "source_id": pa.array([2**60 + i for i in range(5)], type=pa.uint64()),
+        }
+    )
+    sources = []
+    for name, table in [("left", left), ("right", right)]:
+        if source_kind == "reader":
+            sources.append(
+                pa.RecordBatchReader.from_batches(table.schema, table.to_batches(2))
+            )
+        elif source_kind == "file":
+            path = tmp_path / f"{name}.arrow"
+            with pa.ipc.new_file(str(path), table.schema) as writer:
+                writer.write_table(table, max_chunksize=2)
+            sources.append(path)
+        else:
+            sources.append(table)
+    result = crossmatch_sky_from_arrow(
+        *sources, radius_arcsec=1.0, batch_size=2, find=find
+    )
+    if find == "best":
+        expected_left, expected_right = [0, 1, 2, 3, 4], [1, 2, 1, 3, 0]
+    else:
+        expected_left, expected_right = [0, 0, 1, 2, 2, 3, 4], [1, 4, 2, 1, 4, 3, 0]
+    assert result.left_index.tolist() == expected_left
+    assert result.right_index.tolist() == expected_right
+    assert right["source_id"].take(result.right_index.numpy()).to_pylist() == [
+        2**60 + index for index in expected_right
+    ]
+    assert result.separation_arcsec.max().item() < 1.0
+
+
+@pytest.mark.parametrize("empty_side", ["left", "right", "both"])
+def test_arrow_crossmatch_empty_catalogue_returns_no_pairs(empty_side) -> None:
+    empty = pa.table(
+        {"ra": pa.array([], type=pa.float64()), "dec": pa.array([], type=pa.float64())}
+    )
+    nonempty = pa.table({"ra": [10.0], "dec": [0.0]})
+    result = crossmatch_sky_from_arrow(
+        empty if empty_side != "right" else nonempty,
+        empty if empty_side != "left" else nonempty,
+        radius_arcsec=1.0,
+    )
+    assert result.left_index.numel() == result.right_index.numel() == 0
+
+
+@pytest.mark.parametrize("radius", [0.0, -1.0, float("nan"), float("inf")])
+def test_arrow_crossmatch_rejects_invalid_radius(radius) -> None:
+    table = pa.table({"ra": [10.0], "dec": [0.0]})
+    with pytest.raises(ValueError):
+        crossmatch_sky_from_arrow(table, table, radius_arcsec=radius)
+
+
 def _random_ra_dec(n: int, *, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
     rng = torch.Generator().manual_seed(seed)
     ra = torch.rand(n, generator=rng) * 360.0
@@ -87,7 +159,9 @@ def test_crossmatch_sky_from_arrow_matches_tensor() -> None:
 def test_crossmatch_sky_from_arrow_with_custom_columns() -> None:
     left_ra, left_dec = _random_ra_dec(20, seed=7)
     right_ra, right_dec = _random_ra_dec(30, seed=14)
-    expected = crossmatch_sky(left_ra, left_dec, right_ra, right_dec, radius_arcsec=10.0)
+    expected = crossmatch_sky(
+        left_ra, left_dec, right_ra, right_dec, radius_arcsec=10.0
+    )
 
     left_table = pa.table({"RA": left_ra.numpy(), "DEC": left_dec.numpy()})
     right_table = pa.table({"RA": right_ra.numpy(), "DEC": right_dec.numpy()})
@@ -142,7 +216,10 @@ def test_crossmatch_sky_from_arrow_with_file(tmp_path) -> None:
 
     left_path = str(tmp_path / "left.arrow")
     right_path = str(tmp_path / "right.arrow")
-    for path, r, d in [(left_path, left_ra, left_dec), (right_path, right_ra, right_dec)]:
+    for path, r, d in [
+        (left_path, left_ra, left_dec),
+        (right_path, right_ra, right_dec),
+    ]:
         table = pa.table({"ra": r.numpy(), "dec": d.numpy()})
         with pa.ipc.new_file(pa.OSFile(path, "wb"), table.schema) as writer:
             writer.write_table(table)

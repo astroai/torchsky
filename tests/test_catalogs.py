@@ -33,6 +33,100 @@ def test_crossmatch_sky_returns_nearest_matches_within_radius() -> None:
     assert torch.all(result.separation_arcsec < 2.0)
 
 
+def test_catalog_crossmatch_explicitly_aligns_epochs() -> None:
+    left = Catalog(
+        lon=torch.tensor([10.0], dtype=torch.float64),
+        lat=torch.tensor([0.0], dtype=torch.float64),
+        epoch=2000.0,
+        pm_lon_coslat_mas_yr=torch.tensor([1000.0], dtype=torch.float64),
+        pm_lat_mas_yr=torch.tensor([0.0], dtype=torch.float64),
+        columns={"id": torch.tensor([2**60 + 1])},
+    )
+    right = left.propagate_angular(2020.0).to_frame("GALACTIC")
+    assert left.crossmatch(right, radius_arcsec=0.1).left_index.numel() == 0
+    result = left.crossmatch(right, radius_arcsec=0.1, target_epoch=2020.0)
+    assert result.left_index.tolist() == result.right_index.tolist() == [0]
+    assert result.separation_arcsec.item() < 1e-6
+    assert left.columns["id"][result.left_index].tolist() == [2**60 + 1]
+    assert float(left.epoch) == 2000.0
+
+
+def test_catalog_crossmatch_physical_epoch_alignment_uses_complete_motion() -> None:
+    from astropy import units as u
+    from astropy.coordinates import SkyCoord
+    from astropy.time import Time
+
+    original = SkyCoord(
+        ra=269.4520769586186 * u.deg,
+        dec=4.693364966576667 * u.deg,
+        distance=(1000.0 / 547.45) * u.pc,
+        pm_ra_cosdec=-802.803 * u.mas / u.yr,
+        pm_dec=10362.542 * u.mas / u.yr,
+        radial_velocity=-110.6 * u.km / u.s,
+        obstime=Time(2000.0, format="jyear"),
+    )
+    moved = original.apply_space_motion(new_obstime=Time(2020.0, format="jyear"))
+    left = Catalog(
+        lon=torch.tensor([original.ra.deg]),
+        lat=torch.tensor([original.dec.deg]),
+        epoch=2000.0,
+        pm_lon_coslat_mas_yr=torch.tensor([-802.803], dtype=torch.float64),
+        pm_lat_mas_yr=torch.tensor([10362.542], dtype=torch.float64),
+        parallax_mas=torch.tensor([547.45], dtype=torch.float64),
+        radial_velocity_km_s=torch.tensor([-110.6], dtype=torch.float64),
+    )
+    right = Catalog(
+        lon=torch.tensor([moved.ra.deg]),
+        lat=torch.tensor([moved.dec.deg]),
+        epoch=2020.0,
+    )
+    result = left.crossmatch(
+        right, radius_arcsec=0.001, target_epoch=2020.0, motion="physical"
+    )
+    assert result.left_index.tolist() == result.right_index.tolist() == [0]
+    assert result.separation_arcsec.item() < 0.001
+
+
+def test_catalog_crossmatch_epoch_alignment_refuses_missing_motion_and_stale_index() -> (
+    None
+):
+    cat = Catalog(lon=torch.tensor([10.0]), lat=torch.tensor([0.0]), epoch=2000.0)
+    with pytest.raises(ValueError, match="pm_lon"):
+        cat.crossmatch(cat, radius_arcsec=1.0, target_epoch=2020.0)
+    with pytest.raises(ValueError, match="right_index"):
+        cat.crossmatch(
+            cat, radius_arcsec=1.0, target_epoch=2020.0, right_index=cat.index()
+        )
+    with pytest.raises(ValueError, match="scalar"):
+        cat.crossmatch(
+            cat, radius_arcsec=1.0, target_epoch=torch.tensor([2000.0, 2020.0])
+        )
+    with pytest.raises(ValueError, match="motion"):
+        cat.crossmatch(cat, radius_arcsec=1.0, target_epoch=2000.0, motion="invented")
+
+
+def test_catalog_preserves_fractional_epoch_precision() -> None:
+    cat = Catalog(
+        lon=torch.tensor([10.0]), lat=torch.tensor([0.0]), epoch=2000.123456789
+    )
+    assert float(cat.epoch) == pytest.approx(2000.123456789, abs=1e-10, rel=0.0)
+
+
+def test_crossmatch_rejects_index_from_different_right_coordinates() -> None:
+    from torchsky.catalogs import HealpixIndex
+
+    wrong_index = HealpixIndex.build(torch.tensor([200.0]), torch.tensor([0.0]))
+    with pytest.raises(ValueError, match="right_index"):
+        crossmatch_sky(
+            torch.tensor([10.0]),
+            torch.tensor([0.0]),
+            torch.tensor([10.0]),
+            torch.tensor([0.0]),
+            radius_arcsec=1.0,
+            right_index=wrong_index,
+        )
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_crossmatch_sky_cuda_matches_cpu() -> None:
     left_ra = torch.tensor([10.0, 20.0, 30.0], dtype=torch.float64)
@@ -253,7 +347,9 @@ def test_crossmatch_sky_scalar_radius_matches_declination_indexed() -> None:
         left_dec,
         right_ra,
         right_dec,
-        radius_arcsec=torch.full((left_ra.numel(),), radius_arcsec, dtype=torch.float64),
+        radius_arcsec=torch.full(
+            (left_ra.numel(),), radius_arcsec, dtype=torch.float64
+        ),
         left_chunk_size=2,
         right_chunk_size=3,
         find="all",
@@ -494,9 +590,7 @@ def test_crossmatch_with_prebuilt_index_matches_crossmatch_sky() -> None:
     left_dec = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float64)
     right_ra = torch.tensor([10.0001, 25.0, 29.9998], dtype=torch.float64)
     right_dec = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float64)
-    expected = crossmatch_sky(
-        left_ra, left_dec, right_ra, right_dec, radius_arcsec=2.0
-    )
+    expected = crossmatch_sky(left_ra, left_dec, right_ra, right_dec, radius_arcsec=2.0)
     index = HealpixIndex.build(right_ra, right_dec, nside=64)
     got = crossmatch_sky(
         left_ra,
@@ -551,9 +645,7 @@ def test_catalog_roundtrip_cone_inside_take_and_crossmatch() -> None:
 
     site = Site(lon_deg=-155.47, lat_deg=19.83)
     eop = EarthOrientation(dut1_s=0.184)
-    altaz = cat.observe(
-        "ALTAZ", obstime_mjd_utc=60000.0, site=site, eop=eop
-    )
+    altaz = cat.observe("ALTAZ", obstime_mjd_utc=60000.0, site=site, eop=eop)
     lon_a, lat_a = transform(
         lon,
         lat,

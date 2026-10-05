@@ -9,6 +9,12 @@ import torch
 from torch import Tensor, nn
 
 from ..sphere.healpix import lonlat_to_xyz, spherical_fourier_features
+from .photometry import (
+    BinnedRedshiftHead,
+    MaskedSetFusion,
+    PhotometryEncoder,
+    marginalize_association_logits,
+)
 
 
 def sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:
@@ -78,7 +84,11 @@ def log_spectral_encoding(
 
     raw = wavelength if wavelength is not None else frequency
     assert raw is not None
-    raw = torch.as_tensor(raw, dtype=torch.float64)
+    raw = torch.as_tensor(raw)
+    if not raw.is_floating_point():
+        raw = raw.to(
+            dtype=torch.float32 if raw.device.type == "mps" else torch.float64
+        )
     coord = torch.log(torch.clamp(raw, min=torch.finfo(raw.dtype).tiny))
     scales = base ** torch.arange(
         num_frequencies, dtype=coord.dtype, device=coord.device
@@ -171,16 +181,20 @@ class SkyCoordinateEncoder(nn.Module):
                     wavelength=wavelength,
                     frequency=frequency,
                     num_frequencies=self.spectral_frequencies,
-                )
+                ).to(device=sky.device, dtype=sky.dtype)
             )
         return torch.cat(feats, dim=-1)
 
 
 __all__ = [
+    "BinnedRedshiftHead",
+    "MaskedSetFusion",
+    "PhotometryEncoder",
     "SkyCoordinateEncoder",
     "SineLayer",
     "SirenImplicitField",
     "harmonic_sky_encoding",
     "log_spectral_encoding",
+    "marginalize_association_logits",
     "sky_encoder_fourier_min_frequency",
 ]

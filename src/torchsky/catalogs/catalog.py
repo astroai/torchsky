@@ -11,7 +11,7 @@ from torch import Tensor
 
 from ..wcs.catalog_state import CatalogState
 from ..wcs.coords import transform
-from ..wcs.frames import _to_device, canonical_celestial_frame
+from ..wcs.frames import _to_device, _work_dtype, canonical_celestial_frame
 from ..wcs.observed import EarthOrientation, PNModel, Site
 from .core import CrossmatchResult, crossmatch_sky
 from .index import HealpixIndex
@@ -29,7 +29,15 @@ def _normalize_frame(frame: str) -> str:
 
 
 def _as_rows(value: Tensor | float, device: torch.device) -> Tensor:
-    return _to_device(torch.as_tensor(value), device).reshape(-1)
+    if isinstance(value, Tensor):
+        return _to_device(value, device).reshape(-1)
+    return torch.as_tensor(value, dtype=_work_dtype(device), device=device).reshape(-1)
+
+
+def _move_column(col: Tensor, device: torch.device) -> Tensor:
+    if device.type == "mps" and col.dtype == torch.float64:
+        return col.to(device=device, dtype=torch.float32)
+    return col.to(device=device)
 
 
 @dataclass
@@ -50,7 +58,9 @@ class Catalog:
     radial_velocity_km_s: Tensor | None = None
     valid: Tensor | None = None
     columns: dict[str, Tensor] = field(default_factory=dict)
-    _index: HealpixIndex | None = field(default=None, init=False, repr=False, compare=False)
+    _index: HealpixIndex | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         lon = torch.as_tensor(self.lon)
@@ -60,9 +70,13 @@ class Catalog:
         if self.lon.numel() != self.lat.numel():
             raise ValueError("lon and lat must have the same number of rows")
         self.frame = _normalize_frame(self.frame)
-        epoch_t = torch.as_tensor(self.epoch)
+        epoch_t = (
+            _to_device(self.epoch, device)
+            if isinstance(self.epoch, Tensor)
+            else torch.as_tensor(self.epoch, dtype=_work_dtype(device), device=device)
+        )
         if epoch_t.ndim == 0 or epoch_t.numel() == 1:
-            self.epoch = _to_device(epoch_t.reshape(()), device)
+            self.epoch = epoch_t.reshape(())
         else:
             self.epoch = _as_rows(epoch_t, device)
             if int(self.epoch.numel()) != int(self.lon.numel()):
@@ -77,15 +91,15 @@ class Catalog:
             self.radial_velocity_km_s, n, device
         )
         if self.valid is not None:
-            valid = torch.as_tensor(self.valid, dtype=torch.bool, device=device).reshape(
-                -1
-            )
+            valid = torch.as_tensor(
+                self.valid, dtype=torch.bool, device=device
+            ).reshape(-1)
             if int(valid.numel()) != n:
                 raise ValueError("valid must match the number of rows")
             self.valid = valid
         extras: dict[str, Tensor] = {}
         for name, col in self.columns.items():
-            tensor = torch.as_tensor(col, device=device)
+            tensor = _move_column(torch.as_tensor(col), device)
             if tensor.ndim == 0:
                 raise ValueError(f"columns[{name!r}] must be a 1-D row column")
             flat = tensor.reshape(tensor.shape[0], *tensor.shape[1:])
@@ -123,17 +137,19 @@ class Catalog:
                 return _to_device(value, device_t)
             return value.to(device=device_t)
 
-        extras: dict[str, Tensor] = {}
-        for name, col in self.columns.items():
-            moved = _move(col, floating=col.is_floating_point())
-            if moved is not None:
-                extras[name] = moved
-        epoch = self.epoch if isinstance(self.epoch, Tensor) else torch.as_tensor(self.epoch)
+        extras: dict[str, Tensor] = {
+            name: _move_column(col, device_t) for name, col in self.columns.items()
+        }
+        epoch = (
+            _to_device(self.epoch, device_t)
+            if isinstance(self.epoch, Tensor)
+            else torch.as_tensor(self.epoch, dtype=_work_dtype(device_t), device=device_t)
+        )
         return Catalog(
             lon=_to_device(self.lon, device_t),
             lat=_to_device(self.lat, device_t),
             frame=self.frame,
-            epoch=_move(epoch),
+            epoch=epoch,
             pm_lon_coslat_mas_yr=_move(self.pm_lon_coslat_mas_yr),
             pm_lat_mas_yr=_move(self.pm_lat_mas_yr),
             parallax_mas=_move(self.parallax_mas),
@@ -144,7 +160,9 @@ class Catalog:
 
     def to_state(self) -> CatalogState:
         if self.frame in _OBSERVED_FRAMES:
-            raise ValueError("CatalogState is celestial; observed frames stay on Catalog")
+            raise ValueError(
+                "CatalogState is celestial; observed frames stay on Catalog"
+            )
         return CatalogState(
             lon=self.lon,
             lat=self.lat,
@@ -177,11 +195,15 @@ class Catalog:
     def _with_state(self, state: CatalogState) -> Catalog:
         return self.from_state(state, columns=self.columns)
 
-    def to_frame(self, name: str) -> Catalog:
+    def to_frame(
+        self, name: str, *, tt_mjd: Tensor | float | None = None
+    ) -> Catalog:
         dest = _normalize_frame(name)
-        if dest in _OBSERVED_FRAMES:
-            raise ValueError("observed frames require Catalog.observe with site and EOP")
-        return self._with_state(self.to_state().to_frame(dest))
+        if dest in _OBSERVED_FRAMES and tt_mjd is None:
+            raise ValueError(
+                "observed frames require Catalog.observe with site and EOP"
+            )
+        return self._with_state(self.to_state().to_frame(dest, tt_mjd=tt_mjd))
 
     def propagate_angular(self, epoch: Tensor | float) -> Catalog:
         return self._with_state(self.to_state().propagate_angular(epoch))
@@ -244,9 +266,18 @@ class Catalog:
     ) -> Tensor:
         return self.index(nside=nside).query_disc(lon, lat, radius_deg)
 
-    def inside(self, coverage: Any, *, time_mjd: Tensor | float | None = None) -> Tensor:
+    def inside(
+        self, coverage: Any, *, time_mjd: Tensor | float | None = None
+    ) -> Tensor:
         if time_mjd is not None:
-            return coverage.contains(time_mjd, self.lon, self.lat)
+            t_mjd = (
+                _to_device(time_mjd, self.device)
+                if isinstance(time_mjd, Tensor)
+                else torch.as_tensor(
+                    time_mjd, dtype=_work_dtype(self.device), device=self.device
+                )
+            )
+            return coverage.contains(t_mjd, self.lon, self.lat)
         return coverage.contains(self.lon, self.lat)
 
     def take(self, mask_or_index: Tensor) -> Catalog:
@@ -283,12 +314,45 @@ class Catalog:
         *,
         find: str = "best",
         right_index: HealpixIndex | None = None,
+        target_epoch: float | Tensor | None = None,
+        motion: str = "angular",
     ) -> CrossmatchResult:
-        right = other if other.frame == self.frame else other.to_frame(self.frame)
+        """Match stored positions, or explicitly propagate to a common Julian year.
+
+        ``motion="angular"`` requires both PM components for rows whose epoch
+        changes; ``"physical"`` additionally requires parallax and radial
+        velocity. Missing motion is never filled with zero. A supplied index
+        must be rebuilt by the caller after frame/epoch changes.
+        """
+        if motion not in ("angular", "physical"):
+            raise ValueError("motion must be 'angular' or 'physical'")
+        if right_index is not None and (
+            target_epoch is not None or other.frame != self.frame
+        ):
+            raise ValueError(
+                "right_index cannot be reused after epoch or frame conversion"
+            )
+        left = self
+        right = other if other.device == self.device else other.to(self.device)
+        if target_epoch is not None:
+            target = _to_device(torch.as_tensor(target_epoch), self.device)
+            if target.numel() != 1 or not bool(torch.isfinite(target).all()):
+                raise ValueError("target_epoch must be a finite scalar Julian year")
+
+            def align(catalog: Catalog) -> Catalog:
+                epoch = torch.as_tensor(catalog.epoch)
+                if bool(torch.all(epoch == target.to(epoch.device))):
+                    return catalog
+                if motion == "angular":
+                    return catalog.propagate_angular(target.reshape(()))
+                return catalog.propagate_physical(target.reshape(()))
+
+            left, right = align(left), align(right)
+        right = right if right.frame == left.frame else right.to_frame(left.frame)
         index = right_index if right_index is not None else right.index()
         return crossmatch_sky(
-            self.lon,
-            self.lat,
+            left.lon,
+            left.lat,
             right.lon,
             right.lat,
             radius_arcsec=radius_arcsec,

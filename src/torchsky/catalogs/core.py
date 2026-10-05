@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator, cast
 
 import torch
 from torch import Tensor
@@ -132,10 +132,14 @@ def _candidate_dec_window(
     return start, stop
 
 
+def _work_dtype(device: torch.device) -> torch.dtype:
+    return torch.float32 if device.type == "mps" else torch.float64
+
+
 def _empty_crossmatch(device: torch.device) -> CrossmatchResult:
     empty_i64 = torch.empty(0, dtype=torch.int64, device=device)
-    empty_f64 = torch.empty(0, dtype=torch.float64, device=device)
-    return CrossmatchResult(empty_i64, empty_i64, empty_f64)
+    empty_flt = torch.empty(0, dtype=_work_dtype(device), device=device)
+    return CrossmatchResult(empty_i64, empty_i64, empty_flt)
 
 
 def _finalize_crossmatch(
@@ -185,12 +189,13 @@ def _normalize_radius_arcsec(
     device: torch.device,
 ) -> tuple[Tensor, float]:
     """Return per-left radii and the prune radius (max)."""
-    radius = torch.as_tensor(radius_arcsec, dtype=torch.float64, device=device)
+    dtype = _work_dtype(device)
+    radius = torch.as_tensor(radius_arcsec, dtype=dtype, device=device)
     if radius.ndim == 0:
         value = float(radius.item())
         if value <= 0.0:
             raise ValueError("radius_arcsec must be positive")
-        return torch.full((n_left,), value, dtype=torch.float64, device=device), value
+        return torch.full((n_left,), value, dtype=dtype, device=device), value
     flat = radius.reshape(-1)
     if int(flat.numel()) != n_left:
         raise ValueError("radius_arcsec must be a scalar or match the left catalog")
@@ -244,8 +249,17 @@ def _accumulate_ring_chunk(
         lonlat=True,
     ).to(torch.int64)
     rings = _nested_neighbor_rings(coarse_index.nside, left_pix, hops)
+    rings_flat = rings.reshape(-1)
+    if not coarse_index.nest and rings_flat.numel() > 0:
+        valid_r = rings_flat >= 0
+        rings_lookup = rings_flat.clone()
+        rings_lookup[valid_r] = _healpix.nest2ring(
+            coarse_index.nside, rings_flat[valid_r]
+        )
+    else:
+        rings_lookup = rings_flat
     n_left = int(left_ra.numel())
-    query, right_ids = coarse_index.expand(rings.reshape(-1))
+    query, right_ids = coarse_index.expand(rings_lookup)
     if stats is not None:
         stats.candidate_groups += 1
     if query.numel() == 0:
@@ -476,23 +490,7 @@ def _best_hits(
     separation_arcsec: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Keep the deterministic nearest hit for each left row."""
-    if left_index.numel() == 0:
-        return left_index, right_index, separation_arcsec
-    order = torch.argsort(right_index, stable=True)
-    left_index = left_index[order]
-    right_index = right_index[order]
-    separation_arcsec = separation_arcsec[order]
-    order = torch.argsort(separation_arcsec, stable=True)
-    left_index = left_index[order]
-    right_index = right_index[order]
-    separation_arcsec = separation_arcsec[order]
-    order = torch.argsort(left_index, stable=True)
-    left_index = left_index[order]
-    right_index = right_index[order]
-    separation_arcsec = separation_arcsec[order]
-    keep = torch.ones_like(left_index, dtype=torch.bool)
-    keep[1:] = left_index[1:] != left_index[:-1]
-    return left_index[keep], right_index[keep], separation_arcsec[keep]
+    return _unique_min_pairs(left_index, right_index, separation_arcsec)
 
 
 def _crossmatch_sky_declination_indexed(
@@ -603,6 +601,7 @@ def _crossmatch_sky_coarse_indexed(
     right_index: HealpixIndex | None = None,
 ) -> CrossmatchResult | tuple[CrossmatchResult, _CrossmatchStats]:
     device = left_ra.device
+    work_dtype = _work_dtype(device)
     stats = _CrossmatchStats(
         left_points=int(left_ra.numel()),
         right_points=int(right_ra.numel()),
@@ -626,6 +625,10 @@ def _crossmatch_sky_coarse_indexed(
             raise ValueError("right_index does not match the right catalog")
         if right_index.lon.device != device:
             right_index = right_index.to(device)
+        if not torch.equal(right_index.lon, right_ra) or not torch.equal(
+            right_index.lat, right_dec
+        ):
+            raise ValueError("right_index coordinates do not match the right catalog")
         coarse_index = right_index
         coarse_nside = coarse_index.nside
     pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
@@ -708,6 +711,10 @@ def _crossmatch_sky_coarse_indexed(
                     radius_rad=candidate_radius_rad,
                     device=device,
                 )
+                if not coarse_index.nest and candidate_pixels.numel() > 0:
+                    candidate_pixels = _healpix.nest2ring(
+                        coarse_nside, candidate_pixels
+                    )
                 candidate_cache[cache_key] = candidate_pixels
 
             candidate_right_idx = coarse_index.lookup(candidate_pixels)
@@ -744,7 +751,7 @@ def _crossmatch_sky_coarse_indexed(
             best_sep = torch.full(
                 (count,),
                 torch.inf,
-                dtype=torch.float64,
+                dtype=work_dtype,
                 device=device,
             )
             best_idx = torch.full(
@@ -815,18 +822,20 @@ def crossmatch_sky(
     per-row radius. Pass ``right_index`` to reuse a nested ``HealpixIndex``.
     ``device`` moves inputs onto that device when given.
     """
-    left_ra = torch.as_tensor(left_ra_deg, dtype=torch.float64).reshape(-1)
-    if device is not None:
-        left_ra = left_ra.to(device=torch.device(device))
-    work_device = left_ra.device
+    raw_left_ra = torch.as_tensor(left_ra_deg).reshape(-1)
+    work_device = (
+        torch.device(device) if device is not None else raw_left_ra.device
+    )
+    work_dtype = _work_dtype(work_device)
+    left_ra = raw_left_ra.to(device=work_device, dtype=work_dtype)
     left_dec = torch.as_tensor(
-        left_dec_deg, dtype=torch.float64, device=work_device
+        left_dec_deg, dtype=work_dtype, device=work_device
     ).reshape(-1)
     right_ra = torch.as_tensor(
-        right_ra_deg, dtype=torch.float64, device=work_device
+        right_ra_deg, dtype=work_dtype, device=work_device
     ).reshape(-1)
     right_dec = torch.as_tensor(
-        right_dec_deg, dtype=torch.float64, device=work_device
+        right_dec_deg, dtype=work_dtype, device=work_device
     ).reshape(-1)
     radius_left, _ = _normalize_radius_arcsec(
         radius_arcsec, int(left_ra.numel()), work_device
@@ -842,16 +851,19 @@ def crossmatch_sky(
     if right_ra.numel() == 0 or left_ra.numel() == 0:
         return _empty_crossmatch(work_device)
 
-    return _crossmatch_sky_coarse_indexed(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=radius_left,
-        left_chunk_size=left_chunk_size,
-        right_chunk_size=right_chunk_size,
-        find=find,
-        right_index=right_index,
+    return cast(
+        CrossmatchResult,
+        _crossmatch_sky_coarse_indexed(
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
+            radius_arcsec=radius_left,
+            left_chunk_size=left_chunk_size,
+            right_chunk_size=right_chunk_size,
+            find=find,
+            right_index=right_index,
+        ),
     )
 
 
@@ -882,9 +894,13 @@ def crossmatch_sky_streamed(
     right_chunk_size
         Right-side chunk size for the inner distance loop.
     """
-    right_ra = torch.as_tensor(right_ra_deg, dtype=torch.float64).reshape(-1)
-    right_dec = torch.as_tensor(right_dec_deg, dtype=torch.float64).reshape(-1)
-    device = right_ra.device
+    raw_right_ra = torch.as_tensor(right_ra_deg).reshape(-1)
+    device = raw_right_ra.device
+    work_dtype = _work_dtype(device)
+    right_ra = raw_right_ra.to(dtype=work_dtype)
+    right_dec = torch.as_tensor(
+        right_dec_deg, dtype=work_dtype, device=device
+    ).reshape(-1)
 
     if radius_arcsec <= 0.0:
         raise ValueError("radius_arcsec must be positive")
@@ -915,11 +931,11 @@ def crossmatch_sky_streamed(
     candidate_cache: dict[int, Tensor] = {}
 
     for left_ra, left_dec in left_batches:
-        left_ra = torch.as_tensor(left_ra, dtype=torch.float64, device=device).reshape(
+        left_ra = torch.as_tensor(left_ra, dtype=work_dtype, device=device).reshape(
             -1
         )
         left_dec = torch.as_tensor(
-            left_dec, dtype=torch.float64, device=device
+            left_dec, dtype=work_dtype, device=device
         ).reshape(-1)
         chunk_len = int(left_ra.numel())
         if chunk_len == 0:
@@ -933,7 +949,7 @@ def crossmatch_sky_streamed(
                 left_dec=left_dec,
                 left_abs=left_abs,
                 radius_deg=torch.full(
-                    (chunk_len,), radius_deg, dtype=torch.float64, device=device
+                    (chunk_len,), radius_deg, dtype=work_dtype, device=device
                 ),
                 right_ra=right_ra,
                 right_dec=right_dec,
@@ -991,7 +1007,7 @@ def crossmatch_sky_streamed(
                 continue
 
             best_sep = torch.full(
-                (count,), torch.inf, dtype=torch.float64, device=device
+                (count,), torch.inf, dtype=work_dtype, device=device
             )
             best_idx = torch.full((count,), -1, dtype=torch.int64, device=device)
             group_ra_col = group_ra.unsqueeze(1)
@@ -1052,13 +1068,21 @@ def _tile_catalog_to_parquet(
     import pyarrow as pa
     import pyarrow.parquet as pq
 
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    mmap = None
     if isinstance(source, (str, Path)):
-        source = pa.ipc.open_file(pa.memory_map(str(source), "r")).read_all()
+        mmap = pa.memory_map(str(source), "r")
+        source = pa.ipc.open_file(mmap)
     if isinstance(source, pa.Table):
         reader = source.to_batches(max_chunksize=batch_size)
     elif isinstance(source, pa.ipc.RecordBatchReader):
         reader = source
+    elif isinstance(source, pa.ipc.RecordBatchFileReader):
+        reader = (source.get_batch(i) for i in range(source.num_record_batches))
     else:
+        if mmap is not None:
+            mmap.close()
         raise TypeError(f"unsupported Arrow source: {type(source).__name__}")
 
     pixel_to_rgs: dict[int, list[int]] = {}
@@ -1066,66 +1090,77 @@ def _tile_catalog_to_parquet(
     rg_idx = 0
     n_rows = 0
 
-    for batch in reader:
-        ra_np = batch.column(ra_col).to_numpy().astype("f8", copy=False)
-        dec_np = batch.column(dec_col).to_numpy().astype("f8", copy=False)
-        ra_t = torch.from_numpy(ra_np.copy())
-        dec_t = torch.from_numpy(dec_np.copy())
-        pixels = _healpix.ang2pix(coarse_nside, ra_t, dec_t, nest=True, lonlat=True)
-        pixels_np = pixels.numpy().astype(np.int64)
-
-        order = np.argsort(pixels_np, kind="stable")
-        n = len(order)
-        if n == 0:
-            continue
-
-        ra_sorted = ra_np[order]
-        dec_sorted = dec_np[order]
-        pix_sorted = pixels_np[order]
-
-        pixel_start = 0
-        for i in range(1, n):
-            if pix_sorted[i] != pix_sorted[pixel_start]:
-                pix = int(pix_sorted[pixel_start])
-                pixel_batch = pa.RecordBatch.from_arrays(
-                    [
-                        pa.array(ra_sorted[pixel_start:i]),
-                        pa.array(dec_sorted[pixel_start:i]),
-                        pa.array(pix_sorted[pixel_start:i]),
-                    ],
-                    names=[ra_col, dec_col, "coarse_pixel"],
-                )
-                if writer is None:
-                    writer = pq.ParquetWriter(str(path), pixel_batch.schema)
-                assert writer is not None
-                writer.write_batch(pixel_batch)
-                n_rows += len(pixel_batch)
-                pixel_to_rgs.setdefault(pix, []).append(rg_idx)
-                rg_idx += 1
-                pixel_start = i
-
-        # last pixel group in this batch
-        pix = int(pix_sorted[pixel_start])
-        pixel_batch = pa.RecordBatch.from_arrays(
-            [
-                pa.array(ra_sorted[pixel_start:n]),
-                pa.array(dec_sorted[pixel_start:n]),
-                pa.array(pix_sorted[pixel_start:n]),
-            ],
-            names=[ra_col, dec_col, "coarse_pixel"],
+    try:
+        batches = (
+            batch.slice(start, batch_size)
+            for batch in reader
+            for start in range(0, batch.num_rows, batch_size)
         )
-        if writer is None:
-            writer = pq.ParquetWriter(str(path), pixel_batch.schema)
-        assert writer is not None
-        writer.write_batch(pixel_batch)
-        n_rows += len(pixel_batch)
-        pixel_to_rgs.setdefault(pix, []).append(rg_idx)
-        rg_idx += 1
+        for batch in batches:
+            ra_np = batch.column(ra_col).to_numpy().astype("f8", copy=False)
+            dec_np = batch.column(dec_col).to_numpy().astype("f8", copy=False)
+            ra_t = torch.from_numpy(ra_np.copy())
+            dec_t = torch.from_numpy(dec_np.copy())
+            pixels = _healpix.ang2pix(
+                coarse_nside, ra_t, dec_t, nest=True, lonlat=True
+            )
+            pixels_np = pixels.numpy().astype(np.int64)
 
-    if writer is not None:
-        writer.close()
-    else:
-        raise ValueError("catalog is empty")
+            order = np.argsort(pixels_np, kind="stable")
+            n = len(order)
+            if n == 0:
+                continue
+
+            ra_sorted = ra_np[order]
+            dec_sorted = dec_np[order]
+            pix_sorted = pixels_np[order]
+            row_sorted = order.astype(np.int64) + n_rows
+
+            pixel_start = 0
+            for i in range(1, n):
+                if pix_sorted[i] != pix_sorted[pixel_start]:
+                    pix = int(pix_sorted[pixel_start])
+                    pixel_batch = pa.RecordBatch.from_arrays(
+                        [
+                            pa.array(ra_sorted[pixel_start:i]),
+                            pa.array(dec_sorted[pixel_start:i]),
+                            pa.array(pix_sorted[pixel_start:i]),
+                            pa.array(row_sorted[pixel_start:i]),
+                        ],
+                        names=["lon", "lat", "coarse_pixel", "source_row"],
+                    )
+                    if writer is None:
+                        writer = pq.ParquetWriter(str(path), pixel_batch.schema)
+                    assert writer is not None
+                    writer.write_batch(pixel_batch)
+                    n_rows += len(pixel_batch)
+                    pixel_to_rgs.setdefault(pix, []).append(rg_idx)
+                    rg_idx += 1
+                    pixel_start = i
+
+            # last pixel group in this batch
+            pix = int(pix_sorted[pixel_start])
+            pixel_batch = pa.RecordBatch.from_arrays(
+                [
+                    pa.array(ra_sorted[pixel_start:n]),
+                    pa.array(dec_sorted[pixel_start:n]),
+                    pa.array(pix_sorted[pixel_start:n]),
+                    pa.array(row_sorted[pixel_start:n]),
+                ],
+                names=["lon", "lat", "coarse_pixel", "source_row"],
+            )
+            if writer is None:
+                writer = pq.ParquetWriter(str(path), pixel_batch.schema)
+            assert writer is not None
+            writer.write_batch(pixel_batch)
+            n_rows += len(pixel_batch)
+            pixel_to_rgs.setdefault(pix, []).append(rg_idx)
+            rg_idx += 1
+    finally:
+        if writer is not None:
+            writer.close()
+        if mmap is not None:
+            mmap.close()
 
     return pixel_to_rgs, n_rows
 
@@ -1138,15 +1173,17 @@ def crossmatch_sky_from_arrow(
     left_columns: tuple[str, str] = ("ra", "dec"),
     right_columns: tuple[str, str] = ("ra", "dec"),
     batch_size: int = 131072,
+    find: str = "best",
 ) -> CrossmatchResult:
-    """Bounded-memory crossmatch via HEALPix tiling — no catalog is loaded
-    into memory at once.
+    """Crossmatch Arrow inputs through temporary HEALPix tiles.
 
     Both catalogs are streamed once (partitioned by coarse HEALPix pixel
     into temporary Parquet files with a ``coarse_pixel`` column).  Per-pixel
     tiles are then loaded one at a time for fine-grained distance
-    computation.  Memory scales with the largest per-pixel tile, not the
-    total catalog size.
+    computation. Coordinate memory scales with the largest tile and its
+    neighboring right tiles. Pixel metadata and returned pairs remain in RAM.
+    Indices always refer to the original input row order, including across
+    batches. Use them to select native ID columns without converting IDs to float.
 
     For uniformly distributed sky positions and a well-chosen coarse nside,
     per-pixel tile size is typically a few thousand rows regardless of
@@ -1164,16 +1201,29 @@ def crossmatch_sky_from_arrow(
         ``(ra_column_name, dec_column_name)`` for each catalog.
     batch_size
         Row count per streaming batch during the tiling phase.
+    find
+        ``"best"`` selects one nearest right row per left row, breaking ties
+        by original right row index. ``"all"`` returns every pair in radius.
     """
     import pyarrow.parquet as pq
 
+    if radius_arcsec <= 0.0:
+        raise ValueError("radius_arcsec must be positive")
+    if find not in ("best", "all"):
+        raise ValueError("find must be 'best' or 'all'")
     tmpdir = tempfile.mkdtemp(prefix="torchsky_xmatch_")
     try:
         left_path = Path(tmpdir) / "left.parquet"
         right_path = Path(tmpdir) / "right.parquet"
-        coarse_nside = _nside_for_cap(math.radians(radius_arcsec / 3600.0))
+        coarse_nside = _choose_default_coarse_nside(
+            torch.empty(0),
+            torch.empty(0),
+            torch.empty(0),
+            torch.empty(0),
+            radius_arcsec=radius_arcsec,
+        )
 
-        left_pixel_map, _ = _tile_catalog_to_parquet(
+        left_pixel_map, n_left = _tile_catalog_to_parquet(
             left_source,
             ra_col=left_columns[0],
             dec_col=left_columns[1],
@@ -1189,19 +1239,19 @@ def crossmatch_sky_from_arrow(
             path=right_path,
             batch_size=batch_size,
         )
+        if n_left == 0 or n_right == 0:
+            return _empty_crossmatch(torch.device("cpu"))
 
         left_pixels = set(left_pixel_map)
         right_pixels = set(right_pixel_map)
 
-        radius_deg = radius_arcsec / 3600.0
-        candidate_radius_rad = math.radians(radius_deg) + (
+        candidate_radius_rad = math.radians(radius_arcsec / 3600.0) + (
             2.0 * _healpix.max_pixrad(coarse_nside, degrees=False)
         )
 
         left_hits: list[Tensor] = []
         right_hits: list[Tensor] = []
         sep_hits: list[Tensor] = []
-        left_offset = 0
         device = torch.device("cpu")
 
         left_pf = pq.ParquetFile(str(left_path))
@@ -1211,7 +1261,7 @@ def crossmatch_sky_from_arrow(
             left_rgs = left_pixel_map[left_pixel]
             left_tables = left_pf.read_row_groups(
                 left_rgs,
-                columns=[left_columns[0], left_columns[1]],
+                columns=["lon", "lat", "source_row"],
             )
             left_ra = torch.from_numpy(
                 left_tables.column(0).to_numpy().copy().astype("f8", copy=False)
@@ -1219,6 +1269,7 @@ def crossmatch_sky_from_arrow(
             left_dec = torch.from_numpy(
                 left_tables.column(1).to_numpy().copy().astype("f8", copy=False)
             )
+            left_rows = torch.from_numpy(left_tables.column(2).to_numpy().copy())
             count = int(left_ra.numel())
             if count == 0:
                 continue
@@ -1228,7 +1279,6 @@ def crossmatch_sky_from_arrow(
             )
             relevant_right = set(cand_pixels.tolist()) & right_pixels
             if not relevant_right:
-                left_offset += count
                 continue
 
             right_rg_indices = [
@@ -1237,7 +1287,7 @@ def crossmatch_sky_from_arrow(
             right_rg_indices.sort()
             right_tables = right_pf.read_row_groups(
                 right_rg_indices,
-                columns=[right_columns[0], right_columns[1]],
+                columns=["lon", "lat", "source_row"],
             )
             right_ra = torch.from_numpy(
                 right_tables.column(0).to_numpy().copy().astype("f8", copy=False)
@@ -1245,41 +1295,22 @@ def crossmatch_sky_from_arrow(
             right_dec = torch.from_numpy(
                 right_tables.column(1).to_numpy().copy().astype("f8", copy=False)
             )
-            n_right = int(right_ra.numel())
-            if n_right == 0:
-                left_offset += count
-                continue
-
-            left_abs = torch.arange(
-                left_offset, left_offset + count, dtype=torch.int64, device=device
+            right_rows = torch.from_numpy(right_tables.column(2).to_numpy().copy())
+            # Input ordering makes tensor matcher's tie break the global row index.
+            order = torch.argsort(right_rows, stable=True)
+            right_rows = right_rows[order]
+            matched = crossmatch_sky(
+                left_ra,
+                left_dec,
+                right_ra[order],
+                right_dec[order],
+                radius_arcsec=radius_arcsec,
+                find=find,
             )
-            left_ra_2d = left_ra.unsqueeze(1)
-            left_dec_2d = left_dec.unsqueeze(1)
-
-            best_sep = torch.full((count,), torch.inf, dtype=torch.float64)
-            best_idx = torch.full((count,), -1, dtype=torch.int64)
-            for right_ids in range(0, n_right, 65536):
-                chunk = slice(right_ids, min(right_ids + 65536, n_right))
-                sep = great_circle_distance(
-                    left_ra_2d,
-                    left_dec_2d,
-                    right_ra[chunk].unsqueeze(0),
-                    right_dec[chunk].unsqueeze(0),
-                    degrees=True,
-                )
-                cand_sep, cand_idx = sep.min(dim=1)
-                improved = cand_sep < best_sep
-                if bool(improved.any()):
-                    best_sep = torch.where(improved, cand_sep, best_sep)
-                    best_idx = torch.where(improved, right_ids + cand_idx, best_idx)
-
-            mask = best_sep <= radius_deg
-            if bool(mask.any()):
-                left_hits.append(left_abs[mask])
-                right_hits.append(best_idx[mask])
-                sep_hits.append(best_sep[mask] * 3600.0)
-
-            left_offset += count
+            if matched.left_index.numel():
+                left_hits.append(left_rows[matched.left_index])
+                right_hits.append(right_rows[matched.right_index])
+                sep_hits.append(matched.separation_arcsec)
 
         return _finalize_crossmatch(
             left_hits,
@@ -1287,9 +1318,10 @@ def crossmatch_sky_from_arrow(
             sep_hits,
             device=device,
             stats=_CrossmatchStats(
-                left_points=left_offset,
+                left_points=n_left,
                 right_points=n_right,
             ),
+            sort_within_left=find == "all",
         )
     finally:
         import shutil
