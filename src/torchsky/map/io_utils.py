@@ -6,9 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import torch
+import torchfits
 from torch import Tensor
-
-import torchfits.cpp as _cpp
 
 from ..hdu import HDUList, Header, TensorHDU
 from ..io import read
@@ -314,7 +313,7 @@ def _observation_header_for_area_scaling(
         path = getattr(obs, "path")
         if path is not None and (isinstance(hdu, int) or hdu is None):
             hdr_out = dict(
-                Header(_cpp.read_header_dict(str(path), 0 if hdu is None else hdu))
+                Header(torchfits.read_header(str(path), 0 if hdu is None else hdu))
             )
     except _HEADER_PROBE_EXC:
         hdr_out = None
