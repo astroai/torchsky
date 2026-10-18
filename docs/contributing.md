@@ -35,25 +35,22 @@ work instead of a bare `python` or `python3` from your shell.
 - Python package: `src/torchsky/`
 - Native extension: `src/torchsky/cpp_src/`
 - Tests: `tests/`
-- Benchmarks: `benchmarks/`
 - Docs: `docs/`
 
 Local files that are intentionally not committed:
 
 - large downloaded real-data inputs under `data/`
-- generated benchmark artifacts under `data/benchmark_results/`
 - temporary staging files under `data/_tmp/`
 
-Fresh clones should recreate those products locally using the commands in
-`docs/benchmarks.md`.
+Scientific benchmark inputs, campaign outputs, and scorecards are owned by the
+sibling `torchsky-harness` repository.
 
 ```
 src/torchsky/          Python package
 src/torchsky/cpp_src/  C++ native geometry/compute extension
 src/torchsky/wcs/      Pure-PyTorch WCS implementation
 src/torchsky/sphere/   HEALPix, spherical geometry, SHT
-tests/                  Unit and integration tests
-benchmarks/             Benchmark scripts and upstream-derived validation gates
+tests/                  Bounded unit, API, regression, adjoint, and device tests
 docs/                   Documentation
 examples/               Runnable example scripts
 ```
@@ -103,11 +100,14 @@ pixi run typecheck
 pixi run -e test -- pytest tests/test_foo.py
 ```
 
-## Benchmarks
+## Scientific evaluation
 
-For investigation, narrow scope with domain-specific tasks such as `bench-wcs`,
-`bench-sphere`, and `bench-map-acceptance-smoke`. `bench-all` is
-comprehensive and belongs on CANFAR for resource-intensive runs.
+Scientific benchmarks, exhaustive parity, real-data validation, comparator
+environments, and CANFAR campaigns run from
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness). Core changes
+retain bounded correctness and performance smoke contracts. See the
+[evaluation guide](benchmarks.md) for the boundary and harness methodology for
+run instructions.
 
 ## Documentation Policy
 
@@ -126,21 +126,20 @@ cross-package contract here.
 
 Use `docs/release.md` as the canonical runbook.
 
-Minimum gates:
+Release and package validation:
 
-1. Run release benchmarks and update `docs/benchmarks.md`.
+1. Run `pixi run preflight-push` and the targeted tests for changed behavior.
+   Run `pixi run typecheck` when Python types or public signatures change.
 2. Ensure `docs/changelog.md` is final and versions are synced in:
    - `pyproject.toml`
    - `pixi.toml`
    - `src/torchsky/__init__.py`
-3. Ensure CI is green.
-4. Build and validate artifacts:
+3. Ensure GitHub package CI is green and build artifacts as required by the
+   release workflow. Full local test gates are opt-in under `AGENTS.md`.
 
-```bash
-pixi run bench-all
-```
-
-Include benchmark evidence in PRs that touch performance-sensitive paths.
+For performance claims, record an appropriately scoped harness run and link its
+subject revision, harness revision, and scorecard in the PR. Do not make
+scientific campaigns implicit core release gates.
 
 ## PR guidelines
 

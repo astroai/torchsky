@@ -158,6 +158,11 @@ class Catalog:
             columns=extras,
         )
 
+    @property
+    def state(self) -> CatalogState:
+        """Return this catalog's celestial kinematic state as a :class:`CatalogState`."""
+        return self.to_state()
+
     def to_state(self) -> CatalogState:
         if self.frame in _OBSERVED_FRAMES:
             raise ValueError(

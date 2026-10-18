@@ -16,7 +16,6 @@ from torchsky.map import (
     PSFSpec,
     field_image_residual_product,
     field_image_quality_metrics,
-    field_quality_acceptance_report,
     field_quality_scorecard,
     fit_field_model,
     make_residual_tile_basis_field,
@@ -474,60 +473,6 @@ def test_field_quality_scorecard_groups_bands_and_tracks_extrema() -> None:
     assert scorecard["extrema"]["lowest_residual_snr"]["index"] == 1
     assert scorecard["extrema"]["lowest_support_fraction"]["index"] == 2
 
-
-def test_field_quality_acceptance_report_flags_explicit_threshold_violations() -> None:
-    observations = (
-        FieldObservation(
-            image=torch.ones((2, 2), dtype=torch.float32),
-            header=_tan_header(2, crval1=150.0, crval2=2.0, scale_deg=0.01),
-            wavelength=5000.0,
-            band_name="g",
-        ),
-        FieldObservation(
-            image=torch.ones((2, 2), dtype=torch.float32),
-            header=_tan_header(2, crval1=150.0, crval2=2.0, scale_deg=0.01),
-            wavelength=6500.0,
-            band_name="r",
-        ),
-    )
-    metrics = (
-        {
-            "weighted_rmse": 0.05,
-            "residual_snr": 20.0,
-            "support_fraction": 0.95,
-            "effective_weight_sum": 10.0,
-            "psf_residual_alignment": 0.1,
-        },
-        {
-            "weighted_rmse": 0.2,
-            "residual_snr": 3.0,
-            "support_fraction": 0.4,
-            "effective_weight_sum": 2.0,
-        },
-    )
-
-    report = field_quality_acceptance_report(
-        metrics,
-        observations=observations,
-        max_weighted_rmse=0.1,
-        min_residual_snr=5.0,
-        min_support_fraction=0.5,
-        min_effective_weight_sum=3.0,
-        max_abs_psf_residual_alignment=0.2,
-    )
-
-    assert report["passed"] is False
-    assert report["scorecard"]["by_band"]["g"]["observation_count"] == 1
-    assert {
-        (violation["index"], violation["metric"], violation.get("reason"))
-        for violation in report["violations"]
-    } == {
-        (1, "weighted_rmse", None),
-        (1, "residual_snr", None),
-        (1, "support_fraction", None),
-        (1, "effective_weight_sum", None),
-        (1, "psf_residual_alignment", "missing"),
-    }
 
 
 def test_select_field_residual_tiles_ranks_weighted_residual_energy() -> None:

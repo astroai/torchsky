@@ -169,21 +169,32 @@ def _smoke_test_torch_compile() -> bool:
         return False
 
 
-_COMPILE_OK: bool = _smoke_test_torch_compile()
+_COMPILE_OK: bool | None = None
+
+
+def _compile_available() -> bool:
+    """Probe torch.compile lazily on first use, never at import time."""
+    global _COMPILE_OK
+    if _COMPILE_OK is None:
+        if os.environ.get("TORCHSKY_SHT_COMPILE", "1") == "0":
+            _COMPILE_OK = False
+        else:
+            _COMPILE_OK = _smoke_test_torch_compile()
+    return bool(_COMPILE_OK)
 
 
 def _maybe_compile(fn):
-    """Compile when available, falling back if a later specialization fails."""
-    if not _COMPILE_OK:
-        return fn
-    compiled = torch.compile(fn)
+    """Compile on first call when available, falling back on specialization errors."""
+    compiled = None
     compile_disabled = False
 
     @functools.wraps(fn)
     def _compiled_or_eager(*args, **kwargs):
-        nonlocal compile_disabled
-        if compile_disabled:
+        nonlocal compiled, compile_disabled
+        if compile_disabled or not _compile_available():
             return fn(*args, **kwargs)
+        if compiled is None:
+            compiled = torch.compile(fn)
         try:
             return compiled(*args, **kwargs)
         except Exception as compile_error:

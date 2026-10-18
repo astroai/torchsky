@@ -126,25 +126,19 @@ pixi run -e test -- pytest tests/test_map_image_plane.py tests/test_map_product.
 Repository pre-push verifier remains:
 
 ```text
-pixi run ci-local
+pixi run preflight-push
 ```
+
+Run the focused map contract tests alongside implementation changes. Full local
+tests are opt-in under current repository policy.
 
 ## Benchmark and parity plan
 
-Extend `benchmarks/bench_map_projection_mosaic_suite.py` rather than creating a
-new benchmark surface. Add small/medium seam, high-declination, rotated-CD, and
-distorted-edge planning cases and report:
-
-- planning wall time;
-- planned output pixel count;
-- fraction of independently dense boundary samples contained;
-- maximum boundary overshoot in output pixels;
-- end-to-end coadd coverage/RMSE on the planned grid.
-
-In the optional `map-compat` environment, compare target containment and pixel
-count against `reproject.mosaicking.find_optimal_celestial_wcs` (parity
-reference only, never a runtime path). Run the existing projection/mosaic suite
-before and after to ensure no regression on ordinary TAN/SIP cases.
+Survey-scale timing, comparator parity, and quantitative coadd evaluation are
+owned by [`torchsky-harness`](https://github.com/astroai/torchsky-harness).
+Keep this core change bounded to the map-planning contract and its tests; add
+campaign cases or acceptance evidence in the harness against an explicitly
+identified torchsky subject.
 
 ## Audit summary and why this wins
 

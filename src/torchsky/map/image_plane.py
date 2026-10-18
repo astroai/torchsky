@@ -144,6 +144,8 @@ class ImageObservation:
     photometric_scale: float = 1.0
     background_offset: float = 0.0
     wavelength: float | None = None
+    wavelength_map: Tensor | None = None
+    ifu_wcs: Any | None = None
     spectral_min: float | None = None
     spectral_max: float | None = None
     transmission_center: float | None = None
@@ -158,7 +160,7 @@ class ImageObservation:
     weight_is_inverse_variance: bool = False
     data: Tensor | None = None
     header: dict[str, Any] | None = None
-    wcs: WCS | dict[str, Any] | None = None
+    wcs: WCS | dict[str, Any] | Any | None = None
     weight_map: Tensor | None = None
     mask: Tensor | None = None
     primary_beam: Tensor | None = None
@@ -174,6 +176,20 @@ class ImageObservation:
     exposure_time: float | None = None
     head_path: str | None = None
     use_sidecar_head: bool = False
+    dcr_zenith_deg: float | None = None
+    dcr_parallactic_deg: float = 0.0
+    dcr_ref_wavelength: float = 5000.0
+    dcr_pressure_hpa: float = 600.0
+    dcr_temperature_c: float = 7.0
+    tracking_rate: tuple[float, float] | None = None
+    mjd_obs: float | None = None
+    reference_mjd: float | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.weight, Tensor) and self.weight.ndim >= 2:
+            if self.weight_map is None:
+                self.weight_map = self.weight
+            self.weight = 1.0
 
 
 Observation = ImageObservation
@@ -187,6 +203,9 @@ class ResampleConfig:
     pixfrac: float = 1.0
     semantics: MapValueSemantics = "surface_brightness"
     area_scaling: bool | None = None
+    spectral_kernel: Literal["linear", "drizzle", "emsm", "nearest"] = "linear"
+    spectral_pixfrac: float = 1.0
+    emsm_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -228,6 +247,7 @@ class StackConfig:
     clip_sigma: float = 4.0
     clip_iterations: int = 3
     tile_hw: tuple[int, int] | None = None
+    tile_size: int | tuple[int, int] | None = None
     footprint_order: int | None = None
     scratch_dir: str | Path | None = None
 
@@ -249,8 +269,39 @@ class MapResult:
     var_flat: Tensor | None = None
 
     @property
+    def image(self) -> Tensor:
+        return self.data
+
+    @property
+    def shape(self) -> torch.Size:
+        return self.data.shape
+
+    @property
     def wcs(self) -> WCS:
         return WCS(self.header)
+
+
+@dataclass
+class HealpixResult:
+    """Result of direct-to-HEALPix coaddition."""
+
+    data: Any
+    weight: Any
+    nside: int
+    nest: bool = False
+    sparse: bool = False
+    overlap_count: Any | None = None
+    coverage_moc: MOC | None = None
+
+    @property
+    def image(self) -> Any:
+        return self.data
+
+    @property
+    def sparse_map(self) -> Any | None:
+        from ..sphere.sparse import HealSparseMap
+
+        return self.data if isinstance(self.data, HealSparseMap) else None
 
 
 @dataclass(frozen=True)
@@ -297,14 +348,52 @@ class MultiBandMapResult:
     band_observation_counts: Tensor | None = None
 
     @property
+    def cube(self) -> Tensor:
+        return self.data
+
+    @property
     def wavelength(self) -> Tensor:
         return self.spectral_axis.to_wavelength()
 
 
-@dataclass
+@dataclass(init=False)
 class PlannedImagePlaneTarget:
     header: dict
     shape: tuple[int, int]
+
+    def __init__(
+        self,
+        header: dict[str, Any] | WCS | None = None,
+        shape: tuple[int, int] | None = None,
+        *,
+        wcs: WCS | dict[str, Any] | None = None,
+    ) -> None:
+        src = wcs if wcs is not None else header
+        if src is None:
+            raise ValueError("Either header or wcs must be provided to Target")
+        if isinstance(src, WCS):
+            hdr = src.to_header(relax=True, include_naxis=True)
+            inferred_shape = src.array_shape
+        elif hasattr(src, "to_header"):
+            hdr = dict(src.to_header())
+            inferred_shape = getattr(src, "array_shape", None)
+        else:
+            hdr = dict(src)
+            if "NAXIS1" in hdr and "NAXIS2" in hdr:
+                inferred_shape = (int(hdr["NAXIS2"]), int(hdr["NAXIS1"]))
+            else:
+                inferred_shape = None
+        if shape is None:
+            if inferred_shape is None:
+                raise ValueError("shape=(H, W) must be provided when header/wcs lacks NAXIS1/2")
+            shape_hw = (int(inferred_shape[0]), int(inferred_shape[1]))
+        else:
+            shape_hw = (int(shape[0]), int(shape[1]))
+        hdr.setdefault("NAXIS", 2)
+        hdr["NAXIS1"] = int(shape_hw[1])
+        hdr["NAXIS2"] = int(shape_hw[0])
+        self.header = hdr
+        self.shape = shape_hw
 
     @property
     def wcs(self) -> WCS:
@@ -370,6 +459,10 @@ class SpectralCubeMapResult:
     correlation_factor: Tensor | None = None
     overlap_count: Tensor | None = None
     coverage_mocs: tuple[MOC | None, ...] | None = None
+
+    @property
+    def cube(self) -> Tensor:
+        return self.data
 
     @property
     def wavelength(self) -> Tensor:
@@ -2896,6 +2989,38 @@ def plan_cube(
     )
 
 
+def _obs_target_pixel_bbox(
+    source_wcs: WCS,
+    source_shape: tuple[int, int],
+    full_target_wcs: WCS,
+    *,
+    margin: float = 8.0,
+) -> tuple[float, float, float, float] | None:
+    """Return (y_min, y_max, x_min, x_max) of source_wcs on full_target_wcs, or None if unbounded."""
+    hs, ws = int(source_shape[0]), int(source_shape[1])
+    if hs <= 0 or ws <= 0:
+        return (0.0, -1.0, 0.0, -1.0)
+    try:
+        t = torch.linspace(0.0, 1.0, 9, dtype=source_wcs.crval.dtype, device=source_wcs.device)
+        x0, x1 = -0.5, float(ws) - 0.5
+        y0, y1 = -0.5, float(hs) - 0.5
+        xs = torch.cat([x0 + t * (x1 - x0), torch.full_like(t, x1), x1 - t * (x1 - x0), torch.full_like(t, x0)])
+        ys = torch.cat([torch.full_like(t, y0), y0 + t * (y1 - y0), torch.full_like(t, y1), y1 - t * (y1 - y0)])
+        ra, dec = source_wcs.pixel_to_world(xs, ys)
+        ra, dec = _convert_world_between_wcs(ra, dec, source_wcs, full_target_wcs)
+        tx, ty = full_target_wcs.world_to_pixel(ra, dec)
+        if not bool((torch.isfinite(tx) & torch.isfinite(ty)).all()):
+            return None
+        return (
+            float(ty.min().item()) - margin,
+            float(ty.max().item()) + margin,
+            float(tx.min().item()) - margin,
+            float(tx.max().item()) + margin,
+        )
+    except Exception:
+        return None
+
+
 def _coadd_image_plane_spatial_tiles(
     observations: Sequence[ImageObservation],
     *,
@@ -2924,6 +3049,7 @@ def _coadd_image_plane_spatial_tiles(
     th = max(int(tile_height), 1)
     tw = max(int(tile_width), 1)
     device = map_device
+    full_target_wcs = WCS(header_dict)
     full_context = torch.zeros(
         (math.ceil(len(observations) / 32), H, W),
         dtype=torch.int64,
@@ -2941,7 +3067,7 @@ def _coadd_image_plane_spatial_tiles(
         )
     mosaic_representative_area_sr = (
         representative_pixel_area_sr(
-            WCS(header_dict), target_shape, device=device
+            full_target_wcs, target_shape, device=device
         )
         if mosaic_surface_brightness_area_scaling
         else None
@@ -2955,7 +3081,7 @@ def _coadd_image_plane_spatial_tiles(
         full_pixel_area_sr = None
         if value_semantics == "flux":
             full_pixel_area_sr = pixel_area_sr_map(
-                WCS(header_dict), target_shape, device=device
+                full_target_wcs, target_shape, device=device
             )
 
         def overlap_contributions():
@@ -2978,9 +3104,19 @@ def _coadd_image_plane_spatial_tiles(
                     background_estimator=background_estimator,
                 )
                 source_wcs = WCS(header_dict_obs)
+                obs_bbox = _obs_target_pixel_bbox(
+                    source_wcs, (int(image.shape[0]), int(image.shape[1])), full_target_wcs
+                )
                 for y0 in range(0, H, th):
                     for x0 in range(0, W, tw):
                         y1, x1 = min(y0 + th, H), min(x0 + tw, W)
+                        if obs_bbox is not None and (
+                            y1 <= obs_bbox[0]
+                            or y0 >= obs_bbox[1]
+                            or x1 <= obs_bbox[2]
+                            or x0 >= obs_bbox[3]
+                        ):
+                            continue
                         tile_shape = (y1 - y0, x1 - x0)
                         sub_header, _ = _subtarget_header_for_window(
                             header_dict,
@@ -3202,9 +3338,19 @@ def _coadd_image_plane_spatial_tiles(
                 background_estimator=background_estimator,
             )
             source_wcs = WCS(header_dict_obs)
+            obs_bbox = _obs_target_pixel_bbox(
+                source_wcs, (int(image.shape[0]), int(image.shape[1])), full_target_wcs
+            )
             for y0 in range(0, H, th):
                 for x0 in range(0, W, tw):
                     y1, x1 = min(y0 + th, H), min(x0 + tw, W)
+                    if obs_bbox is not None and (
+                        y1 <= obs_bbox[0]
+                        or y0 >= obs_bbox[1]
+                        or x1 <= obs_bbox[2]
+                        or x0 >= obs_bbox[3]
+                    ):
+                        continue
                     tile_shape = (y1 - y0, x1 - x0)
                     sub_header, _ = _subtarget_header_for_window(
                         header_dict,
@@ -5439,6 +5585,90 @@ def match_sky(
     return updated_obs, {"mode": "mesh", "corrections": corrections}
 
 
+def _resolve_tile_hw(
+    tile_size: int | tuple[int, int] | None,
+    spatial_tile_hw: tuple[int, int] | None,
+    s_cfg: StackConfig,
+) -> tuple[int, int] | None:
+    raw = (
+        tile_size
+        if tile_size is not None
+        else (spatial_tile_hw if spatial_tile_hw is not None else (s_cfg.tile_size if s_cfg.tile_size is not None else s_cfg.tile_hw))
+    )
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return (int(raw), int(raw))
+    return (int(raw[0]), int(raw[1]))
+
+
+def _apply_observation_astrometric_shifts(
+    observations: Sequence[Observation],
+    device: torch.device | str | None,
+) -> list[Observation]:
+    """Apply DCR and non-sidereal moving-target ephemeris offsets to observation headers."""
+    from ..wcs.iau2006 import apply_dcr, apply_ephemeris_offset
+
+    needs_shift = any(
+        obs.dcr_zenith_deg is not None
+        or (obs.tracking_rate is not None and obs.mjd_obs is not None and obs.reference_mjd is not None)
+        for obs in observations
+    )
+    if not needs_shift:
+        return list(observations)
+
+    map_device = _resolve_map_device(device)
+    read_dev = str(map_device)
+    shifted: list[Observation] = []
+    for obs in observations:
+        if obs.dcr_zenith_deg is None and not (
+            obs.tracking_rate is not None
+            and obs.mjd_obs is not None
+            and obs.reference_mjd is not None
+        ):
+            shifted.append(obs)
+            continue
+        img, hdr = load_observation_image_and_header(obs, device=read_dev)
+        hdr_copy = dict(hdr)
+        ra0 = torch.tensor(float(hdr_copy.get("CRVAL1", 0.0)), dtype=torch.float64)
+        dec0 = torch.tensor(float(hdr_copy.get("CRVAL2", 0.0)), dtype=torch.float64)
+        if obs.dcr_zenith_deg is not None and obs.wavelength is not None:
+            ra0, dec0 = apply_dcr(
+                ra0,
+                dec0,
+                float(obs.wavelength),
+                zenith_angle_deg=float(obs.dcr_zenith_deg),
+                parallactic_angle_deg=float(obs.dcr_parallactic_deg),
+                reference_wavelength_angstrom=float(obs.dcr_ref_wavelength),
+                pressure_hpa=float(obs.dcr_pressure_hpa),
+                temperature_c=float(obs.dcr_temperature_c),
+            )
+        if (
+            obs.tracking_rate is not None
+            and obs.mjd_obs is not None
+            and obs.reference_mjd is not None
+        ):
+            ra0, dec0 = apply_ephemeris_offset(
+                ra0,
+                dec0,
+                d_ra_cosdec_arcsec_per_hr=float(obs.tracking_rate[0]),
+                d_dec_arcsec_per_hr=float(obs.tracking_rate[1]),
+                mjd_obs=float(obs.mjd_obs),
+                mjd_ref=float(obs.reference_mjd),
+            )
+        hdr_copy["CRVAL1"] = float(ra0.item())
+        hdr_copy["CRVAL2"] = float(dec0.item())
+        shifted.append(
+            dataclasses.replace(
+                obs,
+                data=img,
+                header=hdr_copy,
+                wcs=WCS(hdr_copy),
+            )
+        )
+    return shifted
+
+
 def coadd(
     observations: Sequence[Observation],
     target: Target | Mapping[str, Any] | WCS | None = None,
@@ -5454,6 +5684,7 @@ def coadd(
     clip_sigma: float | None = None,
     clip_iterations: int | None = None,
     footprint_order: int | None = None,
+    tile_size: int | tuple[int, int] | None = None,
     spatial_tile_hw: tuple[int, int] | None = None,
     surface_brightness_area_scaling: bool | None = None,
     output_path: str | None = None,
@@ -5465,7 +5696,7 @@ def coadd(
     """Unified 2D image-plane mosaic / coadd entry point.
 
     Accepts either structured configuration objects (``resample``, ``sky``, ``outliers``, ``stack``)
-    or direct keyword arguments (``kernel``, ``pixfrac``, ``semantics``, ``method``).
+    or direct keyword arguments (``kernel``, ``pixfrac``, ``semantics``, ``method``, ``tile_size``).
     """
     r_cfg = resample or ResampleConfig()
     s_cfg = stack or StackConfig()
@@ -5482,9 +5713,7 @@ def coadd(
         if surface_brightness_area_scaling is not None
         else r_cfg.area_scaling
     )
-    resolved_tile_hw = (
-        spatial_tile_hw if spatial_tile_hw is not None else s_cfg.tile_hw
-    )
+    resolved_tile_hw = _resolve_tile_hw(tile_size, spatial_tile_hw, s_cfg)
     resolved_footprint_order = (
         footprint_order if footprint_order is not None else s_cfg.footprint_order
     )
@@ -5492,7 +5721,7 @@ def coadd(
 
     bg_est = background_estimator
     sky_corr = cross_exposure_sky_corrector
-    obs_to_stack = list(observations)
+    obs_to_stack = _apply_observation_astrometric_shifts(observations, device)
     target_header = _coerce_target_header(target)
 
     if sky is not None and sky.mode != "none" and sky.subtract:
@@ -5604,8 +5833,9 @@ def coadd_multiband(
     """Clean multi-band image-plane coadd entry point."""
     r_cfg = resample or ResampleConfig()
     s_cfg = stack or StackConfig()
+    obs_shifted = _apply_observation_astrometric_shifts(observations, device)
     return coadd_image_plane_multiband(
-        observations,
+        obs_shifted,
         target_header=_coerce_target_header(target),
         footprint_order=footprint_order
         if footprint_order is not None
@@ -5619,6 +5849,306 @@ def coadd_multiband(
     )
 
 
+def _has_3d_ifu_observations(observations: Sequence[Observation]) -> bool:
+    from ..wcs.gwcs_sampling import IFUSliceWCS
+
+    return any(
+        obs.wavelength_map is not None
+        or obs.ifu_wcs is not None
+        or isinstance(obs.wcs, IFUSliceWCS)
+        for obs in observations
+    )
+
+
+def _coadd_ifu_3d_cube(
+    observations: Sequence[Observation],
+    target: CubeTarget | Target | Mapping[str, Any] | WCS | None,
+    *,
+    r_cfg: ResampleConfig,
+    spectral_axis: SpectralAxis | Sequence[float] | Tensor | None,
+    spectral_bin_edges: Sequence[float] | Tensor | None,
+    spectral_unit: str,
+    spectral_type: str,
+    spectral_kernel: Literal["linear", "drizzle", "emsm", "nearest"],
+    pixfrac: float,
+    spectral_pixfrac: float,
+    emsm_scale: float,
+    device: torch.device | str | None,
+) -> SpectralCubeMapResult:
+    """Build a 3D (N_wave, H, W) cube from 2D IFU detector images with per-pixel (ra, dec, lambda)."""
+    from ..wcs.gwcs_sampling import IFUSliceWCS
+    from ..wcs.iau2006 import apply_dcr, apply_ephemeris_offset
+
+    map_device = _resolve_map_device(device)
+    read_dev = str(map_device)
+
+    if isinstance(target, PlannedImagePlaneCubeTarget):
+        header_dict = dict(target.header)
+        H, W = int(target.shape[0]), int(target.shape[1])
+        if spectral_axis is None:
+            spectral_axis = target.spectral_axis
+        if spectral_bin_edges is None:
+            spectral_bin_edges = target.spectral_bin_edges
+    else:
+        raw_hdr = _coerce_target_header(target)
+        if raw_hdr is None:
+            raise ValueError("target header or CubeTarget is required for 3D IFU cube building")
+        H, W = target_shape_from_header(raw_hdr, fallback=(32, 32))
+        header_dict = normalized_header_for_shape(dict(raw_hdr), (H, W), overrides=None)
+
+    if spectral_axis is None:
+        # Infer from observations' wavelength_map or IFUSliceWCS
+        all_lams: list[Tensor] = []
+        for obs in observations:
+            if obs.wavelength_map is not None:
+                wmap = torch.as_tensor(obs.wavelength_map, dtype=torch.float64)
+                all_lams.append(wmap[torch.isfinite(wmap)])
+            elif obs.wavelength is not None:
+                all_lams.append(torch.tensor([float(obs.wavelength)], dtype=torch.float64))
+        if not all_lams:
+            raise ValueError("spectral_axis must be provided for 3D IFU cube building")
+        cat_lam = torch.cat(all_lams)
+        lmin = float(cat_lam.min().item())
+        lmax = float(cat_lam.max().item())
+        spectral_axis = SpectralAxis(
+            values=torch.linspace(lmin, lmax, 16, dtype=torch.float64),
+            unit=spectral_unit,
+            type=spectral_type,
+        )
+    s_axis = _validated_spectral_axis(
+        spectral_axis, default_unit=spectral_unit, default_type=spectral_type
+    )
+    wave_centers = s_axis.values.to(device=map_device, dtype=torch.float32)
+    N_wave = int(wave_centers.numel())
+    if N_wave > 1:
+        d_wave = (wave_centers[-1] - wave_centers[0]) / float(N_wave - 1)
+    else:
+        d_wave = torch.tensor(1.0, device=map_device, dtype=torch.float32)
+
+    target_wcs = WCS(header_dict).to(map_device)
+    numer = torch.zeros((N_wave, H, W), dtype=torch.float32, device=map_device)
+    denom = torch.zeros((N_wave, H, W), dtype=torch.float32, device=map_device)
+    overlap = torch.zeros((N_wave, H, W), dtype=torch.int32, device=map_device)
+    band_obs_counts = torch.zeros((N_wave,), dtype=torch.int64)
+
+    flat_numer = numer.reshape(-1)
+    flat_denom = denom.reshape(-1)
+    stride_z = H * W
+    stride_y = W
+
+    for obs in observations:
+        if obs.data is not None:
+            raw_img = obs.data.to(device=map_device, dtype=torch.float32)
+            hdr_obs = dict(obs.header) if obs.header is not None else {}
+        else:
+            raw_img, hdr_obs = load_observation_image_and_header(obs, device=read_dev)
+            raw_img = raw_img.to(device=map_device, dtype=torch.float32)
+        src_w = _load_observation_weight_map(obs, raw_img, device=map_device)
+        cal_img, cal_w = _apply_observation_calibration(obs, raw_img, src_w)
+        s_eff = _effective_observation_photometric_scale(obs, hdr_obs)
+        if s_eff != 1.0:
+            cal_img = cal_img * float(s_eff)
+            cal_w = cal_w / float(s_eff * s_eff)
+
+        valid = torch.isfinite(cal_img) & torch.isfinite(cal_w) & (cal_w > 0.0)
+        ifu_obj = (
+            obs.ifu_wcs
+            if obs.ifu_wcs is not None
+            else (obs.wcs if isinstance(obs.wcs, IFUSliceWCS) else None)
+        )
+        if ifu_obj is not None and getattr(ifu_obj, "valid_mask", None) is not None:
+            valid = valid & ifu_obj.valid_mask.to(device=map_device, dtype=torch.bool)
+        if not bool(valid.any()):
+            continue
+
+        yy, xx = torch.nonzero(valid, as_tuple=True)
+        val_v = cal_img[yy, xx].to(dtype=torch.float32)
+        w_v = cal_w[yy, xx].to(dtype=torch.float32)
+
+        w_dtype = torch.float32 if map_device.type == "mps" else torch.float64
+        x_det = xx.to(dtype=w_dtype)
+        y_det = yy.to(dtype=w_dtype)
+        if ifu_obj is not None:
+            ra_d, dec_d, lam_d = ifu_obj.pixel_to_world(x_det, y_det)
+        else:
+            obs_wcs = (
+                obs.wcs
+                if isinstance(obs.wcs, WCS)
+                else WCS(obs.wcs if isinstance(obs.wcs, dict) else hdr_obs)
+            ).to(map_device)
+            ra_d, dec_d = obs_wcs.pixel_to_world(x_det, y_det)
+            if obs.wavelength_map is not None:
+                lam_d = obs.wavelength_map.to(device=map_device, dtype=w_dtype)[yy, xx]
+            elif obs.wavelength is not None:
+                lam_d = torch.full_like(ra_d, float(obs.wavelength))
+            else:
+                raise ValueError("Observation must define ifu_wcs, wavelength_map, or wavelength")
+
+        if obs.dcr_zenith_deg is not None:
+            ra_d, dec_d = apply_dcr(
+                ra_d,
+                dec_d,
+                lam_d,
+                zenith_angle_deg=float(obs.dcr_zenith_deg),
+                parallactic_angle_deg=float(obs.dcr_parallactic_deg),
+                reference_wavelength_angstrom=float(obs.dcr_ref_wavelength),
+                pressure_hpa=float(obs.dcr_pressure_hpa),
+                temperature_c=float(obs.dcr_temperature_c),
+            )
+        if (
+            obs.tracking_rate is not None
+            and obs.mjd_obs is not None
+            and obs.reference_mjd is not None
+        ):
+            ra_d, dec_d = apply_ephemeris_offset(
+                ra_d,
+                dec_d,
+                d_ra_cosdec_arcsec_per_hr=float(obs.tracking_rate[0]),
+                d_dec_arcsec_per_hr=float(obs.tracking_rate[1]),
+                mjd_obs=float(obs.mjd_obs),
+                mjd_ref=float(obs.reference_mjd),
+            )
+
+        xt, yt = target_wcs.world_to_pixel(ra_d, dec_d)
+        xt = xt.to(dtype=torch.float32)
+        yt = yt.to(dtype=torch.float32)
+        lam_f = lam_d.to(dtype=torch.float32)
+        if N_wave > 1:
+            zt = (lam_f - wave_centers[0]) / d_wave.clamp_min(1e-12)
+        else:
+            zt = torch.zeros_like(lam_f)
+
+        ok = torch.isfinite(xt) & torch.isfinite(yt) & torch.isfinite(zt)
+        if not bool(ok.any()):
+            continue
+        xt, yt, zt, val_v, w_v = xt[ok], yt[ok], zt[ok], val_v[ok], w_v[ok]
+        obs_hit_mask = torch.zeros_like(flat_denom, dtype=torch.bool)
+
+        if spectral_kernel == "nearest":
+            ix = torch.round(xt).to(torch.int64)
+            iy = torch.round(yt).to(torch.int64)
+            iz = torch.round(zt).to(torch.int64)
+            in_b = (ix >= 0) & (ix < W) & (iy >= 0) & (iy < H) & (iz >= 0) & (iz < N_wave)
+            if bool(in_b.any()):
+                idx = iz[in_b] * stride_z + iy[in_b] * stride_y + ix[in_b]
+                flat_numer.scatter_add_(0, idx, val_v[in_b] * w_v[in_b])
+                flat_denom.scatter_add_(0, idx, w_v[in_b])
+                obs_hit_mask[idx] = True
+        elif spectral_kernel == "emsm":
+            sigma = max(float(emsm_scale), 1e-3)
+            xc = torch.round(xt).to(torch.int64)
+            yc = torch.round(yt).to(torch.int64)
+            zc = torch.round(zt).to(torch.int64)
+            # Compute normalized 3x3x3 Shepard exponential weights
+            w_neighbors: list[tuple[int, int, int, Tensor]] = []
+            w_norm = torch.zeros_like(xt)
+            for dz in (-1, 0, 1):
+                iz = zc + dz
+                z_ok = (iz >= 0) & (iz < N_wave)
+                dist_z2 = torch.square(iz.to(torch.float32) - zt)
+                for dy in (-1, 0, 1):
+                    iy = yc + dy
+                    zy_ok = z_ok & (iy >= 0) & (iy < H)
+                    dist_zy2 = dist_z2 + torch.square(iy.to(torch.float32) - yt)
+                    for dx in (-1, 0, 1):
+                        ix = xc + dx
+                        in_b = zy_ok & (ix >= 0) & (ix < W)
+                        dist2 = dist_zy2 + torch.square(ix.to(torch.float32) - xt)
+                        wk = torch.where(
+                            in_b,
+                            torch.exp(-dist2 / (sigma * sigma)),
+                            torch.zeros_like(dist2),
+                        )
+                        w_neighbors.append((dz, dy, dx, wk))
+                        w_norm = w_norm + wk
+            w_norm_safe = w_norm.clamp_min(1e-12)
+            for dz, dy, dx, wk in w_neighbors:
+                frac = wk / w_norm_safe
+                pos = frac > 1e-6
+                if not bool(pos.any()):
+                    continue
+                iz = (zc + dz)[pos]
+                iy = (yc + dy)[pos]
+                ix = (xc + dx)[pos]
+                idx = iz * stride_z + iy * stride_y + ix
+                eff_w = w_v[pos] * frac[pos]
+                flat_numer.scatter_add_(0, idx, val_v[pos] * eff_w)
+                flat_denom.scatter_add_(0, idx, eff_w)
+                obs_hit_mask[idx] = True
+        else:
+            # 3D voxel drizzle / trilinear ("drizzle" or "linear")
+            pf_xy = max(float(pixfrac), 1e-6) if spectral_kernel == "drizzle" else 1.0
+            pf_z = max(float(spectral_pixfrac), 1e-6) if spectral_kernel == "drizzle" else 1.0
+            xs = xt - 0.5 * (pf_xy - 1.0)
+            ys = yt - 0.5 * (pf_xy - 1.0)
+            zs = zt - 0.5 * (pf_z - 1.0)
+            x0 = torch.floor(xs).to(torch.int64)
+            y0 = torch.floor(ys).to(torch.int64)
+            z0 = torch.floor(zs).to(torch.int64)
+            dx = torch.clamp((xs - x0.to(torch.float32)) / pf_xy, 0.0, 1.0)
+            dy = torch.clamp((ys - y0.to(torch.float32)) / pf_xy, 0.0, 1.0)
+            dz = torch.clamp((zs - z0.to(torch.float32)) / pf_z, 0.0, 1.0)
+            for oz, wz in ((0, 1.0 - dz), (1, dz)):
+                iz = z0 + oz
+                for oy, wy in ((0, 1.0 - dy), (1, dy)):
+                    iy = y0 + oy
+                    for ox, wx in ((0, 1.0 - dx), (1, dx)):
+                        ix = x0 + ox
+                        frac = wz * wy * wx
+                        in_b = (
+                            (iz >= 0)
+                            & (iz < N_wave)
+                            & (iy >= 0)
+                            & (iy < H)
+                            & (ix >= 0)
+                            & (ix < W)
+                            & (frac > 0.0)
+                        )
+                        if not bool(in_b.any()):
+                            continue
+                        idx = iz[in_b] * stride_z + iy[in_b] * stride_y + ix[in_b]
+                        eff_w = w_v[in_b] * frac[in_b]
+                        flat_numer.scatter_add_(0, idx, val_v[in_b] * eff_w)
+                        flat_denom.scatter_add_(0, idx, eff_w)
+                        obs_hit_mask[idx] = True
+
+        obs_hit_3d = obs_hit_mask.reshape(N_wave, H, W)
+        overlap.add_(obs_hit_3d.to(torch.int32))
+        band_obs_counts.add_(obs_hit_3d.any(dim=(-2, -1)).cpu().to(torch.int64))
+
+    nz = denom > 0.0
+    data = torch.where(nz, numer / denom.clamp_min(1e-12), torch.zeros_like(numer))
+    centers_cpu = s_axis.values.to(dtype=torch.float64).cpu()
+    if spectral_bin_edges is not None:
+        edges_t = _validated_spectral_bin_edges(
+            torch.as_tensor(spectral_bin_edges, dtype=torch.float64), n_band=N_wave
+        )
+        lower_c = edges_t[:-1].clone()
+        upper_c = edges_t[1:].clone()
+    else:
+        lower_c = centers_cpu.clone()
+        upper_c = centers_cpu.clone()
+    band_meta = BandMetadataTable(
+        band_index=torch.arange(N_wave, dtype=torch.int64),
+        center=centers_cpu,
+        lower=lower_c,
+        upper=upper_c,
+        observation_count=band_obs_counts,
+        spectral_weight_sum=band_obs_counts.to(torch.float64),
+        band_names=tuple(None for _ in range(N_wave)),
+    )
+    return SpectralCubeMapResult(
+        spectral_axis=s_axis,
+        band_metadata=band_meta,
+        data=data,
+        weight=denom,
+        header=header_dict,
+        spatial_wcs=WCS(header_dict),
+        inverse_variance=denom,
+        overlap_count=overlap,
+    )
+
+
 def coadd_cube(
     observations: Sequence[Observation],
     target: CubeTarget | Target | Mapping[str, Any] | WCS | None = None,
@@ -5629,20 +6159,50 @@ def coadd_cube(
     pixfrac: float | None = None,
     semantics: MapValueSemantics | None = None,
     method: MapStackingMethod | None = None,
+    spectral_kernel: Literal["linear", "drizzle", "emsm", "nearest"] | None = None,
+    spectral_pixfrac: float | None = None,
+    emsm_scale: float | None = None,
     footprint_order: int | None = None,
     spectral_axis: SpectralAxis | Sequence[float] | Tensor | None = None,
+    wavelengths: SpectralAxis | Sequence[float] | Tensor | None = None,
     spectral_bin_edges: Sequence[float] | Tensor | None = None,
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     device: torch.device | str | None = None,
 ) -> SpectralCubeMapResult:
-    """Clean spectral-cube image-plane coadd entry point."""
+    """Clean spectral-cube image-plane coadd entry point (supports 2D filter bands and 3D IFU slices)."""
+    if spectral_axis is None and wavelengths is not None:
+        spectral_axis = wavelengths
     r_cfg = resample or ResampleConfig()
     s_cfg = stack or StackConfig()
+    resolved_spec_kernel = (
+        spectral_kernel if spectral_kernel is not None else r_cfg.spectral_kernel
+    )
+    if _has_3d_ifu_observations(observations) or resolved_spec_kernel == "emsm":
+        return _coadd_ifu_3d_cube(
+            observations,
+            target,
+            r_cfg=r_cfg,
+            spectral_axis=spectral_axis,
+            spectral_bin_edges=spectral_bin_edges,
+            spectral_unit=spectral_unit,
+            spectral_type=spectral_type,
+            spectral_kernel=resolved_spec_kernel,
+            pixfrac=pixfrac if pixfrac is not None else r_cfg.pixfrac,
+            spectral_pixfrac=(
+                spectral_pixfrac
+                if spectral_pixfrac is not None
+                else r_cfg.spectral_pixfrac
+            ),
+            emsm_scale=emsm_scale if emsm_scale is not None else r_cfg.emsm_scale,
+            device=device,
+        )
+
+    obs_shifted = _apply_observation_astrometric_shifts(observations, device)
     if isinstance(target, PlannedImagePlaneCubeTarget) and spectral_axis is None and spectral_bin_edges is None:
         return coadd_image_plane_cube(
-            observations,
+            obs_shifted,
             target=target,
             footprint_order=footprint_order
             if footprint_order is not None
@@ -5665,7 +6225,7 @@ def coadd_cube(
     else:
         target_hdr = _coerce_target_header(target)
     return coadd_image_plane_cube(
-        observations,
+        obs_shifted,
         target_header=target_hdr,
         footprint_order=footprint_order
         if footprint_order is not None
@@ -5681,6 +6241,311 @@ def coadd_cube(
         device=device,
         background_estimator=background_estimator,
     )
+
+
+def coadd_healpix(
+    observations: Sequence[Observation],
+    nside: int,
+    *,
+    nest: bool = False,
+    sparse: bool = False,
+    nside_coverage: int = 32,
+    kernel: Literal[
+        "bilinear", "nearest", "bicubic", "lanczos2", "lanczos3", "lanczos4"
+    ] = "bilinear",
+    sky: SkyConfig | None = None,
+    outliers: OutlierConfig | None = None,
+    device: torch.device | str | None = None,
+) -> HealpixResult:
+    """Coadd 2D WCS observations directly onto a dense or sparse HEALPix grid."""
+    from ..sphere import healpix as _hp
+    from ..sphere.sparse import HealSparseMap
+
+    if not observations:
+        raise ValueError("At least one Observation is required")
+    nside_i = int(nside)
+    npix = _hp.nside2npix(nside_i)
+    order = nside_i.bit_length() - 1
+    map_device = _resolve_map_device(device)
+    read_dev = str(map_device)
+
+    obs_list = _apply_observation_astrometric_shifts(observations, map_device)
+    if sky is not None and sky.mode != "none" and sky.subtract:
+        obs_list, _ = match_sky(obs_list, config=sky, apply=True, device=map_device)
+    if outliers is not None and outliers.enabled:
+        _, obs_list = detect_outliers(
+            obs_list, config=outliers, update_masks=True, device=map_device
+        )
+
+    union_moc = MOC.empty()
+    pix_chunks: list[Tensor] = []
+    num_chunks: list[Tensor] = []
+    den_chunks: list[Tensor] = []
+
+    for obs in obs_list:
+        if obs.data is not None:
+            raw_img = obs.data.to(device=map_device, dtype=torch.float32)
+            hdr_obs = dict(obs.header) if obs.header is not None else {}
+        else:
+            raw_img, hdr_obs = load_observation_image_and_header(obs, device=read_dev)
+            raw_img = raw_img.to(device=map_device, dtype=torch.float32)
+        src_w = _load_observation_weight_map(obs, raw_img, device=map_device)
+        cal_img, cal_w = _apply_observation_calibration(obs, raw_img, src_w)
+        s_eff = _effective_observation_photometric_scale(obs, hdr_obs)
+        if s_eff != 1.0:
+            cal_img = cal_img * float(s_eff)
+            cal_w = cal_w / float(s_eff * s_eff)
+
+        obs_wcs = (
+            obs.wcs
+            if isinstance(obs.wcs, WCS)
+            else WCS(obs.wcs if isinstance(obs.wcs, dict) else hdr_obs)
+        ).to(map_device)
+        H_s, W_s = int(cal_img.shape[-2]), int(cal_img.shape[-1])
+        obs_moc = MOC.from_wcs(obs_wcs, shape=(H_s, W_s), max_order=order)
+        union_moc = union_moc.union(obs_moc)
+        obs_pix = obs_moc.to_pixelized_region(nside_i, nest=nest).pixels.to(
+            device=map_device, dtype=torch.int64
+        )
+        if obs_pix.numel() == 0:
+            continue
+
+        ra_p, dec_p = _hp.pix2ang(nside_i, obs_pix, nest=nest, lonlat=True)
+        x_src, y_src = obs_wcs.world_to_pixel(ra_p, dec_p)
+        x_2d = x_src.to(dtype=torch.float32).unsqueeze(0)
+        y_2d = y_src.to(dtype=torch.float32).unsqueeze(0)
+        x_norm = (2.0 * x_2d / max(W_s - 1, 1)) - 1.0
+        y_norm = (2.0 * y_2d / max(H_s - 1, 1)) - 1.0
+        grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
+        valid_src = (cal_w > 0.0) & torch.isfinite(cal_img) & torch.isfinite(cal_w)
+        channels = torch.stack(
+            [
+                torch.where(valid_src, cal_img * cal_w, torch.zeros_like(cal_img)),
+                torch.where(valid_src, cal_w, torch.zeros_like(cal_w)),
+                valid_src.to(dtype=torch.float32),
+            ],
+            dim=0,
+        )
+        sampled = sample_image_plane_batched_channels(
+            channels,
+            x_src=x_2d,
+            y_src=y_2d,
+            grid=grid,
+            kernel=kernel,
+        )
+        s_num = sampled[0, 0]
+        s_den = sampled[1, 0]
+        s_sup = sampled[2, 0]
+        in_b = (
+            torch.isfinite(x_2d[0])
+            & torch.isfinite(y_2d[0])
+            & (x_2d[0] >= 0.0)
+            & (x_2d[0] <= (W_s - 1))
+            & (y_2d[0] >= 0.0)
+            & (y_2d[0] <= (H_s - 1))
+        )
+        hit = in_b & (s_sup > 0.0) & (s_den > 0.0) & torch.isfinite(s_num)
+        if not bool(hit.any()):
+            continue
+        pix_chunks.append(obs_pix[hit])
+        num_chunks.append(s_num[hit])
+        den_chunks.append(s_den[hit])
+
+    if not sparse:
+        numer_dense = torch.zeros(npix, dtype=torch.float32, device=map_device)
+        denom_dense = torch.zeros(npix, dtype=torch.float32, device=map_device)
+        overlap_dense = torch.zeros(npix, dtype=torch.int32, device=map_device)
+        for p_c, n_c, d_c in zip(pix_chunks, num_chunks, den_chunks):
+            numer_dense.index_add_(0, p_c, n_c)
+            denom_dense.index_add_(0, p_c, d_c)
+            overlap_dense.index_add_(
+                0, p_c, torch.ones_like(p_c, dtype=torch.int32)
+            )
+        nz = denom_dense > 0.0
+        data_dense = torch.where(
+            nz, numer_dense / denom_dense.clamp_min(1e-12), torch.zeros_like(numer_dense)
+        )
+        return HealpixResult(
+            data=data_dense,
+            weight=denom_dense,
+            nside=nside_i,
+            nest=nest,
+            sparse=False,
+            overlap_count=overlap_dense,
+            coverage_moc=union_moc,
+        )
+
+    nside_cov = min(int(nside_coverage), nside_i)
+    if not pix_chunks:
+        empty_map = HealSparseMap.make_empty(
+            nside_cov, nside_i, dtype=torch.float32, sentinel=0.0
+        )
+        return HealpixResult(
+            data=empty_map,
+            weight=empty_map,
+            nside=nside_i,
+            nest=nest,
+            sparse=True,
+            overlap_count=empty_map,
+            coverage_moc=union_moc,
+        )
+
+    all_pix = torch.cat(pix_chunks)
+    all_num = torch.cat(num_chunks)
+    all_den = torch.cat(den_chunks)
+    uniq_pix, inv = torch.unique(all_pix, sorted=True, return_inverse=True)
+    u_num = torch.zeros(uniq_pix.numel(), dtype=torch.float32, device=map_device)
+    u_den = torch.zeros(uniq_pix.numel(), dtype=torch.float32, device=map_device)
+    u_ovl = torch.zeros(uniq_pix.numel(), dtype=torch.int32, device=map_device)
+    u_num.index_add_(0, inv, all_num)
+    u_den.index_add_(0, inv, all_den)
+    u_ovl.index_add_(0, inv, torch.ones_like(inv, dtype=torch.int32))
+    u_data = u_num / u_den.clamp_min(1e-12)
+
+    data_smap = HealSparseMap.from_pixels(
+        uniq_pix,
+        u_data,
+        nside_sparse=nside_i,
+        nest=nest,
+        nside_coverage=nside_cov,
+        sentinel=0.0,
+    )
+    weight_smap = HealSparseMap.from_pixels(
+        uniq_pix,
+        u_den,
+        nside_sparse=nside_i,
+        nest=nest,
+        nside_coverage=nside_cov,
+        sentinel=0.0,
+    )
+    ovl_smap = HealSparseMap.from_pixels(
+        uniq_pix,
+        u_ovl,
+        nside_sparse=nside_i,
+        nest=nest,
+        nside_coverage=nside_cov,
+        sentinel=0.0,
+    )
+    return HealpixResult(
+        data=data_smap,
+        weight=weight_smap,
+        nside=nside_i,
+        nest=nest,
+        sparse=True,
+        overlap_count=ovl_smap,
+        coverage_moc=union_moc,
+    )
+
+
+def resample_healpix(
+    healpix_map: Tensor | HealpixResult | Any,
+    target: Target | Mapping[str, Any] | WCS,
+    *,
+    nside: int | None = None,
+    nest: bool = False,
+    method: Literal["bilinear", "nearest", "harmonic"] = "bilinear",
+    device: torch.device | str | None = None,
+) -> MapResult:
+    """Project a dense or sparse HEALPix map (or ``HealpixResult``) onto a 2D target WCS."""
+    from ..sphere import healpix as _hp
+    from ..sphere.core import sample_healpix_map
+    from ..sphere.sparse import HealSparseMap
+    from .healpix_spectral import sample_healpix_map_on_image_header_harmonic
+
+    map_device = _resolve_map_device(device)
+    raw_hdr = _coerce_target_header(target)
+    if raw_hdr is None:
+        raise ValueError("target must provide a 2D WCS or header")
+    H, W = target_shape_from_header(raw_hdr, fallback=(64, 64))
+    header_dict = normalized_header_for_shape(dict(raw_hdr), (H, W), overrides=None)
+    target_wcs = WCS(header_dict).to(map_device)
+
+    weight_smap: HealSparseMap | None = None
+    weight_dense: Tensor | None = None
+    if isinstance(healpix_map, HealpixResult):
+        nest = healpix_map.nest
+        nside = healpix_map.nside
+        if healpix_map.sparse:
+            weight_smap = healpix_map.weight
+            healpix_map = healpix_map.data
+        else:
+            weight_dense = healpix_map.weight
+            healpix_map = healpix_map.data
+
+    if isinstance(healpix_map, HealSparseMap):
+        ra_g, dec_g = _build_target_world_grid(target_wcs, H, W, device=map_device)
+        interp_mode: Literal["bilinear", "nearest"] = (
+            "nearest" if method == "nearest" else "bilinear"
+        )
+        sampled = healpix_map.interpolate(ra_g, dec_g, method=interp_mode).to(
+            device=map_device, dtype=torch.float32
+        )
+        valid = torch.isfinite(sampled) & (
+            sampled != float(healpix_map.fill_value)
+        )
+        data_2d = torch.where(valid, sampled, torch.zeros_like(sampled))
+        if weight_smap is not None:
+            w_2d = weight_smap.interpolate(ra_g, dec_g, method=interp_mode).to(
+                device=map_device, dtype=torch.float32
+            )
+            w_2d = torch.where(valid & (w_2d > 0.0), w_2d, torch.zeros_like(data_2d))
+        else:
+            w_2d = valid.to(dtype=torch.float32)
+        return MapResult(data=data_2d, weight=w_2d, header=header_dict)
+
+    map_t = torch.as_tensor(healpix_map, device=map_device, dtype=torch.float32)
+    resolved_nside = int(nside) if nside is not None else _hp.npix2nside(int(map_t.shape[-1]))
+    if method == "harmonic":
+        data_2d = sample_healpix_map_on_image_header_harmonic(
+            map_t, header_dict, nest=nest
+        ).to(device=map_device, dtype=torch.float32)
+        w_2d = torch.isfinite(data_2d).to(dtype=torch.float32)
+        return MapResult(data=data_2d, weight=w_2d, header=header_dict)
+
+    ra_g, dec_g = _build_target_world_grid(target_wcs, H, W, device=map_device)
+    interp_mode_d: Literal["bilinear", "nearest"] = (
+        "nearest" if method == "nearest" else "bilinear"
+    )
+    if weight_dense is not None:
+        w_t = weight_dense.to(device=map_device, dtype=torch.float32)
+        good_hp = torch.isfinite(map_t) & (~_hp.mask_bad(map_t)) & (w_t > 0.0)
+        safe_map = torch.where(good_hp, map_t, torch.zeros_like(map_t))
+        safe_w = torch.where(good_hp, w_t, torch.zeros_like(w_t))
+        num_2d = sample_healpix_map(
+            safe_map * safe_w,
+            nside=resolved_nside,
+            lon_deg=ra_g,
+            lat_deg=dec_g,
+            nest=nest,
+            interpolation=interp_mode_d,
+        ).to(device=map_device, dtype=torch.float32)
+        w_2d = sample_healpix_map(
+            safe_w,
+            nside=resolved_nside,
+            lon_deg=ra_g,
+            lat_deg=dec_g,
+            nest=nest,
+            interpolation=interp_mode_d,
+        ).to(device=map_device, dtype=torch.float32)
+        valid = torch.isfinite(num_2d) & torch.isfinite(w_2d) & (w_2d > 0.0)
+        data_2d = torch.where(
+            valid, num_2d / w_2d.clamp_min(1e-12), torch.zeros_like(num_2d)
+        )
+        w_2d = torch.where(valid, w_2d, torch.zeros_like(w_2d))
+        return MapResult(data=data_2d, weight=w_2d, header=header_dict)
+
+    data_2d = sample_healpix_map(
+        map_t,
+        nside=resolved_nside,
+        lon_deg=ra_g,
+        lat_deg=dec_g,
+        nest=nest,
+        interpolation=interp_mode_d,
+    ).to(device=map_device, dtype=torch.float32)
+    valid = torch.isfinite(data_2d) & (~_hp.mask_bad(data_2d))
+    data_2d = torch.where(valid, data_2d, torch.zeros_like(data_2d))
+    w_2d = valid.to(dtype=torch.float32)
+    return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
 
 def aperture_uncertainty(
@@ -5713,4 +6578,11 @@ def aperture_uncertainty(
         ),
         device=device,
     )
+
+
+CubeResult = SpectralCubeMapResult
+MultibandResult = MultiBandMapResult
+ApertureUncertainty = MapApertureUncertainty
+
+
 

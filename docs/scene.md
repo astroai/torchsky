@@ -78,24 +78,43 @@ result = operator.solve_normal_equation_cg(observed_image, iterations=8)
 
 Scalar observation weights and explicit weight/mask/primary-beam maps feed the bound operator's inverse-noise hook. Use `scene.bind_image_plane_observations_to_target(...)` when several image-plane observations share the same latent target grid. It returns the multi-observation operator set used by the map solver substrate, so `A^T N^-1 A` and `A^T N^-1 y` are summed across observations. Set `exposure_chunk_size` to cap the number of prediction tensors retained at once; iterative solves use this matrix-free path while preserving exposure-order accumulation. `iter_apply_chunks(...)` exposes the same bounded execution for consumers that do not need all predictions materialized as one tuple.
 
-The same bound operator can estimate posterior map variance without forming a
-dense covariance matrix:
+The same bound operator can estimate an inverse-curvature diagonal without
+forming a dense covariance matrix. The historical method name is retained:
 
 ```python
-variance = operator_set.estimate_posterior_variance_diagonal(
+inverse_curvature_diagonal = operator_set.estimate_posterior_variance_diagonal(
     reference_map,
     num_probes=64,
     seed=7,
     iterations=32,
     damping=1.0e-6,
+    rtol=1.0e-5,
+    atol=0.0,
 )
 ```
 
 This is a seeded Hutchinson estimate of
-`diag((A^T N^-1 A + damping I)^-1)`. Compose a prior operator into the set to
-include a non-identity prior precision. Each probe is solved independently by
-matrix-free CG, so memory stays bounded by one probe and the solver workspace;
-finite probe count and incomplete CG convergence both contribute estimation
-error. Negative finite-probe estimates are clipped to the positive machine
-floor so the returned variance remains usable; that clipping is biased near
-zero and is not a substitute for increasing probes or checking CG convergence.
+`diag((H + damping I)^-1)`, where `H = A^T N^-1 A`, for a fixed Hermitian
+positive-definite system on the declared state space. Each probe is solved
+independently by matrix-free CG, so memory stays bounded by one probe and the
+solver workspace. Every solution is checked against the actual normal action:
+`||(H + damping I)x - z|| <= max(atol, rtol ||z||)`. An inadequate or non-finite
+solve raises instead of returning uncertainty. Shape, dtype and device must
+agree with the reference state. Finite residual checks and a finite probe set
+do not certify global identifiability; a small residual also does not bound
+inverse error without conditioning information.
+
+Finite-probe Hutchinson estimates can be negative even when the true inverse
+diagonal is positive. Returned estimates preserve those signed values; clipping
+would bias them and turn Monte Carlo noise into false tiny variances. Increase
+the probe budget or evaluate selected functionals when that noise is too large
+for the query. The raw signed estimate is not a per-pixel uncertainty guarantee.
+
+With no regularization, inverse information has the usual fixed-model sampling
+covariance interpretation only on an estimable, explicitly gauge-fixed
+subspace and under the declared noise/nuisance assumptions. Damping or composing
+a quadratic penalty operator changes the target to inverse penalized curvature.
+For a penalty `P`, the regularized estimator's sampling covariance is
+`(H + P)^-1 H (H + P)^-1`, not `(H + P)^-1`; mean transfer and possible bias
+must also be considered. A Bayesian posterior interpretation requires its
+declared prior and likelihood assumptions.

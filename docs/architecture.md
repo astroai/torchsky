@@ -31,7 +31,8 @@ small and namespace-oriented.
 | `scene` | Observations, operators, instruments, latent scenes, products, coadds, objectives, renderers, and fits | promoted `torchsky.map` paths, `torchsky.scene` facade, and field/INR modelling while it remains experimental |
 | `viz` | Browser and notebook-facing visualization | `torchsky.viz` |
 
-Use `torchsky.surfaces` to inspect this contract from code.
+The public contract is checked by the package API tests; implementation
+helpers stay in their owning namespaces.
 
 FITS I/O is an external boundary owned by `torchfits`. File-oriented
 applications load tensors, header mappings, masks/weights, or streamed table

@@ -1,356 +1,38 @@
-# Roadmap
+# Torchsky package roadmap
 
-> Current planning/status surface, not the public API contract. For shipped
-> APIs, start with [`../api.md`](../api.md). For shipped-work history, use
-> [`history.md`](history.md).
+`torchsky` is the torch-native compute layer for sky coordinates, spherical
+geometry, maps, observation operators, scenes, and field models. FITS and table
+I/O belong to `torchfits`; scientific benchmarks, exhaustive parity,
+large/real-data validation, scorecards, and CANFAR orchestration belong to the
+sibling [`torchsky-harness`](https://github.com/astroai/torchsky-harness).
 
-SMACS continuation updated: 2026-09-29. Other subsystem entries below retain
-their 2026-07-27 audit date.
+## Implemented package surfaces
 
-For current SMACS work, follow [the evidence-first reconstruction actions](next.md#smacs-evidence-first-reconstruction-plan--2026-09-24)
-and [the next-model handoff checkpoint](active.md#next-model-handoff-checkpoint--2026-09-29).
-The precision repair is verified but has not improved real-data reconstruction;
-full-image training timed out. Matched injection screens reject both the
-1024-square and 512-square target-footprint grids: neither is deeper than legacy
-at matched purity, and both worsen F150W effective FWHM despite improving F277W.
-The next bounded task is a test-first, one-band linear explicit-grid
-forward/adjoint and weighted inverse solve with frozen calibration. Scientific
-quality remains unestablished.
+| Area | Core ownership | Guide |
+|---|---|---|
+| WCS and coordinates | Tensor transforms, coordinate frames, distortion, spectral and time axes | [WCS](../wcs.md), [coordinates](../coordinates.md) |
+| Sphere and HEALPix | Spherical predicates, coverage maps, sparse maps, harmonic primitives | [Sphere](../sphere.md) |
+| Catalogs | Sky-domain indexing, crossmatch, cone search, Arrow/tensor batches | [Catalogs](../catalogs.md) |
+| Map and scenes | Product planning/rendering, coadds, observation operators, bounded-memory execution | [Map](../map.md), [scene](../scene.md) |
+| Continuous fields | Experimental differentiable field models and calibration-fit operators | [Field](../field.md), [encoders](../encoders.md) |
+| Spectral models | Spectral axes, cubes, transforms, and photometric utilities | [Spectral data](../spectral.md) |
+| Runtime and interchange | Torchfits boundary, transforms, datasets, and visualization adapters | [I/O](../io.md), [ML/runtime](../ml.md) |
 
-## Mission And Ownership
+This table identifies ownership and entry points; it does not certify parity or
+performance against other packages. Consult the harness for current measured
+results and acceptance criteria.
 
-`torchsky` is a torch-native astronomy stack for large survey workloads:
-tensor-native WCS and sphere geometry, scalable catalog indexing and map
-operators, differentiable scene/field rendering, and cross-device execution
-where the module claims it.
+## Durable engineering priorities
 
-FITS image/table I/O has moved back to
-[`torchfits`](https://github.com/astroai/torchfits). `torchsky` consumes tensors,
-header mappings, masks/weights, and streamed table batches. It does not own
-CFITSIO, FITS HDU machinery, compression, checksums, file caches, or FITS table
-mutation.
+1. Fix correctness defects in shared geometry, coordinate transforms, and
+   observation operators.
+2. Prefer indexing, tiling, chunking, streaming, and sparse representations for
+   survey-scale data.
+3. Preserve differentiability, device behavior, and exact mathematical
+   contracts in bounded tests.
+4. Avoid widening public APIs without repeated use or composability evidence.
+5. Support performance claims with reproducible harness measurements.
 
-The core must not become a thin wrapper around legacy astronomy packages.
-Astropy, WCSLIB, healpy, hpgeom, healsparse, reproject, and related tools remain
-references, comparators, optional compatibility targets, or benchmark
-baselines.
-
-## Replacement Target
-
-The target is complete functional replacement of sky-domain workflows users
-reach for in `astropy.wcs` / WCSLIB, `healpy`, `healsparse`, PyMOC-style MOC
-tooling, `hpgeom`, `astropy-healpix`, and adjacent geometry/map packages where
-they overlap with `torchsky`'s mission. FITS replacement is the `torchfits`
-mission and is no longer a `torchsky` roadmap axis.
-
-Replacement means matching trusted behavior at useful API and workflow layers,
-with torch-native execution and no mandatory runtime dependency on comparator
-packages. It does not mean copying every upstream primitive or claiming
-untested behavior.
-
-## Current Baseline
-
-- Full local gate: `pixi run ci-local`.
-- Latest recorded full local gate: `1665 passed, 214 skipped, 12 warnings`
-  in 466.49 seconds (2026-07-27, stabilized multi-band Gate 0 checkpoint).
-- Latest focused WCS gate: `338 passed, 2 skipped, 22 warnings`.
-- Latest focused sphere/HEALPix gate: `351 passed, 6 skipped, 10 warnings`.
-- Latest WCS/sphere acceptance: `pixi run wcs-sphere-acceptance` passes; its
-  pytest phase reports `558 passed, 2 skipped, 26 warnings`.
-- Root `import torchsky` is intended to remain a lean lazy facade.
-- Public surfaces are grouped into `core`, `compat`, and `experimental` tiers
-  in `torchsky.surfaces`.
-- The package-isolation gate is now **green**: CFITSIO/zlib/FITS-table native
-  build wiring has been removed; all remaining FITS-related Python modules are
-  thin delegation wrappers re-exporting from `torchfits`. The isolation gate
-  (`test_package_isolation.py`) is a hard assert. A cross-repo integration gate
-  (`test_torchfits_integration.py`) validates the torchsky↔torchfits contract.
-
-Recorded test counts are evidence snapshots, not evergreen release claims.
-Re-baseline them after the repository boundary cleanup.
-
-## Domain Status
-
-| Domain | Status | Covered now | Highest-impact closure |
-| --- | --- | --- | --- |
-| FITS / HDU / table I/O | Moved to `torchfits`; not a torchsky replacement domain | The sibling package owns images, headers, HDUs, compression, checksums, tables, Arrow scans, and I/O benchmarks. | Remove residual duplicate modules/build wiring, define a narrow optional adapter, and keep one cross-repo contract gate. |
-| WCS | Broad `astropy.wcs` / WCSLIB gates pass; not standards-complete | Celestial projections/distortions, alternate keys, slicing/subsetting, differentiable paths, spectral/time primitives, frame conversion, independent/coupled TAB lookup, inverses, and Jacobians. | Concrete Paper III/IV fixtures, high-precision frame behavior, generalized transform graphs, device parity, and broad performance baselines. |
-| Sphere / HEALPix / MOC / sparse maps | Strong core workflow coverage | High-NSIDE and no-dense sparse paths, MOC, regions, resolution changes, harmonic parity, and spin acceptance. | Exact-region edge cases, broader upstream replay, survey-scale indexing, cross-device behavior, and massive-scale memory/throughput baselines. |
-| Catalog indexing / crossmatch | High-impact scale substrate | Tensor-native crossmatch and sphere primitives with comparator and fixture coverage. | Replace all-pairs paths with indexed/chunked execution; report candidate reduction, peak memory, correctness, and device behavior at survey scale. |
-| Map / scene operators | Highest-impact integration layer | `ObservationOperatorBundle` is becoming the shared substrate across map products, field fitting, scene rendering, diagnostics, and implicit forward models. | Matrix-free chunked execution, exact adjoints, explicit noise/weight semantics, deterministic accumulation, and representative multi-exposure real-data gates. |
-| Field models / INR / adaptive capacity | Experimental downstream work | Support-aware diagnostics, residual products, scorecards, pose refinement, and STRAINER-style scaffolding exist. | Promote only after operator correctness, memory scaling, and classical baselines are strong. |
-
-## Recent Progress Evidence
-
-- Map-product union planning now uses a seam-safe spherical centre, exact TAN
-  plane bounds, and rotation-invariant CD determinant scale. The same union
-  contract reaches single-band, spectral, INR, and CLI paths; RA=0 seam and
-  rotated-CD containment regressions are gated.
-- Continuous-field observation rendering now has opt-in bounded-memory 2×2
-  Gauss–Legendre detector-pixel integration. Spatial samples nest around the
-  existing spectral response, receive exposure-pose transforms individually,
-  and are combined before PSF/background operators. Constant-field, subpixel
-  Gaussian error, gradient, tiled parity, product, and CLI-surface tests gate
-  the primitive. This is operator groundwork for compact adaptive/Foam-like
-  capacity, not a Power-Foam implementation claim.
-- `torchsky map --plan-json` atomically records the resolved coadd/INR job
-  before compute: expanded paths and HDUs, calibration inputs, target WCS and
-  shape, tiling, method settings, and device. Coadd and INR dry-run integration
-  tests gate the record without creating a FITS product.
-- Experimental field geometry now includes exact tensor-native power distance,
-  bounded power-cell ownership, Čech overlap adjacency, radical-plane
-  equations, an exact uniform-grid Čech index with symmetric neighbor CSR, and
-  exact disk-to-regular-tile candidate CSR. One-million-site CANFAR CPU gates
-  reduce 499,999,500,000 possible cell pairs to 848,574 candidates in 3.683 s
-  median, and 1,048,576,000,000 possible tile/site tests to 2,789,942 exact
-  candidates in 0.181 s median, both with independent dense-oracle parity.
-  The isolated CUDA 12.9 environment now builds Torchsky on an H100 NVL MIG
-  slice; the corresponding million-site medians are 0.0465 s for sparse Čech
-  construction and 0.0269 s for tile candidates, with 675–676 MB peak CUDA
-  allocation and both dense-oracle checks passing.
-- The exact bounded-power-cell/pixel operator now has a scalar analytic oracle
-  and a production Torch-batched renderer. Small/medium/large CANFAR CPU/H100
-  runs preserve topology and area; the 10,000-site/16,384-pixel case processes
-  108,379 candidates in 2.995/1.547 s eager CPU/CUDA with bounded 4,096-candidate
-  chunks. Whole-builder compilation reaches 0.230/0.0414 s steady state but
-  costs 423/233 s warm-up and high process RSS. Targeted clipping/area-kernel
-  compilation provides the operational compromise: 0.208 s CPU and 0.0843 s
-  H100 with 215/87 s warm-up and substantially lower RSS. Eager remains the
-  short-job default; no native kernel is justified without a downstream profile.
-- Exact hard inference is paired with a separately named log-domain smooth
-  bounded-ownership training surrogate. Sites, strictly positive radii, and
-  per-cell spectral coefficients receive finite gradients even when a query is
-  initially outside all hard bounds; exact reporting still uses analytic pixel
-  areas. `SpectralPowerFoam` shares geometry over wavelength and renders the
-  same learned coefficients through arbitrary sampled responses or compact
-  spectral bases. A matched six-channel CANFAR benchmark exactly equals six
-  independent renders while reducing CPU time 5.01x and H100 time 4.24x.
-- The pre-registered multi-band depth benchmark has entered Gate 0/M0 without
-  expanding Torchsky's public API. Benchmark-local code now produces
-  deterministic independent seed manifests, required truth-catalogue strata,
-  blank and close-pair scenes, flux-conserving 4x4 subpixel truth images, a
-  common Torch whitening/matched-filter/local-max/NMS detector, validation-only
-  purity thresholds, and exact maximum-cardinality one-to-one association.
-  Dense 129-sample spectral truth, WCS-angular NMS/association, joint forced
-  fluxes, adjacent-color metrics, and held-out Gaussian likelihood are now
-  gated; local focused evidence is 11 passes and one CUDA skip. Classical/model
-  baselines and the full smoke selection function remain open, so no depth-gain
-  claim exists.
-- The production classical floor now has an exact H100 run at commit
-  `addb925`: all 15 focused CUDA tests passed and the 96-square, six-band,
-  four-exposure benchmark completed in 3,702.98 s. Bilinear and chi-square rows
-  each took under 0.34 s, while exact square Drizzle took 3,691.03 s with about
-  12% of eight CPUs and 0% GPU utilization. This closes the correctness floor
-  and exposes the next infrastructure bottleneck: compile/vectorize exact
-  polygon clipping before adding seeds. It is one-seed evidence, not a depth
-  claim.
-- The FOSSIL science and primitive notes are now distilled into a common
-  differentiable spatial-spectral track. `SpectralAxis` is hardened for
-  irregular/descending grids, explicit edges, quadrature, selection/transfer,
-  and autograd-preserving wavelength/frequency/energy/wavenumber conversion.
-  The focused spectral/FITS-WCS gate is 36 passes. Next is a minimal typed
-  tensor/operator contract, then response mixing and protected subspaces shared
-  by classical and neural component separation.
-- CANFAR's Linux LAPACK gate caught byte-level nondeterminism in the first
-  noiseless forced-photometry JSON: mathematically zero residuals varied around
-  `1e-16` between calls. The report boundary now canonicalizes values below the
-  declared `1e-12` noiseless tolerance while retaining unrounded tensors and
-  tight scientific tests. The corrected exact-commit H100 rerun passed 23
-  focused tests and emitted the deterministic six-band artifact.
-- Weighted and equal-mean tiled coadds now execute exposure-major: an observation
-  is read and calibrated once, projected through every output tile, then released.
-  The stale unbounded module-global tensor cache is gone, overwrite freshness is
-  gated, and bilinear/flux/Drizzle/conservative tiled parity is covered. Exact
-  median and cross-exposure correction retain an explicit tile-major fallback
-  until a spillable reducer exists.
-- CANFAR multi-exposure scaling now covers 512/2048 square on CPU/H100 and a
-  bounded 4096-square H100 point. Untiled wins at 512; tile 512 beats tile 256
-  by 3.25x CPU and 3.52x H100 at 2048, and 3.42x H100 at 4096. Large-case CUDA
-  allocation differs by only 1–4% between tile sizes because all inputs remain
-  resident, so 512 is the throughput-oriented default rather than a claimed
-  input-memory fix. Real 2048-square repeated `SCI`/`ERR`/`DQ` reads now have
-  0.060–0.068 ms warm medians and exact NaN-aware values/header/device transfer;
-  a second caller MEF cache is therefore rejected unless a future cold-I/O
-  profile overturns that evidence.
-
-- WCS mixed pixel/world solving covers spatial cubes with linearly coupled
-  non-spatial axes; the focused gate reports
-  `338 passed, 2 skipped, 22 warnings`.
-- FK4/Besselian position-WCS conversion, axis-correlation reporting, and coupled
-  TAB inverse/Jacobian behavior have targeted parity coverage.
-- Sphere pixel-id and pixel-range upgrade/degrade workflows have hpgeom parity;
-  the focused sphere/HEALPix gate reports
-  `351 passed, 6 skipped, 10 warnings`.
-- Sphere spin-matrix default acceptance passes.
-- Architecture ownership changed: FITS implementation work and I/O throughput
-  claims now belong to `torchfits`; torchsky retains only integration contracts.
-- The real SMACS benchmark now follows that ownership: calibrated filter/header
-  discovery, `SCI`/`ERR`/`DQ` reads, and temporary science/weight/mask FITS
-  products all traverse Torchsky's public Torchfits facade. CANFAR inventories
-  all 135 aligned six-band exposures and every named MEF plane. The
-  pre-registered split has common support in a header-selected 512-square
-  F277W-grid crop at `(112, 0)`; no science pixel entered the crop decision.
-  Real repeated reads, float32/uint32 preservation, NaN-aware equality, CUDA
-  transfer, header equality, overwrite freshness, and bounded memory are gated.
-- WCS/sphere `gradcheck` gap closed: 26 WCS gradcheck tests (all 8 projections,
-  SIP, TPV) + 3 sphere spectral gradcheck tests. Projections with analytic
-  inverse (AIT, MOL, CEA, MER) get `world_to_pixel` gradcheck; TAN/SIN/ARC/HPX
-  use Newton iteration and are excluded from inverse gradcheck.
-- End-to-end operator multi-exposure benchmark
-  (`benchmarks/bench_operator_multiexposure.py`): creates N synthetic dithered
-  TAN exposures, runs `coadd_image_plane`, and tracks wall time, throughput,
-  overlap statistics, deterministic accumulation, and peak GPU memory.
-- Multi-exposure bundle execution is matrix-free and chunk bounded for solver
-  normal actions, weighted adjoints, and residual updates. An isolated macOS
-  arm64 smoke at 24 x 512-square exposures reported the same deterministic
-  checksum for eager, chunk-1, and chunk-4 execution; peak RSS deltas were
-  49.7, 3.3, and 18.6 MB respectively, while throughput was 863, 2,507, and
-  1,451 megapixels/s. Re-run `bench_operator_chunking.py` for current hardware.
-- Arrow streaming path for catalogs: ``CatalogStreamDataset.from_arrow``,
-  ``crossmatch_sky_streamed`` (generic left-batch iterator),
-  ``crossmatch_sky_from_arrow`` (Arrow IPC / file convenience). All pyarrow
-  imports are lazy (optional dependency). 9 Arrow-streaming tests (20 catalog
-  tests green).
-- ``crossmatch_sky_from_arrow`` rewritten as **bounded-memory partitioned
-  crossmatch**: both catalogs are tiled to per-pixel Parquet row groups and
-  crossmatched one pixel at a time. Memory scales with the largest per-pixel
-  tile, not total catalog size. The old ``_build_coarse_healpix_index_from_arrow``
-  (which needed an in-memory argsort index, ~16 N bytes) is removed.
-- Operator gradcheck and adjoint coverage: 32 tests covering (a) WCS
-  image-plane operators — ``InterpolationGeometryOp`` (3 kernels × 2 value
-  semantics), ``ConservativePolygonRemapOp``, ``ExactDrizzleGeometryOp`` (square
-  + point), ``ForwardSplatGeometryOp`` (splat_point + splat_box) — (b) the
-  HEALPix bilinear forward/adjoint pair (``sample_healpix_map_on_image_header`` /
-  ``accumulate_image_on_healpix_map_adjoint``, RING + NEST, with dot-product,
-  ``gradcheck``, and ``gradgradcheck`` verification), and (c) 5 standalone
-  operators (``gaussian_blur``, ``apply_kernel2d`` image/kernel,
-  ``polynomial_background``, ``apply_image_observation_calibration``) with
-  both ``gradcheck`` and ``gradgradcheck``.
-  The PSF, background, and radiometry operators now preserve input dtype
-  instead of hardcoding ``float32``.
-- Deterministic accumulation verified across 8 kernels × 3 stacking methods
-  (24 parametrized tests): ``coadd_image_plane`` produces bit-identical
-  ``.data``, ``.weight``, and ``.overlap_count`` on repeat calls.
-- Device-parity parametrization: all 16 geometry adjoint and 10 standalone
-  operator tests now run on ``cpu`` and ``cuda`` (when available). MPS is
-  excluded due to the PyTorch MPS backend lacking ``float64`` support
-  (required by WCS grid arithmetic).
-
-## Current Work Queue
-
-### Active 2026-07-28 focus — ADASS UPdec depth sprint
-
-The broad FOSSIL/component-separation track is temporarily paused through
-2026-08-04. The active scientific gate is now a detector-level injection/recovery
-comparison on the six-band SMACS J0723 exposures underlying the UPdec-Webb
-products. A depth claim requires positive paired `m50` gain at fixed empirical
-purity relative to the strongest Drizzle/SWarp multiband detector, acceptable
-flux/color bias, and non-degraded held-out exposure likelihood. Current
-public-mosaic flux ratios are not calibrated well enough for that claim, and the
-real Foam/INR injection profile remains to be implemented. See
-[`../projects/adass_updec_depth_week.md`](../projects/adass_updec_depth_week.md).
-
-### P0 — Boundary And Correctness — DONE
-
-- CFITSIO/zlib build wiring removed from `cpp_src/CMakeLists.txt` ✓
-- FITS engine modules (`hdu.py`, `table.py`, `core.py`, `_where.py`, etc.)
-  replaced with thin delegation wrappers to `torchfits` ✓
-- Package-isolation gate (`test_package_isolation.py`) is a hard assert ✓
-- Cross-repo integration gate (`test_torchfits_integration.py`) validates the
-  torchsky↔torchfits contract using real FIS fixture data ✓
-- Dead code in `map/windowing.py` (circular-import workaround) removed ✓
-- `SpectralReader` in `spectral.py` now reads `CUNIT1` instead of hardcoding
-  `"Angstrom"` ✓
-- `_where.py` delegated to the stable `torchfits.where` public boundary ✓
-
-### Open
-
-- CUDA-enabled source/editable builds now pass in the isolated CANFAR
-  `cuda-bench` environment with matching PyTorch/CUDA, NVCC, NVRTC development
-  files, and CMake. A distributable wheel with that exact CUDA runtime remains
-  a packaging gate until native import and a first WCS construction/transform
-  pass from the installed wheel on target Linux.
-- Freeze the exact adapter/signature contract against the stable
-  `torchfits.where`, `torchfits.hdu`, and `torchfits.table` public modules; do
-  not encode transient private implementation APIs or preserve obsolete 0.3.x
-  behavior in new torchsky code.
-- Preserve header/WCS metadata, dtype, device, masks/weights, spectral axes,
-  and table-batch semantics across the boundary. Invalid or ambiguous inputs
-  fail closed.
-
-### P1 — Massive Scientific And Operational Impact
-
-- Make observation operators the performance center: benchmark end-to-end
-  multi-exposure products rather than isolated helper calls.
-- Require exact adjoints, bounded-memory tiling, deterministic accumulation
-  policy, and CPU/CUDA/MPS parity where support is claimed.
-- Replace catalog all-pairs behavior with structured spherical indices,
-  candidate pruning, chunking, and streaming tensor/Arrow batches.
-- Track complexity, candidate-reduction ratio, peak memory, transfer volume,
-  throughput, and science-error metrics—not wall time alone.
-
-### P2 — Geometry Closure And Kernel Performance
-
-- Convert remaining WCS and sphere gaps into named parity matrices. Every item
-  is covered by a gate, explicitly out of scope, or open against a named
-  fixture/benchmark.
-- Close WCS standards gaps only against concrete fixtures: coupled Paper III
-  chains, Paper IV reference positions, high-precision frame behavior,
-  generalized frame graphs, and legacy bridge replay.
-- Broaden WCS/sphere performance baselines across projections, distortions,
-  inverse paths, spectral/time, TAB, regions, harmonics, scale, and devices.
-- Optimize only measured hot kernels after asymptotic structure and data layout
-  are sound.
-
-### P3 — Research Layers
-
-- Promote adaptive local-capacity field components only after memory, support,
-  real-data, and benchmark gates justify them.
-- Add exact normal-equation and uncertainty gates before promoting new inverse
-  map/scene solvers.
-- Treat world-model and measure-valued scene ideas as research-layer work on
-  top of stable operators, not as core API commitments.
-- Execute the ordered INR, bounded Power-Foam, multiband-depth, and classical
-  map parity tasks in [`next.md`](next.md); promotion still depends on the gates
-  above rather than roadmap placement.
-
-## Prioritization Rule
-
-New work must clear three questions in order:
-
-1. **Massive impact:** does it unlock a core survey workflow, remove duplicated
-   ownership, or improve asymptotic memory/runtime?
-2. **Correctness:** is behavior specified by exact mathematics, a trusted
-   fixture, round-trip/adjoint tests, and fail-closed edge handling?
-3. **Performance:** is the end-to-end workload benchmarked at realistic small,
-   medium, and massive scales, including peak memory and device transfer?
-
-Micro-optimizations, cosmetic refactors, and API expansion stay behind boundary
-cleanup, operator correctness, scalable indexing, and measured bottlenecks.
-
-## Standing Gates
-
-- Pre-push hook: `pixi run preflight-push`. Full pytest: GitHub `build-test` or optional `pixi run ci-local`.
-- Package boundary: no FITS implementation modules, CFITSIO/zlib linkage, or
-  FITS-owned benchmarks in torchsky; integration smoke against the supported
-  `torchfits 1.0.0+` range.
-- FITS/table I/O behavior and throughput changes: validate in the `torchfits`
-  repository.
-- WCS/sphere claims: `pixi run wcs-sphere-acceptance` plus focused parity tests
-  relevant to the changed domain.
-- Map/field changes: exact adjoint, operator-bundle, field-quality,
-  representative real-data/fixture gates proportional to the claim, and
-  end-to-end multi-exposure operator benchmark for throughput/memory.
-- Operator benchmark: `pixi run -e test -- python benchmarks/bench_operator_multiexposure.py`
-  (add `--tile-size N` to measure exposure-major tiled execution).
-- Performance changes: benchmark small, medium, and massive cases and report
-  peak memory, correctness tolerance, and crossover behavior.
-
-## Archived Context
-
-These are retained for provenance but are not active roadmap documents:
-
-- [`../archive/roadmap-knowledge-base.md`](../archive/roadmap-knowledge-base.md)
-- [`../archive/roadmap-world-model-whitepaper-plan.md`](../archive/roadmap-world-model-whitepaper-plan.md)
-- [`../archive/roadmap-sky-measure-scene-plan.md`](../archive/roadmap-sky-measure-scene-plan.md)
-- [`../reviews/autonomous_refactor_log.md`](../reviews/autonomous_refactor_log.md)
+For detailed policy and verification tiers, see [`AGENTS.md`](../../AGENTS.md).
+For the current package-specific queue, see [active.md](active.md); this file
+does not assign a project-wide experiment queue.

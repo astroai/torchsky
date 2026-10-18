@@ -707,6 +707,10 @@ class DiffuseFoamHybridField(_BaseFieldModel):
 
 
 def _observation_without_background(observation: FieldObservation) -> FieldObservation:
+    if observation.additive_components:
+        raise NotImplementedError(
+            "component anchors do not yet support typed additive components"
+        )
     stripped = copy.deepcopy(observation)
     stripped.sky_background = None
     stripped.instrument_background = None

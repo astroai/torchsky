@@ -37,8 +37,8 @@ nanobind = ">=2.10.2"
 pytorch = ">=2.13"
 
 # Workspace dependencies — default (lean) dev shell: build tools + pytest driver only.
-# Ecosystem / legacy astronomy packages live in feature `test`, `bench`, `sphere-bench`, etc.
-# (see AGENTS.md). Run the suite with `pixi run test`, which executes pytest in `-e test`.
+# Retained fixture/interop packages live in `test`; scientific comparators and
+# experiment orchestration live in torchsky-harness. See AGENTS.md.
 [dependencies]
 # torchsky = { path = "." }  # Don't add self-dependency - causes circular dependency
 pytest = ">=8.0"
@@ -66,8 +66,6 @@ lint = "ruff check . && ruff format ."
 preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q src/torchsky tests"
 # Optional local copy of GitHub build-test. Not a push blocker.
 ci-local = "pixi run preflight-push && pixi run typecheck && pixi run test"
-# Comparator import smoke (optional; `bench-all` Pixi env). Set TORCHSKY_CI_LOCAL_BENCH=1 to include in custom wrappers.
-ci-local-heavy = "pixi run -e bench-all -- python -c \"import healpy, hpgeom, healsparse; import astropy_healpix; import spherical_geometry; import mocpy\""
 typecheck = "pixi run -e test pyright"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 
@@ -76,129 +74,14 @@ setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
 release-manual = "twine upload dist/*"
 
-# Core benchmarks (essential)
-bench = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --scope all"
-bench-wcs = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only"
-bench-sphere = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only"
-bench-map-image-plane = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_image_plane.py --json-out benchmark_results/map_image_plane.json"
-bench-map-compat = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_compat.py --json-out benchmark_results/map_compat.json"
-bench-map-ground-truth = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_ground_truth.py --json-out benchmark_results/map_ground_truth.json"
-bench-map-multifield-truth = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_multifield_truth.py --json-out benchmark_results/map_multifield_truth.json"
-bench-map-multifield-scale = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_multifield_truth.py --cases tan_multifield_rectangular_scale,tpv_multifield_rectangular_scale --width 2048 --height 1536 --runs 1 --torchsky-kernels bilinear --json-out benchmark_results/map_multifield_scale.json"
-bench-map-multifield-random10 = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_multifield_truth.py --cases mixed_multifield_random10 --width 2048 --height 1536 --runs 1 --torchsky-kernels bilinear --json-out benchmark_results/map_multifield_random10.json"
-bench-map-ground-truth-competitive-large-union = "pixi run -e sphere-bench python benchmarks/run_ground_truth_competitive_large_union.py --size 512 --json-out benchmark_results/map_ground_truth_competitive_large_union.json --markdown-out benchmark_results/map_ground_truth_competitive_large_union.md"
-bench-map-ground-truth-competitive-large-union-aggregate = "pixi run -e sphere-bench python benchmarks/aggregate_ground_truth_competitive_large_union.py --json-out benchmark_results/map_ground_truth_competitive_large_union_aggregate.json --markdown-out benchmark_results/map_ground_truth_competitive_large_union_aggregate.md"
-bench-map-ground-truth-competitive-large-union-rect-masked = "pixi run -e sphere-bench python benchmarks/run_ground_truth_competitive_large_union.py --case tan_random10_large_union_rect_weighted_masked --size 512 --width 512 --height 384 --json-out benchmark_results/map_ground_truth_competitive_large_union_rect_masked.json --markdown-out benchmark_results/map_ground_truth_competitive_large_union_rect_masked.md"
-bench-map-ground-truth-competitive-large-union-rect-masked-aggregate = "pixi run -e sphere-bench python benchmarks/aggregate_ground_truth_competitive_large_union.py --inputs benchmark_results/map_ground_truth_competitive_large_union_rect_masked.json benchmark_results/map_ground_truth_competitive_large_union_rect_masked_1024x768.json benchmark_results/map_ground_truth_competitive_large_union_rect_masked_2048x1536.json --json-out benchmark_results/map_ground_truth_competitive_large_union_rect_masked_aggregate.json --markdown-out benchmark_results/map_ground_truth_competitive_large_union_rect_masked_aggregate.md"
-bench-map-tan-sip-suite = "pixi run -e map-compat python benchmarks/bench_map_tan_sip_suite.py --profile quick --json-out benchmark_results/map_tan_sip_suite.json --markdown-out benchmark_results/map_tan_sip_suite.md"
-bench-map-tan-sip-suite-full = "pixi run -e map-compat python benchmarks/bench_map_tan_sip_suite.py --profile full --json-out benchmark_results/map_tan_sip_suite_full.json --markdown-out benchmark_results/map_tan_sip_suite_full.md"
-bench-map-projection-mosaic-suite = "pixi run -e map-compat python benchmarks/bench_map_projection_mosaic_suite.py --profile quick --json-out benchmark_results/map_projection_mosaic_suite.json --markdown-out benchmark_results/map_projection_mosaic_suite.md"
-bench-map-projection-mosaic-suite-full = "pixi run -e map-compat python benchmarks/bench_map_projection_mosaic_suite.py --profile full --json-out benchmark_results/map_projection_mosaic_suite_full.json --markdown-out benchmark_results/map_projection_mosaic_suite_full.md"
-bench-map-field-fit = "pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --json-out benchmark_results/map_field_fit.json"
-bench-map-field-heldout-contract = "pixi run -e test python benchmarks/bench_map_field_fit.py --size 16 --steps 1 --runs 1 --cases tan_field_fit --models sine_implicit,spectral_power_foam,diffuse_foam_hybrid,coadd_bilinear --holdout-observations 1 --holdout-sky-quadrants ne,sw --json-out benchmark_results/map_field_heldout_contract.json"
-bench-map-foam-sparse = "pixi run -e sphere-bench python benchmarks/bench_map_foam_sparse.py --json-out benchmark_results/map_foam_sparse.json"
-bench-map-foam-tiles = "pixi run -e sphere-bench python benchmarks/bench_map_foam_tiles.py --json-out benchmark_results/map_foam_tiles.json"
-bench-map-foam-operator = "pixi run -e sphere-bench python benchmarks/bench_map_foam_operator.py --json-out benchmark_results/map_foam_operator.json"
-bench-map-foam-spectral = "pixi run -e sphere-bench python benchmarks/bench_map_foam_spectral.py --json-out benchmark_results/map_foam_spectral.json"
-bench-map-foam-training = "pixi run -e sphere-bench python benchmarks/bench_map_foam_training.py --json-out benchmark_results/map_foam_training.json"
-bench-wcs-tpv-inverse = "pixi run -e sphere-bench python benchmarks/bench_wcs_tpv_inverse.py --json-out benchmark_results/wcs_tpv_inverse.json --markdown-out benchmark_results/wcs_tpv_inverse.md"
-bench-wcs-spectral-temporal = "pixi run -e bench-all python benchmarks/bench_wcs_spectral_temporal.py --json-out benchmark_results/wcs_spectral_temporal.json"
-bench-wcs-tabular = "pixi run -e bench-all python benchmarks/bench_wcs_tabular.py --json-out benchmark_results/wcs_tabular.json"
-bench-wcs-paper2 = "pixi run -e bench-all python benchmarks/bench_wcs.py --cases PCO,XPH,TSC,CSC,QSC,NCP --n-points 20000 --runs 3 --device cpu --json-out benchmark_results/wcs_paper2.json"
-bench-wcs-small-n-paths = "pixi run -e bench-all python benchmarks/bench_wcs_small_n_paths.py --cases TAN,SIN,ARC --n-points 256 --runs 11 --json-out benchmark_results/wcs_small_n_paths.json"
-bench-observed-place = "pixi run -e test python benchmarks/bench_observed_place.py --n-points 4096 --runs 7 --json-out benchmark_results/observed_place.json"
-bench-map-ground-truth-gate = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_ground_truth.py --size 32 --runs 2 --cases tan_multires_noise --torchsky-kernels bilinear --json-out benchmark_results/map_ground_truth_gate.json --baseline-json benchmarks/baselines/map_ground_truth_smoke.json"
-bench-map-multifield-gate = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_multifield_truth.py --size 48 --runs 2 --cases tan_multifield_cube --torchsky-kernels bilinear --json-out benchmark_results/map_multifield_gate.json --baseline-json benchmarks/baselines/map_multifield_truth_smoke.json"
-bench-map-field-fit-gate = "pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --size 24 --steps 8 --runs 2 --cases tan_field_fit --models sine_implicit,coadd_bilinear --json-out benchmark_results/map_field_fit_gate.json --baseline-json benchmarks/baselines/map_field_fit_smoke.json"
-bench-map-compat-gate = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_compat.py --size 32 --n-obs 2 --runs 1 --cases real_astropy_sip_fixture,real_astropy_sip_shifted_wcs,real_astropy_sip_mef,real_astropy_sip_mef_shifted_wcs --torchsky-kernels bilinear --reproject-kernels bilinear --drizzle-kernels point --swarp-kernels bilinear --json-out benchmark_results/map_compat_gate.json --baseline-json benchmarks/baselines/map_compat_real_smoke.json"
-bench-map-ground-truth-gate-rep = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_ground_truth.py --size 96 --runs 3 --cases tan_multires_noise,tpv_flux_multires_mild --torchsky-kernels bilinear --json-out benchmark_results/map_ground_truth_gate_rep.json --baseline-json benchmarks/baselines/map_ground_truth_rep.json"
-bench-map-multifield-gate-rep = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_map_multifield_truth.py --size 96 --runs 3 --cases tan_multifield_cube,tpv_multifield_cube --torchsky-kernels bilinear --json-out benchmark_results/map_multifield_gate_rep.json --baseline-json benchmarks/baselines/map_multifield_truth_rep.json"
-bench-map-field-fit-gate-rep = "pixi run -e sphere-bench python benchmarks/bench_map_field_fit.py --size 32 --steps 24 --runs 2 --cases tan_field_fit,tan_sip_field_fit_multicolor --models sine_implicit,wire_implicit,coadd_bilinear --json-out benchmark_results/map_field_fit_gate_rep.json --baseline-json benchmarks/baselines/map_field_fit_rep.json"
-bench-map-compat-external = "pixi run -e map-compat python scripts/run_local_sphere_bench.py benchmarks/bench_map_compat.py --json-out benchmark_results/map_compat_external.json"
-bench-map-drizzle-required = "pixi run -e map-compat python benchmarks/bench_map_compat.py --size 32 --n-obs 2 --runs 1 --cases upstream_drizzle_crpix_translation --torchsky-kernels drizzle_point,drizzle_square --comparators drizzle --drizzle-kernels point,square --require-comparators drizzle --acceptance-json benchmarks/baselines/map_drizzle_acceptance.json --json-out benchmark_results/map_drizzle_required.json"
-bench-map-swarp-required = "pixi run -e map-compat python benchmarks/bench_map_compat.py --size 32 --n-obs 2 --runs 1 --cases synthetic_shifted_wcs --torchsky-kernels bilinear,lanczos3 --comparators swarp --swarp-kernels bilinear,lanczos3 --require-comparators swarp --acceptance-json benchmarks/baselines/map_swarp_acceptance.json --json-out benchmark_results/map_swarp_required.json"
-bench-map-swarp-clipped-required = "pixi run -e map-compat python benchmarks/bench_map_compat.py --size 32 --runs 1 --cases synthetic_swarp_clipped --torchsky-kernels bilinear --comparators swarp_clipped --require-comparators swarp_clipped --acceptance-json benchmarks/baselines/map_swarp_clipped_acceptance.json --json-out benchmark_results/map_swarp_clipped_required.json"
-bench-map-montage-required = "pixi run -e map-compat python benchmarks/bench_map_compat.py --size 32 --n-obs 2 --runs 1 --cases synthetic_montage_sin_grid --torchsky-kernels conservative_polygon --comparators montage --require-comparators montage --acceptance-json benchmarks/baselines/map_montage_acceptance.json --json-out benchmark_results/map_montage_required.json"
-bench-map-acceptance-smoke = "pixi run bench-map-ground-truth-gate && pixi run bench-map-multifield-gate && pixi run bench-map-field-fit-gate && pixi run bench-map-compat-gate"
-bench-map-acceptance = "pixi run bench-map-ground-truth-gate-rep && pixi run bench-map-multifield-gate-rep && pixi run bench-map-field-fit-gate-rep && pixi run bench-map-compat-gate"
-bootstrap-map-compat-tools = "pixi run -e map-compat python scripts/bootstrap_map_compat_tools.py --tool all"
-bootstrap-map-compat-swarp = "pixi run -e map-compat python scripts/bootstrap_map_compat_tools.py --tool swarp"
-bootstrap-map-compat-montage = "pixi run -e map-compat python scripts/bootstrap_map_compat_tools.py --tool montage"
-bootstrap-map-compat-casutools = "pixi run -e map-compat python scripts/bootstrap_map_compat_tools.py --tool casutools"
-bench-wcs-legacy = "pixi run -e bench-legacy python benchmarks/bench_all.py --profile user --wcs-only --legacy-wcs"
-# Plan §4: Phase 0 quick benches + full WCS/sphere pytest + spin matrix smoke.
-wcs-sphere-acceptance = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --quick --run-id acceptance_wcs --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --quick --run-id acceptance_sphere --output-dir benchmarks_results && pixi run -e bench-all pytest tests/test_wcs_*.py tests/test_sphere_*.py tests/test_healsparse_upstream.py tests/test_healpix_*.py tests/test_spectral.py -q --tb=line && pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set default --runs 2 --json-out benchmarks_results/acceptance_spin_matrix.json"
-# Full (not --quick) WCS+sphere orchestrator + the same pytest glob. For CANFAR/Linux.
-wcs-sphere-acceptance-full = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --no-gpu --no-legacy-wcs-bridge --run-id acceptance_wcs_full --output-dir benchmarks_results && pixi run -e bench-all python benchmarks/bench_all.py --profile user --sphere-only --no-gpu --run-id acceptance_sphere_full --output-dir benchmarks_results && pixi run -e bench-all pytest tests/test_wcs_*.py tests/test_sphere_*.py tests/test_healsparse_upstream.py tests/test_healpix_*.py tests/test_spectral.py -q --tb=line && pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set default --runs 2 --json-out benchmarks_results/acceptance_spin_matrix.json"
-canfar-wcs-sphere = "bash scripts/launch_canfar_wcs_sphere.sh"
-canfar-wcs-sphere-cpu = "bash scripts/launch_canfar_wcs_sphere.sh cpu"
-canfar-wcs-sphere-cuda = "bash scripts/launch_canfar_wcs_sphere.sh cuda"
-canfar-wcs-sphere-suite = "bash scripts/launch_canfar_wcs_sphere.sh suite"
-canfar-wcs-sphere-world = "bash scripts/launch_canfar_wcs_sphere.sh world"
-canfar-wcs-sphere-world-cuda = "bash scripts/launch_canfar_wcs_sphere.sh world-cuda"
-canfar-catalog-scale = "bash scripts/launch_canfar_wcs_sphere.sh catalog-scale"
-canfar-catalog-scale-1e6 = "bash scripts/launch_canfar_wcs_sphere.sh catalog-scale-1e6"
-canfar-catalog-scale-1e7 = "bash scripts/launch_canfar_wcs_sphere.sh catalog-scale-1e7"
-canfar-catalog-scale-real = "bash scripts/launch_canfar_wcs_sphere.sh catalog-scale-real"
-# Comparator version matrix for open-source tools (see docs/benchmarks.md); run per Pixi env you use for benches.
-bench-archive-scorecard = "pixi run -e default -- python scripts/archive_benchmark_scorecard.py"
-bench-comparator-versions = "pixi run -e bench-all python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_bench-all.json"
-bench-comparator-versions-sphere = "pixi run -e sphere-bench python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_sphere-bench.json"
-bench-comparator-versions-legacy = "pixi run -e bench-legacy python scripts/print_benchmark_comparator_versions.py --json-out benchmarks_results/VERSIONS_comparators_bench-legacy.json"
-bench-comparator-versions-all = "pixi run bench-comparator-versions && pixi run bench-comparator-versions-sphere && pixi run bench-comparator-versions-legacy"
-# WCS suite with every in-process + legacy-bridge comparator (needs bench-legacy env + kapteyn/pyast).
-bench-wcs-ecosystem = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --wcs-only --legacy-wcs --run-id wcs_ecosystem --output-dir benchmarks_results"
 
-# Comprehensive benchmarks (renamed from exhaustive)
-bench-all = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --scope all"
-bench-all-keep = "pixi run -e bench-all python benchmarks/bench_all.py --profile user --scope all --keep-temp"
-bench-all-force = "pixi run -e bench-all python benchmarks/bench_all.py --profile lab --scope all"
-bench-transforms = "pixi run -e bench python benchmarks/bench_transforms.py"
-bench-focused = "pixi run -e bench python benchmarks/bench_transforms.py"
 
-# Pytest-based benchmarking
-bench-pytest = "pytest benchmarks/ --benchmark-only"
-
-# Development tools
-notebook = "pixi run -e default -- jupyter lab"
 
 # Test phases for development workflow
 test-phase1 = "pixi run -e default -- python -c 'import sys; sys.path.insert(0, \"src\"); import torchsky; print(\"Phase 1 COMPLETE: All core features implemented\")'"
 test-transforms = "pixi run -e default -- pytest tests/test_transforms.py -v"
 test-dataloader = "pixi run -e default -- pytest tests/test_dataloader.py -v"
-sphere-bench-bootstrap = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip"
-sphere-bench-bootstrap-core = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip --include astropy-healpix,hpgeom,healpix,mhealpy"
-sphere-bench-bootstrap-harmonics = "pixi run -e sphere-bench python scripts/bootstrap_sphere_bench.py --installer pip --with-harmonics"
-sht-bench-bootstrap = "pixi run -e sht-bench python scripts/bootstrap_sphere_bench.py --installer pip --with-s2fft"
-sht-bench-spectral = "pixi run -e sht-bench python benchmarks/bench_sphere_spectral.py --nside 32 --lmax 32 --runs 5 --json-out benchmark_results/sphere_spectral_s2fft.json"
-sphere-upstream-sync = "pixi run -e sphere-bench python scripts/sync_upstream_sphere_sources.py --prefer-sdist --include healpy,astropy-healpix,healpix,mhealpy,spherical-geometry --output-dir benchmark_results/upstream_fixtures"
-sphere-upstream-spin-matrix-gate-extended = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --seed 123 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json --baseline-json benchmarks/baselines/spin_matrix_extended_baseline.json --max-regression-frac 0.20"
-sphere-upstream-spin-matrix = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json"
-sphere-upstream-spin-matrix-gate = "pixi run -e sphere-bench python benchmarks/bench_spin_matrix.py --case-set extended --runs 5 --seed 123 --json-out benchmark_results/upstream_replay_healpy_spin_matrix.json --raw-json-out benchmark_results/upstream_replay_healpy_spin_extended_raw.json --baseline-json benchmarks/baselines/spin_matrix_extended_baseline.json --max-regression-frac 0.20"
-sphere-bench-geometry = "pixi run -e sphere-bench python benchmarks/bench_sphere_geometry.py --nside 1024 --n-points 200000 --runs 5 --device auto --sample-profile mixed --json-out benchmark_results/sphere_geometry.json --csv-out benchmark_results/sphere_geometry.csv"
-sphere-bench-geometry-ecosystem = "pixi run -e sphere-bench python benchmarks/bench_sphere_geometry.py --device cpu --sample-profile mixed --nside 1024 --n-points 200000 --runs 5 --libraries torchsky,healpy,hpgeom,astropy-healpix,healpix,mhealpy --json-out benchmark_results/sphere_geometry_ecosystem.json --csv-out benchmark_results/sphere_geometry_ecosystem.csv"
-sphere-bench-geometry-fast = "pixi run -e sphere-bench python benchmarks/bench_sphere_geometry.py --nside 256 --n-points 50000 --runs 3 --device auto --sample-profile mixed"
-sphere-bench-geometry-matrix = "pixi run -e sphere-bench python benchmarks/bench_sphere_matrix.py --device cpu --nside 1024 --n-points 200000 --runs 5 --strict-missing --output-dir benchmark_results/sphere_matrix_latest"
-sphere-bench-geometry-gate = "pixi run -e sphere-bench python benchmarks/bench_sphere_matrix.py --device cpu --nside 1024 --n-points 200000 --runs 5 --strict-missing --output-dir benchmark_results/sphere_matrix_latest --min-median-ratio-vs-healpy ang2pix_ring=1.8,ang2pix_nested=1.35,pix2ang_ring=1.15,pix2ang_nested=1.0,ring2nest=1.05,nest2ring=0.85"
-sphere-bench-geometry-matrix-small = "pixi run -e sphere-bench python benchmarks/bench_sphere_matrix.py --device cpu --nside 1024 --n-points 20000 --runs 9 --strict-missing --output-dir benchmark_results/sphere_matrix_small_latest"
-sphere-bench-geometry-gate-small = "pixi run -e sphere-bench python benchmarks/bench_sphere_matrix.py --device cpu --nside 1024 --n-points 20000 --runs 9 --strict-missing --output-dir benchmark_results/sphere_matrix_small_latest --min-median-ratio-vs-healpy ang2pix_ring=1.6,ang2pix_nested=1.25,pix2ang_ring=1.1,pix2ang_nested=0.95,ring2nest=1.05,nest2ring=0.85"
-sphere-bench-healpix-cpu = "pixi run -e sphere-bench python benchmarks/bench_healpix.py --device cpu --sample-profile mixed --nside 1024 --n-points 200000 --runs 5 --max-index-mismatches 0 --max-pix2ang-dra-deg 1e-10 --max-pix2ang-ddec-deg 1e-10"
-sphere-bench-healpix-mps = "pixi run -e sphere-bench python benchmarks/bench_healpix.py --device mps --compare-cpu --sample-profile uniform --nside 1024 --n-points 200000 --runs 5 --max-index-mismatches 10 --max-pix2ang-dra-deg 5e-4 --max-pix2ang-ddec-deg 5e-4"
-sphere-bench-healpix-advanced = "pixi run -e sphere-bench python benchmarks/bench_healpix_advanced.py --device cpu --nside 1024 --n-points 200000 --runs 5 --json-out benchmark_results/healpix_advanced.json"
-sphere-bench-healpix-advanced-gate = "pixi run -e sphere-bench python benchmarks/bench_healpix_advanced.py --device cpu --nside 1024 --n-points 200000 --runs 5 --min-ratio-vs-healpy neighbors_ring=1.0,neighbors_nested=0.9,interp_weights_ring=1.1,interp_weights_nested=1.1,interp_val_ring=0.9,interp_val_nested=0.95 --json-out benchmark_results/healpix_advanced.json"
-sphere-bench-healpix-advanced-gate-small = "pixi run -e sphere-bench python benchmarks/bench_healpix_advanced.py --device cpu --nside 1024 --n-points 20000 --runs 9 --min-ratio-vs-healpy neighbors_ring=0.85,neighbors_nested=0.4,interp_weights_ring=1.1,interp_weights_nested=1.1,interp_val_ring=0.85,interp_val_nested=1.0 --json-out benchmark_results/healpix_advanced_small.json"
-sphere-bench-core = "pixi run -e sphere-bench python benchmarks/bench_sphere_core.py --device auto --nside 256 --n-points 100000 --n-bands 8 --runs 5 --json-out benchmark_results/sphere_core.json"
-sphere-bench-moc = "pixi run -e sphere-bench python benchmarks/bench_sphere_core.py --moc-only --n-points 50000 --runs 3 --moc-max-order 6 --json-out benchmark_results/moc_core.json"
-sphere-bench-polygons = "pixi run -e sphere-bench python scripts/run_local_sphere_bench.py benchmarks/bench_sphere_polygons.py --nside 512 --n-points 200000 --runs 5 --json-out benchmark_results/sphere_polygons.json"
-sphere-bench-geom-exact-contains = "pixi run -e sphere-bench python benchmarks/bench_sphere_geom_exact_contains.py --n-points 200000 --runs 5 --json-out benchmark_results/sphere_geom_exact_contains.json"
-sphere-bench-geom-exact-contains-gate = "pixi run -e sphere-bench python benchmarks/bench_sphere_geom_exact_contains.py --n-points 200000 --runs 5 --json-out benchmark_results/sphere_geom_exact_contains.json --baseline-json benchmarks/baselines/sphere_geom_exact_contains_gate.json"
-sphere-bench-catalog-crossmatch = "pixi run -e sphere-bench python benchmarks/bench_catalog_crossmatch.py --n-left 20000 --n-right-band 250000 --n-right-background 50000 --radius-arcsec 2.0 --runs 5 --json-out benchmark_results/catalog_crossmatch.json"
-sphere-bench-catalog-compat = "pixi run -e sphere-bench python benchmarks/bench_catalog_compat.py --n-left 10000 --n-right-noise 80000 --radius-arcsec 2.0 --runs 5 --json-out benchmark_results/catalog_compat.json"
-sphere-bench-spectral = "pixi run -e sphere-bench python benchmarks/bench_sphere_spectral.py --nside 32 --lmax 32 --runs 7 --json-out benchmark_results/sphere_spectral.json"
-sphere-bench-sparse = "pixi run -e sphere-bench python benchmarks/bench_sphere_sparse.py --nside 512 --coverage-frac 0.1 --n-queries 200000 --runs 5 --json-out benchmark_results/sphere_sparse.json"
-sphere-bench-sparse-gate = "pixi run -e sphere-bench python benchmarks/bench_sphere_sparse.py --nside 512 --coverage-frac 0.1 --n-queries 200000 --runs 5 --min-ratio-sparse-udgrade-vs-dense 1.0 --json-out benchmark_results/sphere_sparse.json"
-sphere-bench-pipeline = "pixi run -e sphere-bench python benchmarks/bench_pipeline_table_sphere.py --n-rows 1000000 --runs 3 --nside 256 --json-out benchmark_results/pipeline_table_sphere.json"
-sphere-bench-pipeline-gate = "pixi run -e sphere-bench python benchmarks/bench_pipeline_table_sphere.py --n-rows 1000000 --runs 3 --nside 256 --min-read-ratio-filtered-vs-torch 0.2 --min-pipeline-ratio-filtered-vs-no-pushdown 0.7 --min-pipeline-ratio-torch-vs-no-pushdown 0.7 --json-out benchmark_results/pipeline_table_sphere.json"
+
 
 [feature.prod]
 platforms = ["osx-arm64", "linux-64"]
@@ -208,8 +91,6 @@ python = "==3.13.14"
 
 [feature.prod.pypi-dependencies]
 torchfits = "==1.0.0"
-canfar = "*"
-vos = "*"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
@@ -222,34 +103,6 @@ pytest-xdist = ">=3.0"
 requests = ">=2.28"
 
 # Benchmark feature with additional dependencies
-[feature.bench.dependencies]
-astropy = ">=5.0"
-matplotlib = ">=3.8"
-seaborn = ">=0.13"
-pandas = ">=2.2"
-psutil = ">=5.9"
-pytest-benchmark = ">=4.0"
-pytest-xdist = ">=3.0"
-reproject = ">=0.14"
-
-[feature.bench.pypi-dependencies]
-drizzle = "==2.2.0"
-dfreproject = "==1.3.1"
-
-[feature.sphere-bench.dependencies]
-healpy = ">=1.19.0,<2"
-hpgeom = ">=1.0"
-healsparse = ">=1.10"
-astropy-healpix = ">=1.0"
-spherical-geometry = ">=1.2"
-cython = ">=3.0"
-pybind11 = ">=2.12"
-
-[feature.sphere-bench.pypi-dependencies]
-mocpy = ">=0.13"
-
-# Linux-only accelerator environment. The normal solve stays CPU/MPS portable;
-# this feature selects conda-forge's CUDA build of the same supported PyTorch.
 [feature.cuda]
 platforms = ["linux-64-cuda"]
 
@@ -271,77 +124,14 @@ mpmath = ">=1.1,<1.4"
 torchfits = "==1.0.0"
 torch = "==2.13.0"
 
-[feature.smacs.dependencies]
-pillow = ">=10"
-psutil = ">=5.9"
-
-[feature.smacs.pypi-dependencies]
-jwst = ">=1.17"
-stpsf = ">=1.2"
-photutils = ">=1.1"
-
-[feature.svo-bootstrap.dependencies]
-astroquery = ">=0.4.6"
-
-[feature.map-compat.dependencies]
-python = "==3.13.14"
-cmake = ">=3.21"
-ninja = ">=1.10"
-scikit-build-core = ">=1.0.0"
-nanobind = ">=2.10.2"
-autoconf = ">=2.71"
-automake = ">=1.16"
-libtool = ">=2.4"
-make = ">=4.4"
-pkg-config = ">=0.29"
-wcslib = ">=8"
-astromatic-swarp = ">=2.41"
-astropy-base = ">=5.0"
-
-[feature.map-compat.pypi-dependencies]
-MontagePy = "*"
-drizzle = "==2.2.0"
-
-[feature.bench-legacy.dependencies]
-python = "3.10.*"
-numpy = "<2.0"
-matplotlib = "*"
-seaborn = "*"
-pandas = "*"
-psutil = "*"
-astropy = "*"
-starlink-ast = "*"
-cython = "<3.0"
-# Add torch for torchsky
-pytorch = ">=2.13"
-
-[feature.bench-legacy.pypi-dependencies]
-# Kapteyn is not pinned here: its sdist build often fails under isolated solves
-# (requires NumPy at build time). After `pixi install -e bench-legacy`, install when needed:
-#   pixi run -e bench-legacy python -m pip install kapteyn
-
-# Astrometric calibration (SCAMP + SExtractor + astropy).
-# solve-field is NOT a conda dep (no osx-arm64 build); use `pixi run solve-field`.
+# Production calibration helpers: solve-field plus optional SCAMP refinement.
 [feature.astrometry.dependencies]
 astromatic-scamp = ">=2.0"
 astromatic-source-extractor = ">=2.28"
-astropy = ">=5.0"
-numpy = ">=1.20"
 
 # Environment definitions
 [environments]
 default = { features = ["prod"], solve-group = "default" }
 test = { features = ["prod", "test"], solve-group = "default" }
-bench = { features = ["prod", "bench"], solve-group = "default" }
-sphere-bench = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
-# Optional s2fft peer. JAX is not locked here; run `pixi run sht-bench-bootstrap`.
-sht-bench = { features = ["prod", "test", "sphere-bench"], solve-group = "default" }
 cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
-smacs-cuda = { features = ["cuda", "smacs"], no-default-feature = true, solve-group = "smacs-cuda" }
-smacs = { features = ["prod", "test", "smacs"], solve-group = "smacs" }
-svo-bootstrap = { features = ["prod", "svo-bootstrap"], solve-group = "default" }
-bench-all = { features = ["prod", "bench", "sphere-bench"], solve-group = "default" }
-map-compat = { features = ["prod", "bench", "sphere-bench", "map-compat"], solve-group = "map-compat" }
-map-compat-cuda = { features = ["cuda", "map-compat"], no-default-feature = true, solve-group = "map-compat-cuda" }
-bench-legacy = { features = ["bench-legacy"], solve-group = "bench-legacy" }
 astrometry = { features = ["prod", "astrometry"], solve-group = "default" }

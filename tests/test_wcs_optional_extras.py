@@ -43,6 +43,38 @@ def test_freeze_live_gwcs_fails_closed_without_gwcs() -> None:
         freeze_live_gwcs(object(), ((0.0, 1.0), (0.0, 1.0)))
 
 
+@pytest.mark.parametrize("values_method", [False, True])
+def test_freeze_live_gwcs_preserves_reflected_coordinates_when_extra_available(
+    monkeypatch: pytest.MonkeyPatch, values_method: bool
+) -> None:
+    # The optional loader boundary is mocked; the actual sampler and native
+    # table execute, without requiring GWCS in the default test environment.
+    monkeypatch.setattr(
+        "torchsky.wcs.gwcs_live.importlib.util.find_spec", lambda name: object()
+    )
+
+    class Model:
+        def __call__(self, x, y):
+            return -0.03 * x + 0.2, 0.04 * y - 0.1
+
+    class ValuesModel(Model):
+        pixel_to_world_values = Model.__call__
+
+    model = ValuesModel() if values_method else Model()
+    frozen = freeze_live_gwcs(
+        model,
+        ((0.0, 1.0), (0.0, 1.0)),
+        initial_grid_shape=(5, 5),
+        maximum_grid_shape=(5, 5),
+        random_validation_points=8,
+        coordinates="plane_arcsec",
+    )
+    points = torch.tensor([[0.25, 0.7], [0.8, 0.4]], dtype=torch.float64)
+    expected = torch.stack((-0.03 * points[:, 0] + 0.2, 0.04 * points[:, 1] - 0.1), -1)
+    assert frozen.passed
+    torch.testing.assert_close(frozen.transform(points), expected, atol=1e-14, rtol=0)
+
+
 def test_catalog_state_astropy_roundtrip_positions() -> None:
     sky = SkyCoord(ra=[10.0, 120.0] * u.deg, dec=[20.0, -5.0] * u.deg, frame="icrs")
     state = catalog_state_from_astropy(sky)

@@ -1,25 +1,14 @@
 # INR and Power Foam sky reconstruction: problem formulation and objectives
 
-## Active SMACS assumptions — 2026-09-05
+## Campaign configuration
 
-The accepted execution specification is in
-[`../roadmap/next.md`](../roadmap/next.md#accepted-execution-plan--2026-09-05).
-The first comparison learns a static spatial/spectral `I_nu` scene through fixed
-measured passbands and independently calibrated PSFs/backgrounds. Effective PSFs
-include detector pixel response; do not integrate pixels twice. Use calibrated
-SCI and ERR/variance in a Gaussian likelihood, with training-only numerical
-normalization reversed on output. Gain alone does not convert MJy/sr to counts.
-For flat-`I_nu` calibration, photon-throughput weights are proportional to
-`T(lambda)/lambda`; verify the actual product reference-spectrum convention.
-
-Persistent intracluster light stays in the celestial scene. Detector offsets
-are calibrated independently and anchored relatively; an absolute foreground
-reference is still needed for absolute diffuse brightness. No unrestricted
-exposure bias is learned from held-out science residuals. Joint scene/operator
-learning and temporal astronomical fields are later controlled extensions.
-Select by validation detector likelihood after flux/color/diffuse-fidelity
-checks; depth is reported separately. Fine spectra and hybrid component
-decompositions remain prior-dependent until independent evidence supports them.
+This document defines the reusable inverse problem and model assumptions. The
+current SMACS/UPDec dataset, exposure selection, calibration contract, frozen
+splits, comparator matrix, quantitative depth endpoint, and acceptance gates
+are maintained in the
+[UPDec evaluation campaign](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md).
+Campaign results do not change the formulation or establish a general claim
+without independent evidence.
 
 ## Purpose
 
@@ -872,17 +861,12 @@ A low training residual is insufficient because a flexible model can absorb
 noise, backgrounds, or calibration errors. We need data that did not update the
 model.
 
-For the current SMACS J0723 experiment, the frozen dither split is
-
-- training: `PATT_NUM={1,2,4,5,7}`;
-- validation: `PATT_NUM={3,8}`;
-- blind test: `PATT_NUM={6,9}`.
-
-Validation exposures select architecture, spectral rank, atom density,
-learning rate, temperature schedule, regularization, stopping rule, and
-detection threshold. Test exposures and blind injection identifiers are used
-once for the final scientific measurement. A failure on the blind test changes
-the claim, not the configuration.
+Each campaign freezes its train, validation, and blind-test groups before
+fitting; exact exposure and injection identities belong in its harness manifest.
+Validation evidence selects architecture, spectral rank, atom density, learning
+rate, temperature schedule, regularization, stopping rule, and detection
+threshold. Test observations are used once for the final measurement. A failure
+on the blind test changes the claim, not the configuration.
 
 These exposure folds share one celestial field and often common calibration.
 They test prediction into withheld detector realizations conditional on that
@@ -903,127 +887,13 @@ Useful diagnostics include:
 - forward/adjoint dot-product checks for every linear operator;
 - results stratified by band, magnitude, colour, crowding, and field quadrant.
 
-## 12. Our immediate quantitative objective
+## 12–13. Campaign objectives and method matrix
 
-The current primary endpoint is detector-level source recovery in the six JWST
-NIRCam bands F090W, F150W, F200W, F277W, F356W, and F444W. All methods receive
-the same aligned CRF observations, masks, inverse variances, WCS metadata,
-passbands, PSF contract, injections, and output grids.
-
-The scalar depth coordinate must be declared before generating the blind
-injections. Use a reference-band AB magnitude \(m_{\rm ref}\), or an equivalent
-amplitude normalization of a preregistered spectral template, and define every
-other band through the injection's colour or spectral parameters. There is no
-single multiband AB magnitude without such a convention. Report separate
-recovery curves for declared colour/SED, crowding, and morphology strata rather
-than hiding a population-dependent gain in one mixture average.
-
-Inject sources in the latent scene and propagate them through passband, WCS,
-spatial response, pixel integration, calibration, and masking before adding
-them to detector data. When count-level source noise is material, positive
-injections also require the corresponding signal-dependent noise draw; paired
-negative injections remain local-response probes rather than physical skies.
-To measure reconstruction response, rerun every fitting and selection stage
-that would respond to the added source. Adding a template only to an already
-frozen reconstruction measures the detector/scorer response, not the INR or
-Foam pipeline response, and must be labelled separately.
-
-Freeze the validation-selected detection threshold before examining the blind
-test. Apply the same threshold-selection rule separately to each method; do not
-force one numerical score threshold onto differently calibrated scorers. At the
-resulting threshold, chosen to target 95% validation purity, define
-\(m_{50}\) on the test set as the value of \(m_{\rm ref}\) at which the fitted
-per-source recovery probability is 50%. The recovery model, monotonicity
-constraint, matching radius or probabilistic association rule, blend policy,
-and treatment of genuine but uncatalogued objects must be frozen with the
-threshold. If the fitted curve does not bracket 50% over the injected range,
-report a bound rather than extrapolating an \(m_{50}\). Do not recalibrate the
-threshold on test detections. Because a larger AB magnitude is fainter, the
-primary contrast must name one preregistered SED/morphology stratum or a fixed
-population mixture and is
-
-\[
-\Delta m_{50}
-=m_{50}(\text{shared spectral Foam})
--m_{50}(\text{best classical multiband pipeline}).
-\]
-
-The desired claim requires all of the following, not just
-\(\Delta m_{50}>0\):
-
-- the paired 95% injection-batch bootstrap interval for \(\Delta m_{50}\)
-  excludes zero;
-- measured test purity is at least 95%, with a lower 95% cluster-bootstrap
-  bound of at least 93%;
-- median absolute bright-source flux bias is at most 2% in every band and no
-  more than one percentage point worse than the best classical method;
-- adjacent-band median colour bias is at most 0.02 mag for the declared
-  smooth-continuum population;
-- held-out exposure predictive score improves; for a loss-like score where
-  smaller is better, the alternative non-inferiority gate is that the upper
-  95% confidence bound on shared minus independent score does not exceed a
-  preregistered margin \(\delta_{\rm pred}\);
-- the gain appears in at least two of four blind 256-pixel quadrants as a
-  heterogeneity diagnostic, not as independent replication;
-- blank, negative-injection, and shuffled-band controls pass.
-
-Use the same injection-batch identifiers for every method and resample those
-identifiers jointly 10,000 times, refitting the declared recovery curve in each
-replicate; never resample individual detections as if they were independent.
-Keep the four spatial quadrants as fixed strata and report their results
-separately. The resulting intervals quantify injection-realization uncertainty
-conditional on this field, its background, the fitted reconstruction, and the
-frozen test exposures. They do not include field-to-field variance, calibration
-uncertainty, or optimizer instability unless those quantities are explicitly
-resampled. Report a separate calibration/seed sensitivity analysis and require
-coverage checks for any combined interval. Generalization beyond this
-conditioning requires independent fields or exposure sets. Compute the purity
-lower bound from the same paired cluster bootstrap and report bootstrap-fit
-failures. Unmatched detections in a real field can be genuine uncatalogued
-sources, so negative images, blank simulations, and adjudicated real-source
-matches must accompany any false-positive estimate. Wall time, parameter/atom
-count, peak resident memory, and peak accelerator memory are reported with the
-scientific metrics. A 0.2 mag improvement is a useful planning target, not a
-success threshold that can be chosen after seeing the data.
-
-The strongest classical comparator is not a single-band stack. It includes
-validation-selected Drizzle and SWarp products followed by PSF-aware multiband
-detection with the same spectral prior, plus the native-detector linear or
-proper-coadd information reference. Independent and shared INR and Foam rows
-determine whether any gain comes from the representation, spectral sharing, or
-simply more capacity.
-
-## 13. Model matrix and ablations
-
-The minimum defensible method matrix is:
-
-| Family | Required row | Scientific question |
-| --- | --- | --- |
-| classical | weighted Torchsky per-band stack | internal mapmaking control |
-| classical | upstream square Drizzle | standard dithered-imaging comparator |
-| classical | validation-selected SWarp | standard survey-stacking comparator |
-| classical | native-detector linear fit or proper coadd with effective PSF/covariance | information-preserving linear reference |
-| classical | PSF-aware whitened multiband detection over the best stacks with the same SED/template family | strongest classical use of the same bands and prior |
-| INR | independent appearance | what does a flexible continuous spatial model do without spectral sharing? |
-| INR | shared spectral appearance | does INR spectral coupling add depth without unacceptable bias? |
-| Foam | independent appearance on shared geometry | what does Foam geometry do without spectral sharing? |
-| Foam | shared low-rank spectral appearance | primary adaptive spectral candidate |
-
-Estimate any whitening operator from training or calibration evidence only,
-and include the inter-band and resampling covariance supported by those data.
-Apply the same transform to data, templates, and injected signals. If a diagonal
-or otherwise approximate covariance is used for scale, label the detector
-approximate and validate its null distribution on held-out blank data.
-
-For Foam, the planned shared row uses a four-mode spectral basis. The
-six-mode, rank-six whitened row spans arbitrary appearances in six bands and is
-the response-aware independent control. Both a near-parameter-matched grid and
-a spatial-resolution-matched grid are required because these controls answer
-different questions.
-
-For both INR and Foam, the final scored product must be generated by the same
-declared observation model used for evaluation. Foam is scored from detached
-hard geometry, never from the smooth ownership surrogate.
+The SMACS depth endpoint, recovery thresholds, bootstrap protocol, comparator
+matrix, and ablation rows are maintained in the
+[harness campaign formulation](https://github.com/astroai/torchsky-harness/blob/main/docs/inr_foam_problem_formulation.md)
+and [UPDec campaign record](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md).
+They are scientific evaluation contracts rather than runtime package defaults.
 
 ## 14. Optimization procedures
 
@@ -1198,8 +1068,8 @@ metric.
   operators, and training workflow.
 - [Implicit forward modelling](../implicit_forward.md): compact multi-survey
   prediction and robust-loss scaffold.
-- [ADASS UPDec depth sprint](adass_updec_depth_week.md): frozen data split,
-  method matrix, claim gates, and current execution status.
+- [UPDec depth evaluation campaign](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md):
+  frozen data split, method matrix, claim gates, and campaign evidence.
 - [Source unmixing with known or unknown sources](source_unmixing_problem_formulation.md):
   component identifiability, protected targets, cross-fitting, and uncertainty
   after reconstruction.

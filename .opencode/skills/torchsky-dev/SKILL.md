@@ -27,6 +27,12 @@ metadata:
 
 ## Common commands
 
-- `pixi run lint` — ruff format
-- `pixi run -e test -- python -m pytest tests/ -q --no-header -x`
-- `pixi run -e bench -- python benchmarks/bench_*.py`
+- `pixi run preflight-push` — Ruff and compileall pre-push gate
+- `pixi run typecheck` — pyright
+- `pixi run test` — package test task (map tests run in the CI map matrix)
+- `pixi run -e test -- pytest tests/test_foo.py` — targeted package tests
+
+Scientific benchmarks, exhaustive parity, and real-data validation run from
+the sibling `torchsky-harness` checkout against an explicitly installed
+torchsky subject. Record the two repository revisions separately; consult the
+harness's `AGENTS.md` and benchmark methodology for its current commands.

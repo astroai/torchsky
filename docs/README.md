@@ -29,12 +29,17 @@ validation, and API pointers.
   specifications, and operator adapters.
 - [Sphere and HEALPix](sphere.md) - `torchsky.sphere`, HEALPix, geometry,
   sparse maps, MOC, and harmonic primitives.
-- [Map](map.md) - `torchsky.map`, products, kernels, value semantics, truth
-  evaluation, operators, and field/INR workflows.
+- [Map](map.md) - `torchsky.map`, products, kernels, value semantics,
+  operators, and field/INR workflows.
 - [Continuous fields](field.md) - `torchsky.field`, composable `model`, `fit`,
   `render`, and `sample` workflows (experimental).
 - [Implicit forward modeling](implicit_forward.md) - multi-survey losses,
   kinematics, `predict_observation_mean`, Charbonnier scaffold.
+- [Native likelihood and calibration foundations](native-likelihood.md) -
+  native response, Gaussian evidence, linear queries, physical detector stages,
+  and the bounded Poisson–Gaussian law (experimental).
+- [PSF response conventions](psf-response-conventions.md) - detector-grid
+  kernel orientation and source-flux versus uniform-sky contracts.
 - [Catalogs](catalogs.md) - `torchsky.catalogs`, crossmatch, and streaming
   catalog datasets. Scale covering: [catalog matching research](research/catalog_matching.md).
 - [Spectral data](spectral.md) - `torchsky.spectral`, spectra, cubes, and
@@ -48,14 +53,25 @@ validation, and API pointers.
 ## Compatibility And Measurement
 
 - [Ecosystem compatibility](compatibility.md) - reference libraries, optional
-  compatibility surfaces, and upstream validation coverage.
-- [Benchmarks](benchmarks.md) - methodology, comparator environments, real-data
-  setup, SMACS/UPdec runs, tasks, and benchmark snapshot.
+  compatibility surfaces, and the package boundary for parity work.
+- [Scientific evaluation](benchmarks.md) - evaluation ownership and how to use
+  the sibling harness; detailed methodology, comparator environments,
+  real-data campaigns, and scorecards live in
+  [`torchsky-harness`](https://github.com/astroai/torchsky-harness).
 
 ## Projects
 
-- [Hyperspectral fusion / neural fields (student onboarding)](projects/hyperspectral-fusion.md) -
-  SMACS mini-cutouts, classical stack baseline, quicklook visualization, INR first fit, and library vs research split.
+- [INR and Power-Foam formulation](projects/inr_foam_problem_formulation.md) -
+  scientific objective and model formulation for differentiable spatial-
+  spectral reconstruction.
+- [Field response and discovery plan](projects/field_response_discovery_plan.md) -
+  accepted native-response, calibration, and discovery plan.
+- [Field response implementation status](projects/field_response_discovery_status.md) -
+  bounded components, exact checks, and open scientific gates.
+- [Field response amendments](projects/field_response_discovery_amendments.md) -
+  revisions and clarifications to the accepted plan.
+- [Research notes](research/catalog_matching.md) - focused literature context
+  for catalog matching; this is not a public API contract.
 
 ## Contributor Docs
 
@@ -67,17 +83,17 @@ validation, and API pointers.
 
 ## Roadmap
 
-These files are planning and research context, not the current public API
-contract.
+These files track package architecture and implementation concerns, not
+scientific campaign status or public API guarantees.
 
-- [Roadmap](roadmap/status.md) - current strategy, domain status, active queue,
-  and standing gates.
+- [Roadmap](roadmap/status.md) - package ownership, implemented surfaces, and
+  durable engineering priorities.
+- [Execution principles](roadmap/next.md) - bounded implementation and review
+  priorities for core changes.
 - [Catalog matching research](research/catalog_matching.md) - exact S² covering
   vs GIS / point-cloud / ANN literature; not a public API.
-- [Execution roadmap](roadmap/next.md) - ordered Torchsky map, INR, Power-Foam,
-  multi-wavelength depth, and infrastructure task list.
-- [Roadmap history](roadmap/history.md) - maintained record of shipped
-  improvements, validation gates, and follow-ups.
+- [Implementation history](roadmap/history.md) - package-level ownership and
+  architecture decisions.
 
 ## Archive
 
@@ -85,8 +101,12 @@ Archived docs are preserved for context and provenance. Do not treat them as
 current workflow or API contracts.
 
 - [Torchfits migration history](archive/torchfits-migration-history.md)
-- [Benchmark history](archive/benchmark-history.md)
-- [Development handoff snapshot](archive/development-handoff.md)
 - [Roadmap knowledge base](archive/roadmap-knowledge-base.md)
 - [World model whitepaper plan](archive/roadmap-world-model-whitepaper-plan.md)
 - [Sky measure scene plan](archive/roadmap-sky-measure-scene-plan.md)
+
+Scientific campaign records, scorecards, historical evaluation, and the
+student-facing SMACS workflow are maintained in
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness), including
+its [benchmark methodology](https://github.com/astroai/torchsky-harness/blob/main/docs/benchmarks.md)
+and [campaigns](https://github.com/astroai/torchsky-harness/tree/main/campaigns).

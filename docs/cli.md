@@ -78,7 +78,8 @@ FITS I/O.
 ## Automation Guidance
 
 - Prefer explicit input/output paths and non-interactive flags.
-- Keep downloaded data and generated benchmark artifacts out of the repository.
+- Keep downloaded data and generated evaluation artifacts in paths managed by
+  `torchsky-harness`, not in the core package tree.
 - For repeatable development commands, prefer Pixi tasks documented in
   [benchmarks.md](benchmarks.md), [contributing.md](contributing.md), and
   [release.md](release.md).

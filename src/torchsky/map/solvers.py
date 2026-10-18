@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+from numbers import Real
 from typing import Callable, Iterator, Sequence
 
 import torch
@@ -87,9 +89,17 @@ def _normalized_probe(probe: Tensor) -> Tensor:
     return probe_t / norm
 
 
+def _solver_complex_dtype(*tensors: Tensor) -> torch.dtype:
+    for tensor in tensors:
+        if tensor.device.type == "mps":
+            return torch.complex64
+    return torch.complex128
+
+
 def _rayleigh_quotient(state: Tensor, image: Tensor) -> float:
-    state_flat = state.reshape(-1).to(torch.complex128)
-    image_flat = image.reshape(-1).to(torch.complex128)
+    dtype = _solver_complex_dtype(state, image)
+    state_flat = state.reshape(-1).to(dtype)
+    image_flat = image.reshape(-1).to(dtype)
     denom = torch.sum(torch.conj(state_flat) * state_flat).real
     if float(denom.item()) <= 0.0:
         return 0.0
@@ -99,8 +109,9 @@ def _rayleigh_quotient(state: Tensor, image: Tensor) -> float:
 
 
 def _inner_product(lhs: Tensor, rhs: Tensor) -> Tensor:
-    lhs_flat = torch.as_tensor(lhs).reshape(-1).to(torch.complex128)
-    rhs_flat = torch.as_tensor(rhs).reshape(-1).to(torch.complex128)
+    dtype = _solver_complex_dtype(lhs, rhs)
+    lhs_flat = torch.as_tensor(lhs).reshape(-1).to(dtype)
+    rhs_flat = torch.as_tensor(rhs).reshape(-1).to(dtype)
     return torch.sum(torch.conj(lhs_flat) * rhs_flat)
 
 
@@ -253,13 +264,23 @@ def _estimate_inverse_diagonal_hutchinson(
     *,
     num_probes: int,
     seed: int,
+    normal_action: NormalOperatorFn,
+    damping: float = 0.0,
+    rtol: float = 1.0e-5,
+    atol: float = 0.0,
 ) -> Tensor:
+    """Return a signed inverse-curvature diagonal estimate after checked solves."""
     if not isinstance(num_probes, int) or isinstance(num_probes, bool):
         raise TypeError("num_probes must be an integer")
     if num_probes < 1:
         raise ValueError("num_probes must be positive")
     if not isinstance(seed, int) or isinstance(seed, bool):
         raise TypeError("seed must be an integer")
+    for name, value in (("damping", damping), ("rtol", rtol), ("atol", atol)):
+        if not isinstance(value, Real) or isinstance(value, bool):
+            raise TypeError(f"{name} must be a real number")
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"{name} must be finite and non-negative")
     state = torch.as_tensor(reference_state)
     if not (torch.is_floating_point(state) or torch.is_complex(state)):
         raise TypeError("reference_state must have a floating-point or complex dtype")
@@ -275,8 +296,20 @@ def _estimate_inverse_diagonal_hutchinson(
     )
     # ponytail: MPS has no local Generator; remove the CPU transfer when torch adds it.
     generator = torch.Generator(device=generator_device).manual_seed(seed)
-    variance = torch.zeros(state.shape, dtype=real_dtype, device=state.device)
-    for _ in range(num_probes):
+    estimate = torch.zeros(state.shape, dtype=real_dtype, device=state.device)
+
+    def _checked_output(output: Tensor, name: str) -> Tensor:
+        if not isinstance(output, Tensor):
+            raise TypeError(f"{name} must return a tensor")
+        if output.shape != state.shape:
+            raise ValueError(f"{name} output shape must match reference_state")
+        if output.dtype != state.dtype or output.device != state.device:
+            raise ValueError(f"{name} output dtype and device must match reference_state")
+        if not torch.all(torch.isfinite(output)):
+            raise RuntimeError(f"{name} produced a non-finite inverse probe")
+        return output
+
+    for probe_index in range(num_probes):
         probe = torch.randint(
             0,
             2,
@@ -286,15 +319,28 @@ def _estimate_inverse_diagonal_hutchinson(
             generator=generator,
         ).to(dtype=real_dtype, device=state.device)
         probe = (probe * 2.0 - 1.0).to(dtype=state.dtype)
-        solution = torch.as_tensor(solve(probe))
+        solution = _checked_output(solve(probe), "normal-system solve")
+        image = _checked_output(normal_action(solution), "normal action")
+        residual = image + damping * solution - probe
+        residual_norm = torch.linalg.vector_norm(residual)
+        allowed_residual = torch.maximum(
+            residual_norm.new_tensor(atol), rtol * torch.linalg.vector_norm(probe)
+        )
+        if not torch.isfinite(residual_norm) or bool(residual_norm > allowed_residual):
+            raise RuntimeError(
+                f"inverse probe {probe_index} failed the actual residual check: "
+                f"norm={float(residual_norm.item()):.6g}, "
+                f"allowed={float(allowed_residual.item()):.6g}; "
+                "the system may be singular or the solve incomplete"
+            )
         contribution = (torch.conj(probe) * solution).real.to(dtype=real_dtype)
         if not torch.all(torch.isfinite(contribution)):
-            raise RuntimeError("normal-system solve produced a non-finite variance probe")
-        variance.add_(contribution)
-    variance.div_(float(num_probes))
-    if not torch.all(torch.isfinite(variance)):
-        raise RuntimeError("variance probe accumulation produced non-finite values")
-    return variance.clamp_min(torch.finfo(real_dtype).tiny)
+            raise RuntimeError("normal-system solve produced a non-finite inverse probe")
+        estimate.add_(contribution)
+    estimate.div_(float(num_probes))
+    if not torch.all(torch.isfinite(estimate)):
+        raise RuntimeError("inverse probe accumulation produced non-finite values")
+    return estimate
 
 
 @dataclass
@@ -377,11 +423,28 @@ class BoundObservationOperator:
         iterations: int = 32,
         damping: float = 0.0,
         preconditioner: PreconditionerFn | Tensor | None = None,
+        rtol: float = 1.0e-5,
+        atol: float = 0.0,
     ) -> Tensor:
-        """Estimate ``diag((A^T N^-1 A + damping I)^-1)`` matrix-free.
+        """Estimate the inverse-curvature diagonal with signed Hutchinson probes.
 
-        Negative finite-probe estimates are clipped to the positive machine floor.
+        The historical name is retained. The target is
+        ``diag((A^T N^-1 A + damping I)^-1)``; damping changes curvature and
+        does not give the sampling covariance of a regularized estimator.
+        Negative finite-probe estimates remain signed, without a positive floor.
+        Every solve must satisfy the actual residual criterion
+        ``|| (H + damping I) x - z || <= max(atol, rtol ||z||)`` or raise.
+        The declared normal system must be fixed, Hermitian positive definite
+        on the chosen state space, with any unmeasured gauges removed explicitly.
+        A finite set of checked probes does not certify global identifiability
+        or establish a bound on inverse error for an ill-conditioned system.
+        A posterior interpretation additionally requires a declared Gaussian
+        likelihood and prior; inverse curvature alone supplies neither.
         """
+        if not isinstance(iterations, int) or isinstance(iterations, bool):
+            raise TypeError("iterations must be an integer")
+        if iterations < 1:
+            raise ValueError("iterations must be positive")
 
         def _solve(rhs: Tensor) -> Tensor:
             return self.solve_normal_system_cg(
@@ -396,6 +459,10 @@ class BoundObservationOperator:
             reference_state,
             num_probes=num_probes,
             seed=seed,
+            normal_action=self.normal_operator_action,
+            damping=damping,
+            rtol=rtol,
+            atol=atol,
         )
 
     def estimate_normal_operator_scale(
@@ -696,11 +763,21 @@ class BoundObservationOperatorSet:
         iterations: int = 32,
         damping: float = 0.0,
         preconditioner: PreconditionerFn | Tensor | None = None,
+        rtol: float = 1.0e-5,
+        atol: float = 0.0,
     ) -> Tensor:
-        """Estimate ``diag((A^T N^-1 A + damping I)^-1)`` matrix-free.
+        """Estimate inverse curvature with signed, residual-checked probes.
 
-        Negative finite-probe estimates are clipped to the positive machine floor.
+        Uses the same contract as
+        ``BoundObservationOperator.estimate_posterior_variance_diagonal``:
+        no positive floor, failure on an inadequate actual solve residual,
+        and no claim that damped inverse curvature is sampling covariance.
+        Checked finite probes do not certify global identifiability.
         """
+        if not isinstance(iterations, int) or isinstance(iterations, bool):
+            raise TypeError("iterations must be an integer")
+        if iterations < 1:
+            raise ValueError("iterations must be positive")
 
         def _solve(rhs: Tensor) -> Tensor:
             return self.solve_normal_system_cg(
@@ -715,6 +792,10 @@ class BoundObservationOperatorSet:
             reference_state,
             num_probes=num_probes,
             seed=seed,
+            normal_action=self.normal_operator_action,
+            damping=damping,
+            rtol=rtol,
+            atol=atol,
         )
 
     def _residual_norm(

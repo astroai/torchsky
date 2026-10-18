@@ -46,13 +46,13 @@ xmatch / torchfits. Scale covering is documented in
 ### Crossmatch two catalogs
 
 ```python
-from torchsky.catalogs import Catalog, crossmatch_sky
+from torchsky.catalogs import Catalog, crossmatch
 
 left = Catalog(lon=left_ra, lat=left_dec)
 right = Catalog(lon=right_ra, lat=right_dec)
-matches = left.crossmatch(right, radius_arcsec=1.5)
-# or the function kernel:
-matches = crossmatch_sky(
+matches = crossmatch(left, right, 1.5)
+# or directly on coordinate tensors:
+matches = crossmatch(
     left.lon, left.lat, right.lon, right.lat, radius_arcsec=1.5
 )
 ```
@@ -64,7 +64,7 @@ right row per left row.
 `radius_arcsec` may be a positive scalar or a per-left-row tensor. A scalar
 (or all-equal) radius uses a nested-HEALPix index on the right catalog.
 Per-row radii keep declination-window pruning. Streamed and Arrow helpers
-(`crossmatch_sky_streamed`, `crossmatch_sky_from_arrow`) still take a scalar
+(`crossmatch(left_arrow, right_arrow, radius_arcsec, streamed=True)`) take a scalar
 radius.
 
 ### Stream catalog partitions
@@ -80,18 +80,18 @@ for partition in DataLoader(dataset, num_workers=2, batch_size=None):
 
 ## API surface
 
-- `Catalog`
+- `Catalog` (`.state`, `.to_state()`, `Catalog.from_state(...)`, `.crossmatch(...)`, `.cone(...)`, `.inside(...)`)
+- `crossmatch(...)` (unified entry point for `Catalog`, coordinate tensors, and Arrow/streamed tables)
 - `HealpixIndex.build` / `query_disc` / `lookup`
 - `nside_for_cap` / `cap_covering_pixels`
 - `CrossmatchResult`
-- `crossmatch_sky(...)`
-- `crossmatch_sky_streamed` / `crossmatch_sky_from_arrow`
+- `crossmatch_sky(...)`, `crossmatch_sky_streamed(...)`, `crossmatch_sky_from_arrow(...)`
 - `CatalogStreamDataset`
 
 ## Validation and performance
 
-Catalog compatibility is tested against Astropy-style fixtures where available
-and benchmarked in `benchmarks/bench_catalog_crossmatch.py` and
-`benchmarks/bench_catalog_compat.py`. Linux catalog benches stay on CANFAR;
-this API wave does not claim new Linux leadership. SHA `7564070c`
-`catalog_compat.json`: synthetic 10k×85k is 0.116× SkyCoord (not claimed).
+Core catalog tests cover bounded API, regression, and geometric contracts.
+Comparator parity, large-catalog throughput, candidate-reduction measurements,
+and Linux/real-data campaigns live in
+[torchsky-harness](https://github.com/astroai/torchsky-harness). No benchmark
+result is inferred from a passing core test.

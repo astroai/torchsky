@@ -7,6 +7,10 @@ from .adaptive_axes import (
     AdaptiveSpatioSpectralTemporalEncoder,
 )
 from .background import (
+    AdditiveComponent,
+    AdditiveFrame,
+    AdditiveProcessingState,
+    AdditiveStage,
     ConditionedBackgroundField,
     DetectorBackgroundOp,
     ExplicitBackgroundOp,
@@ -16,6 +20,7 @@ from .background import (
     SkyBackgroundOp,
     SpatialSkyBackgroundOp,
     apply_background_components,
+    apply_calibrated_additive_response,
     constant_background,
     fit_background_plane,
     observation_background_components,
@@ -67,6 +72,26 @@ from .calibration import (
     set_field_training_stage,
 )
 from .coverage import SpatialFillDistanceBounds, spatial_fill_distance_bounds
+from .continuous_response import (
+    AchromaticPixelResponse,
+    NativeQuadratureResponseOp,
+    NativeSpectralPixelResponse,
+)
+from .detector_response import (
+    IntegratedDetectorMoments,
+    LinearDetectorResponse,
+    integrated_detector_moments,
+    integrated_photoelectron_mean,
+)
+from .epsf import (
+    GaussianPixelResponse,
+    NativePixelStamp,
+    NativeStarFit,
+    PixelIntegratedResponse,
+    native_pixel_stamp,
+    profile_native_star,
+)
+from .nuisance import CalibratedNuisancePrecision, ProfiledNuisancePrecision
 from .geometry import (
     ConservativePolygonRemapOp,
     ExactDrizzleGeometryOp,
@@ -175,6 +200,7 @@ from .pixel_area import (
     representative_pixel_area_sr,
     wrapped_delta_ra_deg,
 )
+from .pixel_calibration import PixelCalibrationOp
 from .radiometry import (
     ExplicitRadiometryOp,
     apply_image_observation_calibration,
@@ -227,6 +253,27 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "AchromaticPixelResponse",
+    "AdditiveComponent",
+    "AdditiveFrame",
+    "AdditiveProcessingState",
+    "AdditiveStage",
+    "CalibratedNuisancePrecision",
+    "GaussianPixelResponse",
+    "IntegratedDetectorMoments",
+    "LinearDetectorResponse",
+    "NativeQuadratureResponseOp",
+    "NativeSpectralPixelResponse",
+    "NativePixelStamp",
+    "NativeStarFit",
+    "PixelIntegratedResponse",
+    "PixelCalibrationOp",
+    "ProfiledNuisancePrecision",
+    "apply_calibrated_additive_response",
+    "native_pixel_stamp",
+    "integrated_detector_moments",
+    "integrated_photoelectron_mean",
+    "profile_native_star",
     "AdaptiveAxisFeatures",
     "AffineRadiometry",
     "AdaptiveSpatioSpectralTemporalEncoder",

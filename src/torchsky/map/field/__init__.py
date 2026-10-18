@@ -135,7 +135,6 @@ from .quality import (
     FieldResidualTile,
     field_image_residual_product,
     field_image_quality_metrics,
-    field_quality_acceptance_report,
     field_quality_scorecard,
     render_field_fit_quality,
     render_field_quality,
@@ -240,8 +239,14 @@ from .learned_optimizer import (
     propose_factorized_objects_from_coadd,
     render_factorized_scene_grid,
 )
+from .native_physical import (
+    NativePhysicalLikelihood,
+    bind_native_physical_likelihood,
+)
 
 __all__ = [
+    "NativePhysicalLikelihood",
+    "bind_native_physical_likelihood",
     "FIELD_MODEL_KINDS",
     "FIELD_MODEL_PRESET_NAMES",
     "FIELD_MODEL_PRESETS",
@@ -304,7 +309,6 @@ __all__ = [
     "field_observations_from_ifu_cube",
     "field_image_quality_metrics",
     "field_image_residual_product",
-    "field_quality_acceptance_report",
     "field_quality_scorecard",
     "forwarding",
     "foam",

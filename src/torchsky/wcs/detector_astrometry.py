@@ -127,12 +127,16 @@ def _determinant(jacobian: Tensor) -> Tensor:
 
 
 class RegularGridTransform2D(nn.Module):
-    """Frozen, orientation-preserving regular-grid detector transform.
+    """Frozen regular-grid detector transform with consistent sampled parity.
 
     ``table`` has shape ``(height, width, 2)`` and samples detector coordinates
     ``origin + spacing * (x_index, y_index)``. Bicubic mode uses local
     four-point Lagrange interpolation, which reproduces affine maps exactly,
     including at the detector boundary.
+    Sampled Jacobians may be consistently positive or consistently negative;
+    a reflected coordinate frame is preserved without changing its values.
+    The determinant floor applies to their absolute magnitude. These sampled
+    diagnostics do not prove global injectivity between validation points.
     """
 
     table: Tensor
@@ -250,11 +254,14 @@ class RegularGridTransform2D(nn.Module):
                 self.diagnostic_points(subdivisions)
             )
             _finite(determinant, "table Jacobian determinant")
-            if bool((determinant <= floor).any().detach().cpu().item()):
-                minimum = float(determinant.min().detach().cpu().item())
+            positive = bool((determinant > floor).all().detach().cpu().item())
+            negative = bool((determinant < -floor).all().detach().cpu().item())
+            if not (positive or negative):
+                minimum = float(determinant.abs().min().detach().cpu().item())
                 raise ValueError(
-                    "table is folded or singular: sampled minimum Jacobian "
-                    f"determinant {minimum:.8g} <= {float(floor):.8g}"
+                    "table is folded or singular: sampled Jacobian determinants "
+                    "must have a consistent sign and absolute magnitude above "
+                    f"{float(floor):.8g} (minimum magnitude {minimum:.8g})"
                 )
         return determinant
 
@@ -556,12 +563,16 @@ class DetectorToTangentTransform(nn.Module):
         if determinant_floor < 0:
             raise ValueError("determinant_floor must be non-negative")
         self.affine.assert_invertible(determinant_floor)
+        base_determinant = self.table.assert_invertible(subdivisions=subdivisions)
         with torch.no_grad():
             determinant = self.jacobian_determinant(
                 self.table.diagnostic_points(subdivisions)
             )
             _finite(determinant, "composite Jacobian determinant")
-            if bool((determinant <= determinant_floor).any().detach().cpu().item()):
+            signed_magnitude = determinant * base_determinant.sign()
+            if bool(
+                (signed_magnitude <= determinant_floor).any().detach().cpu().item()
+            ):
                 raise ValueError("composite detector transform is folded or singular")
         return determinant
 

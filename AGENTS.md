@@ -51,6 +51,14 @@ Geometric primitives, mapmaking, and cross-wavelength field representations are 
 
 ## Dependencies, installation, and ecosystem packages
 
+Scientific benchmarks, exhaustive upstream parity, large/real-data validation,
+scorecards, and CANFAR evaluation orchestration are owned by the sibling
+`torchsky-harness` repository. Keep production implementations and bounded
+unit/API/regression, adjoint, gradient, and device-contract tests here. Do not
+import harness-private code into torchsky or add it as a runtime dependency.
+Comparator environments and benchmark tasks are defined in the harness;
+historical launch plans do not restore their ownership to this repository.
+
 ### PyPI / `pyproject.toml` contract
 
 - **Runtime (`[project].dependencies`)** is intentionally small: **`torch`**,
@@ -60,7 +68,9 @@ Geometric primitives, mapmaking, and cross-wavelength field representations are 
 - **Heavy or domain-ecosystem packages** belong in **`[project.optional-dependencies]`** (`test`, `bench`, `viz`, `map`, `examples`, …), not in the core runtime list. Use them for tests, benchmarks, viz servers, map pipelines, and parity—not as silent requirements of `import torchsky`.
 - **Table interchange:** prefer **PyArrow**-native paths and **`polars`** where a DataFrame-like API is needed; **`pandas`** remains optional (e.g. `to_pandas`, bench scripts).
 - **Supported Python metadata:** **`>=3.12`** with no upper cap. The reproducible primary development lane uses **3.13.14**.
-- **Pip extras:** **`[test]`** for pytest + fixtures aligned with CI; **`[bench]`** for throughput scripts; **`[bench-all]`** adds HEALPix / geometry comparators (**healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical-geometry**, **mocpy**) for parity benches—same role as Pixi `bench-all`; **`[sht-bench]`** is the optional **s2fft** HEALPix SHT peer (not an oracle; JAX stays out of the default `test` env).
+- **Pip extras:** **`[test]`** supports retained package fixtures and optional
+  interop checks. Benchmark, sphere-comparator, and SHT-peer extras belong to
+  `torchsky-harness`; they are no longer torchsky extras.
 
 ### Python interpreter (agents and humans)
 
@@ -77,14 +87,15 @@ Do **not** guess `python3` or bare `python` on PATH for project work.
   - **`test`** — `pytest` suite: **astropy**, **torchfits**, **pyarrow**,
     **polars**, **pandas**, **scipy** (via solve), **requests**, etc., for WCS
     fixtures, integration inputs, table batches, and interop tests.
-  - **`bench` / `bench-all`** — throughput comparators, plotting, **pandas**, **reproject**, optional map tools.
-  - **`sphere-bench`** — HEALPix / sparse **ecosystem** comparators (**healpy**, **hpgeom**, **healsparse**, **astropy-healpix**, **spherical-geometry**, **mocpy**, …) and upstream-derived benchmark gates.
-  - **`sht-bench`** — same comparators as `sphere-bench` plus optional **s2fft** via `pixi run sht-bench-bootstrap` (do not add JAX to `sphere-bench` by default).
-  - **`map-compat`**, **`bench-legacy`** — external toolchains and legacy Python stacks as needed.
+  - Production/tooling environments such as **`astrometry`**,
+    and **`cuda-bench`** remain when they serve package work.
+  - **`bench`**, **`bench-all`**, **`sphere-bench`**, **`sht-bench`**,
+    **`map-compat`**, **`bench-legacy`**, and SMACS evaluation environments
+    now live in `torchsky-harness`.
 - **`pixi run test`** runs **`pytest -n auto --ignore-glob=tests/test_map_*.py`** in the **`test`** environment (same shape as the GitHub `build-test` job; map tests live in the separate CI map matrix).
 - **`pixi run preflight-push`** — **ruff** + **`python -m compileall`** using the **default** env interpreter (`pixi run -e default -- python …`), not an arbitrary system `python`. This is the git **pre-push** hook.
 - **`pixi run ci-local`** — **preflight-push** + **typecheck** + **test** (optional local copy of GitHub `build-test`; not a push blocker).
-- **`pixi run ci-local-heavy`** — optional import smoke for sphere comparators in the **`bench-all`** env.
+- Optional comparator import smoke runs in `torchsky-harness`.
 
 ### I/O ownership and optional ecosystem packages
 
@@ -96,8 +107,8 @@ Never import `astropy.io.fits` or Python `fitsio`. Read and write FITS with
 `torchfits` (or the thin `torchsky.table` / `torchsky.io.fits` facades). Header
 cards are plain dicts. Astropy WCS is a parity oracle and takes those dicts;
 it is not a FITS I/O layer. Do not add new `astropy.io.fits` or `fitsio` imports
-in tests, benchmarks, scripts, or examples. Leftover map/SMACS MEF fixture
-writers still need migrating off `astropy.io.fits`; do not copy them.
+in tests, benchmarks, scripts, or examples. Read FITS fixtures through
+Torchfits and keep fixture construction within the supported Torchfits boundary.
 
 Eat our own dog food: `src/torchsky` and examples compute with torchsky (and
 `torchfits` at file boundaries). Do not import `astropy.wcs`, `healpy`,
@@ -113,8 +124,8 @@ Apart from explicitly opt-in interoperability adapters described above, use
 **healsparse**, **astropy-healpix**, **spherical_geometry**, **pandas**, etc., only in:
 
 - **`tests/`** (fixtures, parity, regression),
-- **`benchmarks/`**,
-- **`scripts/`** that bootstrap or print comparator versions,
+- scientific **benchmarks in `torchsky-harness`**,
+- **harness scripts** that bootstrap or print comparator versions,
 - **CI workflows** that install extras for those jobs,
 - **docs** that describe compatibility.
 
@@ -224,10 +235,11 @@ Use packaged fixtures, upstream test data, or representative real astronomy data
 - catch edge cases synthetic generators miss
 - validate interoperability claims
 
-Examples already present in this repo include upstream-derived benchmark gates,
-parity suites, and FITS-based integration tests. FITS integration fixtures may
-be loaded through `torchfits`; I/O correctness and throughput claims must be
-tested in the `torchfits` repository.
+Core tests cover bounded API, regression, adjoint, gradient, and device
+contracts. Exhaustive upstream parity, large/real-data validation, and
+scientific scorecards live in `torchsky-harness`. FITS integration fixtures may
+be loaded through `torchfits`; I/O correctness and throughput claims belong in
+the `torchfits` repository.
 
 **Perf smoke:** `tests/test_perf_gate.py` should cover torchsky-owned hot paths
 such as WCS, HEALPix, indexing, resampling, and operators. FITS read/write
@@ -281,11 +293,13 @@ throughput.
 
 ## Benchmarks and Evidence
 
-Relevant benchmark surfaces live in:
+Scientific benchmark surfaces live in:
 
-- `benchmarks/`
+- the sibling [`torchsky-harness`](https://github.com/astroai/torchsky-harness)
+  repository's `benchmarks/` and `campaigns/` trees
 - `docs/benchmarks.md`
-- upstream-derived benchmark and parity gates documented in `docs/benchmarks.md`
+- upstream-derived benchmark and parity gates linked from the scientific
+  evaluation guide
 
 For sphere and catalog work specifically:
 

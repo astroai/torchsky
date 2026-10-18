@@ -1,33 +1,30 @@
+import ast
 from pathlib import Path
 import re
 
 
 def test_torchsky_src_does_not_import_astropy_io_fits():
     repo = Path(__file__).parents[1]
-    paths = list((repo / "src" / "torchsky").rglob("*.py"))
-    paths.extend((repo / "tests").glob("test_wcs*.py"))
-    paths.extend(
-        [
-            repo / "tests" / "test_catalog_compat.py",
-            repo / "tests" / "test_canfar_wcs_sphere_runner.py",
-            repo / "tests" / "test_release_smoke.py",
-            repo / "tests" / "test_real_data_validation.py",
-            repo / "tests" / "test_spectral.py",
-            repo / "benchmarks" / "bench_catalog_compat.py",
-            repo / "benchmarks" / "bench_wcs.py",
-            repo / "benchmarks" / "bench_wcs_tpv_inverse.py",
-            repo / "benchmarks" / "bench_wcs_legacy_only.py",
-            repo / "benchmarks" / "bench_wcs_spectral_temporal.py",
-        ]
-    )
     offenders = []
-    for path in paths:
-        for line_number, line in enumerate(path.read_text().splitlines(), start=1):
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if "astropy.io.fits" in line:
-                offenders.append(f"{path}:{line_number}: {stripped}")
+    roots = [repo / "src" / "torchsky", repo / "tests", repo / "scripts", repo / "examples"]
+    for root in roots:
+        for path in root.rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Import):
+                    forbidden = any(
+                        alias.name == "astropy.io.fits"
+                        or alias.name.startswith("astropy.io.fits.")
+                        for alias in node.names
+                    )
+                elif isinstance(node, ast.ImportFrom):
+                    forbidden = (node.module or "").startswith("astropy.io.fits") or (
+                        node.module == "astropy.io"
+                        and any(alias.name == "fits" for alias in node.names)
+                    )
+                else:
+                    forbidden = False
+                if forbidden:
+                    offenders.append(f"{path}:{node.lineno}: Astropy FITS import")
     assert not offenders, "\n".join(offenders)
 
 
@@ -36,7 +33,6 @@ def test_torchsky_does_not_import_python_fitsio():
     roots = [
         repo / "src" / "torchsky",
         repo / "tests",
-        repo / "benchmarks",
         repo / "scripts",
         repo / "examples",
     ]

@@ -15,13 +15,25 @@ from ..wcs.frames import (
     propagate_proper_motion,
     propagate_space_motion,
 )
+from ..wcs.iau2006 import (
+    apply_dcr,
+    apply_ephemeris_offset,
+    apply_refraction,
+    apply_stellar_aberration,
+    dcr_offset,
+)
 from ..wcs.observed import EarthOrientation, Site, observed_altaz
 
 __all__ = [
     "CatalogState",
     "EarthOrientation",
     "Site",
+    "apply_dcr",
+    "apply_ephemeris_offset",
+    "apply_refraction",
+    "apply_stellar_aberration",
     "convert_celestial",
+    "dcr_offset",
     "heliocentric_rv_to_lsr",
     "icrs_to_ecliptic_of_date",
     "icrs_to_galactocentric",
@@ -30,3 +42,4 @@ __all__ = [
     "propagate_space_motion",
     "transform",
 ]
+

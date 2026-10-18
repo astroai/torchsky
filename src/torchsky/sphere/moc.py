@@ -20,33 +20,67 @@ def _order_from_nside(nside: int, *, name: str = "nside") -> int:
     return nside_i.bit_length() - 1
 
 
+_MAX_HEALPIX_ORDER = 29
+_MAX_HEALPIX_NSIDE = 1 << _MAX_HEALPIX_ORDER
+
+
 def _nside_from_max_order(max_order: int) -> int:
     order = int(max_order)
     if order < 0:
         raise ValueError("max_order must be non-negative")
+    if order > _MAX_HEALPIX_ORDER:
+        raise ValueError(
+            f"max_order must be <= {_MAX_HEALPIX_ORDER}; got {order}"
+        )
     return 1 << order
+
+
+def _order_from_uniq(uniq: Tensor) -> Tensor:
+    """Return the HEALPix order of each UNIQ value with integer arithmetic.
+
+    UNIQ encodes the order as ``4 * nside**2 + nested_pixel`` with
+    ``nside = 2**order``.  A float ``log2`` loses the low bits of large
+    int64 values and misclassifies the last cells of high orders, so the
+    order is derived from an exact integer bit length.
+    """
+    u = uniq.to(torch.int64)
+    if bool((u < 4).any()):
+        raise ValueError("UNIQ values must be >= 4 (nside >= 1)")
+    # floor(log2(u)) through a fixed unrolled binary search; exact for int64.
+    exponent = torch.zeros_like(u)
+    value = u
+    for shift in (32, 16, 8, 4, 2, 1):
+        shifted = torch.bitwise_right_shift(value, shift)
+        nonzero = shifted > 0
+        exponent = torch.where(nonzero, exponent + shift, exponent)
+        value = torch.where(nonzero, shifted, value)
+    # uniq in [4**(order+1), 4**(order+2) - 1]
+    order = torch.bitwise_right_shift(exponent - 2, 1)
+    if bool((order > _MAX_HEALPIX_ORDER).any()):
+        raise ValueError(
+            f"UNIQ values must encode nside <= {_MAX_HEALPIX_NSIDE}"
+        )
+    return order
 
 
 def nest2uniq(nside: int | Tensor, pix: int | Tensor) -> Tensor:
     """Convert NESTED pixel index to UNIQ pixel index."""
     n = torch.as_tensor(nside, dtype=torch.int64)
     p = torch.as_tensor(pix, dtype=torch.int64)
+    if bool((n <= 0).any()) or bool((n > _MAX_HEALPIX_NSIDE).any()):
+        raise ValueError(
+            f"nside must be in [1, {_MAX_HEALPIX_NSIDE}]"
+        )
+    if bool((n & (n - 1) != 0).any()):
+        raise ValueError("nside must be a positive power of two")
     return 4 * (n * n) + p
 
 
 def uniq2nest(uniq: int | Tensor) -> tuple[Tensor, Tensor]:
     """Convert UNIQ pixel index to (nside, NESTED pixel index)."""
     u = torch.as_tensor(uniq, dtype=torch.int64)
-    # 4 * 4^order + pix = uniq
-    # 4^order = uniq // 4 (approx)
-    # order = log4(uniq // 4)
-    log_dtype = torch.float32 if u.device.type == "mps" else torch.float64
-    order = torch.div(
-        torch.log2(torch.div(u, 4, rounding_mode="floor").to(log_dtype)),
-        2.0,
-        rounding_mode="floor",
-    ).to(torch.int64)
-    nside = 1 << order
+    order = _order_from_uniq(u)
+    nside = torch.bitwise_left_shift(torch.ones_like(order), order)
     pix = u - 4 * (nside * nside)
     return nside, pix
 
@@ -54,18 +88,15 @@ def uniq2nest(uniq: int | Tensor) -> tuple[Tensor, Tensor]:
 def _max_order_from_uniq(uniq: Tensor) -> int:
     if uniq.numel() == 0:
         return 0
-    nside, _ = uniq2nest(uniq.max())
-    log_dtype = torch.float32 if nside.device.type == "mps" else torch.float64
-    return int(torch.log2(nside.to(log_dtype)).item())
+    return int(_order_from_uniq(uniq.max()).item())
 
 
 def _uniq_to_ranges(uniq: Tensor, max_order: int) -> list[tuple[int, int]]:
     if uniq.numel() == 0:
         return []
 
-    nsides, pix_nested = uniq2nest(uniq)
-    log_dtype = torch.float32 if nsides.device.type == "mps" else torch.float64
-    orders = torch.log2(nsides.to(log_dtype)).to(torch.int64)
+    _, pix_nested = uniq2nest(uniq)
+    orders = _order_from_uniq(uniq)
     up_shifts = (2 * (max_order - orders)).clamp_min(0)
     down_shifts = (2 * (orders - max_order)).clamp_min(0)
     pix_at_order = pix_nested >> down_shifts
@@ -151,7 +182,7 @@ def _cat_uniq(parts: list[Tensor], device: torch.device) -> Tensor:
     return torch.cat(nonempty)
 
 
-def _hierarchical_disc_uniq(
+def _hierarchical_disc_bmoc(
     lon_deg: float,
     lat_deg: float,
     radius_deg: float,
@@ -159,11 +190,12 @@ def _hierarchical_disc_uniq(
     *,
     inclusive: bool,
     device: torch.device,
-) -> Tensor:
-    """Coarse-to-fine disc MOC: keep interior cells, subdivide only the boundary."""
+) -> tuple[Tensor, Tensor]:
+    """Coarse-to-fine disc BMOC returning (uniq, flag) with flag=1 inside, 0 boundary."""
     order = 0
     pix = torch.arange(12, dtype=torch.int64, device=device)
-    kept: list[Tensor] = []
+    kept_uniq: list[Tensor] = []
+    kept_flag: list[Tensor] = []
     lon0 = torch.as_tensor(lon_deg, device=device)
     lat0 = torch.as_tensor(lat_deg, device=device)
     radius = float(radius_deg)
@@ -177,34 +209,73 @@ def _hierarchical_disc_uniq(
         fully_out = dist - r_pix > (radius + r_leaf if inclusive else radius)
         leaf_hit = dist <= (radius + r_leaf if inclusive else radius)
         if order == max_order:
-            hit = pix[leaf_hit]
-            if hit.numel() > 0:
-                kept.append(nest2uniq(nside, hit))
+            inside_leaf = pix[fully_in]
+            if inside_leaf.numel() > 0:
+                kept_uniq.append(nest2uniq(nside, inside_leaf))
+                kept_flag.append(
+                    torch.ones(inside_leaf.numel(), dtype=torch.uint8, device=device)
+                )
+            bndry_leaf = pix[leaf_hit & (~fully_in)]
+            if bndry_leaf.numel() > 0:
+                kept_uniq.append(nest2uniq(nside, bndry_leaf))
+                kept_flag.append(
+                    torch.zeros(bndry_leaf.numel(), dtype=torch.uint8, device=device)
+                )
             break
         inside = pix[fully_in]
         if inside.numel() > 0:
-            kept.append(nest2uniq(nside, inside))
+            kept_uniq.append(nest2uniq(nside, inside))
+            kept_flag.append(
+                torch.ones(inside.numel(), dtype=torch.uint8, device=device)
+            )
         boundary = pix[~(fully_in | fully_out)]
         if boundary.numel() == 0:
             break
         pix = _healpix.nest_children(boundary, levels=1).reshape(-1)
         order += 1
-    return _cat_uniq(kept, device)
+    if not kept_uniq:
+        return (
+            torch.empty(0, dtype=torch.int64, device=device),
+            torch.empty(0, dtype=torch.uint8, device=device),
+        )
+    return torch.cat(kept_uniq), torch.cat(kept_flag)
 
 
-def _hierarchical_polygon_uniq(
+def _hierarchical_disc_uniq(
+    lon_deg: float,
+    lat_deg: float,
+    radius_deg: float,
+    max_order: int,
+    *,
+    inclusive: bool,
+    device: torch.device,
+) -> Tensor:
+    """Coarse-to-fine disc MOC: keep interior cells, subdivide only the boundary."""
+    uniq, _ = _hierarchical_disc_bmoc(
+        lon_deg,
+        lat_deg,
+        radius_deg,
+        max_order,
+        inclusive=inclusive,
+        device=device,
+    )
+    return uniq
+
+
+def _hierarchical_polygon_bmoc(
     lon_deg: Tensor,
     lat_deg: Tensor,
     max_order: int,
-) -> Tensor:
-    """Coarse-to-fine polygon MOC. Interior cells stay coarse; boundary subdivides.
-
-    Fully-inside uses pixel center plus four corners. A concave dent that misses
-    those five samples can over-cover; upgrade is exact cell-in-polygon.
-    """
+) -> tuple[Tensor, Tensor]:
+    """Coarse-to-fine polygon BMOC returning (uniq, flag) with flag=1 inside, 0 boundary."""
     poly_lon = torch.as_tensor(lon_deg)
     device = poly_lon.device
     poly_lat = torch.as_tensor(lat_deg, device=device)
+    if poly_lon.numel() < 3:
+        return (
+            torch.empty(0, dtype=torch.int64, device=device),
+            torch.empty(0, dtype=torch.uint8, device=device),
+        )
     verts = lonlat_to_unit_xyz(poly_lon, poly_lat)
     center_xyz = verts.mean(dim=0)
     center_xyz = center_xyz / torch.linalg.norm(center_xyz).clamp_min(1e-15)
@@ -219,7 +290,8 @@ def _hierarchical_polygon_uniq(
     r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
     order = 0
     pix = torch.arange(12, dtype=torch.int64, device=device)
-    kept: list[Tensor] = []
+    kept_uniq: list[Tensor] = []
+    kept_flag: list[Tensor] = []
     while True:
         nside = 1 << order
         lon_p, lat_p = _healpix.pix2ang(nside, pix, nest=True, lonlat=True)
@@ -231,11 +303,6 @@ def _hierarchical_polygon_uniq(
             break
         lon_p, lat_p = _healpix.pix2ang(nside, pix, nest=True, lonlat=True)
         center_in = spherical_polygon_contains(lon_p, lat_p, poly_lon, poly_lat)
-        if order == max_order:
-            hit = pix[center_in]
-            if hit.numel() > 0:
-                kept.append(nest2uniq(nside, hit))
-            break
         corners = _healpix.boundaries(nside, pix, step=1, nest=True)
         lon_c, lat_c = _healpix.xyz_to_lonlat(
             corners[:, 0, :].reshape(-1),
@@ -246,16 +313,73 @@ def _hierarchical_polygon_uniq(
             lon_c, lat_c, poly_lon, poly_lat
         ).reshape(pix.numel(), 4)
         fully_in = center_in & corner_in.all(dim=1)
+        if order == max_order:
+            inside_leaf = pix[fully_in]
+            if inside_leaf.numel() > 0:
+                kept_uniq.append(nest2uniq(nside, inside_leaf))
+                kept_flag.append(
+                    torch.ones(inside_leaf.numel(), dtype=torch.uint8, device=device)
+                )
+            any_in = center_in | corner_in.any(dim=1)
+            bndry_leaf = pix[any_in & (~fully_in)]
+            # Also include leaf cells containing polygon vertices (handles tiny footprints)
+            vert_pix = _healpix.ang2pix(
+                nside, poly_lon, poly_lat, nest=True, lonlat=True
+            ).to(torch.int64)
+            if inside_leaf.numel() > 0:
+                vert_pix = vert_pix[~torch.isin(vert_pix, inside_leaf)]
+            bndry_all = torch.unique(torch.cat([bndry_leaf, vert_pix]))
+            if bndry_all.numel() > 0:
+                kept_uniq.append(nest2uniq(nside, bndry_all))
+                kept_flag.append(
+                    torch.zeros(bndry_all.numel(), dtype=torch.uint8, device=device)
+                )
+            break
         # ponytail: 5-sample fully-inside can miss a concave dent; exact cell-in-polygon is the upgrade.
         inside = pix[fully_in]
         if inside.numel() > 0:
-            kept.append(nest2uniq(nside, inside))
+            kept_uniq.append(nest2uniq(nside, inside))
+            kept_flag.append(
+                torch.ones(inside.numel(), dtype=torch.uint8, device=device)
+            )
         boundary = pix[~fully_in]
         if boundary.numel() == 0:
             break
         pix = _healpix.nest_children(boundary, levels=1).reshape(-1)
         order += 1
-    return _cat_uniq(kept, device)
+    if not kept_uniq:
+        return (
+            torch.empty(0, dtype=torch.int64, device=device),
+            torch.empty(0, dtype=torch.uint8, device=device),
+        )
+    return torch.cat(kept_uniq), torch.cat(kept_flag)
+
+
+def _hierarchical_polygon_uniq(
+    lon_deg: Tensor,
+    lat_deg: Tensor,
+    max_order: int,
+    *,
+    inclusive: bool = False,
+) -> Tensor:
+    """Coarse-to-fine polygon MOC. Interior cells stay coarse; boundary subdivides."""
+    uniq, flag = _hierarchical_polygon_bmoc(lon_deg, lat_deg, max_order)
+    if inclusive or uniq.numel() == 0:
+        return uniq
+    # Standard MOC.from_polygon leaf rule: include interior cells (flag==1)
+    # plus leaf cells whose center is inside the polygon.
+    poly_lon = torch.as_tensor(lon_deg)
+    poly_lat = torch.as_tensor(lat_deg, device=poly_lon.device)
+    interior = uniq[flag > 0]
+    bndry = uniq[flag == 0]
+    if bndry.numel() == 0:
+        return interior
+    nside = 1 << max_order
+    _, pix_b = uniq2nest(bndry)
+    lon_p, lat_p = _healpix.pix2ang(nside, pix_b, nest=True, lonlat=True)
+    c_in = spherical_polygon_contains(lon_p, lat_p, poly_lon, poly_lat)
+    return torch.cat([interior, bndry[c_in]])
+
 
 
 def _resolve_moc_table_hdu_index(path: str) -> int:
@@ -329,6 +453,27 @@ def _format_ascii_pixels(pixels: Tensor, *, compact: bool) -> str:
     return " ".join(parts)
 
 
+class _EmptyFlag(int):
+    def __new__(cls, is_empty: bool, factory: Any) -> "_EmptyFlag":
+        obj = super().__new__(cls, int(bool(is_empty)))
+        obj._is_empty = bool(is_empty)
+        obj._factory = factory
+        return obj
+
+    def __bool__(self) -> bool:
+        return self._is_empty
+
+    def __call__(self) -> Any:
+        return self._factory()
+
+
+class _EmptyDescriptor:
+    def __get__(self, instance: Any, owner: type) -> Any:
+        if instance is None:
+            return owner._make_empty
+        return _EmptyFlag(int(instance.uniq.numel()) == 0, owner._make_empty)
+
+
 class MOC:
     """Multi-Order Coverage map."""
 
@@ -336,8 +481,22 @@ class MOC:
         self.uniq = _normalize_moc(torch.as_tensor(uniq, dtype=torch.int64))
 
     @classmethod
-    def empty(cls) -> "MOC":
+    def _make_empty(cls) -> "MOC":
         return cls(torch.empty(0, dtype=torch.int64))
+
+    empty: Any = _EmptyDescriptor()
+
+    @property
+    def is_empty(self) -> bool:
+        return int(self.uniq.numel()) == 0
+
+    def __bool__(self) -> bool:
+        return int(self.uniq.numel()) > 0
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MOC):
+            return False
+        return bool(torch.equal(self.uniq, other.uniq.to(device=self.uniq.device)))
 
     @classmethod
     def full(cls, max_order: int = 0) -> "MOC":
@@ -348,8 +507,7 @@ class MOC:
     def max_order(self) -> int:
         if self.uniq.numel() == 0:
             return 0
-        nside, _ = uniq2nest(self.uniq.max())
-        return int(torch.log2(nside.to(torch.float64)).item())
+        return int(_order_from_uniq(self.uniq.max()).item())
 
     def contains(self, lon_deg: Tensor | float, lat_deg: Tensor | float) -> Tensor:
         """Check if points are contained in the MOC."""
@@ -963,5 +1121,514 @@ class MOC:
             return cls(torch.empty((0,), dtype=torch.int64))
         return cls(torch.cat(uniqs))
 
+    @classmethod
+    def from_wcs(
+        cls,
+        wcs: Any,
+        shape: tuple[int, int] | None = None,
+        *,
+        max_order: int = 10,
+        mask: Tensor | None = None,
+    ) -> "MOC":
+        """Build a MOC from a 2D WCS (and optional valid-pixel mask)."""
+        bmoc = BMOC.from_wcs(wcs, shape=shape, max_order=max_order, mask=mask)
+        return bmoc.to_moc(include_boundary=True)
 
-__all__ = ["MOC", "nest2uniq", "uniq2nest"]
+    @classmethod
+    def from_observations(
+        cls,
+        observations: Any,
+        *,
+        max_order: int = 10,
+    ) -> "MOC":
+        """Build the union MOC of a sequence of observations or WCS objects."""
+        moc = cls.empty()
+        for obs in observations:
+            if hasattr(obs, "wcs") and hasattr(obs, "data"):
+                H, W = int(obs.data.shape[-2]), int(obs.data.shape[-1])
+                valid_mask = None
+                if getattr(obs, "mask", None) is not None:
+                    valid_mask = ~torch.as_tensor(obs.mask, dtype=torch.bool)
+                w_plane = getattr(obs, "weight_map", None)
+                if w_plane is None and isinstance(getattr(obs, "weight", None), Tensor):
+                    w_t = torch.as_tensor(obs.weight)
+                    if w_t.ndim >= 2:
+                        w_plane = w_t
+                if w_plane is not None:
+                    w_ok = torch.as_tensor(w_plane) > 0
+                    valid_mask = w_ok if valid_mask is None else (valid_mask & w_ok)
+                obs_moc = cls.from_wcs(
+                    obs.wcs,
+                    shape=(H, W),
+                    max_order=max_order,
+                    mask=valid_mask,
+                )
+            elif isinstance(obs, tuple) and len(obs) == 2:
+                obs_moc = cls.from_wcs(obs[0], shape=obs[1], max_order=max_order)
+            else:
+                obs_moc = cls.from_wcs(obs, max_order=max_order)
+            moc = moc.union(obs_moc)
+        return moc
+
+    def sample_randoms(
+        self,
+        n: int,
+        *,
+        generator: torch.Generator | None = None,
+        device: torch.device | str | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """Draw ``n`` points uniformly in solid angle inside this MOC."""
+        return sample_randoms(n, self, generator=generator, device=device)
+
+
+def _wcs_perimeter_lonlat(
+    wcs: Any,
+    shape: tuple[int, int] | None = None,
+    *,
+    edge_steps: int = 16,
+) -> tuple[Tensor, Tensor, int, int]:
+    if shape is None:
+        arr_shape = getattr(wcs, "array_shape", None)
+        if arr_shape is not None and len(arr_shape) >= 2:
+            H, W = int(arr_shape[-2]), int(arr_shape[-1])
+        else:
+            pix_shape = getattr(wcs, "pixel_shape", None)
+            if pix_shape is not None and len(pix_shape) >= 2:
+                W, H = int(pix_shape[0]), int(pix_shape[1])
+            else:
+                raise ValueError(
+                    "shape=(H, W) must be provided when wcs has no pixel_shape/array_shape"
+                )
+    else:
+        H, W = int(shape[0]), int(shape[1])
+
+    device = getattr(wcs, "crval", torch.tensor(0.0)).device
+    dtype = getattr(wcs, "crval", torch.tensor(0.0, dtype=torch.float64)).dtype
+    steps = max(2, int(edge_steps))
+    t = torch.linspace(0.0, 1.0, steps + 1, device=device, dtype=dtype)[:-1]
+    x0, x1 = -0.5, float(W) - 0.5
+    y0, y1 = -0.5, float(H) - 0.5
+    xs = torch.cat(
+        [
+            x0 + t * (x1 - x0),
+            torch.full_like(t, x1),
+            x1 - t * (x1 - x0),
+            torch.full_like(t, x0),
+        ]
+    )
+    ys = torch.cat(
+        [
+            torch.full_like(t, y0),
+            y0 + t * (y1 - y0),
+            torch.full_like(t, y1),
+            y1 - t * (y1 - y0),
+        ]
+    )
+    ra, dec = wcs.pixel_to_world(xs, ys)
+    return ra.reshape(-1), dec.reshape(-1), H, W
+
+
+class BMOC:
+    """Boolean Multi-Order Coverage map storing UNIQ cells and interior/boundary flags.
+
+    ``flag == 1`` indicates a cell completely inside the region; ``flag == 0``
+    indicates a partial/boundary cell at ``max_order``.
+    """
+
+    def __init__(self, uniq: Tensor, flag: Tensor | None = None):
+        u = torch.as_tensor(uniq, dtype=torch.int64).reshape(-1)
+        if flag is None:
+            f = torch.ones_like(u, dtype=torch.uint8)
+        else:
+            f = torch.as_tensor(flag, dtype=torch.uint8, device=u.device).reshape(-1)
+            if f.numel() != u.numel():
+                raise ValueError("flag must have the same length as uniq")
+        if u.numel() > 0:
+            order = torch.argsort(u, stable=True)
+            u = u[order]
+            f = f[order]
+            keep = torch.cat(
+                [
+                    u[1:] != u[:-1],
+                    torch.tensor([True], dtype=torch.bool, device=u.device),
+                ]
+            )
+            u = u[keep]
+            f = f[keep]
+        self.uniq = u
+        self.flag = f
+
+    @classmethod
+    def _make_empty(cls) -> "BMOC":
+        return cls(
+            torch.empty(0, dtype=torch.int64),
+            torch.empty(0, dtype=torch.uint8),
+        )
+
+    empty: Any = _EmptyDescriptor()
+
+    @property
+    def is_empty(self) -> bool:
+        return int(self.uniq.numel()) == 0
+
+    def __bool__(self) -> bool:
+        return int(self.uniq.numel()) > 0
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BMOC):
+            return False
+        return bool(
+            torch.equal(self.uniq, other.uniq.to(device=self.uniq.device))
+            and torch.equal(self.flag, other.flag.to(device=self.flag.device))
+        )
+
+    @classmethod
+    def full(cls) -> "BMOC":
+        u = nest2uniq(1, torch.arange(12, dtype=torch.int64))
+        return cls(u, torch.ones(12, dtype=torch.uint8))
+
+    @property
+    def max_order(self) -> int:
+        return _max_order_from_uniq(self.uniq)
+
+    @property
+    def area(self) -> float:
+        """Total area (interior + boundary) in steradians."""
+        if self.uniq.numel() == 0:
+            return 0.0
+        nsides, _ = uniq2nest(self.uniq)
+        nsides_f64 = nsides.to(torch.float64)
+        return float(((4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))).sum().item())
+
+    @property
+    def area_sq_deg(self) -> float:
+        return self.area * ((180.0 / math.pi) * (180.0 / math.pi))
+
+    @property
+    def interior_area(self) -> float:
+        """Area of strictly interior cells (``flag == 1``) in steradians."""
+        ins = self.uniq[self.flag > 0]
+        if ins.numel() == 0:
+            return 0.0
+        nsides, _ = uniq2nest(ins)
+        nsides_f64 = nsides.to(torch.float64)
+        return float(((4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))).sum().item())
+
+    @property
+    def interior_area_sq_deg(self) -> float:
+        return self.interior_area * ((180.0 / math.pi) * (180.0 / math.pi))
+
+    def to_moc(self, *, include_boundary: bool = True) -> MOC:
+        """Convert to a standard ``MOC`` (optionally keeping only interior cells)."""
+        if include_boundary:
+            return MOC(self.uniq)
+        return MOC(self.uniq[self.flag > 0])
+
+    def interior_moc(self) -> MOC:
+        """Return the ``MOC`` of strictly interior cells (``flag == 1``)."""
+        return MOC(self.uniq[self.flag > 0])
+
+    def boundary_moc(self) -> MOC:
+        """Return the ``MOC`` of boundary cells (``flag == 0``)."""
+        return MOC(self.uniq[self.flag == 0])
+
+    def contains(
+        self,
+        lon_deg: Tensor | float,
+        lat_deg: Tensor | float,
+        *,
+        include_boundary: bool = True,
+    ) -> Tensor:
+        """Test whether points fall inside the BMOC."""
+        return self.to_moc(include_boundary=include_boundary).contains(lon_deg, lat_deg)
+
+    @classmethod
+    def from_cone(
+        cls,
+        lon_deg: float,
+        lat_deg: float,
+        radius_deg: float,
+        max_order: int = 10,
+        *,
+        inclusive: bool = True,
+    ) -> "BMOC":
+        """Build a BMOC for a spherical cone/disc."""
+        order = int(max_order)
+        _nside_from_max_order(order)
+        if float(radius_deg) <= 0.0:
+            return cls.empty()
+        lon_t = torch.as_tensor(lon_deg)
+        uniq, flag = _hierarchical_disc_bmoc(
+            float(lon_deg),
+            float(lat_deg),
+            float(radius_deg),
+            order,
+            inclusive=inclusive,
+            device=lon_t.device,
+        )
+        return cls(uniq, flag)
+
+    from_circle = from_cone
+
+    @classmethod
+    def from_polygon(
+        cls,
+        lon_deg: Tensor | list[float],
+        lat_deg: Tensor | list[float],
+        max_order: int = 10,
+    ) -> "BMOC":
+        """Build a BMOC for a spherical polygon."""
+        order = int(max_order)
+        _nside_from_max_order(order)
+        uniq, flag = _hierarchical_polygon_bmoc(
+            torch.as_tensor(lon_deg),
+            torch.as_tensor(lat_deg),
+            order,
+        )
+        return cls(uniq, flag)
+
+    @classmethod
+    def from_wcs(
+        cls,
+        wcs: Any,
+        shape: tuple[int, int] | None = None,
+        *,
+        max_order: int = 10,
+        mask: Tensor | None = None,
+    ) -> "BMOC":
+        """Build a BMOC from a 2D WCS footprint (and optional valid-pixel mask)."""
+        order = int(max_order)
+        nside = _nside_from_max_order(order)
+        if mask is not None:
+            mask_t = torch.as_tensor(mask, dtype=torch.bool)
+            if mask_t.ndim != 2:
+                raise ValueError("mask must be a 2D tensor of shape (H, W)")
+            if not bool(mask_t.any()):
+                return cls.empty()
+            device = getattr(wcs, "crval", mask_t).device
+            dtype = getattr(wcs, "crval", torch.tensor(0.0, dtype=torch.float64)).dtype
+            if not dtype.is_floating_point:
+                dtype = torch.float32 if device.type == "mps" else torch.float64
+            yy, xx = torch.nonzero(mask_t.to(device=device), as_tuple=True)
+            ra, dec = wcs.pixel_to_world(xx.to(dtype), yy.to(dtype))
+            valid = torch.isfinite(ra) & torch.isfinite(dec)
+            if not bool(valid.any()):
+                return cls.empty()
+            pix = torch.unique(
+                _healpix.ang2pix(
+                    nside, ra[valid], dec[valid], nest=True, lonlat=True
+                ).to(torch.int64)
+            )
+            # Determine interior vs boundary on the mask grid via 8-neighbors in pix
+            nb = _healpix.neighbors(nside, pix, nest=True)
+            is_interior = (nb >= 0).all(dim=-1) & torch.isin(nb, pix).all(dim=-1)
+            uniq = nest2uniq(nside, pix)
+            flag = is_interior.to(torch.uint8)
+            return cls(uniq, flag)
+
+        ra_p, dec_p, _, _ = _wcs_perimeter_lonlat(wcs, shape=shape)
+        valid = torch.isfinite(ra_p) & torch.isfinite(dec_p)
+        if int(valid.sum().item()) < 3:
+            return cls.empty()
+        return cls.from_polygon(ra_p[valid], dec_p[valid], max_order=order)
+
+    def sample_randoms(
+        self,
+        n: int,
+        *,
+        include_boundary: bool = True,
+        generator: torch.Generator | None = None,
+        device: torch.device | str | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """Draw ``n`` points uniformly in solid angle inside this BMOC."""
+        return sample_randoms(
+            n,
+            self.to_moc(include_boundary=include_boundary),
+            generator=generator,
+            device=device,
+        )
+
+
+def _sample_in_nested_cells(
+    nsides: Tensor | int,
+    pix_nested: Tensor,
+    u_x: Tensor,
+    u_y: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Map uniform (u_x, u_y) in [0, 1)^2 inside NESTED HEALPix cells to (lon_deg, lat_deg).
+
+    Because the HEALPix curvilinear projection has constant Jacobian
+    |d(z, phi)/d(x, y)| = pi / 3 everywhere on all 12 base faces (both polar
+    caps and equatorial belt), uniform sampling in face coordinates (x, y) is
+    mathematically exact uniform solid-angle sampling on S^2 with zero
+    rejection.
+    """
+    pix_t = torch.as_tensor(pix_nested, dtype=torch.int64)
+    device = pix_t.device
+    f_dtype = _healpix._float_dtype_for_device(device)
+    ns_t = torch.as_tensor(nsides, dtype=torch.int64, device=device)
+    npface = ns_t * ns_t
+    face_num = torch.div(pix_t, npface, rounding_mode="floor")
+    ipf = pix_t - face_num * npface
+    ix = _healpix.compact_bits(ipf).to(f_dtype)
+    iy = _healpix.compact_bits(ipf >> 1).to(f_dtype)
+    ns_f = ns_t.to(f_dtype)
+    # Clamp u_x, u_y slightly below 1.0 to stay strictly inside the cell
+    eps = 1e-7 if f_dtype == torch.float32 else 1e-15
+    ux = u_x.to(device=device, dtype=f_dtype).clamp(min=0.0, max=1.0 - eps)
+    uy = u_y.to(device=device, dtype=f_dtype).clamp(min=0.0, max=1.0 - eps)
+    x = (ix + ux) / ns_f
+    y = (iy + uy) / ns_f
+
+    jrll, jpll = _healpix._face_consts(device)
+    jrll_f = jrll[face_num].to(f_dtype)
+    jpll_f = jpll[face_num].to(f_dtype)
+
+    jr = jrll_f - x - y
+    nr = torch.empty_like(jr)
+    z = torch.empty_like(jr)
+
+    north = jr < 1.0
+    south = jr > 3.0
+    equat = ~(north | south)
+
+    nr[north] = jr[north]
+    z[north] = 1.0 - torch.square(nr[north]) / 3.0
+    nr[south] = 4.0 - jr[south]
+    z[south] = -1.0 + torch.square(nr[south]) / 3.0
+    nr[equat] = 1.0
+    z[equat] = (2.0 - jr[equat]) * (2.0 / 3.0)
+
+    nr_safe = torch.where(nr == 0.0, torch.ones_like(nr), nr)
+    phi = (jpll_f * nr + x - y) * (math.pi * 0.25) / nr_safe
+    phi = torch.where(nr == 0.0, torch.zeros_like(phi), phi)
+
+    lon_deg = torch.remainder(torch.rad2deg(phi), 360.0)
+    lat_deg = torch.rad2deg(torch.asin(torch.clamp(z, -1.0, 1.0)))
+    return lon_deg, lat_deg
+
+
+def sample_randoms(
+    n: int,
+    footprint: MOC | BMOC | HealSparseMap | None = None,
+    *,
+    weights: HealSparseMap | Tensor | str | None = None,
+    generator: torch.Generator | None = None,
+    device: torch.device | str | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Generate ``n`` random sky coordinates ``(ra_deg, dec_deg)`` uniformly in solid angle.
+
+    Supports rejection-free sampling inside a :class:`MOC`, :class:`BMOC`, or
+    :class:`HealSparseMap`, with optional per-pixel depth/completeness weights.
+    """
+    n_i = int(n)
+    if n_i < 0:
+        raise ValueError("n must be non-negative")
+    if footprint is None and isinstance(weights, HealSparseMap):
+        footprint = weights
+        weights = "values"
+
+    if footprint is None:
+        dev = torch.device("cpu") if device is None else torch.device(device)
+        f_dtype = _healpix._float_dtype_for_device(dev)
+        if n_i == 0:
+            empty = torch.empty(0, dtype=f_dtype, device=dev)
+            return empty, empty
+        u_lon = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
+        u_z = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
+        lon_deg = u_lon * 360.0
+        z = 2.0 * u_z - 1.0
+        lat_deg = torch.rad2deg(torch.asin(torch.clamp(z, -1.0, 1.0)))
+        return lon_deg, lat_deg
+
+    if isinstance(footprint, BMOC):
+        footprint = footprint.to_moc(include_boundary=True)
+
+    if isinstance(footprint, MOC):
+        dev = (
+            footprint.uniq.device
+            if device is None
+            else torch.device(device)
+        )
+        f_dtype = _healpix._float_dtype_for_device(dev)
+        if n_i == 0:
+            empty = torch.empty(0, dtype=f_dtype, device=dev)
+            return empty, empty
+        if footprint.uniq.numel() == 0:
+            raise ValueError("cannot sample randoms from an empty MOC")
+        uniq = footprint.uniq.to(device=dev)
+        nsides, pix_nested = uniq2nest(uniq)
+        ns_f = nsides.to(f_dtype)
+        cell_weights = 1.0 / (ns_f * ns_f)
+        cdf = torch.cumsum(cell_weights, dim=0)
+        u_cell = (
+            torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator) * cdf[-1]
+        )
+        idx = torch.searchsorted(cdf, u_cell, right=False).clamp(
+            max=uniq.numel() - 1
+        )
+        ux = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
+        uy = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
+        return _sample_in_nested_cells(nsides[idx], pix_nested[idx], ux, uy)
+
+    if isinstance(footprint, HealSparseMap):
+        dev = (
+            footprint.pixels.device
+            if device is None
+            else torch.device(device)
+        )
+        f_dtype = _healpix._float_dtype_for_device(dev)
+        if n_i == 0:
+            empty = torch.empty(0, dtype=f_dtype, device=dev)
+            return empty, empty
+        pix = footprint.pixels.to(device=dev)
+        if pix.numel() == 0:
+            raise ValueError("cannot sample randoms from an empty HealSparseMap")
+        if not footprint.nest:
+            pix_nest = _healpix.ring2nest(footprint.nside, pix)
+        else:
+            pix_nest = pix
+
+        if weights is None:
+            idx = torch.randint(
+                0, pix_nest.numel(), (n_i,), device=dev, generator=generator
+            )
+        else:
+            if isinstance(weights, str):
+                if weights == "values":
+                    w_raw = footprint.values
+                elif footprint.column_names and weights in footprint.column_names:
+                    w_raw = footprint[weights].values
+                else:
+                    raise ValueError(f"unknown weights specification: {weights!r}")
+            elif isinstance(weights, HealSparseMap):
+                w_raw = weights.get_values(footprint.pixels)
+            else:
+                w_raw = torch.as_tensor(weights, device=dev)
+            w = w_raw.to(device=dev, dtype=f_dtype).reshape(-1)
+            if w.numel() != pix_nest.numel():
+                raise ValueError(
+                    "weights must have one entry per valid pixel in footprint"
+                )
+            w = torch.where(torch.isfinite(w) & (w > 0), w, torch.zeros_like(w))
+            total_w = float(w.sum().item())
+            if total_w <= 0.0:
+                raise ValueError("weights must have positive sum")
+            cdf = torch.cumsum(w, dim=0)
+            u_cell = (
+                torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
+                * cdf[-1]
+            )
+            idx = torch.searchsorted(cdf, u_cell, right=False).clamp(
+                max=pix_nest.numel() - 1
+            )
+        ux = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
+        uy = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
+        return _sample_in_nested_cells(footprint.nside, pix_nest[idx], ux, uy)
+
+    raise TypeError(
+        "footprint must be a MOC, BMOC, HealSparseMap, or None"
+    )
+
+
+__all__ = ["BMOC", "MOC", "nest2uniq", "sample_randoms", "uniq2nest"]

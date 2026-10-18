@@ -125,6 +125,7 @@ def gaussian_blur_variance(variance: Tensor, sigma_pix: float) -> Tensor:
 
 
 def apply_kernel2d(image: Tensor, kernel2d: Tensor) -> Tensor:
+    """Convolve with an image-shaped unit-source response, zero outside the image."""
     if kernel2d.ndim != 2:
         raise ValueError("kernel2d PSF must be 2D")
     kernel = kernel2d.to(device=image.device, dtype=image.dtype)
@@ -132,14 +133,14 @@ def apply_kernel2d(image: Tensor, kernel2d: Tensor) -> Tensor:
     ky, kx = int(kernel.shape[0]), int(kernel.shape[1])
     out = F.conv2d(
         image.unsqueeze(0).unsqueeze(0),
-        kernel.view(1, 1, ky, kx),
+        kernel.flip(-2, -1).view(1, 1, ky, kx),
         padding=(ky // 2, kx // 2),
     )
     return out.squeeze(0).squeeze(0)
 
 
 def apply_kernel2d_variance(variance: Tensor, kernel2d: Tensor) -> Tensor:
-    """Propagate independent-pixel variance through a normalized 2-D PSF."""
+    """Propagate independent-pixel variance through :func:`apply_kernel2d`."""
     if kernel2d.ndim != 2:
         raise ValueError("kernel2d PSF must be 2D")
     kernel = kernel2d.to(device=variance.device, dtype=variance.dtype)
@@ -148,7 +149,7 @@ def apply_kernel2d_variance(variance: Tensor, kernel2d: Tensor) -> Tensor:
     ky, kx = int(kernel.shape[0]), int(kernel.shape[1])
     out = F.conv2d(
         variance.unsqueeze(0).unsqueeze(0),
-        kernel.view(1, 1, ky, kx),
+        kernel.flip(-2, -1).view(1, 1, ky, kx),
         padding=(ky // 2, kx // 2),
     )
     return out.squeeze(0).squeeze(0)

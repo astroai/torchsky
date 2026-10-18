@@ -4,6 +4,7 @@ import tempfile
 import numpy as np
 from astropy.table import Table
 
+import torchfits
 import torchsky
 
 
@@ -17,7 +18,7 @@ def create_table(path: str) -> None:
             "VLA": vla,
         }
     )
-    table.write(path, format="fits", overwrite=True)
+    torchfits.table.write(path, table, extname="CATALOG", overwrite=True)
 
 
 if __name__ == "__main__":
@@ -27,7 +28,7 @@ if __name__ == "__main__":
     try:
         create_table(filename)
 
-        table, _ = torchsky.read(filename, hdu=1, return_header=True)
+        table, _ = torchsky.read(filename, hdu="CATALOG", return_header=True)
 
         try:
             df = torchsky.to_pandas(table, decode_bytes=True, vla_policy="object")

@@ -15,12 +15,10 @@ from torchsky.map import (
     make_field_component_decomposition,
     render_field_observation,
 )
-from torchsky.map.field import _BaseFieldModel
-
-
-class ConstantField(_BaseFieldModel):
+class ConstantField(torch.nn.Module):
     def __init__(self, domain: FieldDomain, value: float) -> None:
-        super().__init__(domain)
+        super().__init__()
+        self.domain = domain
         self.value = torch.nn.Parameter(torch.tensor(float(value), dtype=torch.float32))
 
     def forward(

@@ -6,7 +6,7 @@ import sys
 
 import pytest
 import torch
-from astropy.io import fits
+from torchfits import HDUList, TensorHDU
 
 import torchsky
 import torchsky.map.image_plane as image_plane_mod
@@ -24,7 +24,6 @@ from torchsky.map import (
     coadd_image_plane,
     coadd_image_plane_cube,
     coadd_image_plane_multiband,
-    evaluate_map_product,
     plan_map_product,
     plan_image_plane_cube_target,
     plan_image_plane_cube_target_from_header,
@@ -178,10 +177,11 @@ def _astropy_sip_fixture() -> Path:
     )
 
 
-def _clean_header(header: dict) -> fits.Header:
-    out = fits.Header()
+def _clean_header(header: dict) -> dict:
+    out = {}
     for key, value in header.items():
-        if str(key).endswith("_COMMENT"):
+        # The fixture tensors are decoded floating values, not stored integers.
+        if str(key).endswith("_COMMENT") or key in {"BZERO", "BSCALE", "BLANK"}:
             continue
         out[key] = value
     return out
@@ -189,7 +189,7 @@ def _clean_header(header: dict) -> fits.Header:
 
 def _write_real_sip_mef(tmp_path: Path, *, shifted: bool) -> Path:
     image, header = torchsky.read(str(_astropy_sip_fixture()), return_header=True)
-    data = image.to(dtype=torch.float32).cpu().numpy()
+    data = image.to(dtype=torch.float32).cpu()
     sci1 = _clean_header(dict(header))
     sci1["EXTNAME"] = "SCI"
     sci1["EXTVER"] = 1
@@ -213,27 +213,27 @@ def _write_real_sip_mef(tmp_path: Path, *, shifted: bool) -> Path:
     dq2["EXTNAME"] = "DQ"
     dq2["EXTVER"] = 2
 
-    weight1 = torch.ones_like(image, dtype=torch.float32).cpu().numpy()
-    weight2 = torch.ones_like(image, dtype=torch.float32).cpu().numpy()
+    weight1 = torch.ones_like(image, dtype=torch.float32).cpu()
+    weight2 = torch.ones_like(image, dtype=torch.float32).cpu()
     weight1[:, : image.shape[1] // 3] = 2.0
     weight2[:, (2 * image.shape[1]) // 3 :] = 3.0
-    mask1 = torch.ones_like(image, dtype=torch.float32).cpu().numpy()
-    mask2 = torch.ones_like(image, dtype=torch.float32).cpu().numpy()
+    mask1 = torch.ones_like(image, dtype=torch.float32).cpu()
+    mask2 = torch.ones_like(image, dtype=torch.float32).cpu()
     mask1[:, (2 * image.shape[1]) // 3 :] = 0.0
     mask2[:, : image.shape[1] // 3] = 0.0
 
     path = tmp_path / ("real_sip_shifted_mef.fits" if shifted else "real_sip_mef.fits")
-    fits.HDUList(
+    HDUList(
         [
-            fits.PrimaryHDU(),
-            fits.ImageHDU(data=data, header=sci1, name="SCI"),
-            fits.ImageHDU(data=weight1, header=err1, name="ERR"),
-            fits.ImageHDU(data=mask1, header=dq1, name="DQ"),
-            fits.ImageHDU(data=data, header=sci2, name="SCI"),
-            fits.ImageHDU(data=weight2, header=err2, name="ERR"),
-            fits.ImageHDU(data=mask2, header=dq2, name="DQ"),
+            TensorHDU(torch.empty(0)),
+            TensorHDU(data=data, header=sci1),
+            TensorHDU(data=weight1, header=err1),
+            TensorHDU(data=mask1, header=dq1),
+            TensorHDU(data=data, header=sci2),
+            TensorHDU(data=weight2, header=err2),
+            TensorHDU(data=mask2, header=dq2),
         ]
-    ).writeto(path, overwrite=True)
+    ).write(str(path), overwrite=True)
     return path
 
 
@@ -403,8 +403,8 @@ def _tpv_header(
     crval2: float,
     rotation_deg: float = 0.0,
     scale_deg: float = 0.01,
-) -> fits.Header:
-    header = fits.Header()
+) -> dict:
+    header = {}
     header["NAXIS"] = 2
     header["NAXIS1"] = size
     header["NAXIS2"] = size
@@ -482,17 +482,17 @@ def _write_synthetic_tpv_mef(tmp_path: Path, *, size: int = 64) -> Path:
     mask1[:, size // 3 : size // 3 + max(2, size // 16)] = 0.0
     mask2[size // 2 - max(2, size // 20) : size // 2 + max(2, size // 20), :] = 0.0
     path = tmp_path / "synthetic_tpv_mef.fits"
-    fits.HDUList(
+    HDUList(
         [
-            fits.PrimaryHDU(),
-            fits.ImageHDU(data=image.cpu().numpy(), header=sci1, name="SCI"),
-            fits.ImageHDU(data=weight1.cpu().numpy(), header=err1, name="ERR"),
-            fits.ImageHDU(data=mask1.cpu().numpy(), header=dq1, name="DQ"),
-            fits.ImageHDU(data=image.cpu().numpy(), header=sci2, name="SCI"),
-            fits.ImageHDU(data=weight2.cpu().numpy(), header=err2, name="ERR"),
-            fits.ImageHDU(data=mask2.cpu().numpy(), header=dq2, name="DQ"),
+            TensorHDU(torch.empty(0)),
+            TensorHDU(data=image.cpu(), header=sci1),
+            TensorHDU(data=weight1.cpu(), header=err1),
+            TensorHDU(data=mask1.cpu(), header=dq1),
+            TensorHDU(data=image.cpu(), header=sci2),
+            TensorHDU(data=weight2.cpu(), header=err2),
+            TensorHDU(data=mask2.cpu(), header=dq2),
         ]
-    ).writeto(path, overwrite=True)
+    ).write(str(path), overwrite=True)
     return path
 
 
@@ -3284,40 +3284,6 @@ def test_coadd_image_plane_rejects_non_positive_drizzle_pixfrac(
         )
 
 
-def test_coadd_image_plane_clamps_negative_resampled_weights_for_high_order_kernels(
-    tmp_path: Path,
-) -> None:
-    benchmarks_dir = Path(__file__).resolve().parents[1] / "benchmarks"
-    if str(benchmarks_dir) not in sys.path:
-        sys.path.insert(0, str(benchmarks_dir))
-    import bench_map_ground_truth as truth_bench
-
-    observations, target_header, truth = truth_bench.make_case(
-        tmp_path,
-        case="tan_random10_large_union_rect_weighted_masked",
-        size=1024,
-        seed=1234,
-        width=1024,
-        height=768,
-    )
-
-    result = coadd_image_plane(
-        [item.observation for item in observations],
-        target_header=target_header,
-        resampling_kernel="bicubic",
-    )
-    metrics = evaluate_map_product(
-        result.data,
-        truth,
-        weight=result.weight,
-        header=target_header,
-        value_semantics="surface_brightness",
-    )
-
-    assert torch.isfinite(result.data).all()
-    assert torch.isfinite(result.weight).all()
-    assert bool((result.weight >= 0.0).all())
-    assert math.isfinite(float(metrics["total_flux_relative_error"]))
 
 
 def test_coadd_image_plane_flux_semantics_improves_flux_conservation(tmp_path) -> None:

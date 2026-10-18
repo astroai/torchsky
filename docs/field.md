@@ -11,6 +11,11 @@ see [INR and Power-Foam sky reconstruction](projects/inr_foam_problem_formulatio
 
 For map products and classical stacks, see [map.md](map.md). For the Charbonnier / multi-survey scaffold around field rendering, see [implicit_forward.md](implicit_forward.md).
 
+Native stamp calibration and small likelihood/forced-photometry queries can run
+without a fitted continuous field. See the [native likelihood guide](native-likelihood.md)
+and [exposure example](../examples/native_exposure_calibration.py) for their
+conditional response, nuisance, rank and sampling-uncertainty contracts.
+
 ## Core workflow
 
 1. Build one **`field.Observation`** per band (or per exposure): image tensor, FITS-like **`header`** dict (WCS), spectral limits or tabulated throughput, optional **`weight`** / **`mask`**, optional **`PSFSpec`**.
@@ -30,11 +35,9 @@ Runnable references:
 
 - [examples/example_map_field_survey_split.py](../examples/example_map_field_survey_split.py)
 - [examples/example_field_multiband_quality.py](../examples/example_field_multiband_quality.py)
-- [examples/notebooks/01_field_fit_synthetic.ipynb](../examples/notebooks/01_field_fit_synthetic.ipynb) (synthetic quickstart)
-- [scripts/build_smacs0723_minicutout.py](../scripts/build_smacs0723_minicutout.py) (optional real JWST UPdec mini-cutouts + `manifest.json`)
-- [scripts/build_smacs0723_stack_baseline.py](../scripts/build_smacs0723_stack_baseline.py) (classical multiband stack cube baseline)
-- [scripts/visualize_smacs0723_products.py](../scripts/visualize_smacs0723_products.py) (PNG quicklooks for cutouts, stack cubes, and residuals)
-- [docs/projects/hyperspectral-fusion.md](projects/hyperspectral-fusion.md) (student onboarding)
+- [synthetic field-fit notebook](https://github.com/astroai/torchsky-harness/blob/main/notebooks/01_field_fit_synthetic.ipynb)
+- [SMACS campaign notebooks and tools](https://github.com/astroai/torchsky-harness/tree/main/notebooks)
+- [hyperspectral fusion onboarding](https://github.com/astroai/torchsky-harness/blob/main/docs/projects/hyperspectral-fusion.md)
 
 ## `field.Observation`
 
@@ -123,7 +126,7 @@ model = field.preset("fast", domain, hidden_dim=64, hidden_layers=2)
 | `operator_constrained_feature_field` | Hooks for operator-side structure (advanced). |
 | `strainer_sky_encoder_mlp` | Optional pretrained trunk path (see module docstrings). |
 
-Exact constructor kwargs vary by kind (hidden sizes, grid resolution, Fourier frequencies, etc.). Start from benchmarks or **`example_map_field_survey_split.py`**, then tune.
+Exact constructor kwargs vary by kind (hidden sizes, grid resolution, Fourier frequencies, etc.). Start from **`example_map_field_survey_split.py`** and the public constructors, then tune. Scientific model comparisons and real-data tuning are documented in the [harness](https://github.com/astroai/torchsky-harness).
 
 **Capacity hints:** **`spectral_data_budget`** / **`spectral_model_capacity_hints`** in [`spectral_budget.py`](../src/torchsky/map/field/spectral_budget.py) suggest model families from your observation list.
 
@@ -216,78 +219,50 @@ identifiable interval exists. Joint spatial holes still require a separate
 coverage check. An explicitly supplied `sample_spacing` may make the bound more
 conservative, but cannot make it finer than the evidence coverage.
 
-Build a replayable JWST/NIRCam calibration manifest before constructing these
-encoders:
+Calibration sample discovery, NIRCam exposure acquisition, frozen split policy,
+and manifest extraction commands are maintained in the harness's
+[calibration evidence guide](https://github.com/astroai/torchsky-harness/blob/main/docs/calibration-evidence.md).
+The core API consumes validated tensors from a manifest; it does not acquire
+exposures or choose calibration samples.
 
-```console
-pixi run torchsky calibration-manifest \
-  '/arc/projects/ots/torchsky-data/jwst_smacs0723/aligned/*.fits' \
-  --evidence calibration-evidence.csv \
-  --output calibration-manifest.json
+The harness guide documents the extraction policy, reviewed-catalog option,
+source selection, and evidence-product provenance. Keep sample selection fixed
+before fitting; train, validation, and test rows must remain disjoint.
+
+The runtime split loader and operator calibration terms remain in torchsky:
+
+```python
+from pathlib import Path
+
+from torchsky.calibration_evidence import load_operator_calibration_split
+from torchsky.map.operators import BackgroundCalibrationTerm, PSFCalibrationTerm
+
+psf_evidence = load_operator_calibration_split(
+    Path("calibration-manifest.json"),
+    split="train",
+    role="psf",
+    detector="NRCA1",
+)
+psf_term = PSFCalibrationTerm(model=psf_model, **psf_evidence)
+
+background_evidence = load_operator_calibration_split(
+    Path("calibration-manifest.json"),
+    split="train",
+    role="background",
+    detector="NRCA1",
+)
+background_term = BackgroundCalibrationTerm(
+    model=background_model,
+    **background_evidence,
+)
 ```
 
-The CSV columns are `exposure,detector_x,detector_y,role` plus an optional
-`source_id`; `role` is `psf` or `background`. Coordinates are zero-indexed
-NIRCam detector coordinates, not pixels in an aligned mosaic. The command reads
-primary and SCI headers through Torchfits, maps the FITS one-indexed
-`SUBSTRT*`/`SUBSIZE*` footprint into that common detector frame, freezes the
-existing `PATT_NUM` train/validation/test partition, and records canonical MJD
-UTC midpoint provenance. It fails on inconsistent timing aliases, footprints,
-or evidence coordinates.
-
-The UPDec experiment uses the complete 135 aligned
-`*_crf_rshift_tweakreg.fits` products. The 27 plain CRFs cover only the long
-channel, and the 135 CAL products are the reproducibility fallback.
-
-No external detection catalog is required. With no `--catalog`, the extractor
-fits a heteroscedastic Gaussian-PSF amplitude while analytically marginalizing
-a local constant sky, robustly whitens the response, retains isolated compact
-peaks, refines their subpixel centroids, and lays out source-excluded background
-controls across each detector. The thresholds and selection diagnostics are
-persisted so the same selection function is applied to every frozen split.
-
-```console
-pixi run torchsky calibration-extract \
-  '/arc/projects/ots/torchsky-data/jwst_smacs0723/aligned/*.fits' \
-  --output-dir /arc/projects/ots/torchsky-data/jwst_smacs0723/calibration-evidence
-```
-
-An explicitly reviewed astrometric catalog remains an optional higher-assurance
-override. Its columns are
-`source_id,role,ra_deg,dec_deg,reviewed`. `role` is `psf` for an isolated,
-unsaturated calibration star or `background` for a source-free location.
-Optional columns are `pmra_mas_yr,pmdec_mas_yr,ref_epoch_jyear,sample_weight`;
-proper motions use the Gaia `pm_ra_cosdec` convention and default to zero at
-J2016.0. Every row must explicitly set `reviewed=true`.
-
-```console
-pixi run torchsky calibration-extract \
-  '/arc/projects/ots/torchsky-data/jwst_smacs0723/aligned/*.fits' \
-  --catalog smacs0723-reviewed-calibrators.csv \
-  --output-dir benchmark_results/smacs0723-calibration-evidence
-```
-
-The command reads `SCI`, `ERR`, and `DQ` through Torchfits. Catalog positions
-are propagated to the exposure midpoint and transformed with Torchsky WCS. PSF
-stamps are bilinearly registered at their fractional detector phase, fitted
-with a weighted sigma-clipped local plane, normalized to unit flux, and stored
-with per-pixel inverse-variance weights. Blank-sky targets are the centre value
-of the same robust local plane, weighted by detrended variance. The command
-conservatively accepts only `DQ==0`, rejects incomplete or low-S/N stamps, and
-persists every rejection reason. Its final manifest links target indices,
-product SHA-256 values, instrument metadata, detector coverage, and the fixed
-train/validation/test split. The bilinear stamp is the initial detector-sampled
-ePSF contract; promote it to an oversampled spatial ePSF only if held-out
-encircled-energy residuals show detector-phase structure.
-
-For each role/band/detector/split, the manifest records a certified interval for
-the two-dimensional rectangular-domain fill distance. The lower endpoint is
-the maximum sampled grid-centre distance; the upper endpoint adds the grid-cell
-half-diagonal using the 1-Lipschitz property of distance to the nearest sample.
-Refinement continues to the requested error or fails closed. Twice the upper
-endpoint is a conservative coverage guard, not a scattered-sampling Nyquist
-theorem or a physical PSF/background correlation length. The manifest includes
-a deterministic SHA-256 over its complete canonical payload.
+The loader returns detector coordinates, wavelength, exposure midpoint, and
+sample weights for both roles. PSF rows also resolve hashed kernel and pixel-
+weight products; background rows supply target values. When selecting one
+exposure, pass both its exact `exposure_id` and `band`; the loader then uses
+the exposure-specific calibration split. File-backed manifests verify product
+SHA-256 values unless `verify_hashes=False` is explicitly requested.
 
 Within these bounds, each axis learns sparse band gates and a continuous
 bounded dilation. `initialize_from_evidence` jointly profiles all harmonic
@@ -295,17 +270,6 @@ bands with an intercept and trend, selects the starting dilation by weighted
 residual, and initializes each gate from a full-versus-band-ablated BIC. It is
 an initializer, not a result, and must use calibration/cross-fit evidence rather
 than the unpartitioned science evaluation pixels.
-
-For the UPDec NIRCam profile, `torchsky.instrument` now freezes STScI version-7
-commissioning passbands and on-orbit PSF widths. The official detector scales
-are 0.031 arcsec/pixel (short channel) and 0.063 arcsec/pixel (long channel),
-while the six empirical PSF FWHMs are 0.033, 0.050, 0.066, 0.092, 0.116, and
-0.145 arcsec. These constrain detector sampling, band support, and the starting
-kernel footprint; they do **not** supply the focal-plane scale on which PSF
-coefficients vary. That scale comes from calibration-star coverage and the
-profile fit above. Likewise, build time coordinates from exposure mid-times;
-the observatory wavefront-sensing cadence is not the temporal resolution of a
-particular visit.
 
 Learned gates, feature wavelengths, gate-weighted scales, and bounds are
 returned under `result.diagnostics["operator_scale_diagnostics"]`.
@@ -323,6 +287,11 @@ quadrature. `ConditionedBackgroundField` is signed and additive; it may model a
 residual around explicit background estimates already attached to each
 observation. Detector-coordinate models use `detector_x0_pix` and
 `detector_y0_pix`, which are updated automatically by training crops.
+
+Image-shaped asymmetric PSF stamps retain their measured orientation in
+rendering. Source-flux conservation does not imply a constant uniform-sky
+response. See [PSF response conventions](psf-response-conventions.md) for these
+invariants, detector-boundary losses and migration of old asymmetric weights.
 
 Use evidence-space calibration terms and separate optimizer invocations to
 make the staged sequence explicit:

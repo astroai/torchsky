@@ -44,18 +44,12 @@ torchfits cache, table, I/O, and dataset surfaces.
 
 ## Performance Highlights
 
-`torchsky` performance claims cover only torchsky-owned computation:
-
-- **WCS transforms**: tensor-native forward, inverse, Jacobian, spectral/time,
-  and TAB paths with focused parity and scale benchmarks.
-- **Sphere/HEALPix**: vectorized pixel, region, sparse-map, and harmonic
-  primitives with upstream comparator gates.
-- **Map/catalog workflows**: end-to-end throughput, peak memory, candidate
-  reduction, exact-adjoint checks, and science-error metrics are the priority.
-
-FITS image/table throughput is measured and documented in `torchfits`.
-
-For detailed benchmarks and methodology, see the [Benchmarks Guide](docs/benchmarks.md).
+Scientific performance claims, upstream parity campaigns, real-data evaluation,
+and scorecards are maintained in the sibling
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness) repository.
+Torchsky retains bounded package tests and performance smoke checks for its own
+runtime paths. FITS image/table throughput belongs to `torchfits`. See the
+[scientific evaluation guide](docs/benchmarks.md) for the ownership boundary.
 
 ---
 
@@ -90,10 +84,6 @@ aliases for older downstream callers.
 - **`map`**: Extended mapmaking tools (e.g. SVO filter profiles)
   ```bash
   pip install "torchsky[map]"
-  ```
-- **`bench-all`**: All comparator libraries for testing and parity benchmarks
-  ```bash
-  pip install "torchsky[bench-all]"
   ```
 
 ---

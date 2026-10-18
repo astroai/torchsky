@@ -74,8 +74,8 @@ No new runtime dependency is required (`json`, `os`, and `pathlib` only).
 - INR dry-run: record resolved method/model/render settings but do not read
   field observations, resolve remote SVO metadata, or fit.
 - Verification: focused `pixi run -e test -- pytest tests/test_cli_map.py
-  tests/test_map_image_plane.py -q`, then mandatory `pixi run ci-local` before
-  push.
+  tests/test_map_image_plane.py -q`, then `pixi run preflight-push` before
+  push. Full local tests remain opt-in under current repository policy.
 
 ## Deferred deliberately
 

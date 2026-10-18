@@ -57,11 +57,18 @@ from .tabular import (
 from .gwcs_sampling import (
     FrozenDetectorEpochTables,
     GWCSGridSamplingResult,
+    IFUSliceWCS,
     sample_gwcs_detector_epochs,
     sample_gwcs_detector_to_tangent,
 )
 from .coords import transform
-from .iau2006 import apply_refraction, apply_stellar_aberration
+from .iau2006 import (
+    apply_dcr,
+    apply_ephemeris_offset,
+    apply_refraction,
+    apply_stellar_aberration,
+    dcr_offset,
+)
 from .observed import (
     EarthOrientation,
     Site,
@@ -69,6 +76,11 @@ from .observed import (
     itrs_xyz_to_lonlat_deg,
     observed_altaz,
 )
+
+from_tabular = tabular_axes_from_fits
+from_coupled_tabular = coupled_tabular_wcs_from_fits
+sample_gwcs = sample_gwcs_detector_to_tangent
+sample_gwcs_epochs = sample_gwcs_detector_epochs
 
 __all__ = [
     "SPEED_OF_LIGHT",
@@ -82,6 +94,7 @@ __all__ = [
     "EarthOrientation",
     "FrozenDetectorEpochTables",
     "GWCSGridSamplingResult",
+    "IFUSliceWCS",
     "RegularGridTransform2D",
     "SampledTransformValidation",
     "Site",
@@ -101,6 +114,10 @@ __all__ = [
     "frequency_to_spectral",
     "fit_affine_2d",
     "fit_sky_affine",
+    "from_coupled_tabular",
+    "from_tabular",
+    "sample_gwcs",
+    "sample_gwcs_epochs",
     "sample_gwcs_detector_epochs",
     "sample_gwcs_detector_to_tangent",
     "galactic_to_icrs",
@@ -112,8 +129,11 @@ __all__ = [
     "heliocentric_rv_to_lsr",
     "lsr_line_of_sight_kms",
     "icrs_to_galactic",
+    "apply_dcr",
+    "apply_ephemeris_offset",
     "apply_refraction",
     "apply_stellar_aberration",
+    "dcr_offset",
     "icrs_to_itrs_xyz",
     "itrs_xyz_to_lonlat_deg",
     "observed_altaz",
@@ -131,3 +151,5 @@ __all__ = [
     "vacuum_wavelength_to_air",
     "validate_sampled_transform",
 ]
+
+

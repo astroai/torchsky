@@ -72,21 +72,12 @@ the Monte-Carlo test seeded and small enough for the normal test environment.
 | CUDA (conditional) | `if torch.cuda.is_available()`: float64 and float32 batch output/J/covariance vs CPU using the same tensors. | Assert device preservation and CPU/CUDA agreement. Run only conditionally in the normal suite; do not add a fake CUDA requirement. |
 | Input failures | Wrong trailing dimensions, non-finite state/covariance, non-symmetric covariance, clearly indefinite covariance, nonpositive parallax, and superluminal state. | Check contextual `ValueError`s; no partial output/fallback. |
 
-## Benchmark recommendation
+## Performance follow-up
 
-Do not add a benchmark gate in the first covariance PR: correctness and API
-semantics are the risk. Once the branch-free batched core exists, add one small
-`benchmarks/bench_space_motion.py` (or a row in the existing benchmark runner)
-that reports, without a pass/fail claim:
-
-- state-only throughput and `state + J + J C J^T` throughput;
-- CPU float64 and CUDA float32/float64 when available;
-- `N = 1, 1_000, 100_000`, fixed physical states/covariances;
-- peak-memory or allocation count for the covariance path.
-
-The baseline should be Torchsky state-only versus Torchsky covariance, not
-Astropy: Astropy's Python/ERFA scalar-oriented route is a semantic reference,
-not a fair survey-scale batch performance comparator.
+Do not add benchmark scripts or timing gates to the core covariance change.
+Survey-scale throughput and any comparison against reference implementations
+belong in [`torchsky-harness`](https://github.com/astroai/torchsky-harness),
+where the harness and subject revisions can be recorded separately.
 
 ## Minimal implementation order
 

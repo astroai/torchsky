@@ -38,7 +38,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from astropy.io import fits
+import torchfits
 
 
 def _pixi_exec_solve_field() -> list[str]:
@@ -69,16 +69,23 @@ def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 def _extract_ccd(mef_path: str, hdu_index: int, out_path: str) -> bool:
     """Extract a single CCD from a MEF to a separate FITS file."""
     try:
-        with fits.open(mef_path) as hdul:
+        with torchfits.open(mef_path) as hdul:
             if hdu_index < 0 or hdu_index >= len(hdul):
                 print(f"  HDU {hdu_index} out of range (max {len(hdul) - 1})", file=sys.stderr)
                 return False
             hdu = hdul[hdu_index]
-            if not isinstance(hdu, fits.ImageHDU | fits.CompImageHDU):
+            if (
+                not isinstance(hdu, torchfits.TensorHDU)
+                or int(hdu.header.get("NAXIS1", 0)) <= 0
+                or int(hdu.header.get("NAXIS2", 0)) <= 0
+            ):
                 print(f"  HDU {hdu_index} is not an image HDU", file=sys.stderr)
                 return False
-            hdul_out = fits.HDUList([fits.PrimaryHDU(data=hdu.data, header=hdu.header)])
-            hdul_out.writeto(out_path, overwrite=True)
+            tensor = hdu.to_tensor()
+            extracted = torchfits.HDUList(
+                [torchfits.TensorHDU(data=tensor, header=hdu.header)]
+            )
+            torchfits.write(out_path, extracted, overwrite=True)
             return True
     except Exception as e:
         print(f"  Error extracting HDU {hdu_index}: {e}", file=sys.stderr)
@@ -212,10 +219,14 @@ def cmd_full(args: argparse.Namespace) -> int:
             catalogs.append(cat_path)
 
             # Run sex on each extension
-            with fits.open(str(prop_path)) as hdul:
-                ext_indices = [i for i, h in enumerate(hdul)
-                               if isinstance(h, fits.ImageHDU | fits.CompImageHDU)
-                               and h.data is not None]
+            with torchfits.open(str(prop_path)) as hdul:
+                ext_indices = [
+                    i
+                    for i, hdu in enumerate(hdul)
+                    if isinstance(hdu, torchfits.TensorHDU)
+                    and int(hdu.header.get("NAXIS1", 0)) > 0
+                    and int(hdu.header.get("NAXIS2", 0)) > 0
+                ]
 
             for ext_idx in ext_indices:
                 ext_cat = str(scamp_dir / f"{base}_ext{ext_idx}.cat")

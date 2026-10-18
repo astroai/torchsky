@@ -28,6 +28,9 @@ For the high-level design target and refactor rules, see
 | Dust laws (CCM89 / O'Donnell / F99 / Calzetti) | `torchsky.extinction` | [spectral.md](spectral.md) |
 | FLRW distances, comoving geometry, and AP scaling | `torchsky.cosmology` | [spectral.md](spectral.md) |
 | Build tensor transforms and training inputs | `torchsky.transforms` plus reader-defined datasets | [ml.md](ml.md) |
+| Native forced photometry, blends, and likelihood evidence | `torchsky.map.likelihood`, `torchsky.map.query` | [native-likelihood.md](native-likelihood.md) |
+| Native detector response, nuisances, and physical stages | `torchsky.map.operators`, `torchsky.map.field.native_response` | [native-likelihood.md](native-likelihood.md) |
+| PSF pixel-response conventions | `torchsky.map.operators` | [psf-response-conventions.md](psf-response-conventions.md) |
 | Use field encoders | `torchsky.encoders` | [encoders.md](encoders.md) |
 | Inspect FITS files from a shell | `torchfits` tools/APIs | [io.md](io.md) |
 | Run the browser viewer | `torchsky.viz`, `torchsky viz` | [viz.md](viz.md), [cli.md](cli.md) |
@@ -44,8 +47,8 @@ For the high-level design target and refactor rules, see
   map models, visualization server paths, and training-facing utilities.
 
 Surfaces are assigned to architecture pillars: `world`, `scene`, and `viz`.
-FITS I/O is a package boundary, not a torchsky pillar. Use `torchsky.surfaces`
-when you need programmatic API-surface metadata.
+FITS I/O is a package boundary, not a torchsky pillar. The public contract is
+enumerated by the namespaces below and checked by the package API tests.
 
 ## Architecture Pillars
 
@@ -61,6 +64,9 @@ when you need programmatic API-surface metadata.
 - [`torchsky.coords`](coordinates.md)
 - [`torchsky.sphere`](sphere.md)
 - [`torchsky.map`](map.md)
+- `torchsky.map.likelihood`, `torchsky.map.query`, `torchsky.map.evidence` —
+  experimental native likelihood and forced-photometry surfaces
+  ([native-likelihood.md](native-likelihood.md))
 - [`torchsky.scene`](scene.md)
 - [`torchsky.field`](field.md)
 - [`torchsky.transforms`](ml.md)

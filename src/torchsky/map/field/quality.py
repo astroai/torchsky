@@ -269,83 +269,6 @@ def field_quality_scorecard(
     }
 
 
-def field_quality_acceptance_report(
-    per_observation: Sequence[dict[str, float]],
-    *,
-    observations: Sequence[FieldObservation] | None = None,
-    max_weighted_rmse: float | None = None,
-    min_residual_snr: float | None = None,
-    min_support_fraction: float | None = None,
-    min_effective_weight_sum: float | None = None,
-    max_abs_psf_residual_alignment: float | None = None,
-) -> dict[str, Any]:
-    """Evaluate explicit per-observation quality gates with no default thresholds."""
-    if observations is not None and len(observations) != len(per_observation):
-        raise ValueError("observations must have the same length as per_observation")
-    criteria: dict[str, tuple[str, float]] = {}
-    if max_weighted_rmse is not None:
-        criteria["weighted_rmse"] = ("max", float(max_weighted_rmse))
-    if min_residual_snr is not None:
-        criteria["residual_snr"] = ("min", float(min_residual_snr))
-    if min_support_fraction is not None:
-        criteria["support_fraction"] = ("min", float(min_support_fraction))
-    if min_effective_weight_sum is not None:
-        criteria["effective_weight_sum"] = ("min", float(min_effective_weight_sum))
-    if max_abs_psf_residual_alignment is not None:
-        criteria["psf_residual_alignment"] = (
-            "max_abs",
-            float(max_abs_psf_residual_alignment),
-        )
-    violations: list[dict[str, Any]] = []
-    for index, metrics in enumerate(per_observation):
-        band = (
-            _observation_quality_group_key(observations[index], index)
-            if observations is not None
-            else None
-        )
-        for metric, (direction, threshold) in criteria.items():
-            if metric not in metrics:
-                violations.append(
-                    {
-                        "index": int(index),
-                        "band": band,
-                        "metric": metric,
-                        "reason": "missing",
-                        "threshold": threshold,
-                    }
-                )
-                continue
-            value = float(metrics[metric])
-            compare_value = abs(value) if direction == "max_abs" else value
-            failed = (
-                compare_value > threshold
-                if direction in {"max", "max_abs"}
-                else compare_value < threshold
-            )
-            if failed:
-                violations.append(
-                    {
-                        "index": int(index),
-                        "band": band,
-                        "metric": metric,
-                        "value": value,
-                        "threshold": threshold,
-                        "direction": direction,
-                    }
-                )
-    return {
-        "passed": not violations,
-        "criteria": {
-            metric: {"direction": direction, "threshold": threshold}
-            for metric, (direction, threshold) in criteria.items()
-        },
-        "violations": tuple(violations),
-        "scorecard": field_quality_scorecard(
-            per_observation,
-            observations=observations,
-        ),
-    }
-
 
 def field_image_quality_metrics(
     prediction: Tensor,
@@ -748,7 +671,6 @@ __all__ = [
     "FieldResidualTile",
     "field_image_residual_product",
     "field_image_quality_metrics",
-    "field_quality_acceptance_report",
     "field_quality_scorecard",
     "render_field_fit_quality",
     "render_field_quality",

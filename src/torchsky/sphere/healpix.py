@@ -59,6 +59,8 @@ def _float_dtype_for_device(device: torch.device) -> torch.dtype:
 def _validate_nside(nside: int) -> None:
     if nside <= 0 or (nside & (nside - 1)) != 0:
         raise ValueError("nside must be a positive power of two")
+    if nside > (1 << 29):
+        raise ValueError("nside must be <= 2**29 (HEALPix order 29)")
 
 
 def _as_float64(x: Tensor | float | list[float]) -> Tensor:
@@ -1539,6 +1541,9 @@ def query_circle(
     )
 
 
+query_cone = query_circle
+
+
 def query_circle_vec(
     nside: int,
     vec: Tensor | Sequence[float],
@@ -1590,7 +1595,8 @@ def query_strip(
 
 def query_polygon(
     nside: int,
-    vertices: Tensor | Sequence[Sequence[float]],
+    vertices: Tensor | Sequence[Sequence[float]] | Sequence[float],
+    lat_deg: Tensor | Sequence[float] | None = None,
     *,
     inclusive: bool = False,
     nest: bool = False,
@@ -1603,22 +1609,25 @@ def query_polygon(
     Convex polygons use the direct half-space query. Concave simple polygons are
     triangulated by :func:`torchsky.sphere.geom.query_polygon_general`.
 
-    `vertices` accepts:
-    - Cartesian shape (N,3) or (3,N), if `lonlat=False`
-    - Lon/lat degrees shape (N,2) or (2,N), if `lonlat=True`
-
-    When the Euclidean vertex centroid lies inside the oriented polygon, a spherical
-    cap about that centroid (radius = max vertex angle + optional inclusive padding)
-    is queried via `query_disc`, then pixels are filtered with the exact half-space
-    tests — **O(nside + cap_area)** instead of **O(npix)** in typical cases. If the
-    centroid fails the inside test, this falls back to a full-sky chunked scan.
+    Accepts either:
+    - ``query_polygon(nside, lon_deg, lat_deg, ...)`` (1D degree sequences/tensors)
+    - ``query_polygon(nside, vertices, lonlat=True, ...)`` with shape ``(N, 2)`` or ``(2, N)``
+    - ``query_polygon(nside, vertices, lonlat=False, ...)`` with Cartesian shape ``(N, 3)`` or ``(3, N)``
     """
     _validate_nside(nside)
-    t_input = torch.as_tensor(vertices)
-    dtype = torch.float32 if t_input.device.type == "mps" else torch.float64
-    v = t_input.to(dtype=dtype)
-    if v.ndim != 2:
-        raise ValueError("vertices must be 2D")
+    if lat_deg is not None:
+        lon_t = torch.as_tensor(vertices)
+        dtype = torch.float32 if lon_t.device.type == "mps" else torch.float64
+        lon_t = lon_t.to(dtype=dtype).reshape(-1)
+        lat_t = torch.as_tensor(lat_deg, dtype=dtype, device=lon_t.device).reshape(-1)
+        v = torch.stack([lon_t, lat_t], dim=-1)
+        lonlat = True
+    else:
+        t_input = torch.as_tensor(vertices)
+        dtype = torch.float32 if t_input.device.type == "mps" else torch.float64
+        v = t_input.to(dtype=dtype)
+        if v.ndim != 2:
+            raise ValueError("vertices must be 2D")
 
     if lonlat:
         if v.shape[-1] == 2:
@@ -1662,7 +1671,9 @@ def query_polygon(
         from .geom import query_polygon_general
 
         lon, lat = xyz_to_lonlat(vv[:, 0], vv[:, 1], vv[:, 2])
-        return query_polygon_general(nside, lon, lat, nest=nest)
+        return query_polygon_general(
+            nside, lon, lat, nest=nest, inclusive=inclusive
+        )
     edge_normals = edge_normals / edge_norm.unsqueeze(1)
 
     centroid = vv.mean(dim=0)
@@ -2434,6 +2445,7 @@ __all__ = [
     "query_box",
     "query_circle",
     "query_circle_vec",
+    "query_cone",
     "query_disc",
     "query_polygon",
     "query_polygon_vec",

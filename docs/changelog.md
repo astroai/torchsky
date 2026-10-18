@@ -5,6 +5,11 @@ All notable changes to torchsky will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+Historical benchmark tables and comparative performance claims have moved to
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness/blob/main/docs/archive/benchmark-history.md).
+They are not current package status. FITS/table I/O performance evidence is
+owned by `torchfits`.
+
 ## [0.4.0.dev0] - Unreleased
 
 ### Architecture
@@ -14,10 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are no longer torchsky-owned surfaces.
 - Torchsky's active scope is WCS, sphere/HEALPix/MOC, catalog geometry,
   observation operators, mapmaking, scenes, and field models.
-- Residual root I/O and `torchsky.io` / `torchsky.table` surfaces are migration
-  debt pending removal or thin deprecation-only delegation.
-- The supported integration baseline is `torchfits 1.0.0` with a matching
-  PyTorch 2.10 native ABI; dataset classes are imported from `torchfits.data`.
+- Root I/O and `torchsky.io` / `torchsky.table` compatibility surfaces delegate
+  to `torchfits`; they are not second implementations.
+- `torchfits` is the required FITS/table runtime dependency; dataset classes are
+  imported from `torchfits.data`.
 
 ### Added
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.
@@ -54,15 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Version synchronization across `pyproject.toml`, `pixi.toml`, and `__init__.py` (was inconsistent in 0.3.1).
-- Benchmark snapshot updated to run `20260318_083620` with improved results across all domains.
 - CI workflow cleanup: `ci.yml` now references `pyarrow` instead of `pytorch-frame`.
-- Default pixi environment now includes comparison libraries (`healpy`, `hpgeom`, `healsparse`, `astropy-healpix`, `spherical-geometry`) so parity tests run by default; skipped tests reduced from ~142 to ~16.
+- Historical comparator environments and exhaustive parity suites were later
+  moved to `torchsky-harness`.
 
 ### Fixed
 - **Spectral Transforms**: Resolved minor parity bugs in `torchsky.sphere.spectral` relating to harmonic primitive precision.
 
-### Performance
-- Re-baselined the exhaustive benchmark suite. `torchsky` maintains its 100% win rate against `fitsio` and improves aggregate WCS leadership (80.7% win rate vs AST/Astropy).
+Historical comparative results are archived in the
+[harness benchmark history](https://github.com/astroai/torchsky-harness/blob/main/docs/archive/benchmark-history.md).
 
 ## [0.3.0] - 2026-03-06
 
@@ -87,17 +92,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **WCS Resolution**: `torchsky.get_wcs` now consistently resolves to the native PyTorch implementation, removing runtime dependency on external C++ libs for coordinates.
 - **Build System**: Removed all `WCSLIB` detection and linking logic. The C++ engine is now leaner, focusing exclusively on FITS I/O (vendored `cfitsio`).
-- **Standardized Benchmark Output**: Default benchmark results now consistently target the `benchmarks_results/` directory.
 
 ### Removed
 - **External Dependency (WCSLIB)**: Completely removed the C++ `wcslib` dependency, significantly reducing binary size and making wheels fully self-contained.
 - **Legacy Components**: Removed the obsolete monolithic `wcs.py` and the redundant `torchsky.fits` namespace.
 - **Developmental Artifacts**: Cleaned up transient test artifacts and local tool metadata.
 
-### Performance
-- **FITS I/O**: Maintained 100% win rate against `fitsio` across 249 image-domain and 140 table-domain cases (typically 10x-100x faster than `astropy` for large-N payloads).
-- **WCS Thruput**: Achieved 1.1x-1.3x leads in high-volume (N > 100k) forward transforms.
-- **Sphere Geometry**: Achieved ~89% win rate across the HEALPix ecosystem; identified optimization targets for spin transforms in 0.3.1.
+Historical comparative results are archived in the
+[harness benchmark history](https://github.com/astroai/torchsky-harness/blob/main/docs/archive/benchmark-history.md).
 
 ## [0.2.1] - 2026-02-14
 
@@ -105,8 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routed `int32` image reads through the CFITSIO fast path, fixing a regression.
 - Implemented 128 MB chunking for large file reads to prevent memory spikes during type conversion.
 
-### Performance
-- Table reads via memory mapping show substantial speedups for large catalogs.
+Table I/O performance evidence is now owned by `torchfits`.
 
 ## [0.2.0] - 2026-02-14
 
@@ -117,7 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTML representation for `HDUList` in notebook environments.
 - `hdu="auto"` / `hdu=None` payload detection in `read()` and `get_header()`.
 - `get_wcs()` convenience API for file-based WCS initialization.
-- ML loader benchmark script (`bench_ml_loader.py`).
+- ML-loader evaluation moved to `torchsky-harness`.
 
 ### Changed
 - Minimum supported Python version raised to 3.11 (later raised to 3.12 in 0.4.0.dev0).
@@ -130,9 +131,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multiple interoperability and non-table regression fixes with test coverage updates.
 
 ### Performance Notes
-- Benchmarks were re-baselined and workflow noise was reduced (repeat control, focused suites, stable fast runs) to make before/after performance comparisons more reproducible.
-- Full 0.2.0 release benchmark (with tables) shows torchsky ahead in 87/88 `read_full` rows vs `fitsio` and 87/88 vs `fitsio_torch`; only `medium_float64_2d` remains a slight loss in this snapshot.
-- ML-loader benchmark configuration was aligned for fairer comparisons (persistent workers + payload HDU detection); current CPU results are near parity with run-to-run variance (uncompressed median 0.985x vs `fitsio`, compressed median 1.008x), so performance claims should use repeated runs rather than single-shot output.
+- Historical benchmark methodology and result snapshots are archived in the
+  [harness benchmark history](https://github.com/astroai/torchsky-harness/blob/main/docs/archive/benchmark-history.md).
+- FITS/table I/O and data-loading performance comparisons are maintained by
+  `torchfits` and `torchsky-harness`, respectively.
 
 ## [0.1.1] - 2025-12-05
 

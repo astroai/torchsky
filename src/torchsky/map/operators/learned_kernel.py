@@ -6,7 +6,7 @@ small astrometric errors, mild nonlinearities) without absorbing scene
 information:
 
 - ``ConstrainedKernelPSF``: quasi-convolution core built from a bank of
-  positive, unit-sum basis kernels (flux conserving by construction),
+  positive, unit-sum basis kernels (flux conserving away from boundaries),
   initialised from Gaussian profiles around a nominal FWHM and mixed by
   coefficients that may be conditioned on an instrument-state latent.
 - ``GatedResidualOperator``: small nonlinear residual (brighter-fatter and
@@ -165,7 +165,11 @@ class SpatioSpectralTemporalEncoder(nn.Module):
 
 
 class ConditionedKernelPSF(nn.Module):
-    """Flux-conserving non-stationary PSF from conditioned convex basis weights."""
+    """Source-conditioned PSF with image-shaped impulse-response basis kernels.
+
+    Unit-sum kernels conserve source flux when their support stays on the
+    detector. Spatial source mixing does not imply a uniform flat-sky response.
+    """
 
     def __init__(
         self,
@@ -248,7 +252,7 @@ class ConditionedKernelPSF(nn.Module):
         weighted_sources = mixture * image.unsqueeze(0)
         convolved = F.conv2d(
             weighted_sources.unsqueeze(0),
-            basis.unsqueeze(1),
+            basis.flip(-2, -1).unsqueeze(1),
             padding=self.kernel_size // 2,
             groups=self.kernel_basis.n_basis,
         )
@@ -261,7 +265,7 @@ class ConditionedKernelPSF(nn.Module):
         wavelength: Tensor | float,
         time_mjd: Tensor | float | None = None,
     ) -> Tensor:
-        """Return normalized effective kernels with sample axes first."""
+        """Return image-shaped unit-source stamps with sample axes first."""
         mixture = self.mixture_weights(
             spatial_x, spatial_y, wavelength, time_mjd
         ).movedim(0, -1)
@@ -288,6 +292,7 @@ class ExtendedResidualKernelPSF(nn.Module):
     unit-sum. Residual bases are centrosymmetrized before use, anchoring their
     centroid to the central pixel. A bounded convex fraction prevents the PSF
     residual from becoming an unrestricted image operator.
+    Baseline and effective kernels are image-shaped unit-source stamps.
     """
 
     def __init__(
@@ -440,7 +445,7 @@ class ExtendedResidualKernelPSF(nn.Module):
         )
         residual = F.conv2d(
             (mixture * image.unsqueeze(0)).unsqueeze(0),
-            basis.unsqueeze(1),
+            basis.flip(-2, -1).unsqueeze(1),
             padding=self.kernel_size // 2,
             groups=int(basis.shape[0]),
         ).squeeze(0).sum(dim=0)
@@ -449,7 +454,7 @@ class ExtendedResidualKernelPSF(nn.Module):
         )
         baseline = F.conv2d(
             image[None, None],
-            baseline_kernel[None, None],
+            baseline_kernel.flip(-2, -1)[None, None],
             padding=self.kernel_size // 2,
         )[0, 0]
         fraction = self.residual_fraction.to(device=image.device, dtype=image.dtype)
@@ -475,7 +480,9 @@ class ConstrainedKernelPSF(nn.Module):
 
     The effective kernel is a convex mixture of ``n_basis`` learned basis
     kernels. Each basis kernel is constrained positive (softplus) and
-    normalised to unit sum, so the operator conserves flux for any mixture.
+    normalised to unit sum, so the operator conserves flux for any mixture
+    away from detector boundaries. Kernels have the orientation of the
+    rendered unit-source stamp; they are flipped only at the conv2d boundary.
     Mixture coefficients come either from a learned global logit vector or,
     when ``cond_dim > 0``, from a linear head over an instrument-state
     latent (spatially varying observing conditions).
@@ -529,7 +536,7 @@ class ConstrainedKernelPSF(nn.Module):
         return F.softmax(logits, dim=-1)
 
     def effective_kernels(self, cond: Tensor | None, batch_size: int) -> Tensor:
-        """[B, ks, ks] per-sample unit-sum kernels."""
+        """[B, ks, ks] per-sample unit-source image stamps."""
         coeffs = self.mixture_coefficients(cond, batch_size)
         basis = self.basis_kernels()
         return torch.einsum("bk,kij->bij", coeffs, basis)
@@ -543,7 +550,7 @@ class ConstrainedKernelPSF(nn.Module):
         pad = self.kernel_size // 2
         # Batched per-sample convolution via grouped conv with B groups.
         x = image.permute(1, 0, 2, 3)  # [1, B, H, W]
-        w = kernels.unsqueeze(1)  # [B, 1, ks, ks]
+        w = kernels.flip(-2, -1).unsqueeze(1)  # [B, 1, ks, ks]
         out = F.conv2d(x, w, padding=pad, groups=b)
         return out.permute(1, 0, 2, 3)
 

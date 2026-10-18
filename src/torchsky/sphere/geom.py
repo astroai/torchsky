@@ -683,6 +683,7 @@ def query_polygon_general(
     lat_deg: Tensor | list[float],
     *,
     nest: bool = False,
+    inclusive: bool = False,
 ) -> Tensor:
     """
     Query HEALPix pixels inside a simple spherical polygon (convex or non-convex).
@@ -694,7 +695,9 @@ def query_polygon_general(
     vertices_xyz = lonlat_to_unit_xyz(lon_t, lat_t).to(dtype=lon_t.dtype)
 
     if vertices_xyz.shape[0] == 3:
-        return _healpix.query_polygon(nside, vertices_xyz, nest=nest)
+        return _healpix.query_polygon(
+            nside, vertices_xyz, nest=nest, inclusive=inclusive
+        )
 
     center = vertices_xyz.mean(dim=0)
     center = center / torch.linalg.norm(center).clamp_min(1e-15)
@@ -704,7 +707,9 @@ def query_polygon_general(
     chunks: list[Tensor] = []
     for i, j, k in triangles:
         verts = vertices_xyz[[i, j, k]].to(device=query_device)
-        chunks.append(_healpix.query_polygon(nside, verts, nest=nest))
+        chunks.append(
+            _healpix.query_polygon(nside, verts, nest=nest, inclusive=inclusive)
+        )
     if not chunks:
         return torch.empty(0, dtype=torch.int64, device=query_device)
     return torch.unique(torch.cat(chunks)).to(torch.int64)
@@ -1875,14 +1880,24 @@ def query_ellipse(
     return candidates[keep]
 
 
+Polygon = SphericalPolygon
+MultiPolygon = SphericalMultiPolygon
+Cap = SphericalCap
+Cone = SphericalCap
+
+
 __all__ = [
     "Box",
+    "Cap",
     "Circle",
+    "Cone",
     "Ellipse",
     "ExactSphericalRegion",
     "LonLat",
+    "MultiPolygon",
     "NativeExactSphericalRegion",
     "PixelizedRegion",
+    "Polygon",
     "RegionAreaEstimate",
     "SphericalBooleanRegion",
     "SphericalBox",
@@ -1902,3 +1917,4 @@ __all__ = [
     "spherical_triangle_area",
     "to_exact_region",
 ]
+

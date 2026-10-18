@@ -31,7 +31,22 @@ from ..map.field import (
     render_field_observation_distribution,
     scale_observation_for_rest_frame_scene,
 )
-from ..map.image_plane import ImageObservation
+from ..map.image_plane import (
+    CubeResult,
+    CubeTarget,
+    HealpixResult,
+    ImageObservation,
+    MapResult,
+    MultibandResult,
+    coadd,
+    coadd_cube,
+    coadd_healpix,
+    coadd_multiband,
+    plan,
+    plan_cube,
+    resample,
+    resample_healpix,
+)
 from ..map.product import (
     MapBandpassSpec,
     MapProductResult,
@@ -66,7 +81,11 @@ Observation: TypeAlias = FieldObservation | ImageObservation
 Scene: TypeAlias = SceneRepresentation
 ProductSpec: TypeAlias = MapProductSpec
 BandpassSpec: TypeAlias = MapBandpassSpec
+ProductResult: TypeAlias = MapProductResult
 Target: TypeAlias = TargetRenderSpec
+fit = fit_field_model
+model = make_field_model
+stack_product = stack_map_product
 
 
 def image_observation(*args: Any, **kwargs: Any) -> ImageObservation:
@@ -144,21 +163,27 @@ def predict(
 __all__ = [
     "BandpassSpec",
     "ContinuousFieldModel",
+    "CubeResult",
+    "CubeTarget",
     "DiscreteTargetImage",
     "FieldObservation",
     "ForwardContext",
     "HarmonicAlmScene",
     "HealpixMapScene",
+    "HealpixResult",
     "ImageObservation",
     "KinematicState",
     "MapBandpassSpec",
     "MapProductResult",
     "MapProductSpec",
+    "MapResult",
+    "MultibandResult",
     "Observation",
     "ObservationOperatorAdapter",
     "ObservationOperatorBundle",
     "ObservationOperatorBundleProtocol",
     "PSFSpec",
+    "ProductResult",
     "ProductSpec",
     "Scene",
     "SceneRepresentation",
@@ -169,18 +194,26 @@ __all__ = [
     "TargetRenderSpec",
     "as_scene_representation",
     "bind_image_plane_observations_to_target",
+    "coadd",
+    "coadd_cube",
+    "coadd_healpix",
+    "coadd_multiband",
     "field_observation",
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
+    "fit",
     "fit_field_model",
     "image_observation",
     "make_field_model",
+    "model",
     "multi_survey_charbonnier_loss",
     "observation_charbonnier_loss",
     "operator_adapter_for_observation",
     "operator_bundle_for_observation",
     "operator_bundles_for_observations",
+    "plan",
+    "plan_cube",
     "predict",
     "predict_observation_mean",
     "product_spec",
@@ -190,11 +223,15 @@ __all__ = [
     "render_field_observation",
     "render_field_observation_distribution",
     "render_field_product",
+    "resample",
+    "resample_healpix",
     "scale_observation_for_rest_frame_scene",
     "sample_image_plane_batched_channels",
     "splat_to_native",
     "stack_map_product",
+    "stack_product",
     "target_from_header",
     "target_from_product",
     "target_to_field_observation",
 ]
+

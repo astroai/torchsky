@@ -275,9 +275,292 @@ def sample_gwcs_detector_epochs(
     return FrozenDetectorEpochTables(epochs=epochs, samples=samples)
 
 
+@dataclass(frozen=True)
+class IFUSliceWCS:
+    """Piecewise-disjoint 2D detector -> 3D ``(ra_deg, dec_deg, wavelength)`` IFU slice WCS.
+
+    Prevents cross-slice interpolation bleed at IFU slice boundaries by restricting
+    sub-pixel bilinear interpolation strictly to neighbors sharing the same ``slice_id >= 0``.
+    """
+
+    ra_map: Tensor
+    dec_map: Tensor
+    wavelength_map: Tensor
+    slice_id_map: Tensor
+
+    def __post_init__(self) -> None:
+        if self.ra_map.ndim != 2:
+            raise ValueError("ra_map, dec_map, wavelength_map, and slice_id_map must be 2D (H, W)")
+        shape = self.ra_map.shape
+        if (
+            self.dec_map.shape != shape
+            or self.wavelength_map.shape != shape
+            or self.slice_id_map.shape != shape
+        ):
+            raise ValueError("all IFUSliceWCS maps must have identical (H, W) shape")
+
+    @property
+    def detector_shape(self) -> tuple[int, int]:
+        return (int(self.ra_map.shape[0]), int(self.ra_map.shape[1]))
+
+    @property
+    def valid_mask(self) -> Tensor:
+        return (
+            (self.slice_id_map >= 0)
+            & torch.isfinite(self.ra_map)
+            & torch.isfinite(self.dec_map)
+            & torch.isfinite(self.wavelength_map)
+        )
+
+    def to(self, device: Any) -> "IFUSliceWCS":
+        dev = torch.device(device)
+        dt = torch.float32 if dev.type == "mps" else torch.float64
+        return IFUSliceWCS(
+            ra_map=self.ra_map.to(device=dev, dtype=dt),
+            dec_map=self.dec_map.to(device=dev, dtype=dt),
+            wavelength_map=self.wavelength_map.to(device=dev, dtype=dt),
+            slice_id_map=self.slice_id_map.to(device=dev, dtype=torch.int64),
+        )
+
+    @classmethod
+    def from_slices(
+        cls,
+        detector_shape_or_slices: Any,
+        slices: list[Any] | tuple[Any, ...] | None = None,
+        *,
+        device: Any = "cpu",
+    ) -> "IFUSliceWCS":
+        """Build an :class:`IFUSliceWCS` from ``(slice_mask, callable_or_tuple)`` pairs or slice dicts."""
+        if slices is None:
+            slice_list = list(detector_shape_or_slices)
+            if not slice_list:
+                raise ValueError("slices must not be empty when detector_shape is omitted")
+            first = slice_list[0]
+            first_mask = first["mask"] if isinstance(first, dict) else first[0]
+            m0 = torch.as_tensor(first_mask)
+            h, w = int(m0.shape[-2]), int(m0.shape[-1])
+        else:
+            h, w = int(detector_shape_or_slices[0]), int(detector_shape_or_slices[1])
+            slice_list = list(slices)
+
+        dev = torch.device(device)
+        dt = torch.float32 if dev.type == "mps" else torch.float64
+        ra_full = torch.full((h, w), float("nan"), dtype=dt, device=dev)
+        dec_full = torch.full((h, w), float("nan"), dtype=dt, device=dev)
+        wave_full = torch.full((h, w), float("nan"), dtype=dt, device=dev)
+        sid_full = torch.full((h, w), -1, dtype=torch.int64, device=dev)
+
+        yy, xx = torch.meshgrid(
+            torch.arange(h, dtype=dt, device=dev),
+            torch.arange(w, dtype=dt, device=dev),
+            indexing="ij",
+        )
+        for slice_idx, item in enumerate(slice_list):
+            if isinstance(item, dict):
+                mask = item["mask"]
+                if "wcs" in item:
+                    wcs_obj = item["wcs"]
+                    wave_spec = item["wavelength"]
+
+                    def _eval_dict_slice(
+                        x_pts: Tensor,
+                        y_pts: Tensor,
+                        _w: Any = wcs_obj,
+                        _lam: Any = wave_spec,
+                    ) -> tuple[Tensor, Tensor, Tensor]:
+                        r_s, d_s = _w.pixel_to_world(x_pts, y_pts)
+                        if callable(_lam):
+                            l_s = _lam(x_pts, y_pts)
+                        else:
+                            l_t = torch.as_tensor(_lam, dtype=dt, device=dev)
+                            l_s = l_t[m] if l_t.shape == (h, w) else l_t
+                        return r_s, d_s, l_s
+
+                    spec: Any = _eval_dict_slice
+                else:
+                    spec = (item["ra"], item["dec"], item["wavelength"])
+            else:
+                mask, spec = item
+            m = torch.as_tensor(mask, dtype=torch.bool, device=dev)
+            if m.shape != (h, w):
+                raise ValueError(f"slice {slice_idx} mask shape {tuple(m.shape)} != {(h, w)}")
+            if not bool(m.any()):
+                continue
+            if callable(spec):
+                r_s, d_s, lam_s = spec(xx[m], yy[m])
+                ra_full[m] = torch.as_tensor(r_s, dtype=dt, device=dev)
+                dec_full[m] = torch.as_tensor(d_s, dtype=dt, device=dev)
+                wave_full[m] = torch.as_tensor(lam_s, dtype=dt, device=dev)
+            else:
+                r_s, d_s, lam_s = spec
+                r_t = torch.as_tensor(r_s, dtype=dt, device=dev)
+                d_t = torch.as_tensor(d_s, dtype=dt, device=dev)
+                l_t = torch.as_tensor(lam_s, dtype=dt, device=dev)
+                if r_t.shape == (h, w):
+                    ra_full[m] = r_t[m]
+                    dec_full[m] = d_t[m]
+                    wave_full[m] = l_t[m]
+                else:
+                    ra_full[m] = r_t
+                    dec_full[m] = d_t
+                    wave_full[m] = l_t
+            sid_full[m] = int(slice_idx)
+        return cls(
+            ra_map=ra_full,
+            dec_map=dec_full,
+            wavelength_map=wave_full,
+            slice_id_map=sid_full,
+        )
+
+    @classmethod
+    def from_callable(
+        cls,
+        reference: Callable[..., Any],
+        detector_shape: tuple[int, int],
+        *,
+        slice_id_map: Tensor | None = None,
+        device: Any = "cpu",
+    ) -> "IFUSliceWCS":
+        """Sample a 2D -> 3D ``(ra, dec, wavelength)`` callable across the detector grid."""
+        h, w = int(detector_shape[0]), int(detector_shape[1])
+        dev = torch.device(device)
+        dt = torch.float32 if dev.type == "mps" else torch.float64
+        yy, xx = torch.meshgrid(
+            torch.arange(h, dtype=dt, device=dev),
+            torch.arange(w, dtype=dt, device=dev),
+            indexing="ij",
+        )
+        ra, dec, wave = reference(xx, yy)
+        ra_t = torch.as_tensor(ra, dtype=dt, device=dev).reshape(h, w)
+        dec_t = torch.as_tensor(dec, dtype=dt, device=dev).reshape(h, w)
+        wave_t = torch.as_tensor(wave, dtype=dt, device=dev).reshape(h, w)
+        valid = torch.isfinite(ra_t) & torch.isfinite(dec_t) & torch.isfinite(wave_t)
+        if slice_id_map is None:
+            sid = torch.where(
+                valid,
+                torch.zeros((h, w), dtype=torch.int64, device=dev),
+                torch.full((h, w), -1, dtype=torch.int64, device=dev),
+            )
+        else:
+            sid = torch.as_tensor(slice_id_map, dtype=torch.int64, device=dev).reshape(h, w)
+            sid = torch.where(valid, sid, torch.full_like(sid, -1))
+        return cls(
+            ra_map=ra_t,
+            dec_map=dec_t,
+            wavelength_map=wave_t,
+            slice_id_map=sid,
+        )
+
+    def pixel_to_world(
+        self, x: Tensor | float, y: Tensor | float
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Evaluate ``(ra_deg, dec_deg, wavelength)`` at sub-pixel ``(x, y)`` without cross-slice bleed."""
+        dev = self.ra_map.device
+        dt = self.ra_map.dtype
+        xt = torch.as_tensor(x, dtype=dt, device=dev)
+        yt = torch.as_tensor(y, dtype=dt, device=dev)
+        xt, yt = torch.broadcast_tensors(xt, yt)
+        orig_shape = xt.shape
+        xf = xt.reshape(-1)
+        yf = yt.reshape(-1)
+        h, w = self.detector_shape
+
+        in_bounds = (
+            torch.isfinite(xf)
+            & torch.isfinite(yf)
+            & (xf >= -0.5)
+            & (xf <= float(w) - 0.5)
+            & (yf >= -0.5)
+            & (yf <= float(h) - 0.5)
+        )
+        xi_nn = xf.round().to(torch.int64).clamp(0, w - 1)
+        yi_nn = yf.round().to(torch.int64).clamp(0, h - 1)
+        target_sid = torch.where(
+            in_bounds,
+            self.slice_id_map[yi_nn, xi_nn],
+            torch.full_like(xi_nn, -1),
+        )
+        valid_query = target_sid >= 0
+
+        x0 = torch.floor(xf).to(torch.int64).clamp(0, w - 1)
+        y0 = torch.floor(yf).to(torch.int64).clamp(0, h - 1)
+        x1 = (x0 + 1).clamp(0, w - 1)
+        y1 = (y0 + 1).clamp(0, h - 1)
+        fx = (xf - x0.to(dt)).clamp(0.0, 1.0)
+        fy = (yf - y0.to(dt)).clamp(0.0, 1.0)
+
+        w00 = (1.0 - fx) * (1.0 - fy)
+        w10 = fx * (1.0 - fy)
+        w01 = (1.0 - fx) * fy
+        w11 = fx * fy
+
+        m00 = (self.slice_id_map[y0, x0] == target_sid) & valid_query
+        m10 = (self.slice_id_map[y0, x1] == target_sid) & valid_query
+        m01 = (self.slice_id_map[y1, x0] == target_sid) & valid_query
+        m11 = (self.slice_id_map[y1, x1] == target_sid) & valid_query
+
+        w00 = torch.where(m00, w00, torch.zeros_like(w00))
+        w10 = torch.where(m10, w10, torch.zeros_like(w10))
+        w01 = torch.where(m01, w01, torch.zeros_like(w01))
+        w11 = torch.where(m11, w11, torch.zeros_like(w11))
+        w_sum = w00 + w10 + w01 + w11
+        fallback_nn = valid_query & (w_sum <= 0.0)
+        if bool(fallback_nn.any()):
+            w00 = torch.where(fallback_nn, torch.ones_like(w00), w00)
+            x0 = torch.where(fallback_nn, xi_nn, x0)
+            y0 = torch.where(fallback_nn, yi_nn, y0)
+            w_sum = w00 + w10 + w01 + w11
+
+        safe_w = w_sum.clamp_min(1e-30)
+        w00 = w00 / safe_w
+        w10 = w10 / safe_w
+        w01 = w01 / safe_w
+        w11 = w11 / safe_w
+
+        def _safe_gather(m_2d: Tensor, iy: Tensor, ix: Tensor, mask_b: Tensor) -> Tensor:
+            vals = m_2d[iy, ix]
+            return torch.where(mask_b & torch.isfinite(vals), vals, torch.zeros_like(vals))
+
+        ra_ref = _safe_gather(self.ra_map, yi_nn, xi_nn, valid_query)
+
+        def _interp_ra_delta(iy: Tensor, ix: Tensor, mask_b: Tensor) -> Tensor:
+            r_v = _safe_gather(self.ra_map, iy, ix, mask_b)
+            delta = torch.remainder(r_v - ra_ref + 180.0, 360.0) - 180.0
+            return torch.where(mask_b, delta, torch.zeros_like(delta))
+
+        m00_eff = m00 | fallback_nn
+        ra_out = torch.remainder(
+            ra_ref
+            + w00 * _interp_ra_delta(y0, x0, m00_eff)
+            + w10 * _interp_ra_delta(y0, x1, m10)
+            + w01 * _interp_ra_delta(y1, x0, m01)
+            + w11 * _interp_ra_delta(y1, x1, m11),
+            360.0,
+        )
+        dec_out = (
+            w00 * _safe_gather(self.dec_map, y0, x0, m00_eff)
+            + w10 * _safe_gather(self.dec_map, y0, x1, m10)
+            + w01 * _safe_gather(self.dec_map, y1, x0, m01)
+            + w11 * _safe_gather(self.dec_map, y1, x1, m11)
+        )
+        wave_out = (
+            w00 * _safe_gather(self.wavelength_map, y0, x0, m00_eff)
+            + w10 * _safe_gather(self.wavelength_map, y0, x1, m10)
+            + w01 * _safe_gather(self.wavelength_map, y1, x0, m01)
+            + w11 * _safe_gather(self.wavelength_map, y1, x1, m11)
+        )
+        nan_v = torch.full_like(ra_out, float("nan"))
+        ra_out = torch.where(valid_query, ra_out, nan_v).reshape(orig_shape)
+        dec_out = torch.where(valid_query, dec_out, nan_v).reshape(orig_shape)
+        wave_out = torch.where(valid_query, wave_out, nan_v).reshape(orig_shape)
+        return ra_out, dec_out, wave_out
+
+
 __all__ = [
     "FrozenDetectorEpochTables",
     "GWCSGridSamplingResult",
+    "IFUSliceWCS",
     "sample_gwcs_detector_epochs",
     "sample_gwcs_detector_to_tangent",
 ]
+

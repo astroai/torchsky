@@ -44,12 +44,8 @@ benchmark_results_*/
 benchmarks_results/
 benchmarks_results_*/
 bench_results/
-benchmark_results_*/
-benchmarks/benchmark_results/
-benchmarks/bench_results/
-benchmarks/replays/
-!benchmarks/replays/upstream_sources.json
-benchmarks/kapteyn_src/
+examples/**/*.fits.fz
+**/.ipynb_checkpoints/
 *.log
 *.log*
 *.json
@@ -66,35 +62,6 @@ verify_inverse.py
 test_fetch*.py
 test_sg*.py
 
-# benchmarks
-benchmarks/benchmark_competitors.py
-benchmarks/test_pyast*.py
-benchmarks/kapteyn-*.tar.gz
-benchmarks/large_mmap.fits
-benchmarks/parallel_test_*.fits
-benchmarks/scaled.fits
-benchmarks/repro_map2alm*.py
-benchmarks/find_overflow.py
-benchmarks/baselines/
-benchmarks/test_pyast*.py
-benchmarks/kapteyn_src/
-benchmarks/kapteyn-*.tar.gz
-benchmarks/large_mmap.fits
-benchmarks/parallel_test_*.fits
-benchmarks/scaled.fits
-benchmarks/repro_map2alm*.py
-benchmarks/find_overflow.py
-benchmarks/baselines/
-!benchmarks/baselines/
-!benchmarks/baselines/map_*.json
-!benchmarks/baselines/map_*.md
-!benchmarks/baselines/spin_matrix_extended_baseline.json
-!benchmarks/baselines/sphere_geom_exact_contains_gate.json
-
-# committed scorecard history (ephemeral runs stay in benchmarks_results/)
-!benchmarks/scorecards/
-!benchmarks/scorecards/**
-
 # native build artifacts
 wcslib.tar.bz2
 wcslib_src/
@@ -104,7 +71,6 @@ wcslib_src/
 # mpl config cache
 mpl-cache-*/
 venv/
-.venv/
 .venv/
 node_modules/
 .pixi-cache/

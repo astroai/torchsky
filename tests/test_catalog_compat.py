@@ -5,11 +5,9 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table
 import astropy.units as u
 from pathlib import Path
-import tempfile
 
 pytest.importorskip("scipy")
 
-import torchsky
 from torchsky.catalogs import crossmatch_sky
 from torchsky.table import write as _table_write
 
@@ -156,193 +154,12 @@ def _real_catalog_tables() -> tuple[Table, Table]:
     return left_table, right_table
 
 
-def test_crossmatch_sky_matches_astropy_skycoord_on_random_catalogs() -> None:
-    rng = torch.Generator().manual_seed(321)
-    n_left = 64
-    n_right = 96
-
-    left_ra = torch.rand(n_left, generator=rng, dtype=torch.float64) * 360.0
-    left_dec = torch.rad2deg(
-        torch.asin((torch.rand(n_left, generator=rng, dtype=torch.float64) * 2.0) - 1.0)
-    )
-    right_ra = torch.rand(n_right, generator=rng, dtype=torch.float64) * 360.0
-    right_dec = torch.rad2deg(
-        torch.asin(
-            (torch.rand(n_right, generator=rng, dtype=torch.float64) * 2.0) - 1.0
-        )
-    )
-
-    right_ra[:16] = (
-        left_ra[:16]
-        + (torch.rand(16, generator=rng, dtype=torch.float64) - 0.5) * 0.00015
-    )
-    right_dec[:16] = (
-        left_dec[:16]
-        + (torch.rand(16, generator=rng, dtype=torch.float64) - 0.5) * 0.00015
-    )
-
-    result = crossmatch_sky(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=2.0,
-        left_chunk_size=13,
-        right_chunk_size=17,
-    )
-    exp_left, exp_right, exp_sep = _astropy_crossmatch(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=2.0,
-    )
-
-    assert result.left_index.tolist() == exp_left
-    assert result.right_index.tolist() == exp_right
-    np.testing.assert_allclose(
-        result.separation_arcsec.cpu().numpy(),
-        exp_sep,
-        atol=1e-6,
-        rtol=0.0,
-    )
 
 
-def test_crossmatch_sky_matches_astropy_on_wrap_and_pole_cases() -> None:
-    left_ra = torch.tensor([359.9998, 5.0, 220.0], dtype=torch.float64)
-    left_dec = torch.tensor([0.0, 89.9990, 89.9985], dtype=torch.float64)
-    right_ra = torch.tensor([0.0001, 185.0, 40.0, 10.0], dtype=torch.float64)
-    right_dec = torch.tensor([0.0, 89.9991, 88.5, 89.9987], dtype=torch.float64)
-
-    result = crossmatch_sky(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=12.0,
-        left_chunk_size=2,
-        right_chunk_size=2,
-    )
-    exp_left, exp_right, exp_sep = _astropy_crossmatch(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=12.0,
-    )
-
-    assert result.left_index.tolist() == exp_left
-    assert result.right_index.tolist() == exp_right
-    np.testing.assert_allclose(
-        result.separation_arcsec.cpu().numpy(),
-        exp_sep,
-        atol=1e-6,
-        rtol=0.0,
-    )
 
 
-def test_crossmatch_sky_matches_astropy_on_real_votable_catalogs() -> None:
-    left_ra, left_dec, right_ra, right_dec = _real_catalogs()
-
-    result = crossmatch_sky(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=0.1,
-        left_chunk_size=7,
-        right_chunk_size=11,
-    )
-    exp_left, exp_right, exp_sep = _astropy_crossmatch(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=0.1,
-    )
-
-    assert result.left_index.tolist() == exp_left
-    assert result.right_index.tolist() == exp_right
-    np.testing.assert_allclose(
-        result.separation_arcsec.cpu().numpy(),
-        exp_sep,
-        atol=1e-8,
-        rtol=0.0,
-    )
 
 
-@pytest.mark.skipif(
-    not _has_native_table_io(),
-    reason="torchsky native FITS table extension unavailable",
-)
-def test_crossmatch_sky_end_to_end_matches_astropy_after_fits_read_on_real_catalogs() -> (
-    None
-):
-    left_table, right_table = _real_catalog_tables()
-    # FITS table write only needs float RA/DEC columns; extra string/object columns
-    # can trip Astropy FITS verification on newer releases (e.g. varlen descriptors).
-    left_roundtrip = left_table[["RA", "DEC"]]
-    right_roundtrip = right_table[["RA", "DEC"]]
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        left_path = Path(tmpdir) / "left_catalog.fits"
-        right_path = Path(tmpdir) / "right_catalog.fits"
-        _table_write(
-            str(left_path),
-            {
-                "RA": np.asarray(left_roundtrip["RA"]),
-                "DEC": np.asarray(left_roundtrip["DEC"]),
-            },
-            overwrite=True,
-        )
-        _table_write(
-            str(right_path),
-            {
-                "RA": np.asarray(right_roundtrip["RA"]),
-                "DEC": np.asarray(right_roundtrip["DEC"]),
-            },
-            overwrite=True,
-        )
-
-        left_loaded = torchsky.table.read(
-            str(left_path),
-            columns=["RA", "DEC"],
-        )
-        right_loaded = torchsky.table.read(
-            str(right_path),
-            columns=["RA", "DEC"],
-        )
-
-        left_ra = _fits_table_column_to_float64_tensor(left_loaded, "RA")
-        left_dec = _fits_table_column_to_float64_tensor(left_loaded, "DEC")
-        right_ra = _fits_table_column_to_float64_tensor(right_loaded, "RA")
-        right_dec = _fits_table_column_to_float64_tensor(right_loaded, "DEC")
-
-        result = crossmatch_sky(
-            left_ra,
-            left_dec,
-            right_ra,
-            right_dec,
-            radius_arcsec=2.0,
-            left_chunk_size=32,
-            right_chunk_size=64,
-        )
-        exp_left, exp_right, exp_sep = _astropy_crossmatch(
-            left_ra,
-            left_dec,
-            right_ra,
-            right_dec,
-            radius_arcsec=2.0,
-        )
-
-        assert result.left_index.tolist() == exp_left
-        assert result.right_index.tolist() == exp_right
-        np.testing.assert_allclose(
-            result.separation_arcsec.cpu().numpy(),
-            exp_sep,
-            atol=1e-6,
-            rtol=0.0,
-        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

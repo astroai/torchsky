@@ -20,9 +20,12 @@ from ...sphere import healpix as _healpix_wcs
 
 from ..healpix_image_plane import sample_healpix_map_on_image_header
 from ..operators.background import (
+    AdditiveStage,
     LearnedBackgroundOp,
+    apply_additive_stage,
     apply_background_components,
     observation_background_components,
+    validate_additive_components,
 )
 from ..operators.bundle import (
     ObservationOperatorBundle,
@@ -88,10 +91,12 @@ def _spatial_quadrature_nodes(
 
 
 def _validate_pixel_response(
-    observation: FieldObservation, spatial_sampling: FieldSpatialSampling,
+    observation: FieldObservation,
+    spatial_sampling: FieldSpatialSampling,
     operator_bundle: ObservationOperatorBundle | None = None,
 ) -> None:
     bundle = _resolve_operator_bundle(observation, operator_bundle)
+    _validate_additive_response(observation, bundle)
     if bundle.psf is None or spatial_sampling == "center":
         return
     pixel_response_included = bundle.psf.pixel_response_included
@@ -109,6 +114,34 @@ def _validate_pixel_response(
         raise ValueError(
             "learned PSF pixel response convention is unknown; record whether the "
             "calibrated kernel includes detector pixel response"
+        )
+
+
+def _validate_additive_response(
+    observation: FieldObservation,
+    bundle: ObservationOperatorBundle,
+) -> None:
+    validate_additive_components(
+        observation.additive_components,
+        shape=(int(observation.image.shape[0]), int(observation.image.shape[1])),
+        value_unit=observation.value_unit,
+        value_semantics=observation.value_semantics,
+        processing_state=observation.processing_state,
+    )
+    if any(
+        component.stage == AdditiveStage.SAMPLED_RESPONSE_INPUT
+        for component in observation.additive_components
+    ) and (
+        isinstance(bundle.psf, LearnedPSFOp)
+        or (
+            bundle.psf is not None
+            and observation.psf_spec is not None
+            and observation.psf_spec.mode == "learned_lowrank"
+        )
+    ):
+        raise ValueError(
+            "sampled additive response input requires an achromatic explicit PSF; "
+            "spectral response of the additive plane is unspecified"
         )
 
 
@@ -397,6 +430,9 @@ def _apply_observation_background(
                 dtype=output.dtype,
             ),
         )
+    output = apply_additive_stage(
+        output, observation.additive_components, AdditiveStage.CALIBRATED_OUTPUT
+    )
     return output
 
 
@@ -489,6 +525,11 @@ def _render_spatially_integrated_distribution(
             patch_var += float(spatial_weight) ** 2 * node_var
         output_mean[y0:y1, x0:x1] = patch_mean
         output_var[y0:y1, x0:x1] = patch_var
+    output_mean = apply_additive_stage(
+        output_mean,
+        observation.additive_components,
+        AdditiveStage.SAMPLED_RESPONSE_INPUT,
+    )
     if operator_bundle.psf is not None:
         output_mean = apply_psf_spec(output_mean, observation.psf_spec)
         output_var = apply_psf_variance_spec(output_var, observation.psf_spec)
@@ -502,6 +543,9 @@ def _render_spatially_integrated_distribution(
                 dtype=output_mean.dtype,
             ),
         )
+    output_mean = apply_additive_stage(
+        output_mean, observation.additive_components, AdditiveStage.CALIBRATED_OUTPUT
+    )
     return (
         output_mean.to(dtype=image.dtype),
         torch.log(torch.clamp(output_var, min=1.0e-8)).to(dtype=image.dtype),
@@ -636,6 +680,9 @@ def render_field_observation_distribution(
             raise ValueError(
                 "field model does not provide an explicit predictive distribution"
             )
+    mean = apply_additive_stage(
+        mean, observation.additive_components, AdditiveStage.SAMPLED_RESPONSE_INPUT
+    )
     if operator_bundle.psf is not None:
         mean = apply_psf_spec(mean, observation.psf_spec)
         variance = apply_psf_variance_spec(torch.exp(logvar), observation.psf_spec)
@@ -650,6 +697,9 @@ def render_field_observation_distribution(
                 dtype=mean.dtype,
             ),
         )
+    mean = apply_additive_stage(
+        mean, observation.additive_components, AdditiveStage.CALIBRATED_OUTPUT
+    )
     return mean.to(dtype=image.dtype), logvar.to(dtype=image.dtype)
 
 
@@ -669,6 +719,10 @@ def render_field_samples_distribution(
     exposure_pose: ExposurePose | None = None,
     operator_bundle: ObservationOperatorBundle | None = None,
 ) -> tuple[Tensor, Tensor]:
+    if observation.additive_components:
+        raise ValueError(
+            "pixel-sampled rendering does not support typed additive planes"
+        )
     ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
         ra_deg, dec_deg, observation, exposure_pose
     )
@@ -991,6 +1045,9 @@ def render_field_observation(
                     node_plane += plane * weights[i].to(dtype=plane.dtype)
             patch += node_plane * spatial_weight
         rendered[y0:y1, x0:x1] = patch
+    rendered = apply_additive_stage(
+        rendered, observation.additive_components, AdditiveStage.SAMPLED_RESPONSE_INPUT
+    )
     if operator_bundle.psf is not None:
         rendered = apply_psf_spec(rendered, observation.psf_spec)
     rendered = _apply_observation_background(
@@ -1019,6 +1076,8 @@ def render_spectral_power_foam_observation_exact(
     spatial_tile_hw: tuple[int, int] | None = None,
 ) -> Tensor:
     """Hard-render a spectral Power Foam through target pixels and common operators."""
+    if observation.additive_components:
+        raise ValueError("exact Foam rendering does not support typed additive planes")
     if observation.image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
     _validate_pixel_response(
@@ -1202,6 +1261,10 @@ def render_field_samples(
     exposure_pose: ExposurePose | None = None,
     operator_bundle: ObservationOperatorBundle | None = None,
 ) -> Tensor:
+    if observation.additive_components:
+        raise ValueError(
+            "pixel-sampled rendering does not support typed additive planes"
+        )
     ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
         ra_deg, dec_deg, observation, exposure_pose
     )

@@ -57,12 +57,11 @@ any later Foam-inspired representation.
 
 ### Evidence and diagnostics
 
-- `tests/test_inr_perf.py` and `benchmarks/bench_inr_perf.py` exercise CPU plus
-  optional CUDA/MPS training and rendering, loss reduction, throughput, and
-  comparison with native/SWarp coadds on synthetic truth.
-- `benchmarks/bench_map_field_fit.py` and the SMACS J0723 benchmark family compare
-  field products and classical stacks on shared target products, including
-  sparse-mosaic cases and real JWST inputs.
+- Bounded runtime contracts are tested in the core field/map tests, including
+  loss behavior, gradients, tiling, and device handling.
+- Survey-scale throughput, stack comparisons, and real-data evaluation belong
+  to [`torchsky-harness`](https://github.com/astroai/torchsky-harness); the
+  harness records the exact subject revision and evaluation evidence.
 - Field residual products, support-aware scorecards, multiscale residual metrics,
   PSF alignment diagnostics, and residual-tile ranking exist.
 

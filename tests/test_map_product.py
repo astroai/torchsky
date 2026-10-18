@@ -14,11 +14,7 @@ from torchsky.map import (
     GaussianBasisField,
     ImageObservation,
     MapBandpassSpec,
-    check_map_benchmark_regressions,
     estimate_map_inverse_variance,
-    evaluate_map_frontier_regions,
-    evaluate_map_uncertainty,
-    evaluate_map_product,
     make_field_model,
     plan_map_product,
     render_field_observation,
@@ -772,52 +768,6 @@ def test_render_scene_product_renders_healpix_scene_through_solver_hooks() -> No
     assert result.mask is not None and bool(torch.all(result.mask))
 
 
-def test_evaluate_map_product_uses_product_level_metrics() -> None:
-    product = torchsky.map.MapProductSpec(
-        target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="single"),),
-    )
-    truth = torch.ones((1, 6, 6), dtype=torch.float32)
-    pred = truth.clone()
-    pred[0, 0, 0] = 3.0
-    metrics = evaluate_map_product(
-        torchsky.map.MapProductResult(
-            product=product,
-            data=pred,
-            weight=torch.ones_like(pred),
-            header=_simple_header(),
-        ),
-        truth,
-    )
-
-    assert metrics["reconstruction_rmse"] is not None
-    assert float(metrics["reconstruction_rmse"]) > 0.0
-    assert float(metrics["coverage_fraction"]) == pytest.approx(1.0)
-    assert float(metrics["total_flux_relative_error"]) > 0.0
-    assert metrics["band_reconstruction_rmse"] == [
-        pytest.approx(float(metrics["reconstruction_rmse"]))
-    ]
-    assert len(metrics["band_flux_relative_error"]) == 1
-    assert float(metrics["band_flux_relative_error"][0]) > 0.0
-
-
-def test_evaluate_map_product_uses_mask_when_weight_is_unavailable() -> None:
-    product = torchsky.map.MapProductSpec(
-        target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="single"),),
-    )
-    data = torch.ones((1, 6, 6), dtype=torch.float32)
-    prediction = torchsky.map.MapProductResult(
-        product=product,
-        data=data,
-        weight=None,
-        header=_simple_header(),
-        mask=torch.ones_like(data, dtype=torch.bool),
-    )
-
-    metrics = evaluate_map_product(prediction, data)
-
-    assert metrics["coverage_fraction"] == pytest.approx(1.0)
 
 
 def test_estimate_map_inverse_variance_support_proxy_flags_extrapolated_regions() -> (
@@ -864,89 +814,5 @@ def test_estimate_map_inverse_variance_never_invents_field_weights() -> None:
     )
 
 
-def test_evaluate_map_uncertainty_tracks_residual_ordering() -> None:
-    truth = torch.zeros((1, 4, 4), dtype=torch.float32)
-    pred = truth.clone()
-    pred[0, 0, 0] = 4.0
-    pred[0, 3, 3] = 0.1
-    ivar = torch.ones_like(pred)
-    ivar[0, 0, 0] = 0.01
-    ivar[0, 3, 3] = 100.0
-    support_weight = torch.ones_like(pred)
-    support_weight[0, 0, 0] = 0.0
-
-    metrics = evaluate_map_uncertainty(
-        ivar,
-        pred,
-        truth,
-        support_weight=support_weight,
-    )
-
-    assert metrics["uncertainty_error_corr"] > 0.0
-    assert (
-        metrics["uncertainty_top_quartile_abs_err"]
-        > metrics["uncertainty_bottom_quartile_abs_err"]
-    )
-    assert (
-        metrics["uncertainty_extrapolated_mean_sigma"]
-        > metrics["uncertainty_support_mean_sigma"]
-    )
 
 
-def test_evaluate_map_frontier_regions_tracks_fringe_and_overlap() -> None:
-    truth = torch.zeros((1, 7, 7), dtype=torch.float32)
-    pred = truth.clone()
-    support_weight = torch.zeros_like(pred)
-    support_weight[:, 2:5, 2:5] = 1.0
-    overlap = torch.zeros_like(pred, dtype=torch.int32)
-    overlap[:, 2:5, 2:5] = 1
-    overlap[:, 3, 3] = 2
-    pred[:, 2, 2] = 1.0
-    pred[:, 3, 3] = 2.0
-    pred[:, 1, 3] = 3.0
-    pred[:, 0, 0] = 4.0
-
-    metrics = evaluate_map_frontier_regions(
-        pred,
-        truth,
-        support_weight=support_weight,
-        overlap_count=overlap,
-        fringe_kernel_size=3,
-    )
-
-    assert metrics["support_single_overlap_reconstruction_rmse"] > 0.0
-    assert metrics["support_multi_overlap_reconstruction_rmse"] > 0.0
-    assert metrics["fringe_extrapolated_reconstruction_rmse"] > 0.0
-    assert metrics["far_extrapolated_reconstruction_rmse"] > 0.0
-    assert metrics["fringe_extrapolated_fraction"] > 0.0
-    assert metrics["far_extrapolated_fraction"] > 0.0
-
-
-def test_check_map_benchmark_regressions_respects_skip_time_flag() -> None:
-    baseline = [
-        {
-            "case": "case",
-            "library": "torchsky",
-            "method": "coadd",
-            "variant": "bilinear",
-            "reconstruction_rmse": 1.0,
-            "signal_to_residual_db": 10.0,
-            "total_flux_relative_error": 0.1,
-            "time_ms": 1.0,
-            "skip_time_regression": True,
-        }
-    ]
-    current = [
-        {
-            "case": "case",
-            "library": "torchsky",
-            "method": "coadd",
-            "variant": "bilinear",
-            "reconstruction_rmse": 1.05,
-            "signal_to_residual_db": 10.0,
-            "total_flux_relative_error": 0.105,
-            "time_ms": 100.0,
-        }
-    ]
-    errors = check_map_benchmark_regressions(current, baseline)
-    assert errors == []

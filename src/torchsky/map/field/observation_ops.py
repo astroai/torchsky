@@ -329,6 +329,10 @@ def crop_field_observation(
             if observation.detector_background is not None
             else None
         ),
+        additive_components=tuple(
+            replace(component, values=component.values[y_slice, x_slice])
+            for component in observation.additive_components
+        ),
         detector_x0_pix=float(observation.detector_x0_pix) + int(x0),
         detector_y0_pix=float(observation.detector_y0_pix) + int(y0),
     )

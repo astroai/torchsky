@@ -53,7 +53,12 @@ def test_top_level_namespaces_expose_science_modules() -> None:
         "CatalogState",
         "EarthOrientation",
         "Site",
+        "apply_dcr",
+        "apply_ephemeris_offset",
+        "apply_refraction",
+        "apply_stellar_aberration",
         "convert_celestial",
+        "dcr_offset",
         "heliocentric_rv_to_lsr",
         "icrs_to_ecliptic_of_date",
         "icrs_to_galactocentric",
@@ -73,15 +78,28 @@ def test_map_root_keeps_workflow_api_small() -> None:
         "SkyConfig",
         "OutlierConfig",
         "StackConfig",
+        "MapResult",
+        "CubeResult",
+        "MultibandResult",
+        "HealpixResult",
+        "ApertureUncertainty",
+        "ProductSpec",
+        "BandpassSpec",
+        "ProductResult",
+        "UncertaintyProduct",
         "plan",
         "plan_cube",
+        "plan_product",
         "resample",
+        "resample_healpix",
         "blot",
         "detect_outliers",
         "match_sky",
         "coadd",
         "coadd_multiband",
         "coadd_cube",
+        "coadd_healpix",
+        "stack_product",
         "aperture_uncertainty",
         "coadd_image_plane",
         "coadd_image_plane_cube",
@@ -95,7 +113,6 @@ def test_map_root_keeps_workflow_api_small() -> None:
         "MapUncertaintyProduct",
         "MapPlanV2",
         "load_map_plan",
-        "MapResult",
         "MapApertureUncertainty",
         "MultiBandMapResult",
         "SpectralCubeMapResult",
@@ -103,6 +120,16 @@ def test_map_root_keeps_workflow_api_small() -> None:
     assert "fit_field_model" not in torchsky.map.__all__
     assert torchsky.field.fit is torchsky.map.field.fit_field_model
     assert torchsky.field.model is torchsky.map.field.make_field_model
+    assert torchsky.sphere.Polygon is torchsky.sphere.SphericalPolygon
+    assert torchsky.sphere.MultiPolygon is torchsky.sphere.SphericalMultiPolygon
+    assert torchsky.sphere.Cone is torchsky.sphere.SphericalCap
+    assert callable(torchsky.sphere.query_cone)
+    assert callable(torchsky.sphere.query_polygon)
+    assert callable(torchsky.sphere.sample_map)
+    assert callable(torchsky.catalogs.crossmatch)
+    assert callable(torchsky.wcs.from_tabular)
+    assert callable(torchsky.wcs.sample_gwcs)
+    assert torchsky.scene.coadd is torchsky.map.coadd
 
 
 def test_field_namespace_uses_short_composable_verbs() -> None:

@@ -68,11 +68,12 @@ For details, see [sphere.md](sphere.md).
 ## Build A Map Product
 
 ```python
-from torchsky import scene
-from torchsky.map import coadd_image_plane
+from torchsky.map import Observation, coadd, plan
 
-# Plan and run an image-plane coadd
-result = coadd_image_plane([scene.image_observation("science.fits")])
+# Plan a target grid from the observation and run an image-plane coadd
+observations = [Observation("science.fits")]
+target = plan(observations, projection="TAN")
+result = coadd(observations, target)
 ```
 
 For details, see [map.md](map.md).
@@ -83,11 +84,13 @@ For high-level modeling, use the `torchsky.scene` facade:
 
 ```python
 import torch
+import torchfits
 from torchsky import scene
 
-# Build observation and target render specification
-obs = scene.image_observation("science.fits")
-target = scene.target_from_header(obs.header)
+# Read the WCS metadata with torchfits; build the observation and target explicitly
+header = dict(torchfits.read_header("science.fits", 0))
+obs = scene.image_observation("science.fits", header=header)
+target = scene.target_from_header(header)
 
 # Render a scene to the target grid
 prediction = scene.render(torch.zeros(target.shape), target)

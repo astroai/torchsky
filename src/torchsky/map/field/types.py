@@ -14,6 +14,11 @@ import torch.nn as nn
 from torch import Tensor
 
 from ...spectrophotometry import Passband
+from ..operators.background import (
+    AdditiveComponent,
+    AdditiveProcessingState,
+    validate_additive_components,
+)
 
 if TYPE_CHECKING:
     from ..exposure_pose import ExposurePose
@@ -168,6 +173,11 @@ FieldPSFMode = Literal["none", "gaussian_sigma_pix", "kernel2d", "learned_lowran
 @dataclass
 class PSFSpec:
     """Public PSF description for field observations and target products.
+
+    ``kernel2d`` is an odd-sized, image-shaped unit-source response: its center
+    indexes zero displacement and increasing columns/rows are positive detector
+    x/y offsets. Rendering normalizes its sum and retains zero-padding losses
+    at detector boundaries. It is not a PyTorch cross-correlation weight array.
 
     Learned PSFs are calibration products and are frozen while rendering a sky
     scene.  ``frozen=False`` is reserved for a future calibration-only execution
@@ -400,6 +410,8 @@ class FieldObservation:
     gain_provenance_id: str | None = None
     exposure_time_s: float | None = None
     collecting_area_m2: float | None = None
+    additive_components: tuple[AdditiveComponent, ...] = ()
+    processing_state: AdditiveProcessingState | None = None
 
     _cached_ra_deg: Tensor | None = field(default=None, init=False, repr=False)
     _cached_dec_deg: Tensor | None = field(default=None, init=False, repr=False)
@@ -427,6 +439,17 @@ class FieldObservation:
             raise TypeError("FieldObservation image must be floating point")
         if not isinstance(self.header, dict):
             raise TypeError("FieldObservation header must be a dict")
+        if self.processing_state is not None:
+            self.processing_state = AdditiveProcessingState(self.processing_state)
+        if not isinstance(self.additive_components, tuple):
+            raise TypeError("FieldObservation additive_components must be a tuple")
+        validate_additive_components(
+            self.additive_components,
+            shape=(int(self.image.shape[0]), int(self.image.shape[1])),
+            value_unit=self.value_unit,
+            value_semantics=self.value_semantics,
+            processing_state=self.processing_state,
+        )
         if self.psf_spec is None:
             if float(self.psf_sigma_pix) > 0.0:
                 self.psf_spec = PSFSpec.gaussian(float(self.psf_sigma_pix))
@@ -577,6 +600,10 @@ class FieldObservation:
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("FieldObservation dtype must be floating point")
         kwargs: dict[str, object] = {}
+        kwargs["additive_components"] = tuple(
+            component.to(device=device, dtype=dtype)
+            for component in self.additive_components
+        )
         floating_fields = (
             "image",
             "weight",
