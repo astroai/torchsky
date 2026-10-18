@@ -10,9 +10,9 @@ from typing import Any
 
 import torch
 
-from ..hdu import Header, TableHDU, TableHDURef, TensorHDU
-from ..io import open as open_fits
-from ..io import read
+from torchfits.hdu import Header, TableHDU, TableHDURef, TensorHDU
+from torchfits import open as open_fits
+from torchfits import read
 
 
 def _json_value(value: Any) -> Any:

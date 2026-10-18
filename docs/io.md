@@ -80,12 +80,13 @@ Adapters crossing the package boundary must preserve:
 Ambiguous metadata must fail closed. Core torchsky code should not inspect file
 paths to guess semantics.
 
-## Compatibility Transition
+## Compatibility Boundary
 
-Any residual `torchsky.read`, `torchsky.open`, `torchsky.io`, or
-`torchsky.table` surface is migration-only. It must be a thin delegate to
-`torchfits`, emit a deprecation warning, and have a documented removal release.
-No new behavior should be added to those namespaces.
+`torchsky` no longer exposes `torchsky.read`, `torchsky.open`, `torchsky.io`,
+`torchsky.table`, `torchsky.hdu`, `torchsky.cache`, or dataset/dataloader
+aliases. Use the public `torchfits` API directly. Any future compatibility
+surface must be a new, documented design with its own removal policy; it must
+not restore the removed aliases.
 
 ## Validation And Performance
 

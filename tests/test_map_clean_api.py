@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 
 import torchsky
-from torchsky.io import write
+from torchfits import write
 from torchsky.map import (
     Observation,
     OutlierConfig,

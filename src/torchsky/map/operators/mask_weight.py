@@ -8,7 +8,7 @@ import math
 import torch
 from torch import Tensor
 
-from ...io import read
+from torchfits import read
 from .base import MaskWeightOp
 from .image_grid import validate_image_plane_2d
 from .noise import sanitize_inverse_variance

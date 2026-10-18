@@ -70,8 +70,8 @@ enumerated by the namespaces below and checked by the package API tests.
 - [`torchsky.scene`](scene.md)
 - [`torchsky.field`](field.md)
 - [`torchsky.transforms`](ml.md)
-- [`torchsky.datasets`](ml.md)
-- `torchsky.cache` is a compatibility alias for `torchfits.cache`.
+- FITS I/O, tables, caches, and datasets are provided by `torchfits`; torchsky
+  does not expose alias namespaces for them.
 - [`torchsky.catalogs`](catalogs.md)
 - [`torchsky.spectral`](spectral.md)
 - [`torchsky.spectrophotometry`](spectral.md)

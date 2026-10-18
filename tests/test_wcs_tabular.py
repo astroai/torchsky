@@ -2,8 +2,8 @@ import math
 
 import pytest
 import torch
+import torchfits
 
-import torchsky
 from torchsky.wcs import (
     CoupledTabularLookupWCS,
     TabularAxis,
@@ -12,6 +12,12 @@ from torchsky.wcs import (
     coupled_tabular_wcs_from_fits,
     tabular_axes_from_fits,
 )
+
+
+def _wcs_from_fits(path, *, hdu: int = 0, key: str = "") -> WCS:
+    header = dict(torchfits.read_header(str(path), hdu))
+    with torchfits.open(str(path)) as hdul:
+        return WCS(header, key=key, tables=hdul)
 
 
 class _TabTable:
@@ -839,7 +845,7 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
     fits_path = tmp_path / "tabular_auto.fits"
 
     # Write a FITS file with image (referencing tabular axes) and table HDU
-    from torchsky.hdu import TensorHDU, TableHDU, HDUList, Header
+    from torchfits.hdu import TensorHDU, TableHDU, HDUList, Header
 
     image_header = Header()
     image_header["SIMPLE"] = True
@@ -871,7 +877,7 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
     hdul = HDUList([image_hdu, table_hdu])
     hdul.write(str(fits_path), overwrite=True)
 
-    root_wcs = torchsky.get_wcs(str(fits_path), hdu=0)
+    root_wcs = _wcs_from_fits(fits_path)
     assert 0 in root_wcs.tabular_axes
     torch.testing.assert_close(
         root_wcs.pixel_to_world(torch.tensor([[1.0], [3.5]], dtype=torch.float64)),
@@ -882,7 +888,7 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
 def test_wcs_coupled_tabular_fits_lazy_auto_loading(tmp_path) -> None:
     fits_path = tmp_path / "coupled_tabular_auto.fits"
 
-    from torchsky.hdu import HDUList, Header, TableHDU, TensorHDU
+    from torchfits.hdu import HDUList, Header, TableHDU, TensorHDU
 
     image_header = Header()
     image_header["SIMPLE"] = True
@@ -935,17 +941,17 @@ def test_wcs_coupled_tabular_fits_lazy_auto_loading(tmp_path) -> None:
         dim=-1,
     )
 
-    root_wcs = torchsky.get_wcs(str(fits_path), hdu=0)
+    root_wcs = _wcs_from_fits(fits_path)
     assert root_wcs.coupled_tabular is not None
     assert root_wcs.coupled_tabular_axes == (0, 1)
     torch.testing.assert_close(root_wcs.pixel_to_world(pixels), expected_world)
     torch.testing.assert_close(root_wcs.world_to_pixel(expected_world), pixels)
 
 
-def test_get_wcs_auto_loads_alternate_key_tabular_axes(tmp_path) -> None:
+def test_wcs_from_header_loads_alternate_key_tabular_axes(tmp_path) -> None:
     fits_path = tmp_path / "tabular_alt_auto.fits"
 
-    from torchsky.hdu import HDUList, Header, TableHDU, TensorHDU
+    from torchfits.hdu import HDUList, Header, TableHDU, TensorHDU
 
     image_header = Header()
     image_header["SIMPLE"] = True
@@ -979,7 +985,7 @@ def test_get_wcs_auto_loads_alternate_key_tabular_axes(tmp_path) -> None:
         str(fits_path), overwrite=True
     )
 
-    wcs = torchsky.get_wcs(str(fits_path), hdu=0, key="A")
+    wcs = _wcs_from_fits(fits_path, key="A")
 
     assert wcs.wcs_key == "A"
     assert 0 in wcs.tabular_axes

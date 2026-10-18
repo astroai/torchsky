@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 import torch
-import torchsky
 
 from torchsky.map.sky import CrossExposureSkyCorrector, MeshSkyEstimator, PolynomialSkyModel
 from torchsky.map import ImageObservation, coadd_image_plane
+import torchfits
 
 
 class TestCrossExposureSkyCorrector:
@@ -226,7 +226,7 @@ class TestCrossExposureSkyCorrector:
         paths = []
         for i, off in enumerate(offsets):
             p = tmp_path / f"obs_{i}.fits"
-            torchsky.write(str(p), base + off, header=header, overwrite=True)
+            torchfits.write(str(p), base + off, header=header, overwrite=True)
             paths.append(p)
         corrector = CrossExposureSkyCorrector(
             estimator=MeshSkyEstimator(block_size=16, statistic="median")
@@ -246,7 +246,7 @@ class TestCrossExposureSkyCorrector:
         paths = []
         for i, off in enumerate(offsets):
             p = tmp_path / f"obs_{i}.fits"
-            torchsky.write(str(p), base + off, header=header, overwrite=True)
+            torchfits.write(str(p), base + off, header=header, overwrite=True)
             paths.append(p)
         corrector = CrossExposureSkyCorrector(
             estimator=MeshSkyEstimator(block_size=16, statistic="median")
@@ -272,7 +272,7 @@ class TestCrossExposureSkyCorrector:
         paths = []
         for i, off in enumerate(offsets):
             p = tmp_path / f"obs_{i}.fits"
-            torchsky.write(str(p), 1.0 + structure + off, header=header, overwrite=True)
+            torchfits.write(str(p), 1.0 + structure + off, header=header, overwrite=True)
             paths.append(p)
         obs = [ImageObservation(str(p)) for p in paths]
         corrector = CrossExposureSkyCorrector(
@@ -293,7 +293,7 @@ class TestCrossExposureSkyCorrector:
         paths = []
         for i, off in enumerate([0.0, 10.0, 20.0]):
             p = tmp_path / f"obs_{i}.fits"
-            torchsky.write(str(p), torch.ones(32, 32, dtype=torch.float32) + off,
+            torchfits.write(str(p), torch.ones(32, 32, dtype=torch.float32) + off,
                            header=header, overwrite=True)
             paths.append(p)
         corrector = CrossExposureSkyCorrector(
@@ -311,7 +311,7 @@ class TestCrossExposureSkyCorrector:
     def test_cube_raises(self, tmp_path):
         header = self._simple_header()
         p = tmp_path / "obs.fits"
-        torchsky.write(str(p), torch.ones(16, 16, dtype=torch.float32), header=header, overwrite=True)
+        torchfits.write(str(p), torch.ones(16, 16, dtype=torch.float32), header=header, overwrite=True)
         corrector = CrossExposureSkyCorrector()
         from torchsky.map.image_plane import coadd_image_plane_cube
         import pytest

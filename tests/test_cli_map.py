@@ -11,6 +11,7 @@ import torchsky
 
 from torchsky.cli import build_parser
 from torchsky.cli.map_command import _dispatch_map
+import torchfits
 
 
 def _simple_header(shape: tuple[int, int] = (8, 8)) -> dict:
@@ -308,14 +309,14 @@ def test_run_coadd_accepts_cli_weight_and_mask_maps(tmp_path) -> None:
     mask_b = tmp_path / "b_mask.fits"
     output = tmp_path / "out.fits"
     header = _simple_header()
-    torchsky.write(str(path_a), torch.full((8, 8), 2.0), header=header, overwrite=True)
-    torchsky.write(str(path_b), torch.full((8, 8), 10.0), header=header, overwrite=True)
+    torchfits.write(str(path_a), torch.full((8, 8), 2.0), header=header, overwrite=True)
+    torchfits.write(str(path_b), torch.full((8, 8), 10.0), header=header, overwrite=True)
     wmap = torch.ones((8, 8), dtype=torch.float32)
     wmap[:, :4] = 3.0
     mask = torch.ones((8, 8), dtype=torch.float32)
     mask[:, 4:] = 0.0
-    torchsky.write(str(weight_a), wmap, header=header, overwrite=True)
-    torchsky.write(str(mask_b), mask, header=header, overwrite=True)
+    torchfits.write(str(weight_a), wmap, header=header, overwrite=True)
+    torchfits.write(str(mask_b), mask, header=header, overwrite=True)
 
     args = argparse.Namespace(
         inputs=[str(path_a), str(path_b)],
@@ -344,7 +345,7 @@ def test_run_coadd_accepts_cli_weight_and_mask_maps(tmp_path) -> None:
     )
 
     assert _run_coadd(args) == 0
-    data = torchsky.read(str(output), device="cpu")
+    data = torchfits.read(str(output), device="cpu")
     expected_left = (2.0 * 3.0 + 10.0) / 4.0
     # Interior rows (1-6) should match; edge pixels may be 0 from bilinear resampling
     torch.testing.assert_close(
@@ -368,10 +369,10 @@ def test_run_coadd_accepts_cli_photometric_scale_and_background(tmp_path) -> Non
     path_raw = tmp_path / "raw.fits"
     output = tmp_path / "out.fits"
     header = _simple_header()
-    torchsky.write(
+    torchfits.write(
         str(path_ref), torch.full((8, 8), 2.0), header=header, overwrite=True
     )
-    torchsky.write(
+    torchfits.write(
         str(path_raw), torch.full((8, 8), 6.0), header=header, overwrite=True
     )
 
@@ -402,7 +403,7 @@ def test_run_coadd_accepts_cli_photometric_scale_and_background(tmp_path) -> Non
     )
 
     assert _run_coadd(args) == 0
-    data = torchsky.read(str(output), device="cpu")
+    data = torchfits.read(str(output), device="cpu")
     torch.testing.assert_close(
         data[1:7, 1:7],
         torch.full((6, 6), 2.0, dtype=torch.float32),
@@ -416,7 +417,7 @@ def test_run_coadd_dry_run_does_not_execute_mapmaker(monkeypatch, tmp_path) -> N
 
     path = tmp_path / "input.fits"
     header = _simple_header()
-    torchsky.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
+    torchfits.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
 
     def fail_run(*args, **kwargs):
         raise AssertionError("ImagePlaneMapMaker should not run during dry-run")
@@ -459,7 +460,7 @@ def test_cli_map_dry_run_writes_resolved_plan_json(monkeypatch, tmp_path) -> Non
     input_path = tmp_path / "input.fits"
     output_path = tmp_path / "output.fits"
     plan_path = tmp_path / "plans" / "output.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -514,7 +515,7 @@ def test_cli_explicit_unit_weight_round_trips_as_inverse_variance(
     first_output = tmp_path / "unused.fits"
     replay_output = tmp_path / "unit-weight-replay.fits"
     plan_path = tmp_path / "unit-weight.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -553,7 +554,7 @@ def test_cli_explicit_unit_weight_round_trips_as_inverse_variance(
         ],
     )
     assert main() == 0
-    with torchsky.HDUList.fromfile(str(replay_output)) as hdul:
+    with torchfits.hdu.HDUList.fromfile(str(replay_output)) as hdul:
         by_name = {str(hdu.header.get("EXTNAME", "")): hdu for hdu in hdul}
         torch.testing.assert_close(
             by_name["IVAR"].to_tensor("cpu"),
@@ -568,7 +569,7 @@ def test_cli_sigma_clipped_plan_records_exact_scratch_requirement(
 
     input_path = tmp_path / "clip-input.fits"
     plan_path = tmp_path / "clip.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -615,7 +616,7 @@ def test_cli_montage_plan_records_global_overlap_scratch_requirement(
     input_b = tmp_path / "montage-plan-b.fits"
     plan_path = tmp_path / "montage.plan.json"
     for path in (input_a, input_b):
-        torchsky.write(
+        torchfits.write(
             str(path),
             torch.ones((8, 8)),
             header=_simple_header(),
@@ -661,7 +662,7 @@ def test_cli_map_from_plan_verifies_identity_and_allows_output_override(
     first_output = tmp_path / "first.fits"
     replay_output = tmp_path / "replay.fits"
     plan_path = tmp_path / "map.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.ones((8, 8)), header=_simple_header(), overwrite=True
     )
     monkeypatch.setattr(
@@ -693,7 +694,7 @@ def test_cli_map_from_plan_verifies_identity_and_allows_output_override(
     )
     assert main() == 0
 
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.zeros((8, 8)), header=_simple_header(), overwrite=True
     )
     with pytest.raises(SystemExit, match="content changed|size changed|checksum"):
@@ -705,7 +706,7 @@ def test_cli_map_writes_standard_mef_products(monkeypatch, tmp_path) -> None:
 
     input_path = tmp_path / "input.fits"
     output_path = tmp_path / "map.fits"
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.ones((8, 8)), header=_simple_header(), overwrite=True
     )
     monkeypatch.setattr(
@@ -725,7 +726,7 @@ def test_cli_map_writes_standard_mef_products(monkeypatch, tmp_path) -> None:
 
     assert main() == 0
 
-    with torchsky.HDUList.fromfile(str(output_path)) as hdul:
+    with torchfits.hdu.HDUList.fromfile(str(output_path)) as hdul:
         names = [str(hdu.header.get("EXTNAME", "")) for hdu in hdul]
         assert names == [
             "SCI",
@@ -747,7 +748,7 @@ def test_cli_map_writes_requested_noise_correlation_plane(
 
     input_path = tmp_path / "correlation-input.fits"
     output_path = tmp_path / "correlation-map.fits"
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.ones((8, 8)), header=_simple_header(), overwrite=True
     )
     monkeypatch.setattr(
@@ -772,7 +773,7 @@ def test_cli_map_writes_requested_noise_correlation_plane(
 
     assert main() == 0
 
-    with torchsky.HDUList.fromfile(str(output_path)) as hdul:
+    with torchfits.hdu.HDUList.fromfile(str(output_path)) as hdul:
         by_name = {str(hdu.header.get("EXTNAME", "")): hdu for hdu in hdul}
         assert list(by_name) == ["SCI", "WHT", "IVAR", "NCORR", "VAR_DETECTOR"]
         assert by_name["NCORR"].header["NCORTYPE"] == "LOCAL_ENBW"
@@ -787,7 +788,7 @@ def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
     input_path = tmp_path / "input.fits"
     output_path = tmp_path / "output.fits"
     plan_path = tmp_path / "output.inr.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -838,7 +839,7 @@ def test_cli_map_field_defaults_to_joint_header_derived_bands(
     for path, band in zip(input_paths, ("F277W", "F356W")):
         header = _simple_header()
         header["FILTER"] = band
-        torchsky.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
+        torchfits.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
     plan_path = tmp_path / "joint.plan.json"
     monkeypatch.setattr(
         "sys.argv",
@@ -879,7 +880,7 @@ def test_cli_map_field_artifact_resumes_training(monkeypatch, tmp_path) -> None:
     replay_output_path = tmp_path / "field-replayed.fits"
     artifact_path = tmp_path / "field.artifact"
     plan_path = tmp_path / "field.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),

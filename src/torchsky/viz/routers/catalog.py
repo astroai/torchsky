@@ -41,7 +41,7 @@ def _catalog_load_sync(
     hdu: int,
     max_rows: int,
 ) -> JSONResponse:
-    from ...io import read_table
+    from torchfits.table import read_torch as read_table
 
     root: Path = request.app.state.root_dir
     abs_path = str(_resolve(root, path))
@@ -117,7 +117,7 @@ def _catalog_filter_moc_sync(
     dec_col: str,
     hdu: int,
 ) -> JSONResponse:
-    from ...io import read_table
+    from torchfits.table import read_torch as read_table
     from ...sphere.moc import MOC
 
     root: Path = request.app.state.root_dir

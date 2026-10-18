@@ -480,8 +480,8 @@ def write_cube_fits(
         spectral_axis: Spectral coordinates for axis 3; ``values`` length
             must match the spectral dimension of ``cube``.
         spectral_axis_index: Which dimension of ``cube`` is spectral (default ``0``).
-        overwrite: Passed to :func:`torchsky.write`.
-        compress: Passed to :func:`torchsky.write`.
+        overwrite: Passed to :func:`torchfits.write`.
+        compress: Passed to :func:`torchfits.write`.
         allow_nonuniform: If True, allows non-uniform spacing of spectral axis coordinates.
         nonuniform_fallback: Method to handle non-uniform coordinates: "custom_cards"
             (writes each wavelength into custom WAVE0, WAVE1... cards) or "table"
@@ -544,7 +544,7 @@ def write_cube_fits(
     header["CDELT3"] = float(cdelt3)
 
     if not is_uniform and allow_nonuniform:
-        from .io import write
+        from torchfits import write
 
         if nonuniform_fallback == "custom_cards":
             header["CTYPE3"] = str(spectral_axis.type)
@@ -559,7 +559,7 @@ def write_cube_fits(
                 compress=compress,
             )
         elif nonuniform_fallback == "table":
-            from .hdu import HDUList, Header, TableHDU, TensorHDU
+            from torchfits.hdu import HDUList, Header, TableHDU, TensorHDU
 
             header["CTYPE3"] = f"{spectral_axis.type}-TAB"
             header["PS3_0"] = "WCS-TAB"
@@ -574,7 +574,7 @@ def write_cube_fits(
         else:
             raise ValueError(f"Unknown nonuniform_fallback: {nonuniform_fallback}")
     else:
-        from .io import write
+        from torchfits import write
 
         header["CTYPE3"] = str(spectral_axis.type)
         write(
@@ -1155,7 +1155,7 @@ class SpectralReader:
         mask_col: Optional[str] = "MASK",
     ) -> "Spectrum1D":
         """Read 1D spectrum from FITS table."""
-        from .io import open as open_fits
+        from torchfits import open as open_fits
 
         with open_fits(filepath) as hdul:
             table_hdu = hdul[hdu]
@@ -1194,7 +1194,7 @@ class SpectralReader:
     @staticmethod
     def read_data_cube(filepath: str, hdu: int = 0) -> "DataCube":
         """Read 3D data cube from FITS image."""
-        from .io import open as open_fits
+        from torchfits import open as open_fits
 
         with open_fits(filepath) as hdul:
             image_hdu = hdul[hdu]

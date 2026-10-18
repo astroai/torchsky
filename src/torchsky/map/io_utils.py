@@ -9,8 +9,8 @@ import torch
 import torchfits
 from torch import Tensor
 
-from ..hdu import HDUList, Header, TensorHDU
-from ..io import read
+from torchfits.hdu import HDUList, Header, TensorHDU
+from torchfits import read
 from .operators.image_grid import validate_image_plane_2d
 
 if TYPE_CHECKING:

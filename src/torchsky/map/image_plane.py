@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from ..device import default_compute_device
-from ..io import read, write
+from torchfits import read, write
 from ..sphere.moc import MOC
 from ..spectral import (
     DataCube,

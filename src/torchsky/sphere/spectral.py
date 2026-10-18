@@ -11,7 +11,8 @@ import torch
 from torch import Tensor
 
 from .._native import cpp as _cpp
-from ..io import read_image, read_table
+from torchfits import read_tensor as read_image
+from torchfits.table import read_torch as read_table
 
 from . import healpix as _healpix
 from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLES

@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from torchsky.io import write
+from torchfits import write
 from torchsky.map.field.inverse import (
     IRLSConfig,
     LinearBandGridField,

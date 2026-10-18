@@ -12,7 +12,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from ..io import get_header, read_table, write
+from torchfits import read_header as get_header, write
+from torchfits.table import read_torch as read_table
 from . import healpix as _healpix
 from .moc import MOC, _resolve_moc_table_hdu_index, nest2uniq
 

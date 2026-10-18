@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 import torch
 
-import torchsky
 from torchsky.map.field import (
     FieldDomain,
     FieldFitResult,
@@ -20,6 +19,7 @@ from torchsky.map.field import (
 )
 from torchsky.map.field.core import ExplicitSpectralGridField
 from torchsky.map.plan import build_map_input_identity
+import torchfits
 
 
 def _header() -> dict[str, object]:
@@ -87,7 +87,7 @@ def test_field_artifact_roundtrip_uses_weights_only_load(
     monkeypatch,
 ) -> None:
     input_path = tmp_path / "input.fits"
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.ones((6, 6)), header=_header(), overwrite=True
     )
     model = make_field_model(
@@ -335,7 +335,7 @@ def test_field_artifact_rejects_non_json_metadata_before_writing(tmp_path: Path)
 def test_field_artifact_resume_matches_uninterrupted_training(tmp_path: Path) -> None:
     input_path = tmp_path / "input.fits"
     image = torch.linspace(0.0, 1.0, 36).reshape(6, 6)
-    torchsky.write(str(input_path), image, header=_header(), overwrite=True)
+    torchfits.write(str(input_path), image, header=_header(), overwrite=True)
     observation = FieldObservation(
         image=image,
         header=_header(),

@@ -18,6 +18,7 @@ from torchsky.sphere.moc import (
     _union_ranges,
 )
 from torchsky.sphere import HealSparseMap
+import torchfits
 
 
 def test_uniq_to_ranges_empty():
@@ -214,10 +215,9 @@ def test_moc_from_threshold_empty():
 def test_moc_read_fits_fallback(tmp_path):
     """Non-standard UNIQ column name: first int64 column is used."""
     import torch
-    import torchsky
 
     path = str(tmp_path / "test.fits")
-    torchsky.write(
+    torchfits.write(
         path,
         {"OLD_UNIQ": torch.tensor([4, 16, 17], dtype=torch.int64)},
         header={"EXTNAME": "MOC"},

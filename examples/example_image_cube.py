@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torchfits
 
-import torchsky
 
 
 def create_test_file(filename):
@@ -35,7 +34,7 @@ def main():
 
     # Read the full 3D cube
     try:
-        cube, header = torchsky.read(test_file, hdu=0, return_header=True)
+        cube, header = torchfits.read(test_file, hdu=0, return_header=True)
         print("Full 3D Cube:")
         print(f"  Shape: {cube.shape}")  # Expected: (2, 3, 4) - (z, y, x) in FITS order
         print(f"  CTYPE1: {header.get('CTYPE1')}")
@@ -47,7 +46,7 @@ def main():
     # Read a 2D slice using CFITSIO string syntax
     try:
         # Select 2nd plane along 3rd axis (1-based indexing)
-        slice_2d, header = torchsky.read(f"{test_file}[0][*,*,2]", return_header=True)
+        slice_2d, header = torchfits.read(f"{test_file}[0][*,*,2]", return_header=True)
         print("\n2D Slice (CFITSIO String [*,*,2]):")
         print(f"  Shape: {slice_2d.shape}")  # Expected: (3, 4) - collapsed z dimension
         print(f"  Equivalent to cube[1,:,:] = {cube[1, :, :].shape}")
@@ -57,7 +56,7 @@ def main():
     # Read a 1D spectrum using CFITSIO string
     try:
         # Extract spectrum at position (x=2, y=3) - 1-based indexing
-        spectrum_1d, header = torchsky.read(
+        spectrum_1d, header = torchfits.read(
             f"{test_file}[0][2,3,*]", return_header=True
         )
         print("\n1D Spectrum (CFITSIO String [2,3,*]):")
@@ -76,7 +75,7 @@ def main():
     print("\n--- Testing with different cache capacities ---")
     for capacity in [0, 10]:
         try:
-            data, _ = torchsky.read(
+            data, _ = torchfits.read(
                 test_file, hdu=0, cache_capacity=capacity, return_header=True
             )
             print(f"\nCache Capacity: {capacity}")
@@ -88,7 +87,7 @@ def main():
     if torch.cuda.is_available():
         print("\n--- Testing GPU Read ---")
         try:
-            data, _ = torchsky.read(test_file, hdu=0, device="cuda", return_header=True)
+            data, _ = torchfits.read(test_file, hdu=0, device="cuda", return_header=True)
             print(f"  Data device: {data.device}")
             print(f"  Can slice on GPU: data[0,:,:].shape = {data[0, :, :].shape}")
         except RuntimeError as e:

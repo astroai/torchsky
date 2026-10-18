@@ -11,7 +11,6 @@ import time
 import numpy as np
 import torch
 import torchfits
-import torchsky
 import polars as pl
 
 
@@ -50,7 +49,7 @@ def example_polars_integration():
 
     # 1. Read using torchsky (returns dictionary of Tensors/Arrays)
     # limit_rows=None means read all
-    data = torchsky.read(filename, hdu=1)
+    data = torchfits.read(filename, hdu=1)
 
     t1 = time.time()
     print(f"Read time (torchsky): {t1 - t0:.4f}s")

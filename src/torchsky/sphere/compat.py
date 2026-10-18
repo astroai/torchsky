@@ -43,8 +43,8 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from ..io import read_image as _read_image
-from ..io import write as _write
+from torchfits import read_tensor as _read_image
+from torchfits import write as _write
 from . import healpix as _healpix
 from .core import fit_monopole_dipole as _fit_monopole_dipole
 from .geom import query_ellipse as _query_ellipse

@@ -27,6 +27,7 @@ from torchsky.map.scenes import HealpixMapScene
 from torchsky.map.operators import spherical_spectral_operator_bundle
 from torchsky.map.solvers import build_solver_hooks
 from torchsky.spectral import SpectralAxis
+import torchfits
 
 pytest.importorskip("torchsky.cpp")
 
@@ -81,8 +82,8 @@ def test_plan_map_product_single_band_stack_matches_image_plane(tmp_path: Path) 
     header = _simple_header()
     data_a = torch.arange(36, dtype=torch.float32).reshape(6, 6)
     data_b = data_a + 4.0
-    torchsky.write(str(path_a), data_a, header=header, overwrite=True)
-    torchsky.write(str(path_b), data_b, header=header, overwrite=True)
+    torchfits.write(str(path_a), data_a, header=header, overwrite=True)
+    torchfits.write(str(path_b), data_b, header=header, overwrite=True)
 
     observations = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
     product = plan_map_product(observations)
@@ -99,7 +100,7 @@ def test_explicit_unit_inverse_variance_is_not_confused_with_default_weight(
 ) -> None:
     path = tmp_path / "unit-ivar.fits"
     header = _simple_header()
-    torchsky.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
+    torchfits.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
     default = [ImageObservation(str(path), weight=1.0)]
     explicit = [
         ImageObservation(
@@ -126,8 +127,8 @@ def test_map_mask_without_noise_does_not_invent_inverse_variance(
     path = tmp_path / "masked.fits"
     mask_path = tmp_path / "mask.fits"
     header = _simple_header()
-    torchsky.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
-    torchsky.write(
+    torchfits.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
+    torchfits.write(
         str(mask_path),
         torch.ones((6, 6)),
         header=header,
@@ -147,8 +148,8 @@ def test_plan_map_product_single_band_honors_union_footprint(tmp_path: Path) -> 
     header_a = _simple_header()
     header_b = {**header_a, "CRVAL1": float(header_a["CRVAL1"]) + 0.04}
     data = torch.ones((6, 6), dtype=torch.float32)
-    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
-    torchsky.write(str(path_b), data, header=header_b, overwrite=True)
+    torchfits.write(str(path_a), data, header=header_a, overwrite=True)
+    torchfits.write(str(path_b), data, header=header_b, overwrite=True)
 
     observations = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
     reference = plan_map_product(observations, union_footprint=False)
@@ -168,8 +169,8 @@ def test_plan_map_product_spectral_honors_union_footprint(tmp_path: Path) -> Non
     header_a = _simple_header()
     header_b = {**header_a, "CRVAL1": float(header_a["CRVAL1"]) + 0.04}
     data = torch.ones((6, 6), dtype=torch.float32)
-    torchsky.write(str(path_a), data, header=header_a, overwrite=True)
-    torchsky.write(str(path_b), data, header=header_b, overwrite=True)
+    torchfits.write(str(path_a), data, header=header_a, overwrite=True)
+    torchfits.write(str(path_b), data, header=header_b, overwrite=True)
     observations = [
         ImageObservation(str(path_a), wavelength=5000.0),
         ImageObservation(str(path_b), wavelength=5000.0),
@@ -186,7 +187,7 @@ def test_plan_map_product_spectral_honors_union_footprint(tmp_path: Path) -> Non
 
 def test_plan_map_product_header_override_owns_output_shape(tmp_path: Path) -> None:
     path = tmp_path / "input.fits"
-    torchsky.write(
+    torchfits.write(
         str(path),
         torch.ones((6, 6), dtype=torch.float32),
         header=_simple_header(),
@@ -210,8 +211,8 @@ def test_plan_map_product_cube_tracks_requested_bands(tmp_path: Path) -> None:
     header = _simple_header()
     blue = torch.full((6, 6), 2.0, dtype=torch.float32)
     red = torch.full((6, 6), 5.0, dtype=torch.float32)
-    torchsky.write(str(path_blue), blue, header=header, overwrite=True)
-    torchsky.write(str(path_red), red, header=header, overwrite=True)
+    torchfits.write(str(path_blue), blue, header=header, overwrite=True)
+    torchfits.write(str(path_red), red, header=header, overwrite=True)
 
     observations = [
         ImageObservation(
@@ -417,7 +418,7 @@ def test_square_drizzle_reports_squared_coefficient_inverse_variance(
     target_header = dict(source_header)
     target_header["CRPIX1"] = float(target_header["CRPIX1"]) - 0.5
     path = tmp_path / "variance_drizzle.fits"
-    torchsky.write(
+    torchfits.write(
         str(path),
         torch.ones((6, 6), dtype=torch.float32),
         header=source_header,
@@ -469,7 +470,7 @@ def test_half_pixel_projection_reports_squared_coefficient_inverse_variance(
         **source_header,
         "CRPIX1": float(source_header["CRPIX1"]) + 0.5,
     }
-    torchsky.write(
+    torchfits.write(
         str(path),
         torch.ones((6, 6), dtype=torch.float32),
         header=source_header,
@@ -513,7 +514,7 @@ def test_map_product_context_uses_multiple_words_and_records_observations(
 ) -> None:
     header = _simple_header()
     path = tmp_path / "context.fits"
-    torchsky.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
+    torchfits.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
     observations = [ImageObservation(str(path)) for _ in range(33)]
     product = torchsky.map.MapProductSpec(
         target_header=header,
@@ -640,7 +641,7 @@ def test_render_field_product_matches_exact_transmission_per_band_stacks(
         expected_planes.append(rendered)
         for replica, scalar_weight in enumerate((1.0, 2.5)):
             path = tmp_path / f"{label}_{replica}.fits"
-            torchsky.write(str(path), rendered, header=header, overwrite=True)
+            torchfits.write(str(path), rendered, header=header, overwrite=True)
             observations.append(
                 ImageObservation(
                     str(path),

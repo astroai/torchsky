@@ -2,14 +2,14 @@ import json
 
 import torch
 
-import torchsky
 from torchsky.cli import build_parser
+import torchfits
 
 
 def test_info_json_summarizes_hdus_without_reading_data(tmp_path, capsys) -> None:
     path = tmp_path / "sample.fits"
-    torchsky.write(str(path), torch.arange(6, dtype=torch.float32).reshape(2, 3))
-    torchsky.insert_hdu(
+    torchfits.write(str(path), torch.arange(6, dtype=torch.float32).reshape(2, 3))
+    torchfits.insert_hdu(
         str(path),
         {
             "RA": torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64),
@@ -33,7 +33,7 @@ def test_info_json_summarizes_hdus_without_reading_data(tmp_path, capsys) -> Non
 
 def test_info_text_lists_hdu_summary(tmp_path, capsys) -> None:
     path = tmp_path / "image.fits"
-    torchsky.write(str(path), torch.zeros(2, 2))
+    torchfits.write(str(path), torch.zeros(2, 2))
 
     args = build_parser().parse_args(["info", str(path)])
     assert args.handler(args) == 0
@@ -46,7 +46,7 @@ def test_info_text_lists_hdu_summary(tmp_path, capsys) -> None:
 
 def test_cat_json_reads_bounded_table_sample(tmp_path, capsys) -> None:
     path = tmp_path / "table.fits"
-    torchsky.write(
+    torchfits.write(
         str(path),
         {
             "RA": torch.tensor([10.0, 20.0, 30.0], dtype=torch.float64),
@@ -81,7 +81,7 @@ def test_cat_json_reads_bounded_table_sample(tmp_path, capsys) -> None:
 
 def test_cat_text_prints_tab_separated_rows(tmp_path, capsys) -> None:
     path = tmp_path / "table.fits"
-    torchsky.write(
+    torchfits.write(
         str(path),
         {
             "ID": torch.tensor([1, 2], dtype=torch.int64),

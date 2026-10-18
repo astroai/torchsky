@@ -9,7 +9,7 @@ from pathlib import Path
 pytest.importorskip("scipy")
 
 from torchsky.catalogs import crossmatch_sky
-from torchsky.table import write as _table_write
+from torchfits.table import write as _table_write
 
 
 def _has_native_table_io() -> bool:
@@ -17,7 +17,7 @@ def _has_native_table_io() -> bool:
 
 
 def _fits_table_column_to_float64_tensor(table, name: str) -> torch.Tensor:
-    """``torchsky.table.read`` returns PyArrow; convert a numeric column to torch."""
+    """``torchfits.table.read`` returns PyArrow; convert a numeric column to torch."""
     col = table.column(name)
     if hasattr(col, "combine_chunks"):
         col = col.combine_chunks()

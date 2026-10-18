@@ -19,8 +19,10 @@ owned by `torchfits`.
   are no longer torchsky-owned surfaces.
 - Torchsky's active scope is WCS, sphere/HEALPix/MOC, catalog geometry,
   observation operators, mapmaking, scenes, and field models.
-- Root I/O and `torchsky.io` / `torchsky.table` compatibility surfaces delegate
-  to `torchfits`; they are not second implementations.
+- **Breaking:** the root I/O aliases and the `torchsky.io`, `torchsky.table`,
+  `torchsky.hdu`, `torchsky.cache`, `torchsky.datasets`, `torchsky.dataloader`,
+  `torchsky.header_parser`, and `torchsky.core` compatibility modules were
+  removed. Use the public `torchfits` API at the FITS/table boundary.
 - `torchfits` is the required FITS/table runtime dependency; dataset classes are
   imported from `torchfits.data`.
 
@@ -28,10 +30,22 @@ owned by `torchfits`.
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.
 - Flux-conserving spectral rebinning and wavelength-aware relativistic Doppler
   shifts with batched tensor, mask, and inverse-variance propagation.
+- **Experimental native response/likelihood**: native source-node response,
+  Gaussian likelihood evidence, small linear queries, evidence lifecycle guards,
+  continuous source/spectral quadrature, detector moments, pixel calibration,
+  profiled/calibrated nuisance precision, and the bounded Poisson–Gaussian law.
+  These remain experimental and do not establish calibrated real-sky response or
+  SOTA. See `docs/native-likelihood.md`.
 
 ### Removed
 - FITS image/table/checksum implementation tests and benchmarks now owned by
   `torchfits`.
+- The root `read`, `write`, `open`, `get_header`, `get_wcs`, `Header`, `Card`,
+  `HDUList`, `TensorHDU`, and `TableHDU` aliases. Construct `WCS` from a
+  `torchfits.read_header(...)` mapping instead.
+- The `torchsky.io`, `torchsky.table`, `torchsky.hdu`, `torchsky.cache`,
+  `torchsky.datasets`, `torchsky.dataloader`, and `torchsky.header_parser`
+  modules.
 - The private WHERE parser fallback; table filtering delegates to the public
   `torchfits.table` API.
 - The optional `torchsky.frame` / `pytorch-frame` adapter; Arrow and Polars are
@@ -42,7 +56,6 @@ owned by `torchfits`.
 ### Performance
 - **sphere/spectral.py**: O(1) `alm_size` via closed-form formula; precision fixes in harmonic primitives (`(ell-1)**2` → explicit multiplication).
 - **sphere/sparse.py**: Explicit `ratio * ratio` instead of `** 2` in `pixels_per_cov` and `_build_coverage_map` for precision consistency.
-- **header_parser.py**: Fast path for `/` separator, `card.isspace() or not card`, optimized `_parse_string_value` with `find()`.
 - **wcs/legacy.py**: TNX regex patterns cached via `@functools.lru_cache(maxsize=16)`.
 - **wcs/sip.py**: Extracted `_make_pow_cache` and `_make_pow_stack` static methods for SIP power-cache reuse.
 - **wcs/tpv.py**: `PV1_KEYS_SET`/`PV2_KEYS_SET` frozensets for O(1) header key lookup; `keys_set.intersection(header.keys())` to avoid 40 individual lookups.

@@ -14,8 +14,8 @@ FITS image and table I/O is provided by the focused
 intentional: `torchfits` loads tensors and metadata; `torchsky` performs
 sky-domain computation without embedding a second FITS/CFITSIO engine.
 The supported integration baseline is `torchfits 1.0.0` or newer.
-For one migration release, torchsky keeps thin import aliases for the public
-torchfits cache, table, I/O, and dataset surfaces.
+Torchsky does not expose alias namespaces for torchfits I/O, tables, caches, or
+datasets; import those directly from `torchfits`.
 
 ---
 

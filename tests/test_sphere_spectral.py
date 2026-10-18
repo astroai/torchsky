@@ -5,7 +5,7 @@ import pytest
 import torch
 
 from torchsky._native import cpp as _native_cpp
-from torchsky.io import write as write_fits
+from torchfits import write as write_fits
 from torchsky.sphere import compat
 from torchsky.sphere import healpix as hp
 import torchsky.sphere.spectral as spectral_mod

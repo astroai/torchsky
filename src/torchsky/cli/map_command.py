@@ -19,7 +19,8 @@ from typing import Any, Sequence, cast
 import torch
 
 from ..device import default_compute_device
-from ..io import HDUList, TensorHDU, read
+from torchfits import read
+from torchfits.hdu import HDUList, TensorHDU
 from ..map.field import (
     FieldObservation,
     FieldSpatialSampling,

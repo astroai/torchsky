@@ -78,8 +78,8 @@ async def file_tree(request: Request, path: str = "") -> JSONResponse:
 
 def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
     """Return FITS image metadata: shape, BITPIX, WCS summary, HDU list."""
-    from ...io import open as open_fits
-    from ...io import read_image
+    from torchfits import open as open_fits
+    from torchfits import read_tensor as read_image
     from ...wcs import WCS
 
     root: Path = request.app.state.root_dir
@@ -152,7 +152,7 @@ def _fits_histogram_sync(
     nbins: int,
 ) -> JSONResponse:
     """Return image histogram, ZScale limits, and dynamic range report."""
-    from ...io import read_image
+    from torchfits import read_tensor as read_image
     from ..renderers.image import compute_histogram
 
     root: Path = request.app.state.root_dir
@@ -184,7 +184,7 @@ async def fits_histogram(
 
 def _fits_header_sync(request: Request, path: str, hdu: int) -> JSONResponse:
     """Return the full FITS header as a key-value dict."""
-    from ...io import get_header
+    from torchfits import read_header as get_header
 
     root: Path = request.app.state.root_dir
     abs_path = str(_resolve_path(root, path))

@@ -8,7 +8,6 @@ from pathlib import Path
 import torch
 import torchfits
 
-import torchsky
 
 
 def main() -> None:
@@ -27,7 +26,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="torchsky-image-example-") as directory:
         path = Path(directory) / "image.fits"
         torchfits.write(path, image, header=header)
-        loaded, loaded_header = torchsky.read(str(path), return_header=True)
+        loaded, loaded_header = torchfits.read(str(path), return_header=True)
 
     print(f"image shape: {tuple(loaded.shape)}")
     print(f"pixel (0, 0): {loaded[0, 0].item():.1f}")

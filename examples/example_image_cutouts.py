@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torchfits
 
-import torchsky
 
 
 def create_test_file(filename):
@@ -34,7 +33,7 @@ def main():
         # Cutout from [10:15, 15:23] (y, x order for FITS)
         x1, y1 = 15, 10
         x2, y2 = 23, 15
-        data = torchsky.io.read_subset(test_file, hdu=0, x1=x1, y1=y1, x2=x2, y2=y2)
+        data = torchfits.read_subset(test_file, hdu=0, x1=x1, y1=y1, x2=x2, y2=y2)
         print("Cutout (read_subset):")
         print(f"  Data shape: {data.shape}")  # Expected: (5, 8)
     except RuntimeError as e:
@@ -42,7 +41,7 @@ def main():
 
     # Read a cutout using a CFITSIO string
     try:
-        cutout, header = torchsky.read(
+        cutout, header = torchfits.read(
             f"{test_file}[1][11:15,16:23]", return_header=True
         )  # 1-based indexing
         print("\nCutout (CFITSIO String):")
@@ -58,7 +57,7 @@ def main():
     try:
         x1, y1 = 15, 10
         x2, y2 = 32, 15  # Read to end of x dimension
-        data = torchsky.io.read_subset(test_file, hdu=0, x1=x1, y1=y1, x2=x2, y2=y2)
+        data = torchfits.read_subset(test_file, hdu=0, x1=x1, y1=y1, x2=x2, y2=y2)
         print("\nCutout (read to end):")
         print(f"  Data shape: {data.shape}")
     except RuntimeError as e:
@@ -68,7 +67,7 @@ def main():
     print("\n--- Testing cache with full read ---")
     for capacity in [0, 10]:
         try:
-            data, _ = torchsky.read(
+            data, _ = torchfits.read(
                 test_file, hdu=0, cache_capacity=capacity, return_header=True
             )
             print(f"\nCache Capacity: {capacity}")
@@ -81,7 +80,7 @@ def main():
         print("\n--- Testing GPU Read ---")
         try:
             # Note: read_subset returns tensor on CPU, move to GPU after
-            data = torchsky.io.read_subset(test_file, hdu=0, x1=5, y1=5, x2=15, y2=15)
+            data = torchfits.read_subset(test_file, hdu=0, x1=5, y1=5, x2=15, y2=15)
             data = data.to("cuda")
             print(f"  Data device: {data.device}")
         except RuntimeError as e:

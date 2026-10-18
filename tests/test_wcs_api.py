@@ -1,13 +1,8 @@
-import os
-import tempfile
 
 import numpy as np
 import torch
-import torchfits
 from astropy.wcs import WCS as AstropyWCS
 
-import torchsky
-from torchsky.hdu import HDUList, Header, TensorHDU
 from torchsky.wcs import WCS
 
 
@@ -78,80 +73,6 @@ def test_wcs_2d_world_to_pixel():
     )
 
 
-def test_get_wcs_from_file_auto_hdu():
-    image = np.random.normal(size=(32, 32)).astype(np.float32)
-    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        path = f.name
-    torchfits.write(
-        path,
-        torch.from_numpy(image),
-        header={
-            "CTYPE1": "RA---TAN",
-            "CTYPE2": "DEC--TAN",
-            "CRPIX1": 1.0,
-            "CRPIX2": 1.0,
-            "CRVAL1": 180.0,
-            "CRVAL2": 0.0,
-            "CDELT1": -0.1,
-            "CDELT2": 0.1,
-        },
-        overwrite=True,
-    )
-
-    try:
-        wcs = torchsky.get_wcs(path, hdu="auto")
-        assert isinstance(wcs, WCS)
-        world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
-        assert torch.allclose(  # type: ignore
-            world,
-            torch.tensor([[180.0, 0.0]], dtype=torch.float64),
-            atol=1e-6,  # type: ignore
-        )
-    finally:
-        if os.path.exists(path):
-            os.unlink(path)
-
-
-def test_get_wcs_auto_hdu_skips_empty_primary():
-    image = np.random.normal(size=(16, 16)).astype(np.float32)
-    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        path = f.name
-    primary = TensorHDU(
-        data=torch.zeros((1, 1), dtype=torch.float32),
-        header=Header({"SIMPLE": True, "EXTEND": True}),
-    )
-    sci = TensorHDU(
-        data=torch.from_numpy(image),
-        header=Header(
-            {
-                "XTENSION": "IMAGE",
-                "EXTNAME": "SCI",
-                "CTYPE1": "RA---TAN",
-                "CTYPE2": "DEC--TAN",
-                "CRPIX1": 1.0,
-                "CRPIX2": 1.0,
-                "CRVAL1": 10.0,
-                "CRVAL2": -5.0,
-                "CDELT1": -0.01,
-                "CDELT2": 0.01,
-            }
-        ),
-    )
-    HDUList([primary, sci]).write(path, overwrite=True)
-
-    try:
-        wcs = torchsky.get_wcs(path, hdu="auto")
-        world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
-        assert torch.allclose(  # type: ignore
-            world,
-            torch.tensor([[10.0, -5.0]], dtype=torch.float64),
-            atol=1e-6,  # type: ignore
-        )
-    finally:
-        if os.path.exists(path):
-            os.unlink(path)
-
-
 def test_wcs_alternate_key_matches_astropy():
     header = {
         "NAXIS": 2,
@@ -191,50 +112,6 @@ def test_wcs_alternate_key_matches_astropy():
     assert twcs.pixel_shape == (100, 100)
     assert twcs.array_shape == (100, 100)
     assert twcs.pixel_bounds == [(0.0, 99.0), (0.0, 99.0)]
-
-
-def test_get_wcs_from_file_selects_alternate_key():
-    image = np.zeros((16, 16), dtype=np.float32)
-    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        path = f.name
-    torchfits.write(
-        path,
-        torch.from_numpy(image),
-        header={
-            "CTYPE1": "RA---TAN",
-            "CTYPE2": "DEC--TAN",
-            "CRPIX1": 1.0,
-            "CRPIX2": 1.0,
-            "CRVAL1": 10.0,
-            "CRVAL2": 20.0,
-            "CDELT1": -0.01,
-            "CDELT2": 0.01,
-            "CTYPE1A": "RA---TAN",
-            "CTYPE2A": "DEC--TAN",
-            "CRPIX1A": 1.0,
-            "CRPIX2A": 1.0,
-            "CRVAL1A": 120.0,
-            "CRVAL2A": -30.0,
-            "CDELT1A": -0.02,
-            "CDELT2A": 0.02,
-        },
-        overwrite=True,
-    )
-
-    try:
-        wcs = torchsky.get_wcs(path, hdu=0, key="A")
-        world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
-
-        assert wcs.wcs_key == "A"
-        torch.testing.assert_close(
-            world,
-            torch.tensor([[120.0, -30.0]], dtype=torch.float64),
-            atol=1e-6,
-            rtol=0.0,
-        )
-    finally:
-        if os.path.exists(path):
-            os.unlink(path)
 
 
 def test_wcs_axis_metadata_and_footprint():

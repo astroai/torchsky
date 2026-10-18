@@ -1616,7 +1616,7 @@ class SparseHealpixMap:
         otherwise ``max(1, nside // 16)`` (pixel-list maps). Extra value
         dimensions keep the PIXEL/VALUE binary table.
         """
-        from ..io import write
+        from torchfits import write
 
         if (
             self.nside_coverage is not None
@@ -1689,7 +1689,7 @@ class SparseHealpixMap:
         overwrite: bool = False,
         nside_coverage: int | None = None,
     ) -> None:
-        from ..io import insert_hdu, write
+        from torchfits import insert_hdu, write
 
         nside_cov = int(
             self.nside_coverage if nside_coverage is None else nside_coverage
@@ -1748,7 +1748,7 @@ class SparseHealpixMap:
 
     @classmethod
     def _read_healsparse_fits(cls, filename: str) -> "SparseHealpixMap":
-        from ..io import get_header, read_image
+        from torchfits import read_header as get_header, read_tensor as read_image
 
         hdr_cov = get_header(filename, hdu=0)
         hdr = get_header(filename, hdu=1)
@@ -1811,7 +1811,8 @@ class SparseHealpixMap:
     @classmethod
     def read_fits(cls, filename: str) -> "SparseHealpixMap":
         """Read HealSparse COV+SPARSE images or a PIXEL/VALUE table."""
-        from ..io import get_header, read_table
+        from torchfits import read_header as get_header
+        from torchfits.table import read_torch as read_table
 
         hdr0 = get_header(filename, hdu=0)
         pixtype = str(hdr0.get("PIXTYPE", "")).strip().upper()

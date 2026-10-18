@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import torchfits
 
 from torchsky.spectral import (
     SpectralAxis,
@@ -113,9 +114,8 @@ def test_write_cube_fits_nonuniform_table() -> None:
         assert header_out["PS3_0"] == "WCS-TAB"
         assert header_out["PS3_1"] == "WAVE"
 
-        import torchsky
 
-        with torchsky.open(str(path)) as hdul:
+        with torchfits.open(str(path)) as hdul:
             assert len(hdul) == 2
             assert hdul[1].header["EXTNAME"] == "WCS-TAB"
             # Verify coordinates are stored in the second HDU
@@ -136,9 +136,8 @@ def test_write_cube_fits_nonuniform_table() -> None:
         )
 
         # Test bin edges computation with tables provided
-        import torchsky
 
-        with torchsky.open(str(path)) as hdul:
+        with torchfits.open(str(path)) as hdul:
             edges, _ = spectral_bin_edges_from_header(dc.header, tables=hdul)
             expected_edges = torch.tensor(
                 [3925.0, 4075.0, 4185.0, 4310.0, 4490.0], dtype=torch.float64

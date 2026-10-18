@@ -8,7 +8,6 @@ from pathlib import Path
 import torch
 import torchfits
 
-import torchsky
 
 
 def create_test_file(filename: str | Path) -> None:
@@ -74,10 +73,10 @@ def main() -> None:
             print(f"SCI CTYPE1: {science_hdu.header['CTYPE1']}")
             print(f"CATALOG columns: {catalog_hdu.columns}")
 
-        science, science_header = torchsky.read(
+        science, science_header = torchfits.read(
             str(test_file), hdu="SCI", return_header=True
         )
-        catalog, _ = torchsky.read(
+        catalog, _ = torchfits.read(
             str(test_file), hdu="CATALOG", return_header=True
         )
         print(f"SCI image shape: {tuple(science.shape)}")

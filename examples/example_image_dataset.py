@@ -5,7 +5,6 @@ import torch
 import torchfits
 from torch.utils.data import DataLoader, Dataset
 
-import torchsky
 
 # --- Synthetic Data Generation (for demonstration purposes) ---
 
@@ -44,7 +43,7 @@ class SimpleFitsDataset(Dataset):
                 self.file_list.append(filepath)
                 # Get label from header (more robust than filename parsing)
                 try:
-                    header = torchsky.get_header(filepath, hdu=0)  # Primary HDU is 0
+                    header = torchfits.read_header(filepath, hdu=0)  # Primary HDU is 0
                     label = int(header["LABEL"])
                     self.labels.append(label)
                 except (RuntimeError, KeyError) as e:  # Catch errors
@@ -66,7 +65,7 @@ class SimpleFitsDataset(Dataset):
         label = self.labels[idx]
 
         try:
-            data, _ = torchsky.read(
+            data, _ = torchfits.read(
                 filename,
                 cache_capacity=self.cache_capacity,
                 device=self.device,

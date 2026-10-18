@@ -9,7 +9,7 @@ import math
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..io import get_header, verify_checksums
+from torchfits import read_header as get_header, verify_checksums
 from .operators.config import (
     MAP_RESAMPLING_KERNELS,
     MAP_STACKING_METHODS,

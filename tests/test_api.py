@@ -8,19 +8,7 @@ from torchsky.cli import build_parser
 
 def test_top_level_namespaces_expose_science_modules() -> None:
     assert set(torchsky.__all__) == {
-        "read",
-        "write",
-        "open",
-        "get_header",
-        "get_wcs",
         "WCS",
-        "Header",
-        "Card",
-        "HDUList",
-        "TensorHDU",
-        "TableHDU",
-        "io",
-        "table",
         "wcs",
         "sphere",
         "spectral",
@@ -33,18 +21,12 @@ def test_top_level_namespaces_expose_science_modules() -> None:
         "scene",
         "field",
         "transforms",
-        "datasets",
-        "cache",
-        "interop",
         "encoders",
         "catalogs",
         "coords",
         "quality",
     }
-    assert callable(torchsky.io.create_dataloader)
     assert hasattr(torchsky.transforms, "Normalize")
-    assert callable(torchsky.cache.clear)
-    assert isinstance(torchsky.cache.stats(), dict)
     assert torchsky.wcs.WCS is torchsky.WCS
     assert hasattr(torchsky.sphere, "great_circle_distance")
     assert callable(torchsky.coords.transform)
@@ -192,12 +174,34 @@ def test_map_cli_exposes_resampling_kernel_option() -> None:
     assert args.value_semantics == "flux"
 
 
-def test_fits_compatibility_aliases_delegate_to_torchfits() -> None:
-    import torchfits
-    import torchsky.cache as sky_cache
+def test_fits_io_is_owned_by_torchfits() -> None:
+    import importlib.util
 
-    assert torchsky.io.fits.write is torchfits.write
-    assert torchsky.io.fits.open is torchfits.open
-    assert torchsky.io.fits.get_header is torchfits.read_header
-    assert torchsky.io.read is torchfits.read
-    assert sky_cache.clear is torchfits.cache.clear
+    import torchfits
+
+    for name in (
+        "io",
+        "table",
+        "hdu",
+        "cache",
+        "datasets",
+        "dataloader",
+        "header_parser",
+        "core",
+    ):
+        assert importlib.util.find_spec(f"torchsky.{name}") is None
+    for name in (
+        "read",
+        "write",
+        "open",
+        "get_header",
+        "get_wcs",
+        "Header",
+        "Card",
+        "HDUList",
+        "TensorHDU",
+        "TableHDU",
+    ):
+        assert not hasattr(torchsky, name)
+    assert callable(torchfits.read)
+    assert callable(torchfits.table.read)

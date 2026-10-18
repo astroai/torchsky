@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 
 from .instrument import nircam_imaging_band
-from .io import read
+from torchfits import read
 
 _ROLES = {"psf", "background"}
 

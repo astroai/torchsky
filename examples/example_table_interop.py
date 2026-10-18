@@ -5,7 +5,6 @@ import numpy as np
 from astropy.table import Table
 
 import torchfits
-import torchsky
 
 
 def create_table(path: str) -> None:
@@ -28,17 +27,17 @@ if __name__ == "__main__":
     try:
         create_table(filename)
 
-        table, _ = torchsky.read(filename, hdu="CATALOG", return_header=True)
+        table, _ = torchfits.read(filename, hdu="CATALOG", return_header=True)
 
         try:
-            df = torchsky.to_pandas(table, decode_bytes=True, vla_policy="object")
+            df = torchfits.to_pandas(table, decode_bytes=True, vla_policy="object")
             print("Pandas DataFrame")
             print(df)
         except ImportError as exc:
             print(f"Pandas not installed: {exc}")
 
         try:
-            arrow = torchsky.to_arrow(table, decode_bytes=True, vla_policy="list")
+            arrow = torchfits.to_arrow(table, decode_bytes=True, vla_policy="list")
             print("PyArrow schema")
             print(arrow.schema)
         except ImportError as exc:

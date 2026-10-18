@@ -70,7 +70,7 @@ def _tensor_pixel_count(t: object) -> int:
 
 def _register_pair_sync(request: Request, pair: ValidationPair) -> JSONResponse:
     """Register a truth/model/(optional sigma) FITS pair. Returns pair ID."""
-    from ...io import read_image
+    from torchfits import read_tensor as read_image
 
     root: Path = request.app.state.root_dir
     max_px = int(getattr(request.app.state, "max_image_pixels", 512 * 1024 * 1024))

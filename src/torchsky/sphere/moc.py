@@ -934,7 +934,7 @@ class MOC:
 
         Uses :func:`torchsky.io.write` (torchfits) — no Python ``fitsio``.
         """
-        from ..io import write
+        from torchfits import write
 
         header = {
             "PIXTYPE": "HEALPIX",
@@ -950,7 +950,7 @@ class MOC:
     @classmethod
     def read_fits(cls, filename: str) -> "MOC":
         """Read a MOC from an IVOA FITS file via :func:`torchsky.io.read_table`."""
-        from ..io import read_table
+        from torchfits.table import read_torch as read_table
 
         hdu = _resolve_moc_table_hdu_index(filename)
         table = read_table(filename, hdu=hdu)

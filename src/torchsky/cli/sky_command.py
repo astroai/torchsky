@@ -6,7 +6,7 @@ import sys
 import torch
 
 from ..device import default_compute_device
-from ..io import read, write
+from torchfits import read, write
 from ..map.sky import CrossExposureSkyCorrector, MeshSkyEstimator, PolynomialSkyModel
 
 

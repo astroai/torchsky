@@ -1,6 +1,5 @@
 import ast
 from pathlib import Path
-import re
 
 
 def test_torchsky_src_does_not_import_astropy_io_fits():
@@ -60,34 +59,23 @@ def test_torchsky_does_not_import_torchfits_private_modules():
     assert not offenders, "\n".join(offenders)
 
 
-def test_dataset_boundary_uses_published_torchfits_names():
-    from torchfits.data import FitsImageDataset, FitsImageIterableDataset
-    from torchsky.datasets import (
-        FITSDataset,
-        FitsImageDataset as TorchskyFitsImageDataset,
-        FitsImageIterableDataset as TorchskyFitsImageIterableDataset,
-        IterableFITSDataset,
-    )
+def test_fits_surfaces_are_not_owned_by_torchsky():
+    import importlib.util
 
-    assert TorchskyFitsImageDataset is FitsImageDataset
-    assert TorchskyFitsImageIterableDataset is FitsImageIterableDataset
-    assert FITSDataset is FitsImageDataset
-    assert IterableFITSDataset is FitsImageIterableDataset
-
-
-def test_table_boundary_is_a_thin_public_torchfits_facade():
     import torchfits
-    from torchfits import table as fits_table
-    from torchsky import table as sky_table
 
-    release = tuple(int(part) for part in re.findall(r"\d+", torchfits.__version__)[:3])
-    assert release >= (1, 0, 0)
-    for name in ("read", "scan", "scan_torch", "read_polars", "scan_polars"):
-        assert getattr(sky_table, name) is getattr(fits_table, name)
-    assert not any(name.startswith("_can_use_") for name in dir(sky_table))
-
-
-def test_hdu_boundary_does_not_reexport_tensor_frame():
-    import torchsky.hdu as hdu
-
-    assert not hasattr(hdu, "TensorFrame")
+    for name in (
+        "io",
+        "table",
+        "hdu",
+        "cache",
+        "datasets",
+        "dataloader",
+        "header_parser",
+        "core",
+    ):
+        assert importlib.util.find_spec(f"torchsky.{name}") is None
+    for name in ("read", "write", "open", "read_header", "read_tensor"):
+        assert hasattr(torchfits, name)
+    assert hasattr(torchfits.table, "read")
+    assert hasattr(torchfits.hdu, "HDUList")

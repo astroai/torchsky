@@ -86,7 +86,7 @@ def _register_survey_sync(
 
     The survey ID is used as the prefix for all subsequent tile requests.
     """
-    from ...io import read_image
+    from torchfits import read_tensor as read_image
     from ...wcs import WCS
 
     root: Path = request.app.state.root_dir

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import torchfits
 
 # Skip entire module if viz extras not available
 fastapi = pytest.importorskip("fastapi")
@@ -336,14 +337,13 @@ def test_catalog_filter_moc_column_discovery(tmp_path: Path):
     """filter_moc must resolve RAJ2000/DEJ2000 like /load (no KeyError → 500)."""
     import math
 
-    import torchsky
     from torchsky.sphere.core import lonlat_to_unit_xyz
     from torchsky.sphere.moc import MOC
     from torchsky.viz.server import create_app
     from torchsky.sphere.healpix import query_disc
 
     root = tmp_path
-    torchsky.write(
+    torchfits.write(
         str(root / "cat.fits"),
         {
             "RAJ2000": torch.tensor([150.0, 150.1], dtype=torch.float64),
