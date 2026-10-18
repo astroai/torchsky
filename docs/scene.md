@@ -1,12 +1,14 @@
 # `torchsky.scene`
 
-`torchsky.scene` is the promoted namespace for joint sky-modelling concepts. It is currently an additive facade over the mature `torchsky.map` and `torchsky.map.field` implementation, so existing map imports keep working.
+`torchsky.scene` is an **experimental** namespace for scene representations and
+operator adapters. Production map verbs live in `torchsky.map`; field
+model/fit/render/sample verbs live in `torchsky.field`.
 
-Use this namespace for the mission-level objects:
+Use this namespace for:
 
 - `scene.FieldObservation` and `scene.ImageObservation`
 - `scene.TargetRenderSpec`
-- `scene.MapProductSpec` and `scene.MapBandpassSpec`
+- `scene.ProductSpec` and `scene.BandpassSpec`
 - `scene.SceneRepresentation` plus tensor, HEALPix, harmonic, and field-model adapters
 - `scene.ObservationOperatorAdapter`, `scene.operator_bundle_for_observation(...)`, and image-plane operator-set binding
 - `scene.sample_image_plane_batched_channels(...)` and

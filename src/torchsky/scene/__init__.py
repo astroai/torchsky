@@ -1,8 +1,9 @@
-"""Promoted scene, observation, and product facade.
+"""Experimental scene representation and operator facade.
 
-This namespace is an additive facade over the current map/field implementation.
-It gives users the mission-level vocabulary while the mature implementation
-continues to live under :mod:`torchsky.map`.
+This namespace is additive over the map/field implementation: it gives users
+scene-level vocabulary for representations, target specifications, and operator
+adapters. Production map verbs live in :mod:`torchsky.map`; field models and
+fit/render/sample verbs live in :mod:`torchsky.field`.
 """
 
 from __future__ import annotations
@@ -12,50 +13,14 @@ from typing import Any, TypeAlias
 from torch import Tensor, nn
 
 from ..map.field import (
-    ForwardContext,
-    KinematicState,
-    PSFSpec,
-    SurveyDataTerm,
     FieldObservation,
-    field_observations_from_bin_centers,
-    field_observations_from_bin_edges,
-    field_observations_from_ifu_cube,
-    fit_field_model,
-    make_field_model,
-    multi_survey_charbonnier_loss,
-    observation_charbonnier_loss,
+    ForwardContext,
+    PSFSpec,
     predict_observation_mean,
-    render_field_cube,
-    render_field_healpix,
-    render_field_observation,
-    render_field_observation_distribution,
-    scale_observation_for_rest_frame_scene,
 )
-from ..map.image_plane import (
-    CubeResult,
-    CubeTarget,
-    HealpixResult,
-    ImageObservation,
-    MapResult,
-    MultibandResult,
-    coadd,
-    coadd_cube,
-    coadd_healpix,
-    coadd_multiband,
-    plan,
-    plan_cube,
-    resample,
-    resample_healpix,
-)
-from ..map.product import (
-    MapBandpassSpec,
-    MapProductResult,
-    MapProductSpec,
-    render_field_product,
-    stack_map_product,
-)
+from ..map.image_plane import ImageObservation
 from ..map.operators.resampling import sample_image_plane_batched_channels
-from ..map.splat import SplatDiagnostics, splat_to_native
+from ..map.product import MapBandpassSpec, MapProductSpec
 from ..map.scenes import (
     ContinuousFieldModel,
     DiscreteTargetImage,
@@ -66,6 +31,7 @@ from ..map.scenes import (
     as_scene_representation,
     target_to_field_observation,
 )
+from ..map.splat import SplatDiagnostics, splat_to_native
 from ..map.target import TargetRenderSpec
 from .operators import (
     ObservationOperatorAdapter,
@@ -77,15 +43,9 @@ from .operators import (
     operator_bundles_for_observations,
 )
 
-Observation: TypeAlias = FieldObservation | ImageObservation
-Scene: TypeAlias = SceneRepresentation
-ProductSpec: TypeAlias = MapProductSpec
 BandpassSpec: TypeAlias = MapBandpassSpec
-ProductResult: TypeAlias = MapProductResult
-Target: TypeAlias = TargetRenderSpec
-fit = fit_field_model
-model = make_field_model
-stack_product = stack_map_product
+ProductSpec: TypeAlias = MapProductSpec
+Scene: TypeAlias = SceneRepresentation
 
 
 def image_observation(*args: Any, **kwargs: Any) -> ImageObservation:
@@ -113,7 +73,7 @@ def target_from_header(
 
 
 def target_from_product(
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     band_index: int = 0,
     psf_spec: object | None = None,
@@ -129,10 +89,10 @@ def target_from_product(
 def product_spec(
     *,
     target_header: dict[str, Any],
-    bands: tuple[MapBandpassSpec, ...],
+    bands: tuple[BandpassSpec, ...],
     value_semantics: str = "surface_brightness",
     footprint_order: int | None = None,
-) -> MapProductSpec:
+) -> ProductSpec:
     """Construct a map product specification using scene vocabulary."""
     return MapProductSpec(
         target_header=target_header,
@@ -156,82 +116,42 @@ def predict(
     observation: FieldObservation,
     **kwargs: Any,
 ) -> Tensor:
-    """Predict one field observation using the current deterministic operator path."""
+    """Predict one field observation using the deterministic operator path."""
     return predict_observation_mean(model, observation, **kwargs)
 
 
 __all__ = [
     "BandpassSpec",
     "ContinuousFieldModel",
-    "CubeResult",
-    "CubeTarget",
     "DiscreteTargetImage",
     "FieldObservation",
     "ForwardContext",
     "HarmonicAlmScene",
     "HealpixMapScene",
-    "HealpixResult",
     "ImageObservation",
-    "KinematicState",
-    "MapBandpassSpec",
-    "MapProductResult",
-    "MapProductSpec",
-    "MapResult",
-    "MultibandResult",
-    "Observation",
     "ObservationOperatorAdapter",
     "ObservationOperatorBundle",
     "ObservationOperatorBundleProtocol",
     "PSFSpec",
-    "ProductResult",
     "ProductSpec",
     "Scene",
     "SceneRepresentation",
     "SpinHarmonicAlmScene",
     "SplatDiagnostics",
-    "SurveyDataTerm",
-    "Target",
     "TargetRenderSpec",
     "as_scene_representation",
     "bind_image_plane_observations_to_target",
-    "coadd",
-    "coadd_cube",
-    "coadd_healpix",
-    "coadd_multiband",
     "field_observation",
-    "field_observations_from_bin_centers",
-    "field_observations_from_bin_edges",
-    "field_observations_from_ifu_cube",
-    "fit",
-    "fit_field_model",
     "image_observation",
-    "make_field_model",
-    "model",
-    "multi_survey_charbonnier_loss",
-    "observation_charbonnier_loss",
     "operator_adapter_for_observation",
     "operator_bundle_for_observation",
     "operator_bundles_for_observations",
-    "plan",
-    "plan_cube",
     "predict",
-    "predict_observation_mean",
     "product_spec",
     "render",
-    "render_field_cube",
-    "render_field_healpix",
-    "render_field_observation",
-    "render_field_observation_distribution",
-    "render_field_product",
-    "resample",
-    "resample_healpix",
-    "scale_observation_for_rest_frame_scene",
     "sample_image_plane_batched_channels",
     "splat_to_native",
-    "stack_map_product",
-    "stack_product",
     "target_from_header",
     "target_from_product",
     "target_to_field_observation",
 ]
-

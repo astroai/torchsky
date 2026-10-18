@@ -52,7 +52,8 @@ def test_scene_facade_promotes_existing_concepts() -> None:
     assert torchsky.scene is scene
     assert scene.ImageObservation is ImageObservation
     assert scene.FieldObservation is FieldObservation
-    assert scene.MapProductSpec is MapProductSpec
+    assert scene.ProductSpec is MapProductSpec
+    assert scene.BandpassSpec is MapBandpassSpec
     assert scene.TargetRenderSpec is TargetRenderSpec
     assert (
         scene.sample_image_plane_batched_channels is sample_image_plane_batched_channels

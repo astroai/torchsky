@@ -111,7 +111,10 @@ def test_map_root_keeps_workflow_api_small() -> None:
     assert callable(torchsky.catalogs.crossmatch)
     assert callable(torchsky.wcs.from_tabular)
     assert callable(torchsky.wcs.sample_gwcs)
-    assert torchsky.scene.coadd is torchsky.map.coadd
+    assert not hasattr(torchsky.scene, "coadd")
+    assert not hasattr(torchsky.scene, "plan")
+    assert callable(torchsky.map.coadd)
+    assert callable(torchsky.scene.render)
 
 
 def test_field_namespace_uses_short_composable_verbs() -> None:

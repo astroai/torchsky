@@ -39,12 +39,13 @@ For the high-level design target and refactor rules, see
 
 `torchsky` exposes public surfaces in three broad tiers:
 
-- **Core:** WCS transforms, sphere/map primitives, catalog geometry, observation
-  operators, and tensor/header-based scene objects.
+- **Core:** WCS transforms, sphere/map primitives, catalog geometry, and
+  observation operators.
 - **Compatibility:** APIs that intentionally mirror useful upstream behavior,
   such as healpy-shaped HEALPix access.
-- **Experimental:** active modelling and workflow surfaces such as field/INR
-  map models, visualization server paths, and training-facing utilities.
+- **Experimental:** scene representations/operator adapters, field/INR models,
+  native likelihood/query/evidence, visualization server paths, and
+  training-facing utilities.
 
 Surfaces are assigned to architecture pillars: `world`, `scene`, and `viz`.
 FITS I/O is a package boundary, not a torchsky pillar. The public contract is
