@@ -45,6 +45,10 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **Map calibration helpers split**: observation calibration, variance
+  accumulation, provenance-context, and area-scaling helpers moved from
+  `map/image_plane.py` to `map/calibration.py`; image_plane re-exports them and
+  drops from 4,180 to 3,987 lines.
 - **Field model classes split**: the 27 neural field-model classes moved from
   `map/field/core.py` to `map/field/models.py`; `core` now holds only the model
   factory/dispatch and public re-exports (502 lines, down from 5,651).
