@@ -1,6 +1,6 @@
 import torch
 from torch import Tensor
-from typing import Dict, Any, Tuple
+from typing import Dict, Any
 
 from torchsky._native import cpp as _cpp
 
