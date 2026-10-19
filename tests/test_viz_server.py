@@ -379,3 +379,41 @@ def test_viz_router_modules_import() -> None:
 
     for name in ("fits", "hips", "moc", "validate", "catalog"):
         importlib.import_module(f"torchsky.viz.routers.{name}")
+
+
+def test_moc_geojson_and_fits(client: TestClient, tmp_fits_dir: Path):
+    """Exercise the MOC GeoJSON/FITS endpoints (not used by the bundled UI)."""
+    import math
+
+    from torchsky.sphere.core import lonlat_to_unit_xyz
+    from torchsky.sphere.healpix import query_disc
+    from torchsky.sphere.moc import MOC
+
+    vec = lonlat_to_unit_xyz(150.0, 2.0)
+    pix = query_disc(8, vec, math.radians(5.0), nest=True)
+    uniq = (4 * 8 * 8 + pix).to(torch.int64)
+    MOC(uniq).write_fits(str(tmp_fits_dir / "overlay.moc"), overwrite=True)
+
+    r = client.get("/api/moc/geojson?path=overlay.moc")
+    assert r.status_code == 200, r.text
+    assert r.json()["type"] == "FeatureCollection"
+
+    r = client.get("/api/moc/fits?path=overlay.moc")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/fits")
+
+
+def test_validate_chi2_requires_sigma(client: TestClient, tmp_fits_dir: Path):
+    """The chi2 endpoints must reject a pair registered without a sigma image."""
+    _write_minimal_fits(tmp_fits_dir / "chi2_model.fits", shape=(128, 128))
+    body = {
+        "truth_path": "test_image.fits",
+        "model_path": "chi2_model.fits",
+        "truth_hdu": 0,
+        "model_hdu": 0,
+    }
+    r = client.post("/api/validate/register", json=body)
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+    assert client.get(f"/api/validate/{pid}/chi2_stats").status_code == 422
+    assert client.get(f"/api/validate/{pid}/chi2_map").status_code == 422
