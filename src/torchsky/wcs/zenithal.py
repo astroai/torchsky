@@ -283,51 +283,29 @@ def project_zenithal(
         # Small-r linear approximation: r ≈ xi when xi is small,
         # so for r < w5 the error is negligible.
         xi_small = r * w6
-        # Iterative solution for larger r: find cos(xi) such that
-        #   r = -(log(cosxi)/tanxi + w1*tanxi)
-        #   where tanxi = sqrt(1-cos²xi)/cosxi.
-        # The function r(cosxi) decreases monotonically from ∞ at cosxi→0
-        # to 0 at cosxi→1.  Bracket the root with x_lo=1 (r=0) and
-        # x_hi=0.1 (r≈5.2 ≫ any realistic pixel offset).
-        x_lo = torch.ones_like(r)
-        r_lo = torch.zeros_like(r)
-        x_hi = torch.full_like(r, 0.1)
-        # r at cosxi=0.1: tanxi = sqrt(0.99)/0.1 ≈ 9.95
-        tanxi_hi_val = math.sqrt(1.0 - 0.01) / 0.1
-        r_hi = torch.full_like(r, -(math.log(0.1) / tanxi_hi_val + w1 * tanxi_hi_val))
-        # Expand bracket outward from initial estimate if needed.
-        for _ in range(4):
-            need_expand = r > r_hi
-            x_hi_new = x_hi / 10.0
-            tanxi_hi_exp = torch.sqrt(torch.clamp(1.0 - x_hi_new * x_hi_new, min=0.0)) / torch.clamp(x_hi_new, min=1e-15)
-            r_hi_exp = -(torch.log(torch.clamp(x_hi_new, min=1e-15)) / tanxi_hi_exp + w1 * tanxi_hi_exp)
-            x_hi = torch.where(need_expand, x_hi_new, x_hi)
-            r_hi = torch.where(need_expand, r_hi_exp, r_hi)
-            if not bool(need_expand.any()):
-                break
-        cosxi = (x_lo + x_hi) * 0.5
-        for _ in range(60):
-            tanxi = torch.sqrt(torch.clamp(1.0 - cosxi * cosxi, min=0.0)) / torch.clamp(cosxi, min=1e-15)
-            rt = -(torch.log(torch.clamp(cosxi, min=1e-15)) / tanxi + w1 * tanxi)
-            # Regula falsi: shrink bracket toward the root.
-            converged_mask = torch.abs(rt - r) < 1e-10
-            if bool(converged_mask.all()):
-                break
-            lam = torch.clamp((r_hi - r) / torch.clamp(r_hi - r_lo, min=1e-12), 0.05, 0.95)
-            cosxi_new = x_hi - lam * (x_hi - x_lo)
-            x_lo = torch.where(rt < r, cosxi, x_lo)
-            r_lo = torch.where(rt < r, rt, r_lo)
-            x_hi = torch.where(rt >= r, cosxi, x_hi)
-            r_hi = torch.where(rt >= r, rt, r_hi)
-            cosxi = torch.where(converged_mask, cosxi, cosxi_new)
-        # Recompute residual from the final cosxi for convergence check
-        tanxi_f = torch.sqrt(torch.clamp(1.0 - cosxi * cosxi, min=0.0)) / torch.clamp(cosxi, min=1e-15)
-        rt_final = -(torch.log(torch.clamp(cosxi, min=1e-15)) / tanxi_f + w1 * tanxi_f)
-        xi_val = torch.acos(torch.clamp(cosxi, -1.0, 1.0)) * R2D
+        # Solve r = 0.5*log1p(t^2)/t - w1*t with t = tan(xi) by Newton.
+        # The direct r(xi) relation has no closed form; t is well conditioned
+        # near xi=0 and the derivative is analytic:
+        #   d/dt [0.5*log1p(t^2)/t - w1*t] = (t^2/(1+t^2) - 0.5*log1p(t^2))/t^2 - w1
+        # Start from the small-angle root t ~ r/w2 and use a fixed iteration
+        # count (no host-side convergence syncs).
+        t_val = torch.clamp(r / w2, min=1.0e-300)
+        for _ in range(8):
+            t2 = t_val * t_val
+            log1p_t = torch.log1p(t2)
+            value = 0.5 * log1p_t / t_val - w1 * t_val - r
+            derivative = (t2 / (1.0 + t2) - 0.5 * log1p_t) / t2 - w1
+            t_val = t_val - value / derivative
+        # Residual from the final iterate drives the validity mask.
+        t2_final = t_val * t_val
+        log1p_final = torch.log1p(t2_final)
+        rt_final = 0.5 * log1p_final / t_val - w1 * t_val - r
+        xi_val = torch.atan(t_val) * R2D
+
         xi_rad = torch.where(r < w5, xi_small, xi_val)
         theta = 90.0 - 2.0 * xi_rad
         # Valid: small-r path, or iterative path converged (residual small)
-        converged = torch.abs(rt_final - r) < 1e-10
+        converged = torch.abs(rt_final) < 1e-10
         valid = (r < w5) | converged
         theta = torch.where(valid, theta, torch.full_like(theta, float("nan")))
         phi = torch.where(valid, phi, torch.full_like(phi, float("nan")))
