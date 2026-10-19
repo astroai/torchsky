@@ -382,7 +382,6 @@ class SpectralTransform:
         self,
         ctype: str,
         crval: float,
-        cdelt: float,
         cunit: str | None = None,
         restfrq: float | None = None,
         restwav: float | None = None,

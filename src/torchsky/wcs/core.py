@@ -333,7 +333,6 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
             if is_spectral:
                 crval = float(self.wcs_params.get(f"CRVAL{axis_number}", 0.0))
-                cdelt = float(self.wcs_params.get(f"CDELT{axis_number}", 1.0))
                 cunit = self.wcs_params.get(f"CUNIT{axis_number}")
 
                 # Extract PV keywords for this axis
@@ -367,7 +366,6 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 self.spectral_transforms[axis_idx] = SpectralTransform(
                     ctype=ctype,
                     crval=crval,
-                    cdelt=cdelt,
                     cunit=cunit,
                     restfrq=restfrq,
                     restwav=restwav,

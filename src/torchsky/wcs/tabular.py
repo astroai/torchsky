@@ -402,7 +402,6 @@ class CoupledTabularLookupWCS:
                     axes,
                     max_iter=max_iter,
                     tol=tol,
-                    bounds=bounds_mode,
                     lower_bounds=None,
                     upper_bounds=None,
                 )
@@ -425,7 +424,6 @@ def _solve_coupled_tabular_point(
     *,
     max_iter: int,
     tol: float,
-    bounds: TabularBoundsMode,
     lower_bounds: Tensor | None,
     upper_bounds: Tensor | None,
 ) -> Tensor:
@@ -542,7 +540,6 @@ def _solve_coupled_tabular_point_2d_global(
                 axes,
                 max_iter=max_iter,
                 tol=tol,
-                bounds="clamp",
                 lower_bounds=lower,
                 upper_bounds=upper,
             )
