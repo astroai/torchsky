@@ -27,6 +27,11 @@ wcs = WCS(header)
 | `world_to_pixel_values(*world_arrays, origin=0)` | Lower-level tuple form for the inverse direction. |
 | `to(device)` | Move the WCS (and any baked tables) to a device. |
 
+Return convention: a multi-axis WCS returns one tensor per axis
+(celestial, spectral, time, tabular, ...). A single-axis WCS such as a pure
+spectral FITS header returns the world array directly, and the inverse accepts
+that array directly. `pixel_to_world_values` always returns a tuple.
+
 Celestial transforms support SIP, TPV, paper-IV lookup tables, and coupled
 `-TAB` axes. Spectral and time axes are transforms too, not metadata.
 
