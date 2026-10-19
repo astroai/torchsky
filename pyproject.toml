@@ -156,8 +156,5 @@ markers = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# The curated field facade intentionally leaves the concrete model zoo under
-# torchsky.map.field; legacy imports remain available but are not public names.
-"src/torchsky/field/__init__.py" = ["F401"]
 "tests/test_map_smacs0723_stackers.py" = ["E402"]
 "tests/test_map_smacs0723_stackers_band_sweep.py" = ["E402"]
