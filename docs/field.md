@@ -126,6 +126,13 @@ model = field.preset("fast", domain, hidden_dim=64, hidden_layers=2)
 | `sky_lambda_planes_field`, `sky_lambda_kplanes_field`, `sky_lambda_feature_field`, … | K-plane / λ-atlas style spectral grids for rich multi-λ structure. |
 | `bandpass_conditioned_field`, `conditioned_spectral_field` | Conditioning on band metadata. |
 | `operator_constrained_feature_field` | Hooks for operator-side structure (advanced). |
+| `explicit_spectral_grid_field` | Explicit multiframe spatial/spectral grid baseline for capacity comparisons. |
+| `gaussian_basis` | Gaussian-basis sky model; opt-in `splat` renders additive elliptical sources. |
+| `sky_lambda_feature_field_hetero` | Sky-λ feature field that also predicts per-pixel variance. |
+| `sky_lambda_atlas_field`, `sky_lambda_feature_atlas_field` | Atlas-tiled fields: spatially gated expert fields that share a latent atlas. |
+| `spectral_power_foam` | Sky-λ forward model on an adapted spectral Power Foam (scale-adaptive, non-neural alternative). |
+| `foam_initialized_inr` | Positive INR correction initialized from a fitted Foam field. |
+| `diffuse_foam_hybrid` | Low-capacity diffuse field plus a localized non-negative spectral Foam. |
 | `strainer_sky_encoder_mlp` | Optional pretrained trunk path (see module docstrings). |
 
 Exact constructor kwargs vary by kind (hidden sizes, grid resolution, Fourier frequencies, etc.). Start from **`example_map_field_survey_split.py`** and the public constructors, then tune. Scientific model comparisons and real-data tuning are documented in the [harness](https://github.com/astroai/torchsky-harness).
