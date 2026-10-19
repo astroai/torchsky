@@ -37,8 +37,8 @@ subset = cat.take(inside)
 
 `from_arrow` / `CatalogStreamDataset` feed tensors into `Catalog`.
 There is no `from_polars` / `to_polars` wrapper; Polars and HATS stay in
-xmatch / torchfits. Scale covering is documented in
-[catalog matching research](https://github.com/astroai/torchsky/blob/main/notes/research/catalog_matching.md).
+xmatch / torchfits. Scale covering and the exact-pair design are documented in
+[Matching design](#matching-design-exact-covering-first).
 `Catalog.to_state()` is the `CatalogState` used by `torchsky.coords`.
 
 ## Recipes
@@ -95,3 +95,23 @@ Comparator parity, large-catalog throughput, candidate-reduction measurements,
 and Linux/real-data campaigns live in
 [torchsky-harness](https://github.com/astroai/torchsky-harness). No benchmark
 result is inferred from a passing core test.
+
+## Matching design: exact covering first
+
+Matching needs **recall = 1** under a stated metric. On the unit sphere the
+metric is the great-circle angle; torchsky uses the stable
+`atan2(||a x b||, a . b)` form. Euclidean k-NN in R^3 on unit vectors is an
+*exact* spherical-cap query only with the chord radius `2 sin(theta/2)`.
+
+The join is partition-then-refine:
+
+1. Cover the query and catalog with HEALPix cells of bounded radius.
+2. Generate candidates whose cell centres are within `radius + 2 * max_pixel_radius`.
+3. Apply the exact great-circle (or Mahalanobis) test to surviving pairs.
+
+Dropping a true pair during candidate generation is a correctness bug, never an
+optimization. Per-row positional error must cover that row's radius; a global
+maximum radius is only a candidate-generation shortcut, not the final test.
+Approximate nearest-neighbour indexes are not a substitute for the exact
+predicate, and HEALPix, HTM, Q3C, and LSST sphgeom are alternative coverings,
+not multiple torchsky APIs.

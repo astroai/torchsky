@@ -1,6 +1,10 @@
 # Native likelihood and calibration foundations
 
-These primitives implement bounded parts of the [field-response plan](https://github.com/astroai/torchsky/blob/main/notes/projects/field_response_discovery_plan.md). They support exposure tasks without a global field and retain full information for field queries. They do not establish SOTA, full raw detector physics or calibrated real-sky coverage. The [implementation status](https://github.com/astroai/torchsky/blob/main/notes/projects/field_response_discovery_status.md) records the remaining gates.
+These primitives support exposure tasks without a global field and retain full
+information for field queries. They are bounded, tested components; they do not
+establish SOTA, full raw detector physics, or calibrated real-sky coverage. The
+status section at the end of this page records what is implemented and which
+gates remain open.
 
 ## Native star pixels
 
@@ -201,3 +205,41 @@ Run `pixi run -e default -- python examples/native_exposure_calibration.py`. It 
 `pixi run -e default -- python examples/native_response_moments.py` demonstrates continuous source transport and ordered photon/dark/charge/read moments with explicit units. It does not approximate those moments as a calibrated Gaussian likelihood.
 
 `pixi run -e default -- python examples/native_field_response.py` demonstrates source-node radiance, response/calibration ownership, an opt-in native image prediction and a conditional field-template query. Its small planar quadrature and chosen Gaussian noise are illustrative, not a calibrated instrument or accuracy certificate.
+
+## Implementation status and open gates
+
+Implemented and covered by independent dense/SciPy references, gradient checks,
+and bounded device tests:
+
+- Gaussian nuisance precision, native point-response profiling, fixed Gaussian
+  likelihood/query evidence, typed calibrated additive placement;
+- small native linear queries, legacy inverse-probe correctness, detector-grid
+  PSF transport orientation, fixed-evidence calibration lifecycle;
+- continuous-position spectral quadrature and ordered photon/dark/charge/read
+  detector moments;
+- joint Gaussian field-observation bridge, explicit pixel radiometric/flat
+  transfer, opt-in native source-node field route, and the joint source-node
+  calibration/nuisance binding;
+- Poisson-Gaussian zero boundary/CDF tails with stable positive-rate NLL
+  curvature, signed detector charts with optional GWCS freezing, the native
+  physical integrated-read likelihood, and checkpointed physical-mixture
+  chunks;
+- compact nuisance/query spectral placement on MPS and bounded metadata-query
+  tooling for native-product acquisition.
+
+Open gates (none are implied by the bounded tests above):
+
+- adaptive/controlled chromatic response, default training/renderer integration,
+  and physical radiometric/flat calibration beyond the opt-in source-node route;
+- photon/charge/read additive-stage renderer integration, normalized native
+  likelihoods, and nonlinear/history detector laws;
+- end-to-end observation lineage and joint nuisance propagation across every
+  field/coadd caller;
+- query/UQ reports and calibration lifecycle across all solvers;
+- verified real native-data science references: HST/ACS, JWST/NIRCam, and
+  CFHT/MegaCam products currently have bounded byte/header/geometry/calibration
+  checks only (`training_ready=false`);
+- broader CUDA/MPS execution evidence and independent chromatic PSF/background
+  calibration (M1), field-reconstruction discovery gates (M2), nonlinear
+  detector evidence (M3), interface proofs (M4), and all-available-data
+  federation (M5).

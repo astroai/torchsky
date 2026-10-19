@@ -11,6 +11,7 @@ verify_fix.py
 # Editor / Tools
 .vscode/
 .cursor/
+.kilo/
 .qoder/
 .benchmarks/
 
@@ -104,3 +105,7 @@ torchsky_sky_ssl_research_plan.md
 
 # Generated example data
 data_simple_fits/
+
+# Planning: one tracked plan, everything else local research
+notes/*
+!notes/planned.md

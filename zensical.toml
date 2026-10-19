@@ -25,7 +25,7 @@ nav = [
     {"Catalogs" = ["catalogs.md", "catalogue-foundations.md"]},
     {"Mapmaking" = ["map.md", "scene.md"]},
     {"Spectral data" = ["spectral.md", "photometry-encoders.md"]},
-    {"Fields and models" = ["field.md", "encoders.md", "ml.md"]},
+    {"Fields and models" = ["field.md", "field-formulation.md", "encoders.md", "ml.md"]},
     {"Observation operators" = [
       "psf-response-conventions.md",
       "astrometric_calibration.md",

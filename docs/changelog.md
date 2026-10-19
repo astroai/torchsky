@@ -103,7 +103,8 @@ owned by `torchfits`.
 
 ### Documentation and developer experience
 - **Published documentation site**: Zensical + Material build from `docs/` only
-  (plans, research, reviews, and archive moved under `notes/`), with a home
+  (unpublished plans, research, reviews, and archives stay outside git;
+  `notes/planned.md` is the single tracked plan), with a home
   page, quick start, navigation by domain, API reference pages for every
   namespace, a strict build, an offline link checker, and a Pages workflow.
 - **Documentation contracts**: every public `__all__` name must appear in the

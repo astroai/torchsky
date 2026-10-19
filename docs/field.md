@@ -7,7 +7,7 @@ Use the concise **`torchsky.field`** namespace for new code; the older
 
 For the scientific inverse problem shared by INRs and spectral Power Foam,
 including the exact hard-cell formulation and the quantitative depth objective,
-see [INR and Power-Foam sky reconstruction](https://github.com/astroai/torchsky/blob/main/notes/projects/inr_foam_problem_formulation.md).
+see [INR and Power-Foam formulation](field-formulation.md).
 
 For map products and classical stacks, see [map.md](map.md). For the Charbonnier / multi-survey scaffold around field rendering, see [implicit_forward.md](implicit_forward.md).
 
@@ -598,3 +598,25 @@ pred = field.render(model, obs)
 - [implicit_forward.md](implicit_forward.md) — `SurveyDataTerm`, `KinematicState`, Charbonnier scaffold.
 - [spectral.md](spectral.md) — spectra and cube containers / I/O.
 - [map.md](map.md) — `ImageObservation`, coadds, `render_field_product`.
+
+## Frequency-adaptive candidates
+
+Three experimental models implement frequency-control ideas from the INR
+literature. They share the `torchsky.field` model contract but are **not**
+production presets until they win an equal-budget, held-out comparison.
+
+- `BaconField` (`bacon`): multiplicative frozen sine filters with a
+  non-negative sum-of-squares readout. The declared bandwidths describe output
+  angular support; latent filters receive half that budget because the
+  non-negative readout doubles Fourier support.
+- `SASNetField` (`sasnet`): spatially localized, frequency-adaptive model with a
+  learned mask over a frozen frequency bank. It is not strictly band-limited;
+  the finest frequency and hash resolution are capped from the caller-supplied
+  pixel footprint and PSF support.
+- `FlairField` (`flair_bla`): real-feature band-limited-layer approximation with
+  Gaussian envelopes and explicit period/sigma/shift parameters.
+
+The models are exposed by the `torchsky.map.field` factory and serialized like
+other field models. Admission to a preset still requires the same
+serialization/device/gradient contract, shared operator tests, and held-out
+scientific recovery as the rest of the model zoo.

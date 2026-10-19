@@ -27,9 +27,9 @@ REQUIRED_FILES = (
     "docs/map.md",
     "docs/field.md",
     "docs/scene.md",
-    "notes/reviews/autonomous_refactor_log.md",
-    "notes/roadmap/history.md",
-    "notes/roadmap/status.md",
+    "docs/native-likelihood.md",
+    "docs/field-formulation.md",
+    "notes/planned.md",
 )
 
 DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {'docs/benchmarks.md': ('torchsky-harness', 'Torchsky retains production implementations'), 'docs/map.md': ('ObservationOperatorBundle', 'LearnedInstrumentOperator', 'ConstrainedKernelPSF'), 'docs/field.md': ('field.fit', 'field.render', 'field.sample', 'operator_constrained'), 'docs/architecture.md': ('scene', 'world', 'io')}

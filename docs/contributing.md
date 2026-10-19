@@ -111,9 +111,9 @@ run instructions.
 
 ## Documentation Policy
 
-The published documentation site is built from `docs/` only; planning,
-research, reviews, and historical notes live under `notes/` and are not
-published.
+The published documentation site is built from `docs/` only. Unpublished
+research, reviews, archives, and brainstorming stay outside git; implemented
+behavior belongs in `docs/`.
 
 - Root `README.md`: user-facing only.
 - `docs/index.md`: site home and documentation map.
@@ -121,7 +121,10 @@ published.
 - `docs/api.md`: public API guide and namespace router.
 - `docs/changelog.md`: release notes.
 - `docs/examples.md` and `docs/benchmarks.md`: operational guides.
-- `notes/`: internal plans, research, reviews, and archive (not published).
+- `notes/planned.md`: the single tracked plan for work that is committed for a
+  future release.
+- Untracked research, reviews, archives, and brainstorming stay outside git
+  (ignored under `notes/`); implemented behavior belongs in `docs/`, not notes.
 
 Build and verify docs with Pixi:
 

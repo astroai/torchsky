@@ -1,18 +1,17 @@
+# INR and Power Foam reconstruction: formulation and objectives
+
+This page is background for the implemented `torchsky.field` models (INRs,
+spectral Power Foam, and their hybrids). It defines the inverse problem and
+modelling assumptions behind the map/field APIs; it is not a scientific
+acceptance claim. Current API contracts live in [Continuous fields](field.md)
+and [Implicit forward modelling](implicit_forward.md). Measured validation and
+campaign status live in `torchsky-harness`.
+
 # INR and Power Foam sky reconstruction: problem formulation and objectives
-
-## Campaign configuration
-
-This document defines the reusable inverse problem and model assumptions. The
-current SMACS/UPDec dataset, exposure selection, calibration contract, frozen
-splits, comparator matrix, quantitative depth endpoint, and acceptance gates
-are maintained in the
-[UPDec evaluation campaign](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md).
-Campaign results do not change the formulation or establish a general claim
-without independent evidence.
 
 ## Purpose
 
-This note defines the inverse problem that Torchsky's implicit neural
+This page defines the inverse problem that Torchsky's implicit neural
 representations (INRs) and spectral Power Foam models are intended to solve. It
 is written for astronomers who know the basic supervised-learning pattern—fit a
 model from inputs and labelled targets—but have not used continuous neural
@@ -1064,14 +1063,9 @@ metric.
 
 ## Related Torchsky documents
 
-- [Continuous fields](../field.md): current field APIs, models, observation
+- [Continuous fields](field.md): current field APIs, models, observation
   operators, and training workflow.
-- [Implicit forward modelling](../implicit_forward.md): compact multi-survey
+- [Implicit forward modelling](implicit_forward.md): compact multi-survey
   prediction and robust-loss scaffold.
 - [UPDec depth evaluation campaign](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md):
   frozen data split, method matrix, claim gates, and campaign evidence.
-- [Source unmixing with known or unknown sources](source_unmixing_problem_formulation.md):
-  component identifiability, protected targets, cross-fitting, and uncertainty
-  after reconstruction.
-- [FOSSIL primitives](fossil.md): longer-term differentiable
-  spatial-spectral component-separation use cases.

@@ -66,3 +66,23 @@ policy, INR/latents, and scene-field models stay in those packages.
 - Make user-facing APIs and CLIs clean, low-jargon, and easy to adopt.
 - Avoid cosmetic churn unless it materially improves architecture, usability,
   scalability, differentiability, or correctness.
+
+## Ownership decisions
+
+- **FITS and table I/O:** parsing, HDUs, checksums, table mutation, Arrow
+  conversion, and I/O throughput live in `torchfits`. Torchsky consumes
+  tensors, header mappings, and table batches through explicit boundaries.
+- **Native compute:** torchsky owns its coordinate, WCS, spherical, catalog,
+  map, scene, and continuous-field algorithms. Compatibility adapters sit above
+  torchsky-native implementations.
+- **Validation:** core retains bounded unit/API/regression, adjoint, gradient,
+  and device-contract tests. Exhaustive upstream parity, real-data validation,
+  and performance acceptance live in `torchsky-harness`.
+- **Spectral transforms:** torchsky owns low-level, tensor-native spectral
+  geometry (flux-conserving rebinning and wavelength-aware relativistic Doppler
+  shifts) as free functions in `torchsky.spectral`. Continuum estimators, phase
+  folding, and application-level preprocessing are not copied from torchfits;
+  the index-based `RedshiftShift` API was removed rather than kept as a second
+  physical model.
+- **Experiment records:** historical campaign snapshots and scorecards live in
+  the harness, not as a live task queue in the package.
