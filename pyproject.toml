@@ -57,7 +57,7 @@ docs = [
 ]
 
 # Browser-based visualization server: torchsky viz --root /data --port 8822
-# Requires internet access for Aladin Lite JS (or a pre-built npm bundle).
+# Requires internet access for the Aladin Lite JavaScript viewer.
 viz = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",   # uvloop + httptools for high-throughput PNG streaming
