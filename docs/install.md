@@ -52,9 +52,10 @@ Exact pins match `[build-system].requires` in `pyproject.toml`.
 
 Optional extras (from `pyproject.toml`):
 
-- **`map`**: `astropy` and `astroquery` for ``torchsky map --method inr`` with the default
-  ``--inr-spectral-source=svo`` (SVO filter profiles). Install with
-  `pip install 'torchsky[map]'` when using PyPI wheels, or install those packages in your env.
+- **`map`**: `astropy` and `astroquery` for SVO filter profiles used by
+  ``torchsky map --method field --inr-spectral-source=svo`` (the default source).
+  Install with `pip install 'torchsky[map]'` when using PyPI wheels, or install
+  those packages in your env.
 
 `torchfits` is an integration package, not a hidden backend. In-memory
 tensor/header workflows do not require it.

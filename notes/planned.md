@@ -31,6 +31,11 @@ Scientific campaigns, comparator evidence, and acceptance status live in
   `joint_native`, `neural_inverse`, and the lensing/magnification operators so
   the public names state what they do; drop any that lack a demonstrated
   consumer or acceptance role for 0.4.0.
+- **CLI flag naming:** the `torchsky map` parser still uses `--inr-*` flag names
+  (`--inr-spectral-source`, `--inr-steps`, `--inr-band`, ...) although the
+  method is now called `field`. Rename the flags to `--field-*` before the
+  public release, updating `docs/cli.md`, examples, and `tests/test_cli_map.py`;
+  do not keep both spellings.
 - **Harness evidence refresh:** rebuild the wheel and rerun the declared gates
   and GPU validation whenever the subject changes; regenerate the evidence
   bundle and baseline subject identity before tagging.

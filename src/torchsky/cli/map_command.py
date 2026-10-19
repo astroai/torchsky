@@ -1751,12 +1751,12 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--svo-facility",
         default="JWST",
-        help="SVO get_filter_list facility (inr --inr-spectral-source=svo)",
+        help="SVO get_filter_list facility (field --inr-spectral-source=svo)",
     )
     p.add_argument(
         "--svo-instrument",
         default="NIRCAM",
-        help="SVO get_filter_list instrument (inr --inr-spectral-source=svo)",
+        help="SVO get_filter_list instrument (field --inr-spectral-source=svo)",
     )
     p.add_argument(
         "--svo-filter-id",
@@ -1788,7 +1788,7 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         "--inr-transmission",
         type=Path,
         default=None,
-        help="Two-column wavelength, transmission file (inr --inr-spectral-source=file)",
+        help="Two-column wavelength, transmission file (field --inr-spectral-source=file)",
     )
     p.add_argument(
         "--inr-transmission-dir",
