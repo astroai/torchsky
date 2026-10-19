@@ -1099,6 +1099,23 @@ def _resolve_tab_table(
                     hdu, extname=target, extver=extver, extlev=extlev
                 ):
                     return hdu
+    # Positional lookup: HDU-list containers (e.g. torchfits.HDUList) expose
+    # integer indexing and __len__ but not __iter__, so the branch above never
+    # sees them. This is the public FITS boundary for real -TAB files.
+    if (
+        not isinstance(tables, (str, bytes, Mapping))
+        and hasattr(tables, "__len__")
+        and hasattr(tables, "__getitem__")
+    ):
+        try:
+            for index in range(len(tables)):
+                candidate = tables[index]
+                if _table_header(candidate) is not None and _table_matches_identity(
+                    candidate, extname=target, extver=extver, extlev=extlev
+                ):
+                    return candidate
+        except (KeyError, TypeError, ValueError, IndexError):
+            pass
     detail = f"table extension {extname!r}"
     if extver is not None:
         detail += f" EXTVER={extver}"
@@ -1228,7 +1245,12 @@ def tabular_axes_from_fits(
             tab_axis_number,
         )
         if index_col_raw is None or str(index_col_raw).strip() == "":
-            pixel = torch.arange(coord.shape[0], dtype=torch.float64)
+            # FITS -TAB default index vector is 1..N (the table index is a
+            # 1-based coordinate), not 0..N-1. The CRVAL/CDELT/CD linear
+            # transform produces that index directly.
+            pixel = torch.arange(
+                1, coord.shape[0] + 1, dtype=torch.float64
+            )
         else:
             index_col = str(index_col_raw).strip()
             pixel = _as_tabular_index_array(
@@ -1331,7 +1353,9 @@ def coupled_tabular_wcs_and_axes_from_fits(
             )
 
         if index_col_raw is None or str(index_col_raw).strip() == "":
-            pixel_axis = torch.arange(shape[tab_axis_number - 1], dtype=torch.float64)
+            pixel_axis = torch.arange(
+                1, shape[tab_axis_number - 1] + 1, dtype=torch.float64
+            )
         else:
             index_col = str(index_col_raw).strip()
             pixel_axis = _as_tabular_index_array(
@@ -1365,7 +1389,7 @@ def coupled_tabular_wcs_and_axes_from_fits(
     if missing:
         for axis in missing:
             pixel_axes_by_tab_axis[axis] = torch.arange(
-                grid_shape[axis - 1], dtype=torch.float64
+                1, grid_shape[axis - 1] + 1, dtype=torch.float64
             )
 
     coords.sort(key=lambda item: item[0])

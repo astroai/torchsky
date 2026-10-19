@@ -58,6 +58,17 @@ owned by `torchfits`.
   and the scripts are copied into the built site so their links work.
 
 ### Fixed
+- **FITS `-TAB` default indexing vector**: the fallback table index was
+  `0..N-1`; the FITS/table-WCS convention is `1..N`, so every tabulated
+  coordinate (e.g. a real `TIME-TAB` axis) was shifted by one index and the
+  last sample fell off the table. Astropy/WCSLIB parity is now exact on a real
+  HST `-TAB` product, and the harness gates it against astropy
+  (`bench_wcs_real_headers`).
+- **`-TAB` tables from `torchfits.HDUList`**: table lookup required a
+  name-indexed mapping or an iterable of HDUs, and the public FITS boundary
+  (`torchfits.HDUList`) exposes integer indexing and `__len__` but not
+  `__iter__`. The resolver now falls back to positional lookup, so real
+  `-TAB` FITS products load through the documented boundary.
 - **Center-native WCS inverse rotation**: `world_to_pixel` for cylindrical,
   all-sky, pseudocylindrical, and polyconic projections reused the pole-native
   rotation basis, so any header with a non-zero reference latitude
