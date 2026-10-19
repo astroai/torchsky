@@ -45,6 +45,11 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **Field helper layer split**: the shared helpers and `_BaseFieldModel` moved
+  out of the 5.6k-line `map/field/core.py` into `map/field/_core_helpers.py`
+  (feature/atlas helpers, domain estimation, strainer checkpoint helpers);
+  `core` re-exports every moved name so imports are unchanged. core.py drops
+  from 5,651 to 5,141 lines.
 - **Map sky matching split**: `detect_outliers`, `match_sky`, their private
   helpers, and the sky-matching tile resolver moved from the 5.3k-line
   `map/image_plane.py` to `map/sky_matching.py`; the image-plane module now
