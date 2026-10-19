@@ -50,6 +50,11 @@ owned by `torchfits`.
   `sphere/spectral_ops.py`; the SHT primitives are imported lazily so the
   module graph stays acyclic, and `spectral` re-exports the historical names.
   spectral.py drops from 4,636 to 4,031 lines.
+- **Field model classes split**: the 4,666-line `map/field/models.py` now keeps
+  only re-exports; the model zoo lives in `models_foam`, `models_component`,
+  `models_implicit`, `models_encoder`, and `models_skylambda` by representation
+  family. The historical `torchsky.map.field.models` and `torchsky.map.field`
+  imports are unchanged.
 - **Map calibration helpers split**: observation calibration, variance
   accumulation, provenance-context, and area-scaling helpers moved from
   `map/image_plane.py` to `map/calibration.py`; image_plane re-exports them and
