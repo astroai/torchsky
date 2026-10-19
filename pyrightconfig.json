@@ -1,7 +1,6 @@
 {
   "include": [
     "src/torchsky/__init__.py",
-    "src/torchsky/header_parser.py",
     "src/torchsky/quality.py",
     "src/torchsky/spectrophotometry.py"
   ],
