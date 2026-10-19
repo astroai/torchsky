@@ -260,7 +260,6 @@ def test_conservative_polygon_op_and_helper_use_full_footprint_contract(
         "target",
         value_semantics="surface_brightness",
         pixel_area_sr_map_fn="pixel_area_fn",
-        representative_pixel_area_fn="representative_area_fn",
         chunk_pixels=1024,
     )
 

@@ -26,7 +26,7 @@ from .execution import (
 )
 from .image_grid import target_shape_from_header, validate_image_plane_2d
 from .mask_weight import load_image_observation_weight_map
-from .pixel_area import pixel_area_sr_map, representative_pixel_area_sr
+from .pixel_area import pixel_area_sr_map
 
 
 def bind_image_plane_target_operator(
@@ -85,7 +85,6 @@ def bind_image_plane_target_operator(
             value_semantics=validate_map_value_semantics(semantics),
             drizzle_pixfrac=float(drizzle_pixfrac),
             pixel_area_sr_map_fn=pixel_area_sr_map,
-            representative_pixel_area_fn=representative_pixel_area_sr,
             chunk_pixels=int(chunk_pixels),
             resample_weighted_to_target_fn=_resample_weighted_to_target,
             forward_project_weighted_to_target_fn=_forward_project_weighted_to_target,

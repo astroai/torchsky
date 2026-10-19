@@ -665,23 +665,6 @@
         </div>
       </div>
 
-      <!-- Catalog load -->
-      <div class="sidebar-section">
-        <label class="section-title" for="catalog-select" style="display:block;">Catalog Overlay</label>
-        <select id="catalog-select" style="margin-bottom:var(--sp2)">
-          <option value="">— select FITS catalog —</option>
-        </select>
-        <div style="display:flex;gap:var(--sp2)">
-          <input type="text" id="ra-col-input" placeholder="RA col" value="RA" aria-label="Right Ascension column"
-            style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
-                   border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
-                   font-size:11px;padding:4px var(--sp2);" />
-          <input type="text" id="dec-col-input" placeholder="Dec col" value="DEC" aria-label="Declination column"
-            style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
-                   border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
-                   font-size:11px;padding:4px var(--sp2);" />
-        </div>
-      </div>
     </div>
   </aside>
 
@@ -755,12 +738,6 @@
         <div id="wcs-info" class="stat-grid"></div>
       </div>
 
-      <!-- Validation stats (hidden by default) -->
-      <div class="info-card" id="val-stats-card" style="display:none">
-        <div class="info-card-title">Validation</div>
-        <div class="stat-grid" id="val-chi2-stats"></div>
-      </div>
-
     </div>
   </aside>
 
@@ -773,14 +750,6 @@
     <div class="footer-item">
       <span class="label">Dec</span>
       <span class="value text-mono" id="coord-dec">—</span>
-    </div>
-    <div class="footer-item">
-      <span class="label">Pixel</span>
-      <span class="value text-mono" id="coord-pix">—</span>
-    </div>
-    <div class="footer-item">
-      <span class="label">Value</span>
-      <span class="value text-mono" id="coord-val">—</span>
     </div>
     <div style="margin-left:auto" class="footer-item">
       <div id="status-spinner" class="spinner hidden" aria-hidden="true"></div>

@@ -64,7 +64,6 @@ def _coadd_ifu_3d_cube(
     observations: Sequence[Observation],
     target: CubeTarget | Target | Mapping[str, Any] | WCS | None,
     *,
-    r_cfg: ResampleConfig,
     spectral_axis: SpectralAxis | Sequence[float] | Tensor | None,
     spectral_bin_edges: Sequence[float] | Tensor | None,
     spectral_unit: str,
@@ -376,7 +375,6 @@ def coadd_cube(
         return _coadd_ifu_3d_cube(
             observations,
             target,
-            r_cfg=r_cfg,
             spectral_axis=spectral_axis,
             spectral_bin_edges=spectral_bin_edges,
             spectral_unit=spectral_unit,

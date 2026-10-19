@@ -244,7 +244,6 @@ def _init_scanner(
     *,
     xmin: int,
     xmax: int,
-    ymin: int,
     ymax: int,
 ) -> _Scanner | None:
     if len(polygon) < 3:
@@ -429,7 +428,7 @@ def _scanner_row_bounds(
             )
         input_overlap.append(vin)
     scanner = _init_scanner(
-        input_overlap, xmin=0, xmax=src_w - 1, ymin=0, ymax=src_h - 1
+        input_overlap, xmin=0, xmax=src_w - 1, ymax=src_h - 1
     )
     if scanner is None:
         return (
@@ -664,7 +663,6 @@ def exact_square_drizzle_project(
     value_semantics: str,
     drizzle_pixfrac: float,
     pixel_area_sr_map_fn,
-    representative_pixel_area_fn,
     chunk_pixels: int,
     return_variance_weight: bool = False,
 ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
@@ -908,7 +906,6 @@ def exact_point_drizzle_project(
     *,
     value_semantics: str,
     pixel_area_sr_map_fn,
-    representative_pixel_area_fn,
     chunk_pixels: int,
 ) -> tuple[Tensor, Tensor]:
     image = image.to(dtype=torch.float32)

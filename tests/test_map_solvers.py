@@ -461,7 +461,6 @@ def test_spherical_harmonic_multi_observation_pcg_with_exact_diagonal_reduces_co
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
 
@@ -521,7 +520,6 @@ def test_composed_operator_blocks_support_mixed_image_and_state_constraints() ->
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
 
@@ -955,7 +953,6 @@ def test_harmonic_degree_prior_operator_stabilizes_mixed_block_solve() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
 
@@ -1032,7 +1029,6 @@ def test_harmonic_dense_prior_operator_reduces_correlated_mode_penalty() -> None
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
 
@@ -1081,7 +1077,6 @@ def test_harmonic_cl_prior_operator_reduces_power_spectrum_penalty() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
     result = operator_set.solve_normal_equation_cg(
@@ -1161,7 +1156,6 @@ def test_teb_cl_prior_joint_temperature_polarization_reduce_cross_spectrum_penal
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(joint_truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     result = operator_set.solve_normal_equation_cg(
@@ -1257,7 +1251,6 @@ def test_harmonic_survey_split_reduces_shared_component_leakage() -> None:
     split_diagonal = split_set.estimate_normal_operator_diagonal(
         split_data,
         initial_probe=torch.zeros_like(split_truth),
-        max_entries=64,
         damping=1.0e-4,
     )
     split_result = split_set.solve_normal_equation_cg(
@@ -1273,7 +1266,6 @@ def test_harmonic_survey_split_reduces_shared_component_leakage() -> None:
     shared_only_diagonal = shared_only_block.estimate_normal_operator_diagonal(
         shared_only_data,
         initial_probe=torch.zeros_like(shared_truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     shared_only_result = shared_only_block.solve_normal_equation_cg(
@@ -1374,7 +1366,6 @@ def test_spin_harmonic_prior_operator_stabilizes_mixed_block_solve() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=32,
         damping=1.0e-4,
     )
 
@@ -1430,7 +1421,6 @@ def test_spin_harmonic_kronecker_prior_reduces_separable_penalty() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     result = operator_set.solve_normal_equation_cg(

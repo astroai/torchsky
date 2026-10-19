@@ -218,26 +218,3 @@ async def val_chi2_map(pid: str, request: Request) -> Response:
     return await run_in_thread(_chi2_map_sync, pid, request)
 
 
-def _dr_report_sync(pid: str, request: Request) -> JSONResponse:
-    from ..renderers.image import detect_dynamic_range
-
-    pairs = _pairs(request)
-    if pid not in pairs:
-        raise HTTPException(status_code=404, detail="Pair not registered")
-    r = pairs[pid]
-    residual = r.model - r.truth
-    return JSONResponse(
-        {
-            "truth": detect_dynamic_range(r.truth),
-            "model": detect_dynamic_range(r.model),
-            "residual": detect_dynamic_range(residual),
-        }
-    )
-
-
-@router.get("/{pid}/dr_report")
-async def val_dr_report(pid: str, request: Request) -> JSONResponse:
-    """Return dynamic-range report for truth, model, and residual."""
-    from .._blocking import run_in_thread
-
-    return await run_in_thread(_dr_report_sync, pid, request)

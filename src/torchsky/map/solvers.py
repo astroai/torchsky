@@ -547,7 +547,6 @@ class BoundObservationOperator:
         data: Tensor,
         *,
         initial_probe: Tensor | None = None,
-        max_entries: int = 4096,
         damping: float = 0.0,
         num_probes: int = 16,
     ) -> Tensor:
@@ -947,7 +946,6 @@ class BoundObservationOperatorSet:
         data: Sequence[Tensor],
         *,
         initial_probe: Tensor | None = None,
-        max_entries: int = 4096,
         damping: float = 0.0,
         num_probes: int = 16,
     ) -> Tensor:

@@ -262,10 +262,8 @@ def _slice_prepared_target(
 def _window_large_tan_target(
     *,
     source_wcs: WCS,
-    source_header: dict,
     source_shape: tuple[int, int],
     target: _PreparedImagePlaneTarget,
-    target_header: dict,
     value_semantics: MapValueSemantics,
 ) -> tuple[_PreparedImagePlaneTarget | None, tuple[int, int, int, int] | None]:
     if wcs_has_distortion(target.wcs):

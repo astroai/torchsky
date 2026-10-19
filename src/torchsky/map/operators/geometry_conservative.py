@@ -18,7 +18,6 @@ def _exact_conservative_polygon_project(
     value_semantics: str,
     drizzle_pixfrac: float = 1.0,
     pixel_area_sr_map_fn,
-    representative_pixel_area_fn,
     chunk_pixels: int,
     return_variance_weight: bool = False,
 ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
@@ -176,7 +175,6 @@ def conservative_polygon_project(
     value_semantics: str,
     drizzle_pixfrac: float = 1.0,
     pixel_area_sr_map_fn,
-    representative_pixel_area_fn,
     chunk_pixels: int,
     return_variance_weight: bool = False,
 ):
@@ -194,7 +192,6 @@ def conservative_polygon_project(
         value_semantics=value_semantics,
         drizzle_pixfrac=drizzle_pixfrac,
         pixel_area_sr_map_fn=pixel_area_sr_map_fn,
-        representative_pixel_area_fn=representative_pixel_area_fn,
         chunk_pixels=chunk_pixels,
         return_variance_weight=return_variance_weight,
     )

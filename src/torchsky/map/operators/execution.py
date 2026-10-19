@@ -1282,7 +1282,6 @@ def project_image_observation_geometry(
     value_semantics: str,
     drizzle_pixfrac: float,
     pixel_area_sr_map_fn,
-    representative_pixel_area_fn,
     chunk_pixels: int,
     resample_weighted_to_target_fn: ResampleToTargetFn,
     forward_project_weighted_to_target_fn: ForwardProjectFn,
@@ -1303,7 +1302,6 @@ def project_image_observation_geometry(
                 value_semantics=value_semantics,
                 drizzle_pixfrac=drizzle_pixfrac,
                 pixel_area_sr_map_fn=pixel_area_sr_map_fn,
-                representative_pixel_area_fn=representative_pixel_area_fn,
                 chunk_pixels=chunk_pixels,
                 return_variance_weight=return_variance_weight,
             )
@@ -1314,7 +1312,6 @@ def project_image_observation_geometry(
             target,
             value_semantics=value_semantics,
             pixel_area_sr_map_fn=pixel_area_sr_map_fn,
-            representative_pixel_area_fn=representative_pixel_area_fn,
             chunk_pixels=chunk_pixels,
         )
         return (numer, weight, weight) if return_variance_weight else (numer, weight)
@@ -1327,7 +1324,6 @@ def project_image_observation_geometry(
             value_semantics=value_semantics,
             drizzle_pixfrac=drizzle_pixfrac,
             pixel_area_sr_map_fn=pixel_area_sr_map_fn,
-            representative_pixel_area_fn=representative_pixel_area_fn,
             chunk_pixels=chunk_pixels,
             return_variance_weight=return_variance_weight,
         )

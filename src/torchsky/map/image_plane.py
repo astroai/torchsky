@@ -1421,10 +1421,8 @@ def _project_observation_to_target_chunk(
             source_wcs = WCS(header_dict_obs)
         prepared_target_view, target_window = _window_large_tan_target(
             source_wcs=source_wcs,
-            source_header=header_dict_obs,
             source_shape=tuple(image.shape),
             target=prepared_target,
-            target_header=target_header,
             value_semantics=value_semantics,
         )
         if prepared_target_view is None:
@@ -1454,7 +1452,6 @@ def _project_observation_to_target_chunk(
                 value_semantics=value_semantics,
                 drizzle_pixfrac=drizzle_pixfrac,
                 pixel_area_sr_map_fn=pixel_area_sr_map,
-                representative_pixel_area_fn=representative_pixel_area_sr,
                 chunk_pixels=_DRIZZLE_FORWARD_CHUNK_PIXELS,
                 resample_weighted_to_target_fn=_resample_weighted_to_target,
                 forward_project_weighted_to_target_fn=(
