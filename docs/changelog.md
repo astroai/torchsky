@@ -45,6 +45,11 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **Map sky matching split**: `detect_outliers`, `match_sky`, their private
+  helpers, and the sky-matching tile resolver moved from the 5.3k-line
+  `map/image_plane.py` to `map/sky_matching.py`; the image-plane module now
+  re-exports the public names, so imports and the `torchsky.map` facade are
+  unchanged. `image_plane.py` drops by ~450 lines.
 - **WCS core split**: the 5.2k-line `wcs/core.py` module now keeps the `WCS`
   state machine while rotations/TAN projection live in `wcs/_rotation.py`,
   footprint/geometry/serialization in `wcs/_geometry.py`, and the shared
