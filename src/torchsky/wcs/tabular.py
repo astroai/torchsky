@@ -1145,21 +1145,7 @@ def _extract_separable_tab_axis(
     return reference[:, 0]
 
 
-def _as_independent_tab_array(
-    value: Any, name: str, tab_axis_number: int | None = None
-) -> Tensor:
-    tensor = torch.as_tensor(value)
-    squeezed = torch.squeeze(tensor)
-    if squeezed.ndim == 1:
-        return squeezed
-    if tab_axis_number is None:
-        raise ValueError(
-            f"{name} is multidimensional and requires PVi_3 tabular-axis mapping"
-        )
-    return _extract_separable_tab_axis(tensor, name, tab_axis_number)
-
-
-def _as_tabular_index_array(
+def _as_tab_coordinate_array(
     value: Any, name: str, tab_axis_number: int | None = None
 ) -> Tensor:
     tensor = torch.as_tensor(value)
@@ -1239,7 +1225,7 @@ def tabular_axes_from_fits(
             extlev=extlev,
         )
         coord_col = str(coord_col_raw).strip()
-        coord = _as_independent_tab_array(
+        coord = _as_tab_coordinate_array(
             _read_table_column(table, coord_col),
             f"PS{axis_number}_1 column {coord_col!r}",
             tab_axis_number,
@@ -1253,7 +1239,7 @@ def tabular_axes_from_fits(
             )
         else:
             index_col = str(index_col_raw).strip()
-            pixel = _as_tabular_index_array(
+            pixel = _as_tab_coordinate_array(
                 _read_table_column(table, index_col),
                 f"PS{axis_number}_2 column {index_col!r}",
                 tab_axis_number,
@@ -1358,7 +1344,7 @@ def coupled_tabular_wcs_and_axes_from_fits(
             )
         else:
             index_col = str(index_col_raw).strip()
-            pixel_axis = _as_tabular_index_array(
+            pixel_axis = _as_tab_coordinate_array(
                 _read_table_column(table, index_col),
                 f"PS{axis_number}_2 column {index_col!r}",
                 tab_axis_number,

@@ -6,6 +6,8 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from .._dtype import as_work_tensor as _as_tensor
+
 SPEED_OF_LIGHT = 299792458.0  # m / s
 PLANCK = 6.62607015e-34  # J s
 ELECTRON_VOLT = 1.602176634e-19  # J
@@ -131,16 +133,6 @@ def spectral_unit_scale(spectral_type: str, unit: str | None = None) -> float:
             f"unsupported spectral unit {unit!r} for type {kind}"
         ) from exc
     return 1.0
-
-
-def _work_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
-
-
-def _as_tensor(value: Any) -> Tensor:
-    if isinstance(value, Tensor):
-        return value.to(dtype=_work_dtype(value.device))
-    return torch.as_tensor(value, dtype=torch.float64)
 
 
 def _rest_frequency(

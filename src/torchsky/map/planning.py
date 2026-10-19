@@ -7,6 +7,8 @@ lazily to avoid a module import cycle.
 
 from __future__ import annotations
 
+from ._lazy import image_plane as _image_plane
+
 import math
 from collections.abc import Sequence
 from typing import Any
@@ -29,11 +31,6 @@ from .spectral_projection import (
 )
 from .operators.image_grid import normalized_header_for_shape, target_shape_from_header
 from ..wcs import WCS
-
-
-def _image_plane():
-    from . import image_plane
-    return image_plane
 
 
 def _spherical_union_center(footprints: Tensor) -> tuple[float, float]:

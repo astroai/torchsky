@@ -2,6 +2,8 @@ import math
 from typing import Sequence, Tuple
 
 import torch
+
+from .._dtype import work_dtype as _float_dtype_for_device
 from torch import Tensor
 
 try:
@@ -48,12 +50,6 @@ _NB_SWAPARRAY = torch.tensor(
     dtype=torch.int64,
 )
 UNSEEN = -1.6375e30
-
-
-def _float_dtype_for_device(device: torch.device) -> torch.dtype:
-    if device.type == "mps":
-        return torch.float32
-    return torch.float64
 
 
 def _validate_nside(nside: int) -> None:

@@ -6,6 +6,9 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from .._dtype import as_work_tensor as _as_tensor
+from .._dtype import work_dtype as _work_dtype
+
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 ARCSEC_TO_RAD = D2R / 3600.0
@@ -45,16 +48,6 @@ _FK4_CORR = torch.tensor(
     ],
     dtype=torch.float64,
 ) * 1.0e-6
-
-
-def _work_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
-
-
-def _as_tensor(value: Any) -> Tensor:
-    if isinstance(value, Tensor):
-        return value.to(dtype=_work_dtype(value.device))
-    return torch.as_tensor(value, dtype=torch.float64)
 
 
 def _to_device(value: Tensor, device: torch.device) -> Tensor:

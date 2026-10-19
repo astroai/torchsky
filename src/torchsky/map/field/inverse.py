@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -16,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..._hash import file_sha256 as _file_sha256
 from ...calibration_evidence import load_operator_calibration_split
 from ...wcs import WCS
 
@@ -63,14 +63,6 @@ _RAW_COUNT_UNITS = frozenset(
         "electrons/s",
     }
 )
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _validate_spatial_tile_hw(
@@ -2738,7 +2730,7 @@ def load_stationary_calibrated_band_observations(
         )
     manifest_resolved = Path(manifest_path).resolve()
     report_resolved = Path(fit_report_path).resolve()
-    manifest_sha = _sha256_file(manifest_resolved)
+    manifest_sha = _file_sha256(manifest_resolved)
     report = json.loads(report_resolved.read_text(encoding="utf-8"))
     if report.get("manifest_sha256") != manifest_sha:
         raise ValueError("operator fit report does not match the calibration manifest")
@@ -2790,7 +2782,7 @@ def load_stationary_calibrated_band_observations(
             ckpt_path = Path(group["checkpoint"])
             if not ckpt_path.is_absolute():
                 ckpt_path = (report_resolved.parent / ckpt_path).resolve()
-            ckpt_sha = _sha256_file(ckpt_path)
+            ckpt_sha = _file_sha256(ckpt_path)
             if ckpt_sha != group.get("checkpoint_sha256"):
                 raise ValueError(f"{detector}/{role} checkpoint hash mismatch")
             arrays = load_operator_calibration_split(
@@ -2925,7 +2917,7 @@ def load_stationary_calibrated_band_observations(
                 raise ValueError(
                     "measured passband path and sha256 must both be provided when declared"
                 )
-            actual_pb_sha = _sha256_file(Path(str(passband_path)))
+            actual_pb_sha = _file_sha256(Path(str(passband_path)))
             if actual_pb_sha != str(passband_sha):
                 raise ValueError("measured passband SHA-256 hash mismatch")
         key = _context_key(ctx)

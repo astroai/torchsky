@@ -10,6 +10,8 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
+from .._dtype import work_complex_dtype as _preferred_complex_dtype
+from .._dtype import work_dtype as _preferred_real_dtype
 from .._native import cpp as _cpp
 from torchfits import read_tensor as read_image
 from torchfits.table import read_torch as read_table
@@ -209,14 +211,6 @@ def _maybe_compile(fn):
             return result
 
     return _compiled_or_eager
-
-
-def _preferred_real_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
-
-
-def _preferred_complex_dtype(device: torch.device) -> torch.dtype:
-    return torch.complex64 if device.type == "mps" else torch.complex128
 
 
 def _accumulate_add(

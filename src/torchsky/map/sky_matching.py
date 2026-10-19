@@ -8,6 +8,8 @@ modules do not import each other at module import time.
 
 from __future__ import annotations
 
+from ._lazy import image_plane as _image_plane
+
 import dataclasses
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
@@ -27,11 +29,6 @@ from .observation import (
 from .sky import CrossExposureSkyCorrector, MeshSkyEstimator
 from .windowing import _build_target_world_grid
 from ..wcs import WCS
-
-
-def _image_plane():
-    from . import image_plane
-    return image_plane
 
 
 def _load_existing_observation_valid_mask(

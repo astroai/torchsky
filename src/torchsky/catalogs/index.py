@@ -6,6 +6,8 @@ import math
 from dataclasses import dataclass
 
 import torch
+
+from .._dtype import work_dtype as _work_dtype
 from torch import Tensor
 
 from ..sphere import great_circle_distance
@@ -14,10 +16,6 @@ from ..sphere import healpix as _healpix
 _MAX_NSIDE = 65536
 _TARGET_POINTS_PER_PIXEL = 64
 _BATCHED_RING_HOPS_MAX = 4
-
-
-def _work_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
 
 
 def nside_for_cap(radius_rad: float, *, max_nside: int = _MAX_NSIDE) -> int:

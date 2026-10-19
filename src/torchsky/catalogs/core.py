@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, cast
 
 import torch
+
+from .._dtype import work_dtype as _work_dtype
 from torch import Tensor
 from torch.utils.data import IterableDataset, get_worker_info
 
@@ -130,10 +132,6 @@ def _candidate_dec_window(
     start = int(torch.searchsorted(right_dec_sorted, lower, right=False).item())
     stop = int(torch.searchsorted(right_dec_sorted, upper, right=True).item())
     return start, stop
-
-
-def _work_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
 
 
 def _empty_crossmatch(device: torch.device) -> CrossmatchResult:

@@ -5,13 +5,11 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
+
+from .._dtype import work_dtype as _float_dtype
 from torch import Tensor
 
 from . import healpix as _healpix
-
-
-def _float_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
 
 
 def _as_float_tensor(x: Tensor | float) -> Tensor:

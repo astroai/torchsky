@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -10,18 +9,11 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from ._hash import file_sha256 as _file_sha256
 from .instrument import nircam_imaging_band
 from torchfits import read
 
 _ROLES = {"psf", "background"}
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
 
 def load_operator_calibration_split(
     manifest: Path | dict[str, Any],

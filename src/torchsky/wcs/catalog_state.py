@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Any, Literal
+from typing import Literal
 
 import torch
 from torch import Tensor
 
+from .._dtype import as_work_tensor as _as_f64
 from .frames import (
     _to_device,
-    _work_dtype,
     canonical_celestial_frame,
     convert_celestial,
     propagate_proper_motion,
@@ -27,12 +27,6 @@ Representation = Literal["lonlat_deg", "unit_xyz", "barycentric_au"]
 
 # IAU: 1 pc is the distance at which 1 au subtends 1 arcsecond.
 _AU_PER_PC = 648000.0 / math.pi
-
-
-def _as_f64(value: Any) -> Tensor:
-    if isinstance(value, Tensor):
-        return value.to(dtype=_work_dtype(value.device))
-    return torch.as_tensor(value, dtype=torch.float64)
 
 
 def _tangent_basis(lon: Tensor, lat: Tensor) -> tuple[Tensor, Tensor]:
