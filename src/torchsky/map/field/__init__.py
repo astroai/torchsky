@@ -110,7 +110,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "load_strainer_trunk_checkpoint": (".core", "load_strainer_trunk_checkpoint"),
     "pretrain_strainer_trunk_synthetic": (".core", "pretrain_strainer_trunk_synthetic"),
     "save_strainer_trunk_checkpoint": (".core", "save_strainer_trunk_checkpoint"),
-    "_BaseFieldModel": (".core", "_BaseFieldModel"),
     "evaluate_field_coordinates_vmapped": (".rendering", "evaluate_field_coordinates_vmapped"),
     "iter_field_observation_tiles": (".rendering", "iter_field_observation_tiles"),
     "render_field_cube": (".rendering", "render_field_cube"),
@@ -136,7 +135,6 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "fit_field_component_decomposition": (".training", "fit_field_component_decomposition"),
     "fit_field_model": (".training", "fit_field_model"),
     "fit_structured_noise_crossfit": (".training", "fit_structured_noise_crossfit"),
-    "_noise_pretrain_field_model": (".training", "_noise_pretrain_field_model"),
     "KinematicState": (".implicit_forward", "KinematicState"),
     "SurveyDataTerm": (".implicit_forward", "SurveyDataTerm"),
     "multi_survey_charbonnier_loss": (".implicit_forward", "multi_survey_charbonnier_loss"),
@@ -386,8 +384,6 @@ __all__ = [
     "suggest_spectral_model_capacity",
     "sky_encoding",
     "training",
-    "_BaseFieldModel",
-    "_noise_pretrain_field_model",
 ]
 
 

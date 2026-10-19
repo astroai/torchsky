@@ -611,22 +611,6 @@ def _half_plane_clip_batch(
     return x_out, y_out, n_out
 
 
-def _batch_quad_pixel_areas(
-    quad_x: Tensor,
-    quad_y: Tensor,
-    centers: Tensor,
-) -> Tensor:
-    M = centers.shape[0]
-    if M == 0:
-        return torch.empty(0, dtype=quad_x.dtype, device=quad_x.device)
-
-    return _batch_quads_pixel_areas(
-        quad_x.unsqueeze(0).expand(M, -1),
-        quad_y.unsqueeze(0).expand(M, -1),
-        centers,
-    )
-
-
 def _batch_quads_pixel_areas(
     quad_x: Tensor,
     quad_y: Tensor,

@@ -125,8 +125,8 @@ def test_create_app_defaults_to_no_cors_origins(tmp_fits_dir: Path):
     app = create_app(root_dir=str(tmp_fits_dir))
     cors = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
 
-    assert cors.options["allow_origins"] == []
-    assert cors.options["allow_credentials"] is False
+    assert cors.kwargs["allow_origins"] == []
+    assert cors.kwargs["allow_credentials"] is False
 
 
 def test_static_viz_html_escapes_metadata_and_tracks_aria_state():
@@ -372,3 +372,10 @@ def test_catalog_filter_moc_column_discovery(tmp_path: Path):
     assert r_f.status_code == 200, r_f.text
     body = r_f.json()
     assert body["n_in_moc"] >= 1
+
+
+def test_viz_router_modules_import() -> None:
+    import importlib
+
+    for name in ("fits", "hips", "moc", "validate", "catalog"):
+        importlib.import_module(f"torchsky.viz.routers.{name}")

@@ -28,7 +28,7 @@ from torchsky.map.field import (
 )
 from torchsky.map.solvers import ComponentDecompositionDiagnostics
 from torchsky.spectral import SpectralAxis
-from torchsky.map.field import _noise_pretrain_field_model
+from torchsky.map.field.training import _noise_pretrain_field_model
 from torchsky.map.field.bandpass import bandpass_quadrature
 from torchsky.map.field.core import _BaseFieldModel
 from torchsky.map.field.hashgrid import HashGridEncoder

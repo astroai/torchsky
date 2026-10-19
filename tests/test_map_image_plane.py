@@ -13,7 +13,6 @@ import torchsky.map.image_plane as image_plane_mod
 import torchsky.map.operators.execution as execution_mod
 import torchsky.map.operators.geometry_drizzle as drizzle_geometry_mod
 from torchsky.map.operators.geometry_drizzle import (
-    _batch_quad_pixel_areas,
     _batch_quads_pixel_areas,
     _scanner_row_bounds,
 )
@@ -60,8 +59,10 @@ def test_batched_square_drizzle_areas_match_independent_quads() -> None:
     batched = _batch_quads_pixel_areas(quad_x, quad_y, centers)
     independent = torch.stack(
         [
-            _batch_quad_pixel_areas(
-                quad_x[index], quad_y[index], centers[index : index + 1]
+            _batch_quads_pixel_areas(
+                quad_x[index : index + 1],
+                quad_y[index : index + 1],
+                centers[index : index + 1],
             )[0]
             for index in range(2)
         ]
