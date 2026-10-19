@@ -133,6 +133,14 @@ owned by `torchfits`.
   (`torchfits.HDUList`) exposes integer indexing and `__len__` but not
   `__iter__`. The resolver now falls back to positional lookup, so real
   `-TAB` FITS products load through the documented boundary.
+- **Viz routes importing a deleted helper**: the blocking helper
+  `viz/_blocking.py` had been removed by a "no importers" cleanup while sixteen
+  lazy imports in the fits, hips, moc, validate, and catalog routers still
+  referenced it, so those endpoints failed on first request. Restored it on
+  Starlette's thread pool, installed the viz test dependencies so the server
+  suite actually runs, and added a static lazy-import-target test
+  (`tests/test_lazy_import_targets.py`) that resolves every function-local
+  relative import against the package tree.
 - **Center-native WCS inverse rotation**: `world_to_pixel` for cylindrical,
   all-sky, pseudocylindrical, and polyconic projections reused the pole-native
   rotation basis, so any header with a non-zero reference latitude
@@ -152,6 +160,25 @@ owned by `torchfits`.
   containers, axis helpers, resampling, and its own Doppler shift; every
   namespace has an explicit `__all__`, checked by
   `tests/test_public_namespaces.py`.
+- **Breaking: experimental field/native module paths renamed** for clarity:
+  `map/field/native_physical.py` → `native_integrated_read.py`
+  (`NativeIntegratedReadLikelihood`), `joint_native.py` →
+  `joint_native_likelihood.py`, `neural_inverse.py` → `gauss_newton.py`
+  (`gauss_newton_pcg_step`), and `map/operators/lensing.py` →
+  `magnification.py`. The old module paths are gone; public entry points are
+  the `torchsky.map.field` facade names.
+- **Second lean-code pass (map, field, solvers, viz)**: removed the
+  undocumented `learned_optimizer` and `calibration_partitions` prototypes,
+  the unused `representative_pixel_area_fn` plumbing through the geometry
+  kernels, the no-op `estimate_normal_operator_diagonal(max_entries)` option,
+  unused parameters in cube/windowing/scanner helpers, the unused
+  `/api/validate/{pid}/dr_report` route, dead static-UI blocks (catalog
+  overlay controls, validation stats card, unused footer fields), and the
+  abandoned Vite shell. Registered the documented `bacon` frequency-adaptive
+  model kind in the factory and documented every reachable expert model kind.
+- **API manifest completed**: the frozen public-surface manifest now covers all
+  30 namespaces (adding spectral, spectrophotometry, redshift, log_lambda,
+  extinction, cosmology, transforms, quality, and viz) instead of a subset.
 
 ### Removed
 - FITS image/table/checksum implementation tests and benchmarks now owned by

@@ -39,6 +39,12 @@ Scientific campaigns, comparator evidence, and acceptance status live in
 - **Release mechanics:** reconcile `main` with the release branch, configure
   PyPI trusted publishers and GitHub Pages, tag `v0.4.0` / `v0.1.0`, then run
   post-release verification from PyPI.
+- **Publishing workflows overlap:** `.github/workflows/build_wheels.yml` and
+  `.github/workflows/publish.yml` both trigger on `v*` tags and both upload to
+  PyPI. Pick one canonical multi-platform trusted-publishing workflow (the
+  release checklist and README already point at `build_wheels.yml`; the newer
+  `publish.yml` adds tag/version checks), merge the useful verification steps,
+  and delete the other before tagging.
 
 ## Calibrated-field work (post-0.4.0 unless promoted)
 
