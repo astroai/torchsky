@@ -44,6 +44,16 @@ owned by `torchfits`.
   Irregular axes remain an index-space interpolation with a recorded bias
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
+### Changed
+- **Lean-code pass (native, WCS, sphere, map)**: removed the unused NumPy
+  HEALPix bindings and dead native kernels (68 → 56 exported symbols), the
+  pre-`torchfits` CFITSIO vendor tree and CI hooks, the merged
+  `torchsky.cpp` compatibility shim, unused logging and CMake options, dead
+  Astropy-mimic WCS methods, the unused `torch.func` SIP/TPV distortion path,
+  and duplicated field/atlas/Fourier/diagnostic helpers. `torchsky.map.field`
+  is now a lazy facade (1 field module imported instead of 28). Public API
+  names were not changed.
+
 ### Removed
 - **Legacy CFITSIO vendoring**: `extern/vendor.sh`, its version pin, the
   generated `extern/cfitsio` tree, the CI vendor steps, and the manifest entry
