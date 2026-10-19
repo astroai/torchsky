@@ -80,6 +80,12 @@ owned by `torchfits`.
   and the scripts are copied into the built site so their links work.
 
 ### Fixed
+- **Native extension loader on PyPI torch wheels**: the compiled module was
+  named `_cpp`, so `import torchsky._cpp` dlopened libtorch before torch had
+  loaded it; conda environments hid this, PyPI torch wheels do not. The shared
+  object is now `_cpp_ext` behind a tiny `torchsky/_cpp.py` loader that
+  preloads torch and re-exports every native name (public import path
+  unchanged). Found by the CANFAR headless GPU subject-install smoke.
 - **FITS `-TAB` default indexing vector**: the fallback table index was
   `0..N-1`; the FITS/table-WCS convention is `1..N`, so every tabulated
   coordinate (e.g. a real `TIME-TAB` axis) was shifted by one index and the
