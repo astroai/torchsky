@@ -22,18 +22,18 @@ def plan(*args: Any, **kwargs: Any) -> Any:
 
 _EXPORTS: dict[str, tuple[str, str]] = {
     # Clean Public API Facade
-    "Observation": ("torchsky.map.image_plane", "Observation"),
-    "Target": ("torchsky.map.image_plane", "Target"),
-    "CubeTarget": ("torchsky.map.image_plane", "CubeTarget"),
-    "ResampleConfig": ("torchsky.map.image_plane", "ResampleConfig"),
-    "SkyConfig": ("torchsky.map.image_plane", "SkyConfig"),
-    "OutlierConfig": ("torchsky.map.image_plane", "OutlierConfig"),
-    "StackConfig": ("torchsky.map.image_plane", "StackConfig"),
-    "MapResult": ("torchsky.map.image_plane", "MapResult"),
-    "CubeResult": ("torchsky.map.image_plane", "CubeResult"),
-    "MultibandResult": ("torchsky.map.image_plane", "MultibandResult"),
-    "HealpixResult": ("torchsky.map.image_plane", "HealpixResult"),
-    "ApertureUncertainty": ("torchsky.map.image_plane", "ApertureUncertainty"),
+    "Observation": ("torchsky.map.observation", "Observation"),
+    "Target": ("torchsky.map.observation", "Target"),
+    "CubeTarget": ("torchsky.map.observation", "CubeTarget"),
+    "ResampleConfig": ("torchsky.map.observation", "ResampleConfig"),
+    "SkyConfig": ("torchsky.map.observation", "SkyConfig"),
+    "OutlierConfig": ("torchsky.map.observation", "OutlierConfig"),
+    "StackConfig": ("torchsky.map.observation", "StackConfig"),
+    "MapResult": ("torchsky.map.observation", "MapResult"),
+    "CubeResult": ("torchsky.map.observation", "CubeResult"),
+    "MultibandResult": ("torchsky.map.observation", "MultibandResult"),
+    "HealpixResult": ("torchsky.map.observation", "HealpixResult"),
+    "ApertureUncertainty": ("torchsky.map.observation", "ApertureUncertainty"),
     "ProductSpec": ("torchsky.map.product", "ProductSpec"),
     "BandpassSpec": ("torchsky.map.product", "BandpassSpec"),
     "ProductResult": ("torchsky.map.product", "ProductResult"),
@@ -70,13 +70,13 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "splat_to_native": ("torchsky.map.splat", "splat_to_native"),
     "SplatDiagnostics": ("torchsky.map.splat", "SplatDiagnostics"),
     # Compatibility / Internal / Phase 1 entries resolved lazily
-    "BandMetadataTable": ("torchsky.map.image_plane", "BandMetadataTable"),
-    "ImageObservation": ("torchsky.map.image_plane", "ImageObservation"),
+    "BandMetadataTable": ("torchsky.map.observation", "BandMetadataTable"),
+    "ImageObservation": ("torchsky.map.observation", "ImageObservation"),
     "ImagePlaneMapMaker": ("torchsky.map.image_plane", "ImagePlaneMapMaker"),
     "MapResamplingKernel": ("torchsky.map.image_plane", "MapResamplingKernel"),
     "MapStackingMethod": ("torchsky.map.image_plane", "MapStackingMethod"),
     "MapValueSemantics": ("torchsky.map.image_plane", "MapValueSemantics"),
-    "PlannedImagePlaneTarget": ("torchsky.map.image_plane", "PlannedImagePlaneTarget"),
+    "PlannedImagePlaneTarget": ("torchsky.map.observation", "PlannedImagePlaneTarget"),
     "PlannedImagePlaneCubeTarget": (
         "torchsky.map.image_plane",
         "PlannedImagePlaneCubeTarget",
@@ -498,19 +498,21 @@ def __dir__() -> list[str]:
 
 if TYPE_CHECKING:
     from .plan import MapPlanV2 as MapPlanV2, load_map_plan as load_map_plan
-    from .image_plane import (
+    from .observation import (
+        ApertureUncertainty as ApertureUncertainty,
+        CubeResult as CubeResult,
         CubeTarget as CubeTarget,
         HealpixResult as HealpixResult,
-        ApertureUncertainty as ApertureUncertainty,
         MapResult as MapResult,
         MultibandResult as MultibandResult,
         Observation as Observation,
         OutlierConfig as OutlierConfig,
         ResampleConfig as ResampleConfig,
         SkyConfig as SkyConfig,
-        CubeResult as CubeResult,
         StackConfig as StackConfig,
         Target as Target,
+    )
+    from .image_plane import (
         aperture_uncertainty as aperture_uncertainty,
         blot as blot,
         coadd as coadd,

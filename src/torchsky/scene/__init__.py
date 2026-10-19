@@ -18,7 +18,7 @@ from ..map.field import (
     PSFSpec,
     predict_observation_mean,
 )
-from ..map.image_plane import ImageObservation
+from ..map.observation import ImageObservation
 from ..map.operators.resampling import sample_image_plane_batched_channels
 from ..map.product import BandpassSpec, ProductSpec
 from ..map.scenes import (

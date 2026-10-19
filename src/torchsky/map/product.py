@@ -15,16 +15,15 @@ from ..device import default_compute_device
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
 from ..spectrophotometry import Passband
-from .image_plane import (
+from .observation import (
     BandMetadataTable,
+    CubeResult,
     ImageObservation,
-    MapResamplingKernel,
     MapResult,
-    MapStackingMethod,
-    MapValueSemantics,
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
-    CubeResult,
+)
+from .image_plane import (
     coadd_image_plane,
     coadd_image_plane_cube,
     plan_image_plane_cube_target,
@@ -32,6 +31,9 @@ from .image_plane import (
 )
 from .field.types import FieldSpatialSampling
 from .operators.config import (
+    MapResamplingKernel,
+    MapStackingMethod,
+    MapValueSemantics,
     validate_map_resampling_kernel,
     validate_map_stacking_method,
     validate_map_value_semantics,

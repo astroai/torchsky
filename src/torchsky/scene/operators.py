@@ -9,7 +9,7 @@ from torch import Tensor, nn
 
 from ..map.field import FieldObservation
 from ..map.field.implicit_forward import predict_observation_mean as _predict_mean
-from ..map.image_plane import ImageObservation
+from ..map.observation import ImageObservation
 from ..map.operators.bundle import (
     ObservationOperatorBundle,
     field_observation_operator_bundle,

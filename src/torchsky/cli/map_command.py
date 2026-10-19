@@ -31,7 +31,7 @@ from ..map.field import (
     make_field_model,
     save_field_artifact,
 )
-from ..map.image_plane import (
+from ..map.observation import (
     ImageObservation,
 )
 from ..map.io_utils import write_map_product
