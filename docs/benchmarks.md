@@ -23,3 +23,13 @@ pixi run torchsky-harness run bench_map_compat -- --size 32 --n-obs 2 --runs 1 \
 The harness records the imported subject and distinguishes process completion
 from scientific validity. Core pre-push remains `pixi run preflight-push`;
 full local tests and scientific campaigns remain opt-in.
+
+## Release-candidate evidence
+
+The 0.4.0 release-candidate bundle lives in
+[`torchsky-harness/docs/releases/0.1.0/baseline.md`](https://github.com/astroai/torchsky-harness/blob/main/docs/releases/0.1.0/baseline.md).
+It records one subject artifact identity, all thirteen declared gates as
+`established`, the comparison limits, and the CANFAR GPU validation run. Reproduce
+a gate with the Pixi tasks in that repository; the package-side bounded tests in
+this repository are not a substitute for the reference comparisons.
+

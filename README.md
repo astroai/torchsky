@@ -1,9 +1,13 @@
 # torchsky
 
-[![PyPI version](https://img.shields.io/pypi/v/torchsky.svg)](https://pypi.org/project/torchsky/)
-[![Wheels build](https://github.com/sfabbro/torchsky/actions/workflows/build_wheels.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/build_wheels.yml)
-[![CI status](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml)
+[![Wheels build](https://github.com/astroai/torchsky/actions/workflows/build_wheels.yml/badge.svg)](https://github.com/astroai/torchsky/actions/workflows/build_wheels.yml)
+[![CI status](https://github.com/astroai/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/astroai/torchsky/actions/workflows/ci.yml)
+[![Docs](https://github.com/astroai/torchsky/actions/workflows/docs.yml/badge.svg)](https://github.com/astroai/torchsky/actions/workflows/docs.yml)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+> **Pre-release:** 0.4.0 is the current development line and is not yet on
+> PyPI. It ships when the correctness, performance, API, documentation, and
+> harness goals in the [roadmap](docs/roadmap.md) are met.
 
 `torchsky` is a **high-performance, torch-native astronomy stack** for
 survey-scale coordinates, spherical geometry, catalog indexing, mapmaking,
@@ -51,29 +55,46 @@ Torchsky retains bounded package tests and performance smoke checks for its own
 runtime paths. FITS image/table throughput belongs to `torchfits`. See the
 [scientific evaluation guide](docs/benchmarks.md) for the ownership boundary.
 
+Current release-candidate evidence (same-machine, reference comparisons):
+
+- **WCS**: 38 cases against astropy (30 projections plus reference-latitude-offset
+  cases). Angular parity max `4.13e-5 asec` (the AIR formula floor; every other
+  case `<=1.5e-8 asec`), pole/seam-excluded round trip `4.13e-5 asec`, pixel
+  round trip `1.27e-6 px`; forward `0.46–3.81x` and inverse `0.97–6.01x`
+  astropy throughput.
+- **HEALPix**: 12 operations against healpy at nside 512, zero index/angle
+  mismatches (max `1.14e-13 deg`), throughput `1.02–2.19x`.
+- **Sphere and spin SHT**: parity gates pass against healpy; throughput ratios
+  are recorded, not gated.
+- **Catalogs**: crossmatch against astropy SkyCoord, max separation difference
+  `1.13e-10 asec`.
+- **GPU**: 17 WCS cases on CUDA (including the reference-offset cases) all OK at
+  max `8.2e-3 asec` angular parity.
+
 ---
 
 ## Installation
 
-Install the pre-built wheels from PyPI:
+`torchsky` is not yet published on PyPI; install the release wheel or build
+from source in the meantime:
 
 ```bash
-pip install torchsky
+# Wheel built from this repository (see docs/release.md)
+pip install "torchsky @ file:///path/to/torchsky-0.4.0-cp*-*.whl"
 ```
 
 Package metadata supports Python `>=3.12`, PyTorch `>=2.13`, and torchfits
-`>=1.0.0` without upper caps. Native wheels still fail closed on a mismatched
+`>=1.0.0` without upper caps. Native wheels fail closed on a mismatched
 compiled PyTorch ABI; build from source against a newer supported runtime when
-needed. Install `torchfits` separately when a workflow reads or writes
+needed. Install `torchfits` alongside torchsky when a workflow reads or writes
 FITS files:
 
 ```bash
-pip install torchsky torchfits
+pip install torchfits
 ```
 
-The integration baseline is `torchfits 1.0.0` or newer. Dataset
-classes are provided by `torchfits.data`; torchsky retains its own compatibility
-aliases for older downstream callers.
+The integration baseline is `torchfits 1.0.0` or newer. Dataset and DataLoader
+classes are provided by `torchfits.data`; torchsky does not alias them.
 
 ### Optional Extras
 
@@ -141,7 +162,7 @@ lon2, lat2 = sphere.pix2ang(1024, pix, lonlat=True, nest=True)
 Contributors should use `pixi` for environment management:
 
 ```bash
-git clone https://github.com/sfabbro/torchsky.git
+git clone https://github.com/astroai/torchsky.git
 cd torchsky
 pixi install
 pixi run dev            # Rebuild native extensions
@@ -165,6 +186,14 @@ For more information, see the [Contributing Guide](docs/contributing.md).
 - [Quick Start](docs/quickstart.md) &mdash; From a FITS file to science products in a few minutes.
 - [Getting Started Guide](docs/getting-started.md) &mdash; 10-minute introduction to the stack.
 - [Installation Guide](docs/install.md) &mdash; torchfits integration and native build configuration.
+- [Examples](docs/examples.md) &mdash; Runnable scripts, gated by `pixi run examples`.
+
+### API Reference
+- [API Router](docs/api.md) &mdash; Map of goals to namespaces and reference pages.
+- [WCS](docs/api-wcs.md), [Sphere/HEALPix](docs/api-sphere.md), [Map](docs/api-map.md),
+  [Field](docs/api-field.md), [Catalogs](docs/api-catalogs.md),
+  [Spectral](docs/api-spectral.md), [Scene](docs/api-scene.md),
+  [Runtime](docs/api-runtime.md).
 
 ### Core Modules
 - [I/O Boundary Guide](docs/io.md) &mdash; `torchfits` integration and tensor/metadata contracts.
