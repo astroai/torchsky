@@ -122,3 +122,72 @@ def test_native_rotation_maps_reference_to_native_equator() -> None:
     )
     assert math.isclose(float(phi) % 360.0, 0.0, abs_tol=1e-9)
     assert math.isclose(float(theta), 0.0, abs_tol=1e-9)
+
+
+def _tan_sip_header() -> dict:
+    return {
+        "NAXIS": 2,
+        "NAXIS1": 64,
+        "NAXIS2": 64,
+        "CTYPE1": "RA---TAN-SIP",
+        "CTYPE2": "DEC--TAN-SIP",
+        "CRPIX1": 32.5,
+        "CRPIX2": 32.5,
+        "CRVAL1": 150.0,
+        "CRVAL2": 2.0,
+        "CDELT1": -2.0e-3,
+        "CDELT2": 2.0e-3,
+        "A_ORDER": 2,
+        "B_ORDER": 2,
+        "A_2_0": 3.0e-6,
+        "A_1_1": -2.0e-6,
+        "A_0_2": 1.0e-6,
+        "B_2_0": -2.5e-6,
+        "B_1_1": 2.0e-6,
+        "B_0_2": 2.5e-6,
+    }
+
+
+def test_sip_roundtrip_grid() -> None:
+    wcs = WCS(_tan_sip_header())
+    grid = torch.arange(64, dtype=torch.float64)
+    x, y = torch.meshgrid(grid, grid, indexing="xy")
+    x = x.reshape(-1)
+    y = y.reshape(-1)
+    lon, lat = wcs.pixel_to_world(x, y)
+    x_back, y_back = wcs.world_to_pixel(lon, lat)
+    assert float(torch.hypot(x_back - x, y_back - y).max()) < 1e-6
+
+
+def test_tpv_roundtrip_grid() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 64,
+        "NAXIS2": 64,
+        "CTYPE1": "RA---TPV",
+        "CTYPE2": "DEC--TPV",
+        "CRPIX1": 32.5,
+        "CRPIX2": 32.5,
+        "CRVAL1": 10.0,
+        "CRVAL2": 45.0,
+        "CD1_1": -1.0e-3,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 1.0e-3,
+        "PV1_1": 1.0,
+        "PV1_4": 2.0e-4,
+        "PV1_5": -3.0e-4,
+        "PV2_1": 1.0,
+        "PV2_2": 2.0e-4,
+        "PV2_4": -1.0e-4,
+    }
+    wcs = WCS(header)
+    grid = torch.arange(64, dtype=torch.float64)
+    x, y = torch.meshgrid(grid, grid, indexing="xy")
+    x = x.reshape(-1)
+    y = y.reshape(-1)
+    lon, lat = wcs.pixel_to_world(x, y)
+    x_back, y_back = wcs.world_to_pixel(lon, lat)
+    # TPV inverses are Newton iterations; the forward/inverse pair is the
+    # contract, not an analytic closed form.
+    assert float(torch.hypot(x_back - x, y_back - y).max()) < 1e-5

@@ -113,3 +113,39 @@ def test_moc_circle_contains_its_centre_and_not_the_antipode() -> None:
     assert moc.contains(0.0, 0.0)
     assert not moc.contains(180.0, 0.0)
     assert moc.area_sq_deg == pytest.approx(math.pi * 100.0, rel=0.02)
+
+
+def test_healpix_interpolation_is_linear_in_map_values() -> None:
+    from torchsky.sphere import get_interp_val
+
+    nside = 64
+    g = torch.Generator().manual_seed(3)
+    map_a = torch.rand(12 * nside * nside, generator=g, dtype=torch.float64)
+    map_b = torch.rand(12 * nside * nside, generator=g, dtype=torch.float64)
+    lon = torch.rand(100, generator=g, dtype=torch.float64) * 360.0 - 180.0
+    lat = torch.asin(torch.rand(100, generator=g, dtype=torch.float64) * 2.0 - 1.0).rad2deg()
+
+    value_a = get_interp_val(map_a, lon, lat, nside, lonlat=True)
+    value_b = get_interp_val(map_b, lon, lat, nside, lonlat=True)
+    value_sum = get_interp_val(map_a + map_b, lon, lat, nside, lonlat=True)
+    assert torch.allclose(value_a + value_b, value_sum, atol=1e-6)
+
+
+def test_moc_algebra_contains_operands() -> None:
+    a = MOC.from_circle(0.0, 0.0, radius_deg=20.0)
+    b = MOC.from_circle(180.0, 0.0, radius_deg=20.0)
+    union = a.union(b)
+    intersection = a.intersection(b)
+    difference = a.difference(b)
+
+    assert union.contains(0.0, 0.0) and union.contains(180.0, 0.0)
+    assert not intersection.contains(0.0, 0.0)
+    assert difference.contains(0.0, 0.0) and not difference.contains(180.0, 0.0)
+
+
+def test_quality_bit_names_roundtrip() -> None:
+    from torchsky.quality import QualityBit, quality_bit_names, quality_bits_from_names
+
+    bits = QualityBit(0) | QualityBit(1) | QualityBit(2)
+    names = quality_bit_names(bits)
+    assert quality_bits_from_names(names) == bits
