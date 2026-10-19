@@ -7,7 +7,7 @@ import torch
 
 
 def test_neural_pcg_matches_dense_linear_normal_equations() -> None:
-    from torchsky.map.field.neural_inverse import gauss_newton_pcg_step
+    from torchsky.map.field.gauss_newton import gauss_newton_pcg_step
 
     matrix = torch.tensor([[1.0, 2.0], [3.0, -1.0], [0.5, 1.0]], dtype=torch.float64)
     target = torch.tensor([1.0, 2.0, -1.0], dtype=torch.float64)
@@ -27,7 +27,7 @@ def test_neural_pcg_matches_dense_linear_normal_equations() -> None:
 
 
 def test_neural_pcg_backtracks_a_nonlinear_step() -> None:
-    from torchsky.map.field.neural_inverse import gauss_newton_pcg_step
+    from torchsky.map.field.gauss_newton import gauss_newton_pcg_step
 
     initial = torch.tensor([0.1], dtype=torch.float64)
     updated, report = gauss_newton_pcg_step(
@@ -41,7 +41,7 @@ def test_neural_pcg_backtracks_a_nonlinear_step() -> None:
 
 
 def test_neural_pcg_sums_blocks_and_rejects_nonfinite_input() -> None:
-    from torchsky.map.field.neural_inverse import gauss_newton_pcg_step
+    from torchsky.map.field.gauss_newton import gauss_newton_pcg_step
 
     matrix = torch.tensor([[1.0, 2.0], [3.0, -1.0], [0.5, 1.0]], dtype=torch.float64)
     target = torch.tensor([1.0, 2.0, -1.0], dtype=torch.float64)

@@ -9,7 +9,7 @@ from scipy.linalg import solve
 import torch
 
 from torchsky.map.evidence import EvidenceSnapshot
-from torchsky.map.field.joint_native import bind_joint_native_field_likelihood
+from torchsky.map.field.joint_native_likelihood import bind_joint_native_likelihood
 from torchsky.map.field.native_response import NativeFieldResponse
 from torchsky.map.field.types import FieldObservation
 from torchsky.map.likelihood import GaussianLikelihoodSystem
@@ -189,7 +189,7 @@ def _bind(
             dtype=observations[0].image.dtype,
             device=observations[0].image.device,
         )
-    return bind_joint_native_field_likelihood(
+    return bind_joint_native_likelihood(
         observations,
         responses,
         measurement_ids=tuple(
@@ -546,6 +546,6 @@ def test_bad_basis_units_shapes_modes_and_duplicate_lineage():
         ({"nuisance_treatment": "calibrated"}, "covariance_factor"),
     ):
         with pytest.raises(ValueError, match=message):
-            bind_joint_native_field_likelihood(
+            bind_joint_native_likelihood(
                 observations, responses, **(common | changes)
             )

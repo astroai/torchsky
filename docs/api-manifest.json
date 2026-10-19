@@ -154,12 +154,12 @@
   "torchsky.map.field.gaussian": [
     "bind_linear_band_grid_likelihood"
   ],
-  "torchsky.map.field.joint_native": [
-    "bind_joint_native_field_likelihood"
+  "torchsky.map.field.joint_native_likelihood": [
+    "bind_joint_native_likelihood"
   ],
-  "torchsky.map.field.native_physical": [
-    "NativePhysicalLikelihood",
-    "bind_native_physical_likelihood"
+  "torchsky.map.field.native_integrated_read": [
+    "NativeIntegratedReadLikelihood",
+    "bind_native_integrated_read_likelihood"
   ],
   "torchsky.map.field.native_response": [
     "NativeFieldResponse",

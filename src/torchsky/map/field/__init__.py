@@ -210,13 +210,13 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "adapt_factorized_object_scene": (".learned_optimizer", "adapt_factorized_object_scene"),
     "propose_factorized_objects_from_coadd": (".learned_optimizer", "propose_factorized_objects_from_coadd"),
     "render_factorized_scene_grid": (".learned_optimizer", "render_factorized_scene_grid"),
-    "NativePhysicalLikelihood": (".native_physical", "NativePhysicalLikelihood"),
-    "bind_native_physical_likelihood": (".native_physical", "bind_native_physical_likelihood"),
+    "NativeIntegratedReadLikelihood": (".native_integrated_read", "NativeIntegratedReadLikelihood"),
+    "bind_native_integrated_read_likelihood": (".native_integrated_read", "bind_native_integrated_read_likelihood"),
 }
 
 __all__ = [
-    "NativePhysicalLikelihood",
-    "bind_native_physical_likelihood",
+    "NativeIntegratedReadLikelihood",
+    "bind_native_integrated_read_likelihood",
     "FIELD_MODEL_KINDS",
     "FIELD_MODEL_PRESET_NAMES",
     "FIELD_MODEL_PRESETS",

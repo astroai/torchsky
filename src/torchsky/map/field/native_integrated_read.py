@@ -56,10 +56,10 @@ def _pixel_parameter(value: Tensor, reference: Tensor, name: str) -> Tensor:
 
 
 @dataclass(frozen=True, kw_only=True)
-class NativePhysicalLikelihood:
+class NativeIntegratedReadLikelihood:
     """Conditional normalized finite-mixture law for one integrated read.
 
-    Bind with ``bind_native_physical_likelihood``. This route reuses an empty-
+    Bind with ``bind_native_integrated_read_likelihood``. This route reuses an empty-
     additive ``FieldObservation`` with ``RAW_READS`` processing and the explicit
     ``single_integrated_read`` value semantics. Here that processing label means
     one continuous output per native pixel, not a nondestructive ramp, event
@@ -561,7 +561,7 @@ class NativePhysicalLikelihood:
         return result
 
 
-def bind_native_physical_likelihood(
+def bind_native_integrated_read_likelihood(
     observation: FieldObservation,
     photon_response: NativeFieldResponse,
     output_calibration: PixelCalibrationOp,
@@ -579,7 +579,7 @@ def bind_native_physical_likelihood(
     read_noise_response: LinearDetectorResponse | None = None,
     tail_sigma: float = 12.0,
     max_terms: int = 4096,
-) -> NativePhysicalLikelihood:
+) -> NativeIntegratedReadLikelihood:
     """Bind explicit independent physical collection/read law without a field.
 
     No legacy weight/noise/additive pipeline is used. Source-independent area/
@@ -592,7 +592,7 @@ def bind_native_physical_likelihood(
     """
     if charge_response is not None or read_noise_response is not None:
         raise ValueError("independent pixel likelihood rejects charge/read mixing maps")
-    return NativePhysicalLikelihood(
+    return NativeIntegratedReadLikelihood(
         observation=observation,
         photon_response=photon_response,
         output_calibration=output_calibration,
@@ -610,4 +610,4 @@ def bind_native_physical_likelihood(
     )
 
 
-__all__ = ["NativePhysicalLikelihood", "bind_native_physical_likelihood"]
+__all__ = ["NativeIntegratedReadLikelihood", "bind_native_integrated_read_likelihood"]

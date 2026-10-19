@@ -23,9 +23,9 @@ NAMESPACES = (
     "torchsky.map.operators.pixel_calibration",
     "torchsky.map.operators.epsf",
     "torchsky.map.field.native_response",
-    "torchsky.map.field.native_physical",
+    "torchsky.map.field.native_integrated_read",
     "torchsky.map.field.gaussian",
-    "torchsky.map.field.joint_native",
+    "torchsky.map.field.joint_native_likelihood",
 )
 
 

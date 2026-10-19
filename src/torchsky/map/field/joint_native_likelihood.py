@@ -60,7 +60,7 @@ def _shared_state(responses: tuple[NativeFieldResponse, ...]) -> None:
             )
 
 
-def bind_joint_native_field_likelihood(
+def bind_joint_native_likelihood(
     observations: tuple[FieldObservation, ...],
     responses: tuple[NativeFieldResponse, ...],
     *,
@@ -307,7 +307,7 @@ def bind_joint_native_field_likelihood(
     snapshot.validate()
     operator = BoundObservationOperator(
         ObservationOperatorBundle(),
-        TargetRenderSpec(header={}, shape=(1, sum(sizes)), band_label="joint_native"),
+        TargetRenderSpec(header={}, shape=(1, sum(sizes)), band_label="joint_native_likelihood"),
         apply_operator=forward,
         apply_adjoint=adjoint,
         apply_noise=precision,
@@ -325,4 +325,4 @@ def bind_joint_native_field_likelihood(
     )
 
 
-__all__ = ["bind_joint_native_field_likelihood"]
+__all__ = ["bind_joint_native_likelihood"]

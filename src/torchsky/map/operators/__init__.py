@@ -149,7 +149,7 @@ from .learned_kernel import (
     gaussian_kernel2d,
     gaussian_kernels_from_params,
 )
-from .lensing import (
+from .magnification import (
     ConvergenceMagnification,
     MagnificationResidual,
     magnification_bias,

@@ -135,27 +135,3 @@ def gauss_newton_pcg_step(
         "cg_residual_norm": float(torch.linalg.vector_norm(cg_residual.double())),
         "cg_residual_norm_history": list(solved.residual_norm_history),
     }
-
-
-from .learned_optimizer import (  # noqa: E402
-    CechSetProposalNetwork,
-    FactorizedObjectSceneState,
-    LocalObjectINRDecoder,
-    PreconditionedLearn2FoamOptimizer,
-    SceneOptimizationResult,
-    adapt_factorized_object_scene,
-    propose_factorized_objects_from_coadd,
-    render_factorized_scene_grid,
-)
-
-__all__ = [
-    "CechSetProposalNetwork",
-    "FactorizedObjectSceneState",
-    "LocalObjectINRDecoder",
-    "PreconditionedLearn2FoamOptimizer",
-    "SceneOptimizationResult",
-    "adapt_factorized_object_scene",
-    "gauss_newton_pcg_step",
-    "propose_factorized_objects_from_coadd",
-    "render_factorized_scene_grid",
-]
