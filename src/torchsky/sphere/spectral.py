@@ -144,8 +144,6 @@ _RING_FOURIER_MODES_CPP_MAX_M = int(
 _RING_FOURIER_SYNTH_CPP_MAX_M = int(
     os.environ.get("TORCHSKY_RING_FOURIER_SYNTH_CPP_MAX_M", "1024")
 )
-_PIXWIN_TABLE_CACHE: dict[int, tuple[Tensor, Tensor]] = {}
-_PIXWIN_DATA_DIR = Path(__file__).resolve().parent / "data" / "pixel_window_functions"
 
 _LEGENDRE_REC_CACHE: dict[tuple[int, int], tuple[list[float], list[float]]] = {}
 
@@ -3528,58 +3526,22 @@ def gaussian_beam(fwhm_rad: float, lmax: int, *, pol: bool = False) -> Tensor:
 
 
 def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
-    ns = int(nside)
-    cached = _PIXWIN_TABLE_CACHE.get(ns)
-    if cached is not None:
-        return cached
-    path = _PIXWIN_DATA_DIR / f"pixel_window_n{ns:04d}.fits"
-    if not path.is_file():
-        ref = _REFERENCE_PIXWIN_TABLES.get(ns)
-        if ref is not None:
-            out = (ref[0].clone(), ref[1].clone())
-            _PIXWIN_TABLE_CACHE[ns] = out
-            return out
-        supported = ", ".join(str(k) for k in sorted(_REFERENCE_PIXWIN_TABLES))
+    """Return the temperature and polarization pixel window tables for ``nside``.
+
+    Only the reference rows embedded in ``_pixwin_embedded`` are distributed
+    with torchsky; the historical code path that read optional FITS tables from
+    ``sphere/data/pixel_window_functions`` never had those files in the tree or
+    in wheels, so it could only fail. Clone the arrays so callers cannot mutate
+    the shared reference.
+    """
+    ref = _REFERENCE_PIXWIN_TABLES.get(int(nside))
+    if ref is None:
+        supported = ", ".join(str(key) for key in sorted(_REFERENCE_PIXWIN_TABLES))
         raise ValueError(
-            f"pixel window data not available for nside={ns}: missing {_PIXWIN_DATA_DIR / f'pixel_window_n{ns:04d}.fits'} "
-            f"and no embedded table (embedded nsides: {supported}). "
-            "Add the HEALPix pixel-window FITS for this nside (or use an embedded-table nside). "
-            "Install the HEALPix pixel-window FITS for this nside or use an embedded-table nside."
+            f"pixel window tables are embedded for nside {{{supported}}}; "
+            f"nside={nside} is not bundled"
         )
-
-    data = None
-    import torchfits.cpp as _tf_cpp
-
-    if hasattr(_tf_cpp, "read_fits_table"):
-        try:
-            data = _tf_cpp.read_fits_table(str(path), 1)
-        except Exception:
-            data = None
-    if data is None:
-        try:
-            from .. import (
-                read_table,
-            )  # Local import to avoid import cycles at module load.
-        except Exception as exc:
-            raise RuntimeError(
-                "pixwin requires torchsky table reader when C++ table API is unavailable"
-            ) from exc
-        data = read_table(str(path), hdu=1)
-
-    def _get_col(name: str) -> Tensor:
-        candidates = (name, name.upper(), name.lower())
-        for c in candidates:
-            if c in data:
-                return torch.as_tensor(
-                    data[c], dtype=torch.float64, device="cpu"
-                ).reshape(-1)
-        raise RuntimeError(f"missing '{name}' column in pixel window table: {path}")
-
-    pw_t = _get_col("TEMPERATURE")
-    pw_p = _get_col("POLARIZATION")
-    out = (pw_t, pw_p)
-    _PIXWIN_TABLE_CACHE[ns] = out
-    return out
+    return ref[0].clone(), ref[1].clone()
 
 
 def pixwin(
@@ -3591,11 +3553,9 @@ def pixwin(
     """
     Return HEALPix pixel window function(s).
 
-    Data come from packaged FITS under ``sphere/data/pixel_window_functions/`` when
-    present, otherwise from a small set of embedded reference rows (same numeric
-    values as the standard HEALPix/healpy tables) for offline tests and dev
-    checkouts where ``*.fits`` are not in the tree. Other ``nside`` values require
-    the corresponding FITS file.
+    Uses the embedded reference rows (the same numeric values as the standard
+    HEALPix/healpy tables) for the bundled ``nside`` values; other ``nside``
+    values are rejected rather than silently approximated.
     """
     ns = int(nside)
     if not bool(_healpix.isnsideok(ns)):
@@ -4651,7 +4611,6 @@ def clear_spectral_caches() -> None:
         _SPIN_ALM2MAP_MAT_CACHE_ENTRY_BYTES,
         _SCALAR_MAP2ALM_MAT_CACHE_ENTRY_BYTES,
         _SCALAR_ALM2MAP_MAT_CACHE_ENTRY_BYTES,
-        _PIXWIN_TABLE_CACHE,
         _LEGENDRE_REC_CACHE,
         _SPIN_YLM_CONCAT_CACHE,
         _SPIN_YLM_CONCAT_CACHE_ENTRY_BYTES,
