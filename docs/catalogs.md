@@ -38,7 +38,7 @@ subset = cat.take(inside)
 `from_arrow` / `CatalogStreamDataset` feed tensors into `Catalog`.
 There is no `from_polars` / `to_polars` wrapper; Polars and HATS stay in
 xmatch / torchfits. Scale covering is documented in
-[catalog matching research](research/catalog_matching.md).
+[catalog matching research](https://github.com/astroai/torchsky/blob/main/notes/research/catalog_matching.md).
 `Catalog.to_state()` is the `CatalogState` used by `torchsky.coords`.
 
 ## Recipes

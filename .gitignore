@@ -90,3 +90,6 @@ src/torchsky/_cpp*.so
 *.fls
 *.out
 *.synctex.gz
+
+# Zensical documentation build output
+site/

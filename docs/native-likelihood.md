@@ -1,6 +1,6 @@
 # Native likelihood and calibration foundations
 
-These primitives implement bounded parts of the [field-response plan](projects/field_response_discovery_plan.md). They support exposure tasks without a global field and retain full information for field queries. They do not establish SOTA, full raw detector physics or calibrated real-sky coverage. The [implementation status](projects/field_response_discovery_status.md) records the remaining gates.
+These primitives implement bounded parts of the [field-response plan](https://github.com/astroai/torchsky/blob/main/notes/projects/field_response_discovery_plan.md). They support exposure tasks without a global field and retain full information for field queries. They do not establish SOTA, full raw detector physics or calibrated real-sky coverage. The [implementation status](https://github.com/astroai/torchsky/blob/main/notes/projects/field_response_discovery_status.md) records the remaining gates.
 
 ## Native star pixels
 

@@ -1,0 +1,114 @@
+[project]
+site_name = "torchsky"
+site_description = "Tensor-native astronomy: coordinates, HEALPix, mapmaking, and differentiable sky models for PyTorch."
+site_url = "https://astroai.github.io/torchsky/"
+repo_url = "https://github.com/astroai/torchsky"
+repo_name = "astroai/torchsky"
+edit_uri = "edit/main/docs/"
+copyright = "Copyright &copy; 2026 torchsky contributors"
+
+extra_css = [
+  "stylesheets/extra.css",
+]
+
+nav = [
+  {"Home" = "index.md"},
+  {"Getting Started" = [
+    "install.md",
+    "quickstart.md",
+    "getting-started.md",
+    "compatibility.md",
+  ]},
+  {"User Guide" = [
+    {"Coordinates and WCS" = ["wcs.md", "coordinates.md"]},
+    {"Sphere and HEALPix" = ["sphere.md"]},
+    {"Catalogs" = ["catalogs.md", "catalogue-foundations.md"]},
+    {"Mapmaking" = ["map.md", "scene.md"]},
+    {"Spectral data" = ["spectral.md", "photometry-encoders.md"]},
+    {"Fields and models" = ["field.md", "encoders.md", "ml.md"]},
+    {"Observation operators" = [
+      "psf-response-conventions.md",
+      "astrometric_calibration.md",
+      "implicit_forward.md",
+      "native-likelihood.md",
+    ]},
+    {"I/O boundary" = ["io.md", "table.md"]},
+    {"CLI and visualization" = ["cli.md", "viz.md"]},
+    "examples.md",
+  ]},
+  {"API Reference" = [
+    "api.md",
+    "architecture.md",
+  ]},
+  {"Evaluation" = [
+    "benchmarks.md",
+  ]},
+  {"Project" = [
+    "changelog.md",
+    "roadmap.md",
+    "release.md",
+    "contributing.md",
+  ]},
+]
+
+[project.theme]
+name = "material"
+custom_dir = "overrides"
+logo = "assets/torchsky-logo.svg"
+favicon = "assets/torchsky-logo.svg"
+features = [
+  "navigation.path",
+  "navigation.top",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.tracking",
+  "search.highlight",
+  "search.suggest",
+  "content.action.edit",
+  "content.action.view",
+  "content.code.copy",
+  "content.tabs.link",
+  "toc.follow",
+]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+# ── Markdown extensions ──────────────────────────────────────
+
+[project.markdown_extensions.admonition]
+
+[project.markdown_extensions.pymdownx.details]
+
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }
+]
+
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+
+[project.markdown_extensions.pymdownx.emoji]
+emoji_index = "zensical.extensions.emoji.twemoji"
+emoji_generator = "zensical.extensions.emoji.to_svg"
+
+[project.markdown_extensions.attr_list]
+
+[project.markdown_extensions.md_in_html]
+
+[project.markdown_extensions.def_list]
+
+[project.markdown_extensions.tables]
+
+[project.markdown_extensions.toc]
+permalink = true

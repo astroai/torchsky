@@ -161,7 +161,8 @@ For more information, see the [Contributing Guide](docs/contributing.md).
 ## Documentation Directory
 
 ### Getting Started & Installation
-- [Documentation Index](docs/README.md) &mdash; Entry point for repository docs.
+- [Documentation](docs/index.md) &mdash; Entry point for guides, API reference, and examples.
+- [Quick Start](docs/quickstart.md) &mdash; From a FITS file to science products in a few minutes.
 - [Getting Started Guide](docs/getting-started.md) &mdash; 10-minute introduction to the stack.
 - [Installation Guide](docs/install.md) &mdash; torchfits integration and native build configuration.
 

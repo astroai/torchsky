@@ -253,7 +253,7 @@ product, gradient, adjoint, and device-contract tests with the core operators.
 - [Field survey split](../examples/example_map_field_survey_split.py)
 - [Spin harmonic inverse solve](../examples/example_map_spin_harmonic_inverse.py)
 
-See [examples.md](examples.md#map) for the full map example index.
+See [examples.md](examples.md#core-examples) for the full map example index.
 
 ## Compatibility And Validation
 

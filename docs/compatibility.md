@@ -24,7 +24,7 @@ where users depend on it, not by mirroring another package's internal design.
 
 Optional interoperability surfaces must remain opt-in and must not become
 required imports for ordinary `torchsky` use. See
-[AGENTS.md](../AGENTS.md) for dependency and backend policy.
+[AGENTS.md](https://github.com/astroai/torchsky/blob/main/AGENTS.md) for dependency and backend policy.
 
 ## Validation ownership
 

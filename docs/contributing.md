@@ -111,16 +111,29 @@ run instructions.
 
 ## Documentation Policy
 
+The published documentation site is built from `docs/` only; planning,
+research, reviews, and historical notes live under `notes/` and are not
+published.
+
 - Root `README.md`: user-facing only.
-- `docs/README.md`: documentation map for users, contributors, maintainers, and
-  research/history notes.
+- `docs/index.md`: site home and documentation map.
+- `docs/quickstart.md`: the shortest working path.
 - `docs/api.md`: public API guide and namespace router.
 - `docs/changelog.md`: release notes.
 - `docs/examples.md` and `docs/benchmarks.md`: operational guides.
+- `notes/`: internal plans, research, reviews, and archive (not published).
 
-If a PR changes a public API, update the relevant namespace guide and `docs/api.md` routing in the same PR.
-FITS I/O documentation and benchmarks belong in `torchfits`; update only the
-cross-package contract here.
+Build and verify docs with Pixi:
+
+```bash
+pixi run docs-build     # zensical build --clean --strict
+pixi run docs-serve     # local preview
+pixi run docs-contract  # strict build + offline link check + docs tests
+```
+
+If a PR changes a public API, update the relevant namespace guide and
+`docs/api.md` routing in the same PR. FITS I/O documentation and benchmarks
+belong in `torchfits`; update only the cross-package contract here.
 
 ## Release Checklist (Maintainers)
 

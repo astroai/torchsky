@@ -39,7 +39,7 @@ Start gate: May 8, 2026, `America/Vancouver`
   intended `io` / `world` / `scene` / `viz` architecture spine.
 - Assigned current declared surfaces to pillars without moving implementation or
   breaking public import paths.
-- Added `docs/architecture.md` and linked it from `README.md`, `docs/README.md`,
+- Added `docs/architecture.md` and linked it from `README.md`, `docs/index.md`,
   and `docs/api.md`.
 - Tests run:
   - `pixi run -e test -- pytest tests/test_api_surfaces.py -q`

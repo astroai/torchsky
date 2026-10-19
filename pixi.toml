@@ -67,6 +67,11 @@ preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q
 # Optional local copy of GitHub build-test. Not a push blocker.
 ci-local = "pixi run preflight-push && pixi run api-manifest-check && pixi run typecheck && pixi run test"
 typecheck = "pixi run -e test pyright"
+# Documentation site (Zensical + Material theme). See zensical.toml.
+docs-build = "pixi run -e docs zensical build --clean --strict"
+docs-serve = "pixi run -e docs zensical serve"
+docs-links = "pixi run -e docs python scripts/check_docs_links.py"
+docs-contract = "pixi run docs-build && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run -e test -- pytest tests/test_docs_integrity.py -q"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 
 audit-refactor-cohesion = "pixi run -e default -- python scripts/audit_refactor_cohesion.py"
@@ -104,6 +109,10 @@ pyright = ">=1.1.350"
 pytest-xdist = ">=3.0"
 requests = ">=2.28"
 
+# Documentation feature: static site generator for the published docs.
+[feature.docs.dependencies]
+zensical = ">=0.0.61"
+
 # Benchmark feature with additional dependencies
 [feature.cuda]
 platforms = ["linux-64-cuda"]
@@ -137,3 +146,4 @@ default = { features = ["prod"], solve-group = "default" }
 test = { features = ["prod", "test"], solve-group = "default" }
 cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
 astrometry = { features = ["prod", "astrometry"], solve-group = "default" }
+docs = { features = ["prod", "docs"], solve-group = "default" }

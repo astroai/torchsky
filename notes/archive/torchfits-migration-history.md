@@ -2,7 +2,7 @@
 
 > Historical note: this file records early migration planning from `torchfits`.
 > It is not the current public API contract. For the active API surface, start
-> with [README.md](../../README.md), [docs/README.md](../README.md), and
+> with [README.md](../../README.md), [docs/index.md](../../docs/index.md), and
 > [api.md](../api.md).
 
 This document captures the planning, design decisions, and implementation history from the legacy `torchfits` thread before work moved fully into `torchsky`.

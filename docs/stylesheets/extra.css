@@ -1,0 +1,188 @@
+/* ── torchsky docs ──────────────────────────────────────────── */
+
+@import url("https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root {
+  --ts-navy: #0b1f3a;
+  --ts-navy-mid: #123a63;
+  --ts-cyan: #2f9fe0;
+  --ts-violet: #8b6cf0;
+  --ts-ink: #132238;
+  --ts-muted: #5a6b7d;
+  --ts-paper: #f4f7fb;
+  --ts-line: rgba(11, 31, 58, 0.12);
+  --md-text-font: "Source Sans 3", "Segoe UI", sans-serif;
+  --md-code-font: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+[data-md-color-scheme="slate"] {
+  --ts-paper: #0d1520;
+  --ts-ink: #e8eef6;
+  --ts-muted: #9aabbd;
+  --ts-line: rgba(232, 238, 246, 0.14);
+}
+
+body,
+.md-typeset {
+  font-family: var(--md-text-font);
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-header__topic,
+.ts-hero__headline {
+  font-family: "Space Grotesk", var(--md-text-font);
+  letter-spacing: -0.02em;
+}
+
+.md-header__button.md-logo img {
+  height: 1.9rem;
+}
+
+.md-typeset code {
+  font-family: var(--md-code-font);
+}
+
+/* ── hero ────────────────────────────────────────────────────── */
+
+.ts-hero {
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(120% 140% at 15% 0%, #14345c 0%, #0b1f3a 55%, #081428 100%);
+  color: #f4f7fb;
+}
+
+.ts-hero__sky {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1.2px 1.2px at 12% 22%, rgba(255, 255, 255, 0.75) 50%, transparent 51%),
+    radial-gradient(1.4px 1.4px at 32% 68%, rgba(255, 255, 255, 0.55) 50%, transparent 51%),
+    radial-gradient(1px 1px at 54% 18%, rgba(255, 255, 255, 0.65) 50%, transparent 51%),
+    radial-gradient(1.6px 1.6px at 72% 44%, rgba(255, 255, 255, 0.5) 50%, transparent 51%),
+    radial-gradient(1px 1px at 86% 76%, rgba(255, 255, 255, 0.6) 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 44% 88%, rgba(255, 255, 255, 0.45) 50%, transparent 51%);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.ts-hero__inner {
+  position: relative;
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 3.2rem 1.2rem 2.6rem;
+  text-align: center;
+}
+
+.ts-hero__brand {
+  width: min(360px, 70%);
+  height: auto;
+  filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.35));
+}
+
+.ts-hero__headline {
+  margin: 1rem 0 0.35rem;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.ts-hero__lede {
+  max-width: 44rem;
+  margin: 0 auto 1.4rem;
+  font-size: 1.05rem;
+  line-height: 1.6;
+  color: rgba(244, 247, 251, 0.82);
+}
+
+.ts-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+  margin-bottom: 1.4rem;
+}
+
+.ts-btn {
+  display: inline-block;
+  padding: 0.55rem 1.1rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.ts-btn:hover {
+  transform: translateY(-1px);
+}
+
+.ts-btn--primary {
+  background: linear-gradient(120deg, var(--ts-cyan), var(--ts-violet));
+  color: #07131f;
+}
+
+.ts-btn--ghost {
+  border: 1px solid rgba(244, 247, 251, 0.35);
+  color: #f4f7fb;
+}
+
+.ts-btn--ghost:hover {
+  background: rgba(244, 247, 251, 0.1);
+}
+
+.ts-hero__code {
+  display: inline-block;
+  max-width: 100%;
+  margin: 0 auto;
+  padding: 0.9rem 1.1rem;
+  border-radius: 0.6rem;
+  background: rgba(4, 12, 24, 0.72);
+  border: 1px solid rgba(127, 211, 255, 0.18);
+  color: #cfe6ff;
+  text-align: left;
+  overflow-x: auto;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.ts-hero__code code {
+  background: none;
+  color: inherit;
+}
+
+/* ── below-the-fold content ─────────────────────────────────── */
+
+.ts-below {
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 0 1.2rem 2rem;
+}
+
+.ts-below > p:first-child {
+  font-size: 1.02rem;
+  line-height: 1.7;
+}
+
+/* grid cards look better with a touch more air on the landing page */
+.ts-below .grid.cards > ul > li {
+  border-radius: 0.7rem;
+  border-color: var(--ts-line);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.ts-below .grid.cards > ul > li:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(11, 31, 58, 0.12);
+}
+
+/* ── tables and code in guides ──────────────────────────────── */
+
+.md-typeset table:not([class]) {
+  font-size: 0.78rem;
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 0.5rem;
+}

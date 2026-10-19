@@ -8,7 +8,7 @@ a compatibility alias.
 
 ## Table of Contents
 
-- [Pixel & Coordinate Utilities](#pixel--coordinate-utilities)
+- [Pixel & Coordinate Utilities](#pixel-coordinate-utilities)
 - [Coordinate Conversions](#coordinate-conversions)
 - [Geometric Queries](#geometric-queries)
 - [Spherical Geometry](#spherical-geometry-classes)
@@ -18,7 +18,7 @@ a compatibility alias.
 - [STMOC](#class-stmoc)
 - [Harmonic Space (SHT)](#harmonic-space-sht)
 - [Power Spectra](#power-spectra)
-- [Beams & Windows](#beams--windows)
+- [Beams & Windows](#beams-windows)
 - [Execution and Tuning](#execution-and-tuning)
 - [Compatibility](#compatibility)
 

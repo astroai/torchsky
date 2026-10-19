@@ -41,8 +41,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sfabbro/torchsky"
-Repository = "https://github.com/sfabbro/torchsky"
+Homepage = "https://github.com/astroai/torchsky"
+Repository = "https://github.com/astroai/torchsky"
 
 [project.scripts]
 torchsky = "torchsky.cli:main"
@@ -50,6 +50,11 @@ torchsky = "torchsky.cli:main"
 # Defines optional dependencies for different use cases.
 # For pixi environments, these are managed separately via features
 [project.optional-dependencies]
+
+# Documentation site build (zensical + Material theme).
+docs = [
+    "zensical>=0.0.61",
+]
 
 # Browser-based visualization server: torchsky viz --root /data --port 8822
 # Requires internet access for Aladin Lite JS (or a pre-built npm bundle).

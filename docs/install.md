@@ -60,7 +60,7 @@ Optional extras (from `pyproject.toml`):
 tensor/header workflows do not require it.
 
 The current development tree may temporarily retain legacy CFITSIO build files
-while the P0 extraction cleanup in [roadmap/status.md](roadmap/status.md) is
+while the P0 extraction cleanup in [roadmap](roadmap.md) is
 completed. They are not part of the forward public contract.
 
 On macOS, install Xcode Command Line Tools if not present:
