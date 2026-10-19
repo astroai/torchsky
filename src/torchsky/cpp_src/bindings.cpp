@@ -170,28 +170,6 @@ void bind_wcs(nb::module_& m) {
         "tpv_idx1"_a = nb::none(), "tpv_c1"_a = nb::none(),
         "tpv_idx2"_a = nb::none(), "tpv_c2"_a = nb::none()
     );
-    m.def("healpix_ring2nest_cpu", [](int64_t nside, nb::ndarray<nb::numpy, int64_t, nb::c_contig> pix_arr) {
-        std::vector<int64_t> shape;
-        shape.reserve(pix_arr.ndim());
-        int64_t numel = 1;
-        for (size_t i = 0; i < pix_arr.ndim(); ++i) {
-            const int64_t d = static_cast<int64_t>(pix_arr.shape(i));
-            shape.push_back(d);
-            numel *= d;
-        }
-        auto pix_view = torch::from_blob(
-            pix_arr.data(),
-            shape,
-            torch::TensorOptions().dtype(torch::kInt64)
-        );
-        torch::Tensor out;
-        {
-            nb::gil_scoped_release release;
-            out = torchsky::healpix_ring2nest_cpu(nside, pix_view.reshape({numel}));
-        }
-        out = out.reshape(shape);
-        return tensor_to_python(out);
-    }, nb::arg("nside"), nb::arg("pix_arr"));
 
     m.def("healpix_ring2nest_torch_cpu", [](int64_t nside, nb::object pix_obj) {
         auto pix = python_to_tensor(pix_obj).to(torch::kInt64).contiguous();
@@ -203,28 +181,6 @@ void bind_wcs(nb::module_& m) {
         return tensor_to_python(out);
     }, nb::arg("nside"), nb::arg("pix"));
 
-    m.def("healpix_nest2ring_cpu", [](int64_t nside, nb::ndarray<nb::numpy, int64_t, nb::c_contig> pix_arr) {
-        std::vector<int64_t> shape;
-        shape.reserve(pix_arr.ndim());
-        int64_t numel = 1;
-        for (size_t i = 0; i < pix_arr.ndim(); ++i) {
-            const int64_t d = static_cast<int64_t>(pix_arr.shape(i));
-            shape.push_back(d);
-            numel *= d;
-        }
-        auto pix_view = torch::from_blob(
-            pix_arr.data(),
-            shape,
-            torch::TensorOptions().dtype(torch::kInt64)
-        );
-        torch::Tensor out;
-        {
-            nb::gil_scoped_release release;
-            out = torchsky::healpix_nest2ring_cpu(nside, pix_view.reshape({numel}));
-        }
-        out = out.reshape(shape);
-        return tensor_to_python(out);
-    }, nb::arg("nside"), nb::arg("pix_arr"));
 
     m.def("healpix_nest2ring_torch_cpu", [](int64_t nside, nb::object pix_obj) {
         auto pix = python_to_tensor(pix_obj).to(torch::kInt64).contiguous();
@@ -236,43 +192,7 @@ void bind_wcs(nb::module_& m) {
         return tensor_to_python(out);
     }, nb::arg("nside"), nb::arg("pix"));
 
-    m.def("healpix_neighbors_ring_cpu", [](int64_t nside, nb::ndarray<nb::numpy, int64_t, nb::c_contig> pix_arr) {
-        std::vector<int64_t> shape;
-        shape.reserve(pix_arr.ndim());
-        for (size_t i = 0; i < pix_arr.ndim(); ++i) {
-            shape.push_back(static_cast<int64_t>(pix_arr.shape(i)));
-        }
-        auto pix_view = torch::from_blob(
-            pix_arr.data(),
-            shape,
-            torch::TensorOptions().dtype(torch::kInt64)
-        );
-        torch::Tensor out;
-        {
-            nb::gil_scoped_release release;
-            out = torchsky::healpix_neighbors_ring_cpu(nside, pix_view);
-        }
-        return tensor_to_python(out);
-    }, nb::arg("nside"), nb::arg("pix_arr"));
 
-    m.def("healpix_neighbors_nested_cpu", [](int64_t nside, nb::ndarray<nb::numpy, int64_t, nb::c_contig> pix_arr) {
-        std::vector<int64_t> shape;
-        shape.reserve(pix_arr.ndim());
-        for (size_t i = 0; i < pix_arr.ndim(); ++i) {
-            shape.push_back(static_cast<int64_t>(pix_arr.shape(i)));
-        }
-        auto pix_view = torch::from_blob(
-            pix_arr.data(),
-            shape,
-            torch::TensorOptions().dtype(torch::kInt64)
-        );
-        torch::Tensor out;
-        {
-            nb::gil_scoped_release release;
-            out = torchsky::healpix_neighbors_nested_cpu(nside, pix_view);
-        }
-        return tensor_to_python(out);
-    }, nb::arg("nside"), nb::arg("pix_arr"));
 
     m.def("healpix_neighbors_ring_torch_cpu", [](int64_t nside, nb::object pix_obj) {
         auto pix = python_to_tensor(pix_obj).to(torch::kInt64).contiguous();
@@ -294,89 +214,7 @@ void bind_wcs(nb::module_& m) {
         return tensor_to_python(out);
     }, nb::arg("nside"), nb::arg("pix"));
 
-    m.def("healpix_get_interp_weights_ring_cpu",
-          [](int64_t nside,
-             nb::ndarray<nb::numpy, double, nb::c_contig> lon_arr,
-             nb::ndarray<nb::numpy, double, nb::c_contig> lat_arr) {
-              if (lon_arr.ndim() != lat_arr.ndim()) {
-                  throw std::runtime_error("lon/lat ndim mismatch");
-              }
-              std::vector<int64_t> shape;
-              shape.reserve(lon_arr.ndim());
-              int64_t numel = 1;
-              for (size_t i = 0; i < lon_arr.ndim(); ++i) {
-                  const int64_t dlon = static_cast<int64_t>(lon_arr.shape(i));
-                  const int64_t dlat = static_cast<int64_t>(lat_arr.shape(i));
-                  if (dlon != dlat) {
-                      throw std::runtime_error("lon/lat shape mismatch");
-                  }
-                  shape.push_back(dlon);
-                  numel *= dlon;
-              }
-              auto lon_view = torch::from_blob(
-                  lon_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kFloat64)
-              );
-              auto lat_view = torch::from_blob(
-                  lat_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kFloat64)
-              );
-              std::pair<torch::Tensor, torch::Tensor> out;
-              {
-                  nb::gil_scoped_release release;
-                  out = torchsky::healpix_get_interp_weights_ring_cpu(
-                      nside, lon_view.reshape({numel}), lat_view.reshape({numel})
-                  );
-              }
-              out.first = out.first.reshape({4, numel});
-              out.second = out.second.reshape({4, numel});
-              return nb::make_tuple(tensor_to_python(out.first), tensor_to_python(out.second));
-          },
-          nb::arg("nside"), nb::arg("lon_arr"), nb::arg("lat_arr"));
 
-    m.def("healpix_get_interp_weights_nested_cpu",
-          [](int64_t nside,
-             nb::ndarray<nb::numpy, double, nb::c_contig> lon_arr,
-             nb::ndarray<nb::numpy, double, nb::c_contig> lat_arr) {
-              if (lon_arr.ndim() != lat_arr.ndim()) {
-                  throw std::runtime_error("lon/lat ndim mismatch");
-              }
-              std::vector<int64_t> shape;
-              shape.reserve(lon_arr.ndim());
-              int64_t numel = 1;
-              for (size_t i = 0; i < lon_arr.ndim(); ++i) {
-                  const int64_t dlon = static_cast<int64_t>(lon_arr.shape(i));
-                  const int64_t dlat = static_cast<int64_t>(lat_arr.shape(i));
-                  if (dlon != dlat) {
-                      throw std::runtime_error("lon/lat shape mismatch");
-                  }
-                  shape.push_back(dlon);
-                  numel *= dlon;
-              }
-              auto lon_view = torch::from_blob(
-                  lon_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kFloat64)
-              );
-              auto lat_view = torch::from_blob(
-                  lat_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kFloat64)
-              );
-              std::pair<torch::Tensor, torch::Tensor> out;
-              {
-                  nb::gil_scoped_release release;
-                  out = torchsky::healpix_get_interp_weights_nested_cpu(
-                      nside, lon_view.reshape({numel}), lat_view.reshape({numel})
-                  );
-              }
-              out.first = out.first.reshape({4, numel});
-              out.second = out.second.reshape({4, numel});
-              return nb::make_tuple(tensor_to_python(out.first), tensor_to_python(out.second));
-          },
-          nb::arg("nside"), nb::arg("lon_arr"), nb::arg("lat_arr"));
 
     m.def("healpix_get_interp_weights_ring_torch_cpu",
           [](int64_t nside, nb::object lon_obj, nb::object lat_obj) {
@@ -472,46 +310,6 @@ void bind_wcs(nb::module_& m) {
           },
           nb::arg("nside"), nb::arg("vec"), nb::arg("cos_lim"), nb::arg("nest") = false);
 
-    m.def("healpix_ang2pix_ring_cpu",
-          [](int64_t nside,
-             nb::ndarray<nb::numpy, double, nb::c_contig> ra_arr,
-             nb::ndarray<nb::numpy, double, nb::c_contig> dec_arr) {
-              if (ra_arr.ndim() != dec_arr.ndim()) {
-                  throw std::runtime_error("RA/Dec ndim mismatch");
-              }
-              std::vector<int64_t> shape;
-              shape.reserve(ra_arr.ndim());
-              int64_t numel = 1;
-              for (size_t i = 0; i < ra_arr.ndim(); ++i) {
-                  const int64_t dra = static_cast<int64_t>(ra_arr.shape(i));
-                  const int64_t ddec = static_cast<int64_t>(dec_arr.shape(i));
-                  if (dra != ddec) {
-                      throw std::runtime_error("RA/Dec shape mismatch");
-                  }
-                  shape.push_back(dra);
-                  numel *= dra;
-              }
-              auto ra_view = torch::from_blob(
-                  ra_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kFloat64)
-              );
-              auto dec_view = torch::from_blob(
-                  dec_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kFloat64)
-              );
-              torch::Tensor out;
-              {
-                  nb::gil_scoped_release release;
-                  out = torchsky::healpix_ang2pix_ring_cpu(
-                      nside, ra_view.reshape({numel}), dec_view.reshape({numel})
-                  );
-              }
-              out = out.reshape(shape);
-              return tensor_to_python(out);
-          },
-          nb::arg("nside"), nb::arg("ra_arr"), nb::arg("dec_arr"));
 
     m.def("healpix_ang2pix_ring_torch_cpu",
           [](int64_t nside, nb::object ra_obj, nb::object dec_obj) {
@@ -529,46 +327,6 @@ void bind_wcs(nb::module_& m) {
           },
           nb::arg("nside"), nb::arg("ra"), nb::arg("dec"));
 
-    m.def("healpix_ang2pix_nested_cpu",
-          [](int64_t nside,
-             nb::ndarray<nb::numpy, double, nb::c_contig> ra_arr,
-             nb::ndarray<nb::numpy, double, nb::c_contig> dec_arr) {
-              if (ra_arr.ndim() != dec_arr.ndim()) {
-                  throw std::runtime_error("RA/Dec ndim mismatch");
-              }
-              std::vector<int64_t> shape;
-              shape.reserve(ra_arr.ndim());
-              int64_t numel = 1;
-              for (size_t i = 0; i < ra_arr.ndim(); ++i) {
-                  const int64_t dra = static_cast<int64_t>(ra_arr.shape(i));
-                  const int64_t ddec = static_cast<int64_t>(dec_arr.shape(i));
-                  if (dra != ddec) {
-                      throw std::runtime_error("RA/Dec shape mismatch");
-                  }
-                  shape.push_back(dra);
-                  numel *= dra;
-              }
-              auto ra_view = torch::from_blob(
-                  ra_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kFloat64)
-              );
-              auto dec_view = torch::from_blob(
-                  dec_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kFloat64)
-              );
-              torch::Tensor out;
-              {
-                  nb::gil_scoped_release release;
-                  out = torchsky::healpix_ang2pix_nested_cpu(
-                      nside, ra_view.reshape({numel}), dec_view.reshape({numel})
-                  );
-              }
-              out = out.reshape(shape);
-              return tensor_to_python(out);
-          },
-          nb::arg("nside"), nb::arg("ra_arr"), nb::arg("dec_arr"));
 
     m.def("healpix_ang2pix_nested_torch_cpu",
           [](int64_t nside, nb::object ra_obj, nb::object dec_obj) {
@@ -586,31 +344,6 @@ void bind_wcs(nb::module_& m) {
           },
           nb::arg("nside"), nb::arg("ra"), nb::arg("dec"));
 
-    m.def("healpix_pix2ang_ring_cpu",
-          [](int64_t nside, nb::ndarray<nb::numpy, int64_t, nb::c_contig> pix_arr) {
-              std::vector<int64_t> shape;
-              shape.reserve(pix_arr.ndim());
-              int64_t numel = 1;
-              for (size_t i = 0; i < pix_arr.ndim(); ++i) {
-                  const int64_t d = static_cast<int64_t>(pix_arr.shape(i));
-                  shape.push_back(d);
-                  numel *= d;
-              }
-              auto pix_view = torch::from_blob(
-                  pix_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kInt64)
-              );
-              std::pair<torch::Tensor, torch::Tensor> out;
-              {
-                  nb::gil_scoped_release release;
-                  out = torchsky::healpix_pix2ang_ring_cpu(nside, pix_view.reshape({numel}));
-              }
-              out.first = out.first.reshape(shape);
-              out.second = out.second.reshape(shape);
-              return nb::make_tuple(tensor_to_python(out.first), tensor_to_python(out.second));
-          },
-          nb::arg("nside"), nb::arg("pix_arr"));
 
     m.def("healpix_pix2ang_ring_torch_cpu",
           [](int64_t nside, nb::object pix_obj) {
@@ -624,31 +357,6 @@ void bind_wcs(nb::module_& m) {
           },
           nb::arg("nside"), nb::arg("pix"));
 
-    m.def("healpix_pix2ang_nested_cpu",
-          [](int64_t nside, nb::ndarray<nb::numpy, int64_t, nb::c_contig> pix_arr) {
-              std::vector<int64_t> shape;
-              shape.reserve(pix_arr.ndim());
-              int64_t numel = 1;
-              for (size_t i = 0; i < pix_arr.ndim(); ++i) {
-                  const int64_t d = static_cast<int64_t>(pix_arr.shape(i));
-                  shape.push_back(d);
-                  numel *= d;
-              }
-              auto pix_view = torch::from_blob(
-                  pix_arr.data(),
-                  shape,
-                  torch::TensorOptions().dtype(torch::kInt64)
-              );
-              std::pair<torch::Tensor, torch::Tensor> out;
-              {
-                  nb::gil_scoped_release release;
-                  out = torchsky::healpix_pix2ang_nested_cpu(nside, pix_view.reshape({numel}));
-              }
-              out.first = out.first.reshape(shape);
-              out.second = out.second.reshape(shape);
-              return nb::make_tuple(tensor_to_python(out.first), tensor_to_python(out.second));
-          },
-          nb::arg("nside"), nb::arg("pix_arr"));
 
     m.def("healpix_pix2ang_nested_torch_cpu",
           [](int64_t nside, nb::object pix_obj) {
@@ -1166,52 +874,6 @@ void bind_wcs(nb::module_& m) {
           nb::arg("a20"), nb::arg("a11"), nb::arg("a02"),
           nb::arg("b20"), nb::arg("b11"), nb::arg("b02"));
 
-    m.def("wcs_tpv_invert_trace",
-          [](nb::object xi_obj,
-             nb::object eta_obj,
-             nb::object idx1_obj,
-             nb::object c1_obj,
-             nb::object idx2_obj,
-             nb::object c2_obj,
-             int64_t max_iter,
-             double tol) {
-              auto xi = python_to_tensor(xi_obj);
-              auto eta = python_to_tensor(eta_obj);
-              auto idx1 = python_to_tensor(idx1_obj);
-              auto c1 = python_to_tensor(c1_obj);
-              auto idx2 = python_to_tensor(idx2_obj);
-              auto c2 = python_to_tensor(c2_obj);
-              if (!(xi.device().is_cpu() && eta.device().is_cpu() &&
-                    idx1.device().is_cpu() && idx2.device().is_cpu() &&
-                    c1.device().is_cpu() && c2.device().is_cpu())) {
-                  throw std::runtime_error("wcs_tpv_invert_trace expects CPU tensors");
-              }
-              if (!(xi.scalar_type() == torch::kFloat64 && eta.scalar_type() == torch::kFloat64 &&
-                    c1.scalar_type() == torch::kFloat64 && c2.scalar_type() == torch::kFloat64 &&
-                    idx1.scalar_type() == torch::kInt64 && idx2.scalar_type() == torch::kInt64)) {
-                  throw std::runtime_error("wcs_tpv_invert_trace expects float64 inputs and int64 indices");
-              }
-              if (!xi.is_contiguous()) xi = xi.contiguous();
-              if (!eta.is_contiguous()) eta = eta.contiguous();
-              if (!idx1.is_contiguous()) idx1 = idx1.contiguous();
-              if (!c1.is_contiguous()) c1 = c1.contiguous();
-              if (!idx2.is_contiguous()) idx2 = idx2.contiguous();
-              if (!c2.is_contiguous()) c2 = c2.contiguous();
-              std::tuple<torch::Tensor, torch::Tensor, int64_t, std::vector<int64_t>, int64_t> out;
-              {
-                  nb::gil_scoped_release release;
-                  out = torchsky::wcs_tpv_invert_trace(xi, eta, idx1, c1, idx2, c2, max_iter, tol);
-              }
-              return nb::make_tuple(
-                  tensor_to_python(std::get<0>(out)),
-                  tensor_to_python(std::get<1>(out)),
-                  std::get<2>(out),
-                  std::get<3>(out),
-                  std::get<4>(out)
-              );
-          },
-          nb::arg("xi"), nb::arg("eta"), nb::arg("idx1"), nb::arg("c1"), nb::arg("idx2"), nb::arg("c2"),
-          nb::arg("max_iter") = 10, nb::arg("tol") = 1e-11);
 
     m.def(
         "_healpix_scalar_alm2map_direct_cpu",
@@ -1474,100 +1136,6 @@ void bind_wcs(nb::module_& m) {
         nb::arg("mmax"),
         nb::arg("pix_w"));
 
-    m.def(
-        "_healpix_spin2_block_accumulate_cpu_experimental",
-        [](nb::object coeff_plus_obj,
-           nb::object coeff_minus_obj,
-           nb::list y_plus_blocks_obj,
-           nb::list y_minus_blocks_obj,
-           double neg_sign) {
-            torch::Tensor coeff_plus = python_to_tensor(coeff_plus_obj).contiguous();
-            torch::Tensor coeff_minus = python_to_tensor(coeff_minus_obj).contiguous();
-            if (!coeff_plus.device().is_cpu() || !coeff_minus.device().is_cpu()) {
-                throw std::runtime_error("_healpix_spin2_block_accumulate_cpu_experimental expects CPU tensors");
-            }
-            if (coeff_plus.scalar_type() != torch::kComplexDouble || coeff_minus.scalar_type() != torch::kComplexDouble) {
-                throw std::runtime_error("_healpix_spin2_block_accumulate_cpu_experimental expects complex128 coeff tensors");
-            }
-            if (coeff_plus.dim() != 1 || coeff_minus.dim() != 1 || coeff_plus.numel() != coeff_minus.numel()) {
-                throw std::runtime_error("coeff tensors must be 1D and same length");
-            }
-            if (y_plus_blocks_obj.size() != y_minus_blocks_obj.size()) {
-                throw std::runtime_error("y_plus_blocks and y_minus_blocks must have same length");
-            }
-            if (y_plus_blocks_obj.size() == 0) {
-                throw std::runtime_error("basis blocks must be non-empty");
-            }
-
-            std::vector<torch::Tensor> y_plus_blocks;
-            std::vector<torch::Tensor> y_minus_blocks;
-            y_plus_blocks.reserve(y_plus_blocks_obj.size());
-            y_minus_blocks.reserve(y_minus_blocks_obj.size());
-            for (size_t i = 0; i < y_plus_blocks_obj.size(); ++i) {
-                nb::object yp_obj = nb::borrow<nb::object>(y_plus_blocks_obj[i]);
-                nb::object ym_obj = nb::borrow<nb::object>(y_minus_blocks_obj[i]);
-                auto yp = python_to_tensor(yp_obj).contiguous();
-                auto ym = python_to_tensor(ym_obj).contiguous();
-                if (!yp.device().is_cpu() || !ym.device().is_cpu()) {
-                    throw std::runtime_error("basis blocks must be CPU tensors");
-                }
-                if (yp.scalar_type() != torch::kComplexDouble || ym.scalar_type() != torch::kComplexDouble) {
-                    throw std::runtime_error("basis blocks must be complex128 tensors");
-                }
-                if (yp.dim() != 2 || ym.dim() != 2) {
-                    throw std::runtime_error("basis blocks must be rank-2 tensors");
-                }
-                if (yp.sizes() != ym.sizes()) {
-                    throw std::runtime_error("paired y_plus/y_minus blocks must have matching shapes");
-                }
-                y_plus_blocks.push_back(yp);
-                y_minus_blocks.push_back(ym);
-            }
-
-            const int64_t npix = y_plus_blocks[0].size(1);
-            for (const auto& blk : y_plus_blocks) {
-                if (blk.size(1) != npix) {
-                    throw std::runtime_error("all basis blocks must have the same npix dimension");
-                }
-            }
-
-            auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
-            torch::Tensor p_plus = torch::zeros({npix}, options);
-            torch::Tensor p_minus = torch::zeros({npix}, options);
-
-            int64_t offset = 0;
-            for (size_t m = 0; m < y_plus_blocks.size(); ++m) {
-                const auto& yp = y_plus_blocks[m];
-                const auto& ym = y_minus_blocks[m];
-                const int64_t l_count = yp.size(0);
-                if (offset + l_count > coeff_plus.numel()) {
-                    throw std::runtime_error("basis block sizes exceed coefficient length");
-                }
-
-                auto cp = coeff_plus.narrow(0, offset, l_count);
-                auto cm = coeff_minus.narrow(0, offset, l_count);
-                auto p_plus_m = torch::matmul(cp, yp);
-                auto p_minus_m = torch::matmul(cm, ym);
-
-                p_plus = p_plus + p_plus_m;
-                p_minus = p_minus + p_minus_m;
-                if (m > 0) {
-                    p_plus = p_plus + neg_sign * torch::conj(p_minus_m);
-                    p_minus = p_minus + neg_sign * torch::conj(p_plus_m);
-                }
-                offset += l_count;
-            }
-
-            if (offset != coeff_plus.numel()) {
-                throw std::runtime_error("basis block sizes do not match coefficient length");
-            }
-            return nb::make_tuple(tensor_to_python(p_plus), tensor_to_python(p_minus));
-        },
-        nb::arg("coeff_plus"),
-        nb::arg("coeff_minus"),
-        nb::arg("y_plus_blocks"),
-        nb::arg("y_minus_blocks"),
-        nb::arg("neg_sign"));
 
 
     // Experimental recurrence kernels

@@ -217,6 +217,18 @@ def test_no_cfitsio_or_zlib_in_cmake() -> None:
     assert "cache.cpp" not in cmake
 
 
+def test_no_legacy_cfitsio_vendoring() -> None:
+    """The pre-torchfits CFITSIO vendor tree and CI steps must stay gone."""
+    repo = PACKAGE_ROOT.parents[1]
+    assert not (repo / "extern" / "vendor.sh").exists()
+    assert not (repo / "extern" / "cfitsio").exists()
+    manifest = (repo / "MANIFEST.in").read_text()
+    assert "extern/" not in manifest
+    for workflow in (repo / ".github" / "workflows").glob("*.yml"):
+        text = workflow.read_text()
+        assert "extern/vendor.sh" not in text, workflow
+
+
 def test_no_fits_implementation_in_python_source() -> None:
     """No Python FITS implementation code (IO engine, table engine, legacy backends).
 

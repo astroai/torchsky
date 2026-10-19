@@ -44,6 +44,12 @@ owned by `torchfits`.
   Irregular axes remain an index-space interpolation with a recorded bias
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
+### Removed
+- **Legacy CFITSIO vendoring**: `extern/vendor.sh`, its version pin, the
+  generated `extern/cfitsio` tree, the CI vendor steps, and the manifest entry
+  are gone. The native extension builds only WCS/HEALPix/geometry kernels from
+  `src/torchsky/cpp_src`; FITS I/O and CFITSIO belong to `torchfits`.
+
 ### Documentation and developer experience
 - **Published documentation site**: Zensical + Material build from `docs/` only
   (plans, research, reviews, and archive moved under `notes/`), with a home
