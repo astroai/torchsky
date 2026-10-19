@@ -4,9 +4,10 @@ import torch
 from torch import Tensor
 from typing import Tuple, Optional
 
+from ._math import _sincos
+
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
-_HAS_TORCH_SINCOS = hasattr(torch, "sincos")
 
 
 def _pv_param(
@@ -20,12 +21,6 @@ def _pv_param(
     if params is None or idx >= int(params.numel()):
         return torch.as_tensor(default, dtype=like.dtype, device=like.device)
     return params[idx].to(dtype=like.dtype, device=like.device)
-
-
-def _sincos(x: Tensor) -> Tuple[Tensor, Tensor]:
-    if _HAS_TORCH_SINCOS:
-        return torch.sincos(x)
-    return torch.sin(x), torch.cos(x)
 
 
 def project_zenithal(

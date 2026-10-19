@@ -3,20 +3,11 @@ from torch import Tensor
 from typing import Tuple, Optional
 import math
 
+from ._math import _sincos, _wrap_lon180
+
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 SQRT2 = 1.4142135623730951
-_HAS_TORCH_SINCOS = hasattr(torch, "sincos")
-
-
-def _sincos(x: Tensor) -> Tuple[Tensor, Tensor]:
-    if _HAS_TORCH_SINCOS:
-        return torch.sincos(x)
-    return torch.sin(x), torch.cos(x)
-
-
-def _wrap_lon180_checked(angle: Tensor) -> Tensor:
-    return torch.remainder(angle + 180.0, 360.0) - 180.0
 
 
 def project_allsky(
@@ -168,7 +159,7 @@ def deproject_allsky(
 ) -> Tuple[Tensor, Tensor]:
     """Forward all-sky projection."""
     if projection_code == "AIT":
-        phi_wrapped = _wrap_lon180_checked(phi)
+        phi_wrapped = _wrap_lon180(phi)
         phi_rad = phi_wrapped * D2R
         theta_rad = theta * D2R
         sin_theta, cos_theta = _sincos(theta_rad)
@@ -179,7 +170,7 @@ def deproject_allsky(
         return xi, eta
 
     elif projection_code == "MOL":
-        phi_wrapped = _wrap_lon180_checked(phi)
+        phi_wrapped = _wrap_lon180(phi)
         phi_rad = phi_wrapped * D2R
         theta_rad = theta * D2R
         sin_theta = torch.sin(theta_rad)
@@ -211,7 +202,7 @@ def deproject_allsky(
                 H = pv2[1]
             if pv2[2] != 0:
                 K = pv2[2]
-        phi_w = _wrap_lon180_checked(phi)
+        phi_w = _wrap_lon180(phi)
         s_theta = torch.sin(theta * D2R)
         abs_s = torch.abs(s_theta)
         eta_scale = 90.0 * (K / H)
@@ -226,7 +217,7 @@ def deproject_allsky(
         return xi, eta
 
     elif projection_code == "SFL":
-        phi_wrapped = _wrap_lon180_checked(phi)
+        phi_wrapped = _wrap_lon180(phi)
         xi = phi_wrapped * torch.cos(theta * D2R)
         eta = theta
         return xi, eta
@@ -236,7 +227,7 @@ def deproject_allsky(
         r0 = R2D
         w0 = r0 * D2R  # = 1.0
         w2 = math.pi * r0
-        phi_wrapped = _wrap_lon180_checked(phi)
+        phi_wrapped = _wrap_lon180(phi)
         xi_raw = w0 * phi_wrapped
         s = torch.sin(theta * D2R / 3.0)
         xi = (1.0 - 4.0 * s * s) * xi_raw
@@ -263,7 +254,7 @@ def _xph_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
     # Torchsky pole-rotation phi has opposite sign to WCSLIB; undo before XPH.
     phi = -phi
     # Normalize phi to [-180, 180), then chi in [0, 360), psi = chi mod 90.
-    chi = _wrap_lon180_checked(phi) + 180.0
+    chi = _wrap_lon180(phi) + 180.0
     psi = torch.remainder(chi, 90.0)
     phi_n = chi - 180.0
 
@@ -386,7 +377,7 @@ def _xph_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
     theta_out = torch.where(mask_eq, theta_eq, th)
     # Torchsky zenithal/pole rotation uses the opposite phi sign from WCSLIB
     # (cf. zenithal atan2(-xi,-eta) vs prjx2s). Flip so celestial matches.
-    phi_out = _wrap_lon180_checked(-phi_out)
+    phi_out = _wrap_lon180(-phi_out)
     nan = torch.full_like(phi_out, float("nan"))
     phi_out = torch.where(invalid, nan, phi_out)
     theta_out = torch.where(invalid, nan, theta_out)
