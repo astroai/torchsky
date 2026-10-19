@@ -75,8 +75,8 @@ Current release-candidate evidence (same-machine, reference comparisons):
 
 ## Installation
 
-`torchsky` is not yet published on PyPI; install the release wheel or build
-from source in the meantime:
+The 0.4.0 line is not yet on PyPI (0.1.x–0.3.1 are); install the release wheel
+or build from source in the meantime:
 
 ```bash
 # Wheel built from this repository (see docs/release.md)
