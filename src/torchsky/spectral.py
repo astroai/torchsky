@@ -762,12 +762,6 @@ class SpectralAxis:
             )
         return self.values
 
-    def _positive_values(self) -> torch.Tensor:
-        values = self._validated_values()
-        if bool(torch.any(values <= 0)):
-            raise ValueError("spectral conversion coordinates must be positive")
-        return values
-
     def to_wavelength(self) -> torch.Tensor:
         """Convert to vacuum wavelength in Angstroms.
 
