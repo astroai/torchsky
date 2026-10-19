@@ -45,6 +45,12 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **AIR projection solver**: pixel->world for the Airy zenithal projection now
+  uses a fixed-iteration Newton solve in `t = tan(xi)` instead of a bracketed
+  regula-falsi loop with per-iteration host synchronization. On the harness WCS
+  grid (20k points, CPU) it is 2.3x astropy instead of 0.53x, and the maximum
+  angular parity against astropy improves from 4.1e-5 to 4.1e-7 arcsec; the
+  same accuracy holds for PV2_1 in 45..120 deg.
 - **Lean-code pass (native, WCS, sphere, map)**: removed the unused NumPy
   HEALPix bindings and dead native kernels (68 → 56 exported symbols), the
   pre-`torchfits` CFITSIO vendor tree and CI hooks, the merged
