@@ -15,12 +15,91 @@ from torch import Tensor
 from ...device import default_compute_device
 from ...wcs import WCS
 
+def _reset_xavier_mlp(
+    hidden: "nn.Sequential | list[nn.Module] | nn.ModuleList", output: nn.Linear
+) -> None:
+    """Xavier-init every Linear in ``hidden`` and a small final linear readout."""
+    for module in hidden:
+        if type(module) is nn.Linear:
+            nn.init.xavier_uniform_(module.weight)
+            nn.init.zeros_(module.bias)
+    nn.init.uniform_(output.weight, -1e-2, 1e-2)
+    nn.init.constant_(output.bias, -3.0)
+
+
+def _atlas_local_coords(xy: Tensor, centers: Tensor, atlas_side: int) -> Tensor:
+    """Tile-local coordinates for every atlas expert, clamped to ``[0, 1]``."""
+    local = []
+    tile_size = 1.0 / float(atlas_side)
+    for center in centers:
+        lower = center - 0.5 * tile_size
+        shifted = (xy - lower.to(device=xy.device, dtype=xy.dtype)) / tile_size
+        local.append(torch.clamp(shifted, 0.0, 1.0))
+    return torch.stack(local, dim=-2)
+
+
+def _fourier_features_with_curriculum(
+    spatial: Tensor, num_frequencies: int, active: int
+) -> Tensor:
+    """Spatial Fourier features with a curriculum over active frequencies."""
+    if num_frequencies <= 0:
+        return spatial
+    scales = torch.arange(
+        1, num_frequencies + 1, device=spatial.device, dtype=spatial.dtype
+    )
+    feats = [spatial]
+    for idx, scale in enumerate(scales):
+        phase = math.pi * scale * spatial
+        sin_phase = torch.sin(phase)
+        cos_phase = torch.cos(phase)
+        if idx >= active:
+            sin_phase = torch.zeros_like(sin_phase)
+            cos_phase = torch.zeros_like(cos_phase)
+        feats.append(sin_phase)
+        feats.append(cos_phase)
+    return torch.cat(feats, dim=-1)
+
+
+def _fourier_features_vectorized(spatial: Tensor, num_frequencies: int) -> Tensor:
+    """Vectorized spatial Fourier features (no curriculum)."""
+    if num_frequencies <= 0:
+        return spatial
+    scales = torch.arange(
+        1, num_frequencies + 1, device=spatial.device, dtype=spatial.dtype
+    )
+    phase = math.pi * spatial.unsqueeze(-1) * scales
+    sin_feats = torch.sin(phase).transpose(-1, -2)
+    cos_feats = torch.cos(phase).transpose(-1, -2)
+    stacked = torch.stack([sin_feats, cos_feats], dim=-2)
+    flattened = stacked.reshape(*spatial.shape[:-1], -1)
+    return torch.cat([spatial, flattened], dim=-1)
+
+
+def _atlas_expert_weights(
+    xy: Tensor,
+    centers: Tensor,
+    sigma: float,
+    topk_experts: int | None,
+) -> Tensor:
+    """Gaussian softmax weights over atlas experts, optionally top-k sparsified."""
+    diff = xy.unsqueeze(-2) - centers.to(device=xy.device, dtype=xy.dtype)
+    logits = -0.5 * torch.sum(torch.square(diff / max(sigma, 1.0e-3)), dim=-1)
+    weights = torch.softmax(logits, dim=-1)
+    if topk_experts is not None and topk_experts < weights.shape[-1]:
+        topk_vals, topk_idx = torch.topk(weights, k=topk_experts, dim=-1)
+        sparse = torch.zeros_like(weights)
+        sparse.scatter_(-1, topk_idx, topk_vals)
+        weights = sparse / torch.clamp(sparse.sum(dim=-1, keepdim=True), min=1.0e-8)
+    return weights
+
+
 if TYPE_CHECKING:
     from ..product import ProductResult
 
 from ..operators.bundle import field_observation_operator_bundle
 from ..operators.psf import apply_psf_spec, gaussian_blur as _shared_gaussian_blur
 from ..solvers import ComponentDecompositionDiagnostics, SurveyInstrumentComponentMixer
+from ..solvers import _relative_norm, _subspace_leakage
 
 from .bandpass import (
     bandpass_bounds as _bandpass_bounds,
@@ -1445,38 +1524,6 @@ class FieldComponentDecomposition(_BaseFieldModel):
         private_truth_chunks: list[Tensor] = []
         calibration_anchor_chunks: list[Tensor] = []
 
-        def _relative_norm(error: Tensor, reference: Tensor) -> float:
-            error_norm = torch.linalg.vector_norm(torch.as_tensor(error).reshape(-1))
-            ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
-            if float(ref_norm.item()) == 0.0:
-                return (
-                    0.0 if float(error_norm.item()) == 0.0 else float(error_norm.item())
-                )
-            return float((error_norm / ref_norm).item())
-
-        def _subspace_leakage(error: Tensor, basis: Tensor, reference: Tensor) -> float:
-            basis_t = torch.as_tensor(basis)
-            if int(basis_t.numel()) == 0:
-                return 0.0
-            basis_rows = basis_t.reshape(int(basis_t.shape[0]), -1)
-            nonzero = torch.any(basis_rows != 0, dim=1)
-            basis_rows = basis_rows[nonzero]
-            if int(basis_rows.shape[0]) == 0:
-                return 0.0
-            vector = torch.as_tensor(error).reshape(-1)
-            dtype = torch.promote_types(vector.dtype, basis_rows.dtype)
-            matrix = basis_rows.to(dtype=dtype, device=vector.device).transpose(0, 1)
-            rhs = vector.to(dtype=dtype, device=vector.device)
-            coeffs = torch.linalg.lstsq(matrix, rhs).solution
-            projected = matrix @ coeffs
-            proj_norm = torch.linalg.vector_norm(projected)
-            ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
-            if float(ref_norm.item()) == 0.0:
-                return (
-                    0.0 if float(proj_norm.item()) == 0.0 else float(proj_norm.item())
-                )
-            return float((proj_norm / ref_norm).item())
-
         for observation, forward_context in zip(observations, contexts, strict=True):
             render_kwargs = dict(
                 num_spectral_samples=num_spectral_samples,
@@ -2147,12 +2194,7 @@ class FourierMLPField(_BaseFieldModel):
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
-        for module in self.hidden:
-            if type(module) is nn.Linear:
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
-        nn.init.constant_(self.output.bias, -3.0)
+        _reset_xavier_mlp(self.hidden, self.output)
 
     def _fourier_features(self, coords: Tensor) -> Tensor:
         if self.num_frequencies <= 0:
@@ -2247,26 +2289,11 @@ class SpectralBasisField(_BaseFieldModel):
         return max(1, int(math.ceil(self._curriculum_progress * total)))
 
     def _spatial_fourier_features(self, spatial: Tensor) -> Tensor:
-        if self.num_spatial_frequencies <= 0:
-            return spatial
-        scales = torch.arange(
-            1,
-            self.num_spatial_frequencies + 1,
-            device=spatial.device,
-            dtype=spatial.dtype,
+        return _fourier_features_with_curriculum(
+            spatial,
+            self.num_spatial_frequencies,
+            self._active_frequency_count(self.num_spatial_frequencies),
         )
-        active = self._active_frequency_count(self.num_spatial_frequencies)
-        feats = [spatial]
-        for idx, scale in enumerate(scales):
-            phase = math.pi * scale * spatial
-            sin_phase = torch.sin(phase)
-            cos_phase = torch.cos(phase)
-            if idx >= active:
-                sin_phase = torch.zeros_like(sin_phase)
-                cos_phase = torch.zeros_like(cos_phase)
-            feats.append(sin_phase)
-            feats.append(cos_phase)
-        return torch.cat(feats, dim=-1)
 
     def _spectral_basis(self, lam: Tensor) -> Tensor:
         if self.num_spectral_frequencies > 0:
@@ -2439,24 +2466,9 @@ class BandpassConditionedField(_BaseFieldModel):
         nn.init.constant_(self.output.bias, -3.0)
 
     def _spatial_fourier_features(self, spatial: Tensor) -> Tensor:
-        if self.num_spatial_frequencies <= 0:
-            return spatial
-        scales = torch.arange(
-            1,
-            self.num_spatial_frequencies + 1,
-            device=spatial.device,
-            dtype=spatial.dtype,
+        return _fourier_features_vectorized(
+            spatial, self.num_spatial_frequencies
         )
-        scaled = spatial.unsqueeze(-1) * scales
-        phase = math.pi * scaled
-
-        sin_feats = torch.sin(phase).transpose(-1, -2)
-        cos_feats = torch.cos(phase).transpose(-1, -2)
-
-        stacked = torch.stack([sin_feats, cos_feats], dim=-2)
-        flattened = stacked.reshape(*spatial.shape[:-1], -1)
-
-        return torch.cat([spatial, flattened], dim=-1)
 
     def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
         lam = (
@@ -2607,26 +2619,11 @@ class LearnedSpectralBasisField(_BaseFieldModel):
         return max(1, int(math.ceil(self._curriculum_progress * total)))
 
     def _spatial_fourier_features(self, spatial: Tensor) -> Tensor:
-        if self.num_spatial_frequencies <= 0:
-            return spatial
-        scales = torch.arange(
-            1,
-            self.num_spatial_frequencies + 1,
-            device=spatial.device,
-            dtype=spatial.dtype,
+        return _fourier_features_with_curriculum(
+            spatial,
+            self.num_spatial_frequencies,
+            self._active_frequency_count(self.num_spatial_frequencies),
         )
-        active = self._active_frequency_count(self.num_spatial_frequencies)
-        feats = [spatial]
-        for idx, scale in enumerate(scales):
-            phase = math.pi * scale * spatial
-            sin_phase = torch.sin(phase)
-            cos_phase = torch.cos(phase)
-            if idx >= active:
-                sin_phase = torch.zeros_like(sin_phase)
-                cos_phase = torch.zeros_like(cos_phase)
-            feats.append(sin_phase)
-            feats.append(cos_phase)
-        return torch.cat(feats, dim=-1)
 
     def _spectral_features(self, lam: Tensor) -> Tensor:
         return torch.stack([lam, lam * lam, torch.tanh(lam)], dim=-1)
@@ -2872,24 +2869,9 @@ class ConditionedSpectralField(_BaseFieldModel):
         nn.init.constant_(self.output.bias, -3.0)
 
     def _spatial_fourier_features(self, spatial: Tensor) -> Tensor:
-        if self.num_spatial_frequencies <= 0:
-            return spatial
-        scales = torch.arange(
-            1,
-            self.num_spatial_frequencies + 1,
-            device=spatial.device,
-            dtype=spatial.dtype,
+        return _fourier_features_vectorized(
+            spatial, self.num_spatial_frequencies
         )
-        scaled = spatial.unsqueeze(-1) * scales
-        phase = math.pi * scaled
-
-        sin_feats = torch.sin(phase).transpose(-1, -2)
-        cos_feats = torch.cos(phase).transpose(-1, -2)
-
-        stacked = torch.stack([sin_feats, cos_feats], dim=-2)
-        flattened = stacked.reshape(*spatial.shape[:-1], -1)
-
-        return torch.cat([spatial, flattened], dim=-1)
 
     def _spectral_features(self, lam: Tensor) -> Tensor:
         if self.num_spectral_frequencies > 0:
@@ -2997,12 +2979,7 @@ class HashGridConditionedField(_BaseFieldModel):
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
-        for module in self.hidden:
-            if type(module) is nn.Linear:
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
-        nn.init.constant_(self.output.bias, -3.0)
+        _reset_xavier_mlp(self.hidden, self.output)
 
     def _spectral_features(self, lam: Tensor) -> Tensor:
         if self.num_spectral_frequencies > 0:
@@ -3496,12 +3473,7 @@ class HashGridMLPField(_BaseFieldModel):
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
-        for module in self.hidden:
-            if type(module) is nn.Linear:
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
-        nn.init.constant_(self.output.bias, -3.0)
+        _reset_xavier_mlp(self.hidden, self.output)
 
     def forward(
         self,
@@ -3731,12 +3703,7 @@ class SkyLambdaPlanesField(_BaseFieldModel):
         self._reset_parameters()
 
     def _reset_parameters(self) -> None:
-        for module in self.hidden:
-            if type(module) is nn.Linear:
-                nn.init.xavier_uniform_(module.weight)
-                nn.init.zeros_(module.bias)
-        nn.init.uniform_(self.output.weight, -1e-2, 1e-2)
-        nn.init.constant_(self.output.bias, -3.0)
+        _reset_xavier_mlp(self.hidden, self.output)
 
     def forward(
         self,
@@ -5220,17 +5187,8 @@ class SkyLambdaAtlasField(_BaseFieldModel):
             ]
         )
 
-    def _atlas_local_xy(
-        self,
-        xy: Tensor,
-    ) -> Tensor:
-        local = []
-        tile_size = 1.0 / float(self.atlas_side)
-        for center in self.atlas_centers:
-            lower = center - 0.5 * tile_size
-            shifted = (xy - lower.to(device=xy.device, dtype=xy.dtype)) / tile_size
-            local.append(torch.clamp(shifted, 0.0, 1.0))
-        return torch.stack(local, dim=-2)
+    def _atlas_local_xy(self, xy: Tensor) -> Tensor:
+        return _atlas_local_coords(xy, self.atlas_centers, self.atlas_side)
 
     def _atlas_expert_forward(
         self,
@@ -5284,24 +5242,14 @@ class SkyLambdaAtlasField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
         spatial_unit = self._spatial_unit_box_coords(
-            ra_deg,
-            dec_deg,
-            wavelength_angstrom,
+            ra_deg, dec_deg, wavelength_angstrom
         )
-        xy = spatial_unit[..., :2]
-        diff = xy.unsqueeze(-2) - self.atlas_centers.to(
-            device=xy.device, dtype=xy.dtype
+        return _atlas_expert_weights(
+            spatial_unit[..., :2],
+            self.atlas_centers,
+            self.atlas_sigma,
+            self.topk_experts,
         )
-        logits = -0.5 * torch.sum(
-            torch.square(diff / max(self.atlas_sigma, 1.0e-3)), dim=-1
-        )
-        weights = torch.softmax(logits, dim=-1)
-        if self.topk_experts is not None and self.topk_experts < weights.shape[-1]:
-            topk_vals, topk_idx = torch.topk(weights, k=self.topk_experts, dim=-1)
-            sparse = torch.zeros_like(weights)
-            sparse.scatter_(-1, topk_idx, topk_vals)
-            weights = sparse / torch.clamp(sparse.sum(dim=-1, keepdim=True), min=1.0e-8)
-        return weights
 
     def forward(
         self,
@@ -5468,13 +5416,7 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
         )
 
     def _atlas_local_xy(self, xy: Tensor) -> Tensor:
-        local = []
-        tile_size = 1.0 / float(self.atlas_side)
-        for center in self.atlas_centers:
-            lower = center - 0.5 * tile_size
-            shifted = (xy - lower.to(device=xy.device, dtype=xy.dtype)) / tile_size
-            local.append(torch.clamp(shifted, 0.0, 1.0))
-        return torch.stack(local, dim=-2)
+        return _atlas_local_coords(xy, self.atlas_centers, self.atlas_side)
 
     def _atlas_weights(
         self,
@@ -5483,28 +5425,14 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
         spatial_unit = self._spatial_unit_box_coords(
-            ra_deg,
-            dec_deg,
-            wavelength_angstrom,
+            ra_deg, dec_deg, wavelength_angstrom
         )
-        xy = spatial_unit[..., :2]
-        diff = xy.unsqueeze(-2) - self.atlas_centers.to(
-            device=xy.device, dtype=xy.dtype
+        return _atlas_expert_weights(
+            spatial_unit[..., :2],
+            self.atlas_centers,
+            self.atlas_sigma,
+            self.topk_experts,
         )
-        logits = -0.5 * torch.sum(
-            torch.square(diff / max(self.atlas_sigma, 1.0e-3)),
-            dim=-1,
-        )
-        weights = torch.softmax(logits, dim=-1)
-        if self.topk_experts is not None and self.topk_experts < weights.shape[-1]:
-            topk_vals, topk_idx = torch.topk(weights, k=self.topk_experts, dim=-1)
-            sparse = torch.zeros_like(weights)
-            sparse.scatter_(-1, topk_idx, topk_vals)
-            weights = sparse / torch.clamp(
-                sparse.sum(dim=-1, keepdim=True),
-                min=1.0e-8,
-            )
-        return weights
 
     def _expert_local_components(
         self,

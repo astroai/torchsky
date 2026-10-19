@@ -29,6 +29,45 @@ from .scenes import (
 from .target import TargetRenderSpec
 
 
+def _relative_norm(error: Tensor, reference: Tensor) -> float:
+    """Relative L2 norm of ``error`` with respect to ``reference``.
+
+    A zero reference falls back to the absolute error norm, so diagnostics never
+    divide by zero.
+    """
+    error_norm = torch.linalg.vector_norm(torch.as_tensor(error).reshape(-1))
+    ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
+    if float(ref_norm.item()) == 0.0:
+        return 0.0 if float(error_norm.item()) == 0.0 else float(error_norm.item())
+    return float((error_norm / ref_norm).item())
+
+
+def _subspace_leakage(error: Tensor, basis: Tensor, reference: Tensor) -> float:
+    """Fraction of ``error`` that lies in the span of ``basis``.
+
+    Used by component-decomposition diagnostics to report how much of a private
+    residual leaks into the shared-state subspace. Empty or all-zero bases have
+    no leakage by definition.
+    """
+    basis_t = torch.as_tensor(basis)
+    if int(basis_t.numel()) == 0:
+        return 0.0
+    basis_rows = basis_t.reshape(int(basis_t.shape[0]), -1)
+    nonzero = torch.any(basis_rows != 0, dim=1)
+    basis_rows = basis_rows[nonzero]
+    if int(basis_rows.shape[0]) == 0:
+        return 0.0
+    vector = torch.as_tensor(error).reshape(-1)
+    dtype = torch.promote_types(vector.dtype, basis_rows.dtype)
+    matrix = basis_rows.to(dtype=dtype, device=vector.device).transpose(0, 1)
+    rhs = vector.to(dtype=dtype, device=vector.device)
+    coeffs = torch.linalg.lstsq(matrix, rhs).solution
+    projected = matrix @ coeffs
+    proj_norm = torch.linalg.vector_norm(projected)
+    ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
+    if float(ref_norm.item()) == 0.0:
+        return 0.0 if float(proj_norm.item()) == 0.0 else float(proj_norm.item())
+    return float((proj_norm / ref_norm).item())
 ApplyOperatorFn = Callable[[SceneRepresentation, TargetRenderSpec], Tensor]
 AdjointOperatorFn = Callable[[Tensor], Tensor]
 ApplyNoiseFn = Callable[[Tensor], Tensor]
@@ -1578,38 +1617,6 @@ class HarmonicComponentDecomposition(nn.Module):
             state=estimate,
             aggregate=True,
         )
-
-        def _relative_norm(error: Tensor, reference: Tensor) -> float:
-            error_norm = torch.linalg.vector_norm(torch.as_tensor(error).reshape(-1))
-            ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
-            if float(ref_norm.item()) == 0.0:
-                return (
-                    0.0 if float(error_norm.item()) == 0.0 else float(error_norm.item())
-                )
-            return float((error_norm / ref_norm).item())
-
-        def _subspace_leakage(error: Tensor, basis: Tensor, reference: Tensor) -> float:
-            basis_t = torch.as_tensor(basis)
-            if int(basis_t.numel()) == 0:
-                return 0.0
-            basis_rows = basis_t.reshape(int(basis_t.shape[0]), -1)
-            nonzero = torch.any(basis_rows != 0, dim=1)
-            basis_rows = basis_rows[nonzero]
-            if int(basis_rows.shape[0]) == 0:
-                return 0.0
-            vector = torch.as_tensor(error).reshape(-1)
-            dtype = torch.promote_types(vector.dtype, basis_rows.dtype)
-            matrix = basis_rows.to(dtype=dtype, device=vector.device).transpose(0, 1)
-            rhs = vector.to(dtype=dtype, device=vector.device)
-            coeffs = torch.linalg.lstsq(matrix, rhs).solution
-            projected = matrix @ coeffs
-            proj_norm = torch.linalg.vector_norm(projected)
-            ref_norm = torch.linalg.vector_norm(torch.as_tensor(reference).reshape(-1))
-            if float(ref_norm.item()) == 0.0:
-                return (
-                    0.0 if float(proj_norm.item()) == 0.0 else float(proj_norm.item())
-                )
-            return float((proj_norm / ref_norm).item())
 
         shared_error = shared_estimate - shared_truth
         private_error = private_estimate - private_truth
