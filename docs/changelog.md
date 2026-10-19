@@ -45,6 +45,11 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **Sphere spectral operations split**: power-spectrum, pixel-window, beam,
+  synthesis, and smoothing operations moved from `sphere/spectral.py` to
+  `sphere/spectral_ops.py`; the SHT primitives are imported lazily so the
+  module graph stays acyclic, and `spectral` re-exports the historical names.
+  spectral.py drops from 4,636 to 4,031 lines.
 - **Map calibration helpers split**: observation calibration, variance
   accumulation, provenance-context, and area-scaling helpers moved from
   `map/image_plane.py` to `map/calibration.py`; image_plane re-exports them and
