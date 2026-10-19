@@ -148,6 +148,60 @@
     "resample_healpix",
     "stack_product"
   ],
+  "torchsky.map.evidence": [
+    "EvidenceSnapshot"
+  ],
+  "torchsky.map.field.gaussian": [
+    "bind_linear_band_grid_likelihood"
+  ],
+  "torchsky.map.field.joint_native": [
+    "bind_joint_native_field_likelihood"
+  ],
+  "torchsky.map.field.native_physical": [
+    "NativePhysicalLikelihood",
+    "bind_native_physical_likelihood"
+  ],
+  "torchsky.map.field.native_response": [
+    "NativeFieldResponse",
+    "bind_native_field_likelihood",
+    "render_native_field_observation"
+  ],
+  "torchsky.map.likelihood": [
+    "FunctionalSamplingUncertainty",
+    "GaussianLikelihoodFactor",
+    "GaussianLikelihoodSystem",
+    "GaussianNormalEquations"
+  ],
+  "torchsky.map.operators.continuous_response": [
+    "AchromaticPixelResponse",
+    "NativeQuadratureResponseOp",
+    "NativeSpectralPixelResponse"
+  ],
+  "torchsky.map.operators.detector_response": [
+    "IntegratedDetectorMoments",
+    "LinearDetectorResponse",
+    "integrated_detector_moments",
+    "integrated_photoelectron_mean"
+  ],
+  "torchsky.map.operators.epsf": [
+    "GaussianPixelResponse",
+    "NativePixelStamp",
+    "NativeStarFit",
+    "PixelIntegratedResponse",
+    "native_pixel_stamp",
+    "profile_native_star"
+  ],
+  "torchsky.map.operators.nuisance": [
+    "CalibratedNuisancePrecision",
+    "ProfiledNuisancePrecision"
+  ],
+  "torchsky.map.operators.pixel_calibration": [
+    "PixelCalibrationOp"
+  ],
+  "torchsky.map.query": [
+    "LinearQueryResult",
+    "fit_linear_query"
+  ],
   "torchsky.scene": [
     "BandpassSpec",
     "ContinuousFieldModel",

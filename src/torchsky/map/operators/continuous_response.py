@@ -443,3 +443,9 @@ class NativeQuadratureResponseOp:
             if source_chunks
             else values.new_zeros((*values.shape[:-1], 0, nw))
         )
+
+__all__ = [
+    "AchromaticPixelResponse",
+    "NativeQuadratureResponseOp",
+    "NativeSpectralPixelResponse",
+]

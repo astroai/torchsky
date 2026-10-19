@@ -300,3 +300,12 @@ def profile_native_star(
         retained_response=profile.sum(),
         valid_response=profile[valid].sum(),
     )
+
+__all__ = [
+    "GaussianPixelResponse",
+    "NativePixelStamp",
+    "NativeStarFit",
+    "PixelIntegratedResponse",
+    "native_pixel_stamp",
+    "profile_native_star",
+]

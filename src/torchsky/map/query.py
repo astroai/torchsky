@@ -289,3 +289,5 @@ def fit_linear_query(
         nuisance_treatments=tuple(f.nuisance_treatment for f in system.factors),
         _evidence_guard=validate_query,
     )
+
+__all__ = ["LinearQueryResult", "fit_linear_query"]

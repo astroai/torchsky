@@ -14,6 +14,18 @@ NAMESPACES = (
     "torchsky.catalogs",
     "torchsky.coords",
     "torchsky.encoders",
+    "torchsky.map.likelihood",
+    "torchsky.map.query",
+    "torchsky.map.evidence",
+    "torchsky.map.operators.nuisance",
+    "torchsky.map.operators.continuous_response",
+    "torchsky.map.operators.detector_response",
+    "torchsky.map.operators.pixel_calibration",
+    "torchsky.map.operators.epsf",
+    "torchsky.map.field.native_response",
+    "torchsky.map.field.native_physical",
+    "torchsky.map.field.gaussian",
+    "torchsky.map.field.joint_native",
 )
 
 
