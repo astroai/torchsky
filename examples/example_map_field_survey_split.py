@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import torch
 
-from torchsky.map import (
+from torchsky.map.field import (
     FieldComponentAnchorTerm,
     FieldComponentDecomposition,
     FieldDomain,

@@ -12,7 +12,7 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_harmonic_solver_hooks
+from torchsky.map.solvers import build_spherical_harmonic_solver_hooks
 from torchsky.map.solvers import (
     build_harmonic_cl_prior_operator,
     compose_bound_operators,

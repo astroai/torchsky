@@ -19,17 +19,17 @@ from torchsky.map.operators.geometry_drizzle import (
 )
 import torchsky.map.operators.resampling as resampling_mod
 import torchsky.map.windowing as windowing_mod
-from torchsky.map import (
-    ImageObservation,
+from torchsky.map import stack_product
+from torchsky.map.image_plane import (
     coadd_image_plane,
     coadd_image_plane_cube,
     coadd_image_plane_multiband,
-    plan_map_product,
     plan_image_plane_cube_target,
     plan_image_plane_cube_target_from_header,
     plan_image_plane_target,
-    stack_product,
 )
+from torchsky.map.observation import ImageObservation
+from torchsky.map.product import plan_map_product
 from torchsky.map.sky import (
     CrossExposureSkyCorrector,
     MeshSkyEstimator,

@@ -8,11 +8,11 @@ import torch
 
 import torch.nn as nn
 
-from torchsky.map import (
-    STRAINER_TRUNK_CHECKPOINT_FORMAT,
+from torchsky.map.field import (
     FieldDomain,
     FieldFitResult,
     FieldObservation,
+    STRAINER_TRUNK_CHECKPOINT_FORMAT,
     StrainerSkyEncoderMLPField,
     estimate_field_domain,
     fit_field_model,

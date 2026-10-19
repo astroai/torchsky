@@ -15,7 +15,7 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_harmonic_solver_hooks
+from torchsky.map.solvers import build_spherical_harmonic_solver_hooks
 from torchsky.map.solvers import make_diagonal_preconditioner
 from torchsky.map.target import TargetRenderSpec
 

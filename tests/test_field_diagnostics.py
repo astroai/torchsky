@@ -8,24 +8,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torchsky import WCS
-from torchsky.map import (
+from torchsky.map.field import (
     BandpassConditionedField,
     FieldDomain,
     FieldFitResult,
     FieldObservation,
     PSFSpec,
-    field_image_residual_product,
+    StrainerSkyEncoderMLPField,
     field_image_quality_metrics,
+    field_image_residual_product,
     field_quality_scorecard,
     fit_field_model,
     make_residual_tile_basis_field,
+    pretrain_strainer_trunk_synthetic,
     render_field_fit_quality,
     render_field_quality,
     render_field_residual,
     render_field_residual_product,
     select_field_residual_tiles,
-    pretrain_strainer_trunk_synthetic,
-    StrainerSkyEncoderMLPField,
 )
 from torchsky.map.field.core import _BaseFieldModel
 from torchsky.map.field.hashgrid import sample_feature_plane

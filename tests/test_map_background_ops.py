@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from torchsky.map import FieldObservation, render_field_observation
+from torchsky.map.field import FieldObservation, render_field_observation
 from torchsky.map.operators.background import (
     BackgroundOp,
     SpatialSkyBackgroundOp,

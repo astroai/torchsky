@@ -4,7 +4,8 @@ import torch
 
 import torchsky
 from torchsky import scene
-from torchsky.map import ImageObservation, BandpassSpec, ProductSpec
+from torchsky.map import BandpassSpec, ProductSpec
+from torchsky.map.observation import ImageObservation
 from torchsky.map.field import FieldObservation, PSFSpec
 from torchsky.map.operators.bundle import (
     field_observation_operator_bundle,

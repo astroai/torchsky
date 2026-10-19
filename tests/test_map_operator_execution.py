@@ -4,7 +4,7 @@ import torch
 import pytest
 
 from torchsky import WCS
-from torchsky.map import ImageObservation
+from torchsky.map.observation import ImageObservation
 from torchsky.map.operators import (
     ConservativePolygonRemapOp,
     ExactDrizzleGeometryOp,

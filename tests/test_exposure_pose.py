@@ -5,12 +5,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from torchsky.map import (
-    ExposurePose,
+from torchsky.map.exposure_pose import ExposurePose, freeze_pose
+from torchsky.map.field import (
     FieldDomain,
     FieldObservation,
     ForwardContext,
-    freeze_pose,
     make_field_model,
     render_field_observation,
 )

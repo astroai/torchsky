@@ -27,9 +27,9 @@ REQUIRED_FILES = (
     "docs/map.md",
     "docs/field.md",
     "docs/scene.md",
-    "docs/reviews/autonomous_refactor_log.md",
-    "docs/roadmap/history.md",
-    "docs/roadmap/status.md",
+    "notes/reviews/autonomous_refactor_log.md",
+    "notes/roadmap/history.md",
+    "notes/roadmap/status.md",
 )
 
 DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {'docs/benchmarks.md': ('torchsky-harness', 'Torchsky retains production implementations'), 'docs/map.md': ('ObservationOperatorBundle', 'LearnedInstrumentOperator', 'ConstrainedKernelPSF'), 'docs/field.md': ('field.fit', 'field.render', 'field.sample', 'operator_constrained'), 'docs/architecture.md': ('scene', 'world', 'io')}
@@ -87,9 +87,13 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "_noise_pretrain_field_model",
     ),
     "src/torchsky/map/__init__.py": (
-        "make_field_model_preset",
-        "ObservationOperatorBundle",
-        "coadd_image_plane",
+        "Observation",
+        "Target",
+        "ProductSpec",
+        "coadd",
+        "coadd_cube",
+        "coadd_healpix",
+        "aperture_uncertainty",
     ),
     "src/torchsky/map/operators/__init__.py": (
         "MAP_RESAMPLING_KERNELS",

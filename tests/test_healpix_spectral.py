@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import torch
 
-from torchsky.map import (
+from torchsky.map.healpix_image_plane import sample_healpix_map_on_image_header
+from torchsky.map.healpix_spectral import (
     rebandlimit_healpix_map_via_sht,
     sample_alm_on_image_header_spectral,
-    sample_healpix_spin_map_on_image_header_harmonic,
-    sample_healpix_map_on_image_header,
     sample_healpix_map_on_image_header_harmonic,
     sample_healpix_map_on_image_header_spectral,
+    sample_healpix_spin_map_on_image_header_harmonic,
     sample_spin_alm_on_image_header_spectral,
 )
 from torchsky.sphere import alm2lonlat, alm2lonlat_spin, alm2map, alm2map_spin, alm_size

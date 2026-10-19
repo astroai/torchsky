@@ -4,7 +4,8 @@ import pytest
 import torch
 
 from torchsky.map.sky import CrossExposureSkyCorrector, MeshSkyEstimator, PolynomialSkyModel
-from torchsky.map import ImageObservation, coadd_image_plane
+from torchsky.map.image_plane import coadd_image_plane
+from torchsky.map.observation import ImageObservation
 import torchfits
 
 
@@ -299,7 +300,7 @@ class TestCrossExposureSkyCorrector:
         corrector = CrossExposureSkyCorrector(
             estimator=MeshSkyEstimator(block_size=16, statistic="median")
         )
-        from torchsky.map import ImagePlaneMapMaker
+        from torchsky.map.image_plane import ImagePlaneMapMaker
         maker = ImagePlaneMapMaker(
             stacking_method="median",
             cross_exposure_sky_corrector=corrector,

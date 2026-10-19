@@ -15,7 +15,7 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_spin_harmonic_solver_hooks
+from torchsky.map.solvers import build_spherical_spin_harmonic_solver_hooks
 from torchsky.map.solvers import (
     build_spin_harmonic_kronecker_prior_operator,
     compose_bound_operators,

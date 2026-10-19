@@ -6,12 +6,11 @@ import pytest
 import torch
 
 from torchsky import WCS
-from torchsky.map import (
-    ComponentDecompositionDiagnostics,
-    FieldComponentAnchorTerm,
+from torchsky.map.field import (
     FieldCentroidAnchorTerm,
-    FieldDomain,
+    FieldComponentAnchorTerm,
     FieldComponentDecomposition,
+    FieldDomain,
     FieldObservation,
     ForwardContext,
     PSFSpec,
@@ -27,6 +26,7 @@ from torchsky.map import (
     render_field_observation,
     render_field_observation_distribution,
 )
+from torchsky.map.solvers import ComponentDecompositionDiagnostics
 from torchsky.spectral import SpectralAxis
 from torchsky.map.field import _noise_pretrain_field_model
 from torchsky.map.field.bandpass import bandpass_quadrature

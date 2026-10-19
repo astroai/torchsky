@@ -8,20 +8,16 @@ import torch
 
 import torchsky
 import torchsky.map.product as map_product_mod
-from torchsky.map import (
+from torchsky.map import BandpassSpec, stack_product
+from torchsky.map.field import (
     FieldDomain,
     FieldObservation,
     GaussianBasisField,
-    ImageObservation,
-    BandpassSpec,
-    estimate_map_inverse_variance,
     make_field_model,
-    plan_map_product,
     render_field_observation,
-    render_field_ensemble_product,
-    render_field_product,
-    stack_product,
 )
+from torchsky.map.observation import ImageObservation
+from torchsky.map.product import estimate_map_inverse_variance, plan_map_product, render_field_ensemble_product, render_field_product
 from torchsky.map.scenes import ContinuousFieldModel, DiscreteTargetImage
 from torchsky.map.scenes import HealpixMapScene
 from torchsky.map.operators import spherical_spectral_operator_bundle

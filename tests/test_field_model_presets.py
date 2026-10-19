@@ -1,8 +1,8 @@
 import pytest
 
-from torchsky.map import (
-    FIELD_MODEL_PRESET_NAMES,
+from torchsky.map.field import (
     FIELD_MODEL_PRESETS,
+    FIELD_MODEL_PRESET_NAMES,
     FieldDomain,
     get_field_model_preset,
     make_field_model_preset,

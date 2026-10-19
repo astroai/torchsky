@@ -18,7 +18,7 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_healpix_solver_hooks
+from torchsky.map.solvers import build_spherical_healpix_solver_hooks
 from torchsky.map.solvers import (
     build_state_identity_operator,
     build_state_low_rank_operator,

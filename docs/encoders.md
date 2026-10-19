@@ -30,7 +30,7 @@ model = field.model("sky_encoder_mlp", domain)
 ```
 
 `field_observations` should be a sequence of `torchsky.field.Observation`
-objects, not `torchsky.map.ImageObservation` objects from the image-plane coadd
+objects, not `torchsky.map.observation.ImageObservation` objects from the image-plane coadd
 API.
 
 ## Related Guides

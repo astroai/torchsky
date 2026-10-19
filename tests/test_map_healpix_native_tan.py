@@ -12,10 +12,7 @@ pytest.importorskip("reproject")
 
 from reproject import reproject_from_healpix, reproject_to_healpix  # noqa: E402
 
-from torchsky.map import (  # noqa: E402
-    healpix_nside_from_map_len,
-    sample_healpix_map_on_tan_header,
-)
+from torchsky.map.healpix_image_plane import healpix_nside_from_map_len, sample_healpix_map_on_tan_header
 
 
 def test_healpix_nside_from_map_len_roundtrip() -> None:

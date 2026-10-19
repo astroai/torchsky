@@ -15,11 +15,8 @@ import math
 
 import torch
 
-from torchsky.map import (
-    BandpassSpec,
-    ProductSpec,
-    build_spherical_harmonic_solver_hooks,
-)
+from torchsky.map import BandpassSpec, ProductSpec
+from torchsky.map.solvers import build_spherical_harmonic_solver_hooks
 
 
 def _tan_header() -> dict[str, float | int | str]:

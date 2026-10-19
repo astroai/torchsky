@@ -15,7 +15,7 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_healpix_solver_hooks
+from torchsky.map.solvers import build_spherical_healpix_solver_hooks
 from torchsky.map.target import TargetRenderSpec
 from torchsky.sphere import healpix as hp
 

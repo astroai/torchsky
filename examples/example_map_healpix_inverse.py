@@ -20,11 +20,8 @@ import math
 
 import torch
 
-from torchsky.map import (
-    BandpassSpec,
-    ProductSpec,
-    build_spherical_healpix_solver_hooks,
-)
+from torchsky.map import BandpassSpec, ProductSpec
+from torchsky.map.solvers import build_spherical_healpix_solver_hooks
 from torchsky.sphere import healpix as hp
 
 

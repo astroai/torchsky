@@ -15,7 +15,8 @@ import torch
 
 pytest.importorskip("torchsky.cpp")
 
-from torchsky.map import ImageObservation, coadd_image_plane, plan_image_plane_target  # noqa: E402
+from torchsky.map.image_plane import coadd_image_plane, plan_image_plane_target
+from torchsky.map.observation import ImageObservation
 import torchfits
 
 

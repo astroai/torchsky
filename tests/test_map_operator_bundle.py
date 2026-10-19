@@ -4,7 +4,8 @@ import pytest
 import torch
 
 import torchsky.map as map_api
-from torchsky.map import FieldObservation, ImageObservation, PSFSpec
+from torchsky.map.field import FieldObservation, PSFSpec
+from torchsky.map.observation import ImageObservation
 from torchsky.map.operators import (
     ConservativePolygonRemapOp,
     ExplicitBackgroundOp,
@@ -46,7 +47,9 @@ def _simple_header() -> dict[str, float | int | str]:
 
 
 def test_observation_operator_bundle_iter_enabled_skips_disabled_entries() -> None:
-    assert map_api.ObservationOperatorBundle is ObservationOperatorBundle
+    # The bundle is a canonical operators-module type, not a map-facade alias.
+    assert ObservationOperatorBundle.__module__.startswith("torchsky.map.operators")
+    assert "ObservationOperatorBundle" not in map_api.__all__
     bundle = ObservationOperatorBundle(
         geometry=InterpolationGeometryOp(),
         spectral_response=ExplicitSpectralResponseOp(),

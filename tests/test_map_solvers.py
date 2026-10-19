@@ -4,11 +4,7 @@ import math
 
 import torch
 
-from torchsky.map import (
-    build_spherical_harmonic_solver_hooks,
-    build_spherical_healpix_solver_hooks,
-    build_spherical_spin_harmonic_solver_hooks,
-)
+from torchsky.map.solvers import build_spherical_harmonic_solver_hooks, build_spherical_healpix_solver_hooks, build_spherical_spin_harmonic_solver_hooks
 from torchsky.map.operators import (
     InterpolationGeometryOp,
     ObservationOperatorBundle,
