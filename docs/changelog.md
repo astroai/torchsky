@@ -45,6 +45,12 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **Field model classes split**: the 27 neural field-model classes moved from
+  `map/field/core.py` to `map/field/models.py`; `core` now holds only the model
+  factory/dispatch and public re-exports (502 lines, down from 5,651).
+  Imports of every historical class from `torchsky.map.field.core` keep
+  working, and `_bandpass_bounds` stays re-exported for the spectral budget
+  module.
 - **Map target planning split**: the union-footprint planners and public
   `plan`/`plan_cube` family moved from `map/image_plane.py` to
   `map/planning.py`; spectral-plan helpers come from `map/spectral_projection.py`
