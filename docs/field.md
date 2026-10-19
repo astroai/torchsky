@@ -85,9 +85,11 @@ from torchsky import field
 model = field.model("sky_lambda_feature_field", domain)
 ```
 
-Common direct constructors are also available with shorter names, for example
-**`field.Sine`**, **`field.FourierMLP`**, **`field.HashGridSpectral`**, and
-**`field.SkyLambdaFeatures`**.
+Concrete model classes remain available under `torchsky.map.field` (for
+example `torchsky.map.field.core.SineImplicitField`,
+`torchsky.map.field.core.FourierMLPField`, and
+`torchsky.map.field.core.SkyLambdaFeatureField`); `torchsky.field` exposes the
+model/fit/render/sample composition surface and recommended presets.
 
 Presets are a convenience layer, not the core API:
 

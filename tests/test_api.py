@@ -113,8 +113,10 @@ def test_field_namespace_uses_short_composable_verbs() -> None:
         wavelength_scale=100.0,
     )
     model = field.model("sine_implicit", domain, hidden_dim=8, hidden_layers=1)
-    assert isinstance(model, field.Sine)
-    assert field.preset("fast", domain).__class__ is field.SkyEncoderMLP
+    from torchsky.map.field.core import SineImplicitField, SkyEncoderMLPField
+
+    assert isinstance(model, SineImplicitField)
+    assert isinstance(field.preset("fast", domain), SkyEncoderMLPField)
     obs = field.Observation(
         image=torch.zeros((3, 4)),
         header={
