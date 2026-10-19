@@ -192,7 +192,7 @@ def test_dispatch_map_rejects_invalid_inr_tile(mock_expand):
         weight_maps=None,
         mask_maps=None,
         primary_beam_maps=None,
-        method="inr",
+        method="field",
         inr_render_tile=0,
     )
     with pytest.raises(SystemExit, match="--inr-render-tile must be positive"):
@@ -243,21 +243,6 @@ def test_dispatch_map_coadd(mock_run_coadd, mock_expand):
     assert args.inputs == ["in1.fits", "in2.fits"]
     assert args.weights == [1.0, 1.0]
     mock_run_coadd.assert_called_once_with(args)
-
-
-@mock.patch("torchsky.cli.map_command._expand_inputs")
-@mock.patch("torchsky.cli.map_command._run_inr")
-def test_dispatch_map_inr(mock_run_inr, mock_expand):
-    mock_expand.return_value = ["in1.fits"]
-    mock_run_inr.return_value = 0
-
-    args = argparse.Namespace(inputs=["in1.fits"], weights=None, method="inr")
-
-    rc = _dispatch_map(args)
-    assert rc == 0
-    assert args.inputs == ["in1.fits"]
-    assert args.weights == [1.0]
-    mock_run_inr.assert_called_once_with(args)
 
 
 def test_safe_name():
@@ -802,7 +787,7 @@ def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
             str(output_path),
             str(input_path),
             "--method",
-            "inr",
+            "field",
             "--inr-band",
             "F277W",
             "--inr-spectral-source",
@@ -982,7 +967,7 @@ def test_cli_map_field_artifact_resumes_training(monkeypatch, tmp_path) -> None:
         main()
 
 
-def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:
+def test_run_field_single_uses_reference_header(monkeypatch, tmp_path) -> None:
     import torch.nn as nn
     from torchsky.cli import map_command
 
@@ -1087,7 +1072,7 @@ def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:
         dry_run=False,
     )
 
-    assert map_command._run_inr_single(args) == 0
+    assert map_command._run_field_single(args) == 0
     assert written["path"] == str(output_path)
     assert tuple(written["data"].shape) == (5, 7)
     assert written["header"]["NAXIS1"] == 7
@@ -1146,7 +1131,7 @@ def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
         dry_run=True,
     )
 
-    assert map_command._run_inr_single(args) == 0
+    assert map_command._run_field_single(args) == 0
 
 
 def test_paths_to_field_observations_keeps_background_offsets(monkeypatch) -> None:
@@ -1222,7 +1207,7 @@ def test_paths_to_field_observations_keep_each_passband(monkeypatch) -> None:
     ]
 
 
-def test_run_inr_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) -> None:
+def test_run_field_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) -> None:
     from torchsky.cli import map_command
 
     paths = [str(tmp_path / name) for name in ("a.fits", "b.fits", "c.fits")]
@@ -1242,7 +1227,7 @@ def test_run_inr_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) 
         return 0
 
     monkeypatch.setattr(map_command, "read", fake_read)
-    monkeypatch.setattr(map_command, "_run_inr_single", fake_run_single)
+    monkeypatch.setattr(map_command, "_run_field_single", fake_run_single)
 
     args = argparse.Namespace(
         inputs=paths,
@@ -1258,7 +1243,7 @@ def test_run_inr_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) 
         device="cpu",
     )
 
-    assert map_command._run_inr(args) == 0
+    assert map_command._run_field(args) == 0
     by_band = {ns.inr_band: ns for ns in captured}
     assert by_band["F277W"].inputs == [paths[0], paths[2]]
     assert by_band["F277W"].weights == [1.0, 3.0]

@@ -920,7 +920,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_inr(args: argparse.Namespace) -> int:
+def _run_field(args: argparse.Namespace) -> int:
     inputs = _expand_inputs(args.inputs)
     if not inputs:
         print("torchsky map: no input files matched", file=sys.stderr)
@@ -967,16 +967,16 @@ def _run_inr(args: argparse.Namespace) -> int:
                 ns.plan_json = base_plan.with_name(
                     f"{base_plan.stem}_{_safe_name(fk)}{suffix}"
                 )
-            rc = rc or _run_inr_single(ns)
+            rc = rc or _run_field_single(ns)
         return rc
-    return _run_inr_single(args)
+    return _run_field_single(args)
 
 
 def _safe_name(s: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in s) or "band"
 
 
-def _expand_paths_for_inr(
+def _expand_field_inputs(
     paths: list[str],
     hdu: int,
     weights: list[float],
@@ -1037,7 +1037,7 @@ def _expand_paths_for_inr(
     )
 
 
-def _run_inr_single(args: argparse.Namespace) -> int:
+def _run_field_single(args: argparse.Namespace) -> int:
     read_dev = _map_read_device_str(args)
     resolved_plan_inputs = getattr(args, "_resolved_plan_inputs", None)
     if resolved_plan_inputs is None:
@@ -1049,7 +1049,7 @@ def _run_inr_single(args: argparse.Namespace) -> int:
             inr_bg,
             inr_wmaps,
             inr_mmaps,
-        ) = _expand_paths_for_inr(
+        ) = _expand_field_inputs(
             inputs,
             hdu=args.hdu,
             weights=args.weights,
@@ -1501,9 +1501,9 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--method",
-        choices=("coadd", "field", "inr"),
+        choices=("coadd", "field"),
         default="coadd",
-        help="coadd: resample+stack; field: fit continuous field then render to grid (inr is deprecated)",
+        help="coadd: resample+stack; field: fit continuous field then render to grid",
     )
     p.add_argument(
         "--workflow",
@@ -2044,7 +2044,7 @@ def _dispatch_map_from_plan(args: argparse.Namespace) -> int:
         )
         args.inr_max_pixels = args.max_footprint_pixels
         args.per_filter = False
-        return _run_inr_single(args)
+        return _run_field_single(args)
 
     args.method = "coadd"
     args.workflow = str(execution["workflow"])
@@ -2125,7 +2125,7 @@ def _dispatch_map(args: argparse.Namespace) -> int:
             "--primary-beam-maps count must match expanded input file count"
         )
     args.primary_beam_maps = list(args.primary_beam_maps)
-    field_method = args.method in ("field", "inr")
+    field_method = args.method == "field"
     field_amp = str(getattr(args, "field_amp", "none"))
     if not field_method and (
         field_amp != "none"
@@ -2208,9 +2208,4 @@ def _dispatch_map(args: argparse.Namespace) -> int:
     args.inputs = expanded
     if args.method == "coadd":
         return _run_coadd(args)
-    if args.method == "inr":
-        print(
-            "torchsky map: --method=inr is deprecated; use --method=field",
-            file=sys.stderr,
-        )
-    return _run_inr(args)
+    return _run_field(args)

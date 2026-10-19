@@ -926,7 +926,7 @@ class MOC:
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
         """Write the MOC to a FITS file following the IVOA MOC standard.
 
-        Uses :func:`torchsky.io.write` (torchfits) — no Python ``fitsio``.
+        Writes the table through :mod:`torchfits`.
         """
         from torchfits import write
 
@@ -943,7 +943,7 @@ class MOC:
 
     @classmethod
     def read_fits(cls, filename: str) -> "MOC":
-        """Read a MOC from an IVOA FITS file via :func:`torchsky.io.read_table`."""
+        """Read a MOC from an IVOA FITS file through :mod:`torchfits`."""
         from torchfits.table import read_torch as read_table
 
         hdu = _resolve_moc_table_hdu_index(filename)

@@ -138,19 +138,6 @@ def zscale_limits(
     return float(z1.item()), float(z2.item())
 
 
-def percentile_limits(
-    arr: Tensor, lo: float = 2.0, hi: float = 98.0
-) -> tuple[float, float]:
-    """Robust display limits via percentile clipping."""
-    valid = arr.flatten()
-    valid = valid[torch.isfinite(valid)]
-    if valid.numel() == 0:
-        return 0.0, 1.0
-    qs = torch.quantile(
-        valid.float(), torch.tensor([lo / 100, hi / 100], device=valid.device)
-    )
-    return float(qs[0].item()), float(qs[1].item())
-
 
 # ---------------------------------------------------------------------------
 # Stretch functions
