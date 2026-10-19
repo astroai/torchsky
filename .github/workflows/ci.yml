@@ -53,6 +53,10 @@ jobs:
       env:
         PYTHONPATH: ${{ github.workspace }}/src
       run: pixi run -e test -- pyright --verbose
+    - name: Public API manifest
+      env:
+        PYTHONPATH: ${{ github.workspace }}/src
+      run: pixi run -e test -- python scripts/api_manifest.py --check docs/api-manifest.json
   build-test:
     name: Build & Test
     needs: pre-commit

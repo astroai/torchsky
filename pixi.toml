@@ -65,7 +65,7 @@ lint = "ruff check . && ruff format ."
 # Git pre-push hook: ruff + compileall only. Do not add pytest here.
 preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q src/torchsky tests"
 # Optional local copy of GitHub build-test. Not a push blocker.
-ci-local = "pixi run preflight-push && pixi run typecheck && pixi run test"
+ci-local = "pixi run preflight-push && pixi run api-manifest-check && pixi run typecheck && pixi run test"
 typecheck = "pixi run -e test pyright"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 
