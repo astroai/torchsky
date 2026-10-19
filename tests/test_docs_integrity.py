@@ -50,6 +50,8 @@ REQUIRED_PAGES = (
     "api-sphere.md",
     "api-map.md",
     "api-field.md",
+    "api-catalogs.md",
+    "api-spectral.md",
     "architecture.md",
     "benchmarks.md",
     "examples.md",

@@ -42,6 +42,8 @@ nav = [
     "api-sphere.md",
     "api-map.md",
     "api-field.md",
+    "api-catalogs.md",
+    "api-spectral.md",
     "architecture.md",
   ]},
   {"Evaluation" = [

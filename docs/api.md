@@ -69,6 +69,10 @@ enumerated by the namespaces below and checked by the package API tests.
   points, configs and results, submodule ownership.
 - [Field reference](api-field.md): build/fit/render/sample workflow, kinds and
   presets, observations, artifacts, spectral capacity.
+- [Catalog reference](api-catalogs.md): catalog model, crossmatch entry points,
+  streaming, and HEALPix index helpers.
+- [Spectral reference](api-spectral.md): spectral axes, containers, readers,
+  flux-conserving resampling, Doppler shifts, and cube writing.
 - [Architecture](architecture.md): design target and pillar rules.
 
 ## Public Namespaces
