@@ -44,6 +44,19 @@ owned by `torchfits`.
   Irregular axes remain an index-space interpolation with a recorded bias
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
+### Documentation and developer experience
+- **Published documentation site**: Zensical + Material build from `docs/` only
+  (plans, research, reviews, and archive moved under `notes/`), with a home
+  page, quick start, navigation by domain, API reference pages for every
+  namespace, a strict build, an offline link checker, and a Pages workflow.
+- **Documentation contracts**: every public `__all__` name must appear in the
+  docs, every Python block's imports must resolve, and the published tree/nav/
+  assets/links are tested (`tests/test_docs_integrity.py`,
+  `tests/test_docs_snippets.py`, `tests/test_docs_coverage.py`).
+- **Examples are gated and published**: `examples/test_examples.py` runs every
+  standalone example as a bounded subprocess, `pixi run examples` is a CI gate,
+  and the scripts are copied into the built site so their links work.
+
 ### Fixed
 - **Center-native WCS inverse rotation**: `world_to_pixel` for cylindrical,
   all-sky, pseudocylindrical, and polyconic projections reused the pole-native
