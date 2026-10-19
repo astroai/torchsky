@@ -10,7 +10,7 @@ Historical benchmark tables and comparative performance claims have moved to
 They are not current package status. FITS/table I/O performance evidence is
 owned by `torchfits`.
 
-## [0.4.0.dev0] - Unreleased
+## [0.4.0] - 2026-10-18
 
 ### Architecture
 
@@ -187,3 +187,4 @@ Patch release. No user-visible changes.
 [0.2.1]: https://github.com/sfabbro/torchsky/releases/tag/v0.2.1
 [0.3.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.3.0
 [0.3.1]: https://github.com/sfabbro/torchsky/releases/tag/v0.3.1
+[0.4.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.4.0
