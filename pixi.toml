@@ -70,6 +70,8 @@ typecheck = "pixi run -e test pyright"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 
 audit-refactor-cohesion = "pixi run -e default -- python scripts/audit_refactor_cohesion.py"
+api-manifest = "pixi run -e test -- python scripts/api_manifest.py --write docs/api-manifest.json"
+api-manifest-check = "pixi run -e test -- python scripts/api_manifest.py --check docs/api-manifest.json"
 setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
 release-manual = "twine upload dist/*"

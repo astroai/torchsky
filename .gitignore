@@ -49,6 +49,7 @@ examples/**/*.fits.fz
 *.log
 *.log*
 *.json
+!docs/api-manifest.json
 torchfits_exhaustive_*
 pytest_filtered.log
 
