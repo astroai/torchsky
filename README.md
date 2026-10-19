@@ -58,9 +58,9 @@ runtime paths. FITS image/table throughput belongs to `torchfits`. See the
 Current release-candidate evidence (same-machine, reference comparisons):
 
 - **WCS**: 38 cases against astropy (30 projections plus reference-latitude-offset
-  cases). Angular parity max `4.13e-5 asec` (the AIR formula floor; every other
-  case `<=1.5e-8 asec`), pole/seam-excluded round trip `4.13e-5 asec`, pixel
-  round trip `1.27e-6 px`; forward `0.46–3.81x` and inverse `0.97–6.01x`
+  cases). Angular parity max `6.1e-7 asec` (AIR formula floor `4.1e-7`; offset
+  cases `<=1.5e-8 asec`), pole/seam-excluded sky round trip `1.28e-6 asec`,
+  pixel round trip `1.27e-6 px`; forward `0.48–3.99x` and inverse `0.96–7.11x`
   astropy throughput.
 - **HEALPix**: 12 operations against healpy at nside 512, zero index/angle
   mismatches (max `1.14e-13 deg`), throughput `1.02–2.19x`.
