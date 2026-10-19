@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from torchsky.field.frequency_adaptive import BaconField, FlairField, SASNetField
+from torchsky.map.field.frequency_adaptive import BaconField, FlairField, SASNetField
 from torchsky.map.field.frequency_adaptive import _bla_features
 from torchsky.map.field.artifacts import load_field_artifact, save_field_artifact
 from torchsky.map.field.core import make_field_model
