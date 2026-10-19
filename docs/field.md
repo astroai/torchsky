@@ -13,7 +13,7 @@ For map products and classical stacks, see [map.md](map.md). For the Charbonnier
 
 Native stamp calibration and small likelihood/forced-photometry queries can run
 without a fitted continuous field. See the [native likelihood guide](native-likelihood.md)
-and [exposure example](../examples/native_exposure_calibration.py) for their
+and [exposure example](published-examples/native_exposure_calibration.py) for their
 conditional response, nuisance, rank and sampling-uncertainty contracts.
 
 ## Core workflow
@@ -33,8 +33,8 @@ fine angular structure on that device has not been verified.
 
 Runnable references:
 
-- [examples/example_map_field_survey_split.py](../examples/example_map_field_survey_split.py)
-- [examples/example_field_multiband_quality.py](../examples/example_field_multiband_quality.py)
+- [examples/example_map_field_survey_split.py](published-examples/example_map_field_survey_split.py)
+- [examples/example_field_multiband_quality.py](published-examples/example_field_multiband_quality.py)
 - [synthetic field-fit notebook](https://github.com/astroai/torchsky-harness/blob/main/notebooks/01_field_fit_synthetic.ipynb)
 - [SMACS campaign notebooks and tools](https://github.com/astroai/torchsky-harness/tree/main/notebooks)
 - [hyperspectral fusion onboarding](https://github.com/astroai/torchsky-harness/blob/main/docs/projects/hyperspectral-fusion.md)

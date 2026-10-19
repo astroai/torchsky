@@ -133,6 +133,13 @@ def test_relative_doc_links_resolve() -> None:
             target = link.split("#", 1)[0]
             if not target:
                 continue
+            if target.startswith("published-examples/"):
+                # Generated at docs-build time from examples/ by
+                # scripts/sync_docs_examples.sh; check the source script.
+                source = ROOT / "examples" / Path(target).name
+                if not source.is_file():
+                    broken.append(f"{page.relative_to(ROOT)} -> {link}")
+                continue
             if not (page.parent / target).resolve().exists():
                 broken.append(f"{page.relative_to(ROOT)} -> {link}")
     assert not broken, f"Broken relative doc links: {broken}"
@@ -146,12 +153,20 @@ def test_examples_page_lists_existing_scripts() -> None:
         if link.endswith(".py") and not link.startswith(("http://", "https://"))
     ]
     assert referenced, "examples.md must link runnable example scripts"
-    missing = [
-        link
-        for link in referenced
-        if not (DOCS / link.split("#", 1)[0]).resolve().is_file()
-    ]
+    missing: list[str] = []
+    for link in referenced:
+        name = Path(link.split("#", 1)[0]).name
+        if not (ROOT / "examples" / name).is_file():
+            missing.append(link)
     assert not missing, f"examples.md links missing scripts: {missing}"
+    assert (ROOT / "scripts" / "sync_docs_examples.sh").is_file()
+
+
+def test_published_examples_are_generated_not_authored() -> None:
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "docs/published-examples/" in gitignore
+    script = (ROOT / "scripts" / "sync_docs_examples.sh").read_text(encoding="utf-8")
+    assert "examples" in script and "docs/published-examples" in script
 
 
 def test_docs_do_not_advertise_removed_io_aliases() -> None:

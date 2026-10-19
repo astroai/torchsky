@@ -247,11 +247,11 @@ product, gradient, adjoint, and device-contract tests with the core operators.
 
 ## Examples
 
-- [HEALPix inverse solve](../examples/example_map_healpix_inverse.py)
-- [Harmonic inverse solve](../examples/example_map_harmonic_inverse.py)
-- [Shared-vs-survey-private harmonic decomposition](../examples/example_map_harmonic_survey_split.py)
-- [Field survey split](../examples/example_map_field_survey_split.py)
-- [Spin harmonic inverse solve](../examples/example_map_spin_harmonic_inverse.py)
+- [HEALPix inverse solve](published-examples/example_map_healpix_inverse.py)
+- [Harmonic inverse solve](published-examples/example_map_harmonic_inverse.py)
+- [Shared-vs-survey-private harmonic decomposition](published-examples/example_map_harmonic_survey_split.py)
+- [Field survey split](published-examples/example_map_field_survey_split.py)
+- [Spin harmonic inverse solve](published-examples/example_map_spin_harmonic_inverse.py)
 
 See [examples.md](examples.md#core-examples) for the full map example index.
 

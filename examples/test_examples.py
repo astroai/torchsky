@@ -1,77 +1,96 @@
 #!/usr/bin/env python
-"""Quick smoke runner for selected example scripts."""
+"""Smoke runner for every example script in ``examples/``.
 
-import subprocess
+Each example is a standalone script that builds its own synthetic inputs, so
+the runner can execute them one by one in a bounded subprocess. It is the gate
+behind ``pixi run examples`` and ``tests/test_examples_runner.py``.
+
+Run a subset with positional names::
+
+    python examples/test_examples.py example_wcs_transform.py example_healpix.py
+"""
+
+from __future__ import annotations
+
 import os
-import sys
+from pathlib import Path
 import shutil
+import subprocess
+import sys
 
-# Get the directory where this script is located
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent
 
-examples = [
-    "example_image.py",
-    "example_table.py",
-    "example_wcs_transform.py",
-    "example_table_interop.py",
-]
+# Per-example timeout (seconds). The default covers the harmonic and field
+# examples; raise it only with a measured reason.
+DEFAULT_TIMEOUT = 240
+TIMEOUTS: dict[str, int] = {}
+
+EXCLUDE = {
+    "test_examples.py",
+    "__init__.py",
+    # CLI pipeline that requires an external catalogue release, memberships,
+    # and a checkpoint; it is documented in docs/photometry-encoders.md and
+    # exercised through the package tests instead of as a smoke script.
+    "catalogue_photoz.py",
+}
 
 
-def run_test():
-    print(f"Running tests from: {os.getcwd()}")
+def discover() -> list[str]:
+    return sorted(
+        path.name
+        for path in SCRIPT_DIR.glob("*.py")
+        if path.name not in EXCLUDE and not path.name.startswith("_")
+    )
 
+
+def python_cmd() -> list[str]:
     if os.environ.get("PIXI_ENVIRONMENT_NAME"):
-        python_cmd = [sys.executable]
-    elif shutil.which("pixi"):
-        python_cmd = ["pixi", "run", "python"]
-    else:
-        python_cmd = [sys.executable]
+        return [sys.executable]
+    if shutil.which("pixi"):
+        return ["pixi", "run", "python"]
+    return [sys.executable]
 
-    # Check if we should adjust paths based on where we are running from
-    # If running from root (where src/ is), examples are in examples/
-    # If running from examples/, examples are in .
 
-    base_dir = "."
-    if os.path.exists("examples") and os.path.isdir("examples"):
-        base_dir = "examples"
-
-    success = True
-
-    for example in examples:
-        print(f"\n{'=' * 60}")
-        print(f"Testing: {example}")
-        print("=" * 60)
-
-        # Construct path to example file
-        example_path = os.path.join(base_dir, example)
-        if not os.path.exists(example_path) and os.path.exists(
-            os.path.join(SCRIPT_DIR, example)
-        ):
-            example_path = os.path.join(SCRIPT_DIR, example)
-
-        if not os.path.exists(example_path):
-            print(f"FAIL {example} - SKIPPED (File not found at {example_path})")
-            success = False
-            continue
-
+def run_example(name: str) -> tuple[bool, str]:
+    path = SCRIPT_DIR / name
+    if not path.is_file():
+        return False, f"file not found: {path}"
+    timeout = TIMEOUTS.get(name, DEFAULT_TIMEOUT)
+    env = os.environ.copy()
+    env.pop("PYTHONOPTIMIZE", None)
+    try:
         result = subprocess.run(
-            [*python_cmd, example_path],
-            cwd=".",  # Run in current directory
+            [*python_cmd(), str(path)],
+            cwd=str(ROOT),
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=timeout,
+            env=env,
         )
+    except subprocess.TimeoutExpired:
+        return False, f"timeout after {timeout}s"
+    if result.returncode == 0:
+        return True, ""
+    output = (result.stderr or "") + (result.stdout or "")
+    return False, output[-1500:]
 
-        if result.returncode == 0:
-            print(f"PASS {example}")
-        else:
-            print(f"FAIL {example}")
-            print("Error output:")
-            print(result.stderr[:1000])  # Show more output
-            success = False
 
-    return 0 if success else 1
+def main(argv: list[str]) -> int:
+    if not __debug__:
+        print("refusing to run with assertions disabled (-O / PYTHONOPTIMIZE)")
+        return 1
+    names = argv[1:] or discover()
+    failures = 0
+    for name in names:
+        ok, detail = run_example(name)
+        print(f"{'PASS' if ok else 'FAIL'}  {name}")
+        if not ok:
+            failures += 1
+            print(detail)
+    print(f"\n{len(names) - failures}/{len(names)} examples passed")
+    return 0 if failures == 0 else 1
 
 
 if __name__ == "__main__":
-    sys.exit(run_test())
+    raise SystemExit(main(sys.argv))

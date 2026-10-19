@@ -8,14 +8,14 @@ campaign notebooks, real-data preparation, and comparison reports live in the
 
 | Example | Demonstration |
 |---|---|
-| [`example_wcs_transform.py`](../examples/example_wcs_transform.py) | Pixel/world transforms, spectral and temporal WCS, and distortion handling. |
-| [`example_healpix.py`](../examples/example_healpix.py) | HEALPix coordinate conversion, disc queries, and map sampling. |
-| [`example_spectral_sht.py`](../examples/example_spectral_sht.py) | Spherical harmonic transforms, smoothing, and spectra. |
-| [`example_map_healpix_inverse.py`](../examples/example_map_healpix_inverse.py) | Sphere-to-image inverse solve with HEALPix coefficients. |
-| [`example_map_harmonic_inverse.py`](../examples/example_map_harmonic_inverse.py) | Image-to-harmonic inverse solve. |
-| [`example_map_field_survey_split.py`](../examples/example_map_field_survey_split.py) | Train-time field decomposition. |
-| [`example_field_multiband_quality.py`](../examples/example_field_multiband_quality.py) | Small multiband field fit and runtime residual diagnostics. |
-| [`example_table_interop.py`](../examples/example_table_interop.py) | Arrow table batches consumed by torchsky catalog APIs. |
+| [`example_wcs_transform.py`](published-examples/example_wcs_transform.py) | Pixel/world transforms, spectral and temporal WCS, and distortion handling. |
+| [`example_healpix.py`](published-examples/example_healpix.py) | HEALPix coordinate conversion, disc queries, and map sampling. |
+| [`example_spectral_sht.py`](published-examples/example_spectral_sht.py) | Spherical harmonic transforms, smoothing, and spectra. |
+| [`example_map_healpix_inverse.py`](published-examples/example_map_healpix_inverse.py) | Sphere-to-image inverse solve with HEALPix coefficients. |
+| [`example_map_harmonic_inverse.py`](published-examples/example_map_harmonic_inverse.py) | Image-to-harmonic inverse solve. |
+| [`example_map_field_survey_split.py`](published-examples/example_map_field_survey_split.py) | Train-time field decomposition. |
+| [`example_field_multiband_quality.py`](published-examples/example_field_multiband_quality.py) | Small multiband field fit and runtime residual diagnostics. |
+| [`example_table_interop.py`](published-examples/example_table_interop.py) | Arrow table batches consumed by torchsky catalog APIs. |
 
 Legacy file-backed image and dataset examples are being retired in favor of
 `torchfits` readers followed by torchsky transforms. Use the

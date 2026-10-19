@@ -59,17 +59,18 @@ def main() -> None:
             north = scanner.to_table()
             print("Scanner rows with DEC > 0:", north.num_rows)
 
-        # 2) Complex expressions with Polars LazyFrame
+        # 2) Complex expressions with a Polars LazyFrame
         try:
             import polars as pl
         except ImportError:
             print("polars not installed; skipping LazyFrame recipe")
         else:
-            lf = torchfits.table.scan_polars(
+            frame = torchfits.table.read_polars(
                 catalog_file.name, hdu=1, decode_bytes=True
             )
             summary = (
-                lf.filter(pl.col("MAG_G").is_not_null())
+                frame.lazy()
+                .filter(pl.col("MAG_G").is_not_null())
                 .group_by("BAND")
                 .agg(pl.col("MAG_G").mean().alias("mag_g_mean"), pl.len().alias("n"))
                 .sort("n", descending=True)
@@ -77,6 +78,15 @@ def main() -> None:
             )
             print("Polars summary:")
             print(summary)
+
+            # Streaming alternative: scan_polars yields one DataFrame per batch.
+            rows = sum(
+                batch.height
+                for batch in torchfits.table.scan_polars(
+                    catalog_file.name, hdu=1, decode_bytes=True
+                )
+            )
+            print("Streamed rows:", rows)
 
         # 3) SQL joins with DuckDB
         try:

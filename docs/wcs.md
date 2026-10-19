@@ -207,7 +207,7 @@ imputed, and perspective acceleration is therefore outside its contract.
 
 ## Examples
 
-- [WCS transform example](../examples/example_wcs_transform.py)
+- [WCS transform example](published-examples/example_wcs_transform.py)
 
 ## Compatibility And Validation
 

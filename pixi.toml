@@ -67,8 +67,10 @@ preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q
 # Optional local copy of GitHub build-test. Not a push blocker.
 ci-local = "pixi run preflight-push && pixi run api-manifest-check && pixi run typecheck && pixi run test"
 typecheck = "pixi run -e test pyright"
+# Run every example script as a bounded smoke gate.
+examples = "pixi run -e test python examples/test_examples.py"
 # Documentation site (Zensical + Material theme). See zensical.toml.
-docs-build = "pixi run -e docs zensical build --clean --strict"
+docs-build = "bash scripts/sync_docs_examples.sh && pixi run -e docs zensical build --clean --strict"
 docs-serve = "pixi run -e docs zensical serve"
 docs-links = "pixi run -e docs python scripts/check_docs_links.py"
 docs-contract = "pixi run docs-build && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run -e test -- pytest tests/test_docs_integrity.py -q"
