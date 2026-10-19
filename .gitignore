@@ -10,6 +10,7 @@ verify_fix.py
 
 # Editor / Tools
 .vscode/
+.cursor/
 .qoder/
 .benchmarks/
 
