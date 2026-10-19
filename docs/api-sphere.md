@@ -54,7 +54,9 @@ docstring says otherwise (some table or reference paths are CPU-only).
 | `SphericalPolygon`, `SphericalMultiPolygon`, `SphericalCap`, `SphericalBox`, `SphericalEllipse` | Exact spherical regions. |
 | `SphericalBooleanRegion` | Boolean compositions with controlled-error HEALPix evaluation. |
 | `ExactSphericalRegion`, `NativeExactSphericalRegion` | Optional exact-region backends. |
+| `Circle`, `Cone`, `Cap` | Spherical-cap aliases. |
 | `PixelizedRegion`, `WideBitMask` | Pixelized masks and set operations. |
+| `RegionAreaEstimate` | Controlled-error area estimate summary over an nside ladder. |
 | `MOC`, `BMOC`, `STMOC` | Multi-order coverage maps (spatial, boolean, space-time). |
 | `HealSparseMap`, `SparseMap`, `SkyMaskPipe` | Sparse HEALPix maps and mask pipelines. |
 | `sum_intersection`, `sum_union` | Sparse-map combination rules. |

@@ -72,6 +72,8 @@ Validation helpers: `validate_sampled_transform`, `SampledTransformValidation`,
 | `ecliptic_to_icrs`, `icrs_to_ecliptic` | Mean ecliptic of J2000 ↔ ICRS. |
 | `ecliptic_of_date_to_icrs`, `icrs_to_ecliptic_of_date` | Ecliptic of date via IAU 2006 NPB. |
 | `precess_fk5` | Precess FK5 equatorial coordinates between Julian equinoxes. |
+| `SPEED_OF_LIGHT` | Speed of light in the units used by the velocity helpers. |
+| `TabularBoundsMode` | Out-of-bounds policy for tabular axes. |
 | `transform(lon, lat, *, from_frame, to_frame)` | Generic rotation/observation dispatch on `(lon, lat)` tensors. |
 | `canonical_celestial_frame(name)` | Normalize FITS/AST celestial frame names. |
 | `convert_celestial(lon, lat, from_frame, to_frame)` | Convert between supported celestial frames. |

@@ -50,7 +50,7 @@ context; `target="cube"` and `target="healpix"` use the model's own domain.
 | `FIELD_MODEL_PRESETS`, `FieldModelPreset` | Named recipes for users who do not need class details. |
 | `get_field_model_preset(name)` | Resolve a preset. |
 | `is_recommended_field_model(kind)` | Membership test for the recommended subset. |
-| `FieldModelKind`, `PresetName` | Literal types for tooling. |
+| `FieldModelKind`, `PresetName`, `RenderTarget` | Literal types for tooling. |
 
 Recommended kinds are `sky_lambda_feature_field`, `sky_encoder_resmlp`, and
 `hashgrid_spectral_field`; the rest of the zoo remains available through

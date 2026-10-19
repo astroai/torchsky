@@ -73,7 +73,7 @@ examples = "pixi run -e test python examples/test_examples.py"
 docs-build = "bash scripts/sync_docs_examples.sh && pixi run -e docs zensical build --clean --strict"
 docs-serve = "pixi run -e docs zensical serve"
 docs-links = "pixi run -e docs python scripts/check_docs_links.py"
-docs-contract = "pixi run docs-build && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py -q"
+docs-contract = "pixi run docs-build && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py tests/test_docs_coverage.py -q"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 
 audit-refactor-cohesion = "pixi run -e default -- python scripts/audit_refactor_cohesion.py"

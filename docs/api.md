@@ -72,7 +72,12 @@ enumerated by the namespaces below and checked by the package API tests.
 - [Catalog reference](api-catalogs.md): catalog model, crossmatch entry points,
   streaming, and HEALPix index helpers.
 - [Spectral reference](api-spectral.md): spectral axes, containers, readers,
-  flux-conserving resampling, Doppler shifts, and cube writing.
+  flux-conserving resampling, Doppler shifts, cube writing, and the redshift,
+  photometry, extinction, and cosmology surfaces.
+- [Scene reference](api-scene.md): observations, representations, operator
+  bundles, target binding, and rendering.
+- [Runtime reference](api-runtime.md): transforms, encoders, and the quality
+  contract.
 - [Architecture](architecture.md): design target and pillar rules.
 
 ## Public Namespaces

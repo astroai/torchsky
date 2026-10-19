@@ -52,6 +52,8 @@ REQUIRED_PAGES = (
     "api-field.md",
     "api-catalogs.md",
     "api-spectral.md",
+    "api-scene.md",
+    "api-runtime.md",
     "architecture.md",
     "benchmarks.md",
     "examples.md",
