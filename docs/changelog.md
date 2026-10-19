@@ -257,10 +257,10 @@ Patch release. No user-visible changes.
 - Compressed image writing supports Rice compression only.
 - MPS (Apple Silicon) shows overhead for small workloads due to transfer latency.
 
-[0.1.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.1.0
-[0.1.1]: https://github.com/sfabbro/torchsky/releases/tag/v0.1.1
-[0.2.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.2.0
-[0.2.1]: https://github.com/sfabbro/torchsky/releases/tag/v0.2.1
-[0.3.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.3.0
-[0.3.1]: https://github.com/sfabbro/torchsky/releases/tag/v0.3.1
-[0.4.0]: https://github.com/sfabbro/torchsky/releases/tag/v0.4.0
+[0.1.0]: https://github.com/astroai/torchsky/releases/tag/v0.1.0
+[0.1.1]: https://github.com/astroai/torchsky/releases/tag/v0.1.1
+[0.2.0]: https://github.com/astroai/torchsky/releases/tag/v0.2.0
+[0.2.1]: https://github.com/astroai/torchsky/releases/tag/v0.2.1
+[0.3.0]: https://github.com/astroai/torchsky/releases/tag/v0.3.0
+[0.3.1]: https://github.com/astroai/torchsky/releases/tag/v0.3.1
+[0.4.0]: https://github.com/astroai/torchsky/releases/tag/v0.4.0

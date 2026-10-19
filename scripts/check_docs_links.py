@@ -138,6 +138,22 @@ def check_local_links(html_files: list[Path]) -> tuple[list[str], list[str]]:
     return broken, sorted(external)
 
 
+# Repositories that are private until the 0.4.0/0.1.0 release: GitHub returns
+# 404 to unauthenticated probes, so their links are warnings pre-release.
+_PRIVATE_REPO_PATHS = ("/astroai/torchsky", "/astroai/torchsky-harness")
+
+
+def _is_private_repo_url(url: str) -> bool:
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    if host not in {"github.com", "www.github.com"}:
+        return False
+    return any(
+        parts.path == prefix or parts.path.startswith(prefix + "/")
+        for prefix in _PRIVATE_REPO_PATHS
+    )
+
+
 def _is_first_party(url: str) -> bool:
     parts = urlsplit(url)
     host = parts.netloc.lower()
@@ -209,8 +225,11 @@ def warn_external_links(external: list[str]) -> list[str]:
             if result is None:
                 continue
             if _is_first_party(url) and result == "HTTP 404":
-                first_party_404.append(f"{url} -> {result}")
-                print(f"  [FAIL] {url} -> {result}")
+                if _is_private_repo_url(url):
+                    print(f"  [warn] {url} -> {result} (private repo until release)")
+                else:
+                    first_party_404.append(f"{url} -> {result}")
+                    print(f"  [FAIL] {url} -> {result}")
             else:
                 print(f"  [warn] {url} -> {result}")
     return first_party_404

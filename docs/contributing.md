@@ -20,7 +20,7 @@ Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md
 ## Development Setup
 
 ```bash
-git clone https://github.com/sfabbro/torchsky.git
+git clone https://github.com/astroai/torchsky.git
 cd torchsky
 pixi install
 pixi run dev

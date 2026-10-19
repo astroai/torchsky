@@ -68,7 +68,7 @@ xcode-select --install
 Clone the repository and build:
 
 ```bash
-git clone https://github.com/sfabbro/torchsky.git
+git clone https://github.com/astroai/torchsky.git
 cd torchsky
 pip install -e .        # editable install
 ```
