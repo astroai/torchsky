@@ -45,6 +45,12 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **Map target planning split**: the union-footprint planners and public
+  `plan`/`plan_cube` family moved from `map/image_plane.py` to
+  `map/planning.py`; spectral-plan helpers come from `map/spectral_projection.py`
+  and image-plane metadata helpers are imported lazily. `image_plane`
+  re-exports the historical names and `product.py` follows the canonical
+  module. image_plane.py drops from 4,869 to 4,180 lines.
 - **Field helper layer split**: the shared helpers and `_BaseFieldModel` moved
   out of the 5.6k-line `map/field/core.py` into `map/field/_core_helpers.py`
   (feature/atlas helpers, domain estimation, strainer checkpoint helpers);

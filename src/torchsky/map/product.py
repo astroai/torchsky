@@ -23,12 +23,8 @@ from .observation import (
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
 )
-from .image_plane import (
-    coadd_image_plane,
-    coadd_image_plane_cube,
-    plan_image_plane_cube_target,
-    plan_image_plane_target,
-)
+from .image_plane import coadd_image_plane, coadd_image_plane_cube
+from .planning import plan_image_plane_cube_target, plan_image_plane_target
 from .field.types import FieldSpatialSampling
 from .operators.config import (
     MapResamplingKernel,
