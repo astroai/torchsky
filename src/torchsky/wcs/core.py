@@ -4718,19 +4718,25 @@ class WCS:
             x_cel = cos_dec * cos_ra
             y_cel = cos_dec * sin_ra
             z_cel = sin_dec
-            u = x_cel * self._pole_east_x + y_cel * self._pole_east_y
+            # Center-native rotation, inverted with the same basis as
+            # _spherical_rotation: celestial = u*e + v*(-r) + w*n, with
+            # (e, n, r) the east/north/radial basis at (alpha0, delta0).
+            # The stored _pole_* basis belongs to pole-native projections and
+            # is wrong here whenever delta0 != 0 (it would map the reference
+            # point to native latitude 90 - |delta0| instead of 0).
+            u = x_cel * self._east_x + y_cel * self._east_y
             w = (
-                x_cel * self._pole_north_x
-                + y_cel * self._pole_north_y
-                + z_cel * self._pole_north_z
+                x_cel * self._north_x
+                + y_cel * self._north_y
+                + z_cel * self._north_z
             )
             v = -(
-                x_cel * self._pole_radial_x
-                + y_cel * self._pole_radial_y
-                + z_cel * self._pole_radial_z
+                x_cel * self._radial_x
+                + y_cel * self._radial_y
+                + z_cel * self._radial_z
             )
             theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
-            phi = torch.remainder(torch.atan2(u, -v) * r2d + self.phi_p, 360.0)
+            phi = torch.remainder(torch.atan2(u, -v) * r2d, 360.0)
             return phi, theta
 
         if (
