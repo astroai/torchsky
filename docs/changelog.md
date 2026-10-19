@@ -44,6 +44,19 @@ owned by `torchfits`.
   Irregular axes remain an index-space interpolation with a recorded bias
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
+### Fixed
+- **Center-native WCS inverse rotation**: `world_to_pixel` for cylindrical,
+  all-sky, pseudocylindrical, and polyconic projections reused the pole-native
+  rotation basis, so any header with a non-zero reference latitude
+  (`CRVAL2 != 0`) inverted the native frame incorrectly. The error was invisible
+  at `CRVAL2 = 0` (and in all prior comparison cases, which used the equator)
+  and reached hundreds of pixels for `MER`, `CYP`, `AIT`, `HPX`, `SFL`, `BON`,
+  and `PAR` at `CRVAL2 = 20 deg`. The inverse now uses the same east/north/radial
+  basis as the forward transform; `tests/test_wcs_projection_matrix.py` covers
+  all 28 projection codes at both reference latitudes, and the harness gained
+  reference-offset cases (`MER_OFF`, `CYP_OFF`, `AIT_OFF`, `HPX_OFF`, `SFL_OFF`,
+  `XPH_OFF`, `BON_OFF`, `PAR_OFF`).
+
 ### Removed
 - FITS image/table/checksum implementation tests and benchmarks now owned by
   `torchfits`.
