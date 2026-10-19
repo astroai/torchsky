@@ -476,3 +476,21 @@ def apply_extinction(
         wavelength_unit=wavelength_unit,
     )
     return flux_t * factor
+
+__all__ = [
+    "ExtinctionLaw",
+    "WavelengthUnit",
+    "a_lambda",
+    "apply_extinction",
+    "calzetti",
+    "calzetti_a_lambda",
+    "calzetti_k_ebv",
+    "ccm89",
+    "ccm89_ab",
+    "f99_a_lambda",
+    "fitzpatrick99",
+    "k_lambda",
+    "odonnell94",
+    "odonnell94_ab",
+    "transmission",
+]

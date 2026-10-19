@@ -128,3 +128,17 @@ def quality_bits_from_names(
         except KeyError as exc:
             raise ValueError(f"unknown quality-bit name: {name}") from exc
     return value
+
+__all__ = [
+    "CONFIDENCE_SEMANTICS",
+    "CONTRACT_VERSION",
+    "DEFAULT_ZERO_WEIGHT_BITS",
+    "INVERSE_VARIANCE_SEMANTICS",
+    "MASK_POLARITY",
+    "MAX_CONFIDENCE_SAMPLES",
+    "QualityBit",
+    "WeightProduct",
+    "build_weight_product",
+    "quality_bit_names",
+    "quality_bits_from_names",
+]

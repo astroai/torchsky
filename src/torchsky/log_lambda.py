@@ -172,3 +172,9 @@ def _unit_gaussian_kernel(
     delta = torch.zeros_like(kernel)
     delta.scatter_(-1, nearest, 1.0)
     return torch.where(tiny, delta, kernel)
+
+__all__ = [
+    "C_KM_S",
+    "convolve_log_lambda",
+    "sigma_R_kms",
+]
