@@ -236,7 +236,6 @@
     "get_interp_val",
     "get_interp_weights",
     "great_circle_distance",
-    "harmonics",
     "healpix",
     "healpy",
     "interpolate_wavelength_axis",

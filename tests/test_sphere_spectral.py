@@ -9,7 +9,7 @@ from torchfits import write as write_fits
 from torchsky.sphere import compat
 from torchsky.sphere import healpix as hp
 import torchsky.sphere.spectral as spectral_mod
-import torchsky.sphere.harmonics as harmonics_mod
+import torchsky.sphere.spectral as harmonics_mod
 from torchsky.sphere.spectral import (
     alm2lonlat,
     alm2lonlat_spin,

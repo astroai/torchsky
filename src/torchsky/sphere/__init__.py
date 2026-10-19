@@ -6,7 +6,6 @@ documented in ``docs/compatibility.md``; HEALPix/healpy entry points are
 """
 
 from . import compat
-from . import harmonics
 from . import healpy
 from .core import (
     chord_radius,
@@ -157,7 +156,6 @@ __all__ = [
     "SkyMaskPipe",
     # Submodules
     "compat",
-    "harmonics",
     "healpix",
     "healpy",
     # HEALPix pixel & grid operations
