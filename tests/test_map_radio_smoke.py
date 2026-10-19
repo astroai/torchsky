@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import torch
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 from torchsky.map.image_plane import coadd_image_plane, plan_image_plane_target
 from torchsky.map.observation import ImageObservation

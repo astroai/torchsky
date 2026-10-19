@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 import torchfits
 

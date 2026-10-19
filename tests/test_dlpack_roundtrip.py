@@ -4,7 +4,7 @@ import torch
 
 
 def test_dlpack_roundtrip_cpu():
-    m = importlib.import_module("torchsky.cpp")
+    m = importlib.import_module("torchsky._cpp")
     t = torch.arange(12, dtype=torch.float32).reshape(3, 4)
     out = m.echo_tensor(t)
     # CPU tensors should share the same storage pointer (zero-copy round-trip)

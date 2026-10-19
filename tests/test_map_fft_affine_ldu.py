@@ -11,7 +11,7 @@ from torchsky.map.fft_affine_ldu import (
     resample_fft_ldu_affine_2d,
 )
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 
 def test_invert_2x2_identity() -> None:

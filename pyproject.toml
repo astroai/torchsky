@@ -118,22 +118,13 @@ catalog-qa = [
 # Specifies the directory containing the top-level CMakeLists.txt file.
 cmake.source-dir = "src/torchsky/cpp_src"
 cmake.build-type = "Release"
-cmake.args = [
-    "-DTORCHSKY_USE_VENDORED_CFITSIO=ON",
-    "-DTORCHSKY_NIOBUF=80",
-    "-DTORCHSKY_MINDIRECT=16384",
-    "-DUSE_CUDA=OFF",
-    # Portable defaults; cpp_src/CMakeLists.txt adds -O3 in Release. Avoid -march=native
-    # here so wheels and CI builds are reproducible across machines.
-    "-DCMAKE_C_FLAGS=-O3",
-    "-DCMAKE_CXX_FLAGS=-O3",
-]
+# Portable defaults: cpp_src/CMakeLists.txt adds -O3 in Release and enables
+# AVX2/FMA only on x86_64 Linux, so wheels stay reproducible across machines.
+# No CFITSIO or CUDA options: the extension is WCS/HEALPix/geometry only.
 
-# Configures the install directory for the compiled extension.
-# This ensures the compiled `cpp.so` or `cpp.pyd` file is placed inside the `torchsky` package.
+# Place the compiled `_cpp` extension inside the torchsky package.
 install.strip = false
 wheel.packages = ["src/torchsky"]
-sdist.include = ["src/torchsky/sphere/data/pixel_window_functions/*.fits"]
 
 # This setting enables CMake's incremental build feature. When you re-run the build,
 # CMake and Ninja will automatically detect which C++ files have changed and only

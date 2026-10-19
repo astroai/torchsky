@@ -7,7 +7,7 @@ import torch
 
 from torchsky.map.periodic_affine import resample_linear_affine_periodic_bilinear_2d
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 
 def test_periodic_linear_affine_identity_map() -> None:

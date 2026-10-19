@@ -162,19 +162,22 @@ def test_native_compute_modules_do_not_load_torchfits_cpp() -> None:
     )
     for path in native_modules:
         source = path.read_text(encoding="utf-8")
-        assert "import torchsky.cpp" not in source
+        assert "torchfits.cpp" not in source
         assert "from .. import cpp" not in source
 
 
 def test_wcs_can_disable_optional_native_extension_in_subprocess() -> None:
     script = """
+import sys
+
 import torch
-import torchsky.cpp as merged_cpp
+import torchsky._native as native
 from torchsky.wcs import WCS
 from torchsky.wcs import core
 
 assert core._cpp is None
-assert not hasattr(merged_cpp, "wcs_zenithal_project")
+assert native.cpp is None
+assert "torchsky._cpp" not in sys.modules
 wcs = WCS({
     "NAXIS": 2,
     "CTYPE1": "RA---TAN",
@@ -215,6 +218,15 @@ def test_no_cfitsio_or_zlib_in_cmake() -> None:
     assert "table.cpp" not in cmake
     assert "compression.cpp" not in cmake
     assert "cache.cpp" not in cmake
+
+
+def test_no_legacy_merged_cpp_shim() -> None:
+    """``torchsky.cpp`` was a compatibility merge of torchfits.cpp and _cpp."""
+    import importlib.util
+
+    assert importlib.util.find_spec("torchsky.cpp") is None
+    assert not (PACKAGE_ROOT / "cpp.py").exists()
+    assert not (PACKAGE_ROOT / "cpp.pyi").exists()
 
 
 def test_no_legacy_cfitsio_vendoring() -> None:

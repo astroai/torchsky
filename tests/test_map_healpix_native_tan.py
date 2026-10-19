@@ -7,7 +7,7 @@ import pytest
 from astropy.wcs import WCS
 import torch
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 pytest.importorskip("reproject")
 
 from reproject import reproject_from_healpix, reproject_to_healpix  # noqa: E402

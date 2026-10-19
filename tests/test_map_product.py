@@ -25,7 +25,7 @@ from torchsky.map.solvers import build_solver_hooks
 from torchsky.spectral import SpectralAxis
 import torchfits
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 
 def _simple_header() -> dict:

@@ -29,7 +29,7 @@ from torchsky.map.image_plane import (
     _forward_project_weighted_to_target,
 )
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 _DEVICES = ["cpu"]
 if torch.cuda.is_available():

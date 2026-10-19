@@ -10,7 +10,7 @@ from torchsky.map.fft_resample import (
     resample_translation_fft2d,
 )
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 
 def test_fft_diagonal_affine_matches_translation_fft_for_pure_shift() -> None:

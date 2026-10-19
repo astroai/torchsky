@@ -221,7 +221,7 @@ def test_ang2pix_pix2ang_compat_wrappers() -> None:
 
 
 def test_cpp_torch_bindings_core_healpix_match_python() -> None:
-    cpp = pytest.importorskip("torchsky.cpp")
+    cpp = pytest.importorskip("torchsky._cpp")
     required = [
         "healpix_ring2nest_torch_cpu",
         "healpix_nest2ring_torch_cpu",
@@ -270,7 +270,7 @@ def test_cpp_torch_bindings_core_healpix_match_python() -> None:
 
 
 def test_cpp_torch_bindings_interp_val_match_python() -> None:
-    cpp = pytest.importorskip("torchsky.cpp")
+    cpp = pytest.importorskip("torchsky._cpp")
     required = [
         "healpix_get_interp_val_ring_torch_cpu",
         "healpix_get_interp_val_nested_torch_cpu",
@@ -388,7 +388,7 @@ def test_query_vec_helpers_self_consistent() -> None:
 
 
 def test_query_disc_cpp_matches_python_fallback() -> None:
-    cpp = pytest.importorskip("torchsky.cpp")
+    cpp = pytest.importorskip("torchsky._cpp")
     if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
         pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
 
@@ -493,7 +493,7 @@ def test_query_polygon_accepts_convex_quad() -> None:
 def test_query_disc_cuda_vec_matches_cpu() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
-    cpp = pytest.importorskip("torchsky.cpp")
+    cpp = pytest.importorskip("torchsky._cpp")
     if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
         pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
 
@@ -511,7 +511,7 @@ def test_query_disc_cuda_vec_matches_cpu() -> None:
 def test_query_disc_mps_vec_matches_cpu() -> None:
     if not torch.backends.mps.is_available():
         pytest.skip("MPS not available")
-    cpp = pytest.importorskip("torchsky.cpp")
+    cpp = pytest.importorskip("torchsky._cpp")
     if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
         pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
 

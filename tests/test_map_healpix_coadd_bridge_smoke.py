@@ -9,7 +9,7 @@ import pytest
 from astropy.wcs import WCS
 import torch
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 pytest.importorskip("reproject")
 
 from torchsky.map.image_plane import coadd_image_plane, plan_image_plane_target

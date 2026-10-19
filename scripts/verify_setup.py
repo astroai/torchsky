@@ -16,9 +16,9 @@ def main() -> int:
 
     try:
         import torchsky
-        import torchsky.cpp as cpp  # noqa: F401
+        import torchsky._cpp as cpp  # noqa: F401
     except ImportError as e:
-        print("FAIL: torchsky or torchsky.cpp not importable:", e, file=sys.stderr)
+        print("FAIL: torchsky or torchsky._cpp not importable:", e, file=sys.stderr)
         return 1
 
     try:

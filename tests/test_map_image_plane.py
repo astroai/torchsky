@@ -43,7 +43,7 @@ from torchsky.map.operators import (
 from torchsky.spectral import SpectralAxis
 import torchfits
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 
 def test_batched_square_drizzle_areas_match_independent_quads() -> None:

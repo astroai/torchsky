@@ -11,7 +11,7 @@ import torch
 
 pytestmark = pytest.mark.performance
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 import torchsky  # noqa: E402
 from torchsky.sphere import healpix  # noqa: E402
