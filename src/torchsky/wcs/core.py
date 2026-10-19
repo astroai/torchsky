@@ -79,10 +79,6 @@ def _wrap_lon360(angle: Tensor) -> Tensor:
     return torch.remainder(angle, 360.0)
 
 
-def _wrap_lon360_checked(angle: Tensor) -> Tensor:
-    """Compatibility alias; direct wrap is faster than range-check reductions."""
-    return _wrap_lon360(angle)
-
 
 def _wrap_lon180(angle: Tensor) -> Tensor:
     """Wrap longitudes to [-180, 180)."""
@@ -173,22 +169,6 @@ class DistortionLookupTable:
             + v01 * (1.0 - fx) * fy
             + v11 * fx * fy
         )
-
-    def get_offset(self, x: Any, y: Any) -> Any:
-        """Astropy-compatible offset lookup at 1-based FITS pixel coordinates `(x, y)`."""
-        if isinstance(x, Tensor) or isinstance(y, Tensor):
-            ref = x if isinstance(x, Tensor) else y
-            assert isinstance(ref, Tensor)
-            dt = torch.float32 if ref.device.type == "mps" else torch.float64
-            xt = torch.as_tensor(x, dtype=dt, device=ref.device)
-            yt = torch.as_tensor(y, dtype=dt, device=ref.device)
-            return self.eval_tensor(xt, yt)
-        xt = torch.as_tensor(x, dtype=torch.float64)
-        yt = torch.as_tensor(y, dtype=torch.float64)
-        out = self.eval_tensor(xt, yt)
-        if out.ndim == 0:
-            return float(out.item())
-        return out.detach().cpu().numpy()
 
 
 def _coerce_distortion_lookup_table(
@@ -1871,25 +1851,6 @@ class WCS:
         scale = self._r2d / torch.clamp(w, min=1e-12)
         return u * scale, v * scale
 
-    def _spherical_rotation_finite_only(
-        self, phi: Tensor, theta: Tensor
-    ) -> Tuple[Tensor, Tensor]:
-        """Rotate only finite native coordinates; keep NaNs from projection domain masks."""
-        valid = torch.isfinite(phi) & torch.isfinite(theta)
-        if bool(valid.all()):
-            return self._spherical_rotation_optimized(phi, theta, self._native_type)
-        if not bool(valid.any()):
-            nan = torch.full_like(phi, float("nan"))
-            return nan, nan.clone()
-        ra = torch.full_like(phi, float("nan"))
-        dec = torch.full_like(theta, float("nan"))
-        ra_v, dec_v = self._spherical_rotation_optimized(
-            phi[valid], theta[valid], self._native_type
-        )
-        ra[valid] = ra_v
-        dec[valid] = dec_v
-        return ra, dec
-
     def _pixel_to_world_2d_core(
         self, x: Tensor, y: Tensor, origin: float
     ) -> Tuple[Tensor, Tensor]:
@@ -2892,11 +2853,6 @@ class WCS:
         return self.naxis
 
     @property
-    def pixel_axis_names(self) -> tuple[str, ...]:
-        """Pixel axis names, using FITS 1-based axis labels."""
-        return tuple(f"PIXEL{i}" for i in range(1, self.naxis + 1))
-
-    @property
     def world_axis_names(self) -> tuple[str, ...]:
         """World axis names from ``CTYPE`` with blanks filled by FITS axis labels."""
         names: list[str] = []
@@ -3885,12 +3841,6 @@ class WCS:
         ]
         return self.pixel_to_world_values(*pixels, origin=origin)
 
-    def array_index_to_world(
-        self, *index_arrays: Any, origin: int = 0
-    ) -> tuple[Tensor, ...]:
-        """Alias for ``array_index_to_world_values``."""
-        return self.array_index_to_world_values(*index_arrays, origin=origin)
-
     def world_to_array_index_values(
         self, *world_arrays: Any, origin: int = 0
     ) -> tuple[Tensor, ...]:
@@ -3900,12 +3850,6 @@ class WCS:
             torch.round(pixels[self.pixel_n_dim - 1 - i]).to(dtype=torch.long)
             for i in range(self.pixel_n_dim)
         )
-
-    def world_to_array_index(
-        self, *world_arrays: Any, origin: int = 0
-    ) -> tuple[Tensor, ...]:
-        """Alias for ``world_to_array_index_values``."""
-        return self.world_to_array_index_values(*world_arrays, origin=origin)
 
     def slice(
         self,

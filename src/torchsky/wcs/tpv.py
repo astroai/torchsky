@@ -2,12 +2,6 @@ import torch
 from torch import Tensor
 from typing import Dict, Any, Tuple
 
-try:
-    from torch.func import vmap, jacrev
-except ImportError:
-    vmap = None
-    jacrev = None
-
 from torchsky._native import cpp as _cpp
 
 
@@ -22,7 +16,6 @@ class TPV:
     Tangent PV (TPV) distortion correction.
     """
 
-    # Experimental CPU ATen TPV inverse path.
     _CPP_INVERT_MAX_POINTS = 65536
 
     def __init__(self, header: Dict[str, Any]):
@@ -185,48 +178,6 @@ class TPV:
         self.c1 = self.c1.to(device=device, dtype=coeff_dtype)
         self.c2 = self.c2.to(device=device, dtype=coeff_dtype)
         return self
-
-    def _distort_scalar(self, uv: Tensor) -> Tensor:
-        """
-        Distort a single (u, v) point. uv shape [2].
-        Returns [2].
-        """
-        u, v = uv[0], uv[1]
-        r = torch.hypot(u, v)
-
-        # Polynomial powers [0..7]
-        up = torch.pow(u, torch.arange(8, device=uv.device, dtype=uv.dtype))
-        vp = torch.pow(v, torch.arange(8, device=uv.device, dtype=uv.dtype))
-        rp = torch.pow(r, torch.arange(8, device=uv.device, dtype=uv.dtype))
-
-        def eval_axis(idx, c):
-            if c.numel() == 0:
-                return torch.tensor(0.0, device=uv.device, dtype=uv.dtype)
-            # idx is [N, 3] (px, py, pr)
-            basis = up[idx[:, 0]] * vp[idx[:, 1]] * rp[idx[:, 2]]
-            return torch.dot(c.to(uv.dtype), basis)
-
-        xi = eval_axis(self.idx1, self.c1)
-        # Note: TPV axis 2 swaps U and V in the standard polynomial expansion logic
-        # but self.idx2/c2 already account for this or it's handled in eval_axis.
-        # Original code used yp[px] * xp[py] for axis 2.
-        # Let's match the original _distort_impl exactly.
-
-        def eval_axis2(idx, c):
-            if c.numel() == 0:
-                return torch.tensor(0.0, device=uv.device, dtype=uv.dtype)
-            # Original: yp[px] * xp[py] * rp[pr]
-            basis = vp[idx[:, 0]] * up[idx[:, 1]] * rp[idx[:, 2]]
-            return torch.dot(c.to(uv.dtype), basis)
-
-        eta = eval_axis2(self.idx2, self.c2)
-        return torch.stack([xi, eta])
-
-    def distort_vmap(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
-        """Apply distortion using torch.func.vmap."""
-        uv = torch.stack([u.reshape(-1), v.reshape(-1)], dim=1)
-        out = vmap(self._distort_scalar)(uv)
-        return out[:, 0].reshape(u.shape), out[:, 1].reshape(v.shape)
 
     def distort(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
         if u.numel() == 0:

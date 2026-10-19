@@ -541,12 +541,6 @@ class TemporalWCS:
         local = convert_time_scale(mjd, scale, self.timesys)
         return self.from_mjd(local)
 
-    def convert_scale(
-        self, mjd: Tensor, to_scale: str, from_scale: str | None = None
-    ) -> Tensor:
-        """Convert MJD values from ``from_scale`` or header ``TIMESYS`` to ``to_scale``."""
-        return convert_time_scale(mjd, from_scale or self.timesys, to_scale)
-
     @staticmethod
     def mjd_to_jd(mjd: float | Tensor) -> float | Tensor:
         """MJD to JD: JD = MJD + 2400000.5"""

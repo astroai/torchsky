@@ -152,7 +152,9 @@ def project_allsky(
         phi, theta = _xph_x2s(xi, eta)
 
     else:
-        phi, theta = xi, eta
+        raise NotImplementedError(
+            f"All-sky projection code {projection_code!r} is not implemented."
+        )
 
     return phi, theta
 

@@ -4,12 +4,6 @@ from typing import Dict, Any, Tuple
 
 from torchsky._native import cpp as _cpp
 
-try:
-    from torch.func import vmap, jacrev
-except ImportError:
-    # Fallback for very old torch versions if needed, though we assume modern torch
-    vmap = None
-    jacrev = None
 
 
 class SIP:
@@ -22,8 +16,6 @@ class SIP:
     References:
     - Shupe et al. (2005): "The SIP Convention for Representing Distortion in FITS Image Headers"
     """
-
-    _SMALL_VEC_MAX_POINTS = 0
 
     def __init__(self, header: Dict[str, Any]):
         self.a_order = int(header.get("A_ORDER", 0))
@@ -235,45 +227,6 @@ class SIP:
             pows.append(curr)
         return torch.stack(pows, dim=0)
 
-    def _distort_scalar(self, uv: Tensor) -> Tensor:
-        """
-        Distort a single (u, v) point. uv shape [2].
-        Returns [2].
-        Used by vmap and jacrev.
-        """
-        u, v = uv[0], uv[1]
-
-        # Build powers manually for scalar
-        max_order = max(self.a_order, self.b_order)
-        up = torch.pow(u, torch.arange(max_order + 1, device=uv.device, dtype=uv.dtype))
-        vp = torch.pow(v, torch.arange(max_order + 1, device=uv.device, dtype=uv.dtype))
-
-        # Evaluation
-        def eval_poly_scalar(pack):
-            c = pack["c"]
-            if c.numel() == 0:
-                return torch.tensor(0.0, device=uv.device, dtype=uv.dtype)
-            p = pack["p"]
-            q = pack["q"]
-            if p.device != uv.device:
-                p = p.to(device=uv.device)
-                q = q.to(device=uv.device)
-            if c.device != uv.device or c.dtype != uv.dtype:
-                c = c.to(device=uv.device, dtype=uv.dtype)
-            basis = up[p] * vp[q]
-            return torch.dot(c, basis)
-
-        f_uv = eval_poly_scalar(self._a_pack)
-        g_uv = eval_poly_scalar(self._b_pack)
-
-        return uv + torch.stack([f_uv, g_uv])
-
-    def distort_vmap(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
-        """Apply distortion using torch.func.vmap (JAX-style)."""
-        uv = torch.stack([u.reshape(-1), v.reshape(-1)], dim=1)  # [N, 2]
-        out = vmap(self._distort_scalar)(uv)  # [N, 2]
-        return out[:, 0].reshape(u.shape), out[:, 1].reshape(v.shape)
-
     def distort(self, u: Tensor, v: Tensor) -> "tuple[Tensor, Tensor]":
         """
         Apply forward distortion using vectorized matrix-vector multiplication.
@@ -333,15 +286,6 @@ class SIP:
         g_uv = self._sum_terms_from_pack(self._b_pack, u_stack, v_stack, v)
         return u + f_uv, v + g_uv
 
-    def _distort_smallvec(self, u: Tensor, v: Tensor) -> "tuple[Tensor, Tensor]":
-        max_order = max(self.a_order, self.b_order, 1)
-
-        u_s = self._make_pow_stack(u, max_order)
-        v_s = self._make_pow_stack(v, max_order)
-        f_uv = self._sum_terms_from_pack(self._a_pack, u_s, v_s, u)
-        g_uv = self._sum_terms_from_pack(self._b_pack, u_s, v_s, v)
-        return u + f_uv, v + g_uv
-
     def _forward_and_jacobian(
         self, u: Tensor, v: Tensor
     ) -> "tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]":
@@ -362,9 +306,6 @@ class SIP:
             dyd_du = 2.0 * self._quad_b20 * u + self._quad_b11 * v
             dyd_dv = 1.0 + self._quad_b11 * u + 2.0 * self._quad_b02 * v
             return xd, yd, dxd_du, dxd_dv, dyd_du, dyd_dv
-
-        if u.numel() <= self._SMALL_VEC_MAX_POINTS:
-            return self._forward_and_jacobian_smallvec(u, v)
 
         max_order = max(self.a_order, self.b_order, 1)
 
@@ -393,26 +334,6 @@ class SIP:
         for p, q, coeff in self.b_dv_terms:
             dyd_dv.add_(u_p[p] * v_p[q], alpha=float(coeff))
 
-        return xd, yd, dxd_du, dxd_dv, dyd_du, dyd_dv
-
-    def _forward_and_jacobian_smallvec(
-        self, u: Tensor, v: Tensor
-    ) -> "tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]":
-        max_order = max(self.a_order, self.b_order, 1)
-
-        u_s = self._make_pow_stack(u, max_order)
-        v_s = self._make_pow_stack(v, max_order)
-
-        xd = u + self._sum_terms_from_pack(self._a_pack, u_s, v_s, u)
-        yd = v + self._sum_terms_from_pack(self._b_pack, u_s, v_s, v)
-        dxd_du = torch.ones_like(u) + self._sum_terms_from_pack(
-            self._a_du_pack, u_s, v_s, u
-        )
-        dxd_dv = self._sum_terms_from_pack(self._a_dv_pack, u_s, v_s, u)
-        dyd_du = self._sum_terms_from_pack(self._b_du_pack, u_s, v_s, v)
-        dyd_dv = torch.ones_like(v) + self._sum_terms_from_pack(
-            self._b_dv_pack, u_s, v_s, v
-        )
         return xd, yd, dxd_du, dxd_dv, dyd_du, dyd_dv
 
     def undistort(self, u: Tensor, v: Tensor) -> "tuple[Tensor, Tensor]":
