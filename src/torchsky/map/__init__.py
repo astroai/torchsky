@@ -42,14 +42,14 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "plan_cube": ("torchsky.map.image_plane", "plan_cube"),
     "plan_product": ("torchsky.map.product", "plan_map_product"),
     "resample": ("torchsky.map.image_plane", "resample"),
-    "resample_healpix": ("torchsky.map.image_plane", "resample_healpix"),
+    "resample_healpix": ("torchsky.map.healpix_coadd", "resample_healpix"),
     "blot": ("torchsky.map.image_plane", "blot"),
     "detect_outliers": ("torchsky.map.image_plane", "detect_outliers"),
     "match_sky": ("torchsky.map.image_plane", "match_sky"),
     "coadd": ("torchsky.map.image_plane", "coadd"),
     "coadd_multiband": ("torchsky.map.image_plane", "coadd_multiband"),
-    "coadd_cube": ("torchsky.map.image_plane", "coadd_cube"),
-    "coadd_healpix": ("torchsky.map.image_plane", "coadd_healpix"),
+    "coadd_cube": ("torchsky.map.cube", "coadd_cube"),
+    "coadd_healpix": ("torchsky.map.healpix_coadd", "coadd_healpix"),
     "stack_product": ("torchsky.map.product", "stack_product"),
     "aperture_uncertainty": ("torchsky.map.image_plane", "aperture_uncertainty"),
     # Legacy / Explicit Public API Facade
@@ -512,12 +512,15 @@ if TYPE_CHECKING:
         StackConfig as StackConfig,
         Target as Target,
     )
+    from .cube import coadd_cube as coadd_cube
+    from .healpix_coadd import (
+        coadd_healpix as coadd_healpix,
+        resample_healpix as resample_healpix,
+    )
     from .image_plane import (
         aperture_uncertainty as aperture_uncertainty,
         blot as blot,
         coadd as coadd,
-        coadd_cube as coadd_cube,
-        coadd_healpix as coadd_healpix,
         coadd_image_plane as coadd_image_plane,
         coadd_image_plane_cube as coadd_image_plane_cube,
         coadd_image_plane_multiband as coadd_image_plane_multiband,
@@ -528,7 +531,6 @@ if TYPE_CHECKING:
         plan as plan,
         plan_cube as plan_cube,
         resample as resample,
-        resample_healpix as resample_healpix,
     )
     from .product import (
         BandpassSpec as BandpassSpec,

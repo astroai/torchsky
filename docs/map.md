@@ -197,7 +197,9 @@ Promoted flat `torchsky.map` names:
 The public namespace exposes one name per concept. Lower-level implementation
 functions such as `coadd(...)` remain in
 `torchsky.map.image_plane` for advanced workflows, but they are not root-level
-compatibility aliases.
+compatibility aliases. Cube assembly lives in `torchsky.map.cube` and the
+direct-to-HEALPix coadd/resample path in `torchsky.map.healpix_coadd`; both are
+implementation modules that the facade imports lazily.
 
 Advanced planning and implementation helpers live in explicit
 submodules such as `torchsky.map.image_plane`, `torchsky.map.product`,
@@ -259,6 +261,7 @@ Bounded package contracts:
 
 - `tests/test_map_image_plane.py`
 - `tests/test_map_product.py`
+- `tests/test_map_cube_spectral_axis.py`
 
 Scientific parity and performance evaluation live in the harness. See
 [benchmarks.md](benchmarks.md) for the ownership boundary and the
