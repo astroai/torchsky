@@ -117,6 +117,7 @@ from .spectral_projection import (
     _build_band_metadata,
     _build_spectral_projection,
     _observation_spectral_columns,
+    _spectral_fractional_index,
     _validated_spectral_axis,
     _validated_spectral_bin_edges,
 )
@@ -5375,10 +5376,6 @@ def _coadd_ifu_3d_cube(
     )
     wave_centers = s_axis.values.to(device=map_device, dtype=torch.float32)
     N_wave = int(wave_centers.numel())
-    if N_wave > 1:
-        d_wave = (wave_centers[-1] - wave_centers[0]) / float(N_wave - 1)
-    else:
-        d_wave = torch.tensor(1.0, device=map_device, dtype=torch.float32)
 
     target_wcs = WCS(header_dict).to(map_device)
     numer = torch.zeros((N_wave, H, W), dtype=torch.float32, device=map_device)
@@ -5468,10 +5465,7 @@ def _coadd_ifu_3d_cube(
         xt = xt.to(dtype=torch.float32)
         yt = yt.to(dtype=torch.float32)
         lam_f = lam_d.to(dtype=torch.float32)
-        if N_wave > 1:
-            zt = (lam_f - wave_centers[0]) / d_wave.clamp_min(1e-12)
-        else:
-            zt = torch.zeros_like(lam_f)
+        zt = _spectral_fractional_index(wave_centers, lam_f)
 
         ok = torch.isfinite(xt) & torch.isfinite(yt) & torch.isfinite(zt)
         if not bool(ok.any()):

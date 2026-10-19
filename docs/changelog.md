@@ -37,6 +37,13 @@ owned by `torchfits`.
   These remain experimental and do not establish calibrated real-sky response or
   SOTA. See `docs/native-likelihood.md`.
 
+- **Non-uniform spectral axes in `coadd_cube`**: 3D IFU cube assembly now maps
+  each detector sample to the target axis with a per-interval fractional index
+  instead of a single uniform `d_lambda`, so irregular axes no longer misplace
+  samples into the wrong bins. Regular axes keep the previous behaviour.
+  Irregular axes remain an index-space interpolation with a recorded bias
+  envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
+
 ### Removed
 - FITS image/table/checksum implementation tests and benchmarks now owned by
   `torchfits`.

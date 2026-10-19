@@ -169,6 +169,16 @@ cube = coadd_cube(
 )
 ```
 
+Target spectral axes are honoured as given. A non-uniform (irregular) axis is
+mapped to the correct target bins, but the spectral kernel interpolates in
+*index* space: within a bin the position is linear in wavelength, while the
+kernel support spans the adjacent bins. On an irregular axis that produces an
+interpolation bias of order `(width_right - width_left) * dF/dlambda` in
+addition to the edge-bin bias; it is small for near-regular or log-spaced axes
+and can reach several percent for strongly irregular bin widths. Use an aligned
+or regular axis, or `spectral_kernel="nearest"` for exact bin assignment, when
+that bias matters. Non-increasing axes are rejected.
+
 ## API Surface
 
 Promoted flat `torchsky.map` names:

@@ -40,6 +40,27 @@ def _validated_spectral_axis(
     )
 
 
+def _spectral_fractional_index(wave_centers: Tensor, wavelengths: Tensor) -> Tensor:
+    """Map wavelengths to fractional indices on a strictly increasing axis.
+
+    ``k + f`` means: the wavelength lies between ``wave_centers[k]`` and
+    ``wave_centers[k + 1]``, a fraction ``f`` of the way. Values outside the axis
+    map outside ``[0, count - 1]`` so downstream bounds checks reject them.
+    This is the non-uniform generalization of ``(lam - lam_0) / d_lam``.
+    """
+    count = int(wave_centers.numel())
+    if count < 2:
+        return torch.zeros_like(wavelengths)
+    index = torch.searchsorted(wave_centers, wavelengths, right=True) - 1
+    index = index.clamp(0, count - 2)
+    lower = wave_centers[index]
+    upper = wave_centers[index + 1]
+    fraction = (wavelengths - lower) / torch.clamp(
+        upper - lower, min=torch.finfo(wavelengths.dtype).tiny
+    )
+    return index.to(wavelengths.dtype) + fraction
+
+
 def _observation_spectral_columns(
     observations: Sequence[ImageObservation],
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, tuple[str | None, ...]]:
