@@ -45,6 +45,10 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **WCS core split**: the 5.2k-line `wcs/core.py` module now keeps the `WCS`
+  state machine while rotations/TAN projection live in `wcs/_rotation.py`,
+  footprint/geometry/serialization in `wcs/_geometry.py`, and the shared
+  wrap/trig helpers in `wcs/_math.py`. Public API and behaviour are unchanged.
 - **AIR projection solver**: pixel->world for the Airy zenithal projection now
   uses a fixed-iteration Newton solve in `t = tan(xi)` instead of a bracketed
   regula-falsi loop with per-iteration host synchronization. On the harness WCS

@@ -8,6 +8,9 @@ import os
 import numpy as np
 
 from torchsky._native import cpp as _cpp
+from ._geometry import _GeometryMixin, _HeaderIOMixin
+from ._math import _sincos, _wrap_lon180, _wrap_lon360
+from ._rotation import _RotationMixin
 
 from .tpv import TPV, PV1_KEYS, PV2_KEYS, PV1_KEYS_SET, PV2_KEYS_SET
 from .sip import SIP
@@ -66,28 +69,13 @@ _CENTER_CPP_W2P_THRESHOLDS = {
 _ZENITHAL_FUSED_P2W_MAX = 1536
 
 
-def _sincos(x: Tensor) -> Tuple[Tensor, Tensor]:
-    """Return sin(x), cos(x) with a torch.sincos fast path when available."""
-    if _HAS_TORCH_SINCOS:
-        return torch.sincos(x)
-    return torch.sin(x), torch.cos(x)
-
-
-def _wrap_lon360(angle: Tensor) -> Tensor:
-    """Wrap longitudes to [0, 360)."""
-    # Avoid torch.amin/amax bounds checks: they force GPU-CPU sync on large tensors.
-    return torch.remainder(angle, 360.0)
 
 
 
-def _wrap_lon180(angle: Tensor) -> Tensor:
-    """Wrap longitudes to [-180, 180)."""
-    return torch.remainder(angle + 180.0, 360.0) - 180.0
 
 
-def _wrap_lon180_checked(angle: Tensor) -> Tensor:
-    """Compatibility alias; direct wrap is faster than range-check reductions."""
-    return _wrap_lon180(angle)
+
+
 
 
 def _ctype_without_projection(ctype: str) -> str:
@@ -190,7 +178,7 @@ def _coerce_distortion_lookup_table(
     )
 
 
-class WCS:
+class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
     """
     Base class for TorchWCS (PyTorch-native World Coordinate System).
     """
@@ -2374,7 +2362,7 @@ class WCS:
             elif self._is_mol:
                 xi, eta = deproject_allsky(phi, theta, "MOL")
             elif self._is_hpx:
-                phi_w = _wrap_lon180_checked(phi)
+                phi_w = _wrap_lon180(phi)
                 s_theta = torch.sin(theta * self._d2r)
                 abs_s = torch.abs(s_theta)
                 mask_eq = abs_s <= (2.0 / 3.0)
@@ -2387,10 +2375,10 @@ class WCS:
                 xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
                 eta = torch.where(mask_eq, self._hpx_eta_scale * s_theta, eta_pol)
             elif self._is_cea:
-                xi = _wrap_lon180_checked(phi)
+                xi = _wrap_lon180(phi)
                 eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
             elif self._is_mer:
-                xi = _wrap_lon180_checked(phi)
+                xi = _wrap_lon180(phi)
                 tan_arg = torch.tan((45.0 + theta * 0.5) * self._d2r)
                 tan_arg = torch.clamp(tan_arg, min=1e-12)
                 eta = self._r2d * torch.log(tan_arg)
@@ -2400,10 +2388,10 @@ class WCS:
                 )
             elif self._is_car:
                 # Inline trivial CAR projection: native RA -> intermediate xi, native Dec -> intermediate eta
-                xi = _wrap_lon180_checked(phi)
+                xi = _wrap_lon180(phi)
                 eta = theta
             elif self._is_sfl:
-                xi = _wrap_lon180_checked(phi) * torch.cos(theta * self._d2r)
+                xi = _wrap_lon180(phi) * torch.cos(theta * self._d2r)
                 eta = theta
             elif self._is_zpn:
                 if self._is_zpn_linear:
@@ -3066,48 +3054,8 @@ class WCS:
             to_equinox=to_equinox,
         )
 
-    @property
-    def pixel_bounds(self) -> list[tuple[float, float]] | None:
-        """Inclusive 0-based pixel bounds from ``NAXISi`` keywords."""
-        if self._pixel_shape is None:
-            return None
-        return [(0.0, float(n - 1)) for n in self._pixel_shape]
 
-    @property
-    def axis_correlation_matrix(self) -> np.ndarray:
-        """Boolean matrix showing which world axes depend on which pixel axes."""
-        matrix = np.zeros((self.world_n_dim, self.pixel_n_dim), dtype=bool)
-        cd_deps = torch.abs(self.cd_full).detach().cpu().numpy() > 1.0e-15
-        if self._is_spatial and self.naxis >= 2:
-            matrix[:2, :2] = True
-            for i in range(2, self.naxis):
-                matrix[i, :] = cd_deps[i, :]
-        else:
-            matrix[:, :] = cd_deps
-        for axis in self.tabular_axes:
-            if 0 <= axis < self.naxis:
-                matrix[axis, axis] = True
-        for axis in self.coupled_tabular_axes:
-            matrix[axis, :] = False
-            matrix[axis, list(self.coupled_tabular_pixel_axes)] = True
-        return matrix
 
-    def in_image(self, pixels: Any, *, origin: int = 0) -> Tensor:
-        """Return a boolean mask for pixels inside ``pixel_bounds``."""
-        if self._pixel_shape is None:
-            raise ValueError("in_image requires NAXISi image bounds")
-        pix = torch.as_tensor(pixels, dtype=self._wcs_coord_dtype(self.device), device=self.device)
-        if pix.shape[-1] != self.naxis:
-            raise ValueError(f"pixels must have trailing dimension {self.naxis}")
-        lower = torch.full(
-            (self.naxis,), float(origin), dtype=self._wcs_coord_dtype(self.device), device=self.device
-        )
-        upper = torch.tensor(
-            [float(n - 1 + origin) for n in self._pixel_shape[: self.naxis]],
-            dtype=self._wcs_coord_dtype(self.device),
-            device=self.device,
-        )
-        return torch.all((pix >= lower) & (pix <= upper), dim=-1)
 
     def mixed_pixel_world(
         self,
@@ -4473,370 +4421,9 @@ class WCS:
             return torch.stack((ra, dec), dim=-1)
         return self._transform_optimized(rel, allow_cpp_sphere=allow_cpp_sphere)
 
-    def _spherical_rotation_optimized(
-        self,
-        phi: Tensor,
-        theta: Tensor,
-        native_type: str = "pole",
-        *,
-        allow_cpp_sphere: bool = True,
-    ) -> Tuple[Tensor, Tensor]:
-        """
-        Optimized rotation using vector rotation matrix.
-        """
-        if native_type != "pole":
-            if self._use_center_equator_fast:
-                ra = _wrap_lon360(phi + self.alpha0)
-                return ra, theta
-            return self._spherical_rotation(phi, theta, native_type)
 
-        if (
-            allow_cpp_sphere
-            and self._cpp_spherical_rotation_pole is not None
-            and phi.device.type == "cpu"
-            and theta.device.type == "cpu"
-            and phi.dtype == torch.float64
-            and theta.dtype == torch.float64
-            and not phi.requires_grad
-            and not theta.requires_grad
-        ):
-            return self._cpp_spherical_rotation_pole(
-                phi,
-                theta,
-                self._phi_p_rad,
-                self._pole_east_x,
-                self._pole_east_y,
-                self._pole_north_x,
-                self._pole_north_y,
-                self._pole_north_z,
-                self._pole_radial_x,
-                self._pole_radial_y,
-                self._pole_radial_z,
-            )
 
-        d2r = 0.017453292519943295
-        r2d = 57.29577951308232
 
-        phi_rad = (phi - self.phi_p) * d2r
-        theta_rad = theta * d2r
-
-        sin_theta, cos_theta = _sincos(theta_rad)
-        sin_phi, cos_phi = _sincos(phi_rad)
-
-        # Native Cartesian (u, v, w) relative to local basis (East, North, Radial)
-        u = cos_theta * sin_phi
-        v = cos_theta * cos_phi
-        w = sin_theta
-
-        # v_cel = R @ v_nat using precomputed scalar basis at (alpha_p, delta_p).
-        x = u * self._pole_east_x + v * self._pole_north_x + w * self._pole_radial_x
-        y = u * self._pole_east_y + v * self._pole_north_y + w * self._pole_radial_y
-        z = v * self._pole_north_z + w * self._pole_radial_z
-
-        ra = torch.remainder(torch.atan2(y, x) * r2d, 360.0)
-        dec = torch.asin(torch.clamp(z, -1.0, 1.0)) * r2d
-
-        return ra, dec
-
-    def _spherical_rotation(
-        self, phi: Tensor, theta: Tensor, native_type: str = "pole"
-    ) -> Tuple[Tensor, Tensor]:
-        """
-        Rotate native spherical coordinates (phi, theta) to celestial (alpha, delta)
-        using vector rotation (robust at pole).
-        native_type: 'pole' (Ref is 0,90) or 'center' (Ref is 0,0).
-        """
-        # Constants
-        d2r = math.pi / 180.0
-        r2d = 180.0 / math.pi
-
-        # Convert to radians
-        phi_rad = phi * d2r
-        theta_rad = theta * d2r
-
-        # 1. Convert Native (phi, theta) to Cartesian (u, v, w)
-        # u = cos(theta) * sin(phi)
-        # v = -cos(theta) * cos(phi)
-        # w = sin(theta)
-
-        sin_theta = torch.sin(theta_rad)
-        cos_theta = torch.cos(theta_rad)
-        sin_phi = torch.sin(phi_rad)
-        cos_phi = torch.cos(phi_rad)
-
-        u = cos_theta * sin_phi
-        v = -cos_theta * cos_phi
-        w = sin_theta
-
-        # 2. Construct Basis Vectors for Celestial Frame at CRVAL
-        a0 = self.crval[0] * d2r
-        d0 = self.crval[1] * d2r
-
-        sin_a0, cos_a0 = torch.sin(a0), torch.cos(a0)
-        sin_d0, cos_d0 = torch.sin(d0), torch.cos(d0)
-
-        # Basis vectors definition:
-        # r (radial, pointing to CRVAL) = [cos d0 cos a0, cos d0 sin a0, sin d0]
-        # n (north) = [-sin d0 cos a0, -sin d0 sin a0, cos d0]
-        # e (east)  = [-sin a0, cos a0, 0]
-
-        # r components
-        rx = cos_d0 * cos_a0
-        ry = cos_d0 * sin_a0
-        rz = sin_d0
-
-        # n components
-        nx = -sin_d0 * cos_a0
-        ny = -sin_d0 * sin_a0
-        nz = cos_d0
-
-        # e components
-        ex = -sin_a0
-        ey = cos_a0
-        ez = torch.zeros_like(a0)
-
-        # 3. Rotate Vector
-        if native_type == "pole":
-            # Ref is (0, 90) -> w=1
-            # Map w -> r (Pole to CRVAL)
-            # Map v -> n (North-ish to North)
-            # Map u -> e (East to East)
-            X = u * ex + v * nx + w * rx
-            Y = u * ey + v * ny + w * ry
-            Z = u * ez + v * nz + w * rz
-        else:  # 'center'
-            # Ref is (0, 0) -> intersection of Eq/Meridian
-            # At (0,0), w=0, u=0, v=-1 (cos(0)=1, v=-1).
-            # We want Ref (v=-1) to map to CRVAL (r).
-            # So map -v -> r => v -> -r.
-            # We want North Pole (w=1) to map to North (n).
-            # Map w -> n.
-            # Map u -> e (East).
-            # Check u x v = e x -r?
-            # e x -r = n. Matched.
-
-            X = u * ex + v * (-rx) + w * nx
-            Y = u * ey + v * (-ry) + w * ny
-            Z = u * ez + v * (-rz) + w * nz
-
-        # 4. Convert Cartesian to RA/Dec
-        # Dec = asin(Z)
-        Z = torch.clamp(Z, -1.0, 1.0)
-        dec_rad = torch.asin(Z)
-
-        # alpha - alpha_p = atan2(y, x) -> NO.
-        # X, Y, Z are absolute celestial coordinates.
-        # alpha = atan2(Y, X) directly.
-        alpha_rad = torch.atan2(Y, X)
-
-        # Convert to degrees
-        alpha = alpha_rad * r2d
-        delta = dec_rad * r2d
-
-        # Normalize Alpha
-        alpha = torch.remainder(alpha, 360.0)
-
-        return alpha, delta
-
-    def _inverse_spherical_rotation(
-        self,
-        ra: Tensor,
-        dec: Tensor,
-        native_type: str = "pole",
-        *,
-        allow_cpp_inverse_sphere: bool = True,
-    ) -> Tuple[Tensor, Tensor]:
-        """
-        Inverse spherical rotation: celestial (ra, dec) -> native (phi, theta).
-        """
-        if native_type != "pole":
-            if self._use_center_equator_fast:
-                phi = _wrap_lon180_checked(ra - self.alpha0)
-                return phi, dec
-            d2r = 0.017453292519943295
-            r2d = 57.29577951308232
-            ra_rad = ra * d2r
-            dec_rad = dec * d2r
-            sin_dec, cos_dec = _sincos(dec_rad)
-            sin_ra, cos_ra = _sincos(ra_rad)
-            x_cel = cos_dec * cos_ra
-            y_cel = cos_dec * sin_ra
-            z_cel = sin_dec
-            # Center-native rotation, inverted with the same basis as
-            # _spherical_rotation: celestial = u*e + v*(-r) + w*n, with
-            # (e, n, r) the east/north/radial basis at (alpha0, delta0).
-            # The stored _pole_* basis belongs to pole-native projections and
-            # is wrong here whenever delta0 != 0 (it would map the reference
-            # point to native latitude 90 - |delta0| instead of 0).
-            u = x_cel * self._east_x + y_cel * self._east_y
-            w = (
-                x_cel * self._north_x
-                + y_cel * self._north_y
-                + z_cel * self._north_z
-            )
-            v = -(
-                x_cel * self._radial_x
-                + y_cel * self._radial_y
-                + z_cel * self._radial_z
-            )
-            theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
-            phi = torch.remainder(torch.atan2(u, -v) * r2d, 360.0)
-            return phi, theta
-
-        if (
-            allow_cpp_inverse_sphere
-            and self._cpp_inverse_spherical_rotation_pole is not None
-            and ra.device.type == "cpu"
-            and dec.device.type == "cpu"
-            and ra.dtype == torch.float64
-            and dec.dtype == torch.float64
-            and not ra.requires_grad
-            and not dec.requires_grad
-        ):
-            return self._cpp_inverse_spherical_rotation_pole(
-                ra,
-                dec,
-                self._phi_p_rad,
-                self._pole_east_x,
-                self._pole_east_y,
-                self._pole_north_x,
-                self._pole_north_y,
-                self._pole_north_z,
-                self._pole_radial_x,
-                self._pole_radial_y,
-                self._pole_radial_z,
-            )
-
-        d2r = 0.017453292519943295
-        r2d = 57.29577951308232
-
-        ra_rad = ra * d2r
-        dec_rad = dec * d2r
-
-        sin_dec, cos_dec = _sincos(dec_rad)
-        sin_ra, cos_ra = _sincos(ra_rad)
-
-        # Celestial Cartesian (X, Y, Z)
-        x_cel = cos_dec * cos_ra
-        y_cel = cos_dec * sin_ra
-        z_cel = sin_dec
-
-        # v_nat = R^T @ v_cel using precomputed scalar basis at (alpha_p, delta_p).
-        u = x_cel * self._pole_east_x + y_cel * self._pole_east_y
-        v = (
-            x_cel * self._pole_north_x
-            + y_cel * self._pole_north_y
-            + z_cel * self._pole_north_z
-        )
-        w = (
-            x_cel * self._pole_radial_x
-            + y_cel * self._pole_radial_y
-            + z_cel * self._pole_radial_z
-        )
-
-        theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
-        phi = torch.remainder(torch.atan2(u, v) * r2d + self.phi_p, 360.0)
-
-        return phi, theta
-
-    def _project_tan(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-        """
-        Gnomonic (TAN) projection: intermediate (deg) -> spherical (deg).
-
-        xi, eta: Standard coordinates in degrees.
-        Returns: ra, dec in degrees.
-        """
-        # Convert degress to radians
-        rad = math.pi / 180.0
-        deg = 180.0 / math.pi
-
-        xi_rad = xi * rad
-        eta_rad = eta * rad
-        crval1_rad = self.crval[0] * rad
-        crval2_rad = self.crval[1] * rad
-
-        # Use the explicit rotation matrix method which is vectorizable.
-        # 1. Construct vector in tangent plane (3D).
-        #    Plane is z=1 (tangent at North Pole of unit sphere).
-        #    V = [xi, eta, 1] is the correct direction.
-        #    Normalize to get unit vector on sphere.
-
-        x = xi_rad
-        y = eta_rad
-
-        # 2. Rotate this vector from North Pole (0, 90) to (CRVAL1, CRVAL2).
-        # Vector in u,v,w space where w points to CRVAL.
-        # u = x (East)
-        # v = y (North)
-        # w = 1.0
-
-        u = x
-        v = y
-        w = torch.ones_like(x)
-
-        # Normalize
-        norm = torch.sqrt(u * u + v * v + w * w)
-        u = u / norm
-        v = v / norm
-        w = w / norm
-
-        # This vector (u,v,w) is in a frame where Z-axis points to (CRVAL1, CRVAL2).
-        # Y-axis points North (towards NCP).
-        # X-axis points East.
-
-        # We want to rotate this frame to the celestial frame (X, Y, Z).
-        # Rotation depends on (alpha0, delta0).
-
-        a0 = crval1_rad
-        d0 = crval2_rad
-
-        # Construct the rotation matrix explicitly.
-
-        # Local basis at (a0, d0):
-        # r (radial) = [cos(d0)cos(a0), cos(d0)sin(a0), sin(d0)]
-        # n (north)  = [-sin(d0)cos(a0), -sin(d0)sin(a0), cos(d0)] (partial d/delta)
-        # e (east)   = [-sin(a0), cos(a0), 0] (partial d/alpha / cos(delta))
-
-        # Our vector is V = u*e + v*n + w*r
-
-        sin_a0, cos_a0 = torch.sin(a0), torch.cos(a0)
-        sin_d0, cos_d0 = torch.sin(d0), torch.cos(d0)
-
-        # e vector components
-        ex = -sin_a0
-        ey = cos_a0
-        ez = torch.zeros_like(a0)
-
-        # n vector components
-        nx = -sin_d0 * cos_a0
-        ny = -sin_d0 * sin_a0
-        nz = cos_d0
-
-        # r vector components
-        rx = cos_d0 * cos_a0
-        ry = cos_d0 * sin_a0
-        rz = sin_d0
-
-        # Final vector components in Celestial Frame
-        X = u * ex + v * nx + w * rx
-        Y = u * ey + v * ny + w * ry
-        Z = u * ez + v * nz + w * rz
-
-        # Convert X,Y,Z back to RA, Dec
-        # Dec = asin(Z)
-        dec_out_rad = torch.asin(Z)
-
-        # RA = atan2(Y, X)
-        ra_out_rad = torch.atan2(Y, X)
-
-        # Convert to degrees
-        ra_out = ra_out_rad * deg
-        dec_out = dec_out_rad * deg
-
-        # Normalize RA to [0, 360]
-        ra_out = torch.remainder(ra_out, 360.0)
-
-        return ra_out, dec_out
 
     def world_to_pixel(self, *args, **kwargs) -> Union[Tensor, Tuple[Tensor, ...]]:
         """
@@ -4929,319 +4516,15 @@ class WCS:
             return tuple(pix[..., i] for i in range(self.naxis))
         return pix
 
-    @property
-    def pixel_shape(self) -> tuple[int, ...] | None:
-        """Image dimensions in FITS axis order ``(NAXIS1, NAXIS2, ...)``."""
-        return self._pixel_shape
 
-    @pixel_shape.setter
-    def pixel_shape(self, value: Sequence[int] | None) -> None:
-        self._pixel_shape = None if value is None else tuple(int(v) for v in value)
 
-    @property
-    def array_shape(self) -> tuple[int, ...] | None:
-        """Image dimensions in NumPy/PyTorch array order ``(..., NAXIS2, NAXIS1)``."""
-        if self._pixel_shape is None:
-            return None
-        return tuple(reversed(self._pixel_shape))
 
-    def to_header(
-        self,
-        *,
-        relax: bool = True,
-        include_naxis: bool = False,
-    ) -> dict[str, Any]:
-        """Serialize this WCS into a standard FITS header dictionary.
 
-        Parameters
-        ----------
-        relax
-            If ``True`` (default), include SIP polynomial distortion keywords
-            (``A_ORDER``, ``A_p_q``, ``B_ORDER``, ``B_p_q``, ``AP_*``, ``BP_*``)
-            and TPV ``PVi_m`` keywords when present.
-        include_naxis
-            If ``True`` and ``pixel_shape`` is known, include ``NAXIS`` and
-            ``NAXIS1..NAXISn`` cards.
-        """
-        hdr: dict[str, Any] = {}
-        sfx = self.wcs_key
-        if include_naxis and self._pixel_shape is not None:
-            hdr["NAXIS"] = len(self._pixel_shape)
-            for idx, dim in enumerate(self._pixel_shape, start=1):
-                hdr[f"NAXIS{idx}"] = int(dim)
-        hdr[f"WCSAXES{sfx}"] = int(self.naxis)
 
-        crpix_cpu = self.crpix.detach().cpu().to(torch.float64).tolist()
-        crval_cpu = self.crval.detach().cpu().to(torch.float64).tolist()
-        cd_cpu = self.cd_full.detach().cpu().to(torch.float64).tolist()
 
-        for i in range(1, self.naxis + 1):
-            ctype = str(self.wcs_params.get(f"CTYPE{i}", "")).strip()
-            if (
-                relax
-                and self.sip is not None
-                and i in (1, 2)
-                and ctype
-                and not ctype.upper().endswith("-SIP")
-            ):
-                ctype = f"{ctype}-SIP"
-            if ctype:
-                hdr[f"CTYPE{i}{sfx}"] = ctype
-            hdr[f"CRPIX{i}{sfx}"] = float(crpix_cpu[i - 1])
-            hdr[f"CRVAL{i}{sfx}"] = float(crval_cpu[i - 1])
-            cunit = self.wcs_params.get(f"CUNIT{i}")
-            if cunit:
-                hdr[f"CUNIT{i}{sfx}"] = str(cunit)
 
-        for i in range(1, self.naxis + 1):
-            for j in range(1, self.naxis + 1):
-                val = float(cd_cpu[i - 1][j - 1])
-                if i == j or abs(val) > 0.0 or (i <= 2 and j <= 2):
-                    hdr[f"CD{i}_{j}{sfx}"] = val
 
-        for meta_key in (
-            "LONPOLE",
-            "LATPOLE",
-            "RADESYS",
-            "RADECSYS",
-            "EQUINOX",
-            "EPOCH",
-            "RESTFRQ",
-            "RESTFREQ",
-            "RESTWAV",
-            "SPECSYS",
-            "SSYSOBS",
-            "SSYSSRC",
-            "VELREF",
-            "MJD-OBS",
-            "MJDREF",
-            "MJDREFI",
-            "MJDREFF",
-            "DATE-OBS",
-            "TIMESYS",
-            "TIMEUNIT",
-            "TIMEOFFS",
-        ):
-            if meta_key in self.wcs_params:
-                hdr[f"{meta_key}{sfx}" if meta_key in {"LONPOLE", "LATPOLE", "RADESYS", "EQUINOX", "RESTFRQ", "RESTWAV", "SPECSYS"} else meta_key] = self.wcs_params[meta_key]
 
-        for k, v in self.wcs_params.items():
-            if k.startswith(("PV", "PS", "PROJP", "WAT")):
-                if not relax and self._is_tpv and k.startswith("PV"):
-                    continue
-                hdr[f"{k}{sfx}" if not sfx or not k.endswith(sfx) else k] = v
 
-        if relax and self.sip is not None:
-            if self.sip.a_order > 0 or self.sip.a_coeffs:
-                hdr["A_ORDER"] = int(self.sip.a_order)
-                for (p, q), coeff in self.sip.a_coeffs.items():
-                    hdr[f"A_{p}_{q}"] = float(coeff)
-            if self.sip.b_order > 0 or self.sip.b_coeffs:
-                hdr["B_ORDER"] = int(self.sip.b_order)
-                for (p, q), coeff in self.sip.b_coeffs.items():
-                    hdr[f"B_{p}_{q}"] = float(coeff)
-            if self.sip.has_inverse:
-                if self.sip.ap_order > 0 or self.sip.ap_coeffs:
-                    hdr["AP_ORDER"] = int(self.sip.ap_order)
-                    for (p, q), coeff in self.sip.ap_coeffs.items():
-                        hdr[f"AP_{p}_{q}"] = float(coeff)
-                if self.sip.bp_order > 0 or self.sip.bp_coeffs:
-                    hdr["BP_ORDER"] = int(self.sip.bp_order)
-                    for (p, q), coeff in self.sip.bp_coeffs.items():
-                        hdr[f"BP_{p}_{q}"] = float(coeff)
 
-        if self._pixel_affine_matrix is not None and self._pixel_affine_offset is not None:
-            mat = self._pixel_affine_matrix.detach().cpu().to(torch.float64)
-            off = self._pixel_affine_offset.detach().cpu().to(torch.float64)
-            hdr["TSKYAF0"] = "pixel_affine"
-            hdr["TSKYAFA11"] = float(mat[0, 0].item())
-            hdr["TSKYAFA12"] = float(mat[0, 1].item())
-            hdr["TSKYAFA21"] = float(mat[1, 0].item())
-            hdr["TSKYAFA22"] = float(mat[1, 1].item())
-            hdr["TSKYAFB1"] = float(off[0].item())
-            hdr["TSKYAFB2"] = float(off[1].item())
-        elif self.wcs_params.get("TSKYAF0") == "pixel_affine":
-            # Undistorted corrections bake into CRPIX/CD and keep no live
-            # pixel-space affine, but the provenance marker must survive a
-            # header round-trip.
-            for key, value in self.wcs_params.items():
-                if str(key).startswith("TSKYAF"):
-                    hdr[str(key)] = value
 
-        return hdr
-
-    def to_head_string(self, *, relax: bool = True) -> str:
-        """Format this WCS as a SCAMP/SWarp-compatible ``.head`` ASCII string."""
-        hdr = self.to_header(relax=relax, include_naxis=False)
-        lines: list[str] = []
-        for k, v in hdr.items():
-            key_str = f"{str(k)[:8]:<8s}"
-            if isinstance(v, bool):
-                val_str = f"{'T' if v else 'F':>20s}"
-            elif isinstance(v, int):
-                val_str = f"{v:>20d}"
-            elif isinstance(v, float):
-                val_str = f"{v:>20.12G}"
-            else:
-                s_escaped = str(v).replace("'", "''")
-                val_str = f"'{s_escaped:<8s}'"
-            card = f"{key_str}= {val_str}"
-            lines.append(f"{card:<80s}"[:80])
-        lines.append(f"{'END':<80s}")
-        return "\n".join(lines) + "\n"
-
-    def pixel_scales(self) -> tuple[float, float]:
-        """Return nominal pixel scales ``(scale_x_deg, scale_y_deg)`` in degrees/pixel at CRPIX."""
-        cd2 = self.cd_full[:2, :2].detach().cpu().to(torch.float64)
-        sx = float(torch.hypot(cd2[0, 0], cd2[1, 0]).item())
-        sy = float(torch.hypot(cd2[0, 1], cd2[1, 1]).item())
-        return (sx, sy)
-
-    def proj_plane_pixel_scales(self) -> tuple[float, float]:
-        """Alias for :meth:`pixel_scales` matching ``astropy.wcs.utils.proj_plane_pixel_scales``."""
-        return self.pixel_scales()
-
-    def pixel_area(self) -> float:
-        """Return nominal projection-plane pixel solid angle in ``deg**2`` at CRPIX."""
-        cd2 = self.cd_full[:2, :2].detach().cpu().to(torch.float64)
-        return abs(float((cd2[0, 0] * cd2[1, 1] - cd2[0, 1] * cd2[1, 0]).item()))
-
-    def proj_plane_pixel_area(self) -> float:
-        """Alias for :meth:`pixel_area` matching ``astropy.wcs.utils.proj_plane_pixel_area``."""
-        return self.pixel_area()
-
-    def position_angle(self) -> float:
-        """Return position angle (degrees East of North) of the +y pixel axis at CRPIX."""
-        cd2 = self.cd_full[:2, :2].detach().cpu().to(torch.float64)
-        det = float((cd2[0, 0] * cd2[1, 1] - cd2[0, 1] * cd2[1, 0]).item())
-        east_sign = -1.0 if det < 0.0 else 1.0
-        pa_rad = math.atan2(east_sign * float(cd2[0, 1].item()), float(cd2[1, 1].item()))
-        return math.degrees(pa_rad)
-
-    def footprint(
-        self,
-        shape: tuple[int, int] | None = None,
-        *,
-        center: bool = True,
-        origin: int = 0,
-    ) -> Tensor:
-        """Return ``(4, 2)`` tensor of ``(lon_deg, lat_deg)`` corner sky coordinates.
-
-        Parameters
-        ----------
-        shape
-            Image shape in PyTorch ``(height, width) = (NAXIS2, NAXIS1)`` order.
-            If omitted, inferred from ``self.array_shape``.
-        center
-            If ``True`` (default), evaluate at pixel centers
-            ``(0, 0), (0, H-1), (W-1, H-1), (W-1, 0)``. If ``False``, evaluate at
-            outer pixel corners ``(-0.5, -0.5) .. (W-0.5, H-0.5)``.
-        origin
-            Pixel coordinate origin (``0`` for 0-based, ``1`` for FITS 1-based).
-        """
-        if shape is not None:
-            height, width = int(shape[0]), int(shape[1])
-        elif self._pixel_shape is not None and len(self._pixel_shape) >= 2:
-            width, height = int(self._pixel_shape[0]), int(self._pixel_shape[1])
-        else:
-            raise ValueError(
-                "shape=(height, width) must be provided when WCS has no NAXIS1/NAXIS2"
-            )
-        dt = self._wcs_coord_dtype(self.device)
-        off = float(origin)
-        if center:
-            xs = torch.tensor(
-                [off, off, off + float(width - 1), off + float(width - 1)],
-                dtype=dt,
-                device=self.device,
-            )
-            ys = torch.tensor(
-                [off, off + float(height - 1), off + float(height - 1), off],
-                dtype=dt,
-                device=self.device,
-            )
-        else:
-            xs = torch.tensor(
-                [off - 0.5, off - 0.5, off + float(width) - 0.5, off + float(width) - 0.5],
-                dtype=dt,
-                device=self.device,
-            )
-            ys = torch.tensor(
-                [off - 0.5, off + float(height) - 0.5, off + float(height) - 0.5, off - 0.5],
-                dtype=dt,
-                device=self.device,
-            )
-        if self.naxis == 2:
-            ra, dec = self.pixel_to_world(xs, ys, origin=origin)
-            return torch.stack([ra, dec], dim=-1)
-        corners = torch.zeros((4, self.naxis), dtype=dt, device=self.device)
-        corners[:, 0] = xs
-        corners[:, 1] = ys
-        for axis in range(2, self.naxis):
-            corners[:, axis] = self.crpix[axis] - (1.0 - off)
-        return self.pixel_to_world(corners, origin=origin)[:, :2]
-
-    def calc_footprint(
-        self,
-        header: Mapping[str, Any] | None = None,
-        undistort: bool = True,
-        axes: tuple[int, int] | None = None,
-        center: bool = True,
-    ) -> Tensor:
-        """Astropy-compatible footprint helper (``axes=(NAXIS1, NAXIS2)``)."""
-        del undistort
-        if axes is not None:
-            shape: tuple[int, int] | None = (int(axes[1]), int(axes[0]))
-        elif header is not None and "NAXIS1" in header and "NAXIS2" in header:
-            shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
-        else:
-            shape = None
-        return self.footprint(shape=shape, center=center)
-
-    def pixel_area_map(
-        self,
-        shape: tuple[int, int] | None = None,
-        *,
-        unit: str = "deg2",
-    ) -> Tensor:
-        """Compute exact 2D per-pixel spherical solid-angle map ``Omega(y, x)``.
-
-        Parameters
-        ----------
-        shape
-            Image shape ``(height, width)``. Inferred from ``self.array_shape`` if omitted.
-        unit
-            One of ``"deg2"`` (default), ``"arcsec2"``, or ``"sr"``.
-        """
-        if shape is not None:
-            height, width = int(shape[0]), int(shape[1])
-        elif self._pixel_shape is not None and len(self._pixel_shape) >= 2:
-            width, height = int(self._pixel_shape[0]), int(self._pixel_shape[1])
-        else:
-            raise ValueError(
-                "shape=(height, width) must be provided when WCS has no NAXIS1/NAXIS2"
-            )
-        dt = self._wcs_coord_dtype(self.device)
-        y_1d = torch.arange(height, dtype=dt, device=self.device)
-        x_1d = torch.arange(width, dtype=dt, device=self.device)
-        yy, xx = torch.meshgrid(y_1d, x_1d, indexing="ij")
-        ra_xp, dec_xp = self.pixel_to_world(xx + 0.5, yy)
-        ra_xm, dec_xm = self.pixel_to_world(xx - 0.5, yy)
-        ra_yp, dec_yp = self.pixel_to_world(xx, yy + 0.5)
-        ra_ym, dec_ym = self.pixel_to_world(xx, yy - 0.5)
-        _, dec_c = self.pixel_to_world(xx, yy)
-        cos_dec = torch.cos(torch.deg2rad(dec_c)).clamp_min(1e-12)
-
-        dra_dx = (torch.remainder(ra_xp - ra_xm + 180.0, 360.0) - 180.0) * cos_dec
-        ddec_dx = dec_xp - dec_xm
-        dra_dy = (torch.remainder(ra_yp - ra_ym + 180.0, 360.0) - 180.0) * cos_dec
-        ddec_dy = dec_yp - dec_ym
-        area_deg2 = torch.abs(dra_dx * ddec_dy - ddec_dx * dra_dy)
-        unit_norm = unit.strip().lower()
-        if unit_norm in {"deg2", "deg^2", "deg**2"}:
-            return area_deg2
-        if unit_norm in {"arcsec2", "arcsec^2", "arcsec**2"}:
-            return area_deg2 * (3600.0 * 3600.0)
-        if unit_norm in {"sr", "steradian", "steradians"}:
-            return area_deg2 * ((math.pi / 180.0) ** 2)
-        raise ValueError("unit must be one of 'deg2', 'arcsec2', or 'sr'")
