@@ -57,6 +57,14 @@ owned by `torchfits`.
   reference-offset cases (`MER_OFF`, `CYP_OFF`, `AIT_OFF`, `HPX_OFF`, `SFL_OFF`,
   `XPH_OFF`, `BON_OFF`, `PAR_OFF`).
 
+### Changed
+- **Leaner spectral namespace**: `torchsky.spectral` no longer re-exports the
+  26 redshift/velocity helpers that `torchsky.redshift` (and
+  `torchsky.log_lambda`) own. The spectral namespace now declares only its data
+  containers, axis helpers, resampling, and its own Doppler shift; every
+  namespace has an explicit `__all__`, checked by
+  `tests/test_public_namespaces.py`.
+
 ### Removed
 - FITS image/table/checksum implementation tests and benchmarks now owned by
   `torchfits`.
