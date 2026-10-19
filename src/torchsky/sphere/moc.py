@@ -175,12 +175,6 @@ def _normalize_moc(uniq: Tensor) -> Tensor:
     return _ranges_to_uniq(ranges, max_order)
 
 
-def _cat_uniq(parts: list[Tensor], device: torch.device) -> Tensor:
-    nonempty = [part for part in parts if part.numel() > 0]
-    if not nonempty:
-        return torch.empty(0, dtype=torch.int64, device=device)
-    return torch.cat(nonempty)
-
 
 def _hierarchical_disc_bmoc(
     lon_deg: float,

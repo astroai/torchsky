@@ -191,43 +191,6 @@ def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tens
     return torch.abs((d_ap + d_pb) - d_ab) <= tol_rad
 
 
-def _great_circle_arcs_intersect_many(
-    a0: Tensor,
-    a1: Tensor,
-    b0: Tensor,
-    b1: Tensor,
-    *,
-    tol_rad: float = 1e-10,
-) -> Tensor:
-    """
-    Vectorized arc-arc intersection for one arc (a0,a1) vs many arcs (b0,b1).
-
-    Returns boolean tensor of shape [M].
-    """
-    n1 = torch.cross(a0, a1, dim=-1)
-    n1_norm = torch.linalg.norm(n1)
-    if float(n1_norm.item()) < 1e-15:
-        return torch.zeros(b0.shape[0], dtype=torch.bool, device=b0.device)
-
-    n2 = torch.cross(b0, b1, dim=-1)
-    n2_norm = torch.linalg.norm(n2, dim=-1)
-    valid = n2_norm > 1e-15
-
-    p = torch.cross(n1.unsqueeze(0).expand_as(n2), n2, dim=-1)
-    p_norm = torch.linalg.norm(p, dim=-1)
-    valid = valid & (p_norm > 1e-15)
-
-    i1 = p / p_norm.clamp_min(1e-15).unsqueeze(-1)
-    i2 = -i1
-
-    on_a_i1 = _arc_contains_point(a0, a1, i1, tol_rad)
-    on_a_i2 = _arc_contains_point(a0, a1, i2, tol_rad)
-    on_b_i1 = _arc_contains_point(b0, b1, i1, tol_rad)
-    on_b_i2 = _arc_contains_point(b0, b1, i2, tol_rad)
-
-    out = valid & ((on_a_i1 & on_b_i1) | (on_a_i2 & on_b_i2))
-    return out
-
 
 def _great_circle_arcs_intersect_matrix(
     a0: Tensor,
@@ -1398,13 +1361,6 @@ Ellipse = SphericalEllipse
 
 RegionOperand = object
 
-
-def _spherical_geometry_available() -> bool:
-    try:
-        from spherical_geometry.polygon import SphericalPolygon as _  # noqa: F401
-    except Exception:
-        return False
-    return True
 
 
 def _require_spherical_geometry():

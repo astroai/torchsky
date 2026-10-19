@@ -165,11 +165,6 @@ def strict_mode(enabled: bool = True):
         set_strict_mode(prev)
 
 
-def _resolve_strict(strict: bool | None) -> bool:
-    if strict is None:
-        return get_strict_mode()
-    return bool(strict)
-
 
 def ang2pix(
     nside: int, theta: Tensor, phi: Tensor, nest: bool = False, lonlat: bool = False

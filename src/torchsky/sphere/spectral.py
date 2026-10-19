@@ -609,21 +609,6 @@ def _reorder_ring_to_nest_rows(rows: Tensor, nside: int) -> Tensor:
     return torch.index_select(rows, rows.ndim - 1, perm)
 
 
-def _pmm_base(m: int, x: Tensor) -> Tensor:
-    if m == 0:
-        return torch.ones_like(x)
-    # (2m-1)!! = (2m)! / (2^m m!)
-    log_coeff = math.lgamma(2 * m + 1) - (m * math.log(2.0)) - math.lgamma(m + 1)
-
-    # base = (1-x^2)^(m/2)
-    # log_base = (m/2) * log(1-x^2)
-    sin2theta = torch.clamp(1.0 - x * x, min=1e-30)
-    log_base = 0.5 * m * torch.log(sin2theta)
-
-    val = torch.exp(log_coeff + log_base)
-    sign = -1.0 if (m % 2) else 1.0
-    return sign * val
-
 
 def _legendre_rec_coeffs(m: int, lmax: int) -> tuple[list[float], list[float]]:
     """Return recurrence coefficients a_lm, b_lm for l=m+2..lmax."""
@@ -710,12 +695,6 @@ def _legendre_l_sequence(m: int, x: Tensor, lmax: int) -> Tensor:
 
     return torch.stack(seq, dim=0)
 
-
-def _ylm_norm(ell: int, m: int) -> float:
-    return math.sqrt(
-        ((2 * ell + 1) / (4.0 * math.pi))
-        * math.exp(math.lgamma(ell - m + 1) - math.lgamma(ell + m + 1))
-    )
 
 
 def _ylm_basis(
@@ -870,9 +849,6 @@ def _wigner_d_l_sequence(
 
     return torch.stack(seq, dim=0)
 
-
-def _spin_ylm_norm(ell: int) -> float:
-    return math.sqrt((2 * ell + 1) / (4.0 * math.pi))
 
 
 def _spin_ylm_basis(
