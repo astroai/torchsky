@@ -3078,10 +3078,6 @@ def _segment_circle_area_moment(
     return area, moment
 
 
-def _segment_circle_area(start: Tensor, stop: Tensor, radius: Tensor) -> Tensor:
-    """Return the signed disk intersection area swept by one polygon edge."""
-    return _segment_circle_area_moment(start, stop, radius)[0]
-
 
 def _polygon_disk_intersection_area_moment(
     vertices: Tensor,
@@ -3123,14 +3119,6 @@ def _polygon_disk_intersection_area_moment(
     positive_area = torch.abs(area)
     return positive_area, orientation * local_moment + center * positive_area
 
-
-def _polygon_disk_intersection_area(
-    vertices: Tensor,
-    center: Tensor,
-    radius: Tensor,
-) -> Tensor:
-    """Analytic area of a polygon intersected with a closed disk."""
-    return _polygon_disk_intersection_area_moment(vertices, center, radius)[0]
 
 
 def _cell_clip_polygon(

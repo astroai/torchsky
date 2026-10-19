@@ -162,9 +162,6 @@ def _point_bandpass_features(lam: Tensor, num_frequencies: int) -> Tensor:
     return torch.stack(feats, dim=-1)
 
 
-def _gaussian_blur(image: Tensor, sigma_pix: float) -> Tensor:
-    return _shared_gaussian_blur(image, sigma_pix)
-
 
 def _smoothness_probe_grid(
     domain: FieldDomain,
@@ -1235,9 +1232,6 @@ class FieldComponentDecomposition(_BaseFieldModel):
         if forward_context is None:
             return None, None
         return forward_context.survey, forward_context.instrument
-
-    def component_gain_magnitudes(self) -> Tensor:
-        return torch.abs(self.component_gains.detach())
 
     def fix_component_scale_gauge_(
         self,
@@ -4133,30 +4127,6 @@ class SkyLambdaFeatureField(_BaseFieldModel):
             lam,
         )
         return self._aggregate_scale_stack(scale_hidden, context)
-
-    def _scale_hidden(
-        self,
-        ra_deg: Tensor,
-        dec_deg: Tensor,
-        wavelength_angstrom: Tensor | float,
-    ) -> Tensor:
-        spatial_raw = self._spatial_coords(
-            ra_deg,
-            dec_deg,
-            wavelength_angstrom,
-        ).to(dtype=self.base_output.weight.dtype)
-        spatial_unit = self._spatial_unit_box_coords(
-            ra_deg,
-            dec_deg,
-            wavelength_angstrom,
-        ).to(dtype=self.base_output.weight.dtype)
-        lam = self._normalized_wavelength(
-            wavelength_angstrom,
-            device=ra_deg.device,
-            dtype=self.base_output.weight.dtype,
-            shape=ra_deg.shape,
-        )
-        return self._scale_hidden_from_components(spatial_raw, spatial_unit, lam)
 
     def _global_hidden_from_components(
         self,

@@ -30,9 +30,6 @@ from .io_utils import (
 from .io_utils import (
     load_observation_image_and_header as _io_load_observation_image_and_header,
 )
-from .io_utils import (
-    read_image_plane_observation as _io_read_image_plane_observation,
-)
 
 # Header probe for area scaling: recoverable failures when reading metadata only.
 from .observation import (
@@ -127,13 +124,6 @@ from .windowing import (
     _window_large_tan_target,
 )
 
-
-def read_image_plane_observation(
-    path: str,
-    hdu: int | str | None,
-    device: str,
-) -> tuple[Tensor, dict]:
-    return _io_read_image_plane_observation(path, hdu, device, read_fn=read)
 
 
 def load_observation_image_and_header(
@@ -357,12 +347,6 @@ def _should_apply_surface_brightness_area_scaling(
     return float(target_area_sr) >= harmonic_mean_source_area_sr
 
 
-def _is_drizzle_kernel(kernel: MapResamplingKernel) -> bool:
-    return kernel in {"drizzle_point", "drizzle_square"}
-
-
-def _is_conservative_kernel(kernel: MapResamplingKernel) -> bool:
-    return kernel == "conservative_polygon"
 
 
 def _is_splat_kernel(kernel: MapResamplingKernel) -> bool:
@@ -5335,11 +5319,5 @@ def aperture_uncertainty(
         ),
         device=device,
     )
-
-
-CubeResult = CubeResult
-MultibandResult = MultibandResult
-ApertureUncertainty = ApertureUncertainty
-
 
 

@@ -10,6 +10,7 @@ from torch import Tensor
 
 from ...wcs import WCS
 from .config import MapResamplingKernel, MapValueSemantics
+from .execution import wcs_has_distortion
 
 
 def sinc(x: Tensor) -> Tensor:
@@ -515,21 +516,8 @@ def sample_image_plane_diagonal_variance(
     return torch.sum(sampled_variance * torch.square(coefficients), dim=(-1, -2))
 
 
-def _wcs_has_any_distortion(wcs: WCS) -> bool:
-    return (
-        getattr(wcs, "sip", None) is not None
-        or getattr(wcs, "cpdis1", None) is not None
-        or getattr(wcs, "cpdis2", None) is not None
-        or getattr(wcs, "det2im1", None) is not None
-        or getattr(wcs, "det2im2", None) is not None
-        or bool(getattr(wcs, "_is_tpv", False))
-        or bool(getattr(wcs, "_is_tnx", False))
-        or bool(getattr(wcs, "_is_zpx", False))
-    )
-
-
 def _tan_homography_factors(wcs: WCS) -> tuple[Tensor, Tensor] | None:
-    if not bool(getattr(wcs, "_is_tan", False)) or _wcs_has_any_distortion(wcs):
+    if not bool(getattr(wcs, "_is_tan", False)) or wcs_has_distortion(wcs):
         return None
     cd = wcs.cd.detach().to(device="cpu", dtype=torch.float64)
     det_cd = float(torch.linalg.det(cd).item())
@@ -682,7 +670,7 @@ def infer_fft_translation_shift_yx(
     shape_hw: tuple[int, int],
 ) -> tuple[float, float]:
     """Infer ``(shift_y, shift_x)`` for translation FFT resampling."""
-    if _wcs_has_any_distortion(source_wcs):
+    if wcs_has_distortion(source_wcs):
         raise ValueError(
             "fft_shift requires a linear astrometric frame (no SIP or TPV on the source WCS)"
         )
@@ -723,7 +711,7 @@ def infer_diagonal_scale_shift_pixel_map(
     shape_hw: tuple[int, int],
 ) -> tuple[float, float, float, float]:
     """Infer ``(scale_x, shift_x, scale_y, shift_y)`` for a diagonal affine map."""
-    if _wcs_has_any_distortion(source_wcs):
+    if wcs_has_distortion(source_wcs):
         raise ValueError(
             "fft_diagonal_affine requires a linear astrometric frame (no SIP or TPV on source)"
         )
@@ -774,7 +762,7 @@ def infer_linear_affine_pixel_map(
     shape_hw: tuple[int, int],
 ) -> tuple[float, float, float, float, float, float]:
     """Infer a full 2x2 affine source-pixel map from target pixel coordinates."""
-    if _wcs_has_any_distortion(source_wcs):
+    if wcs_has_distortion(source_wcs):
         raise ValueError(
             "periodic_linear_affine requires a linear astrometric frame (no SIP or TPV on source)"
         )

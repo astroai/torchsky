@@ -471,15 +471,6 @@ def _source_row_vertical_bounds(
     return lower, upper
 
 
-def _polygon_area(points: list[tuple[float, float]]) -> float:
-    if len(points) < 3:
-        return 0.0
-    area = 0.0
-    for idx, (x0, y0) in enumerate(points):
-        x1, y1 = points[(idx + 1) % len(points)]
-        area += x0 * y1 - x1 * y0
-    return 0.5 * abs(area)
-
 
 def _clip_polygon_half_plane(
     points: list[tuple[float, float]],
@@ -523,38 +514,6 @@ def _clip_polygon_half_plane(
         prev_inside = curr_inside
     return output
 
-
-def _clip_polygon_to_pixel(
-    quad: list[tuple[float, float]],
-    *,
-    x_center: int,
-    y_center: int,
-) -> list[tuple[float, float]]:
-    poly = _clip_polygon_half_plane(
-        quad,
-        axis=0,
-        boundary=float(x_center) - 0.5,
-        keep_greater=True,
-    )
-    poly = _clip_polygon_half_plane(
-        poly,
-        axis=0,
-        boundary=float(x_center) + 0.5,
-        keep_greater=False,
-    )
-    poly = _clip_polygon_half_plane(
-        poly,
-        axis=1,
-        boundary=float(y_center) - 0.5,
-        keep_greater=True,
-    )
-    poly = _clip_polygon_half_plane(
-        poly,
-        axis=1,
-        boundary=float(y_center) + 0.5,
-        keep_greater=False,
-    )
-    return poly
 
 
 def _half_plane_clip_batch(
