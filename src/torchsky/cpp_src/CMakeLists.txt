@@ -197,7 +197,7 @@ set(SOURCES
 )
 
 # Create python binding module
-nanobind_add_module(_cpp ${SOURCES})
+nanobind_add_module(_cpp_ext ${SOURCES})
 
 # conda may install a copied header tree under site-packages/torch that is older
 # than the matching libtorch package in the same solved environment.  Prefer the
@@ -210,7 +210,7 @@ execute_process(
 )
 if(EXISTS "${TORCHSKY_RUNTIME_PREFIX}/include/ATen/core/TensorBody.h")
     target_include_directories(
-        _cpp SYSTEM BEFORE PRIVATE
+        _cpp_ext SYSTEM BEFORE PRIVATE
         "${TORCHSKY_RUNTIME_PREFIX}/include/torch/csrc/api/include"
         "${TORCHSKY_RUNTIME_PREFIX}/include"
     )
@@ -224,7 +224,7 @@ set_source_files_properties(
 )
 
 # Link libraries
-target_link_libraries(_cpp PRIVATE ${TORCH_LIBRARIES})
+target_link_libraries(_cpp_ext PRIVATE ${TORCH_LIBRARIES})
 
 # Link torch_python for THPVariable_Wrap (bypasses DLPack overhead)
 execute_process(
@@ -240,21 +240,21 @@ unset(TORCH_PYTHON_LIBRARY_FALLBACK CACHE)
 
 find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_ROOT}/lib" NO_DEFAULT_PATH)
 if(TORCH_PYTHON_LIBRARY)
-    target_link_libraries(_cpp PRIVATE ${TORCH_PYTHON_LIBRARY})
+    target_link_libraries(_cpp_ext PRIVATE ${TORCH_PYTHON_LIBRARY})
     message(STATUS "Found libtorch_python: ${TORCH_PYTHON_LIBRARY}")
 else()
     message(WARNING "libtorch_python not found in ${TORCH_ROOT}/lib - tensor returns will use slower DLPack path")
 endif()
 
 # Compiler flags
-target_compile_definitions(_cpp PRIVATE VERSION_INFO="")
-target_compile_definitions(_cpp PRIVATE TORCHSKY_TORCH_ABI="${TORCHSKY_BUILD_TORCH_ABI}")
-target_compile_features(_cpp PRIVATE cxx_std_20)
+target_compile_definitions(_cpp_ext PRIVATE VERSION_INFO="")
+target_compile_definitions(_cpp_ext PRIVATE TORCHSKY_TORCH_ABI="${TORCHSKY_BUILD_TORCH_ABI}")
+target_compile_features(_cpp_ext PRIVATE cxx_std_20)
 
 if(APPLE)
-    target_link_libraries(_cpp PRIVATE "-framework Accelerate")
+    target_link_libraries(_cpp_ext PRIVATE "-framework Accelerate")
 endif()
 
 # Install the compiled module
 # For scikit-build-core, install to the package directory
-install(TARGETS _cpp DESTINATION torchsky)
+install(TARGETS _cpp_ext DESTINATION torchsky)

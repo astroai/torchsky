@@ -1342,7 +1342,7 @@ void bind_wcs(nb::module_& m) {
 
 }
 
-NB_MODULE(_cpp, m) {
+NB_MODULE(_cpp_ext, m) {
     const nb::str runtime_version_object(
         nb::module_::import_("torch").attr("__version__")
     );
