@@ -453,6 +453,10 @@ def make_field_model(
         from .frequency_adaptive import SASNetField
 
         return SASNetField(domain, **kwargs)
+    if kind == "bacon":
+        from .frequency_adaptive import BaconField
+
+        return BaconField(domain, **kwargs)
     if kind == "flair_bla":
         from .frequency_adaptive import FlairField
 

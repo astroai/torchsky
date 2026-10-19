@@ -1,4 +1,4 @@
-"""Internal solver hooks for future discrete inverse mapmaking."""
+"""Internal solver hooks for field fitting and discrete inverse mapmaking."""
 
 from __future__ import annotations
 
@@ -2459,7 +2459,7 @@ def build_teb_cls_prior_operator(
 
 @dataclass
 class SolverHooks:
-    """Internal assembly surface for future GLS / MAP solvers."""
+    """Internal assembly surface shared by GLS and MAP solver experiments."""
 
     operators: ObservationOperatorBundle
     apply_operator: ApplyOperatorFn | None = None

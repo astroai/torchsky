@@ -369,3 +369,13 @@ def test_frequency_adaptive_models_accelerator_contract(
         for parameter in model.parameters()
         if parameter.requires_grad
     )
+
+
+def test_bacon_kind_is_reachable_from_the_factory() -> None:
+    from torchsky.map.field.registry import FIELD_MODEL_KINDS
+
+    assert "bacon" in FIELD_MODEL_KINDS
+    model = make_field_model(
+        "bacon", _domain(), hidden_dim=8, bandwidths=(1.0, 2.0)
+    )
+    assert isinstance(model, BaconField)

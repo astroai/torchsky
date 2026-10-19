@@ -35,6 +35,7 @@ FieldModelKind = Literal[
     "sine_implicit",
     "wire_implicit",
     "sasnet",
+    "bacon",
     "flair_bla",
     "explicit_spectral_grid_field",
     "gaussian_basis",
