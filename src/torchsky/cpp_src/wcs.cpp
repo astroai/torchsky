@@ -305,24 +305,6 @@ inline std::pair<double, double> invert_tpv_scalar_with_seed(
     return {u, v};
 }
 
-inline std::pair<double, double> invert_tpv_scalar(
-    double xi_target, double eta_target,
-    const torch::Tensor& idx1, const torch::Tensor& c1,
-    const torch::Tensor& idx2, const torch::Tensor& c2)
-{
-    return invert_tpv_scalar_with_seed(
-        xi_target,
-        eta_target,
-        tpv_extract_affine_seed_params(idx1, c1, idx2, c2),
-        idx1.data_ptr<int64_t>(),
-        c1.data_ptr<double>(),
-        c1.size(0),
-        idx2.data_ptr<int64_t>(),
-        c2.data_ptr<double>(),
-        c2.size(0)
-    );
-}
-
 std::pair<torch::Tensor, torch::Tensor> wcs_inverse_spherical_rotation_pole(
     const torch::Tensor& ra_deg,
     const torch::Tensor& dec_deg,

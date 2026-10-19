@@ -158,17 +158,6 @@ inline double wrap_rad_2pi(double v) {
     return r;
 }
 
-inline double wrap_deg_360(double v) {
-    double r = std::fmod(v, 360.0);
-    if (r < 0.0) {
-        r += 360.0;
-    }
-    if (r >= 360.0) {
-        r = 0.0;
-    }
-    return r;
-}
-
 inline int64_t xyf_to_nest(int64_t npface, int64_t ix, int64_t iy, int64_t face_num) {
     return face_num * npface
            + static_cast<int64_t>(spread_bits_u64(static_cast<uint64_t>(ix)))
@@ -3401,93 +3390,6 @@ static inline void spin_interpolate_dot_rings(
         iSp[i] += i0 * d_m[i] * parity;
         rSm[i] += r1 * d_p[i] * parity;
         iSm[i] += i1 * d_p[i] * parity;
-    }
-}
-
-static inline void spin_interpolate_recurrence_l_rings(
-    int n_pairs,
-    double c1,
-    double c2,
-    double c3,
-    double r0,
-    double i0,
-    double r1,
-    double i1,
-    double parity,
-    const double* __restrict__ ct,
-    const double* __restrict__ dp1,
-    const double* __restrict__ dp2,
-    const double* __restrict__ dm1,
-    const double* __restrict__ dm2,
-    double* __restrict__ dpc,
-    double* __restrict__ dmc,
-    double* __restrict__ rNp,
-    double* __restrict__ iNp,
-    double* __restrict__ rNm,
-    double* __restrict__ iNm,
-    double* __restrict__ rSp,
-    double* __restrict__ iSp,
-    double* __restrict__ rSm,
-    double* __restrict__ iSm
-) {
-    int i = 0;
-#if defined(__aarch64__)
-    const float64x2_t vc1 = vdupq_n_f64(c1);
-    const float64x2_t vc2 = vdupq_n_f64(c2);
-    const float64x2_t vc3 = vdupq_n_f64(c3);
-    const float64x2_t vr0 = vdupq_n_f64(r0);
-    const float64x2_t vi0 = vdupq_n_f64(i0);
-    const float64x2_t vr1 = vdupq_n_f64(r1);
-    const float64x2_t vi1 = vdupq_n_f64(i1);
-    const float64x2_t vpar = vdupq_n_f64(parity);
-    auto acc_pair = [&](int off) {
-        const float64x2_t vct = vld1q_f64(ct + off);
-        const float64x2_t vcterm = vmulq_f64(vc1, vct);
-        const float64x2_t vp = vfmaq_f64(
-            vmulq_f64(vaddq_f64(vcterm, vc2), vld1q_f64(dp1 + off)),
-            vc3,
-            vld1q_f64(dp2 + off)
-        );
-        const float64x2_t vm = vfmaq_f64(
-            vmulq_f64(vsubq_f64(vcterm, vc2), vld1q_f64(dm1 + off)),
-            vc3,
-            vld1q_f64(dm2 + off)
-        );
-        vst1q_f64(dpc + off, vp);
-        vst1q_f64(dmc + off, vm);
-        const float64x2_t vms = vmulq_f64(vm, vpar);
-        const float64x2_t vps = vmulq_f64(vp, vpar);
-        vst1q_f64(rNp + off, vfmaq_f64(vld1q_f64(rNp + off), vr0, vp));
-        vst1q_f64(iNp + off, vfmaq_f64(vld1q_f64(iNp + off), vi0, vp));
-        vst1q_f64(rNm + off, vfmaq_f64(vld1q_f64(rNm + off), vr1, vm));
-        vst1q_f64(iNm + off, vfmaq_f64(vld1q_f64(iNm + off), vi1, vm));
-        vst1q_f64(rSp + off, vfmaq_f64(vld1q_f64(rSp + off), vr0, vms));
-        vst1q_f64(iSp + off, vfmaq_f64(vld1q_f64(iSp + off), vi0, vms));
-        vst1q_f64(rSm + off, vfmaq_f64(vld1q_f64(rSm + off), vr1, vps));
-        vst1q_f64(iSm + off, vfmaq_f64(vld1q_f64(iSm + off), vi1, vps));
-    };
-    for (; i + 4 <= n_pairs; i += 4) {
-        acc_pair(i);
-        acc_pair(i + 2);
-    }
-    if (i + 2 <= n_pairs) {
-        acc_pair(i);
-        i += 2;
-    }
-#endif
-    for (; i < n_pairs; ++i) {
-        const double vpN = (c1 * ct[i] + c2) * dp1[i] + c3 * dp2[i];
-        const double vmN = (c1 * ct[i] - c2) * dm1[i] + c3 * dm2[i];
-        dpc[i] = vpN;
-        dmc[i] = vmN;
-        rNp[i] += r0 * vpN;
-        iNp[i] += i0 * vpN;
-        rNm[i] += r1 * vmN;
-        iNm[i] += i1 * vmN;
-        rSp[i] += r0 * vmN * parity;
-        iSp[i] += i0 * vmN * parity;
-        rSm[i] += r1 * vpN * parity;
-        iSm[i] += i1 * vpN * parity;
     }
 }
 
