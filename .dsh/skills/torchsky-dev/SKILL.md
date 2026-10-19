@@ -17,9 +17,9 @@ Never guess `python3` or bare `python` on PATH. Use pixi tasks; the repo's
 Python and dependencies come from the pixi environment.
 
 - The default (`default`) dev env is lean: build tools + pytest driver only.
-  Ecosystem astronomy packages live in feature envs (`test`, `bench`,
-  `sphere-bench`, `sht-bench`, `map-compat`, `bench-legacy`) — never required
-  imports of `import torchsky`.
+  Ecosystem astronomy packages live in the relevant feature-gated environments
+  such as `test`; scientific comparator environments live in
+  `torchsky-harness`. None are required imports of `import torchsky`.
 
 ## Workflow
 
@@ -45,8 +45,9 @@ Python and dependencies come from the pixi environment.
 - Algorithmic scalability (indexing, chunking, streaming, sparsity) before
   native kernels; add C++ only for proven hotspots, with parity tests against
   the non-native path.
-- Compare against astropy/healpy/etc. in `tests/`, `benchmarks/`, `scripts/`,
-  and CI extras — never as required imports of the core package.
+- Compare against astropy/healpy/etc. in `tests/`, `scripts/`, and CI extras —
+  never as required imports of the core package. Scientific benchmarks and
+  exhaustive parity live in `torchsky-harness`.
 - Keep comments sparse and high-signal; `ponytail:` prefix for deliberate
   shortcuts.
 
@@ -56,5 +57,9 @@ Python and dependencies come from the pixi environment.
 - `pixi run typecheck` — pyright (test env)
 - `pixi run verify` — torchsky + `torchsky.cpp` import smoke
 - `pixi run dev` — rebuild native extensions after C++ changes
-- `pixi run -e test -- python -m pytest tests/ -q --no-header -x`
-- `pixi run -e bench -- python benchmarks/bench_*.py` — see `benchmark-gates`
+- `pixi run test` — package test task; the GitHub map matrix covers excluded map tests
+
+For scientific evaluation, install the intended torchsky subject and run the
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness) CLI from its
+own checkout. Record the harness and subject revisions separately; see the
+harness's `AGENTS.md` and benchmark methodology.

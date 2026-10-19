@@ -33,7 +33,7 @@ Headless one-shot (CANFAR-friendly, no web server):
 ```bash
 export DEEPSEEK_API_KEY=sk-...
 dsh --profile headless --patch "$PWD/.dsh/cordis.patch.yml" \
-  "Run wcs-sphere-acceptance and summarize regressions vs the committed baselines"
+  "Review the changed WCS implementation, run pixi run preflight-push and targeted package tests, then summarize any failures"
 ```
 
 Sanity check before booting the app (prints the composed plugin tree):
@@ -69,7 +69,7 @@ with DeepSeekHarness(
     session_root="/tmp/dsh-sessions",
     cordis="path/to/minimal.cordis.yml",  # full composition, e.g. the SDK's jsonrpc-agent example
 ) as h:
-    r = h.run("Compare the map-ground-truth run against benchmarks/baselines/map_ground_truth_rep.json")
+    r = h.run("Inspect the current torchsky API guidance and identify the targeted package checks for a map change")
     print(r.final_response)
 ```
 
@@ -81,13 +81,15 @@ your own.
 
 - `torchsky-dev` — pixi workflow, AGENTS.md design rules, common commands
 - `science-analysis` — torch / torchfits / pyarrow analysis patterns
-- `benchmark-gates` — running benches, baseline gates, scorecards
-- `map-suite` — map pytest exclusion, map acceptance gates, SMACS0723 repro
-- `canfar` — CANFAR job suite launch/fetch
+- `map-suite` — bounded core map-contract tests; scientific comparisons are in
+  the sibling torchsky-harness repository
+
+Scientific `benchmark-gates` and `canfar` skills are maintained in the
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness) checkout.
 
 ## Notes
 
 - Sessions are append-only logs (provenance for science runs); reuse a session
   id to continue a durable conversation with persistent bash state.
-- `cordis.patch.yml` overrides: 10-minute bash timeout (pixi/bench headroom)
+- `cordis.patch.yml` overrides: 10-minute bash timeout (Pixi headroom)
   and durable full-text session search.
