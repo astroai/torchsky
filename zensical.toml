@@ -38,6 +38,10 @@ nav = [
   ]},
   {"API Reference" = [
     "api.md",
+    "api-wcs.md",
+    "api-sphere.md",
+    "api-map.md",
+    "api-field.md",
     "architecture.md",
   ]},
   {"Evaluation" = [

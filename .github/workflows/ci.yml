@@ -75,7 +75,7 @@ jobs:
     - name: Install test environment
       run: pixi install --frozen -e test
     - name: Docs contract tests
-      run: pixi run -e test -- pytest tests/test_docs_integrity.py -q
+      run: pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py -q
     - uses: actions/upload-artifact@v4
       with:
         name: torchsky-docs-site

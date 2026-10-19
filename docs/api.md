@@ -59,6 +59,18 @@ enumerated by the namespaces below and checked by the package API tests.
 | `scene` | Observations, operators, instruments, latent scenes, products, coadds, objectives, renderers, and fits. |
 | `viz` | Browser and notebook-facing visualization. |
 
+## Reference Pages
+
+- [WCS reference](api-wcs.md): `torchsky.wcs` classes, frames, tabular axes,
+  motion/time helpers, spectral axes.
+- [Sphere and HEALPix reference](api-sphere.md): indexing, queries, regions,
+  coverage maps, harmonic transforms.
+- [Map reference](api-map.md): the 31-name facade, planning and coadd entry
+  points, configs and results, submodule ownership.
+- [Field reference](api-field.md): build/fit/render/sample workflow, kinds and
+  presets, observations, artifacts, spectral capacity.
+- [Architecture](architecture.md): design target and pillar rules.
+
 ## Public Namespaces
 
 - [`torchsky.wcs`](wcs.md)
