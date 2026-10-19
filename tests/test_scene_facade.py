@@ -4,7 +4,7 @@ import torch
 
 import torchsky
 from torchsky import scene
-from torchsky.map import ImageObservation, MapBandpassSpec, MapProductSpec
+from torchsky.map import ImageObservation, BandpassSpec, ProductSpec
 from torchsky.map.field import FieldObservation, PSFSpec
 from torchsky.map.operators.bundle import (
     field_observation_operator_bundle,
@@ -52,8 +52,8 @@ def test_scene_facade_promotes_existing_concepts() -> None:
     assert torchsky.scene is scene
     assert scene.ImageObservation is ImageObservation
     assert scene.FieldObservation is FieldObservation
-    assert scene.ProductSpec is MapProductSpec
-    assert scene.BandpassSpec is MapBandpassSpec
+    assert scene.ProductSpec is ProductSpec
+    assert scene.BandpassSpec is BandpassSpec
     assert scene.TargetRenderSpec is TargetRenderSpec
     assert (
         scene.sample_image_plane_batched_channels is sample_image_plane_batched_channels
@@ -67,10 +67,10 @@ def test_scene_facade_promotes_existing_concepts() -> None:
 
     product = scene.product_spec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="r", transmission_center=6500.0),),
+        bands=(BandpassSpec(label="r", transmission_center=6500.0),),
     )
     product_target = scene.target_from_product(product)
-    assert isinstance(product, MapProductSpec)
+    assert isinstance(product, ProductSpec)
     assert product_target.band_label == "r"
     assert product_target.transmission_center == 6500.0
 

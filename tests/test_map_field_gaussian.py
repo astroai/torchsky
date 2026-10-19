@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 
 from torchsky.map.field.core import FieldDomain, GaussianBasisField
-from torchsky.map.product import MapBandpassSpec, MapProductResult, MapProductSpec
+from torchsky.map.product import BandpassSpec, ProductResult, ProductSpec
 
 
 def domain():
@@ -126,8 +126,8 @@ def test_splat_product_seed_and_checkpoint():
               "CRVAL1": 10.0, "CRVAL2": 0.0, "CRPIX1": 8.5, "CRPIX2": 8.5,
               "CDELT1": -0.001, "CDELT2": 0.001}
     plane = 1 + torch.arange(16).float()[None, :].expand(16, 16) / 16
-    product = MapProductResult(product=MapProductSpec(header, (
-        MapBandpassSpec(transmission_center=6000), MapBandpassSpec(transmission_center=4000))),
+    product = ProductResult(product=ProductSpec(header, (
+        BandpassSpec(transmission_center=6000), BandpassSpec(transmission_center=4000))),
         data=torch.stack((3 * plane, plane)), weight=None, header=header)
     model = GaussianBasisField(domain(), splat=True, num_basis=16, spectral_resolution=3)
     model.initialize_from_product(product)

@@ -20,7 +20,7 @@ from ..map.field import (
 )
 from ..map.image_plane import ImageObservation
 from ..map.operators.resampling import sample_image_plane_batched_channels
-from ..map.product import MapBandpassSpec, MapProductSpec
+from ..map.product import BandpassSpec, ProductSpec
 from ..map.scenes import (
     ContinuousFieldModel,
     DiscreteTargetImage,
@@ -43,8 +43,6 @@ from .operators import (
     operator_bundles_for_observations,
 )
 
-BandpassSpec: TypeAlias = MapBandpassSpec
-ProductSpec: TypeAlias = MapProductSpec
 Scene: TypeAlias = SceneRepresentation
 
 
@@ -94,7 +92,7 @@ def product_spec(
     footprint_order: int | None = None,
 ) -> ProductSpec:
     """Construct a map product specification using scene vocabulary."""
-    return MapProductSpec(
+    return ProductSpec(
         target_header=target_header,
         bands=bands,
         value_semantics=value_semantics,

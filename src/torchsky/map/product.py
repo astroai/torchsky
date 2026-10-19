@@ -24,7 +24,7 @@ from .image_plane import (
     MapValueSemantics,
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
-    SpectralCubeMapResult,
+    CubeResult,
     coadd_image_plane,
     coadd_image_plane_cube,
     plan_image_plane_cube_target,
@@ -43,7 +43,7 @@ from .target import TargetRenderSpec
 
 
 @dataclass(frozen=True)
-class MapBandpassSpec:
+class BandpassSpec:
     label: str | None = None
     spectral_min: float | None = None
     spectral_max: float | None = None
@@ -57,17 +57,17 @@ class MapBandpassSpec:
 
 
 @dataclass(frozen=True)
-class MapProductSpec:
+class ProductSpec:
     target_header: dict[str, Any]
-    bands: tuple[MapBandpassSpec, ...]
+    bands: tuple[BandpassSpec, ...]
     value_semantics: MapValueSemantics = "surface_brightness"
     footprint_order: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.target_header, dict):
-            raise TypeError("MapProductSpec target_header must be a dict")
+            raise TypeError("ProductSpec target_header must be a dict")
         if not self.bands:
-            raise ValueError("MapProductSpec requires at least one band")
+            raise ValueError("ProductSpec requires at least one band")
         for band in self.bands:
             _coerce_band(band)
 
@@ -101,7 +101,7 @@ class MapProductSpec:
         else:
             per_band_psf = tuple(psf_specs)
             if len(per_band_psf) != len(self.bands):
-                raise ValueError("psf_specs must match MapProductSpec bands")
+                raise ValueError("psf_specs must match ProductSpec bands")
         return tuple(
             self.target_render_spec(
                 band_index=band_index, psf_spec=per_band_psf[band_index]
@@ -119,7 +119,7 @@ MapUncertaintyKind = Literal[
 
 
 @dataclass(frozen=True)
-class MapUncertaintyProduct:
+class UncertaintyProduct:
     """Labeled diagonal uncertainty without pretending it is full covariance."""
 
     variance: Tensor
@@ -181,14 +181,14 @@ class MapUncertaintyProduct:
 
 
 @dataclass
-class MapProductResult:
-    product: MapProductSpec
+class ProductResult:
+    product: ProductSpec
     data: Tensor
     weight: Tensor | None
     header: dict[str, Any]
     overlap_count: Tensor | None = None
     coverage_mocs: tuple[MOC | None, ...] | None = None
-    uncertainty: MapUncertaintyProduct | None = None
+    uncertainty: UncertaintyProduct | None = None
     mask: Tensor | None = None
     context: Tensor | None = None
     provenance: Mapping[str, Any] | None = None
@@ -219,50 +219,50 @@ class MapProductResult:
 MapUncertaintyMode = Literal["native_inverse_variance", "support_density_proxy"]
 
 
-def _coerce_band(value: MapBandpassSpec) -> MapBandpassSpec:
+def _coerce_band(value: BandpassSpec) -> BandpassSpec:
     if not isinstance(value.spectral_unit, str) or not value.spectral_unit.strip():
-        raise ValueError("MapBandpassSpec spectral_unit must be explicit")
+        raise ValueError("BandpassSpec spectral_unit must be explicit")
     if value.passband is not None:
         if value.spectral_unit.strip().lower() not in {"angstrom", "angstroms", "aa"}:
             raise ValueError(
-                "Passband-backed MapBandpassSpec uses Angstrom coordinates"
+                "Passband-backed BandpassSpec uses Angstrom coordinates"
             )
         if (
             value.transmission_center is not None
             or value.transmission_sigma is not None
         ):
             raise ValueError(
-                "MapBandpassSpec passband and Gaussian transmission are mutually exclusive"
+                "BandpassSpec passband and Gaussian transmission are mutually exclusive"
             )
     if value.spectral_min is not None and value.spectral_max is None:
         raise ValueError(
-            "MapBandpassSpec requires spectral_max when spectral_min is set"
+            "BandpassSpec requires spectral_max when spectral_min is set"
         )
     if value.spectral_max is not None and value.spectral_min is None:
         raise ValueError(
-            "MapBandpassSpec requires spectral_min when spectral_max is set"
+            "BandpassSpec requires spectral_min when spectral_max is set"
         )
     if value.spectral_min is not None and value.spectral_max is not None:
         lower = float(value.spectral_min)
         upper = float(value.spectral_max)
         if not math.isfinite(lower) or not math.isfinite(upper) or upper < lower:
             raise ValueError(
-                "MapBandpassSpec spectral bounds must be finite and ordered"
+                "BandpassSpec spectral bounds must be finite and ordered"
             )
     if value.transmission_center is not None and not math.isfinite(
         float(value.transmission_center)
     ):
-        raise ValueError("MapBandpassSpec transmission_center must be finite")
+        raise ValueError("BandpassSpec transmission_center must be finite")
     if value.transmission_sigma is not None:
         sigma = float(value.transmission_sigma)
         if not math.isfinite(sigma) or sigma <= 0.0:
             raise ValueError(
-                "MapBandpassSpec transmission_sigma must be finite and positive"
+                "BandpassSpec transmission_sigma must be finite and positive"
             )
     return value
 
 
-def _band_center(band: MapBandpassSpec) -> float:
+def _band_center(band: BandpassSpec) -> float:
     if band.passband is not None:
         return float(band.passband.effective_wavelength.item())
     if band.transmission_center is not None:
@@ -270,14 +270,14 @@ def _band_center(band: MapBandpassSpec) -> float:
     if band.spectral_min is not None and band.spectral_max is not None:
         return 0.5 * (float(band.spectral_min) + float(band.spectral_max))
     raise ValueError(
-        "MapBandpassSpec requires transmission_center or spectral bounds for product rendering"
+        "BandpassSpec requires transmission_center or spectral bounds for product rendering"
     )
 
 
 def _bands_from_cube_target(
     target: PlannedImagePlaneCubeTarget,
-) -> tuple[MapBandpassSpec, ...]:
-    bands: list[MapBandpassSpec] = []
+) -> tuple[BandpassSpec, ...]:
+    bands: list[BandpassSpec] = []
     metadata = target.band_metadata
     for idx in range(int(metadata.center.numel())):
         lower = float(metadata.lower[idx].item())
@@ -285,7 +285,7 @@ def _bands_from_cube_target(
         center = float(metadata.center[idx].item())
         is_interval = not math.isclose(lower, upper, rel_tol=0.0, abs_tol=1.0e-12)
         bands.append(
-            MapBandpassSpec(
+            BandpassSpec(
                 label=metadata.band_names[idx],
                 spectral_min=lower if is_interval else None,
                 spectral_max=upper if is_interval else None,
@@ -316,7 +316,7 @@ def plan_map_product(
     *,
     reference_index: int = 0,
     header_overrides: dict[str, Any] | None = None,
-    bands: Sequence[MapBandpassSpec] | None = None,
+    bands: Sequence[BandpassSpec] | None = None,
     spectral_axis: SpectralAxis | None = None,
     spectral_bin_edges: Tensor | None = None,
     spectral_unit: str = "Angstrom",
@@ -329,7 +329,7 @@ def plan_map_product(
     footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,
     device: torch.device | str | None = None,
-) -> MapProductSpec:
+) -> ProductSpec:
     """Plan a map product from a sequence of image-plane observations.
 
     When ``union_footprint=True``, the target WCS is computed automatically from
@@ -360,8 +360,8 @@ def plan_map_product(
         )
         validated_bands = tuple(_coerce_band(band) for band in bands)
         if not validated_bands:
-            raise ValueError("MapProductSpec requires at least one band")
-        return MapProductSpec(
+            raise ValueError("ProductSpec requires at least one band")
+        return ProductSpec(
             target_header=spatial.header,
             bands=validated_bands,
             value_semantics=value_semantics,
@@ -387,7 +387,7 @@ def plan_map_product(
             footprint_max_depth=footprint_max_depth,
             max_footprint_pixels=max_footprint_pixels,
         )
-        return MapProductSpec(
+        return ProductSpec(
             target_header=target.header,
             bands=_bands_from_cube_target(target),
             value_semantics=value_semantics,
@@ -405,10 +405,10 @@ def plan_map_product(
         max_footprint_pixels=max_footprint_pixels,
     )
     reference = observations[reference_index]
-    return MapProductSpec(
+    return ProductSpec(
         target_header=spatial.header,
         bands=(
-            MapBandpassSpec(
+            BandpassSpec(
                 label=reference.band_name,
                 spectral_min=reference.spectral_min,
                 spectral_max=reference.spectral_max,
@@ -424,7 +424,7 @@ def plan_map_product(
 
 
 def _band_metadata_from_product(
-    product: MapProductSpec,
+    product: ProductSpec,
     spectral_axis: SpectralAxis,
     spectral_bin_edges: Tensor | None,
 ) -> BandMetadataTable:
@@ -447,14 +447,14 @@ def _band_metadata_from_product(
     )
 
 
-def _product_to_cube_target(product: MapProductSpec) -> PlannedImagePlaneCubeTarget:
+def _product_to_cube_target(product: ProductSpec) -> PlannedImagePlaneCubeTarget:
     centers = torch.tensor(
         [_band_center(band) for band in product.bands],
         dtype=torch.float64,
     )
     if centers.numel() > 1 and not bool(torch.all(centers[1:] > centers[:-1])):
         raise ValueError(
-            "MapProductSpec bands must be strictly increasing in spectral center"
+            "ProductSpec bands must be strictly increasing in spectral center"
         )
     interval_bands = [
         band
@@ -465,7 +465,7 @@ def _product_to_cube_target(product: MapProductSpec) -> PlannedImagePlaneCubeTar
     if interval_bands:
         if len(interval_bands) != len(product.bands):
             raise ValueError(
-                "MapProductSpec direct stacking requires all bands to define intervals or none"
+                "ProductSpec direct stacking requires all bands to define intervals or none"
             )
         lowers = [
             float(band.spectral_min)
@@ -492,7 +492,7 @@ def _product_to_cube_target(product: MapProductSpec) -> PlannedImagePlaneCubeTar
             )
         else:
             raise ValueError(
-                "MapProductSpec direct stacking currently supports only point bands or "
+                "ProductSpec direct stacking currently supports only point bands or "
                 "ordered contiguous interval bands"
             )
     spectral_axis = SpectralAxis(values=centers, unit="Angstrom", type="WAVE")
@@ -515,7 +515,7 @@ def _product_to_cube_target(product: MapProductSpec) -> PlannedImagePlaneCubeTar
     )
 
 
-def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductResult:
+def _wrap_map_result(result: MapResult, product: ProductSpec) -> ProductResult:
     coverage_mocs = None
     if result.coverage_moc is not None:
         coverage_mocs = (result.coverage_moc,)
@@ -527,7 +527,7 @@ def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductRe
             inverse_variance.reciprocal(),
             torch.zeros_like(inverse_variance),
         )
-        uncertainty = MapUncertaintyProduct(
+        uncertainty = UncertaintyProduct(
             variance=variance,
             kind="propagated_linear",
             components={"detector": variance},
@@ -537,7 +537,7 @@ def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductRe
                 else None
             ),
         )
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=result.data.unsqueeze(0),
         weight=result.weight.unsqueeze(0),
@@ -556,9 +556,9 @@ def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductRe
 
 
 def _wrap_cube_result(
-    result: SpectralCubeMapResult,
-    product: MapProductSpec,
-) -> MapProductResult:
+    result: CubeResult,
+    product: ProductSpec,
+) -> ProductResult:
     uncertainty = None
     if result.inverse_variance is not None:
         variance = torch.where(
@@ -566,13 +566,13 @@ def _wrap_cube_result(
             result.inverse_variance.reciprocal(),
             torch.zeros_like(result.inverse_variance),
         )
-        uncertainty = MapUncertaintyProduct(
+        uncertainty = UncertaintyProduct(
             variance=variance,
             kind="propagated_linear",
             components={"detector": variance},
             correlation_factor=result.correlation_factor,
         )
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=result.data,
         weight=result.weight,
@@ -584,9 +584,9 @@ def _wrap_cube_result(
     )
 
 
-def stack_map_product(
+def stack_product(
     observations: Sequence[ImageObservation],
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     resampling_kernel: MapResamplingKernel = "bilinear",
     method: str = "coadd",
@@ -599,9 +599,9 @@ def stack_map_product(
     scratch_dir: str | Path | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
-) -> MapProductResult:
+) -> ProductResult:
     if method != "coadd":
-        raise ValueError("stack_map_product currently supports only method='coadd'")
+        raise ValueError("stack_product currently supports only method='coadd'")
     resampling_kernel = validate_map_resampling_kernel(resampling_kernel)
     stacking_method = validate_map_stacking_method(stacking_method)
     if len(product.bands) == 1:
@@ -650,16 +650,16 @@ def _coerce_product_plane(
     if rendered.ndim == 2:
         if tuple(rendered.shape) != shape:
             raise ValueError(
-                "scene render plane shape must match MapProductSpec target shape"
+                "scene render plane shape must match ProductSpec target shape"
             )
         return rendered
     if rendered.ndim == 3:
         if int(rendered.shape[0]) != n_bands:
-            raise ValueError("scene render cube must match MapProductSpec band count")
+            raise ValueError("scene render cube must match ProductSpec band count")
         plane = rendered[band_index]
         if tuple(plane.shape) != shape:
             raise ValueError(
-                "scene render cube plane shape must match MapProductSpec target shape"
+                "scene render cube plane shape must match ProductSpec target shape"
             )
         return plane
     raise ValueError("scene render result must be 2D or 3D")
@@ -667,11 +667,11 @@ def _coerce_product_plane(
 
 def render_scene_product(
     scene: SceneRepresentation | nn.Module | Tensor,
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     solver_hooks: SolverHooks | None = None,
     num_spectral_samples: int = 9,
-) -> MapProductResult:
+) -> ProductResult:
     scene_representation = as_scene_representation(scene)
     shape = (
         int(product.target_header["NAXIS2"]),
@@ -753,12 +753,12 @@ def render_scene_product(
     uncertainty = None
     if len(variance_planes) == len(planes):
         total_variance = torch.stack(variance_planes, dim=0)
-        uncertainty = MapUncertaintyProduct(
+        uncertainty = UncertaintyProduct(
             variance=total_variance,
             kind=uncertainty_kind or "model_predictive",
             components={"detector": total_variance},
         )
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=data,
         weight=None,
@@ -772,12 +772,12 @@ def render_scene_product(
 
 def render_field_product(
     model: nn.Module,
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     num_spectral_samples: int = 9,
     spatial_sampling: FieldSpatialSampling = "center",
     spatial_tile_hw: tuple[int, int] | None = None,
-) -> MapProductResult:
+) -> ProductResult:
     if spatial_tile_hw is None and spatial_sampling == "center":
         return render_scene_product(
             model,
@@ -871,13 +871,13 @@ def render_field_product(
     uncertainty = (
         None
         if detector_variance is None
-        else MapUncertaintyProduct(
+        else UncertaintyProduct(
             variance=detector_variance,
             kind="model_predictive",
             components={"detector": detector_variance},
         )
     )
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=data,
         weight=None,
@@ -928,7 +928,7 @@ def _streaming_sample_variance(
 @torch.no_grad()
 def render_field_ensemble_product(
     models: Sequence[nn.Module],
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     member_seeds: Sequence[int],
     calibration_draws: Sequence[Tensor] | None = None,
@@ -936,7 +936,7 @@ def render_field_ensemble_product(
     num_spectral_samples: int = 9,
     spatial_sampling: FieldSpatialSampling = "center",
     spatial_tile_hw: tuple[int, int] | None = None,
-) -> MapProductResult:
+) -> ProductResult:
     """Render a seeded ensemble with explicit uncertainty components.
 
     Between-member sample variance is epistemic. When every member supplies an
@@ -957,7 +957,7 @@ def render_field_ensemble_product(
     m2: Tensor | None = None
     detector_sum: Tensor | None = None
     has_detector: bool | None = None
-    reference_result: MapProductResult | None = None
+    reference_result: ProductResult | None = None
     for count, model in enumerate(members, start=1):
         result = render_field_product(
             model,
@@ -1032,14 +1032,14 @@ def render_field_ensemble_product(
         else list(resolved_calibration_seeds),
         "variance_estimator": "unbiased_sample",
     }
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=mean,
         weight=None,
         header=dict(product.target_header),
         overlap_count=reference_result.overlap_count,
         coverage_mocs=reference_result.coverage_mocs,
-        uncertainty=MapUncertaintyProduct(
+        uncertainty=UncertaintyProduct(
             variance=total_variance,
             kind="ensemble_predictive",
             components=components,
@@ -1075,7 +1075,7 @@ def _mean_pool_cube(cube: Tensor, *, kernel_size: int) -> Tensor:
 
 
 def estimate_map_inverse_variance(
-    result: MapProductResult | Tensor,
+    result: ProductResult | Tensor,
     *,
     mode: MapUncertaintyMode = "native_inverse_variance",
     support_weight: Tensor | None = None,
@@ -1084,7 +1084,7 @@ def estimate_map_inverse_variance(
 ) -> Tensor:
     if min_inverse_variance <= 0.0:
         raise ValueError("min_inverse_variance must be positive")
-    if isinstance(result, MapProductResult):
+    if isinstance(result, ProductResult):
         if result.weight is not None:
             weight = _as_cube(result.weight).to(dtype=torch.float32)
         elif mode == "native_inverse_variance" and result.uncertainty is not None:

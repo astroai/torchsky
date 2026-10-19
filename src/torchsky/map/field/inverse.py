@@ -20,7 +20,7 @@ from ...calibration_evidence import load_operator_calibration_split
 from ...wcs import WCS
 
 if TYPE_CHECKING:
-    from ..product import MapProductResult
+    from ..product import ProductResult
 
 from ..operators.background import ConditionedBackgroundField, LearnedBackgroundOp
 from ..operators.bundle import (
@@ -1015,7 +1015,7 @@ class LinearBandGridField(_BaseFieldModel):
 
     def initialize_from_product(
         self,
-        product: MapProductResult,
+        product: ProductResult,
         *,
         band_name: str | None = None,
     ) -> None:
@@ -1041,7 +1041,7 @@ class LinearBandGridField(_BaseFieldModel):
                         break
                 if matched_idx is None:
                     raise ValueError(
-                        f"MapProductResult has no band matching {target_band!r}"
+                        f"ProductResult has no band matching {target_band!r}"
                     )
                 plane = data[matched_idx]
             elif len(product.product.bands) == 1 and int(data.shape[0]) == 1:

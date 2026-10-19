@@ -36,10 +36,10 @@ from ..map.image_plane import (
 )
 from ..map.io_utils import write_map_product
 from ..map.product import (
-    MapBandpassSpec,
+    BandpassSpec,
     plan_map_product,
     render_field_product,
-    stack_map_product,
+    stack_product,
 )
 from ..map.plan import MapPlanV2, build_map_input_identity, load_map_plan
 from ..map.operators.execution import (
@@ -446,13 +446,13 @@ def _resolve_inr_observation_spectra(
     return bands, [profiles[band] for band in bands]
 
 
-def _map_bandpass_spec(label: str, spectral_kw: dict) -> MapBandpassSpec:
+def _map_bandpass_spec(label: str, spectral_kw: dict) -> BandpassSpec:
     wavelength = spectral_kw.get("transmission_wavelength")
     throughput = spectral_kw.get("transmission_throughput")
     if wavelength is not None or throughput is not None:
         if wavelength is None or throughput is None:
             raise ValueError("tabulated passband requires wavelength and throughput")
-        return MapBandpassSpec(
+        return BandpassSpec(
             label=label,
             spectral_min=spectral_kw.get("spectral_min"),
             spectral_max=spectral_kw.get("spectral_max"),
@@ -462,7 +462,7 @@ def _map_bandpass_spec(label: str, spectral_kw: dict) -> MapBandpassSpec:
                 name=label,
             ),
         )
-    return MapBandpassSpec(
+    return BandpassSpec(
         label=label,
         transmission_center=spectral_kw.get("transmission_center"),
         transmission_sigma=spectral_kw.get("transmission_sigma"),
@@ -888,7 +888,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
         return 0
 
     background_estimator, overlap_corrector = _background_strategy(args)
-    result = stack_map_product(
+    result = stack_product(
         observations,
         product,
         resampling_kernel=args.kernel,

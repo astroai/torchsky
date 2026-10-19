@@ -579,8 +579,8 @@ pred = field.render(model, obs)
 
 - Each band is usually its own **`field.Observation`** with distinct spectral metadata; **`field.fit`** aggregates losses across all of them.
 - Tabulated throughput (`transmission_wavelength`, `transmission_throughput`) is preferred when combining HST/JWST filters with different shapes.
-- Build a classical baseline first with **`coadd_image_plane_multiband`** so INR residuals can be interpreted against a conventional WCS-aligned stack. It is a comparator, not an initializer for the native-exposure production fit.
-- For a drizzle-like baseline, use **`coadd_image_plane_cube(...,
+- Build a classical baseline first with **`coadd_multiband`** so INR residuals can be interpreted against a conventional WCS-aligned stack. It is a comparator, not an initializer for the native-exposure production fit.
+- For a drizzle-like baseline, use **`coadd_cube(...,
   resampling_kernel="drizzle_square", drizzle_pixfrac=...)`** or the
   `scripts/build_smacs0723_stack_baseline.py --resampling-kernel drizzle_square`
   helper.

@@ -28,7 +28,7 @@ from torchsky.map import (
     plan_image_plane_cube_target,
     plan_image_plane_cube_target_from_header,
     plan_image_plane_target,
-    stack_map_product,
+    stack_product,
 )
 from torchsky.map.sky import (
     CrossExposureSkyCorrector,
@@ -1478,7 +1478,7 @@ def test_stack_map_product_passes_mean_stacking_to_single_band_coadd(tmp_path) -
     ]
     product = plan_map_product(observations)
 
-    result = stack_map_product(
+    result = stack_product(
         observations,
         product,
         stacking_method="mean",

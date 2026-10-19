@@ -16,8 +16,8 @@ import math
 import torch
 
 from torchsky.map import (
-    MapBandpassSpec,
-    MapProductSpec,
+    BandpassSpec,
+    ProductSpec,
     build_spherical_spin_harmonic_solver_hooks,
 )
 
@@ -51,9 +51,9 @@ def main() -> None:
     alm_b[7] = complex(-0.03, 0.01)
     truth = torch.stack([alm_e, alm_b], dim=0)
 
-    product = MapProductSpec(
+    product = ProductSpec(
         target_header=_tan_header(),
-        bands=(MapBandpassSpec(label="pol", transmission_center=30000.0),),
+        bands=(BandpassSpec(label="pol", transmission_center=30000.0),),
     )
     hooks = build_spherical_spin_harmonic_solver_hooks(
         spin=2,

@@ -16,8 +16,8 @@ import math
 import torch
 
 from torchsky.map import (
-    MapBandpassSpec,
-    MapProductSpec,
+    BandpassSpec,
+    ProductSpec,
     build_spherical_harmonic_solver_hooks,
 )
 
@@ -50,9 +50,9 @@ def main() -> None:
     truth[4] = complex(0.05, -0.02)
     truth[7] = complex(-0.03, 0.01)
 
-    product = MapProductSpec(
+    product = ProductSpec(
         target_header=_tan_header(),
-        bands=(MapBandpassSpec(label="background", transmission_center=7000.0),),
+        bands=(BandpassSpec(label="background", transmission_center=7000.0),),
     )
     hooks = build_spherical_harmonic_solver_hooks(lmax=lmax)
     operator = hooks.bind_target(product.target_render_spec())

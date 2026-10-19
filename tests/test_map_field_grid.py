@@ -5,7 +5,7 @@ import torch
 
 from torchsky import WCS
 from torchsky.map.field.core import ExplicitSpectralGridField, FieldDomain
-from torchsky.map.product import MapBandpassSpec, MapProductResult, MapProductSpec
+from torchsky.map.product import BandpassSpec, ProductResult, ProductSpec
 
 
 def test_float32_grid_nodes_roundtrip_at_smacs_angular_scale():
@@ -175,9 +175,9 @@ def test_grid_initializer_recovers_nonconstant_product_at_nodes(dtype):
     )
     centers = (4000.0, 6000.0)
     data = torch.stack([1.0 + 0.01 * xx + 0.02 * yy + lam / 10000 for lam in centers])
-    product = MapProductResult(
-        product=MapProductSpec(header, tuple(
-            MapBandpassSpec(transmission_center=lam) for lam in centers
+    product = ProductResult(
+        product=ProductSpec(header, tuple(
+            BandpassSpec(transmission_center=lam) for lam in centers
         )), data=data, weight=None, header=header,
     )
     model.initialize_from_product(product)
@@ -207,12 +207,12 @@ def test_grid_initializer_stays_finite_for_bright_surface_brightness() -> None:
     model = ExplicitSpectralGridField(
         domain, spatial_resolution=3, spectral_resolution=2,
     )
-    product = MapProductResult(
-        product=MapProductSpec(
+    product = ProductResult(
+        product=ProductSpec(
             header,
             (
-                MapBandpassSpec(transmission_center=4000.0),
-                MapBandpassSpec(transmission_center=6000.0),
+                BandpassSpec(transmission_center=4000.0),
+                BandpassSpec(transmission_center=6000.0),
             ),
         ),
         data=torch.full((2, 3, 3), 1000.0),

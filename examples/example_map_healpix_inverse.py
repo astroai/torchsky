@@ -21,8 +21,8 @@ import math
 import torch
 
 from torchsky.map import (
-    MapBandpassSpec,
-    MapProductSpec,
+    BandpassSpec,
+    ProductSpec,
     build_spherical_healpix_solver_hooks,
 )
 from torchsky.sphere import healpix as hp
@@ -64,9 +64,9 @@ def main() -> None:
     nside = 32
     truth = _synthetic_foreground_map(nside)
 
-    product = MapProductSpec(
+    product = ProductSpec(
         target_header=_tan_header(),
-        bands=(MapBandpassSpec(label="foreground", transmission_center=8500.0),),
+        bands=(BandpassSpec(label="foreground", transmission_center=8500.0),),
     )
     hooks = build_spherical_healpix_solver_hooks(
         nside=nside,

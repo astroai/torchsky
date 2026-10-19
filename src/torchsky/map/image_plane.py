@@ -305,7 +305,7 @@ class HealpixResult:
 
 
 @dataclass(frozen=True)
-class MapApertureUncertainty:
+class ApertureUncertainty:
     """Exact detector variance for one finite weighted map aperture."""
 
     variance: Tensor
@@ -336,7 +336,7 @@ class MapApertureUncertainty:
 
 
 @dataclass
-class MultiBandMapResult:
+class MultibandResult:
     spectral_axis: SpectralAxis
     data: Tensor
     weight: Tensor
@@ -448,7 +448,7 @@ CubeTarget = PlannedImagePlaneCubeTarget
 
 
 @dataclass
-class SpectralCubeMapResult:
+class CubeResult:
     spectral_axis: SpectralAxis
     band_metadata: BandMetadataTable
     data: Tensor
@@ -4124,7 +4124,7 @@ def evaluate_image_plane_aperture_uncertainty(
     spatial_tile_hw: tuple[int, int] | None = None,
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
-) -> MapApertureUncertainty:
+) -> ApertureUncertainty:
     """Propagate independent detector noise through one finite map aperture.
 
     The aperture is evaluated with the adjoint of the same finite-support
@@ -4411,7 +4411,7 @@ def evaluate_image_plane_aperture_uncertainty(
         del differentiable, image, prepared, source_gradient, source_image
         del source_variance, source_weight
 
-    return MapApertureUncertainty(
+    return ApertureUncertainty(
         variance=exact_variance,
         diagonal_variance=diagonal_variance,
     )
@@ -4497,7 +4497,7 @@ def coadd_image_plane_cube(
     device: torch.device | str | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
-) -> SpectralCubeMapResult:
+) -> CubeResult:
     if not observations:
         raise ValueError("At least one observation is required")
     if cross_exposure_sky_corrector is not None:
@@ -4727,7 +4727,7 @@ def coadd_image_plane_cube(
         if variance_available
         else None
     )
-    return SpectralCubeMapResult(
+    return CubeResult(
         spectral_axis=target.spectral_axis,
         band_metadata=band_metadata,
         data=cube,
@@ -4752,7 +4752,7 @@ def coadd_image_plane_multiband(
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
     device: torch.device | str | None = None,
-) -> MultiBandMapResult:
+) -> MultibandResult:
     cube = coadd_image_plane_cube(
         observations,
         target_header=target_header,
@@ -4766,7 +4766,7 @@ def coadd_image_plane_multiband(
         spectral_type=spectral_type,
         device=device,
     )
-    return MultiBandMapResult(
+    return MultibandResult(
         spectral_axis=cube.spectral_axis,
         data=cube.data,
         weight=cube.weight,
@@ -5829,7 +5829,7 @@ def coadd_multiband(
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
     device: torch.device | str | None = None,
-) -> MultiBandMapResult:
+) -> MultibandResult:
     """Clean multi-band image-plane coadd entry point."""
     r_cfg = resample or ResampleConfig()
     s_cfg = stack or StackConfig()
@@ -5874,7 +5874,7 @@ def _coadd_ifu_3d_cube(
     spectral_pixfrac: float,
     emsm_scale: float,
     device: torch.device | str | None,
-) -> SpectralCubeMapResult:
+) -> CubeResult:
     """Build a 3D (N_wave, H, W) cube from 2D IFU detector images with per-pixel (ra, dec, lambda)."""
     from ..wcs.gwcs_sampling import IFUSliceWCS
     from ..wcs.iau2006 import apply_dcr, apply_ephemeris_offset
@@ -6137,7 +6137,7 @@ def _coadd_ifu_3d_cube(
         spectral_weight_sum=band_obs_counts.to(torch.float64),
         band_names=tuple(None for _ in range(N_wave)),
     )
-    return SpectralCubeMapResult(
+    return CubeResult(
         spectral_axis=s_axis,
         band_metadata=band_meta,
         data=data,
@@ -6170,7 +6170,7 @@ def coadd_cube(
     spectral_type: str = "WAVE",
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     device: torch.device | str | None = None,
-) -> SpectralCubeMapResult:
+) -> CubeResult:
     """Clean spectral-cube image-plane coadd entry point (supports 2D filter bands and 3D IFU slices)."""
     if spectral_axis is None and wavelengths is not None:
         spectral_axis = wavelengths
@@ -6560,7 +6560,7 @@ def aperture_uncertainty(
     spatial_tile_hw: tuple[int, int] | None = None,
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
-) -> MapApertureUncertainty:
+) -> ApertureUncertainty:
     """Clean alias for ``evaluate_image_plane_aperture_uncertainty``."""
     r_cfg = resample or ResampleConfig()
     return evaluate_image_plane_aperture_uncertainty(
@@ -6580,9 +6580,9 @@ def aperture_uncertainty(
     )
 
 
-CubeResult = SpectralCubeMapResult
-MultibandResult = MultiBandMapResult
-ApertureUncertainty = MapApertureUncertainty
+CubeResult = CubeResult
+MultibandResult = MultibandResult
+ApertureUncertainty = ApertureUncertainty
 
 
 

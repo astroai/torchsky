@@ -393,6 +393,6 @@ def test_clean_api_aliases_across_wcs_sphere_catalogs_map() -> None:
     xm1 = catalogs.crossmatch(cat1, cat2, 5.0)
     xm2 = catalogs.crossmatch(cat1.lon, cat1.lat, cat2.lon, cat2.lat, radius_arcsec=5.0)
     assert torch.equal(xm1.left_index, xm2.left_index)
-    assert tmap.CubeResult is tmap.SpectralCubeMapResult
-    assert tmap.MultibandResult is tmap.MultiBandMapResult
-    assert tmap.ApertureUncertainty is tmap.MapApertureUncertainty
+    assert tmap.CubeResult is tmap.CubeResult
+    assert tmap.MultibandResult is tmap.MultibandResult
+    assert tmap.ApertureUncertainty is tmap.ApertureUncertainty

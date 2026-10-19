@@ -184,7 +184,10 @@ Promoted flat `torchsky.map` names:
 - `MapResult`, `CubeResult`, `MultibandResult`, `HealpixResult`, `ApertureUncertainty`
 - `ProductSpec`, `BandpassSpec`, `ProductResult`, `UncertaintyProduct`
 
-Legacy names (`coadd_image_plane`, `coadd_image_plane_cube`, `coadd_image_plane_multiband`, `evaluate_image_plane_aperture_uncertainty`, `MapProductSpec`, etc.) remain supported as compatibility aliases.
+The public namespace exposes one name per concept. Lower-level implementation
+functions such as `coadd(...)` remain in
+`torchsky.map.image_plane` for advanced workflows, but they are not root-level
+compatibility aliases.
 
 Advanced planning and implementation helpers live in explicit
 submodules such as `torchsky.map.image_plane`, `torchsky.map.product`,

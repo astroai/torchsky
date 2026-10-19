@@ -422,7 +422,7 @@ def test_run_coadd_dry_run_does_not_execute_mapmaker(monkeypatch, tmp_path) -> N
     def fail_run(*args, **kwargs):
         raise AssertionError("ImagePlaneMapMaker should not run during dry-run")
 
-    monkeypatch.setattr(map_command, "stack_map_product", fail_run)
+    monkeypatch.setattr(map_command, "stack_product", fail_run)
 
     args = argparse.Namespace(
         inputs=[str(path)],

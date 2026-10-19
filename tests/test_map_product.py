@@ -13,14 +13,14 @@ from torchsky.map import (
     FieldObservation,
     GaussianBasisField,
     ImageObservation,
-    MapBandpassSpec,
+    BandpassSpec,
     estimate_map_inverse_variance,
     make_field_model,
     plan_map_product,
     render_field_observation,
     render_field_ensemble_product,
     render_field_product,
-    stack_map_product,
+    stack_product,
 )
 from torchsky.map.scenes import ContinuousFieldModel, DiscreteTargetImage
 from torchsky.map.scenes import HealpixMapScene
@@ -87,7 +87,7 @@ def test_plan_map_product_single_band_stack_matches_image_plane(tmp_path: Path) 
 
     observations = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
     product = plan_map_product(observations)
-    result = stack_map_product(observations, product)
+    result = stack_product(observations, product)
 
     assert product.n_bands == 1
     assert result.data.shape == (1, 6, 6)
@@ -110,8 +110,8 @@ def test_explicit_unit_inverse_variance_is_not_confused_with_default_weight(
         )
     ]
 
-    default_result = stack_map_product(default, plan_map_product(default))
-    explicit_result = stack_map_product(explicit, plan_map_product(explicit))
+    default_result = stack_product(default, plan_map_product(default))
+    explicit_result = stack_product(explicit, plan_map_product(explicit))
 
     assert default_result.uncertainty is None
     assert explicit_result.uncertainty is not None
@@ -136,7 +136,7 @@ def test_map_mask_without_noise_does_not_invent_inverse_variance(
     )
     observations = [ImageObservation(str(path), mask_path=str(mask_path))]
 
-    result = stack_map_product(observations, plan_map_product(observations))
+    result = stack_product(observations, plan_map_product(observations))
 
     assert result.weight is not None
     assert result.uncertainty is None
@@ -239,7 +239,7 @@ def test_plan_map_product_cube_tracks_requested_bands(tmp_path: Path) -> None:
         ),
         spectral_bin_edges=torch.tensor([4800.0, 5200.0, 6800.0], dtype=torch.float64),
     )
-    result = stack_map_product(observations, product)
+    result = stack_product(observations, product)
 
     assert tuple(band.label for band in product.bands) == ("blue", "red")
     assert result.data.shape == (2, 6, 6)
@@ -248,11 +248,11 @@ def test_plan_map_product_cube_tracks_requested_bands(tmp_path: Path) -> None:
 
 
 def test_render_field_product_matches_product_shape() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
         bands=(
-            MapBandpassSpec(label="g", spectral_min=4700.0, spectral_max=5200.0),
-            MapBandpassSpec(label="r", spectral_min=6100.0, spectral_max=6800.0),
+            BandpassSpec(label="g", spectral_min=4700.0, spectral_max=5200.0),
+            BandpassSpec(label="r", spectral_min=6100.0, spectral_max=6800.0),
         ),
     )
     model = GaussianBasisField(
@@ -272,9 +272,9 @@ def test_render_field_product_matches_product_shape() -> None:
 
 
 def test_render_field_product_labels_likelihood_variance_as_detector() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+        bands=(BandpassSpec(label="g", transmission_center=5000.0),),
     )
 
     result = render_field_product(
@@ -293,9 +293,9 @@ def test_render_field_product_labels_likelihood_variance_as_detector() -> None:
 
 
 def test_render_field_ensemble_product_separates_uncertainty_components() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+        bands=(BandpassSpec(label="g", transmission_center=5000.0),),
     )
     calibration_draws = (
         torch.ones((1, 6, 6)),
@@ -339,9 +339,9 @@ def test_render_field_ensemble_product_separates_uncertainty_components() -> Non
 
 
 def test_render_field_ensemble_product_rejects_mixed_detector_evidence() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+        bands=(BandpassSpec(label="g", transmission_center=5000.0),),
     )
 
     with pytest.raises(ValueError, match="all provide detector"):
@@ -366,9 +366,9 @@ def test_render_field_product_supports_spatial_quadrature() -> None:
             del dec, wavelength
             return torch.zeros_like(ra) + self.value
 
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+        bands=(BandpassSpec(label="g", transmission_center=5000.0),),
     )
 
     result = map_product_mod.render_field_product(
@@ -388,9 +388,9 @@ def test_tiled_field_product_allocates_on_model_device(monkeypatch) -> None:
             super().__init__()
             self.value = torch.nn.Parameter(torch.empty((), device="meta"))
 
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+        bands=(BandpassSpec(label="g", transmission_center=5000.0),),
     )
 
     def fake_render(model, observation, **kwargs):
@@ -424,12 +424,12 @@ def test_square_drizzle_reports_squared_coefficient_inverse_variance(
         header=source_header,
         overwrite=True,
     )
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=target_header,
-        bands=(MapBandpassSpec(label="mono"),),
+        bands=(BandpassSpec(label="mono"),),
     )
 
-    result = stack_map_product(
+    result = stack_product(
         [
             ImageObservation(
                 str(path),
@@ -483,13 +483,13 @@ def test_half_pixel_projection_reports_squared_coefficient_inverse_variance(
             weight_is_inverse_variance=True,
         )
     ]
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=target_header,
-        bands=(MapBandpassSpec(label="science"),),
+        bands=(BandpassSpec(label="science"),),
         value_semantics=value_semantics,
     )
 
-    result = stack_map_product(
+    result = stack_product(
         observations,
         product,
         resampling_kernel=kernel,
@@ -516,12 +516,12 @@ def test_map_product_context_uses_multiple_words_and_records_observations(
     path = tmp_path / "context.fits"
     torchfits.write(str(path), torch.ones((6, 6)), header=header, overwrite=True)
     observations = [ImageObservation(str(path)) for _ in range(33)]
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=header,
-        bands=(MapBandpassSpec(label="mono"),),
+        bands=(BandpassSpec(label="mono"),),
     )
 
-    result = stack_map_product(observations, product)
+    result = stack_product(observations, product)
 
     assert result.context is not None
     assert result.context.shape == (1, 2, 6, 6)
@@ -532,15 +532,15 @@ def test_map_product_context_uses_multiple_words_and_records_observations(
 
 
 def test_map_product_result_exposes_target_render_specs() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
         bands=(
-            MapBandpassSpec(label="g", transmission_center=5000.0),
-            MapBandpassSpec(label="r", transmission_center=6500.0),
+            BandpassSpec(label="g", transmission_center=5000.0),
+            BandpassSpec(label="r", transmission_center=6500.0),
         ),
         value_semantics="flux",
     )
-    result = torchsky.map.MapProductResult(
+    result = torchsky.map.ProductResult(
         product=product,
         data=torch.zeros((2, 6, 6), dtype=torch.float32),
         weight=torch.ones((2, 6, 6), dtype=torch.float32),
@@ -556,7 +556,7 @@ def test_map_product_result_exposes_target_render_specs() -> None:
 
 def test_map_uncertainty_product_exposes_honest_inverse_variance() -> None:
     variance = torch.tensor([[[4.0, 0.0]]], dtype=torch.float32)
-    uncertainty = torchsky.map.MapUncertaintyProduct(
+    uncertainty = torchsky.map.UncertaintyProduct(
         variance=variance,
         kind="propagated_linear",
         components={"detector": variance},
@@ -568,13 +568,13 @@ def test_map_uncertainty_product_exposes_honest_inverse_variance() -> None:
         torch.tensor([[[0.25, 0.0]]], dtype=torch.float32),
     )
     with pytest.raises(ValueError, match="component shapes"):
-        torchsky.map.MapUncertaintyProduct(
+        torchsky.map.UncertaintyProduct(
             variance=variance,
             kind="propagated_linear",
             components={"detector": torch.ones((2, 2))},
         )
     with pytest.raises(ValueError, match="positive wherever variance is positive"):
-        torchsky.map.MapUncertaintyProduct(
+        torchsky.map.UncertaintyProduct(
             variance=variance,
             kind="propagated_linear",
             correlation_factor=torch.zeros_like(variance),
@@ -582,11 +582,11 @@ def test_map_uncertainty_product_exposes_honest_inverse_variance() -> None:
 
 
 def test_internal_scene_product_render_supports_discrete_multiband_cube() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
         bands=(
-            MapBandpassSpec(label="g", transmission_center=5000.0),
-            MapBandpassSpec(label="r", transmission_center=6500.0),
+            BandpassSpec(label="g", transmission_center=5000.0),
+            BandpassSpec(label="r", transmission_center=6500.0),
         ),
     )
     scene = DiscreteTargetImage(
@@ -658,7 +658,7 @@ def test_render_field_product_matches_exact_transmission_per_band_stacks(
             type="WAVE",
         ),
     )
-    stacked = stack_map_product(
+    stacked = stack_product(
         observations,
         product,
         resampling_kernel="bilinear",
@@ -687,11 +687,11 @@ def test_render_field_product_matches_exact_transmission_per_band_stacks(
 
 
 def test_render_field_product_uses_shared_scene_product_renderer() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
         bands=(
-            MapBandpassSpec(label="g", spectral_min=4700.0, spectral_max=5200.0),
-            MapBandpassSpec(label="r", spectral_min=6100.0, spectral_max=6800.0),
+            BandpassSpec(label="g", spectral_min=4700.0, spectral_max=5200.0),
+            BandpassSpec(label="r", spectral_min=6100.0, spectral_max=6800.0),
         ),
     )
     model = GaussianBasisField(
@@ -716,9 +716,9 @@ def test_render_field_product_uses_shared_scene_product_renderer() -> None:
 
 
 def test_render_scene_product_accepts_plain_module_scene() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="g", transmission_center=5000.0),),
+        bands=(BandpassSpec(label="g", transmission_center=5000.0),),
     )
     model = GaussianBasisField(
         FieldDomain(
@@ -742,9 +742,9 @@ def test_render_scene_product_accepts_plain_module_scene() -> None:
 
 
 def test_render_scene_product_renders_healpix_scene_through_solver_hooks() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="mono", transmission_center=5000.0),),
+        bands=(BandpassSpec(label="mono", transmission_center=5000.0),),
     )
     scene = HealpixMapScene(
         torch.ones(12 * 4 * 4, dtype=torch.float32),
@@ -789,11 +789,11 @@ def test_estimate_map_inverse_variance_support_proxy_flags_extrapolated_regions(
 
 
 def test_estimate_map_inverse_variance_never_invents_field_weights() -> None:
-    product = torchsky.map.MapProductSpec(
+    product = torchsky.map.ProductSpec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="single"),),
+        bands=(BandpassSpec(label="single"),),
     )
-    result = torchsky.map.MapProductResult(
+    result = torchsky.map.ProductResult(
         product=product,
         data=torch.ones((1, 6, 6)),
         weight=None,
@@ -804,7 +804,7 @@ def test_estimate_map_inverse_variance_never_invents_field_weights() -> None:
         estimate_map_inverse_variance(result)
 
     variance = torch.full_like(result.data, 4.0)
-    result.uncertainty = torchsky.map.MapUncertaintyProduct(
+    result.uncertainty = torchsky.map.UncertaintyProduct(
         variance=variance,
         kind="model_predictive",
         components={"epistemic": variance},

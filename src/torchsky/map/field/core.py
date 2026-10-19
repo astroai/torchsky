@@ -16,7 +16,7 @@ from ...device import default_compute_device
 from ...wcs import WCS
 
 if TYPE_CHECKING:
-    from ..product import MapProductResult
+    from ..product import ProductResult
 
 from ..operators.bundle import field_observation_operator_bundle
 from ..operators.psf import apply_psf_spec, gaussian_blur as _shared_gaussian_blur
@@ -1731,7 +1731,7 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         ra = dra + float(self.domain.center_ra_deg)
         return ra, dec, wavelengths
 
-    def initialize_from_product(self, product: MapProductResult) -> None:
+    def initialize_from_product(self, product: ProductResult) -> None:
         if self.coord_mode != "local_tangent":
             raise ValueError(
                 "ExplicitSpectralGridField initialization requires local_tangent"
@@ -1756,7 +1756,7 @@ class ExplicitSpectralGridField(_BaseFieldModel):
                 )
             else:
                 raise ValueError(
-                    "MapProductSpec band requires center or bounds for initialization"
+                    "ProductSpec band requires center or bounds for initialization"
                 )
         centers = torch.tensor(
             band_centers, device=self.grid.device, dtype=self.grid.dtype
@@ -2035,7 +2035,7 @@ class GaussianBasisField(_BaseFieldModel):
         return lower_flux * (1 - alpha) + upper_flux * alpha
 
     @torch.no_grad()
-    def initialize_from_product(self, product: MapProductResult) -> None:
+    def initialize_from_product(self, product: ProductResult) -> None:
         if not self.splat:
             raise ValueError("product initialization requires splat=True")
         device, dtype = self.centers.device, self.centers.dtype

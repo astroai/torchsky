@@ -14,7 +14,7 @@ from torchfits import read
 from .operators.image_grid import validate_image_plane_2d
 
 if TYPE_CHECKING:
-    from .product import MapProductResult
+    from .product import ProductResult
 
 _HEADER_PROBE_EXC: tuple[type[BaseException], ...] = (
     OSError,
@@ -62,7 +62,7 @@ def _product_header(
     return Header(header)
 
 
-def _context_cards(result: MapProductResult) -> dict[str, str]:
+def _context_cards(result: ProductResult) -> dict[str, str]:
     provenance = result.provenance
     if provenance is None:
         return {}
@@ -86,7 +86,7 @@ def _context_cards(result: MapProductResult) -> dict[str, str]:
 
 def write_map_product(
     path: str | Path,
-    result: MapProductResult,
+    result: ProductResult,
     *,
     requested_planes: Iterable[str],
     overwrite: bool = False,
