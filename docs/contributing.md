@@ -78,10 +78,11 @@ Minimum pre-PR checks:
 pixi run -e test -- pytest tests/test_api.py tests/test_wcs_api.py -q
 ```
 
-Full suite:
+Full suite (the `pixi run test` task is the quicker lane and deliberately
+ignores `tests/test_map_*.py`):
 
 ```bash
-pixi run test
+pixi run -e test -- pytest -n auto
 ```
 
 Git pre-push hook (`pixi run setup-hooks`) is `pixi run preflight-push` only
