@@ -2284,27 +2284,6 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         ):
             return self._pixel_to_world_2d_core(x, y, float(origin))
 
-        # The quad-cube projections use the float32 Chan-O'Neill polynomials
-        # in the fused WCSLIB-compatible kernel. The CUDA tensor path evaluates
-        # an equivalent double-precision formula in a different order, so a
-        # handful of seam-conditioned pixels differ from the CPU result. For
-        # CUDA quad-cube transforms, evaluate the CPU kernel on a host copy so
-        # the device contract is exact; these projections are small-N/rare and
-        # are not a CUDA throughput claim.
-        if (
-            x.device.type == "cuda"
-            and y.device.type == "cuda"
-            and not x.requires_grad
-            and not y.requires_grad
-            and self._proj_code in ("TSC", "CSC", "QSC")
-        ):
-            host_ra, host_dec = self._pixel_to_world_2d_fast(
-                x.detach().to(device="cpu", dtype=torch.float64),
-                y.detach().to(device="cpu", dtype=torch.float64),
-                origin,
-            )
-            return host_ra.to(device=x.device, dtype=x.dtype), host_dec.to(device=x.device, dtype=x.dtype)
-
         device_ok = x.device.type == "cpu" and y.device.type == "cpu"
         dtype_ok = x.dtype == torch.float64 and y.dtype == torch.float64
 
@@ -2814,22 +2793,6 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         ):
             return self._world_to_pixel_2d_core(ra, dec, float(origin))
         shape = ra.shape
-
-        # Match the CPU quad-cube inverse exactly on CUDA; see the forward path.
-        if (
-            ra.device.type == "cuda"
-            and dec.device.type == "cuda"
-            and not ra.requires_grad
-            and not dec.requires_grad
-            and self._proj_code in ("TSC", "CSC", "QSC")
-        ):
-            host_x, host_y = self._world_to_pixel_2d_fast(
-                ra.detach().to(device="cpu", dtype=torch.float64),
-                dec.detach().to(device="cpu", dtype=torch.float64),
-                iterative=iterative,
-                origin=origin,
-            )
-            return host_x.to(device=ra.device, dtype=ra.dtype), host_y.to(device=ra.device, dtype=ra.dtype)
 
         device_ok = ra.device.type == "cpu" and dec.device.type == "cpu"
         dtype_ok = ra.dtype == torch.float64 and dec.dtype == torch.float64
