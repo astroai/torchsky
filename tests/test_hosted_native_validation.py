@@ -39,7 +39,8 @@ def test_native_portability_workflow_covers_hosted_cpu_isa_contracts() -> None:
     assert "qemu-x86_64 -cpu Nehalem" in source
     assert "TORCHSKY_CPU_ISA=auto" in source
     assert "probe --expected-isa scalar" in source
-    assert "test_scalar_leaf_has_no_avx_instructions" in source
+    assert "inspect-scalar-object" in source
+    assert "ishioka_scalar.cpp.o" in source
     assert source.count("timeout-minutes:") == 3
     assert "cancel-in-progress: true" in source
     assert source.count("cache: pip") == 2

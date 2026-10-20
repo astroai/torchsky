@@ -23,6 +23,8 @@ jobs:
     name: Linux x86-64 baseline and AVX2/FMA
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      SKBUILD_BUILD_DIR: build/native-portability
     steps:
       - uses: actions/checkout@v4
       - name: Install native inspection tools
@@ -56,7 +58,10 @@ jobs:
           python scripts/validate_native_runtime.py compare --candidate-isa avx2 --expected-candidate-isa avx2+fma
           python scripts/validate_native_runtime.py reject --isa neon
       - name: Inspect scalar leaf for baseline instructions
-        run: python -m pytest tests/test_cpu_isa_dispatch.py::test_scalar_leaf_has_no_avx_instructions -q
+        run: |
+          scalar_object="$(find build/native-portability -name '*ishioka_scalar.cpp.o' -print -quit)"
+          test -n "$scalar_object"
+          python scripts/validate_native_runtime.py inspect-scalar-object "$scalar_object"
       - name: Invoke wheel under emulated pre-AVX x86-64 CPU
         run: |
           python_path="$(python -c 'import sys; print(sys.executable)')"

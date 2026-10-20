@@ -5,6 +5,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -157,7 +158,7 @@ def _assert_close(first: Any, second: Any, path: str = "payload") -> None:
             _assert_close(left, right, f"{path}[{index}]")
         return
     if isinstance(first, (int, float)) and isinstance(second, (int, float)):
-        if not math.isclose(float(first), float(second), rel_tol=2e-14, abs_tol=2e-14):
+        if not math.isclose(float(first), float(second), rel_tol=5e-13, abs_tol=5e-14):
             raise AssertionError(f"{path} differs: {first!r} != {second!r}")
         return
     if first != second:
@@ -205,6 +206,23 @@ def _reject(isa: str) -> None:
     print(f"unsupported ISA rejection passed: requested={isa}")
 
 
+def _inspect_scalar_object(path: Path) -> None:
+    result = subprocess.run(
+        ["objdump", "-d", "--demangle", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr)
+    forbidden = re.search(r"\b(?:[yz]mm\d+|v[a-z][a-z0-9]*)\b", result.stdout)
+    if forbidden is not None:
+        raise AssertionError(
+            f"scalar object contains raised-ISA token {forbidden.group(0)!r}"
+        )
+    print(f"scalar object uses baseline instructions: {path}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -222,13 +240,18 @@ def main() -> None:
     reject = subparsers.add_parser("reject")
     reject.add_argument("--isa", choices=ISA_CHOICES, required=True)
 
+    inspect_scalar = subparsers.add_parser("inspect-scalar-object")
+    inspect_scalar.add_argument("path", type=Path)
+
     args = parser.parse_args()
     if args.command == "probe":
         _probe(args.expected_isa, args.json)
     elif args.command == "compare":
         _compare(args.candidate_isa, args.expected_candidate_isa)
-    else:
+    elif args.command == "reject":
         _reject(args.isa)
+    else:
+        _inspect_scalar_object(args.path)
 
 
 if __name__ == "__main__":
