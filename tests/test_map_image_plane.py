@@ -10,6 +10,9 @@ from torchfits import HDUList, TensorHDU
 
 import torchsky
 import torchsky.map.image_plane as image_plane_mod
+import torchsky.map.image_plane_coadd as image_plane_coadd_mod
+import torchsky.map.image_plane_common as image_plane_common_mod
+import torchsky.map.image_plane_projection as image_plane_projection_mod
 import torchsky.map.operators.execution as execution_mod
 import torchsky.map.operators.geometry_drizzle as drizzle_geometry_mod
 from torchsky.map.operators.geometry_drizzle import (
@@ -165,6 +168,135 @@ def test_target_wcs_grids_mps_match_cpu() -> None:
     torch.testing.assert_close(dec_mps.cpu(), dec_cpu.to(dtype=torch.float32))
     torch.testing.assert_close(quad_mps[0].cpu(), quad_cpu[0].to(dtype=torch.float32))
     torch.testing.assert_close(quad_mps[1].cpu(), quad_cpu[1].to(dtype=torch.float32))
+
+
+def test_small_tan_target_cap_uses_exact_corner_separation() -> None:
+    header = _simple_header()
+    header.update(
+        {
+            "NAXIS1": 32,
+            "NAXIS2": 32,
+            "CRPIX1": 16.5,
+            "CRPIX2": 16.5,
+            "CDELT1": -0.1,
+            "CDELT2": 0.1,
+        }
+    )
+    prepared = windowing_mod._prepare_target(
+        header=header,
+        target_wcs=torchsky.WCS(header),
+        target_shape=(32, 32),
+        device=torch.device("cpu"),
+        include_world_grid=False,
+    )
+    plane_radius_rad = math.sqrt(2.0) * 1.55 * math.pi / 180.0
+    expected_deg = math.degrees(math.atan(plane_radius_rad))
+
+    assert prepared.cap_radius_deg == pytest.approx(expected_deg, rel=1e-12)
+    assert prepared.cap_radius_deg > 2.19
+
+
+def test_off_center_tan_cap_contains_every_target_pixel() -> None:
+    header = _simple_header()
+    header.update(
+        {
+            "NAXIS1": 32,
+            "NAXIS2": 32,
+            "CRPIX1": 48.0,
+            "CRPIX2": -8.0,
+            "CDELT1": -0.1,
+            "CDELT2": 0.1,
+        }
+    )
+    wcs = torchsky.WCS(header)
+    prepared = windowing_mod._prepare_target(
+        header=header,
+        target_wcs=wcs,
+        target_shape=(32, 32),
+        device=torch.device("cpu"),
+    )
+    assert prepared.ra_deg is not None and prepared.dec_deg is not None
+    actual_radius = windowing_mod._spherical_cap_radius_from_world_grid(
+        prepared.ra_deg,
+        prepared.dec_deg,
+        center_ra_deg=prepared.center_ra_deg,
+        center_dec_deg=prepared.center_dec_deg,
+    )
+
+    assert prepared.cap_radius_deg >= actual_radius - 1e-12
+    assert prepared.cap_radius_deg > 0.0
+
+
+def test_distorted_target_disables_spherical_cap_rejection() -> None:
+    header = _simple_header()
+    header.update(
+        {
+            "CTYPE1": "RA---TPV",
+            "CTYPE2": "DEC--TPV",
+            "PV1_1": 1.0,
+            "PV1_4": 0.02,
+            "PV2_2": 1.0,
+            "PV2_6": -0.015,
+        }
+    )
+    prepared = windowing_mod._prepare_target(
+        header=header,
+        target_wcs=torchsky.WCS(header),
+        target_shape=(8, 8),
+        device=torch.device("cpu"),
+        include_world_grid=False,
+    )
+
+    assert prepared.cap_radius_deg == 180.0
+
+
+def test_small_target_cap_does_not_reject_off_center_tpv_overlap(tmp_path: Path) -> None:
+    target_header = _simple_header()
+    target_header.update(
+        {
+            "NAXIS1": 32,
+            "NAXIS2": 32,
+            "CRPIX1": 16.5,
+            "CRPIX2": 16.5,
+            "CDELT1": -0.1,
+            "CDELT2": 0.1,
+        }
+    )
+    target_wcs = torchsky.WCS(target_header)
+    source_ra, source_dec = target_wcs.pixel_to_world(
+        torch.tensor(29.0, dtype=torch.float64),
+        torch.tensor(16.0, dtype=torch.float64),
+    )
+    source_header = {
+        "NAXIS": 2,
+        "NAXIS1": 8,
+        "NAXIS2": 8,
+        "CTYPE1": "RA---TPV",
+        "CTYPE2": "DEC--TPV",
+        "CRPIX1": 4.5,
+        "CRPIX2": 4.5,
+        "CRVAL1": float(source_ra.item()),
+        "CRVAL2": float(source_dec.item()),
+        "CDELT1": -0.1,
+        "CDELT2": 0.1,
+        "PV1_1": 1.0,
+        "PV2_1": 1.0,
+    }
+    source_path = tmp_path / "off_center_tpv.fits"
+    torchfits.write(
+        str(source_path),
+        torch.ones((8, 8), dtype=torch.float32),
+        header=source_header,
+        overwrite=True,
+    )
+
+    result = coadd_image_plane(
+        [ImageObservation(str(source_path))],
+        target_header=target_header,
+        resampling_kernel="bilinear",
+    )
+
+    assert bool((result.weight[:, 24:] > 0.0).any())
 
 
 def _astropy_sip_fixture() -> Path:
@@ -601,9 +733,9 @@ def test_coadd_image_plane_spatial_tiles_are_exposure_major(
         prepare_calls.append(str(observation.path))
         return original_prepare(observation, image, **kwargs)
 
-    monkeypatch.setattr(image_plane_mod, "read", counted_read)
+    monkeypatch.setattr(image_plane_common_mod, "read", counted_read)
     monkeypatch.setattr(
-        image_plane_mod, "prepare_image_observation_data", counted_prepare
+        image_plane_coadd_mod, "prepare_image_observation_data", counted_prepare
     )
     tiled = coadd_image_plane(observations, spatial_tile_hw=(3, 5))
 
@@ -1241,7 +1373,7 @@ def test_tiled_overlap_background_uses_one_read_per_exposure_and_cleans_scratch(
         read_calls.append(str(path))
         return original_read(path, **kwargs)
 
-    monkeypatch.setattr(image_plane_mod, "read", counted_read)
+    monkeypatch.setattr(image_plane_common_mod, "read", counted_read)
     scratch = tmp_path / "overlap-scratch"
     tiled = coadd_image_plane(
         observations,
@@ -3420,7 +3552,7 @@ def test_coadd_image_plane_builds_target_grid_once_per_run(
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(image_plane_mod, "_prepare_target", counted)
+    monkeypatch.setattr(image_plane_coadd_mod, "_prepare_target", counted)
 
     result = coadd_image_plane(
         [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
@@ -3474,7 +3606,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
             return original_resample(*args, **kwargs)
 
         monkeypatch.setattr(
-            image_plane_mod, "_resample_weighted_to_target", wrapped_resample
+            image_plane_projection_mod, "_resample_weighted_to_target", wrapped_resample
         )
         monkeypatch.setattr(windowing_mod, "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS", 0)
         forced_numer, forced_weight, _, _ = (
@@ -3553,9 +3685,9 @@ def test_project_observation_window_no_overlap_skips_geometry(monkeypatch) -> No
     def fail_projection(*args, **kwargs):
         raise AssertionError("no-overlap window must not call geometry projection")
 
-    monkeypatch.setattr(image_plane_mod, "_window_large_tan_target", no_overlap_window)
+    monkeypatch.setattr(image_plane_projection_mod, "_window_large_tan_target", no_overlap_window)
     monkeypatch.setattr(
-        image_plane_mod, "project_image_observation_geometry", fail_projection
+        image_plane_projection_mod, "project_image_observation_geometry", fail_projection
     )
 
     projected = image_plane_mod._project_observation_to_target_chunk(
@@ -3632,7 +3764,7 @@ def test_coadd_image_plane_skips_target_grid_for_identical_wcs_without_footprint
         calls += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(image_plane_mod, "_build_target_world_grid", counted)
+    monkeypatch.setattr(image_plane_coadd_mod, "_build_target_world_grid", counted)
 
     result = coadd_image_plane(
         [ImageObservation(str(path_a)), ImageObservation(str(path_b))]

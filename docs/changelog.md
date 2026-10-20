@@ -50,6 +50,12 @@ owned by `torchfits`.
   `sphere/spectral_ops.py`; the SHT primitives are imported lazily so the
   module graph stays acyclic, and `spectral` re-exports the historical names.
   spectral.py drops from 4,636 to 4,031 lines.
+- **Image-plane mapmaking split**: the 3,984-line `map/image_plane.py` now
+  re-exports three role modules: `image_plane_common` (device/validation and
+  observation loading), `image_plane_projection` (resampling/projection
+  kernels), and `image_plane_coadd` (coadds, resampling wrappers, aperture
+  uncertainty). Historical imports, including the module-level re-exports used
+  by tests and downstream modules, are unchanged.
 - **Power Foam primitives split**: the 4,071-line `map/field/foam.py` now
   re-exports role modules: `foam_geometry` (distance/ownership/candidate graphs),
   `foam_solvers` (basis rendering and least-squares solves), `foam_operators`
