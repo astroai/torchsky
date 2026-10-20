@@ -60,7 +60,7 @@ Current release-candidate evidence (same-machine, reference comparisons):
 - **WCS**: 38 cases against astropy (30 projections plus reference-latitude-offset
   cases). Angular parity max `6.1e-7 asec` (AIR formula floor `4.1e-7`; offset
   cases `<=1.5e-8 asec`), pole/seam-excluded sky round trip `1.28e-6 asec`,
-  pixel round trip `1.27e-6 px`; forward `0.46–2.44x` and inverse `0.45–3.42x`
+  pixel round trip `1.27e-6 px`; forward `0.46–2.65x` and inverse `0.88–4.32x`
   astropy throughput.
 - **HEALPix**: 12 operations against healpy at nside 512, zero index/angle
   mismatches (max `1.14e-13 deg`), throughput `1.02–2.19x`.
