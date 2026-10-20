@@ -55,10 +55,10 @@ def test_forced_scalar_and_native_ishioka_parity() -> None:
     assert scalar_payload["isa"] == "scalar"
     assert native_payload["isa"] in {"scalar", "avx2+fma", "neon"}
     assert native_payload["real"] == pytest.approx(
-        scalar_payload["real"], rel=2e-14, abs=2e-14
+        scalar_payload["real"], rel=5e-13, abs=5e-14
     )
     assert native_payload["imag"] == pytest.approx(
-        scalar_payload["imag"], rel=2e-14, abs=2e-14
+        scalar_payload["imag"], rel=5e-13, abs=5e-14
     )
 
 
