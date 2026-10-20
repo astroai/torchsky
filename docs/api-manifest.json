@@ -549,6 +549,7 @@
     "itrs_xyz_to_lonlat_deg",
     "lsr_line_of_sight_kms",
     "observed_altaz",
+    "pixel_to_world_fused",
     "precess_fk5",
     "propagate_proper_motion",
     "propagate_proper_motion_with_jacobian",
@@ -564,6 +565,7 @@
     "transform",
     "transform_spectral",
     "vacuum_wavelength_to_air",
-    "validate_sampled_transform"
+    "validate_sampled_transform",
+    "world_to_pixel_fused"
   ]
 }
