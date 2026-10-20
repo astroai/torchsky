@@ -32,6 +32,7 @@ jobs:
       - name: Install test environment and run tests
         run: |
           pixi install --frozen -e test
+          pixi run -e test -- pip install -e . --no-build-isolation
           pixi run -e test -- pytest tests/ -q --maxfail=1
 
   build_wheels:
