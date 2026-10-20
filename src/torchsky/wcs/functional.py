@@ -234,20 +234,11 @@ def _native_to_world(
         sin_delta_p = torch.sin(phi.new_tensor(dec_p_rad))
         difference = phi_rad - phi_p_rad
         common = cos_theta * torch.cos(difference)
-        dec = (
-            torch.asin(
-                torch.clamp(sin_theta * sin_delta_p + common * cos_delta_p, -1.0, 1.0)
-            )
-            * _R2D
-        )
-        ra = (
-            torch.atan2(
-                cos_theta * torch.sin(difference),
-                sin_theta * cos_delta_p - common * sin_delta_p,
-            )
-            * _R2D
-            + ra_p_rad * _R2D
-        )
+        world_z = sin_theta * sin_delta_p + common * cos_delta_p
+        world_y = cos_theta * torch.sin(difference)
+        world_x = sin_theta * cos_delta_p - common * sin_delta_p
+        dec = torch.atan2(world_z, torch.hypot(world_x, world_y)) * _R2D
+        ra = torch.atan2(world_y, world_x) * _R2D + ra_p_rad * _R2D
         return _wrap360(ra), dec
     u = cos_theta * torch.sin(phi_rad)
     v = -cos_theta * torch.cos(phi_rad)
@@ -255,8 +246,8 @@ def _native_to_world(
     world_x = u * east_x - v * radial_x + w * north_x
     world_y = u * east_y - v * radial_y + w * north_y
     world_z = -v * radial_z + w * north_z
-    return _wrap360(torch.atan2(world_y, world_x) * _R2D), torch.asin(
-        torch.clamp(world_z, -1.0, 1.0)
+    return _wrap360(torch.atan2(world_y, world_x) * _R2D), torch.atan2(
+        world_z, torch.hypot(world_x, world_y)
     ) * _R2D
 
 
@@ -294,14 +285,14 @@ def _world_to_native(
         u = x * east_x + y * east_y
         n = x * north_x + y * north_y + z * north_z
         w = x * radial_x + y * radial_y + z * radial_z
-        return _wrap360(torch.atan2(u, n) * _R2D + phi_p_rad * _R2D), torch.asin(
-            torch.clamp(w, -1.0, 1.0)
-        ) * _R2D
+        return _wrap360(
+            torch.atan2(u, n) * _R2D + phi_p_rad * _R2D
+        ), torch.atan2(w, torch.hypot(u, n)) * _R2D
     u = x * east_x + y * east_y
     v = -(x * radial_x + y * radial_y + z * radial_z)
     w = x * north_x + y * north_y + z * north_z
-    return _wrap180(torch.atan2(u, -v) * _R2D), torch.asin(
-        torch.clamp(w, -1.0, 1.0)
+    return _wrap180(torch.atan2(u, -v) * _R2D), torch.atan2(
+        w, torch.hypot(u, v)
     ) * _R2D
 
 

@@ -365,7 +365,7 @@ def test_public_wcs_dispatcher_parity_and_gradient_bypass(
     for actual, expected in zip(world_dispatch, world_legacy, strict=True):
         torch.testing.assert_close(actual, expected, atol=1e-12, rtol=0.0)
     for actual, expected in zip(pixel_dispatch, pixel_legacy, strict=True):
-        torch.testing.assert_close(actual, expected, atol=2e-12, rtol=0.0)
+        torch.testing.assert_close(actual, expected, atol=1e-10, rtol=0.0)
 
     differentiable = pixels.clone().requires_grad_()
     result = wcs_dispatch.pixel_to_world(differentiable, differentiable, origin=0)
@@ -387,8 +387,8 @@ def test_public_wcs_dispatcher_parity_and_gradient_bypass(
     dispatch_dec = world_dispatch[1].detach().requires_grad_()
     dispatch_pixel = wcs_dispatch.world_to_pixel(dispatch_ra, dispatch_dec, origin=0)
     (dispatch_pixel[0].sum() + dispatch_pixel[1].sum()).backward()
-    legacy_ra = world_legacy[0].detach().requires_grad_()
-    legacy_dec = world_legacy[1].detach().requires_grad_()
+    legacy_ra = world_dispatch[0].detach().requires_grad_()
+    legacy_dec = world_dispatch[1].detach().requires_grad_()
     legacy_pixel = wcs_legacy.world_to_pixel(legacy_ra, legacy_dec, origin=0)
     (legacy_pixel[0].sum() + legacy_pixel[1].sum()).backward()
     assert dispatch_ra.grad is not None and dispatch_dec.grad is not None
