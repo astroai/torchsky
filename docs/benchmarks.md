@@ -28,9 +28,10 @@ full local tests and scientific campaigns remain opt-in.
 
 The 0.4.0 release-candidate bundle lives in
 [`torchsky-harness/docs/releases/0.1.0/baseline.md`](https://github.com/astroai/torchsky-harness/blob/main/docs/releases/0.1.0/baseline.md).
-It records one subject artifact identity, all sixteen declared gates as
-`established` (seven synthetic/truth, six reference-comparison, three
-real-data), the comparison limits, and the CANFAR GPU validation run. Reproduce
+It records one subject artifact identity, every declared gate as
+`established` (synthetic/truth, reference comparison, real data, and
+structural/domain contract gates), the comparison limits, and the CANFAR GPU
+validation run. Reproduce
 a gate with the Pixi tasks in that repository; the package-side bounded tests in
 this repository are not a substitute for the reference comparisons.
 
