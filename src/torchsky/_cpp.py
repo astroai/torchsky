@@ -42,13 +42,12 @@ MIGRATED_COMPAT_SYMBOLS = (
     "_healpix_spin_alm2map_ring_recurrence_cpu",
     "_healpix_scalar_integrate_recurrence_cpu",
     "_healpix_scalar_interpolate_recurrence_cpu",
-)
-
-DEFERRED_NATIVE_SYMBOLS = (
     "healpix_query_disc_torch_cpu",
     "_healpix_spin_map2alm_from_basis_cpu",
     "_healpix_spin_alm2map_from_basis_cpu",
 )
+
+DEFERRED_NATIVE_SYMBOLS: tuple[str, ...] = ()
 
 PYTHON_COMPAT_SYMBOLS = (
     "wcs_zenithal_project",
@@ -557,14 +556,13 @@ _SIMPLE_ADAPTERS = {
     "_healpix_spin_map2alm_ring_recurrence_cpu": "spectral_spin_map2alm_ring_recurrence",
     "_healpix_scalar_integrate_recurrence_cpu": "spectral_scalar_integrate_recurrence",
     "_healpix_scalar_interpolate_recurrence_cpu": "spectral_scalar_interpolate_recurrence",
+    "healpix_query_disc_torch_cpu": "healpix_query_disc",
+    "_healpix_spin_map2alm_from_basis_cpu": "_spectral_spin_map2alm_from_basis",
+    "_healpix_spin_alm2map_from_basis_cpu": "_spectral_spin_alm2map_from_basis",
 }
 
 for _old_name, _operator_name in _SIMPLE_ADAPTERS.items():
     globals()[_old_name] = _operator_adapter(_old_name, _operator_name)
-
-for _deferred_name in DEFERRED_NATIVE_SYMBOLS:
-    globals()[_deferred_name] = getattr(_ext, _deferred_name)
-
 
 def selected_cpu_isa() -> str:
     return str(_ext.selected_cpu_isa())
@@ -577,4 +575,4 @@ __all__ = [
     "selected_cpu_isa",
 ]
 
-del _deferred_name, _old_name, _operator_name
+del _old_name, _operator_name

@@ -283,33 +283,9 @@ else()
     message(FATAL_ERROR "TorchConfig provided neither the torch target nor TORCH_LIBRARIES")
 endif()
 
-# Deferred query_disc and experimental basis nanobind exports still accept and
-# return tensors directly, so their isolated bridge requires THPVariable_Wrap
-# and DLPack until those dynamic/experimental interfaces become dispatcher ops.
-execute_process(
-    COMMAND ${Python_EXECUTABLE} -c "import torch, os; print(os.path.dirname(torch.__file__))"
-    OUTPUT_VARIABLE TORCH_ROOT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-message(DEBUG "torchsky: TORCH_ROOT=${TORCH_ROOT}")
-
-# Avoid stale cached paths when switching environments/interpreters.
-unset(TORCH_PYTHON_LIBRARY CACHE)
-unset(TORCH_PYTHON_LIBRARY_FALLBACK CACHE)
-
-find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_ROOT}/lib" NO_DEFAULT_PATH)
-if(TORCH_PYTHON_LIBRARY)
-    target_link_libraries(_cpp_ext PRIVATE ${TORCH_PYTHON_LIBRARY})
-    message(STATUS "Found libtorch_python: ${TORCH_PYTHON_LIBRARY}")
-else()
-    message(FATAL_ERROR "libtorch_python is required by deferred query_disc and experimental basis bindings")
-endif()
-
 # Compiler flags
 target_compile_definitions(_cpp_ext PRIVATE VERSION_INFO="")
 target_compile_definitions(_cpp_ext PRIVATE TORCHSKY_TORCH_ABI="${TORCHSKY_BUILD_TORCH_ABI}")
-# PyTorch 2.13 conda builds use the C++20 library ABI. Building this tensor
-# bridge as C++17 corrupts returned at::Tensor values even when versions match.
 target_compile_features(_cpp_ext PRIVATE cxx_std_20)
 
 if(APPLE)

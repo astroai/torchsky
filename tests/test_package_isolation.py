@@ -20,13 +20,6 @@ REPO_ROOT = PACKAGE_ROOT.parents[1]
 
 
 def test_native_calls_are_confined_to_dispatch_or_legacy_allowlist() -> None:
-    allowed = {
-        "sphere/healpix.py": {"healpix_query_disc_torch_cpu"},
-        "sphere/spectral.py": {
-            "_healpix_spin_alm2map_from_basis_cpu",
-            "_healpix_spin_map2alm_from_basis_cpu",
-        },
-    }
     found: dict[str, set[str]] = {}
     pattern = re.compile(r"\b_cpp\.([A-Za-z_][A-Za-z0-9_]*)")
     for path in PACKAGE_ROOT.rglob("*.py"):
@@ -34,7 +27,7 @@ def test_native_calls_are_confined_to_dispatch_or_legacy_allowlist() -> None:
         names = set(pattern.findall(path.read_text(encoding="utf-8")))
         if names:
             found[relative] = names
-    assert found == allowed
+    assert found == {}
 
 
 def test_fits_facade_is_absent_and_tensor_operators_do_not_require_native():

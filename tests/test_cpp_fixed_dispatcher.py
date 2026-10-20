@@ -4,6 +4,7 @@ import pytest
 import torch
 from collections.abc import Callable
 from torch._subclasses.fake_tensor import FakeTensorMode, is_fake
+from torch.fx.experimental.symbolic_shapes import ShapeEnv
 
 from torchsky import _ops
 from torchsky._native import cpp as _cpp
@@ -29,6 +30,7 @@ def test_fixed_dispatcher_schemas_are_clean() -> None:
         "healpix_get_interp_weights_nested",
         "healpix_get_interp_val_ring",
         "healpix_get_interp_val_nested",
+        "healpix_query_disc",
         "sparse_get_values_blocks",
     )
     assert _ops.has_fixed_dispatcher()
@@ -123,6 +125,20 @@ def test_sparse_dispatcher_matches_legacy_adapter() -> None:
     actual = torch.ops.torchsky.sparse_get_values_blocks(query, index, blocks, fill)
     expected = _cpp._sparse_get_values_blocks_cpu(query, index, blocks, fill)
     torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("nest", [False, True])
+def test_query_disc_dispatcher_matches_public_and_compatibility(nest: bool) -> None:
+    vec = torch.tensor([0.3, -0.4, 0.5], dtype=torch.float64)
+    cos_lim = 0.25
+    actual = torch.ops.torchsky.healpix_query_disc(8, vec, cos_lim, nest)
+    expected = healpix.query_disc(8, vec, torch.acos(torch.tensor(cos_lim)).item(), nest=nest)
+    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
+        compatibility = _cpp.healpix_query_disc_torch_cpu(8, vec, cos_lim, nest)
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(actual, compatibility)
+    assert actual.dtype == torch.int64
+    assert actual.device.type == "cpu"
 
 
 def test_dispatcher_outputs_do_not_alias_inputs() -> None:
@@ -233,6 +249,17 @@ def test_fixed_dispatcher_fake_tensor_shapes() -> None:
     assert is_fake(out_lat) and out_lat.shape == (2, 3)
 
 
+def test_query_disc_fake_tensor_has_bounded_symbolic_output() -> None:
+    mode = FakeTensorMode(shape_env=ShapeEnv())
+    with mode:
+        output = torch.ops.torchsky.healpix_query_disc(
+            16, torch.empty(3, dtype=torch.float64), 0.5, False
+        )
+    assert is_fake(output)
+    assert isinstance(output.shape[0], torch.SymInt)
+    assert output.dtype == torch.int64
+
+
 def test_discrete_and_native_interpolation_outputs_are_nondifferentiable() -> None:
     lon = torch.tensor([10.0, 20.0], dtype=torch.float64, requires_grad=True)
     lat = torch.tensor([0.0, 5.0], dtype=torch.float64, requires_grad=True)
@@ -285,11 +312,15 @@ def test_public_fixed_shape_paths_use_dispatcher(
         nside_coverage=1,
     )
     sparse.get_values(torch.tensor([0], dtype=torch.int64))
+    healpix.query_disc(
+        2, torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64), 0.25
+    )
     assert {
         "healpix_ring2nest",
         "healpix_neighbors_ring",
         "sphere_planar_point_in_polygon",
         "sparse_get_values_blocks",
+        "healpix_query_disc",
     } <= calls
 
 
@@ -329,3 +360,14 @@ def test_fixed_dispatcher_compile() -> None:
     lon = torch.tensor([0.0, 30.0], dtype=torch.float64)
     lat = torch.tensor([0.0, 45.0], dtype=torch.float64)
     torch.testing.assert_close(compiled(lon, lat), operation(lon, lat))
+
+
+def test_query_disc_dispatcher_compile_fullgraph_dynamic_output() -> None:
+    def operation(vec: torch.Tensor) -> torch.Tensor:
+        return torch.ops.torchsky.healpix_query_disc(8, vec, 0.5, False)
+
+    compiled = torch.compile(
+        operation, fullgraph=True, dynamic=True, backend="aot_eager"
+    )
+    vec = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64)
+    torch.testing.assert_close(compiled(vec), operation(vec))

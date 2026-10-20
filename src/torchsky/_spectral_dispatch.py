@@ -265,6 +265,71 @@ def _fake_scalar_interpolate_recurrence(
     return torch.empty((mmax + 1, theta.shape[0]), dtype=alm.dtype, device=alm.device)
 
 
+def _fake_spin_map2alm_from_basis(
+    q: Tensor,
+    u: Tensor,
+    ycp_t: Tensor,
+    ycm_t: Tensor,
+    pixel_weight: float,
+) -> tuple[Tensor, Tensor]:
+    del pixel_weight
+    _check_f64(q, 1, "q")
+    _check_f64(u, 1, "u")
+    _check_c128(ycp_t, 2, "ycp_t")
+    _check_c128(ycm_t, 2, "ycm_t")
+    torch._check(q.shape == u.shape, lambda: "q/u shapes must match")
+    torch._check(ycp_t.shape == ycm_t.shape, lambda: "basis shapes must match")
+    torch._check(
+        ycp_t.shape[0] == q.shape[0],
+        lambda: "basis first dimension must match q/u length",
+    )
+    output = torch.empty((ycp_t.shape[1],), dtype=ycp_t.dtype, device=q.device)
+    return output, torch.empty_like(output)
+
+
+def _fake_spin_alm2map_from_basis(
+    coeff_plus: Tensor,
+    coeff_minus: Tensor,
+    y_plus: Tensor,
+    y_minus: Tensor,
+    y_plus_m0: Tensor,
+    y_minus_m0: Tensor,
+) -> Tensor:
+    _check_c128(coeff_plus, 1, "coeff_plus")
+    _check_c128(coeff_minus, 1, "coeff_minus")
+    for tensor, name in (
+        (y_plus, "y_plus"),
+        (y_minus, "y_minus"),
+        (y_plus_m0, "y_plus_m0"),
+        (y_minus_m0, "y_minus_m0"),
+    ):
+        _check_c128(tensor, 2, name)
+    torch._check(
+        coeff_plus.shape == coeff_minus.shape,
+        lambda: "coefficient shapes must match",
+    )
+    torch._check(y_plus.shape == y_minus.shape, lambda: "basis shapes must match")
+    torch._check(
+        y_plus_m0.shape == y_minus_m0.shape,
+        lambda: "m0 basis shapes must match",
+    )
+    torch._check(
+        y_plus.shape[0] == coeff_plus.shape[0],
+        lambda: "basis row count must match coefficient length",
+    )
+    torch._check(
+        y_plus_m0.shape[0] <= coeff_plus.shape[0],
+        lambda: "m0 basis row count cannot exceed coefficient length",
+    )
+    torch._check(
+        y_plus_m0.shape[1] == y_plus.shape[1],
+        lambda: "basis tensors must have the same pixel dimension",
+    )
+    return torch.empty(
+        (2, y_plus.shape[1]), dtype=torch.float64, device=coeff_plus.device
+    )
+
+
 def _register_fake(name: str, implementation: Callable[..., Any]) -> None:
     torch.library.register_fake(f"torchsky::{name}")(implementation)
 
@@ -447,6 +512,52 @@ def _backward_concat_integrate(
     )
 
 
+def _setup_basis_map2alm(ctx: Any, inputs: tuple[Any, ...], output: Any) -> None:
+    del output
+    _, _, ycp_t, ycm_t, pixel_weight = inputs
+    ctx.save_for_backward(ycp_t, ycm_t)
+    ctx.pixel_weight = pixel_weight
+
+
+def _backward_basis_map2alm(
+    ctx: Any, grad_plus: Tensor, grad_minus: Tensor
+) -> tuple[Tensor, Tensor, None, None, None]:
+    ycp_t, ycm_t = ctx.saved_tensors
+    plus = ycp_t.conj() @ grad_plus
+    minus = ycm_t.conj() @ grad_minus
+    scale = ctx.pixel_weight
+    return scale * (plus + minus).real, scale * (plus - minus).imag, None, None, None
+
+
+def _setup_basis_alm2map(ctx: Any, inputs: tuple[Any, ...], output: Any) -> None:
+    del output
+    _, _, y_plus, y_minus, y_plus_m0, y_minus_m0 = inputs
+    ctx.save_for_backward(y_plus, y_minus, y_plus_m0, y_minus_m0)
+
+
+def _backward_basis_alm2map(
+    ctx: Any, grad: Tensor
+) -> tuple[Tensor, Tensor, None, None, None, None]:
+    y_plus, y_minus, y_plus_m0, y_minus_m0 = ctx.saved_tensors
+    grad_plus_map = -0.5 * torch.complex(grad[0], grad[1])
+    grad_minus_map = -0.5 * torch.complex(grad[0], -grad[1])
+    grad_plus = grad_plus_map @ y_plus.conj().T
+    grad_minus = grad_minus_map @ y_minus.conj().T
+    l0 = y_plus_m0.shape[0]
+    if l0 != y_plus.shape[0]:
+        grad_plus = grad_plus + grad_minus_map.conj() @ y_plus.conj().T
+        grad_minus = grad_minus + grad_plus_map.conj() @ y_minus.conj().T
+        plus_correction = grad_minus_map.conj() @ y_plus_m0.conj().T
+        minus_correction = grad_plus_map.conj() @ y_minus_m0.conj().T
+        grad_plus = grad_plus - torch.cat(
+            (plus_correction, torch.zeros_like(grad_plus[l0:]))
+        )
+        grad_minus = grad_minus - torch.cat(
+            (minus_correction, torch.zeros_like(grad_minus[l0:]))
+        )
+    return grad_plus, grad_minus, None, None, None, None
+
+
 def _register() -> None:
     fake_implementations: dict[str, Callable[..., Any]] = {
         "spectral_scalar_alm2map_direct": _fake_scalar_direct,
@@ -463,6 +574,8 @@ def _register() -> None:
         "spectral_spin_alm2map_ring_recurrence": _fake_spin_alm2map_recurrence,
         "spectral_scalar_integrate_recurrence": _fake_scalar_integrate_recurrence,
         "spectral_scalar_interpolate_recurrence": _fake_scalar_interpolate_recurrence,
+        "_spectral_spin_map2alm_from_basis": _fake_spin_map2alm_from_basis,
+        "_spectral_spin_alm2map_from_basis": _fake_spin_alm2map_from_basis,
     }
     for name, implementation in fake_implementations.items():
         _register_fake(name, implementation)
@@ -506,6 +619,16 @@ def _register() -> None:
         "torchsky::spectral_spin_integrate_concat",
         _backward_concat_integrate,
         setup_context=_setup_concat_integrate,
+    )
+    torch.library.register_autograd(
+        "torchsky::_spectral_spin_map2alm_from_basis",
+        _backward_basis_map2alm,
+        setup_context=_setup_basis_map2alm,
+    )
+    torch.library.register_autograd(
+        "torchsky::_spectral_spin_alm2map_from_basis",
+        _backward_basis_alm2map,
+        setup_context=_setup_basis_alm2map,
     )
 
 

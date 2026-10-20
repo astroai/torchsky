@@ -200,8 +200,8 @@ def test_clear_spectral_caches_resets_lookup_state() -> None:
     spectral_mod.clear_spectral_caches()
 
     assert not spectral_mod._ALM_ELL_CACHE
-    assert spectral_mod._SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES == 0
-    assert spectral_mod._SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES == 0
+    assert spectral_mod._SPECTRAL_CACHE.info().entries == 0
+    assert spectral_mod._SPECTRAL_CACHE.info().total_bytes == 0
 
 
 def test_map2alm_alm2map_roundtrip_low_l() -> None:

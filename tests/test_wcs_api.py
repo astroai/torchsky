@@ -1395,17 +1395,23 @@ def test_identity_slice_and_affine_preserve_lut_and_existing_pixel_affine() -> N
         assert identity._pixel_affine_matrix is not None
 
 
-def test_unsupported_lut_rebasing_fails_closed() -> None:
+def test_lut_rebasing_and_pixel_affine_composition_are_supported() -> None:
     table = DistortionLookupTable(
-        torch.zeros((2, 2), dtype=torch.float64),
+        torch.tensor([[0.0, 0.01], [0.02, 0.03]], dtype=torch.float64),
         crpix=(1.0, 1.0),
         crval=(1.0, 1.0),
         cdelt=(64.0, 64.0),
     )
     wcs = WCS(_distorted_tan_header(), cpdis1=table)
-    with pytest.raises(NotImplementedError, match="distortion"):
-        wcs.slice((slice(1, None), slice(None)))
-    with pytest.raises(NotImplementedError, match="distortion"):
-        wcs.with_pixel_affine_correction(
-            torch.tensor([[1.0, 0.1], [0.0, 1.0]]), torch.zeros(2)
-        )
+    pixels = torch.tensor([[4.0, 5.0], [12.0, 18.0]], dtype=torch.float64)
+    sliced = wcs.slice((slice(1, None), slice(None)))
+    torch.testing.assert_close(
+        sliced.pixel_to_world(pixels),
+        wcs.pixel_to_world(pixels + torch.tensor([0.0, 1.0])),
+    )
+
+    matrix = torch.tensor([[1.0, 0.1], [0.0, 1.0]], dtype=torch.float64)
+    corrected = wcs.with_pixel_affine_correction(matrix, torch.zeros(2))
+    torch.testing.assert_close(
+        corrected.pixel_to_world(pixels @ matrix.T), wcs.pixel_to_world(pixels)
+    )

@@ -17,6 +17,7 @@ TORCH_LIBRARY_FRAGMENT(torchsky, m) {
     m.def("healpix_get_interp_weights_nested(int nside, Tensor lon_deg, Tensor lat_deg) -> (Tensor pixels, Tensor weights)");
     m.def("healpix_get_interp_val_ring(int nside, Tensor maps, Tensor lon_deg, Tensor lat_deg) -> Tensor");
     m.def("healpix_get_interp_val_nested(int nside, Tensor maps, Tensor lon_deg, Tensor lat_deg) -> Tensor");
+    m.def("healpix_query_disc(int nside, Tensor vec, float cos_lim, bool nest=False) -> Tensor");
     m.def("sparse_get_values_blocks(Tensor query, Tensor block_index, Tensor block_values, Tensor fill) -> Tensor");
 }
 

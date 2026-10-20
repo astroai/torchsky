@@ -107,6 +107,16 @@ def spectral_scalar_interpolate_recurrence(*args: Any) -> torch.Tensor:
     return _spectral("spectral_scalar_interpolate_recurrence", *args)
 
 
+def _spectral_spin_map2alm_from_basis(
+    *args: Any,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return _spectral("_spectral_spin_map2alm_from_basis", *args)
+
+
+def _spectral_spin_alm2map_from_basis(*args: Any) -> torch.Tensor:
+    return _spectral("_spectral_spin_alm2map_from_basis", *args)
+
+
 def sphere_planar_point_in_polygon(*args: Any) -> torch.Tensor:
     return _fixed("sphere_planar_point_in_polygon", *args)
 
@@ -161,6 +171,10 @@ def healpix_get_interp_val_ring(*args: Any) -> torch.Tensor:
 
 def healpix_get_interp_val_nested(*args: Any) -> torch.Tensor:
     return _fixed("healpix_get_interp_val_nested", *args)
+
+
+def healpix_query_disc(*args: Any) -> torch.Tensor:
+    return _fixed("healpix_query_disc", *args)
 
 
 def sparse_get_values_blocks(*args: Any) -> torch.Tensor:

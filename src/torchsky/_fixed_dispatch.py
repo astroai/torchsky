@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 from typing import Any
 
 import torch
@@ -117,6 +118,24 @@ def _fake_interp(nside: int, maps: Tensor, lon: Tensor, lat: Tensor) -> Tensor:
     return torch.empty(shape, dtype=maps.dtype, device=maps.device)
 
 
+def _fake_query_disc(
+    nside: int, vec: Tensor, cos_lim: float, nest: bool = False
+) -> Tensor:
+    del nest
+    _check_nside(nside)
+    torch._check(nside <= 1 << 29, lambda: "nside must not exceed 2**29")
+    torch._check(vec.dtype == torch.float64, lambda: "vec must be float64")
+    torch._check(vec.numel() == 3, lambda: "vec must contain exactly three values")
+    torch._check(
+        math.isfinite(cos_lim) and -1.0 <= cos_lim <= 1.0,
+        lambda: "cos_lim must be finite and in [-1, 1]",
+    )
+    count = torch.library.get_ctx().new_dynamic_size(
+        min=0, max=12 * nside * nside
+    )
+    return torch.empty((count,), dtype=torch.int64, device=vec.device)
+
+
 def _fake_sparse(
     query: Tensor, block_index: Tensor, block_values: Tensor, fill: Tensor
 ) -> Tensor:
@@ -170,6 +189,7 @@ def _register() -> None:
         "healpix_get_interp_weights_nested": _fake_weights,
         "healpix_get_interp_val_ring": _fake_interp,
         "healpix_get_interp_val_nested": _fake_interp,
+        "healpix_query_disc": _fake_query_disc,
         "sparse_get_values_blocks": _fake_sparse,
     }
     for name, implementation in fake_implementations.items():

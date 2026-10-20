@@ -501,7 +501,9 @@ def test_query_vec_helpers_self_consistent() -> None:
     )
 
 
-def test_query_disc_cpp_matches_python_fallback() -> None:
+def test_query_disc_cpp_matches_python_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     cpp = pytest.importorskip("torchsky._cpp")
     if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
         pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
@@ -518,17 +520,13 @@ def test_query_disc_cpp_matches_python_fallback() -> None:
         nside, lon, lat, radius_deg, degrees=True, nest=True, inclusive=False
     )
 
-    old_cpp = healpix_mod._cpp
-    healpix_mod._cpp = None
-    try:
-        exp_ring = query_circle(
-            nside, lon, lat, radius_deg, degrees=True, nest=False, inclusive=True
-        )
-        exp_nest = query_circle(
-            nside, lon, lat, radius_deg, degrees=True, nest=True, inclusive=False
-        )
-    finally:
-        healpix_mod._cpp = old_cpp
+    monkeypatch.setattr(healpix_mod._ops, "has_fixed_dispatcher", lambda: False)
+    exp_ring = query_circle(
+        nside, lon, lat, radius_deg, degrees=True, nest=False, inclusive=True
+    )
+    exp_nest = query_circle(
+        nside, lon, lat, radius_deg, degrees=True, nest=True, inclusive=False
+    )
 
     torch.testing.assert_close(torch.sort(got_ring).values, torch.sort(exp_ring).values)
     torch.testing.assert_close(torch.sort(got_nest).values, torch.sort(exp_nest).values)

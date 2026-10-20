@@ -60,6 +60,17 @@ std::tuple<torch::Tensor, torch::Tensor> spectral_spin_integrate_concat_cpu(
     return std::make_tuple(std::move(out.first), std::move(out.second));
 }
 
+std::tuple<torch::Tensor, torch::Tensor> spectral_spin_map2alm_from_basis_cpu(
+    const torch::Tensor& q,
+    const torch::Tensor& u,
+    const torch::Tensor& ycp_t,
+    const torch::Tensor& ycm_t,
+    double pixel_weight
+) {
+    auto out = healpix_spin_map2alm_from_basis_cpu(q, u, ycp_t, ycm_t, pixel_weight);
+    return std::make_tuple(std::move(out.first), std::move(out.second));
+}
+
 torch::Tensor spectral_spin_interpolate_recurrence_cpu(
     const torch::Tensor& alms,
     const torch::Tensor& theta,
@@ -132,6 +143,8 @@ TORCH_LIBRARY_IMPL(torchsky, CPU, m) {
     m.impl("spectral_spin_alm2map_ring_recurrence", TORCH_FN(torchsky::spectral_spin_alm2map_ring_recurrence_cpu));
     m.impl("spectral_scalar_integrate_recurrence", TORCH_FN(torchsky::healpix_scalar_integrate_recurrence_cpu));
     m.impl("spectral_scalar_interpolate_recurrence", TORCH_FN(torchsky::healpix_scalar_interpolate_recurrence_cpu));
+    m.impl("_spectral_spin_map2alm_from_basis", TORCH_FN(torchsky::spectral_spin_map2alm_from_basis_cpu));
+    m.impl("_spectral_spin_alm2map_from_basis", TORCH_FN(torchsky::healpix_spin_alm2map_from_basis_cpu));
 }
 
 namespace torchsky {

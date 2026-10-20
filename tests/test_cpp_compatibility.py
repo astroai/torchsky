@@ -14,10 +14,6 @@ import torchsky._cpp as cpp
 
 
 PACKAGE_ROOT = Path(cpp.__file__).parent
-DEFERRED_CALL_SITES = {
-    Path("sphere/healpix.py"),
-    Path("sphere/spectral.py"),
-}
 
 
 def test_compatibility_symbol_inventory_is_complete_and_disjoint() -> None:
@@ -25,11 +21,12 @@ def test_compatibility_symbol_inventory_is_complete_and_disjoint() -> None:
     python_compat = set(cpp.PYTHON_COMPAT_SYMBOLS)
     deferred = set(cpp.DEFERRED_NATIVE_SYMBOLS)
     assert migrated
-    assert deferred == {
+    assert {
         "healpix_query_disc_torch_cpu",
         "_healpix_spin_map2alm_from_basis_cpu",
         "_healpix_spin_alm2map_from_basis_cpu",
-    }
+    } <= migrated
+    assert deferred == set()
     assert migrated.isdisjoint(python_compat | deferred)
     assert python_compat.isdisjoint(deferred)
     assert set(cpp.__all__) == migrated | python_compat | deferred | {
@@ -38,12 +35,11 @@ def test_compatibility_symbol_inventory_is_complete_and_disjoint() -> None:
     assert all(hasattr(cpp, name) for name in cpp.__all__)
 
 
-def test_extension_exports_only_deferred_tensor_bindings() -> None:
+def test_extension_exports_only_isa_diagnostics() -> None:
     exported = {name for name in dir(cpp._ext) if not name.startswith("__")}
-    assert exported == set(cpp.DEFERRED_NATIVE_SYMBOLS) | {"selected_cpu_isa"}
+    assert exported == {"selected_cpu_isa"}
     bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")
-    assert bindings.count("m.def(") == len(cpp.DEFERRED_NATIVE_SYMBOLS) + 1
-    assert all(f'"{name}"' in bindings for name in cpp.DEFERRED_NATIVE_SYMBOLS)
+    assert bindings.count("m.def(") == 1
     assert all(f'"{name}"' not in bindings for name in cpp.MIGRATED_COMPAT_SYMBOLS)
     assert all(f'"{name}"' not in bindings for name in cpp.PYTHON_COMPAT_SYMBOLS)
 
@@ -68,6 +64,29 @@ def test_spectral_old_name_preserves_historical_shape_and_warns() -> None:
     with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
         actual = cpp._healpix_ring_fourier_modes_spin_conj_cpu(row, starts, lengths, 0)
     torch.testing.assert_close(actual, expected)
+
+
+def test_remaining_old_names_warn_and_dispatch_with_parity() -> None:
+    vec = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64)
+    expected_disc = torch.ops.torchsky.healpix_query_disc(2, vec, 0.5, False)
+    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
+        actual_disc = cpp.healpix_query_disc_torch_cpu(2, vec, 0.5, False)
+    torch.testing.assert_close(actual_disc, expected_disc)
+
+    q = torch.tensor([0.2, -0.3], dtype=torch.float64)
+    u = torch.tensor([0.4, 0.1], dtype=torch.float64)
+    basis = torch.tensor(
+        [[1.0 + 0.2j, 0.3 - 0.4j], [0.5 + 0.1j, -0.2 + 0.7j]],
+        dtype=torch.complex128,
+    )
+    expected_coeff = torch.ops.torchsky._spectral_spin_map2alm_from_basis(
+        q, u, basis, basis.conj(), 0.25
+    )
+    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
+        actual_coeff = cpp._healpix_spin_map2alm_from_basis_cpu(
+            q, u, basis, basis.conj(), 0.25
+        )
+    torch.testing.assert_close(actual_coeff, expected_coeff)
 
 
 def test_wcs_old_name_preserves_out_parameter_contract_and_warns() -> None:
@@ -125,7 +144,7 @@ def test_wcs_old_name_preserves_out_parameter_contract_and_warns() -> None:
 
 
 def test_loader_reload_and_disable_cpp_subprocess_contract() -> None:
-    assert importlib.reload(cpp).DEFERRED_NATIVE_SYMBOLS
+    assert importlib.reload(cpp).DEFERRED_NATIVE_SYMBOLS == ()
     script = """
 import sys
 import torchsky._native as native
@@ -148,7 +167,7 @@ assert not _ops.has_wcs_dispatcher()
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_production_direct_cpp_calls_are_limited_to_deferred_bindings() -> None:
+def test_production_has_no_direct_cpp_tensor_calls() -> None:
     offenders: list[str] = []
     for path in PACKAGE_ROOT.rglob("*.py"):
         relative = path.relative_to(PACKAGE_ROOT)
@@ -172,17 +191,5 @@ def test_production_direct_cpp_calls_are_limited_to_deferred_bindings() -> None:
             and node.value.id == "_cpp"
         }
         if imports_cpp or direct_names:
-            if relative not in DEFERRED_CALL_SITES:
-                offenders.append(os.fspath(relative))
-                continue
-            allowed = (
-                {"healpix_query_disc_torch_cpu"}
-                if relative == Path("sphere/healpix.py")
-                else {
-                    "_healpix_spin_map2alm_from_basis_cpu",
-                    "_healpix_spin_alm2map_from_basis_cpu",
-                }
-            )
-            if not direct_names <= allowed:
-                offenders.append(os.fspath(relative))
+            offenders.append(os.fspath(relative))
     assert offenders == []

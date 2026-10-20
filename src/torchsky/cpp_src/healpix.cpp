@@ -2483,8 +2483,8 @@ torch::Tensor healpix_spin_alm2map_from_basis_cpu(
         auto cm0 = cm.narrow(0, 0, l0);
         auto p_plus_m0 = torch::matmul(cp0, yp0);
         auto p_minus_m0 = torch::matmul(cm0, ym0);
-        p_plus = p_plus_pos + torch::conj(p_minus_pos - p_minus_m0);
-        p_minus = p_minus_pos + torch::conj(p_plus_pos - p_plus_m0);
+        p_plus = p_plus_pos + torch::conj(p_minus_pos - p_minus_m0).resolve_conj();
+        p_minus = p_minus_pos + torch::conj(p_plus_pos - p_plus_m0).resolve_conj();
     }
 
     auto q = -0.5 * torch::real(p_plus + p_minus);

@@ -12,9 +12,6 @@ try:
 except ImportError:
     vmap = None
 
-from torchsky._native import cpp as _cpp
-
-
 _JRLL = torch.tensor([2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4], dtype=torch.int64)
 _JPLL = torch.tensor([1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7], dtype=torch.int64)
 _FACE_CONST_CACHE: dict[tuple[str, int], tuple[Tensor, Tensor]] = {}
@@ -1498,8 +1495,7 @@ def query_disc(
 
     use_cpp = (
         out_device.type != "mps"
-        and _cpp is not None
-        and hasattr(_cpp, "healpix_query_disc_torch_cpu")
+        and _ops.has_fixed_dispatcher()
     )
     if use_cpp:
         vec_cpu = torch.stack(
@@ -1509,7 +1505,7 @@ def query_disc(
                 vz.detach().cpu().to(torch.float64),
             ]
         ).contiguous()
-        out = _cpp.healpix_query_disc_torch_cpu(nside, vec_cpu, float(cos_lim), nest)
+        out = _ops.healpix_query_disc(nside, vec_cpu, float(cos_lim), nest)
         if out_device.type != "cpu":
             return out.to(device=out_device)
         return out

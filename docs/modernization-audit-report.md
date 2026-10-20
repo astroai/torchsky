@@ -19,9 +19,9 @@ The work repaired the verified defects, added independent regression coverage, s
 
 Final integrated results:
 
-- Native, WCS, sphere, HEALPix, dispatcher, bridge, and package tests: **1072 passed, 31 skipped**.
-- Map and field tests: **1024 passed, 23 skipped**.
-- Performance smoke: **4 passed**.
+- Native, WCS, sphere, HEALPix, dispatcher, bridge, cache, and hosted-validation contract tests: **1161 passed, 33 skipped**.
+- Map and field tests: **1049 passed, 24 skipped**.
+- Scalability/performance regression gates: **67 passed, 2 skipped**.
 - `pixi run preflight-push`: passed.
 - `pixi run typecheck`: **0 errors**, one pre-existing `__all__` warning.
 - Wheel and sdist: content/linkage inspection passed; `twine check` passed; clean installed-wheel dispatcher smoke passed; `TORCHSKY_DISABLE_CPP=1` smoke passed.
@@ -638,7 +638,7 @@ MPS float64 failures, CUDA/device-routing behavior, and CPU-only build portabili
 
 Repository policy defines `pixi run test` as the main suite with `tests/test_map_*.py` excluded; map tests run in a separate matrix. This is operationally reasonable, but it means running only the default task cannot detect map FFT, calibration, variance, PSF, windowing, or field rendering failures.
 
-This work ran the map/field corpus explicitly: **1024 passed, 23 skipped**.
+This work ran the final map/field corpus explicitly: **1049 passed, 24 skipped**.
 
 ### Harness benchmarks measure speed, not semantic edge cases
 
@@ -653,19 +653,20 @@ The appropriate split is:
 
 Examples included accepting singleton sample-shape defects, treating normalization as inverse variance, and expecting strict behavior from a sanitizer. These tests were replaced with scientific/API invariants rather than merely updated to match the implementation.
 
-## Deferred and intentionally unsupported work
+## Completion of formerly deferred technical work
 
-The following were not silently claimed complete:
+The follow-up program completed the technical items that were initially deferred:
 
-- `query_disc` remains outside FakeTensor/fullgraph dispatcher support because output length is data-dependent.
-- Two experimental SHT basis bindings remain legacy-only.
-- Their isolated bridge still requires `torch_python`; all production migrated tensor paths do not.
-- Exact nonidentity rebasing/composition for SIP/CPDIS/DET2IM/LUT/existing pixel-affine state remains unsupported and raises.
-- Celestial-axis permutations beyond the currently supported axis arrangement remain a documented architectural limitation.
-- AVX2/Linux runtime execution is CI-covered but was not locally executed on the macOS arm64 host.
-- CUDA-enabled PyTorch still follows upstream TorchConfig toolkit requirements.
-- Large-scale crossover/default changes to the contained scheduler or hybrid FFT policy require same-machine, cross-platform `torchsky-harness` evidence; no unmeasured default performance claim was made.
-- Potential future scaling work remains for pathological polygon candidate expansion, full detector pixmap construction, incremental HEALPix coadd reduction, Python spectral-cache unification, and indexed STMOC operations.
+- `query_disc` now has a dispatcher CPU kernel and dynamic symbolic FakeTensor output; supported dynamic fullgraph compilation is tested.
+- The two SHT basis kernels now use private dispatcher schemas with explicit autograd, FakeTensor, compile, and compatibility coverage.
+- The DLPack/`THPVariable_Wrap` bridge, `torch_compat.h`, and explicit `torch_python` linkage were removed completely.
+- SIP polynomial, CPDIS/DET2IM and tabular lookup-grid metadata, TPV, existing pixel-affine state, and chained slice/affine transforms now rebase or compose with tested round trips.
+- Celestial axes can occupy arbitrary FITS axis positions and reverse longitude/latitude ordering across mixed-dimensional transforms, metadata, slicing, serialization, gradients, and compile paths. Nonstandard TPV layouts that have no defined convention fail explicitly.
+- Hosted CI now executes Linux scalar/AVX2, QEMU pre-AVX2 illegal-instruction protection, macOS scalar/NEON, CPU-only builds, dispatcher/wheel smoke, and CUDA-toolkit configure/link diagnostics.
+- Harness measurements found the hybrid FFT policy substantially faster overall but with isolated bucket regressions, and found mixed scheduler scaling without a validated ATen-range replacement. The evidence therefore supports retaining both current defaults rather than making an unmeasured change.
+- Polygon overlap and detector pixmap processing are tile-local and candidate-pair bounded; HEALPix coadds reduce incrementally; Python spectral caches share one thread-safe byte budget; and STMOC operations use sorted temporal indexes and bounded sweeps.
+
+The hosted Linux/AVX2/CUDA jobs must still run on the pushed branch to provide platform execution results; local macOS arm64 scalar/NEON validation passed. No runtime default was changed where benchmark evidence did not meet the promotion gate.
 
 ## Result
 

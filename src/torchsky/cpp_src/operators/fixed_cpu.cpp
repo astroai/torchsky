@@ -92,6 +92,7 @@ TORCH_LIBRARY_IMPL(torchsky, CPU, m) {
     m.impl("healpix_get_interp_weights_nested", TORCH_FN(torchsky::healpix_get_interp_weights_nested_dispatch_cpu));
     m.impl("healpix_get_interp_val_ring", TORCH_FN(torchsky::healpix_get_interp_val_ring_cpu));
     m.impl("healpix_get_interp_val_nested", TORCH_FN(torchsky::healpix_get_interp_val_nested_cpu));
+    m.impl("healpix_query_disc", TORCH_FN(torchsky::healpix_query_disc_cpu));
     m.impl("sparse_get_values_blocks", TORCH_FN(torchsky::sparse_get_values_blocks_cpu));
 }
 

@@ -33,6 +33,102 @@ from .operators.resampling import sample_image_plane_batched_channels
 from .windowing import _build_target_world_grid
 
 
+def _sorted_chunk(
+    pixels: Tensor,
+    numer: Tensor,
+    denom: Tensor,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    ordered = pixels.numel() < 2 or bool((pixels[1:] > pixels[:-1]).all())
+    if ordered:
+        sorted_pixels = pixels
+        sorted_numer = numer
+        sorted_denom = denom
+    else:
+        order = torch.argsort(pixels, stable=True)
+        sorted_pixels = pixels[order]
+        sorted_numer = numer[order]
+        sorted_denom = denom[order]
+    if sorted_pixels.numel() > 1 and bool(
+        (sorted_pixels[1:] == sorted_pixels[:-1]).any()
+    ):
+        raise ValueError("a contribution chunk must contain unique HEALPix pixels")
+    return (
+        sorted_pixels,
+        sorted_numer,
+        sorted_denom,
+        torch.ones_like(sorted_pixels, dtype=torch.int32),
+    )
+
+
+def _sorted_alignment(
+    source_pixels: Tensor,
+    target_pixels: Tensor,
+) -> tuple[Tensor, Tensor]:
+    positions = torch.searchsorted(source_pixels, target_pixels)
+    safe_positions = positions.clamp_max(source_pixels.numel() - 1)
+    present = (positions < source_pixels.numel()) & (
+        source_pixels[safe_positions] == target_pixels
+    )
+    return safe_positions, present
+
+
+def _aligned_values(
+    source_values: Tensor,
+    safe_positions: Tensor,
+    present: Tensor,
+) -> Tensor:
+    return torch.where(
+        present,
+        source_values[safe_positions],
+        torch.zeros((), dtype=source_values.dtype, device=source_values.device),
+    )
+
+
+class _SortedContributionAccumulator:
+    def __init__(self, *, device: torch.device) -> None:
+        self.pixels = torch.empty(0, dtype=torch.int64, device=device)
+        self.numer = torch.empty(0, dtype=torch.float32, device=device)
+        self.denom = torch.empty(0, dtype=torch.float32, device=device)
+        self.overlap = torch.empty(0, dtype=torch.int32, device=device)
+
+    def add(self, pixels: Tensor, numer: Tensor, denom: Tensor) -> None:
+        if pixels.numel() == 0:
+            return
+        chunk_pixels, chunk_numer, chunk_denom, chunk_overlap = _sorted_chunk(
+            pixels, numer, denom
+        )
+        if self.pixels.numel() == 0:
+            self.pixels = chunk_pixels
+            self.numer = chunk_numer
+            self.denom = chunk_denom
+            self.overlap = chunk_overlap
+            return
+
+        if torch.equal(self.pixels, chunk_pixels):
+            self.numer = self.numer + chunk_numer
+            self.denom = self.denom + chunk_denom
+            self.overlap = self.overlap + chunk_overlap
+            return
+
+        merged_pixels = torch.unique(
+            torch.cat((self.pixels, chunk_pixels)), sorted=True
+        )
+        old_positions, old_present = _sorted_alignment(self.pixels, merged_pixels)
+        chunk_positions, chunk_present = _sorted_alignment(
+            chunk_pixels, merged_pixels
+        )
+        self.numer = _aligned_values(
+            self.numer, old_positions, old_present
+        ) + _aligned_values(chunk_numer, chunk_positions, chunk_present)
+        self.denom = _aligned_values(
+            self.denom, old_positions, old_present
+        ) + _aligned_values(chunk_denom, chunk_positions, chunk_present)
+        self.overlap = _aligned_values(
+            self.overlap, old_positions, old_present
+        ) + _aligned_values(chunk_overlap, chunk_positions, chunk_present)
+        self.pixels = merged_pixels
+
+
 def coadd_healpix(
     observations: Sequence[Observation],
     nside: int,
@@ -46,13 +142,25 @@ def coadd_healpix(
     sky: SkyConfig | None = None,
     outliers: OutlierConfig | None = None,
     device: torch.device | str | None = None,
+    reduction_chunk_size: int = 262_144,
 ) -> HealpixResult:
-    """Coadd 2D WCS observations directly onto a dense or sparse HEALPix grid."""
+    """Coadd 2D WCS observations directly onto a dense or sparse HEALPix grid.
+
+    ``reduction_chunk_size`` bounds sampled contributions retained before each
+    incremental reduction. Sparse accumulation retains merged output support;
+    dense accumulation writes each chunk directly into the output tensors.
+    """
     from ..sphere import healpix as _hp
     from ..sphere.sparse import HealSparseMap
 
     if not observations:
         raise ValueError("At least one Observation is required")
+    if (
+        isinstance(reduction_chunk_size, bool)
+        or not isinstance(reduction_chunk_size, int)
+        or reduction_chunk_size < 1
+    ):
+        raise ValueError("reduction_chunk_size must be a positive integer")
     nside_i = int(nside)
     npix = _hp.nside2npix(nside_i)
     order = nside_i.bit_length() - 1
@@ -68,9 +176,22 @@ def coadd_healpix(
         )
 
     union_moc = MOC.empty()
-    pix_chunks: list[Tensor] = []
-    num_chunks: list[Tensor] = []
-    den_chunks: list[Tensor] = []
+    sparse_accumulator = (
+        _SortedContributionAccumulator(device=map_device) if sparse else None
+    )
+    numer_dense = (
+        None
+        if sparse
+        else torch.zeros(npix, dtype=torch.float32, device=map_device)
+    )
+    denom_dense = (
+        None
+        if sparse
+        else torch.zeros(npix, dtype=torch.float32, device=map_device)
+    )
+    overlap_dense = (
+        None if sparse else torch.zeros(npix, dtype=torch.int32, device=map_device)
+    )
 
     for obs in obs_list:
         if obs.data is not None:
@@ -96,13 +217,6 @@ def coadd_healpix(
         if obs_pix.numel() == 0:
             continue
 
-        ra_p, dec_p = _hp.pix2ang(nside_i, obs_pix, nest=nest, lonlat=True)
-        x_src, y_src = obs_wcs.world_to_pixel(ra_p, dec_p)
-        x_2d = x_src.to(dtype=torch.float32).unsqueeze(0)
-        y_2d = y_src.to(dtype=torch.float32).unsqueeze(0)
-        x_norm = (2.0 * x_2d / max(W_s - 1, 1)) - 1.0
-        y_norm = (2.0 * y_2d / max(H_s - 1, 1)) - 1.0
-        grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
         valid_src = (cal_w > 0.0) & torch.isfinite(cal_img) & torch.isfinite(cal_w)
         channels = torch.stack(
             [
@@ -112,44 +226,62 @@ def coadd_healpix(
             ],
             dim=0,
         )
-        sampled = sample_image_plane_batched_channels(
-            channels,
-            x_src=x_2d,
-            y_src=y_2d,
-            grid=grid,
-            kernel=kernel,
-        )
-        s_num = sampled[0, 0]
-        s_den = sampled[1, 0]
-        s_sup = sampled[2, 0]
-        in_b = (
-            torch.isfinite(x_2d[0])
-            & torch.isfinite(y_2d[0])
-            & (x_2d[0] >= 0.0)
-            & (x_2d[0] <= (W_s - 1))
-            & (y_2d[0] >= 0.0)
-            & (y_2d[0] <= (H_s - 1))
-        )
-        hit = in_b & (s_sup > 0.0) & (s_den > 0.0) & torch.isfinite(s_num)
-        if not bool(hit.any()):
-            continue
-        pix_chunks.append(obs_pix[hit])
-        num_chunks.append(s_num[hit])
-        den_chunks.append(s_den[hit])
+        for pixel_chunk in obs_pix.split(reduction_chunk_size):
+            ra_p, dec_p = _hp.pix2ang(nside_i, pixel_chunk, nest=nest, lonlat=True)
+            x_src, y_src = obs_wcs.world_to_pixel(ra_p, dec_p)
+            x_2d = x_src.to(dtype=torch.float32).unsqueeze(0)
+            y_2d = y_src.to(dtype=torch.float32).unsqueeze(0)
+            x_norm = (2.0 * x_2d / max(W_s - 1, 1)) - 1.0
+            y_norm = (2.0 * y_2d / max(H_s - 1, 1)) - 1.0
+            grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
+            sampled = sample_image_plane_batched_channels(
+                channels,
+                x_src=x_2d,
+                y_src=y_2d,
+                grid=grid,
+                kernel=kernel,
+            )
+            s_num = sampled[0, 0]
+            s_den = sampled[1, 0]
+            s_sup = sampled[2, 0]
+            in_b = (
+                torch.isfinite(x_2d[0])
+                & torch.isfinite(y_2d[0])
+                & (x_2d[0] >= 0.0)
+                & (x_2d[0] <= (W_s - 1))
+                & (y_2d[0] >= 0.0)
+                & (y_2d[0] <= (H_s - 1))
+            )
+            hit = in_b & (s_sup > 0.0) & (s_den > 0.0) & torch.isfinite(s_num)
+            if bool(hit.any()):
+                hit_pixels = pixel_chunk[hit]
+                if sparse_accumulator is not None:
+                    sparse_accumulator.add(hit_pixels, s_num[hit], s_den[hit])
+                else:
+                    assert (
+                        numer_dense is not None
+                        and denom_dense is not None
+                        and overlap_dense is not None
+                    )
+                    numer_dense.index_add_(0, hit_pixels, s_num[hit])
+                    denom_dense.index_add_(0, hit_pixels, s_den[hit])
+                    overlap_dense.index_add_(
+                        0,
+                        hit_pixels,
+                        torch.ones_like(hit_pixels, dtype=torch.int32),
+                    )
 
     if not sparse:
-        numer_dense = torch.zeros(npix, dtype=torch.float32, device=map_device)
-        denom_dense = torch.zeros(npix, dtype=torch.float32, device=map_device)
-        overlap_dense = torch.zeros(npix, dtype=torch.int32, device=map_device)
-        for p_c, n_c, d_c in zip(pix_chunks, num_chunks, den_chunks):
-            numer_dense.index_add_(0, p_c, n_c)
-            denom_dense.index_add_(0, p_c, d_c)
-            overlap_dense.index_add_(
-                0, p_c, torch.ones_like(p_c, dtype=torch.int32)
-            )
+        assert (
+            numer_dense is not None
+            and denom_dense is not None
+            and overlap_dense is not None
+        )
         nz = denom_dense > 0.0
         data_dense = torch.where(
-            nz, numer_dense / denom_dense.clamp_min(1e-12), torch.zeros_like(numer_dense)
+            nz,
+            numer_dense / denom_dense.clamp_min(1e-12),
+            torch.zeros_like(numer_dense),
         )
         return HealpixResult(
             data=data_dense,
@@ -161,35 +293,47 @@ def coadd_healpix(
             coverage_moc=union_moc,
         )
 
+    assert sparse_accumulator is not None
     nside_cov = min(int(nside_coverage), nside_i)
-    if not pix_chunks:
-        empty_map = HealSparseMap.make_empty(
-            nside_cov, nside_i, dtype=torch.float32, sentinel=0.0
+    if sparse_accumulator.pixels.numel() == 0:
+        empty_data = HealSparseMap.from_pixels(
+            sparse_accumulator.pixels,
+            sparse_accumulator.numer,
+            nside_sparse=nside_i,
+            nest=nest,
+            nside_coverage=nside_cov,
+            sentinel=0.0,
+        )
+        empty_weight = HealSparseMap.from_pixels(
+            sparse_accumulator.pixels,
+            sparse_accumulator.denom,
+            nside_sparse=nside_i,
+            nest=nest,
+            nside_coverage=nside_cov,
+            sentinel=0.0,
+        )
+        empty_overlap = HealSparseMap.from_pixels(
+            sparse_accumulator.pixels,
+            sparse_accumulator.overlap,
+            nside_sparse=nside_i,
+            nest=nest,
+            nside_coverage=nside_cov,
+            sentinel=0.0,
         )
         return HealpixResult(
-            data=empty_map,
-            weight=empty_map,
+            data=empty_data,
+            weight=empty_weight,
             nside=nside_i,
             nest=nest,
             sparse=True,
-            overlap_count=empty_map,
+            overlap_count=empty_overlap,
             coverage_moc=union_moc,
         )
 
-    all_pix = torch.cat(pix_chunks)
-    all_num = torch.cat(num_chunks)
-    all_den = torch.cat(den_chunks)
-    uniq_pix, inv = torch.unique(all_pix, sorted=True, return_inverse=True)
-    u_num = torch.zeros(uniq_pix.numel(), dtype=torch.float32, device=map_device)
-    u_den = torch.zeros(uniq_pix.numel(), dtype=torch.float32, device=map_device)
-    u_ovl = torch.zeros(uniq_pix.numel(), dtype=torch.int32, device=map_device)
-    u_num.index_add_(0, inv, all_num)
-    u_den.index_add_(0, inv, all_den)
-    u_ovl.index_add_(0, inv, torch.ones_like(inv, dtype=torch.int32))
-    u_data = u_num / u_den.clamp_min(1e-12)
+    u_data = sparse_accumulator.numer / sparse_accumulator.denom.clamp_min(1e-12)
 
     data_smap = HealSparseMap.from_pixels(
-        uniq_pix,
+        sparse_accumulator.pixels,
         u_data,
         nside_sparse=nside_i,
         nest=nest,
@@ -197,16 +341,16 @@ def coadd_healpix(
         sentinel=0.0,
     )
     weight_smap = HealSparseMap.from_pixels(
-        uniq_pix,
-        u_den,
+        sparse_accumulator.pixels,
+        sparse_accumulator.denom,
         nside_sparse=nside_i,
         nest=nest,
         nside_coverage=nside_cov,
         sentinel=0.0,
     )
     ovl_smap = HealSparseMap.from_pixels(
-        uniq_pix,
-        u_ovl,
+        sparse_accumulator.pixels,
+        sparse_accumulator.overlap,
         nside_sparse=nside_i,
         nest=nest,
         nside_coverage=nside_cov,
@@ -332,4 +476,3 @@ def resample_healpix(
     data_2d = torch.where(valid, data_2d, torch.zeros_like(data_2d))
     w_2d = valid.to(dtype=torch.float32)
     return MapResult(data=data_2d, weight=w_2d, header=header_dict)
-

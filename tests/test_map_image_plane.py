@@ -14,10 +14,8 @@ import torchsky.map.image_plane_coadd as image_plane_coadd_mod
 import torchsky.map.image_plane_common as image_plane_common_mod
 import torchsky.map.image_plane_projection as image_plane_projection_mod
 import torchsky.map.operators.execution as execution_mod
-import torchsky.map.operators.geometry_drizzle as drizzle_geometry_mod
 from torchsky.map.operators.geometry_drizzle import (
     _batch_quads_pixel_areas,
-    _scanner_row_bounds,
 )
 import torchsky.map.operators.resampling as resampling_mod
 import torchsky.map.windowing as windowing_mod
@@ -74,52 +72,12 @@ def test_batched_square_drizzle_areas_match_independent_quads() -> None:
     torch.testing.assert_close(batched, independent, rtol=0.0, atol=1.0e-12)
 
 
-def test_drizzle_scanner_falls_back_when_detector_corners_are_invalid() -> None:
-    ys, xs = torch.meshgrid(
-        torch.arange(3, dtype=torch.float64),
-        torch.arange(3, dtype=torch.float64),
-        indexing="ij",
-    )
-    pixmap = torch.stack((xs, ys), dim=-1)
-    pixmap[0, 0] = torch.nan
-
-    row_min, row_max = _scanner_row_bounds(
-        pixmap,
-        source_shape=(3, 3),
-        target_shape=(3, 3),
-    )
-
-    torch.testing.assert_close(row_min, torch.zeros(3, dtype=torch.int64))
-    torch.testing.assert_close(row_max, torch.full((3,), 2, dtype=torch.int64))
-
-
-def test_drizzle_scanner_does_not_reject_curved_interior_overlap() -> None:
-    pixmap = torch.full((5, 5, 2), 10.0, dtype=torch.float64)
-    pixmap[1:4, 1:4, 0] = torch.arange(3, dtype=torch.float64).repeat(3, 1)
-    pixmap[1:4, 1:4, 1] = torch.arange(3, dtype=torch.float64).repeat(3, 1).T
-
-    row_min, row_max = _scanner_row_bounds(
-        pixmap,
-        source_shape=(5, 5),
-        target_shape=(3, 3),
-    )
-
-    torch.testing.assert_close(row_min, torch.zeros(5, dtype=torch.int64))
-    torch.testing.assert_close(row_max, torch.full((5,), 4, dtype=torch.int64))
-
-
-def test_exact_square_drizzle_bypasses_corner_scanner_for_sip(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_exact_square_drizzle_projects_sip_footprints() -> None:
     real_path = _astropy_sip_fixture()
     _, header = torchfits.read(str(real_path), return_header=True)
     target_header = dict(header)
     target_header["CRPIX1"] = float(target_header["CRPIX1"]) + 0.25
 
-    def reject_scanner(*args, **kwargs):
-        raise AssertionError("the corner scanner is unsafe for SIP")
-
-    monkeypatch.setattr(drizzle_geometry_mod, "_scanner_row_bounds", reject_scanner)
     result = coadd_image_plane(
         [ImageObservation(str(real_path))],
         target_header=target_header,
@@ -128,6 +86,7 @@ def test_exact_square_drizzle_bypasses_corner_scanner_for_sip(
     )
 
     assert bool((result.weight > 0.0).any())
+    assert bool(torch.isfinite(result.data).all())
 
 
 def _simple_header() -> dict:

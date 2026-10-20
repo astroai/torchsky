@@ -24,9 +24,13 @@ class _GeometryMixin:
         matrix = np.zeros((self.world_n_dim, self.pixel_n_dim), dtype=bool)
         cd_deps = torch.abs(self.cd_full).detach().cpu().numpy() > 1.0e-15
         if self._is_spatial and self.naxis >= 2:
-            matrix[:2, :2] = True
-            for i in range(2, self.naxis):
-                matrix[i, :] = cd_deps[i, :]
+            celestial_deps = np.logical_or(
+                cd_deps[self._celestial_lon_axis, :],
+                cd_deps[self._celestial_lat_axis, :],
+            )
+            matrix[:, :] = cd_deps
+            matrix[self._celestial_lon_axis, :] = celestial_deps
+            matrix[self._celestial_lat_axis, :] = celestial_deps
         else:
             matrix[:, :] = cd_deps
         for axis in self.tabular_axes:
@@ -67,7 +71,9 @@ class _GeometryMixin:
         return tuple(reversed(self._pixel_shape))
     def pixel_scales(self) -> tuple[float, float]:
         """Return nominal pixel scales ``(scale_x_deg, scale_y_deg)`` in degrees/pixel at CRPIX."""
-        cd2 = self.cd_full[:2, :2].detach().cpu().to(torch.float64)
+        rows = [self._celestial_lon_axis, self._celestial_lat_axis]
+        cols = list(self._celestial_axes)
+        cd2 = self.cd_full[rows, :][:, cols].detach().cpu().to(torch.float64)
         sx = float(torch.hypot(cd2[0, 0], cd2[1, 0]).item())
         sy = float(torch.hypot(cd2[0, 1], cd2[1, 1]).item())
         return (sx, sy)
@@ -76,14 +82,18 @@ class _GeometryMixin:
         return self.pixel_scales()
     def pixel_area(self) -> float:
         """Return nominal projection-plane pixel solid angle in ``deg**2`` at CRPIX."""
-        cd2 = self.cd_full[:2, :2].detach().cpu().to(torch.float64)
+        rows = [self._celestial_lon_axis, self._celestial_lat_axis]
+        cols = list(self._celestial_axes)
+        cd2 = self.cd_full[rows, :][:, cols].detach().cpu().to(torch.float64)
         return abs(float((cd2[0, 0] * cd2[1, 1] - cd2[0, 1] * cd2[1, 0]).item()))
     def proj_plane_pixel_area(self) -> float:
         """Alias for :meth:`pixel_area` matching ``astropy.wcs.utils.proj_plane_pixel_area``."""
         return self.pixel_area()
     def position_angle(self) -> float:
         """Return position angle (degrees East of North) of the +y pixel axis at CRPIX."""
-        cd2 = self.cd_full[:2, :2].detach().cpu().to(torch.float64)
+        rows = [self._celestial_lon_axis, self._celestial_lat_axis]
+        cols = list(self._celestial_axes)
+        cd2 = self.cd_full[rows, :][:, cols].detach().cpu().to(torch.float64)
         det = float((cd2[0, 0] * cd2[1, 1] - cd2[0, 1] * cd2[1, 0]).item())
         east_sign = -1.0 if det < 0.0 else 1.0
         pa_rad = math.atan2(east_sign * float(cd2[0, 1].item()), float(cd2[1, 1].item()))
@@ -112,7 +122,11 @@ class _GeometryMixin:
         if shape is not None:
             height, width = int(shape[0]), int(shape[1])
         elif self._pixel_shape is not None and len(self._pixel_shape) >= 2:
-            width, height = int(self._pixel_shape[0]), int(self._pixel_shape[1])
+            pixel_axes = list(self._celestial_axes)
+            width, height = (
+                int(self._pixel_shape[pixel_axes[0]]),
+                int(self._pixel_shape[pixel_axes[1]]),
+            )
         else:
             raise ValueError(
                 "shape=(height, width) must be provided when WCS has no NAXIS1/NAXIS2"
@@ -143,13 +157,14 @@ class _GeometryMixin:
             )
         if self.naxis == 2:
             ra, dec = self.pixel_to_world(xs, ys, origin=origin)
-            return torch.stack([ra, dec], dim=-1)
-        corners = torch.zeros((4, self.naxis), dtype=dt, device=self.device)
-        corners[:, 0] = xs
-        corners[:, 1] = ys
-        for axis in range(2, self.naxis):
-            corners[:, axis] = self.crpix[axis] - (1.0 - off)
-        return self.pixel_to_world(corners, origin=origin)[:, :2]
+            world = torch.stack([ra, dec], dim=-1)
+            return world[:, [self._celestial_lon_axis, self._celestial_lat_axis]]
+        corners = (self.crpix - (1.0 - off)).expand(4, -1).clone()
+        pixel_axes = list(self._celestial_axes)
+        corners[:, pixel_axes[0]] = xs
+        corners[:, pixel_axes[1]] = ys
+        world = self.pixel_to_world(corners, origin=origin)
+        return world[:, [self._celestial_lon_axis, self._celestial_lat_axis]]
     def calc_footprint(
         self,
         header: Mapping[str, Any] | None = None,
@@ -251,7 +266,7 @@ class _HeaderIOMixin:
             if (
                 relax
                 and self.sip is not None
-                and i in (1, 2)
+                and (i - 1) in self._celestial_axes
                 and ctype
                 and not ctype.upper().endswith("-SIP")
             ):
@@ -264,11 +279,28 @@ class _HeaderIOMixin:
             if cunit:
                 hdr[f"CUNIT{i}{sfx}"] = str(cunit)
 
-        for i in range(1, self.naxis + 1):
-            for j in range(1, self.naxis + 1):
-                val = float(cd_cpu[i - 1][j - 1])
-                if i == j or abs(val) > 0.0 or (i <= 2 and j <= 2):
-                    hdr[f"CD{i}_{j}{sfx}"] = val
+        if self._is_tpv and self._tpv_uses_pixel_intermediate:
+            pc_cpu = self.pc_full.detach().cpu().to(torch.float64).tolist()
+            cdelt_cpu = self.cdelt.detach().cpu().to(torch.float64).tolist()
+            for i in range(1, self.naxis + 1):
+                hdr[f"CDELT{i}{sfx}"] = float(cdelt_cpu[i - 1])
+                for j in range(1, self.naxis + 1):
+                    val = float(pc_cpu[i - 1][j - 1])
+                    if i == j or abs(val) > 0.0:
+                        hdr[f"PC{i}_{j}{sfx}"] = val
+        else:
+            for i in range(1, self.naxis + 1):
+                for j in range(1, self.naxis + 1):
+                    val = float(cd_cpu[i - 1][j - 1])
+                    if (
+                        i == j
+                        or abs(val) > 0.0
+                        or (
+                            (i - 1) in self._celestial_axes
+                            and (j - 1) in self._celestial_axes
+                        )
+                    ):
+                        hdr[f"CD{i}_{j}{sfx}"] = val
 
         for meta_key in (
             "LONPOLE",

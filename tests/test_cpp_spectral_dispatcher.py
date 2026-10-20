@@ -62,17 +62,142 @@ def _inputs() -> dict[str, torch.Tensor | int | float]:
     }
 
 
-def test_spectral_dispatcher_schemas_are_clean_and_basis_exports_stay_legacy() -> None:
+def _basis_analysis_reference(
+    q: torch.Tensor,
+    u: torch.Tensor,
+    ycp_t: torch.Tensor,
+    ycm_t: torch.Tensor,
+    pixel_weight: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    polarization = torch.complex(q, u)
+    return (
+        polarization @ ycp_t * pixel_weight,
+        polarization.conj() @ ycm_t * pixel_weight,
+    )
+
+
+def _basis_synthesis_reference(
+    coeff_plus: torch.Tensor,
+    coeff_minus: torch.Tensor,
+    y_plus: torch.Tensor,
+    y_minus: torch.Tensor,
+    y_plus_m0: torch.Tensor,
+    y_minus_m0: torch.Tensor,
+) -> torch.Tensor:
+    p_plus_pos = coeff_plus @ y_plus
+    p_minus_pos = coeff_minus @ y_minus
+    if y_plus_m0.shape[0] == coeff_plus.shape[0]:
+        p_plus = p_plus_pos
+        p_minus = p_minus_pos
+    else:
+        p_plus_m0 = coeff_plus[: y_plus_m0.shape[0]] @ y_plus_m0
+        p_minus_m0 = coeff_minus[: y_minus_m0.shape[0]] @ y_minus_m0
+        p_plus = p_plus_pos + (p_minus_pos - p_minus_m0).conj()
+        p_minus = p_minus_pos + (p_plus_pos - p_plus_m0).conj()
+    return torch.stack(
+        (-0.5 * (p_plus + p_minus).real, -0.5 * (p_plus - p_minus).imag)
+    )
+
+
+def test_spectral_dispatcher_schemas_are_clean_and_basis_schemas_are_private() -> None:
     assert _ops.has_spectral_dispatcher()
     for name in MIGRATED:
         schema = str(getattr(torch.ops.torchsky, name).default._schema)
         assert schema.startswith(f"torchsky::{name}(")
         assert "_cpu" not in schema
-    assert not hasattr(torch.ops.torchsky, "spectral_spin_map2alm_from_basis")
-    assert not hasattr(torch.ops.torchsky, "spectral_spin_alm2map_from_basis")
+    for name in (
+        "_spectral_spin_map2alm_from_basis",
+        "_spectral_spin_alm2map_from_basis",
+    ):
+        schema = str(getattr(torch.ops.torchsky, name).default._schema)
+        assert schema.startswith(f"torchsky::{name}(")
+        assert torch._C._dispatch_has_kernel_for_dispatch_key(f"torchsky::{name}", "CPU")
     assert hasattr(_cpp, "_healpix_spin_map2alm_from_basis_cpu")
     assert hasattr(_cpp, "_healpix_spin_alm2map_from_basis_cpu")
-    assert not hasattr(torch.ops.torchsky, "healpix_query_disc")
+
+
+def test_private_basis_dispatcher_parity_and_compatibility() -> None:
+    torch.manual_seed(12)
+    npix, nalm, m0 = 7, 5, 2
+    q = torch.randn(npix, dtype=torch.float64)
+    u = torch.randn(npix, dtype=torch.float64)
+    ycp_t = torch.randn((npix, nalm), dtype=torch.complex128)
+    ycm_t = torch.randn((npix, nalm), dtype=torch.complex128)
+    coeff_plus = torch.randn(nalm, dtype=torch.complex128)
+    coeff_minus = torch.randn(nalm, dtype=torch.complex128)
+    y_plus = torch.randn((nalm, npix), dtype=torch.complex128)
+    y_minus = torch.randn((nalm, npix), dtype=torch.complex128)
+    y_plus_m0 = torch.randn((m0, npix), dtype=torch.complex128)
+    y_minus_m0 = torch.randn((m0, npix), dtype=torch.complex128)
+
+    analysis = torch.ops.torchsky._spectral_spin_map2alm_from_basis(
+        q, u, ycp_t, ycm_t, 0.3
+    )
+    torch.testing.assert_close(
+        analysis, _basis_analysis_reference(q, u, ycp_t, ycm_t, 0.3)
+    )
+    synthesis = torch.ops.torchsky._spectral_spin_alm2map_from_basis(
+        coeff_plus, coeff_minus, y_plus, y_minus, y_plus_m0, y_minus_m0
+    )
+    torch.testing.assert_close(
+        synthesis,
+        _basis_synthesis_reference(
+            coeff_plus, coeff_minus, y_plus, y_minus, y_plus_m0, y_minus_m0
+        ),
+    )
+    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
+        compatibility = _cpp._healpix_spin_alm2map_from_basis_cpu(
+            coeff_plus, coeff_minus, y_plus, y_minus, y_plus_m0, y_minus_m0
+        )
+    torch.testing.assert_close(compatibility, synthesis)
+
+
+def test_private_basis_dispatcher_autograd_matches_tensor_adjoint() -> None:
+    torch.manual_seed(13)
+    npix, nalm, m0 = 6, 4, 2
+    q = torch.randn(npix, dtype=torch.float64, requires_grad=True)
+    u = torch.randn(npix, dtype=torch.float64, requires_grad=True)
+    q_ref = q.detach().clone().requires_grad_()
+    u_ref = u.detach().clone().requires_grad_()
+    ycp_t = torch.randn((npix, nalm), dtype=torch.complex128)
+    ycm_t = torch.randn((npix, nalm), dtype=torch.complex128)
+    probe_plus = torch.randn(nalm, dtype=torch.complex128)
+    probe_minus = torch.randn(nalm, dtype=torch.complex128)
+    actual = torch.ops.torchsky._spectral_spin_map2alm_from_basis(
+        q, u, ycp_t, ycm_t, 0.4
+    )
+    expected = _basis_analysis_reference(q_ref, u_ref, ycp_t, ycm_t, 0.4)
+    torch.real(torch.vdot(probe_plus, actual[0]) + torch.vdot(probe_minus, actual[1])).backward()
+    torch.real(
+        torch.vdot(probe_plus, expected[0]) + torch.vdot(probe_minus, expected[1])
+    ).backward()
+    torch.testing.assert_close(q.grad, q_ref.grad)
+    torch.testing.assert_close(u.grad, u_ref.grad)
+
+    coeff_plus = torch.randn(nalm, dtype=torch.complex128, requires_grad=True)
+    coeff_minus = torch.randn(nalm, dtype=torch.complex128, requires_grad=True)
+    coeff_plus_ref = coeff_plus.detach().clone().requires_grad_()
+    coeff_minus_ref = coeff_minus.detach().clone().requires_grad_()
+    y_plus = torch.randn((nalm, npix), dtype=torch.complex128)
+    y_minus = torch.randn((nalm, npix), dtype=torch.complex128)
+    y_plus_m0 = torch.randn((m0, npix), dtype=torch.complex128)
+    y_minus_m0 = torch.randn((m0, npix), dtype=torch.complex128)
+    map_probe = torch.randn((2, npix), dtype=torch.float64)
+    actual_map = torch.ops.torchsky._spectral_spin_alm2map_from_basis(
+        coeff_plus, coeff_minus, y_plus, y_minus, y_plus_m0, y_minus_m0
+    )
+    expected_map = _basis_synthesis_reference(
+        coeff_plus_ref,
+        coeff_minus_ref,
+        y_plus,
+        y_minus,
+        y_plus_m0,
+        y_minus_m0,
+    )
+    (actual_map * map_probe).sum().backward()
+    (expected_map * map_probe).sum().backward()
+    torch.testing.assert_close(coeff_plus.grad, coeff_plus_ref.grad)
+    torch.testing.assert_close(coeff_minus.grad, coeff_minus_ref.grad)
 
 
 def test_spectral_dispatcher_parity_with_legacy_adapters() -> None:
@@ -265,11 +390,96 @@ def test_spectral_dispatcher_fake_metadata_all_fixed_shapes() -> None:
             torch.ops.torchsky.spectral_scalar_interpolate_recurrence(
                 coeff, theta, 2, 2
             ),
+            *torch.ops.torchsky._spectral_spin_map2alm_from_basis(
+                theta, theta, basis.T.contiguous(), basis.T.contiguous(), 1.0
+            ),
+            torch.ops.torchsky._spectral_spin_alm2map_from_basis(
+                coeff, coeff, basis, basis, basis[:3], basis[:3]
+            ),
         ]
     assert all(is_fake(output) for output in outputs)
     assert outputs[0].shape == (1, 3)
     assert outputs[1].shape == (2, 3, 3)
-    assert outputs[-1].shape == (3, 3)
+    assert outputs[-4].shape == (3, 3)
+    assert outputs[-3].shape == (6,)
+    assert outputs[-2].shape == (6,)
+    assert outputs[-1].shape == (2, 3)
+
+
+def test_private_basis_dispatcher_gradcheck_opcheck_and_compile() -> None:
+    torch.manual_seed(14)
+    npix, nalm, m0 = 4, 3, 1
+    q = torch.randn(npix, dtype=torch.float64, requires_grad=True)
+    u = torch.randn(npix, dtype=torch.float64, requires_grad=True)
+    ycp_t = torch.randn((npix, nalm), dtype=torch.complex128)
+    ycm_t = torch.randn((npix, nalm), dtype=torch.complex128)
+    coeff_plus = torch.randn(nalm, dtype=torch.complex128, requires_grad=True)
+    coeff_minus = torch.randn(nalm, dtype=torch.complex128, requires_grad=True)
+    y_plus = torch.randn((nalm, npix), dtype=torch.complex128)
+    y_minus = torch.randn((nalm, npix), dtype=torch.complex128)
+    y_plus_m0 = torch.randn((m0, npix), dtype=torch.complex128)
+    y_minus_m0 = torch.randn((m0, npix), dtype=torch.complex128)
+
+    def analysis(first: torch.Tensor, second: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return torch.ops.torchsky._spectral_spin_map2alm_from_basis(
+            first, second, ycp_t, ycm_t, 0.5
+        )
+
+    def synthesis(first: torch.Tensor, second: torch.Tensor) -> torch.Tensor:
+        return torch.ops.torchsky._spectral_spin_alm2map_from_basis(
+            first, second, y_plus, y_minus, y_plus_m0, y_minus_m0
+        )
+
+    assert torch.autograd.gradcheck(analysis, (q, u), fast_mode=True)
+    assert torch.autograd.gradcheck(
+        synthesis, (coeff_plus, coeff_minus), fast_mode=True
+    )
+    torch.library.opcheck(
+        torch.ops.torchsky._spectral_spin_map2alm_from_basis.default,
+        (q.detach(), u.detach(), ycp_t, ycm_t, 0.5),
+    )
+    torch.library.opcheck(
+        torch.ops.torchsky._spectral_spin_alm2map_from_basis.default,
+        (
+            coeff_plus.detach(),
+            coeff_minus.detach(),
+            y_plus,
+            y_minus,
+            y_plus_m0,
+            y_minus_m0,
+        ),
+    )
+
+    def loss(
+        q_value: torch.Tensor,
+        u_value: torch.Tensor,
+        plus_value: torch.Tensor,
+        minus_value: torch.Tensor,
+    ) -> torch.Tensor:
+        analyzed = analysis(q_value, u_value)
+        synthesized = synthesis(plus_value, minus_value)
+        return (
+            analyzed[0].abs().square().sum()
+            + analyzed[1].abs().square().sum()
+            + synthesized.square().sum()
+        )
+
+    eager_inputs = tuple(
+        value.detach().clone().requires_grad_()
+        for value in (q, u, coeff_plus, coeff_minus)
+    )
+    compiled_inputs = tuple(
+        value.detach().clone().requires_grad_()
+        for value in (q, u, coeff_plus, coeff_minus)
+    )
+    eager_loss = loss(*eager_inputs)
+    eager_loss.backward()
+    compiled = torch.compile(loss, fullgraph=True, backend="aot_eager")
+    compiled_loss = compiled(*compiled_inputs)
+    compiled_loss.backward()
+    torch.testing.assert_close(compiled_loss, eager_loss)
+    for actual, expected in zip(compiled_inputs, eager_inputs, strict=True):
+        torch.testing.assert_close(actual.grad, expected.grad)
 
 
 def test_spectral_recurrence_adjoint_and_metadata_nondifferentiable() -> None:
