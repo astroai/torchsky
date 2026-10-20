@@ -111,9 +111,10 @@ def pairwise_angular_distance(
     cross_sq = cross_sq + cross_y.square()
     cross_z = x[:, None] * y[None, :] - y[:, None] * x[None, :]
     cross_sq = cross_sq + cross_z.square()
-    cross = torch.sqrt(torch.clamp(cross_sq, min=0.0))
+    diagonal = torch.eye(v.shape[0], dtype=torch.bool, device=v.device)
+    cross = torch.sqrt(torch.where(diagonal, torch.ones_like(cross_sq), cross_sq))
     dist_rad = torch.atan2(cross, dot)
-    dist_rad.fill_diagonal_(0.0)
+    dist_rad = torch.where(diagonal, torch.zeros_like(dist_rad), dist_rad)
     if degrees:
         return torch.rad2deg(dist_rad)
     return dist_rad
@@ -198,6 +199,8 @@ def sample_healpix_map(
         pix = _healpix.ang2pix(nside, lon_flat, lat_flat, nest=nest, lonlat=True)
         out = vals[:, pix]
     else:
+        if not vals.is_floating_point():
+            vals = vals.to(dtype=_float_dtype(vals.device))
         pix4, w4 = _healpix.get_interp_weights(
             nside, lon_flat, lat_flat, nest=nest, lonlat=True
         )
@@ -207,7 +210,7 @@ def sample_healpix_map(
         weights = w4.to(device=gathered.device, dtype=gathered.dtype)
         out = (gathered * weights.unsqueeze(0)).sum(dim=1)
 
-    return out.reshape(*values.shape[:-1], *coord_shape)
+    return out.reshape(values.shape[:-1] + coord_shape)
 
 
 def sample_multiband_healpix(
@@ -458,4 +461,3 @@ __all__ = [
     "unit_xyz_to_lonlat",
     "wrap_longitude",
 ]
-

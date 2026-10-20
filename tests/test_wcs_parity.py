@@ -170,5 +170,9 @@ def test_mps_two_arg_world_to_pixel_stays_float32() -> None:
     assert px.device.type == "mps"
     assert px.dtype == torch.float32
     assert stacked.dtype == torch.float32
-    torch.testing.assert_close(stacked[..., 0], px, atol=1e-5, rtol=1e-5)
-    torch.testing.assert_close(stacked[..., 1], py, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(
+        stacked[..., 0], px, atol=1e-5, rtol=1e-5, equal_nan=True
+    )
+    torch.testing.assert_close(
+        stacked[..., 1], py, atol=1e-5, rtol=1e-5, equal_nan=True
+    )

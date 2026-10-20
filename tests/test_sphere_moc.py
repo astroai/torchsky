@@ -1,4 +1,5 @@
 import json
+import math
 
 import numpy as np
 import pytest
@@ -7,6 +8,7 @@ from torchsky.sphere import SphericalCap, SphericalPolygon
 from torchsky.sphere import healpix as hp
 from torchsky.sphere.geom import PixelizedRegion
 from torchsky.sphere.moc import (
+    BMOC,
     MOC,
     nest2uniq,
     uniq2nest,
@@ -69,6 +71,16 @@ def test_moc_max_order_empty():
 def test_moc_contains_empty():
     moc = MOC(torch.tensor([], dtype=torch.int64))
     assert not moc.contains(0.0, 0.0).item()
+
+
+def test_moc_contains_empty_broadcasts_lon_lat() -> None:
+    lon = torch.zeros((2, 1), dtype=torch.float64)
+    lat = torch.zeros((1, 3), dtype=torch.float64)
+
+    contained = MOC.empty().contains(lon, lat)
+
+    assert contained.shape == (2, 3)
+    assert not bool(contained.any())
 
 
 def test_moc_contains_pixels_nested_and_ring_inputs() -> None:
@@ -468,6 +480,79 @@ def test_uniq2nest_rejects_invalid_uniq_and_order_overflow() -> None:
         nest2uniq(1 << 30, 0)
     with pytest.raises(ValueError, match="max_order"):
         _nside_from_max_order(30)
+
+
+def test_nest2uniq_rejects_pixel_aliases_and_non_integer_inputs() -> None:
+    with pytest.raises(ValueError, match="pix"):
+        nest2uniq(1, 12)
+    with pytest.raises(ValueError, match="pix"):
+        nest2uniq(1, -1)
+    with pytest.raises(ValueError, match="integers"):
+        nest2uniq(1, 0.5)
+
+
+def test_moc_constructors_reject_invalid_uniq_and_order_pixel_aliases() -> None:
+    with pytest.raises(ValueError, match="UNIQ"):
+        MOC(torch.tensor([1 << 62], dtype=torch.int64))
+    with pytest.raises(ValueError, match="integers"):
+        MOC(torch.tensor([4.5]))
+    with pytest.raises(ValueError, match="pix"):
+        MOC.from_ascii("0/12")
+    with pytest.raises(ValueError, match="pix"):
+        MOC.from_json('{"0": [12]}')
+
+
+def test_nest_uniq_round_trip_broadcasts_and_preserves_canonical_edges() -> None:
+    nsides = torch.tensor([[1], [2], [8]], dtype=torch.int64)
+    pixels = torch.tensor([[0, 1, 11]], dtype=torch.int64)
+    pixels = pixels * (nsides * nsides)
+
+    uniq = nest2uniq(nsides, pixels)
+    got_nsides, got_pixels = uniq2nest(uniq)
+
+    torch.testing.assert_close(got_nsides, nsides.expand_as(pixels))
+    torch.testing.assert_close(got_pixels, pixels)
+
+
+def test_bmoc_normalizes_parent_child_overlap_conservatively() -> None:
+    parent = nest2uniq(1, 0)
+    child = nest2uniq(2, 0)
+
+    bmoc = BMOC(
+        torch.stack((child, parent, parent)),
+        torch.tensor([1, 1, 0], dtype=torch.uint8),
+    )
+
+    torch.testing.assert_close(bmoc.uniq, parent.reshape(1))
+    torch.testing.assert_close(bmoc.flag, torch.tensor([0], dtype=torch.uint8))
+    assert bmoc.area == pytest.approx(math.pi / 3.0)
+    assert bmoc.interior_area == 0.0
+    torch.testing.assert_close(bmoc.to_moc().uniq, parent.reshape(1))
+    assert bmoc.to_moc(include_boundary=False).is_empty
+
+
+def test_bmoc_boolean_operations_preserve_hierarchical_flags_and_area() -> None:
+    parent = BMOC(nest2uniq(1, 0).reshape(1), torch.tensor([0]))
+    child = BMOC(nest2uniq(2, 0).reshape(1), torch.tensor([1]))
+
+    union = parent | child
+    intersection = parent & child
+    difference = parent - child
+
+    assert union.area == pytest.approx(math.pi / 3.0)
+    assert union.interior_area == pytest.approx(math.pi / 12.0)
+    assert union.to_moc().area == pytest.approx(parent.to_moc().area)
+    assert intersection.area == pytest.approx(math.pi / 12.0)
+    assert intersection.interior_area == 0.0
+    assert difference.area == pytest.approx(math.pi / 4.0)
+    assert difference.interior_area == 0.0
+
+
+def test_bmoc_rejects_invalid_uniq_and_flag_aliases() -> None:
+    with pytest.raises(ValueError, match="UNIQ"):
+        BMOC(torch.tensor([1 << 62], dtype=torch.int64))
+    with pytest.raises(ValueError, match="flag values"):
+        BMOC(nest2uniq(1, 0).reshape(1), torch.tensor([2]))
 
 
 def test_moc_high_order_max_order_and_leaf_preservation() -> None:

@@ -14,27 +14,24 @@ Submodules
 ``implicit_forward``
     Forward-model shell (context ``c``, kinematics ``ζ``, modular survey losses); see ``docs/implicit_forward.md``."""
 
-from __future__ import annotations
-
 # Lazy facade: importing the package must not pull in core/foam/training.
 # Each name maps to the submodule that defines it; attributes are resolved on
 # first access and cached in the module globals.
-_EXPORTS: dict[str, tuple[str, str]] = {
-    "annotations": (".__future__", "annotations"),
-    "adaptive": (".adaptive", "adaptive"),
-    "artifacts": (".artifacts", "artifacts"),
-    "bandpass": (".bandpass", "bandpass"),
-    "forwarding": (".forwarding", "forwarding"),
-    "foam": (".foam", "foam"),
-    "hashgrid": (".hashgrid", "hashgrid"),
-    "losses": (".losses", "losses"),
-    "networks": (".networks", "networks"),
-    "noise": (".noise", "noise"),
-    "observation_ops": (".observation_ops", "observation_ops"),
-    "quality": (".quality", "quality"),
-    "rendering": (".rendering", "rendering"),
-    "sky_encoding": (".sky_encoding", "sky_encoding"),
-    "training": (".training", "training"),
+_EXPORTS: dict[str, tuple[str, str | None]] = {
+    "adaptive": (".adaptive", None),
+    "artifacts": (".artifacts", None),
+    "bandpass": (".bandpass", None),
+    "forwarding": (".forwarding", None),
+    "foam": (".foam", None),
+    "hashgrid": (".hashgrid", None),
+    "losses": (".losses", None),
+    "networks": (".networks", None),
+    "noise": (".noise", None),
+    "observation_ops": (".observation_ops", None),
+    "quality": (".quality", None),
+    "rendering": (".rendering", None),
+    "sky_encoding": (".sky_encoding", None),
+    "training": (".training", None),
     "FieldArtifactManifest": (".artifacts", "FieldArtifactManifest"),
     "LoadedFieldArtifact": (".artifacts", "LoadedFieldArtifact"),
     "capture_field_rng_state": (".artifacts", "capture_field_rng_state"),
@@ -186,7 +183,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "PairedImprovementInterval": (".validation", "PairedImprovementInterval"),
     "completeness_limit_magnitude": (".validation", "completeness_limit_magnitude"),
     "paired_bootstrap_improvement": (".validation", "paired_bootstrap_improvement"),
-    "inverse": (".inverse", "inverse"),
+    "inverse": (".inverse", None),
     "IRLSConfig": (".inverse", "IRLSConfig"),
     "LinearBandGridField": (".inverse", "LinearBandGridField"),
     "StationaryCalibratedBandObservation": (".inverse", "StationaryCalibratedBandObservation"),
@@ -395,11 +392,10 @@ def __getattr__(name: str):
     from importlib import import_module
 
     module = import_module(module_name, __name__)
-    value = getattr(module, attribute)
+    value = module if attribute is None else getattr(module, attribute)
     globals()[name] = value
     return value
 
 
 def __dir__():
     return sorted(set(globals()) | set(__all__))
-

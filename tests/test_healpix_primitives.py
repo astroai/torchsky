@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -46,6 +48,7 @@ from torchsky.sphere.healpix import (
     query_polygon,
     query_polygon_vec,
     query_strip,
+    reorder,
     ring2nest,
     upgrade_pixels,
     upgrade_pixel_ranges,
@@ -78,6 +81,11 @@ def test_lonlat_xyz_roundtrip() -> None:
     ddec = torch.abs(dec2 - dec)
     torch.testing.assert_close(dra, torch.zeros_like(dra), atol=1e-12, rtol=0.0)
     torch.testing.assert_close(ddec, torch.zeros_like(ddec), atol=1e-12, rtol=0.0)
+
+
+def test_xyz_to_lonlat_rejects_zero_vectors() -> None:
+    with pytest.raises(ValueError, match="positive norm"):
+        xyz_to_lonlat(torch.tensor([1.0, 0.0]), torch.zeros(2), torch.zeros(2))
 
 
 def test_angular_distance_known_points() -> None:
@@ -151,6 +159,10 @@ def test_nside_scalar_helpers() -> None:
     assert not bool(isnsideok(12))
     assert bool(isnpixok(12288))
     assert not bool(isnpixok(12345))
+    assert bool(isnsideok(1 << 29))
+    assert not bool(isnsideok(1 << 30))
+    with pytest.raises(ValueError, match=r"2\*\*29"):
+        order2nside(30)
 
     area = nside2pixarea(16)
     area_deg = nside2pixarea(16, degrees=True)
@@ -193,6 +205,21 @@ def test_map_helpers_and_ud_grade_shapes() -> None:
     assert out.shape == (2, 12 * 4 * 4)
 
 
+def test_reorder_last_axis_preserves_leading_shapes_and_layouts() -> None:
+    nside = 2
+    npix = nside2npix(nside)
+    base = torch.arange(3 * 2 * npix, dtype=torch.float64).reshape(3, 2, npix)
+    maps = base.transpose(0, 1)
+
+    nested = reorder(maps, r2n=True)
+    restored = reorder(nested, n2r=True)
+
+    assert nested.shape == maps.shape
+    torch.testing.assert_close(restored, maps)
+    empty = reorder(torch.empty((0, 2, npix)), r2n=True)
+    assert empty.shape == (0, 2, npix)
+
+
 def test_ang2pix_pix2ang_compat_wrappers() -> None:
     rng = np.random.default_rng(99)
     ra = torch.from_numpy(rng.uniform(0.0, 360.0, size=4096)).to(torch.float64)
@@ -218,6 +245,58 @@ def test_ang2pix_pix2ang_compat_wrappers() -> None:
     np.testing.assert_allclose(
         phi2.cpu().numpy(), np.deg2rad(ra2.cpu().numpy()), atol=1e-12, rtol=0.0
     )
+
+
+def test_ang2pix_fixed_wrap_poles_and_transition_boundary() -> None:
+    lon = torch.tensor([0.0, 90.0, 180.0, 270.0, 360.0, -90.0], dtype=torch.float64)
+    north = torch.full_like(lon, 90.0)
+    south = torch.full_like(lon, -90.0)
+    transition = torch.full_like(lon, math.degrees(math.asin(2.0 / 3.0)))
+
+    torch.testing.assert_close(
+        ang2pix(1, lon, north, lonlat=True),
+        torch.tensor([0, 1, 2, 3, 0, 3], dtype=torch.int64),
+    )
+    torch.testing.assert_close(
+        ang2pix(1, lon, south, lonlat=True),
+        torch.tensor([8, 9, 10, 11, 8, 11], dtype=torch.int64),
+    )
+    torch.testing.assert_close(
+        ang2pix(2, lon, transition, lonlat=True),
+        torch.tensor([4, 6, 8, 10, 4, 10], dtype=torch.int64),
+    )
+    torch.testing.assert_close(
+        ang2pix(2, lon, transition, nest=True, lonlat=True),
+        torch.tensor([2, 6, 10, 14, 2, 14], dtype=torch.int64),
+    )
+
+
+@pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+def test_lonlat_conversions_reject_nonfinite_values(bad: float) -> None:
+    finite = torch.tensor([0.0], dtype=torch.float64)
+    invalid = torch.tensor([bad], dtype=torch.float64)
+
+    with pytest.raises(ValueError, match="finite"):
+        ang2pix(1, invalid, finite, lonlat=True)
+    with pytest.raises(ValueError, match="finite"):
+        ang2pix(1, finite, invalid, nest=True, lonlat=True)
+    with pytest.raises(ValueError, match="finite"):
+        lonlat_to_xyz(invalid, finite)
+    with pytest.raises(ValueError, match="finite"):
+        get_interp_weights(1, invalid, finite, lonlat=True)
+
+
+@pytest.mark.parametrize("latitude", [-90.0001, 90.0001])
+def test_lonlat_conversions_reject_latitude_outside_domain(latitude: float) -> None:
+    lon = torch.tensor([0.0], dtype=torch.float64)
+    lat = torch.tensor([latitude], dtype=torch.float64)
+
+    with pytest.raises(ValueError, match=r"\[-90, 90\]"):
+        ang2pix(1, lon, lat, lonlat=True)
+    with pytest.raises(ValueError, match=r"\[-90, 90\]"):
+        lonlat_to_xyz(lon, lat)
+    with pytest.raises(ValueError, match=r"\[-90, 90\]"):
+        get_interp_weights(1, lon, lat, lonlat=True)
 
 
 def test_cpp_torch_bindings_core_healpix_match_python() -> None:
@@ -302,6 +381,25 @@ def test_cpp_torch_bindings_interp_val_match_python() -> None:
     torch.testing.assert_close(got_stack, exp_stack, atol=1e-12, rtol=1e-12)
 
 
+def test_interp_coordinates_retain_gradients_on_cpu() -> None:
+    nside = 8
+    lon = torch.tensor([12.3, 87.6], dtype=torch.float64, requires_grad=True)
+    lat = torch.tensor([-23.4, 31.2], dtype=torch.float64, requires_grad=True)
+
+    _, weights = get_interp_weights(nside, lon, lat, nest=True, lonlat=True)
+    coeff = torch.arange(1, 5, dtype=weights.dtype).unsqueeze(1)
+    (weights * coeff).sum().backward()
+    assert lon.grad is not None and torch.isfinite(lon.grad).all()
+    assert lat.grad is not None and torch.isfinite(lat.grad).all()
+
+    lon2 = lon.detach().clone().requires_grad_(True)
+    lat2 = lat.detach().clone().requires_grad_(True)
+    values = torch.arange(nside2npix(nside), dtype=torch.float64)
+    get_interp_val(values, lon2, lat2, nest=True, lonlat=True).sum().backward()
+    assert lon2.grad is not None and torch.isfinite(lon2.grad).all()
+    assert lat2.grad is not None and torch.isfinite(lat2.grad).all()
+
+
 def test_vec2pix_pix2vec_center_roundtrip() -> None:
     nside = 8
     npix = nside2npix(nside)
@@ -325,6 +423,17 @@ def test_ang2vec_vec2ang_roundtrip() -> None:
     dlat = torch.abs(lat2 - lat)
     torch.testing.assert_close(dlon, torch.zeros_like(dlon), atol=1e-12, rtol=0.0)
     torch.testing.assert_close(dlat, torch.zeros_like(dlat), atol=1e-12, rtol=0.0)
+
+
+def test_vec2ang_preserves_leading_shape() -> None:
+    lon = torch.tensor([[0.0, 45.0], [180.0, 270.0]], dtype=torch.float64)
+    lat = torch.tensor([[0.0, 10.0], [-20.0, 30.0]], dtype=torch.float64)
+    vectors = ang2vec(lon, lat, lonlat=True)
+    lon_out, lat_out = vec2ang(vectors, lonlat=True)
+    assert lon_out.shape == lon.shape
+    assert lat_out.shape == lat.shape
+    torch.testing.assert_close(_ra_delta_deg(lon_out, lon), torch.zeros_like(lon))
+    torch.testing.assert_close(lat_out, lat)
 
 
 def test_boundaries_shapes_and_unit_norm() -> None:
@@ -351,6 +460,11 @@ def test_resolution_helpers_and_query_shapes() -> None:
     q2 = query_box(32, 350.0, -10.0, 15.0, 10.0, nest=True)
     assert q2.ndim == 1
     assert q2.dtype == torch.int64
+
+
+def test_query_circle_rejects_vector_centers() -> None:
+    with pytest.raises(ValueError, match="scalar center"):
+        query_circle(8, torch.tensor([10.0, 20.0]), torch.tensor([0.0, 1.0]), 2.0)
 
 
 def test_query_vec_helpers_self_consistent() -> None:
@@ -418,6 +532,84 @@ def test_query_disc_cpp_matches_python_fallback() -> None:
 
     torch.testing.assert_close(torch.sort(got_ring).values, torch.sort(exp_ring).values)
     torch.testing.assert_close(torch.sort(got_nest).values, torch.sort(exp_nest).values)
+
+
+@pytest.mark.parametrize("nside", [1, 2, 4])
+@pytest.mark.parametrize("radius", [0.0, 0.2, math.pi / 2.0, math.pi])
+def test_query_disc_matches_bounded_bruteforce_center_oracle(
+    nside: int, radius: float
+) -> None:
+    vec = torch.tensor([2.0, -3.0, 4.0], dtype=torch.float64)
+    unit = vec / torch.linalg.vector_norm(vec)
+    pix = torch.arange(nside2npix(nside), dtype=torch.int64)
+    x, y, z = pix2vec(nside, pix, nest=False)
+    dots = x * unit[0] + y * unit[1] + z * unit[2]
+    expected = pix[dots >= math.cos(radius)]
+
+    actual = query_disc(nside, vec, radius, nest=False)
+
+    torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("radius", [-1.0, math.pi + 1.0e-12, math.nan, math.inf])
+def test_query_disc_rejects_invalid_radius(radius: float) -> None:
+    with pytest.raises(ValueError, match=r"finite and in \[0, pi\]"):
+        query_disc(1, [1.0, 0.0, 0.0], radius)
+
+
+@pytest.mark.parametrize(
+    "vec",
+    [
+        [0.0, 0.0, 0.0],
+        [math.nan, 0.0, 1.0],
+        [math.inf, 0.0, 1.0],
+        [1.0, 0.0],
+        [1.0, 0.0, 0.0, 0.0],
+    ],
+)
+def test_query_disc_rejects_invalid_vector(vec: list[float]) -> None:
+    with pytest.raises(ValueError):
+        query_disc(1, vec, 0.1)
+
+
+def test_native_healpix_contracts_reject_invalid_domains() -> None:
+    cpp = pytest.importorskip("torchsky._cpp")
+    required = [
+        "healpix_ang2pix_ring_torch_cpu",
+        "healpix_ring2nest_torch_cpu",
+        "healpix_query_disc_torch_cpu",
+    ]
+    if not all(hasattr(cpp, name) for name in required):
+        pytest.skip("torch-native HEALPix bindings unavailable")
+
+    empty = torch.empty(0, dtype=torch.int64)
+    with pytest.raises(RuntimeError, match=r"2\*\*29"):
+        cpp.healpix_ring2nest_torch_cpu(1 << 30, empty)
+
+    finite = torch.tensor([0.0], dtype=torch.float64)
+    with pytest.raises(RuntimeError, match="finite"):
+        cpp.healpix_ang2pix_ring_torch_cpu(
+            1, torch.tensor([math.nan], dtype=torch.float64), finite
+        )
+    with pytest.raises(RuntimeError, match=r"\[-90, 90\]"):
+        cpp.healpix_ang2pix_ring_torch_cpu(
+            1, finite, torch.tensor([91.0], dtype=torch.float64)
+        )
+
+    good_vec = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64)
+    for cos_lim in (math.nan, math.inf, -1.0001, 1.0001):
+        with pytest.raises(RuntimeError, match="cos_lim"):
+            cpp.healpix_query_disc_torch_cpu(1, good_vec, cos_lim, False)
+    with pytest.raises(RuntimeError, match="allocation size overflow"):
+        cpp.healpix_query_disc_torch_cpu(1 << 29, good_vec, -1.0, False)
+    for vec in (
+        torch.tensor([math.nan, 0.0, 1.0], dtype=torch.float64),
+        torch.tensor([math.inf, 0.0, 1.0], dtype=torch.float64),
+        torch.zeros(3, dtype=torch.float64),
+        torch.ones(2, dtype=torch.float64),
+    ):
+        with pytest.raises(RuntimeError):
+            cpp.healpix_query_disc_torch_cpu(1, vec, 0.5, False)
 
 
 def test_query_disc_fact_inclusive_false_is_noop() -> None:
@@ -641,6 +833,15 @@ def test_neighbors_and_interp_shapes() -> None:
     vals = get_interp_val(m, ra, dec, nest=False, lonlat=True)
     assert vals.shape == (3,)
     assert vals.dtype == torch.float64
+
+
+@pytest.mark.parametrize("dtype", [torch.int64, torch.bool])
+def test_get_interp_val_promotes_nonfloating_maps(dtype: torch.dtype) -> None:
+    nside = 2
+    values = torch.arange(nside2npix(nside)).remainder(2).to(dtype)
+    sampled = get_interp_val(values, 10.0, -20.0, lonlat=True)
+    assert sampled.shape == ()
+    assert sampled.dtype == torch.float64
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

@@ -15,8 +15,6 @@ import torch
 from torch import Tensor
 from typing import Tuple
 
-from torchsky._native import cpp as _cpp
-
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 _INV_SQRT2 = 0.7071067811865476
@@ -414,25 +412,8 @@ def _csc_inverse_poly(xf: Tensor, yf: Tensor) -> Tensor:
 def _csc_cpp_pair(
     fn_name: str, a: Tensor, b: Tensor
 ) -> Tuple[Tensor, Tensor] | None:
-    # ponytail: CUDA ATen Horner disagrees with scalar C++/WCSLIB at mas on
-    # some interior samples (CANFAR world-cuda CSC 8.3e-7 deg, 5/49 pts).
-    # Host-copy to the CPU kernel until a fused CUDA Chan–O'Neill exists.
-    # Ceiling: CUDA/MPS CSC without autograd is CPU + copy; autograd stays ATen.
-    if (
-        _cpp is None
-        or not hasattr(_cpp, fn_name)
-        or a.requires_grad
-        or b.requires_grad
-        or a.dtype != torch.float64
-        or b.dtype != torch.float64
-    ):
-        return None
-    fn = getattr(_cpp, fn_name)
-    device = a.device
-    out0, out1 = fn(a.reshape(-1).cpu(), b.reshape(-1).cpu())
-    return out0.to(device=device).reshape(a.shape), out1.to(device=device).reshape(
-        b.shape
-    )
+    del fn_name, a, b
+    return None
 
 
 def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:

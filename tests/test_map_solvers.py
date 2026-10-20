@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import torch
+import torchsky.map.solvers as solver_api
 
 from torchsky.map.solvers import build_spherical_harmonic_solver_hooks, build_spherical_healpix_solver_hooks, build_spherical_spin_harmonic_solver_hooks
 from torchsky.map.operators import (
@@ -37,6 +38,20 @@ from torchsky.map.solvers import (
     teb_cls_precision_factors,
 )
 from torchsky.map.target import TargetRenderSpec
+
+
+def test_solver_package_reexports_historical_callable_aliases() -> None:
+    aliases = {
+        "AdjointOperatorFn",
+        "ApplyNoiseFn",
+        "ApplyOperatorFn",
+        "BindTargetFn",
+        "NormalOperatorFn",
+        "PreconditionerFn",
+    }
+
+    assert aliases <= set(solver_api.__all__)
+    assert all(hasattr(solver_api, name) for name in aliases)
 
 
 def _simple_header() -> dict[str, float | int | str]:

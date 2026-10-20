@@ -17,7 +17,11 @@ from torchsky.map.operators import (
     PSFCalibrationTerm,
     SpatioSpectralTemporalEncoder,
 )
-from torchsky.map.operators.psf import apply_kernel2d, apply_kernel2d_variance
+from torchsky.map.operators.psf import (
+    apply_kernel2d,
+    apply_kernel2d_variance,
+    psf_support_radius,
+)
 
 
 def _asymmetric_kernel() -> torch.Tensor:
@@ -181,6 +185,66 @@ def test_explicit_variance_matches_independent_dense_transport():
     torch.testing.assert_close(apply_kernel2d_variance(variance, kernel), expected)
 
 
+def test_rectangular_odd_kernel_preserves_shape_and_source_stamp_parity():
+    kernel = torch.tensor(
+        [[1.0, 2.0, 3.0]],
+        dtype=torch.float64,
+    )
+    kernel = kernel / kernel.sum()
+    image = torch.zeros((5, 7), dtype=kernel.dtype)
+    image[2, 3] = 1.0
+    rendered = apply_kernel2d(image, kernel)
+    assert rendered.shape == image.shape
+    torch.testing.assert_close(rendered, _scatter(image, kernel))
+
+
+@pytest.mark.parametrize("shape", ((2, 3), (3, 2), (2, 2)))
+def test_even_kernel_dimensions_are_rejected_deterministically(shape):
+    image = torch.ones((5, 7))
+    kernel = torch.ones(shape)
+    spec = type("Spec", (), {"mode": "kernel2d", "kernel2d": kernel})()
+    with pytest.raises(ValueError, match="dimensions must be odd"):
+        apply_kernel2d(image, kernel)
+    with pytest.raises(ValueError, match="dimensions must be odd"):
+        apply_kernel2d_variance(image, kernel)
+    with pytest.raises(ValueError, match="dimensions must be odd"):
+        psf_support_radius(spec)
+
+
+@pytest.mark.parametrize("invalid", (float("nan"), float("inf"), -float("inf")))
+def test_explicit_kernel_rejects_nonfinite_values(invalid):
+    kernel = torch.ones((3, 3), dtype=torch.float64)
+    kernel[0, 0] = invalid
+    with pytest.raises(ValueError, match="finite"):
+        apply_kernel2d(torch.ones((5, 5), dtype=kernel.dtype), kernel)
+
+
+def test_explicit_kernel_rejects_zero_and_near_zero_normalization():
+    image = torch.ones((5, 5), dtype=torch.float64)
+    zero_sum = torch.tensor(
+        [[1.0, -1.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        dtype=image.dtype,
+    )
+    near_zero_sum = zero_sum.clone()
+    near_zero_sum[1, 1] = 1.0e-12
+    for kernel in (zero_sum, near_zero_sum):
+        with pytest.raises(ValueError, match="zero or near zero"):
+            apply_kernel2d(image, kernel)
+        with pytest.raises(ValueError, match="zero or near zero"):
+            apply_kernel2d_variance(image, kernel)
+
+
+def test_explicit_variance_transport_has_input_and_kernel_gradients():
+    variance = torch.rand((4, 5), dtype=torch.float64, requires_grad=True)
+    kernel = torch.rand((3, 3), dtype=torch.float64, requires_grad=True)
+    assert torch.autograd.gradcheck(
+        apply_kernel2d_variance,
+        (variance, kernel),
+        atol=1.0e-5,
+        rtol=1.0e-4,
+    )
+
+
 def test_signed_kernel_helper_keeps_its_existing_normalization_contract():
     # The low-level helper accepts signed kernels; physical PSFSpec does not.
     kernel = _asymmetric_kernel().clone()
@@ -225,6 +289,8 @@ def test_explicit_and_conditioned_transport_preserve_device_and_dtype(device, dt
     explicit = apply_kernel2d(image, kernel)
     assert explicit.device == image.device and explicit.dtype == image.dtype
     torch.testing.assert_close(explicit, _scatter(image, kernel))
+    propagated = apply_kernel2d_variance(torch.ones_like(image), kernel)
+    assert propagated.device == image.device and propagated.dtype == image.dtype
 
 
 class _IdentityDetector:

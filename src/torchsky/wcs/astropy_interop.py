@@ -28,6 +28,9 @@ def catalog_state_from_astropy(coord: SkyCoord) -> CatalogState:
         "lat": torch.as_tensor(icrs.dec.deg, dtype=torch.float64),
         "frame": "ICRS",
     }
+    obstime = getattr(coord, "obstime", None)
+    if obstime is not None:
+        kwargs["epoch"] = torch.as_tensor(obstime.tt.jyear, dtype=torch.float64)
     try:
         kwargs["pm_lon_coslat_mas_yr"] = torch.as_tensor(
             icrs.pm_ra_cosdec.to_value(u.mas / u.yr), dtype=torch.float64
@@ -56,6 +59,7 @@ def catalog_state_to_astropy(state: CatalogState) -> SkyCoord:
     """Build a SkyCoord from ICRS ``CatalogState`` (converts frames first)."""
     import astropy.units as u
     from astropy.coordinates import SkyCoord
+    from astropy.time import Time
 
     icrs = (
         state
@@ -66,6 +70,9 @@ def catalog_state_to_astropy(state: CatalogState) -> SkyCoord:
         "ra": icrs.lon.detach().cpu().numpy() * u.deg,
         "dec": icrs.lat.detach().cpu().numpy() * u.deg,
         "frame": "icrs",
+        "obstime": Time(
+            icrs.epoch.detach().cpu().numpy(), format="jyear", scale="tt"
+        ),
     }
     if icrs.pm_lon_coslat_mas_yr is not None and icrs.pm_lat_mas_yr is not None:
         kwargs["pm_ra_cosdec"] = (

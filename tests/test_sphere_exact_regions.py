@@ -1,8 +1,11 @@
 import numpy as np
+import pytest
 import torch
 
 from torchsky.sphere.geom import (
+    NativeApproximateSphericalRegion,
     NativeExactSphericalRegion,
+    SphericalCap,
     SphericalPolygon,
     to_exact_region,
 )
@@ -44,6 +47,43 @@ def test_native_exact_region_boolean_area_ordering() -> None:
     i = r1.intersection(p2)
     d = r1.difference(p2)
 
-    assert u.area() >= r1.area()
-    assert i.area() <= r1.area()
-    np.testing.assert_allclose(d.area() + i.area(), r1.area(), rtol=0.0, atol=5e-3)
+    with pytest.raises(RuntimeError, match="area_estimate"):
+        u.area()
+    with pytest.raises(RuntimeError, match="analytic native area"):
+        _ = u.is_empty
+    with pytest.raises(RuntimeError, match="exact native intersection"):
+        u.intersects(p1)
+    u_est = u.area_estimate().area_sr
+    i_est = i.area_estimate().area_sr
+    d_est = d.area_estimate().area_sr
+    assert u_est >= r1.area()
+    assert i_est <= r1.area()
+    np.testing.assert_allclose(d_est + i_est, r1.area(), rtol=0.0, atol=5e-3)
+
+
+def test_native_tiny_cap_uses_analytic_area_and_emptiness() -> None:
+    cap = SphericalCap(12.0, -7.0, 1e-7)
+    region = to_exact_region(cap, backend="native", nsides=(1, 2, 4))
+
+    assert bool(region.contains(cap.lon_deg, cap.lat_deg))
+    assert region.area() > 0.0
+    assert not region.is_empty
+    assert region.area_estimate().area_sr == 0.0
+
+
+def test_native_cap_intersection_is_analytic_below_pixel_scale() -> None:
+    left = to_exact_region(
+        SphericalCap(0.0, 0.0, 1e-4), backend="native", nsides=(1, 2)
+    )
+    overlap = SphericalCap(0.00015, 0.0, 1e-4)
+    disjoint = SphericalCap(0.00025, 0.0, 1e-4)
+
+    assert left.intersects(overlap)
+    assert not left.intersects(disjoint)
+
+
+def test_native_exact_name_is_compatibility_alias() -> None:
+    assert NativeExactSphericalRegion is NativeApproximateSphericalRegion
+    region = to_exact_region(SphericalCap(0.0, 0.0, 1.0), backend="native")
+    assert isinstance(region, NativeExactSphericalRegion)
+    assert isinstance(region, NativeApproximateSphericalRegion)

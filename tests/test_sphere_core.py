@@ -9,6 +9,8 @@ from torchsky.sphere.core import (
     interpolate_wavelength_axis,
     pairwise_angular_distance,
     remove_monopole_dipole,
+    sample_healpix_map,
+    sample_map,
     sample_multiband_healpix,
     sample_multiwavelength_healpix,
     slerp_lonlat,
@@ -69,6 +71,22 @@ def test_pairwise_distance_tiny_angle_matches_great_circle() -> None:
 
     torch.testing.assert_close(d[0, 1], expected, atol=1e-12, rtol=0.0)
     assert float(d[0, 1]) > 0.0
+
+
+def test_pairwise_distance_gradients_are_finite_and_correct() -> None:
+    lon = torch.tensor([12.0, 12.00001, 83.0], dtype=torch.float64, requires_grad=True)
+    lat = torch.tensor([-7.0, -6.99999, 21.0], dtype=torch.float64, requires_grad=True)
+
+    assert torch.autograd.gradcheck(
+        lambda x, y: pairwise_angular_distance(x, y, degrees=False),
+        (lon, lat),
+        eps=1.0e-7,
+        atol=1.0e-6,
+        rtol=1.0e-4,
+    )
+    pairwise_angular_distance(lon, lat, degrees=False).sum().backward()
+    assert lon.grad is not None and torch.isfinite(lon.grad).all()
+    assert lat.grad is not None and torch.isfinite(lat.grad).all()
 
 
 def test_slerp_endpoints_and_midpoint() -> None:
@@ -151,6 +169,30 @@ def test_sample_multiband_matches_healpix_interp() -> None:
         dim=0,
     )
     torch.testing.assert_close(sampled, expected, atol=1e-12, rtol=0.0)
+
+
+def test_sample_healpix_scalar_coordinates_and_integer_bilinear() -> None:
+    nside = 2
+    values = torch.arange(hp.nside2npix(nside), dtype=torch.int64)
+
+    nearest = sample_healpix_map(values, nside, 12.0, -8.0, interpolation="nearest")
+    bilinear = sample_healpix_map(values, nside, 12.0, -8.0, interpolation="bilinear")
+    unified = sample_map(values, 12.0, -8.0, interpolation="bilinear")
+
+    assert nearest.shape == ()
+    assert nearest.dtype == torch.int64
+    assert bilinear.shape == ()
+    assert bilinear.dtype == torch.float64
+    torch.testing.assert_close(unified, bilinear)
+
+
+def test_sample_healpix_bool_bilinear_promotes() -> None:
+    nside = 1
+    values = torch.arange(hp.nside2npix(nside)).remainder(2).bool()
+    sampled = sample_healpix_map(values, nside, 45.0, 10.0, interpolation="bilinear")
+    assert sampled.shape == ()
+    assert sampled.dtype == torch.float64
+    assert 0.0 <= float(sampled) <= 1.0
 
 
 def test_interpolate_wavelength_axis_linear() -> None:

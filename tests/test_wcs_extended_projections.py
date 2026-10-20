@@ -8,9 +8,11 @@ import os
 import numpy as np
 import pytest
 import torch
+from astropy.wcs import Prjprm
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
+from torchsky.wcs.zenithal import deproject_zenithal, project_zenithal
 
 
 def _make_header(
@@ -66,6 +68,38 @@ def _ra_wrap_delta(ra_a: np.ndarray, ra_b: np.ndarray) -> np.ndarray:
 # --- Zenithal projections ---
 
 
+def test_air_antipode_and_near_antipode_match_wcslib() -> None:
+    projection = Prjprm()
+    projection.code = "AIR"
+    projection.set_pvi(1, 90.0)
+    phi = np.array([0.0, 30.0, -45.0], dtype=np.float64)
+    theta = np.array([-89.999999, -89.9, -80.0], dtype=np.float64)
+    x_ref, y_ref = projection.prjs2x(phi, theta)
+
+    xi, eta = deproject_zenithal(
+        torch.from_numpy(phi), torch.from_numpy(theta), "AIR"
+    )
+    np.testing.assert_allclose(xi.numpy(), -x_ref, rtol=2.0e-10, atol=1.0e-8)
+    np.testing.assert_allclose(eta.numpy(), y_ref, rtol=3.0e-8, atol=1.0e-8)
+
+    phi_back, theta_back = project_zenithal(xi, eta, "AIR")
+    np.testing.assert_allclose(
+        _ra_wrap_delta(phi_back.numpy(), phi), 0.0, atol=2.0e-10
+    )
+    np.testing.assert_allclose(theta_back.numpy(), theta, atol=2.0e-9)
+
+    xi_pole, eta_pole = deproject_zenithal(
+        torch.tensor(0.0, dtype=torch.float64),
+        torch.tensor(-90.0, dtype=torch.float64),
+        "AIR",
+    )
+    x_pole, y_pole = projection.prjs2x(
+        np.array([0.0], dtype=np.float64), np.array([-90.0], dtype=np.float64)
+    )
+    assert np.isnan(x_pole[0]) and np.isnan(y_pole[0])
+    assert torch.isnan(xi_pole) and torch.isnan(eta_pole)
+
+
 
 
 
@@ -117,7 +151,7 @@ def _ra_wrap_delta(ra_a: np.ndarray, ra_b: np.ndarray) -> np.ndarray:
 
 @pytest.mark.skipif(os.environ.get('TORCHSKY_DISABLE_CPP') == '1', reason='Requires fused C++ backend')
 def test_csc_python_matches_fused_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ATen CSC (CUDA/FUSED=0) must match fused C++/WCSLIB, not sit at mas error."""
+    """ATen and fused CSC must independently match WCSLIB float32 semantics."""
     header = _make_header("CSC", cd_scale=0.3)
     awcs = AstropyWCS(header)
     x, y = _sample_pixels(header, n_side=15)
@@ -133,13 +167,15 @@ def test_csc_python_matches_fused_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     ra_p, dec_p = python.pixel_to_world(xt, yt, origin=0)
     dra = _ra_wrap_delta(ra_p.numpy(), ra_f.numpy())
     ddec = dec_p.numpy() - dec_f.numpy()
-    np.testing.assert_allclose(dra, 0.0, atol=1e-12)
-    np.testing.assert_allclose(ddec, 0.0, atol=1e-12)
+    np.testing.assert_allclose(dra, 0.0, atol=1e-6)
+    np.testing.assert_allclose(ddec, 0.0, atol=1e-6)
     ra_a, dec_a = awcs.all_pix2world(x, y, 0)
     dra_a = _ra_wrap_delta(ra_p.numpy(), ra_a)
     ddec_a = dec_p.numpy() - dec_a
     np.testing.assert_allclose(dra_a, 0.0, atol=1e-6)
     np.testing.assert_allclose(ddec_a, 0.0, atol=1e-6)
+    np.testing.assert_allclose(_ra_wrap_delta(ra_f.numpy(), ra_a), 0.0, atol=1e-6)
+    np.testing.assert_allclose(dec_f.numpy() - dec_a, 0.0, atol=1e-6)
 
 
 

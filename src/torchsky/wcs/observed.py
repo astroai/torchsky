@@ -400,5 +400,5 @@ def _vector_altaz(
         raise ValueError("site.height_m must be finite WGS84 ellipsoidal height")
     east, north, up = _geodetic_normal_east_north(lon_rad, lat_rad)
     alt = torch.asin(torch.clamp((v_itrs * up).sum(dim=-1), -1.0, 1.0)) * R2D
-    az = torch.atan2(-(v_itrs * east).sum(dim=-1), (v_itrs * north).sum(dim=-1)) * R2D
+    az = torch.atan2((v_itrs * east).sum(dim=-1), (v_itrs * north).sum(dim=-1)) * R2D
     return _wrap360(az), alt

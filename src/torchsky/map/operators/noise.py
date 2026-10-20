@@ -61,7 +61,11 @@ class StructuredNoiseOp(NoiseOp):
 
 
 def sanitize_inverse_variance(weight: Tensor) -> Tensor:
-    return weight.where(weight > 0.0, weight.new_zeros(()).expand_as(weight))
+    return torch.where(
+        torch.isfinite(weight) & (weight > 0.0),
+        weight,
+        torch.zeros((), dtype=weight.dtype, device=weight.device),
+    )
 
 
 def _reference_tensor(*values: object) -> Tensor | None:
@@ -99,13 +103,24 @@ def _validate_positive(value: Tensor, *, name: str) -> None:
 def _broadcast_parameter(value: Tensor, shape: tuple[int, ...], *, name: str) -> Tensor:
     """Broadcast a scalar/map or a leading exposure parameter to ``shape``.
 
-    Standard PyTorch broadcasting handles detector maps (``H x W`` against
-    ``E x H x W``). A one-dimensional calibration vector conventionally
-    indexes the leading exposure/amp axis, so the fallback appends singleton
-    dimensions for that case.
+    Standard PyTorch broadcasting handles explicit detector maps (``H x W``
+    against ``E x H x W``). A one-dimensional calibration vector always
+    indexes the leading exposure/amp axis, even when its length also equals a
+    trailing dimension. Trailing-axis calibration maps must therefore include
+    explicit singleton dimensions, such as ``(1, W)``.
     """
     if value.ndim > len(shape):
         raise ValueError(f"{name} has too many dimensions for target shape {shape}")
+    if value.ndim == 1 and len(shape) > 1:
+        leading = value.reshape(value.shape + (1,) * (len(shape) - 1))
+        try:
+            torch.broadcast_shapes(tuple(leading.shape), shape)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"{name} leading-axis shape {tuple(value.shape)} is not "
+                f"broadcastable to {shape}; use an explicit shape for a trailing map"
+            ) from exc
+        return leading
     try:
         torch.broadcast_shapes(tuple(value.shape), shape)
     except RuntimeError:
@@ -233,6 +248,10 @@ def pipeline_variance(
     _validate_nonnegative(err_tensor, name="ERR")
     scale = _coerce(err_scale, reference)
     _validate_positive(scale, name="ERR scale")
+    scale = _broadcast_parameter(scale, tuple(err_tensor.shape), name="ERR scale")
+    floor_tensor = _broadcast_parameter(
+        floor_tensor, tuple(err_tensor.shape), name="variance_floor"
+    )
     try:
         shape = torch.broadcast_shapes(
             tuple(err_tensor.shape), tuple(scale.shape), tuple(floor_tensor.shape)
@@ -241,11 +260,7 @@ def pipeline_variance(
         raise ValueError(
             "ERR, ERR scale, and variance_floor are not broadcastable"
         ) from exc
-    return _broadcast_parameter(
-        scale, shape, name="ERR scale"
-    ).square() * err_tensor.square() + _broadcast_parameter(
-        floor_tensor, shape, name="variance_floor"
-    )
+    return scale.square() * err_tensor.square() + floor_tensor
 
 
 calibrated_pipeline_variance = pipeline_variance

@@ -8,7 +8,7 @@ remain float32 because MPS cannot represent absolute sky coordinates in float64.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Literal
 
 import torch
 import torch.nn as nn
@@ -63,6 +63,54 @@ from .types import (
     FieldSpectralSampling,
     ForwardContext,
 )
+
+
+VarianceIntegrationMode = Literal["coherent", "independent_aleatoric"]
+
+
+def _quadrature_weight_view(weights: Tensor, sample_ndim: int) -> Tensor:
+    return weights.reshape((int(weights.shape[0]),) + (1,) * sample_ndim)
+
+
+def _integrate_marginal_variances(
+    variances: Tensor,
+    weights: Tensor,
+    *,
+    mode: VarianceIntegrationMode,
+) -> Tensor:
+    weight_view = _quadrature_weight_view(weights, variances.ndim - 1).to(
+        dtype=variances.dtype
+    )
+    if mode == "coherent":
+        return torch.square(
+            torch.sum(torch.sqrt(torch.clamp_min(variances, 0.0)) * weight_view, dim=0)
+        )
+    if mode == "independent_aleatoric":
+        return torch.sum(variances * torch.square(weight_view), dim=0)
+    raise ValueError(
+        "variance_mode must be 'coherent' or 'independent_aleatoric'"
+    )
+
+
+def _validate_variance_mode(mode: VarianceIntegrationMode) -> None:
+    if mode not in ("coherent", "independent_aleatoric"):
+        raise ValueError(
+            "variance_mode must be 'coherent' or 'independent_aleatoric'"
+        )
+
+
+def _render_accumulation_dtype(
+    model: nn.Module,
+    requested_dtype: torch.dtype,
+    device: torch.device,
+) -> torch.dtype:
+    dtype = requested_dtype if requested_dtype.is_floating_point else torch.float32
+    for value in (*model.parameters(), *model.buffers()):
+        if value.is_floating_point():
+            dtype = torch.promote_types(dtype, value.dtype)
+    if device.type == "mps" and dtype == torch.float64:
+        return torch.float32
+    return dtype
 
 
 def field_model_has_predictive_distribution(model: nn.Module) -> bool:
@@ -448,6 +496,7 @@ def _render_spatially_integrated_distribution(
     exposure_pose: ExposurePose | None,
     operator_bundle: ObservationOperatorBundle,
     device: torch.device,
+    variance_mode: VarianceIntegrationMode,
 ) -> tuple[Tensor, Tensor]:
     image = observation.image
     height, width = _header_shape(
@@ -459,13 +508,17 @@ def _render_spatially_integrated_distribution(
     else:
         tile_h, tile_w = _validate_spatial_tile_hw(spatial_tile_hw)
         tiles = list(_iter_spatial_tiles(height, width, tile_h, tile_w))
-    output_mean = torch.zeros((height, width), device=device, dtype=torch.float32)
+    accumulation_dtype = _render_accumulation_dtype(model, image.dtype, device)
+    output_mean = torch.zeros((height, width), device=device, dtype=accumulation_dtype)
     output_var = torch.zeros_like(output_mean)
     render_distribution = getattr(model, "render_bandpass_distribution", None)
     forward_distribution = getattr(model, "forward_distribution", None)
     for y0, y1, x0, x1 in tiles:
-        patch_mean = torch.zeros((y1 - y0, x1 - x0), device=device, dtype=torch.float32)
+        patch_mean = torch.zeros(
+            (y1 - y0, x1 - x0), device=device, dtype=accumulation_dtype
+        )
         patch_var = torch.zeros_like(patch_mean)
+        patch_scale = torch.zeros_like(patch_mean)
         for offset_x, offset_y, spatial_weight in spatial_nodes:
             ra_deg, dec_deg = _tile_world_coordinate_grid(
                 observation,
@@ -512,17 +565,24 @@ def _render_spatially_integrated_distribution(
                     stacked_mean * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
                     dim=0,
                 )
-                node_var = torch.sum(
-                    stacked_var
-                    * torch.square(weights).view(-1, 1, 1).to(dtype=stacked_var.dtype),
-                    dim=0,
+                node_var = _integrate_marginal_variances(
+                    stacked_var,
+                    weights,
+                    mode=variance_mode,
                 )
             else:
                 raise ValueError(
                     "field model does not provide an explicit predictive distribution"
                 )
             patch_mean += float(spatial_weight) * node_mean
-            patch_var += float(spatial_weight) ** 2 * node_var
+            if variance_mode == "coherent":
+                patch_scale += float(spatial_weight) * torch.sqrt(
+                    torch.clamp_min(node_var, 0.0)
+                )
+            else:
+                patch_var += float(spatial_weight) ** 2 * node_var
+        if variance_mode == "coherent":
+            patch_var = torch.square(patch_scale)
         output_mean[y0:y1, x0:x1] = patch_mean
         output_var[y0:y1, x0:x1] = patch_var
     output_mean = apply_additive_stage(
@@ -567,7 +627,15 @@ def render_field_observation_distribution(
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
     operator_bundle: ObservationOperatorBundle | None = None,
+    variance_mode: VarianceIntegrationMode = "coherent",
 ) -> tuple[Tensor, Tensor]:
+    """Render predictive mean and log variance.
+
+    Marginal variances at deterministic quadrature nodes are integrated as fully
+    correlated by default. Use ``variance_mode="independent_aleatoric"`` only
+    when node-level aleatoric errors are explicitly independent.
+    """
+    _validate_variance_mode(variance_mode)
     _validate_pixel_response(observation, spatial_sampling, operator_bundle)
     image = observation.image
     if image.ndim != 2:
@@ -629,6 +697,7 @@ def render_field_observation_distribution(
             exposure_pose=exposure_pose,
             operator_bundle=operator_bundle,
             device=device,
+            variance_mode=variance_mode,
         )
     ra_deg, dec_deg = _coordinate_grid(
         observation,
@@ -669,11 +738,10 @@ def render_field_observation_distribution(
                 stacked_mean * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
                 dim=0,
             )
-            # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
-            var = torch.sum(
-                stacked_var
-                * torch.square(weights).view(-1, 1, 1).to(dtype=stacked_var.dtype),
-                dim=0,
+            var = _integrate_marginal_variances(
+                stacked_var,
+                weights,
+                mode=variance_mode,
             )
             logvar = torch.log(torch.clamp(var, min=1.0e-8))
         else:
@@ -718,7 +786,15 @@ def render_field_samples_distribution(
     forward_context: ForwardContext | None = None,
     exposure_pose: ExposurePose | None = None,
     operator_bundle: ObservationOperatorBundle | None = None,
+    variance_mode: VarianceIntegrationMode = "coherent",
 ) -> tuple[Tensor, Tensor]:
+    """Render sample predictive mean and log variance.
+
+    Marginal variances at deterministic quadrature nodes are integrated as fully
+    correlated by default. Use ``variance_mode="independent_aleatoric"`` only
+    when node-level aleatoric errors are explicitly independent.
+    """
+    _validate_variance_mode(variance_mode)
     if observation.additive_components:
         raise ValueError(
             "pixel-sampled rendering does not support typed additive planes"
@@ -726,6 +802,7 @@ def render_field_samples_distribution(
     ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
         ra_deg, dec_deg, observation, exposure_pose
     )
+    ra_deg, dec_deg = torch.broadcast_tensors(ra_deg, dec_deg)
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     if operator_bundle.psf is not None:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
@@ -795,14 +872,16 @@ def render_field_samples_distribution(
         stacked_mean = torch.stack(means, dim=0)
         stacked_var = torch.stack(variances, dim=0)
         mean = torch.sum(
-            stacked_mean * weights.view(-1, 1, 1).to(dtype=stacked_mean.dtype),
+            stacked_mean
+            * _quadrature_weight_view(weights, stacked_mean.ndim - 1).to(
+                dtype=stacked_mean.dtype
+            ),
             dim=0,
         )
-        # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
-        var = torch.sum(
-            stacked_var
-            * torch.square(weights).view(-1, 1, 1).to(dtype=stacked_var.dtype),
-            dim=0,
+        var = _integrate_marginal_variances(
+            stacked_var,
+            weights,
+            mode=variance_mode,
         )
         return mean, torch.log(torch.clamp(var, min=1.0e-8))
     raise ValueError("field model does not provide an explicit predictive distribution")
@@ -925,12 +1004,13 @@ def render_field_observation(
         th, tw = _validate_spatial_tile_hw(spatial_tile_hw)
         tiles = list(_iter_spatial_tiles(H, W, th, tw))
     if isinstance(operator_bundle.psf, LearnedPSFOp):
-        rendered = torch.zeros((H, W), device=device, dtype=torch.float32)
+        accumulation_dtype = _render_accumulation_dtype(model, image.dtype, device)
+        rendered = torch.zeros((H, W), device=device, dtype=accumulation_dtype)
         for wavelength, spectral_weight in zip(wavelengths, weights, strict=True):
             monochromatic = torch.zeros_like(rendered)
             for y0, y1, x0, x1 in tiles:
                 patch = torch.zeros(
-                    (y1 - y0, x1 - x0), device=device, dtype=torch.float32
+                    (y1 - y0, x1 - x0), device=device, dtype=accumulation_dtype
                 )
                 for offset_x, offset_y, spatial_weight in spatial_nodes:
                     if center_ra is not None and center_dec is not None:
@@ -990,9 +1070,12 @@ def render_field_observation(
             spatial_tile_hw=spatial_tile_hw,
         )
         return rendered.to(dtype=image.dtype)
-    rendered = torch.zeros((H, W), device=device, dtype=torch.float32)
+    accumulation_dtype = _render_accumulation_dtype(model, image.dtype, device)
+    rendered = torch.zeros((H, W), device=device, dtype=accumulation_dtype)
     for y0, y1, x0, x1 in tiles:
-        patch = torch.zeros((y1 - y0, x1 - x0), device=device, dtype=torch.float32)
+        patch = torch.zeros(
+            (y1 - y0, x1 - x0), device=device, dtype=accumulation_dtype
+        )
         for offset_x, offset_y, spatial_weight in spatial_nodes:
             if center_ra is not None and center_dec is not None:
                 ra_p = center_ra[y0:y1, x0:x1]
@@ -1268,6 +1351,7 @@ def render_field_samples(
     ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
         ra_deg, dec_deg, observation, exposure_pose
     )
+    ra_deg, dec_deg = torch.broadcast_tensors(ra_deg, dec_deg)
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
     if operator_bundle.psf is not None:
         raise ValueError("pixel-sampled field rendering does not support PSF blurring")
@@ -1329,7 +1413,8 @@ def render_field_samples(
         )
     stacked = torch.stack(spectral_samples, dim=0)
     return torch.sum(
-        stacked * weights.view(-1, 1).to(dtype=stacked.dtype),
+        stacked
+        * _quadrature_weight_view(weights, stacked.ndim - 1).to(dtype=stacked.dtype),
         dim=0,
     )
 
@@ -1358,48 +1443,33 @@ def evaluate_field_coordinates_vmapped(
     model: nn.Module,
     ra_deg: Tensor,
     dec_deg: Tensor,
-    wavelength_angstrom: Tensor,
+    wavelength_angstrom: Tensor | float,
 ) -> Tensor:
-    """Evaluate the field with ``torch.func.vmap`` over flattened coordinates.
+    """Evaluate a field over broadcast coordinates using stateless module state.
 
-    This uses ``functional_call`` so the forward is expressed as a pure function
-    of parameters/buffers plus per-sample inputs—useful for ``func`` transforms
-    (JAX-style batching semantics). Standard field ``nn.Module`` instances already
-    support batched ``(ra, dec, λ)`` tensors; prefer a single vectorized forward unless you
-    need this composition.
+    The historical implementation applied ``torch.func.vmap`` to scalar calls,
+    which fails for valid field models containing tensor-value validation. Field
+    models already accept tensor batches, so this compatibility entry point uses
+    one ``functional_call`` over the broadcast batch and remains differentiable.
     """
     try:
-        from torch.func import functional_call, vmap
+        from torch.func import functional_call
     except ImportError as e:
         raise RuntimeError(
             "evaluate_field_coordinates_vmapped requires PyTorch 2.x torch.func"
         ) from e
-    ra = torch.as_tensor(ra_deg).reshape(-1)
-    dec = torch.as_tensor(dec_deg).reshape(-1)
-    wl = torch.as_tensor(wavelength_angstrom)
-    if wl.ndim == 0:
-        wl = wl.expand(ra.shape[0]).to(dtype=torch.float32, device=ra.device)
-    else:
-        wl = wl.reshape(-1).to(dtype=torch.float32, device=ra.device)
-        if wl.shape[0] != ra.shape[0]:
-            raise ValueError(
-                "wavelength_angstrom must be scalar or match flattened ra/dec length"
-            )
+    ra = torch.as_tensor(ra_deg)
+    dec = torch.as_tensor(dec_deg, device=ra.device)
+    wl = torch.as_tensor(wavelength_angstrom, device=ra.device)
+    ra, dec, wl = torch.broadcast_tensors(ra, dec, wl)
     state = {**dict(model.named_parameters()), **dict(model.named_buffers())}
-
-    def one_point(
-        ra_s: Tensor,
-        dec_s: Tensor,
-        wl_s: Tensor,
-    ) -> Tensor:
-        out = functional_call(
-            model,
-            state,
-            (ra_s.unsqueeze(0), dec_s.unsqueeze(0), wl_s.unsqueeze(0)),
+    output = functional_call(model, state, (ra, dec, wl))
+    if output.shape != ra.shape:
+        raise ValueError(
+            "field render expects one scalar output per broadcast (ra, dec, λ) sample; "
+            f"got shape {tuple(output.shape)} for input shape {tuple(ra.shape)}"
         )
-        return out.reshape(())
-
-    return vmap(one_point)(ra, dec, wl)
+    return output
 
 
 def _evaluate_field_plane_func_vmap(
@@ -1418,6 +1488,10 @@ def _evaluate_field_plane_func_vmap(
     dev = ra_f.device
     wl0 = torch.as_tensor(wavelength, dtype=torch.float32, device=dev)
     cc = max(int(chunk), 1)
+    if n == 0:
+        return evaluate_field_coordinates_vmapped(
+            model, ra_f, dec_f, wl0
+        ).reshape(shape)
     parts: list[Tensor] = []
     for i in range(0, n, cc):
         sl = slice(i, min(i + cc, n))
@@ -1518,10 +1592,11 @@ def render_field_cube(
     ``spatial_tile_hw`` optionally processes the map in ``(tile_h, tile_w)`` spatial
     windows to cap peak activation memory on large TAN grids.
 
-    ``use_func_vmap=True`` routes each wavelength slice through
-    :func:`evaluate_field_coordinates_vmapped` in sub-batches of ``func_vmap_chunk``
-    pixels (``torch.func`` / JAX-style vectorization). Default field models are
-    already batch-vectorized; this path is for ``func`` composition and debugging.
+    ``use_func_vmap=True`` routes each wavelength slice through the stateless
+    compatibility path :func:`evaluate_field_coordinates_vmapped` in sub-batches
+    of ``func_vmap_chunk`` pixels. Field models are already batch-vectorized; the
+    compatibility path no longer applies scalar ``vmap`` because tensor-value
+    validation inside otherwise valid models is incompatible with that transform.
     """
     fallback = (
         (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))

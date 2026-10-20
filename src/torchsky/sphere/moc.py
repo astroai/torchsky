@@ -2,6 +2,7 @@
 
 import json
 import math
+from bisect import bisect_right
 from typing import Any, Literal
 
 import torch
@@ -24,6 +25,17 @@ _MAX_HEALPIX_ORDER = 29
 _MAX_HEALPIX_NSIDE = 1 << _MAX_HEALPIX_ORDER
 
 
+def _as_int64_exact(value: int | Tensor, *, name: str) -> Tensor:
+    tensor = torch.as_tensor(value)
+    if tensor.numel() > 0 and (
+        tensor.dtype == torch.bool
+        or tensor.dtype.is_floating_point
+        or tensor.dtype.is_complex
+    ):
+        raise ValueError(f"{name} must contain integers")
+    return tensor.to(torch.int64)
+
+
 def _nside_from_max_order(max_order: int) -> int:
     order = int(max_order)
     if order < 0:
@@ -43,7 +55,7 @@ def _order_from_uniq(uniq: Tensor) -> Tensor:
     int64 values and misclassifies the last cells of high orders, so the
     order is derived from an exact integer bit length.
     """
-    u = uniq.to(torch.int64)
+    u = _as_int64_exact(uniq, name="uniq")
     if bool((u < 4).any()):
         raise ValueError("UNIQ values must be >= 4 (nside >= 1)")
     # floor(log2(u)) through a fixed unrolled binary search; exact for int64.
@@ -60,25 +72,35 @@ def _order_from_uniq(uniq: Tensor) -> Tensor:
         raise ValueError(
             f"UNIQ values must encode nside <= {_MAX_HEALPIX_NSIDE}"
         )
+    nside = torch.bitwise_left_shift(torch.ones_like(order), order)
+    pix = u - 4 * (nside * nside)
+    if bool(((pix < 0) | (pix >= 12 * nside * nside)).any()):
+        raise ValueError("UNIQ values must use the canonical NUNIQ encoding")
     return order
 
 
 def nest2uniq(nside: int | Tensor, pix: int | Tensor) -> Tensor:
     """Convert NESTED pixel index to UNIQ pixel index."""
-    n = torch.as_tensor(nside, dtype=torch.int64)
-    p = torch.as_tensor(pix, dtype=torch.int64)
+    n = _as_int64_exact(nside, name="nside")
+    p = _as_int64_exact(pix, name="pix")
+    device = p.device if isinstance(pix, Tensor) else n.device
+    n = n.to(device=device)
+    p = p.to(device=device)
+    n, p = torch.broadcast_tensors(n, p)
     if bool((n <= 0).any()) or bool((n > _MAX_HEALPIX_NSIDE).any()):
         raise ValueError(
             f"nside must be in [1, {_MAX_HEALPIX_NSIDE}]"
         )
     if bool((n & (n - 1) != 0).any()):
         raise ValueError("nside must be a positive power of two")
+    if bool(((p < 0) | (p >= 12 * n * n)).any()):
+        raise ValueError("pix must satisfy 0 <= pix < 12 * nside**2")
     return 4 * (n * n) + p
 
 
 def uniq2nest(uniq: int | Tensor) -> tuple[Tensor, Tensor]:
     """Convert UNIQ pixel index to (nside, NESTED pixel index)."""
-    u = torch.as_tensor(uniq, dtype=torch.int64)
+    u = _as_int64_exact(uniq, name="uniq")
     order = _order_from_uniq(u)
     nside = torch.bitwise_left_shift(torch.ones_like(order), order)
     pix = u - 4 * (nside * nside)
@@ -169,10 +191,55 @@ def _normalize_moc(uniq: Tensor) -> Tensor:
     if uniq.numel() == 0:
         return uniq
 
-    u = torch.unique(torch.as_tensor(uniq, dtype=torch.int64))
+    u = torch.unique(_as_int64_exact(uniq, name="uniq"))
     max_order = _max_order_from_uniq(u)
     ranges = _uniq_to_ranges(u, max_order)
     return _ranges_to_uniq(ranges, max_order)
+
+
+def _normalize_bmoc(uniq: Tensor, flag: Tensor) -> tuple[Tensor, Tensor]:
+    """Remove duplicate and parent/child aliases using boundary-dominant flags.
+
+    When overlapping representations disagree, ``flag == 0`` wins. This
+    conservative, order-independent rule prevents a partial cell from being
+    promoted to strictly interior and is used by construction and BMOC algebra.
+    """
+    if uniq.numel() == 0:
+        return uniq, flag
+
+    _order_from_uniq(uniq)
+    max_order = _max_order_from_uniq(uniq)
+    _, pixels = uniq2nest(uniq)
+    orders = _order_from_uniq(uniq)
+    shifts = 2 * (max_order - orders)
+    starts = pixels << shifts
+    ends = (pixels + 1) << shifts
+    indices = sorted(
+        range(uniq.numel()),
+        key=lambda i: (int(starts[i].item()), -int(ends[i].item())),
+    )
+
+    kept_indices: list[int] = []
+    kept_flags: list[int] = []
+    current_end = -1
+    for index in indices:
+        start = int(starts[index].item())
+        end = int(ends[index].item())
+        value = int(flag[index].item())
+        if start < current_end:
+            kept_flags[-1] = min(kept_flags[-1], value)
+            continue
+        kept_indices.append(index)
+        kept_flags.append(value)
+        current_end = end
+
+    index_t = torch.tensor(kept_indices, dtype=torch.int64, device=uniq.device)
+    normalized_uniq = uniq[index_t]
+    normalized_flag = torch.tensor(
+        kept_flags, dtype=torch.uint8, device=flag.device
+    )
+    order = torch.argsort(normalized_uniq)
+    return normalized_uniq[order], normalized_flag[order]
 
 
 
@@ -472,7 +539,7 @@ class MOC:
     """Multi-Order Coverage map."""
 
     def __init__(self, uniq: Tensor):
-        self.uniq = _normalize_moc(torch.as_tensor(uniq, dtype=torch.int64))
+        self.uniq = _normalize_moc(_as_int64_exact(uniq, name="uniq"))
 
     @classmethod
     def _make_empty(cls) -> "MOC":
@@ -508,6 +575,7 @@ class MOC:
         lon = _healpix._as_float64(lon_deg)
         lat = _healpix._as_float64(lat_deg)
         lat = lat.to(device=lon.device)
+        lon, lat = torch.broadcast_tensors(lon, lat)
 
         if self.uniq.numel() == 0:
             return torch.zeros_like(lon, dtype=torch.bool)
@@ -1222,35 +1290,96 @@ def _wcs_perimeter_lonlat(
     return ra.reshape(-1), dec.reshape(-1), H, W
 
 
+def _bmoc_ranges(
+    bmoc: "BMOC", max_order: int
+) -> tuple[list[int], list[int], list[int]]:
+    if bmoc.uniq.numel() == 0:
+        return [], [], []
+    _, pixels = uniq2nest(bmoc.uniq)
+    orders = _order_from_uniq(bmoc.uniq)
+    shifts = 2 * (max_order - orders)
+    starts_t = pixels << shifts
+    ends_t = (pixels + 1) << shifts
+    indices = torch.argsort(starts_t)
+    return (
+        [int(value) for value in starts_t[indices].tolist()],
+        [int(value) for value in ends_t[indices].tolist()],
+        [int(value) for value in bmoc.flag[indices].tolist()],
+    )
+
+
+def _combine_bmoc(left: "BMOC", right: "BMOC", operation: str) -> "BMOC":
+    max_order = max(left.max_order, right.max_order)
+    left_starts, left_ends, left_flags = _bmoc_ranges(left, max_order)
+    right_starts, right_ends, right_flags = _bmoc_ranges(right, max_order)
+    endpoints = sorted(set(left_starts + left_ends + right_starts + right_ends))
+    if len(endpoints) < 2:
+        return BMOC.empty()
+
+    def state_at(
+        position: int, starts: list[int], ends: list[int], flags: list[int]
+    ) -> int:
+        index = bisect_right(starts, position) - 1
+        if index < 0 or position >= ends[index]:
+            return -1
+        return flags[index]
+
+    segments: list[tuple[int, int, int]] = []
+    for start, end in zip(endpoints[:-1], endpoints[1:], strict=True):
+        left_state = state_at(start, left_starts, left_ends, left_flags)
+        right_state = state_at(start, right_starts, right_ends, right_flags)
+        if operation == "union":
+            state = max(left_state, right_state)
+        elif operation == "intersection":
+            state = min(left_state, right_state) if min(left_state, right_state) >= 0 else -1
+        else:
+            state = left_state if left_state >= 0 and right_state < 0 else -1
+        if state < 0:
+            continue
+        if segments and segments[-1][1] == start and segments[-1][2] == state:
+            segments[-1] = (segments[-1][0], end, state)
+        else:
+            segments.append((start, end, state))
+
+    uniq_parts: list[Tensor] = []
+    flag_parts: list[Tensor] = []
+    device = left.uniq.device if left.uniq.numel() > 0 else right.uniq.device
+    for start, end, state in segments:
+        cells = _ranges_to_uniq([(start, end)], max_order).to(device=device)
+        uniq_parts.append(cells)
+        flag_parts.append(
+            torch.full((cells.numel(),), state, dtype=torch.uint8, device=device)
+        )
+    if not uniq_parts:
+        return BMOC.empty()
+    return BMOC(torch.cat(uniq_parts), torch.cat(flag_parts))
+
+
 class BMOC:
     """Boolean Multi-Order Coverage map storing UNIQ cells and interior/boundary flags.
 
     ``flag == 1`` indicates a cell completely inside the region; ``flag == 0``
     indicates a partial/boundary cell at ``max_order``.
+
+    Overlapping duplicate or parent/child cells are represented once. If their
+    flags disagree, boundary (``0``) deterministically dominates interior
+    (``1``), so normalization never overstates strictly interior coverage.
     """
 
     def __init__(self, uniq: Tensor, flag: Tensor | None = None):
-        u = torch.as_tensor(uniq, dtype=torch.int64).reshape(-1)
+        u = _as_int64_exact(uniq, name="uniq").reshape(-1)
         if flag is None:
             f = torch.ones_like(u, dtype=torch.uint8)
         else:
-            f = torch.as_tensor(flag, dtype=torch.uint8, device=u.device).reshape(-1)
+            raw_flag = torch.as_tensor(flag, device=u.device).reshape(-1)
+            if raw_flag.numel() > 0 and bool(
+                ((raw_flag != 0) & (raw_flag != 1)).any()
+            ):
+                raise ValueError("flag values must be 0 or 1")
+            f = raw_flag.to(torch.uint8)
             if f.numel() != u.numel():
                 raise ValueError("flag must have the same length as uniq")
-        if u.numel() > 0:
-            order = torch.argsort(u, stable=True)
-            u = u[order]
-            f = f[order]
-            keep = torch.cat(
-                [
-                    u[1:] != u[:-1],
-                    torch.tensor([True], dtype=torch.bool, device=u.device),
-                ]
-            )
-            u = u[keep]
-            f = f[keep]
-        self.uniq = u
-        self.flag = f
+        self.uniq, self.flag = _normalize_bmoc(u, f)
 
     @classmethod
     def _make_empty(cls) -> "BMOC":
@@ -1335,6 +1464,27 @@ class BMOC:
     ) -> Tensor:
         """Test whether points fall inside the BMOC."""
         return self.to_moc(include_boundary=include_boundary).contains(lon_deg, lat_deg)
+
+    def union(self, other: "BMOC") -> "BMOC":
+        """Union coverage; interior dominates boundary where operands overlap."""
+        return _combine_bmoc(self, other, "union")
+
+    def intersection(self, other: "BMOC") -> "BMOC":
+        """Intersect coverage; boundary dominates interior where both overlap."""
+        return _combine_bmoc(self, other, "intersection")
+
+    def difference(self, other: "BMOC") -> "BMOC":
+        """Subtract all covered cells in ``other``, preserving remaining flags."""
+        return _combine_bmoc(self, other, "difference")
+
+    def __or__(self, other: "BMOC") -> "BMOC":
+        return self.union(other)
+
+    def __and__(self, other: "BMOC") -> "BMOC":
+        return self.intersection(other)
+
+    def __sub__(self, other: "BMOC") -> "BMOC":
+        return self.difference(other)
 
     @classmethod
     def from_cone(

@@ -47,7 +47,10 @@ jobs:
       CIBW_SKIP: pp* *-musllinux_* *-manylinux_i686 *-win32
       CIBW_ARCHS_LINUX: x86_64
       CIBW_TEST_REQUIRES: pytest
-      CIBW_TEST_COMMAND: python -c "import torchsky; print(torchsky.__version__)"
+      CIBW_TEST_SOURCES: scripts/smoke_installed_wheel.py
+      CIBW_TEST_COMMAND: python {project}/scripts/smoke_installed_wheel.py
+      CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
+      CIBW_BEFORE_BUILD: python -m pip install 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=1.20.0' 'torch==2.13.0'
       CIBW_ENVIRONMENT_LINUX: PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
       CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --exclude libtorch_python.so --exclude libtorch_cpu.so --exclude libtorch.so --exclude libc10.so -w {dest_dir} {wheel}"
       CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} --ignore-missing-dependencies --exclude libtorch_python.dylib --exclude libtorch_cpu.dylib --exclude libtorch.dylib --exclude libc10.dylib --exclude libshm.dylib --exclude libasiodrv.dylib"
@@ -57,6 +60,17 @@ jobs:
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.21.3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check wheel contents and linkage
+        run: |
+          python -m pip install twine
+          for wheel in wheelhouse/*.whl; do
+            python scripts/check_distribution.py --wheel "$wheel"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -70,8 +84,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Build sdist
-        run: pipx run build --sdist
+        run: |
+          python -m pip install build twine
+          python -m build --sdist
+
+      - name: Check source distribution
+        run: python scripts/check_distribution.py --sdist dist/*.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:

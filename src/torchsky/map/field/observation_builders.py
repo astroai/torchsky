@@ -102,10 +102,11 @@ def _per_bin_background(
     height: int,
     width: int,
     device: torch.device,
+    dtype: torch.dtype,
 ) -> Tensor | None:
     if value is None:
         return None
-    tensor = torch.as_tensor(value, dtype=torch.float32, device=device)
+    tensor = torch.as_tensor(value, dtype=dtype, device=device)
     if tensor.ndim == 2:
         if tuple(tensor.shape) != (height, width):
             raise ValueError(
@@ -187,7 +188,7 @@ def _field_observations_from_per_bin_bounds(
     w_tensor: Tensor | None = None
     m_tensor: Tensor | None = None
     if weight is not None:
-        w_tensor = torch.as_tensor(weight, dtype=torch.float32, device=device)
+        w_tensor = torch.as_tensor(weight, dtype=dtype, device=device)
         if w_tensor.ndim == 2:
             if w_tensor.shape != (h, w):
                 raise ValueError(
@@ -221,6 +222,7 @@ def _field_observations_from_per_bin_bounds(
         height=h,
         width=w,
         device=device,
+        dtype=dtype,
     )
     inst_tensor = _per_bin_background(
         instrument_background,
@@ -229,6 +231,7 @@ def _field_observations_from_per_bin_bounds(
         height=h,
         width=w,
         device=device,
+        dtype=dtype,
     )
     det_tensor = _per_bin_background(
         detector_background,
@@ -237,6 +240,7 @@ def _field_observations_from_per_bin_bounds(
         height=h,
         width=w,
         device=device,
+        dtype=dtype,
     )
 
     observations: list[FieldObservation] = []

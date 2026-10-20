@@ -14,7 +14,6 @@ from .image_plane import (
     _apply_observation_astrometric_shifts,
     _apply_observation_calibration,
     _coerce_target_header,
-    _effective_observation_photometric_scale,
     _load_observation_weight_map,
     _resolve_map_device,
     detect_outliers,
@@ -82,10 +81,6 @@ def coadd_healpix(
             raw_img = raw_img.to(device=map_device, dtype=torch.float32)
         src_w = _load_observation_weight_map(obs, raw_img, device=map_device)
         cal_img, cal_w = _apply_observation_calibration(obs, raw_img, src_w)
-        s_eff = _effective_observation_photometric_scale(obs, hdr_obs)
-        if s_eff != 1.0:
-            cal_img = cal_img * float(s_eff)
-            cal_w = cal_w / float(s_eff * s_eff)
 
         obs_wcs = (
             obs.wcs
@@ -337,5 +332,4 @@ def resample_healpix(
     data_2d = torch.where(valid, data_2d, torch.zeros_like(data_2d))
     w_2d = valid.to(dtype=torch.float32)
     return MapResult(data=data_2d, weight=w_2d, header=header_dict)
-
 

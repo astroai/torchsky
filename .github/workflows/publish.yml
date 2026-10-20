@@ -18,17 +18,18 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install build tooling
-        run: python -m pip install --upgrade pip build
+        run: |
+          python -m pip install --upgrade pip build twine scikit-build-core nanobind numpy
+          python -m pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu
       - name: Build sdist and wheel
-        run: python -m build
+        run: python -m build --no-isolation
       - name: Verify distributions
         run: |
+          python scripts/check_distribution.py --wheel dist/*.whl --sdist dist/*.tar.gz
           python - <<'PY'
           import glob
           import pathlib
           import tomllib
-          import zipfile
-
           version = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"]
           tag = "${{ github.ref_name }}"
           assert tag == f"v{version}", f"tag {tag} does not match version {version}"
@@ -36,9 +37,6 @@ jobs:
           sdists = glob.glob("dist/*.tar.gz")
           assert len(wheels) == 1 and len(sdists) == 1, (wheels, sdists)
           assert version in wheels[0], (version, wheels[0])
-          names = zipfile.ZipFile(wheels[0]).namelist()
-          assert any(name.endswith("torchsky/__init__.py") for name in names)
-          assert any(name.endswith("_cpp") or ".so" in name for name in names), "wheel has no compiled extension"
           print("distributions:", wheels[0], sdists[0], "version:", version)
           PY
       - name: Wheel install smoke
@@ -47,29 +45,7 @@ jobs:
           /tmp/smoke/bin/python -m pip install --upgrade pip
           /tmp/smoke/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           /tmp/smoke/bin/python -m pip install dist/*.whl
-          /tmp/smoke/bin/python - <<'PY'
-          import torch
-          import torchsky
-          from torchsky import WCS
-          from torchsky.map import Observation, Target, coadd
-
-          assert torchsky.__version__ == "${{ github.ref_name }}".lstrip("v")
-          header = {
-              "NAXIS": 2, "NAXIS1": 8, "NAXIS2": 8,
-              "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-              "CRPIX1": 4.5, "CRPIX2": 4.5, "CRVAL1": 150.0, "CRVAL2": 2.0,
-              "CDELT1": -1.0 / 3600.0, "CDELT2": 1.0 / 3600.0,
-          }
-          wcs = WCS(header)
-          ra, dec = wcs.pixel_to_world(torch.tensor([2.0]), torch.tensor([2.0]))
-          x, y = wcs.world_to_pixel(ra, dec)
-          assert float((x - 2.0).abs().max()) < 1e-6
-          observation = Observation(data=torch.ones((8, 8)), wcs=wcs, weight=torch.ones((8, 8)))
-          result = coadd([observation], Target(wcs=wcs, shape=(8, 8)))
-          assert result.data.shape == (8, 8)
-          assert torch.allclose(result.data[result.weight > 0], torch.ones(1))
-          print("wheel smoke OK: version", torchsky.__version__)
-          PY
+          /tmp/smoke/bin/python scripts/smoke_installed_wheel.py
       - uses: actions/upload-artifact@v4
         with:
           name: distributions

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tomllib
@@ -16,6 +17,24 @@ import tomllib
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src" / "torchsky"
 REPO_ROOT = PACKAGE_ROOT.parents[1]
+
+
+def test_native_calls_are_confined_to_dispatch_or_legacy_allowlist() -> None:
+    allowed = {
+        "sphere/healpix.py": {"healpix_query_disc_torch_cpu"},
+        "sphere/spectral.py": {
+            "_healpix_spin_alm2map_from_basis_cpu",
+            "_healpix_spin_map2alm_from_basis_cpu",
+        },
+    }
+    found: dict[str, set[str]] = {}
+    pattern = re.compile(r"\b_cpp\.([A-Za-z_][A-Za-z0-9_]*)")
+    for path in PACKAGE_ROOT.rglob("*.py"):
+        relative = path.relative_to(PACKAGE_ROOT).as_posix()
+        names = set(pattern.findall(path.read_text(encoding="utf-8")))
+        if names:
+            found[relative] = names
+    assert found == allowed
 
 
 def test_fits_facade_is_absent_and_tensor_operators_do_not_require_native():
@@ -61,6 +80,53 @@ def test_native_torch_abi_contract_is_consistent() -> None:
     assert "TORCHSKY_RUNTIME_PREFIX" in cmake
     assert "Prioritizing libtorch headers" in cmake
     assert "matching_abi" in bindings
+
+
+def test_native_extension_uses_separate_translation_units() -> None:
+    cpp_root = PACKAGE_ROOT / "cpp_src"
+    cmake = (cpp_root / "CMakeLists.txt").read_text(encoding="utf-8")
+    bindings = (cpp_root / "bindings.cpp").read_text(encoding="utf-8")
+
+    for source in ("bindings.cpp", "geom.cpp", "healpix.cpp", "wcs.cpp"):
+        assert cmake.count(source) == 1
+    assert "OBJECT_DEPENDS" not in cmake
+    assert '#include "geom.cpp"' not in bindings
+    assert '#include "healpix.cpp"' not in bindings
+    assert '#include "wcs.cpp"' not in bindings
+    for name in ("geom", "healpix", "wcs"):
+        header = cpp_root / "include" / "torchsky" / f"{name}.h"
+        implementation = (cpp_root / f"{name}.cpp").read_text(encoding="utf-8")
+        assert header.is_file()
+        assert f'#include "torchsky/{name}.h"' in implementation
+    assert '#include "torchsky/healpix.h"' in bindings
+    assert '#include "torchsky/fixed_operators.h"' in bindings
+    assert '#include "torchsky/wcs_operators.h"' in bindings
+
+
+def test_native_extension_keeps_optimized_isa_out_of_baseline_sources() -> None:
+    cpp_root = PACKAGE_ROOT / "cpp_src"
+    cmake = (cpp_root / "CMakeLists.txt").read_text(encoding="utf-8")
+    bindings = (cpp_root / "bindings.cpp").read_text(encoding="utf-8")
+
+    assert "list(APPEND TORCHSKY_COMPILE_OPTIONS -mavx2 -mfma)" not in cmake
+    assert "torchsky_ishioka_avx2" in cmake
+    assert "target_compile_options(torchsky_ishioka_avx2 PRIVATE -O3 -mavx2 -mfma)" in cmake
+    assert "$<TARGET_OBJECTS:torchsky_ishioka_avx2>" in cmake
+    assert "torchsky_ishioka_neon" in cmake
+    assert "TORCHSKY_ENABLE_IPO" in cmake
+    assert "ensure_spectral_operator_schemas_linked" in bindings
+    assert "ensure_spectral_cpu_operators_linked" in bindings
+
+
+def test_native_extension_uses_supported_torch_linkage() -> None:
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "if(TARGET torch)" in cmake
+    assert "target_link_libraries(_cpp_ext PRIVATE torch)" in cmake
+    assert "elseif(TORCH_LIBRARIES)" in cmake
+    assert "${TORCH_LIBRARIES}" in cmake
 
 
 def test_cuda_source_build_requires_a_real_toolkit() -> None:
@@ -172,12 +238,12 @@ import sys
 
 import torch
 import torchsky._native as native
+from torchsky import _ops
 from torchsky.wcs import WCS
-from torchsky.wcs import core
 
-assert core._cpp is None
 assert native.cpp is None
 assert "torchsky._cpp" not in sys.modules
+assert not _ops.has_wcs_dispatcher()
 wcs = WCS({
     "NAXIS": 2,
     "CTYPE1": "RA---TAN",
@@ -239,6 +305,20 @@ def test_no_legacy_cfitsio_vendoring() -> None:
     for workflow in (repo / ".github" / "workflows").glob("*.yml"):
         text = workflow.read_text()
         assert "extern/vendor.sh" not in text, workflow
+
+
+def test_pocketfft_notices_are_included_in_source_distributions() -> None:
+    repo = PACKAGE_ROOT.parents[1]
+    manifest = (repo / "MANIFEST.in").read_text()
+    license_text = (
+        PACKAGE_ROOT / "cpp_src" / "third_party" / "pocketfft.LICENSE.md"
+    ).read_text()
+
+    assert "recursive-include src/torchsky/cpp_src" in manifest
+    assert "*.md" in manifest
+    assert "Copyright (C) 2010-2024 Max-Planck-Society" in license_text
+    assert "Copyright (C) 2019-2020 Peter Bell" in license_text
+    assert "Copyright (C) 2024 Cris Luengo" in license_text
 
 
 def test_no_fits_implementation_in_python_source() -> None:

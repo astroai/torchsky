@@ -1,11 +1,17 @@
+from typing import cast
+
 import numpy as np
 import pytest
 import torch
 
 from torchsky.sphere.geom import (
+    PixelizedRegion,
     SphericalBooleanRegion,
+    SphericalBox,
     SphericalCap,
+    SphericalEllipse,
     SphericalPolygon,
+    query_ellipse,
 )
 
 
@@ -125,3 +131,50 @@ def test_chained_boolean_regions() -> None:
         ]
     )
     assert vals.tolist() == [True, True, False]
+
+
+@pytest.mark.parametrize("nside", [0, 3, -2])
+def test_pixelized_region_rejects_invalid_nside(nside: int) -> None:
+    with pytest.raises(ValueError):
+        PixelizedRegion(nside=nside, nest=False, pixels=torch.tensor([], dtype=torch.int64))
+
+
+def test_pixelized_region_validates_order_and_pixel_domain() -> None:
+    with pytest.raises(TypeError, match="nest"):
+        PixelizedRegion(nside=2, nest=cast(bool, 0), pixels=torch.tensor([0]))
+    with pytest.raises(TypeError, match="integer"):
+        PixelizedRegion(nside=2, nest=False, pixels=torch.tensor([0.0]))
+    with pytest.raises(ValueError, match="out of range"):
+        PixelizedRegion(nside=2, nest=False, pixels=torch.tensor([-1]))
+    with pytest.raises(ValueError, match="out of range"):
+        PixelizedRegion(nside=2, nest=False, pixels=torch.tensor([48]))
+
+
+@pytest.mark.parametrize(
+    ("lat_min", "lat_max"),
+    [(-91.0, 0.0), (0.0, 91.0), (float("nan"), 0.0)],
+)
+def test_spherical_box_rejects_invalid_latitude_domain(
+    lat_min: float, lat_max: float
+) -> None:
+    with pytest.raises(ValueError):
+        SphericalBox(0.0, 1.0, lat_min, lat_max)
+
+
+@pytest.mark.parametrize(
+    ("major", "minor"),
+    [(0.0, 0.0), (2.0, 3.0), (90.0, 1.0), (float("inf"), 1.0)],
+)
+def test_spherical_ellipse_rejects_invalid_focal_axis_domain(
+    major: float, minor: float
+) -> None:
+    with pytest.raises(ValueError):
+        SphericalEllipse(0.0, 0.0, major, minor)
+    with pytest.raises(ValueError):
+        query_ellipse(8, 0.0, 0.0, major, minor)
+
+
+def test_spherical_ellipse_contains_center_not_antipode() -> None:
+    ellipse = SphericalEllipse(23.0, -11.0, 89.0, 20.0, pa_deg=37.0)
+    assert bool(ellipse.contains(23.0, -11.0))
+    assert not bool(ellipse.contains(203.0, 11.0))

@@ -15,12 +15,15 @@ version = "0.4.0"
 description = "Torch-native sky data, coordinates, geometry, and mapmaking"
 authors = [{ name = "Seb Fabbro", email = "sebfabbro@gmail.com" }]
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = [
+    "LICENSE",
+    "src/torchsky/cpp_src/third_party/pocketfft.LICENSE.md",
+]
 keywords = ["fits", "astronomy", "pytorch", "tensor", "wcs", "machine-learning"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -113,8 +116,8 @@ gwcs = [
 # Specifies the directory containing the top-level CMakeLists.txt file.
 cmake.source-dir = "src/torchsky/cpp_src"
 cmake.build-type = "Release"
-# Portable defaults: cpp_src/CMakeLists.txt adds -O3 in Release and enables
-# AVX2/FMA only on x86_64 Linux, so wheels stay reproducible across machines.
+# Portable defaults: the extension baseline is scalar on x86_64, with isolated
+# AVX2+FMA and arm64 NEON Ishioka leaves selected by runtime capability checks.
 # No CFITSIO or CUDA options: the extension is WCS/HEALPix/geometry only.
 
 # Place the compiled `_cpp` extension inside the torchsky package.

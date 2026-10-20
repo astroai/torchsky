@@ -1,4 +1,5 @@
 import torch
+import pytest
 
 from torchsky.sphere import HealSparseMap, MOC
 from torchsky.sphere import healpix as hp
@@ -70,3 +71,61 @@ def test_high_nside_sparse_lookup_moc_contains_and_catalog_filter() -> None:
     filtered_lon, filtered_lat = moc.filter_catalog(lon, lat)
     torch.testing.assert_close(filtered_lon, lon[expected])
     torch.testing.assert_close(filtered_lat, lat[expected])
+
+
+@pytest.mark.parametrize("order", [28, 29])
+def test_order_28_29_sparse_ring_nested_roundtrips(order: int) -> None:
+    nside = 1 << order
+    npface = nside * nside
+    npix = 12 * npface
+    nested = torch.tensor(
+        [0, 1, npface - 1, npface, 5 * npface + 1234567, npix - 1],
+        dtype=torch.int64,
+    )
+
+    ring = hp.nest2ring(nside, nested)
+
+    assert nested.numel() == 6
+    assert ring.numel() == 6
+    torch.testing.assert_close(hp.ring2nest(nside, ring), nested)
+    assert torch.all((ring >= 0) & (ring < npix))
+
+    ring_input = torch.tensor(
+        [0, 1, 2 * nside * (nside - 1), npix // 2, npix - 2, npix - 1],
+        dtype=torch.int64,
+    )
+    torch.testing.assert_close(
+        hp.nest2ring(nside, hp.ring2nest(nside, ring_input)), ring_input
+    )
+
+
+def test_order_29_sparse_centers_and_neighbors_do_not_require_full_map() -> None:
+    nside = 1 << 29
+    npix = 12 * nside * nside
+    assert hp.nside2npix(nside) == 3_458_764_513_820_540_928
+    nested = torch.tensor(
+        [0, 1, nside * nside - 1, nside * nside, npix - 1], dtype=torch.int64
+    )
+
+    lon, lat = hp.pix2ang(nside, nested, nest=True, lonlat=True)
+    back = hp.ang2pix(nside, lon, lat, nest=True, lonlat=True)
+    neighbors = hp.neighbors(nside, nested, nest=True)
+
+    torch.testing.assert_close(back, nested)
+    assert lon.shape == lat.shape == nested.shape == (5,)
+    assert neighbors.shape == (5, 8)
+    assert torch.all((neighbors == -1) | ((neighbors >= 0) & (neighbors < npix)))
+
+
+def test_order_30_is_rejected_without_allocating() -> None:
+    nside = 1 << 30
+    sparse = torch.tensor([0], dtype=torch.int64)
+
+    for operation in (
+        lambda: hp.nside2npix(nside),
+        lambda: hp.ring2nest(nside, sparse),
+        lambda: hp.nest2ring(nside, sparse),
+        lambda: hp.neighbors(nside, sparse, nest=True),
+    ):
+        with pytest.raises(ValueError, match=r"2\*\*29"):
+            operation()

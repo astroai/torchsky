@@ -10,6 +10,56 @@ R2D = 57.29577951308232
 SQRT2 = 1.4142135623730951
 
 
+def _hpx_parameters(
+    pv1: Optional[Tensor] = None,
+    pv2: Optional[Tensor] = None,
+) -> Tuple[float, float, float, float, float, float, float]:
+    h = 4.0
+    k = 3.0
+    if pv1 is not None:
+        if float(pv1[1]) != 0.0:
+            h = float(pv1[1])
+        if float(pv1[2]) != 0.0:
+            k = float(pv1[2])
+    if pv2 is not None:
+        if float(pv2[1]) != 0.0:
+            h = float(pv2[1])
+        if float(pv2[2]) != 0.0:
+            k = float(pv2[2])
+    if not math.isfinite(h) or h <= 0.0 or not h.is_integer():
+        raise ValueError("HPX H must be a finite positive integer")
+    if not math.isfinite(k) or k <= 0.0 or not k.is_integer():
+        raise ValueError("HPX K must be a finite positive integer")
+    facet_spacing = 360.0 / h
+    facet_half_width = 0.5 * facet_spacing
+    return (
+        h,
+        k,
+        (k - 1.0) / k,
+        90.0 * k / h,
+        90.0 * (k - 1.0) / h,
+        90.0 * (k + 1.0) / h,
+        facet_half_width,
+    )
+
+
+def _hpx_facet_center(
+    coordinate: Tensor, south: Tensor, k: float, facet_half_width: float
+) -> Tensor:
+    facet_spacing = 2.0 * facet_half_width
+    offset = torch.full_like(coordinate, facet_half_width)
+    if k % 2.0 == 0.0:
+        offset = torch.where(south, torch.zeros_like(coordinate), offset)
+    return (
+        torch.floor(
+            (coordinate + 180.0 - offset + facet_half_width) / facet_spacing
+        )
+        * facet_spacing
+        - 180.0
+        + offset
+    )
+
+
 def project_allsky(
     xi: Tensor,
     eta: Tensor,
@@ -51,62 +101,49 @@ def project_allsky(
         y = eta * D2R
         X = x
         Y = y
-        valid = torch.abs(Y) <= (SQRT2 + 1e-9)
+        tol = max(1e-13, 4.0 * torch.finfo(X.dtype).eps)
+        ellipse = X * X / 8.0 + Y * Y / 2.0
+        valid = torch.isfinite(ellipse) & (ellipse <= 1.0 + tol)
         sin_gamma = torch.clamp(Y / SQRT2, -1.0, 1.0)
         gamma = torch.asin(sin_gamma)
-        cos_gamma = torch.cos(gamma)
-        # sin(2x) = 2 sin(x) cos(x)
+        cos_gamma = torch.sqrt(torch.clamp(1.0 - sin_gamma * sin_gamma, min=0.0))
         t_val = (2.0 * gamma + 2.0 * sin_gamma * cos_gamma) / math.pi
+        valid = valid & torch.isfinite(t_val) & (t_val.abs() <= 1.0 + tol)
         theta_rad = torch.asin(torch.clamp(t_val, -1.0, 1.0))
         theta = theta_rad * R2D
-        if bool(valid.all()):
-            denom = torch.clamp(2.0 * SQRT2 * cos_gamma, min=1e-8)
-            phi = (math.pi * X / denom) * R2D
-        else:
-            denom = 2.0 * SQRT2 * cos_gamma
-            mask_pole = torch.abs(denom) < 1e-8
-            phi_rad = torch.where(
-                mask_pole,
-                torch.zeros_like(X),
-                math.pi * X / torch.where(mask_pole, torch.ones_like(denom), denom),
-            )
-            phi = phi_rad * R2D
-            if bool((~valid).any()):
-                nan_phi = torch.full_like(phi, float("nan"))
-                nan_theta = torch.full_like(theta, float("nan"))
-                phi = torch.where(valid, phi, nan_phi)
-                theta = torch.where(valid, theta, nan_theta)
+        denom = 2.0 * SQRT2 * cos_gamma
+        denom_nonzero = denom.abs() > 0.0
+        valid = valid & (denom_nonzero | (X == 0.0))
+        phi_rad = math.pi * X / torch.where(
+            denom_nonzero, denom, torch.ones_like(denom)
+        )
+        phi_rad = torch.where(denom_nonzero, phi_rad, torch.zeros_like(phi_rad))
+        valid = valid & torch.isfinite(phi_rad) & (phi_rad.abs() <= math.pi + tol)
+        phi = torch.clamp(phi_rad, -math.pi, math.pi) * R2D
+        nan = torch.full_like(phi, float("nan"))
+        phi = torch.where(valid, phi, nan)
+        theta = torch.where(valid, theta, nan)
 
     elif projection_code == "HPX":
-        H = 4.0
-        K = 3.0
-        if pv1 is not None:
-            if pv1[1] != 0:
-                H = pv1[1]
-            if pv1[2] != 0:
-                K = pv1[2]
-        if pv2 is not None:
-            if pv2[1] != 0:
-                H = pv2[1]
-            if pv2[2] != 0:
-                K = pv2[2]
-
-        eta_scale = 90.0 * (K / H)
+        _, K, _, eta_scale, eta_boundary, eta_pole, facet_half_width = (
+            _hpx_parameters(pv1, pv2)
+        )
         inv_eta_scale = 1.0 / eta_scale
-        eta_boundary = eta_scale * (2.0 / 3.0)
-        inv_polar_denom = 1.0 / (90.0 - eta_boundary)
+        inv_polar_denom = 1.0 / facet_half_width
         abs_eta = torch.abs(eta)
         mask_eq = abs_eta <= eta_boundary
-        sigma = (90.0 - abs_eta) * inv_polar_denom
+        sigma = (eta_pole - abs_eta) * inv_polar_denom
         s_theta = torch.where(
             mask_eq,
             eta * inv_eta_scale,
-            torch.sign(eta) * (1.0 - (sigma * sigma) * (1.0 / 3.0)),
+            torch.sign(eta) * (1.0 - (sigma * sigma) / K),
         )
         theta = torch.asin(torch.clamp(s_theta, -1.0, 1.0)) * R2D
-        xc = torch.round((xi - 45.0) * (1.0 / 90.0)) * 90.0 + 45.0
+        xc = _hpx_facet_center(xi, eta < 0.0, K, facet_half_width)
         phi = torch.where(mask_eq, xi, xc + (xi - xc) / torch.clamp(sigma, min=1e-9))
-        invalid = abs_eta > 90.0
+        invalid = (~torch.isfinite(xi)) | (~torch.isfinite(eta)) | (abs_eta > eta_pole) | (
+            (~mask_eq) & (torch.abs(xi - xc) > facet_half_width * sigma + 1e-8)
+        )
         if bool(invalid.any()):
             nan_phi = torch.full_like(phi, float("nan"))
             nan_theta = torch.full_like(theta, float("nan"))
@@ -172,48 +209,64 @@ def deproject_allsky(
     elif projection_code == "MOL":
         phi_wrapped = _wrap_lon180(phi)
         phi_rad = phi_wrapped * D2R
-        theta_rad = theta * D2R
+        domain_tol = max(1e-12, 4.0 * torch.finfo(theta.dtype).eps)
+        valid = (
+            torch.isfinite(phi)
+            & torch.isfinite(theta)
+            & (theta.abs() <= 90.0 + domain_tol)
+        )
+        theta_clamped = torch.clamp(theta, -90.0, 90.0)
+        theta_rad = theta_clamped * D2R
         sin_theta = torch.sin(theta_rad)
         target = math.pi * sin_theta
-        gamma = theta_rad.clone()  # Better initial guess than zero
-        for _ in range(5):
-            sin_2g = torch.sin(2.0 * gamma)
-            cos_2g = torch.cos(2.0 * gamma)
-            res = 2.0 * gamma + sin_2g - target
-
-            # Convergence check to skip work
-            if torch.all(torch.abs(res) < 1e-12):
-                break
-
-            gamma = gamma - res / (2.0 + 2.0 * cos_2g + 1e-12)
+        pole = theta_clamped.abs() == 90.0
+        lo = torch.full_like(theta_rad, -0.5 * math.pi)
+        hi = torch.full_like(theta_rad, 0.5 * math.pi)
+        gamma = theta_rad.clone()
+        for _ in range(64):
+            res = 2.0 * gamma + torch.sin(2.0 * gamma) - target
+            lo = torch.where(res < 0.0, gamma, lo)
+            hi = torch.where(res >= 0.0, gamma, hi)
+            derivative = 2.0 + 2.0 * torch.cos(2.0 * gamma)
+            derivative_safe = torch.where(
+                derivative > 0.0, derivative, torch.ones_like(derivative)
+            )
+            newton = gamma - res / derivative_safe
+            use_newton = torch.isfinite(newton) & (newton > lo) & (newton < hi)
+            gamma = torch.where(use_newton, newton, 0.5 * (lo + hi))
+        gamma = torch.where(
+            pole,
+            torch.copysign(torch.full_like(gamma, 0.5 * math.pi), theta_clamped),
+            gamma,
+        )
+        residual = 2.0 * gamma + torch.sin(2.0 * gamma) - target
+        residual_tol = max(1e-12, 64.0 * torch.finfo(theta.dtype).eps)
+        valid = valid & (pole | (residual.abs() <= residual_tol))
         xi = 2.0 * SQRT2 * phi_rad * torch.cos(gamma) / math.pi * R2D
         eta = SQRT2 * torch.sin(gamma) * R2D
+        xi = torch.where(pole, torch.zeros_like(xi), xi)
+        nan = torch.full_like(xi, float("nan"))
+        xi = torch.where(valid, xi, nan)
+        eta = torch.where(valid, eta, nan)
         return xi, eta
 
     elif projection_code == "HPX":
-        H, K = 4.0, 3.0
-        if pv1 is not None:
-            if pv1[1] != 0:
-                H = pv1[1]
-            if pv1[2] != 0:
-                K = pv1[2]
-        if pv2 is not None:
-            if pv2[1] != 0:
-                H = pv2[1]
-            if pv2[2] != 0:
-                K = pv2[2]
+        _, K, transition_sin, eta_scale, _, eta_pole, facet_half_width = (
+            _hpx_parameters(pv1, pv2)
+        )
         phi_w = _wrap_lon180(phi)
         s_theta = torch.sin(theta * D2R)
         abs_s = torch.abs(s_theta)
-        eta_scale = 90.0 * (K / H)
-        mask_eq = abs_s <= (2.0 / 3.0)
-        sigma = torch.sqrt(torch.clamp(3.0 * (1.0 - abs_s), min=0.0))
-        eta_pol = torch.sign(s_theta) * (
-            90.0 - (90.0 - (eta_scale * 2.0 / 3.0)) * sigma
-        )
-        xc = torch.round((phi_w - 45.0) / 90.0) * 90.0 + 45.0
+        mask_eq = abs_s <= transition_sin
+        sigma = torch.sqrt(torch.clamp(K * (1.0 - abs_s), min=0.0))
+        eta_pol = torch.sign(s_theta) * (eta_pole - facet_half_width * sigma)
+        xc = _hpx_facet_center(phi_w, s_theta < 0.0, K, facet_half_width)
         xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
         eta = torch.where(mask_eq, eta_scale * s_theta, eta_pol)
+        valid = torch.isfinite(phi) & torch.isfinite(theta) & (theta.abs() <= 90.0 + 1e-12)
+        nan = torch.full_like(xi, float("nan"))
+        xi = torch.where(valid, xi, nan)
+        eta = torch.where(valid, eta, nan)
         return xi, eta
 
     elif projection_code == "SFL":

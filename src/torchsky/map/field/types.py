@@ -5,10 +5,11 @@ Implementation of ``nn.Module`` subclasses and training live in :mod:`torchsky.m
 
 from __future__ import annotations
 
+import copy
+import math
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-import math
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -273,7 +274,7 @@ class PSFSpec:
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
     ) -> "PSFSpec":
-        """Move tensor payloads while retaining the declared PSF contract."""
+        """Return an independently moved PSF without mutating the source model."""
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("PSFSpec dtype must be floating point")
         move_kwargs: dict[str, object] = {}
@@ -283,16 +284,17 @@ class PSFSpec:
             move_kwargs["dtype"] = dtype
         kernel = self.kernel2d
         cells = self.cell_u_pix
+        model = copy.deepcopy(self.model)
         if move_kwargs:
             kernel = None if kernel is None else kernel.to(**move_kwargs)
             cells = None if cells is None else cells.to(**move_kwargs)
-            if self.model is not None:
-                self.model.to(**move_kwargs)
+            if model is not None:
+                model.to(**move_kwargs)
         return PSFSpec(
             mode=self.mode,
             sigma_pix=float(self.sigma_pix),
             kernel2d=kernel,
-            model=self.model,
+            model=model,
             cell_u_pix=cells,
             cell_lam_norm=float(self.cell_lam_norm),
             frozen=bool(self.frozen),
@@ -315,6 +317,19 @@ class FieldDomain:
     wavelength_center: float
     wavelength_scale: float
     coord_mode: FieldCoordinateMode = "local_tangent"
+
+    def __post_init__(self) -> None:
+        for name in ("center_ra_deg", "center_dec_deg", "wavelength_center"):
+            if not math.isfinite(float(getattr(self, name))):
+                raise ValueError(f"FieldDomain {name} must be finite")
+        if not -90.0 <= float(self.center_dec_deg) <= 90.0:
+            raise ValueError("FieldDomain center_dec_deg must be in [-90, 90]")
+        for name in ("spatial_scale_deg", "wavelength_scale"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"FieldDomain {name} must be finite and positive")
+        if self.coord_mode not in ("local_tangent", "sphere_xyz"):
+            raise ValueError(f"unsupported FieldDomain coord_mode {self.coord_mode!r}")
 
 
 @dataclass(frozen=True)
@@ -592,15 +607,16 @@ class FieldObservation:
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
     ) -> "FieldObservation":
-        """Return a moved observation with mask/index dtypes preserved.
+        """Return an independently moved observation with semantic dtypes preserved.
 
         Floating detector planes follow ``dtype``. Boolean masks and integer
-        amplifier indices retain their semantic dtype. Coordinate caches are
-        intentionally dropped by :func:`dataclasses.replace`.
+        amplifier indices retain their semantic dtype. Nested modules are copied
+        before moving, so the source observation is not mutated. Coordinate caches
+        are intentionally dropped by :func:`dataclasses.replace`.
         """
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("FieldObservation dtype must be floating point")
-        kwargs: dict[str, object] = {}
+        kwargs: dict[str, object] = {"header": dict(self.header)}
         kwargs["additive_components"] = tuple(
             component.to(device=device, dtype=dtype)
             for component in self.additive_components
@@ -636,6 +652,7 @@ class FieldObservation:
             kwargs["passband"] = self.passband.to(device)
         transform = self.detector_to_sky
         if isinstance(transform, nn.Module):
+            transform = copy.deepcopy(transform)
             move_kwargs: dict[str, object] = {}
             if device is not None:
                 move_kwargs["device"] = device

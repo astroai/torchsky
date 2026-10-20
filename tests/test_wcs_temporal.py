@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from astropy.time import Time
 
 import pytest
 import torchsky
@@ -25,6 +26,23 @@ def test_temporal_seconds_roundtrip() -> None:
 
     t_back = twcs.from_mjd(mjd)
     assert torch.allclose(t, t_back)  # type: ignore
+
+
+def test_temporal_timeoffs_is_added_in_timeunit_and_roundtrips() -> None:
+    twcs = TemporalWCS(
+        {"MJDREF": 57754.0, "TIMEUNIT": "s", "TIMESYS": "UTC", "TIMEOFFS": 10.0}
+    )
+    relative = torch.tensor([[0.0, 5.0], [20.0, -10.0]], dtype=torch.float64)
+    mjd = twcs.to_mjd(relative)
+    expected = 57754.0 + (relative + 10.0) / 86400.0
+
+    torch.testing.assert_close(mjd, expected)
+    torch.testing.assert_close(twcs.from_mjd(mjd), relative, atol=3.0e-7, rtol=0.0)
+    tai = twcs.to_mjd_scale(relative, "TAI")
+    torch.testing.assert_close(tai, expected + 37.0 / 86400.0)
+    torch.testing.assert_close(
+        twcs.from_mjd_scale(tai, "TAI"), relative, atol=3.0e-7, rtol=0.0
+    )
 
 
 def test_temporal_mjdrefi_mjdreff_support() -> None:
@@ -109,6 +127,22 @@ def test_temporal_jd_mjd_conversion_and_iso_output() -> None:
 
     iso = twcs.to_iso8601(torch.tensor([0.0], dtype=torch.float64))
     assert iso[0].startswith("1858-11-17")  # type: ignore
+
+
+def test_temporal_iso_output_handles_scalar_and_nd_and_matches_astropy() -> None:
+    twcs = TemporalWCS({"MJDREF": 0.0, "TIMESYS": "TT"})
+    tt = torch.tensor(
+        [[58849.0 + 69.184 / 86400.0, 58849.5 + 69.184 / 86400.0]],
+        dtype=torch.float64,
+    )
+    result = twcs.to_iso8601(tt)
+    expected = Time(tt.numpy(), format="mjd", scale="tt").utc.to_datetime()
+
+    assert isinstance(result, list)
+    assert result == [[value.isoformat() for value in expected[0]]]
+    scalar = twcs.to_iso8601(tt[0, 0])
+    assert isinstance(scalar, str)
+    assert scalar == expected[0, 0].isoformat()
 
 
 def test_temporal_tai_minus_utc_leap_table_current_offset() -> None:

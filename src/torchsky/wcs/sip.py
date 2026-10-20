@@ -2,10 +2,6 @@ import torch
 from torch import Tensor
 from typing import Dict, Any
 
-from torchsky._native import cpp as _cpp
-
-
-
 class SIP:
     """
     Simple Imaging Polynomial (SIP) distortion correction.
@@ -73,11 +69,6 @@ class SIP:
         self._quad_b11 = 0.0
         self._quad_b02 = 0.0
         self._quad_inverse_fast = False
-        self._cpp_sip_quadratic_distort = (
-            getattr(_cpp, "wcs_sip_quadratic_distort", None)
-            if _cpp is not None
-            else None
-        )
         self._init_quadratic_forward_fastpath()
 
     def to(self, device: torch.device) -> "SIP":
@@ -234,25 +225,6 @@ class SIP:
         if u.numel() == 0 or not self.has_forward:
             return u, v
         if self._quad_forward_fast:
-            if (
-                self._cpp_sip_quadratic_distort is not None
-                and u.device.type == "cpu"
-                and v.device.type == "cpu"
-                and u.dtype == torch.float64
-                and v.dtype == torch.float64
-                and not u.requires_grad
-                and not v.requires_grad
-            ):
-                return self._cpp_sip_quadratic_distort(
-                    u,
-                    v,
-                    self._quad_a20,
-                    self._quad_a11,
-                    self._quad_a02,
-                    self._quad_b20,
-                    self._quad_b11,
-                    self._quad_b02,
-                )
             uv = u * v
             u2 = u * u
             v2 = v * v

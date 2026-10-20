@@ -210,6 +210,65 @@ def test_evaluate_field_coordinates_vmapped_matches_batched() -> None:
     assert torch.allclose(batched, vmapped, rtol=1.0e-4, atol=1.0e-4)
 
 
+class _BroadcastField(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(2.0, dtype=torch.float64))
+
+    def forward(self, ra, dec, wavelength):
+        ra, dec, wavelength = torch.broadcast_tensors(ra, dec, wavelength)
+        return self.scale * ra + dec - wavelength / 1000.0
+
+
+def test_evaluate_field_coordinates_vmapped_broadcasts_arbitrary_shapes() -> None:
+    model = _BroadcastField()
+    cases = [
+        (
+            torch.tensor(2.0, dtype=torch.float64),
+            torch.tensor(3.0, dtype=torch.float64),
+            torch.tensor(4000.0, dtype=torch.float64),
+        ),
+        (
+            torch.arange(5, dtype=torch.float64),
+            torch.tensor(1.0, dtype=torch.float64),
+            torch.tensor(5000.0, dtype=torch.float64),
+        ),
+        (
+            torch.arange(12, dtype=torch.float64).reshape(3, 4).T,
+            torch.arange(4, dtype=torch.float64)[:, None],
+            torch.tensor([5000.0, 5100.0, 5200.0])[None, :],
+        ),
+        (
+            torch.arange(6, dtype=torch.float64).reshape(2, 1, 3),
+            torch.arange(4, dtype=torch.float64).reshape(1, 4, 1),
+            torch.tensor(5000.0, dtype=torch.float64),
+        ),
+        (
+            torch.empty((0, 3), dtype=torch.float64),
+            torch.empty((0, 1), dtype=torch.float64),
+            torch.tensor(5000.0, dtype=torch.float64),
+        ),
+    ]
+    for ra, dec, wavelength in cases:
+        expected = model(ra, dec, wavelength)
+        actual = evaluate_field_coordinates_vmapped(model, ra, dec, wavelength)
+        assert actual.shape == expected.shape
+        torch.testing.assert_close(actual, expected)
+
+
+def test_evaluate_field_coordinates_vmapped_preserves_parameter_gradients() -> None:
+    model = _BroadcastField()
+    ra = torch.arange(6, dtype=torch.float64).reshape(2, 3)
+    output = evaluate_field_coordinates_vmapped(
+        model,
+        ra,
+        torch.zeros(3, dtype=torch.float64),
+        torch.tensor(5000.0, dtype=torch.float64),
+    )
+    output.sum().backward()
+    torch.testing.assert_close(model.scale.grad, ra.sum())
+
+
 def test_render_field_observation_spatial_tile_matches_full() -> None:
     torch.manual_seed(3)
     domain = FieldDomain(
@@ -242,9 +301,17 @@ def test_render_field_observation_spatial_tile_matches_full() -> None:
         num_spectral_samples=5,
         spatial_tile_hw=(6, 9),
     )
-    assert torch.allclose(a, b, rtol=0.0, atol=1.0e-5)
     assert obs._cached_ra_deg is None
     assert obs._cached_dec_deg is None
+    c = render_field_observation(
+        model,
+        obs,
+        num_spectral_samples=5,
+        use_func_vmap=True,
+        func_vmap_chunk=37,
+    )
+    assert torch.allclose(a, b, rtol=0.0, atol=1.0e-5)
+    assert torch.allclose(a, c, rtol=0.0, atol=1.0e-5)
 
 
 def test_render_field_observation_tile_matches_full_with_psf() -> None:

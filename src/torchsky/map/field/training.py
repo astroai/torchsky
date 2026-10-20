@@ -687,15 +687,32 @@ def _compute_full_observation_losses(
                 _structured_noise_loss(observation, observation_bundle, residual, valid)
                 * weight_sum
             )
-        else:
+        elif loss_kind == "gaussian_nll":
+            weight_sum = valid.sum().to(dtype=pred.dtype)
             weighted_loss = torch.sum(
-                weight
-                * _field_residual_loss(
+                _field_residual_loss(
                     residual,
                     loss_kind=loss_kind,
                     charbonnier_eps=charbonnier_eps,
                     huber_delta=huber_delta,
                     logvar=pred_logvar,
+                    observation_invvar=(
+                        weight if observation.weight is not None else None
+                    ),
+                    sample_weight=(
+                        None if observation.weight is not None else valid.to(pred.dtype)
+                    ),
+                )
+            )
+        else:
+            weighted_loss = torch.sum(
+                _field_residual_loss(
+                    residual,
+                    loss_kind=loss_kind,
+                    charbonnier_eps=charbonnier_eps,
+                    huber_delta=huber_delta,
+                    logvar=pred_logvar,
+                    sample_weight=weight,
                 )
             )
         if gradient_weight > 0.0 and pred.ndim == 2:
@@ -1684,18 +1701,30 @@ def fit_field_model(
                 image = image.to(device=pred.device, dtype=pred.dtype)
                 weight = weight.to(device=pred.device, dtype=pred.dtype)
                 residual = pred - image
-                sample_element_loss = weight * _field_residual_loss(
+                sample_element_loss = _field_residual_loss(
                     residual,
                     loss_kind=loss_kind,
                     charbonnier_eps=charbonnier_eps,
                     huber_delta=huber_delta,
                     logvar=pred_logvar,
+                    observation_invvar=(
+                        weight
+                        if loss_kind == "gaussian_nll"
+                        and observation.weight is not None
+                        else None
+                    ),
+                    sample_weight=(weight if loss_kind != "gaussian_nll" else None),
                 )
                 weighted_loss = torch.mean(sample_element_loss) * float(
                     max(support_count, 1)
                 )
                 weight_sum = torch.as_tensor(
-                    max(float(full_weight_sum), 1.0e-8),
+                    max(
+                        float(support_count)
+                        if loss_kind == "gaussian_nll"
+                        else float(full_weight_sum),
+                        1.0e-8,
+                    ),
                     device=pred.device,
                     dtype=pred.dtype,
                 )
@@ -1750,16 +1779,23 @@ def fit_field_model(
                 )
                 weight = torch.where(valid, weight, torch.zeros_like(weight))
                 weighted_loss = torch.sum(
-                    weight
-                    * _field_residual_loss(
+                    _field_residual_loss(
                         residual,
                         loss_kind=loss_kind,
                         charbonnier_eps=charbonnier_eps,
                         huber_delta=huber_delta,
                         logvar=pred_logvar,
+                        observation_invvar=(
+                            weight if observation.weight is not None else None
+                        ),
+                        sample_weight=(
+                            None
+                            if observation.weight is not None
+                            else valid.to(pred.dtype)
+                        ),
                     )
                 )
-                weight_sum = weight.sum()
+                weight_sum = valid.sum().to(dtype=pred.dtype)
             else:
                 pred = render_field_observation(
                     model,
@@ -1780,13 +1816,13 @@ def fit_field_model(
                 )
                 weight = torch.where(valid, weight, torch.zeros_like(weight))
                 weighted_loss = torch.sum(
-                    weight
-                    * _field_residual_loss(
+                    _field_residual_loss(
                         residual,
                         loss_kind=loss_kind,
                         charbonnier_eps=charbonnier_eps,
                         huber_delta=huber_delta,
                         logvar=pred_logvar,
+                        sample_weight=weight,
                     )
                 )
                 weight_sum = weight.sum()

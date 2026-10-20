@@ -8,6 +8,7 @@ orthogonal complement of constant and affine control-grid modes.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -124,6 +125,41 @@ def _determinant(jacobian: Tensor) -> Tensor:
         jacobian[..., 0, 0] * jacobian[..., 1, 1]
         - jacobian[..., 0, 1] * jacobian[..., 1, 0]
     )
+
+
+def _inverse_tolerances(
+    *,
+    target: Tensor,
+    output_scale: Tensor,
+    tol: float | None,
+    atol: float | None,
+    rtol: float,
+) -> tuple[float, float]:
+    if tol is not None and atol is not None:
+        raise ValueError("tol and atol are aliases; specify only one")
+    absolute = tol if tol is not None else atol
+    if absolute is None:
+        eps = torch.finfo(target.dtype).eps
+        scale = float(output_scale.detach().abs().cpu().item())
+        absolute = max(1.0e-8, 64.0 * eps) * scale
+    absolute = float(absolute)
+    relative = float(rtol)
+    if not math.isfinite(absolute) or absolute < 0.0:
+        raise ValueError("atol must be finite and non-negative")
+    if not math.isfinite(relative) or relative < 0.0:
+        raise ValueError("rtol must be finite and non-negative")
+    return absolute, relative
+
+
+def _inverse_residual_ok(
+    residual: Tensor,
+    target: Tensor,
+    *,
+    atol: float,
+    rtol: float,
+) -> bool:
+    limit = atol + rtol * target.abs()
+    return bool((residual.abs() <= limit).all().detach().cpu().item())
 
 
 class RegularGridTransform2D(nn.Module):
@@ -271,9 +307,14 @@ class RegularGridTransform2D(nn.Module):
         *,
         max_iter: int = 25,
         tol: float | None = None,
+        atol: float | None = None,
+        rtol: float = 0.0,
         fail_closed: bool = True,
     ) -> Tensor:
-        """Newton inverse of the sampled table. Fail closed if residual exceeds ``tol``."""
+        """Newton inverse with output-unit ``atol`` and dimensionless ``rtol``.
+
+        ``tol`` remains a compatibility alias for ``atol``.
+        """
         tgt = self._coerce_points(values)
         origin = self.origin.to(device=tgt.device, dtype=tgt.dtype)
         spacing = self.spacing.to(device=tgt.device, dtype=tgt.dtype)
@@ -296,8 +337,14 @@ class RegularGridTransform2D(nn.Module):
             ),
             dim=-1,
         )
-        if tol is None:
-            tol = 1.0e-8 * float(spacing.max().detach().cpu().item())
+        output_extent = (table.amax(dim=(0, 1)) - table.amin(dim=(0, 1))).amax()
+        atol_value, rtol_value = _inverse_tolerances(
+            target=tgt,
+            output_scale=output_extent,
+            tol=tol,
+            atol=atol,
+            rtol=rtol,
+        )
         for _ in range(int(max_iter)):
             pred, jac = self.evaluate_with_jacobian(x)
             resid = pred - tgt
@@ -311,10 +358,14 @@ class RegularGridTransform2D(nn.Module):
                 dim=-1,
             )
         pred, _ = self.evaluate_with_jacobian(x)
-        max_resid = float((pred - tgt).abs().amax().detach().cpu().item())
-        if fail_closed and max_resid > float(tol):
+        residual = pred - tgt
+        max_resid = float(residual.abs().amax().detach().cpu().item())
+        if fail_closed and not _inverse_residual_ok(
+            residual, tgt, atol=atol_value, rtol=rtol_value
+        ):
             raise ValueError(
-                f"grid inverse residual {max_resid:.8g} exceeds tol {float(tol):.8g}"
+                f"grid inverse residual {max_resid:.8g} exceeds "
+                f"atol={atol_value:.8g}, rtol={rtol_value:.8g}"
             )
         return x
 
@@ -472,7 +523,12 @@ class AffineFreeResidualGrid2D(nn.Module):
         grid = self.projected_control
         dxx = grid[:, 2:] - 2 * grid[:, 1:-1] + grid[:, :-2]
         dyy = grid[2:] - 2 * grid[1:-1] + grid[:-2]
-        return dxx.square().mean() + dyy.square().mean()
+        energy = grid.new_zeros(())
+        if dxx.numel() > 0:
+            energy = energy + dxx.square().mean()
+        if dyy.numel() > 0:
+            energy = energy + dyy.square().mean()
+        return energy
 
 
 class DetectorToTangentTransform(nn.Module):
@@ -512,13 +568,21 @@ class DetectorToTangentTransform(nn.Module):
         *,
         max_iter: int = 25,
         tol: float | None = None,
+        atol: float | None = None,
+        rtol: float = 0.0,
     ) -> Tensor:
         tgt = torch.as_tensor(values)
         if not tgt.is_floating_point() or tgt.shape[-1:] != (2,):
             raise ValueError("values must be floating point with last dimension 2")
         mid = self.affine.inverse(tgt)
         if self.residual is None:
-            return self.table.inverse(mid, max_iter=max_iter, tol=tol)
+            return self.table.inverse(
+                mid,
+                max_iter=max_iter,
+                tol=tol,
+                atol=atol,
+                rtol=rtol,
+            )
         x = self.table.inverse(mid, max_iter=max_iter, fail_closed=False)
         origin = self.table.origin.to(device=tgt.device, dtype=tgt.dtype)
         spacing = self.table.spacing.to(device=tgt.device, dtype=tgt.dtype)
@@ -526,8 +590,19 @@ class DetectorToTangentTransform(nn.Module):
         x0, y0 = origin[0], origin[1]
         x1 = origin[0] + (width - 1) * spacing[0]
         y1 = origin[1] + (height - 1) * spacing[1]
-        if tol is None:
-            tol = 1.0e-8 * float(spacing.max().detach().cpu().item())
+        with torch.no_grad():
+            diagnostic_output = self(self.table.diagnostic_points())
+            output_extent = (
+                diagnostic_output.amax(dim=(0, 1))
+                - diagnostic_output.amin(dim=(0, 1))
+            ).amax()
+        atol_value, rtol_value = _inverse_tolerances(
+            target=tgt,
+            output_scale=output_extent,
+            tol=tol,
+            atol=atol,
+            rtol=rtol,
+        )
         for _ in range(int(max_iter)):
             pred, jac = self.evaluate_with_jacobian(x)
             resid = pred - tgt
@@ -541,10 +616,14 @@ class DetectorToTangentTransform(nn.Module):
                 dim=-1,
             )
         pred, _ = self.evaluate_with_jacobian(x)
-        max_resid = float((pred - tgt).abs().amax().detach().cpu().item())
-        if max_resid > float(tol):
+        residual = pred - tgt
+        max_resid = float(residual.abs().amax().detach().cpu().item())
+        if not _inverse_residual_ok(
+            residual, tgt, atol=atol_value, rtol=rtol_value
+        ):
             raise ValueError(
-                f"detector inverse residual {max_resid:.8g} exceeds tol {float(tol):.8g}"
+                f"detector inverse residual {max_resid:.8g} exceeds "
+                f"atol={atol_value:.8g}, rtol={rtol_value:.8g}"
             )
         return x
 

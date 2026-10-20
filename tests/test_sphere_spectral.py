@@ -1,4 +1,9 @@
 import math
+import os
+import re
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import pytest
@@ -99,6 +104,45 @@ def _has_cpp_spin_recurrence() -> bool:
         and hasattr(_native_cpp, "_healpix_spin_interpolate_recurrence_cpu")
         and hasattr(_native_cpp, "_healpix_spin_integrate_recurrence_cpu")
     )
+
+
+def _has_cpp_scalar_recurrence() -> bool:
+    return (
+        _native_cpp is not None
+        and hasattr(_native_cpp, "_healpix_scalar_interpolate_recurrence_cpu")
+        and hasattr(_native_cpp, "_healpix_scalar_integrate_recurrence_cpu")
+    )
+
+
+def _has_cpp_spectral_contracts() -> bool:
+    return (
+        _has_cpp_ring_fourier()
+        and _has_cpp_spin_concat()
+        and _has_cpp_spin_ring_fused()
+        and _has_cpp_spin_recurrence()
+        and _has_cpp_scalar_recurrence()
+        and _native_cpp is not None
+        and hasattr(_native_cpp, "_healpix_ring_fourier_modes_spin_conj_cpu")
+        and hasattr(_native_cpp, "_healpix_spin_map2alm_from_basis_cpu")
+        and hasattr(_native_cpp, "_healpix_spin_alm2map_from_basis_cpu")
+        and hasattr(_native_cpp, "_healpix_spin_map2alm_ring_recurrence_cpu")
+        and hasattr(_native_cpp, "_healpix_spin_alm2map_ring_recurrence_cpu")
+    )
+
+
+def _run_spectral_subprocess(
+    script: str, extra_env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env={**os.environ, **extra_env},
+    )
+    assert result.returncode == 0, result.stderr
+    return result
 
 
 def _random_alm(lmax: int, seed: int = 0) -> torch.Tensor:
@@ -285,6 +329,107 @@ def test_map2alm_pixel_weight_fits_is_one_plus_correction(tmp_path) -> None:
     torch.testing.assert_close(alm_w, alm_ref, atol=0.0, rtol=0.0)
 
 
+def _map2alm_iter1_reference(
+    m: torch.Tensor, multiplier: torch.Tensor, *, nside: int, lmax: int
+) -> torch.Tensor:
+    alm0 = map2alm(m * multiplier, nside=nside, lmax=lmax, iter=0)
+    residual = m - alm2map(alm0, nside=nside, lmax=lmax)
+    return alm0 + map2alm(residual * multiplier, nside=nside, lmax=lmax, iter=0)
+
+
+def test_map2alm_iterative_ring_weights_match_weighted_operator() -> None:
+    nside = 8
+    lmax = 5
+    m = torch.randn(hp.nside2npix(nside), dtype=torch.float64)
+    weights = spectral_mod._healpix_ring_quadrature_weights(nside)
+
+    got = map2alm(m, nside=nside, lmax=lmax, iter=1, use_weights=True)
+    expected = _map2alm_iter1_reference(
+        m, weights, nside=nside, lmax=lmax
+    )
+
+    torch.testing.assert_close(got, expected, atol=2e-12, rtol=2e-12)
+
+
+def test_map2alm_iterative_pixel_weights_match_weighted_operator(tmp_path) -> None:
+    nside = 8
+    lmax = 5
+    npix = hp.nside2npix(nside)
+    correction = torch.linspace(-0.1, 0.1, npix, dtype=torch.float64)
+    dest = tmp_path / "full_weights"
+    dest.mkdir()
+    write_fits(
+        str(dest / "healpix_full_weights_nside_0008.fits"),
+        correction,
+        overwrite=True,
+    )
+    m = torch.randn(npix, dtype=torch.float64)
+
+    got = map2alm(
+        m,
+        nside=nside,
+        lmax=lmax,
+        iter=1,
+        use_pixel_weights=True,
+        datapath=tmp_path,
+    )
+    expected = _map2alm_iter1_reference(
+        m, 1.0 + correction, nside=nside, lmax=lmax
+    )
+
+    torch.testing.assert_close(got, expected, atol=2e-12, rtol=2e-12)
+
+
+def test_map2alm_iterative_gal_cut_matches_masked_operator() -> None:
+    nside = 8
+    lmax = 5
+    npix = hp.nside2npix(nside)
+    m = torch.randn(npix, dtype=torch.float64)
+    pix = torch.arange(npix, dtype=torch.int64)
+    _lon, lat = hp.pix2ang(nside, pix, nest=False, lonlat=True)
+    keep = (torch.abs(lat) >= 20.0).to(dtype=m.dtype)
+
+    got = map2alm(m, nside=nside, lmax=lmax, iter=1, gal_cut=20.0)
+    expected = _map2alm_iter1_reference(m, keep, nside=nside, lmax=lmax)
+
+    torch.testing.assert_close(got, expected, atol=2e-12, rtol=2e-12)
+
+
+def test_map2alm_iterative_weights_preserve_gradient() -> None:
+    nside = 4
+    lmax = 3
+    m = torch.randn(
+        hp.nside2npix(nside), dtype=torch.float64, requires_grad=True
+    )
+
+    alm = map2alm(m, nside=nside, lmax=lmax, iter=1, use_weights=True)
+    torch.view_as_real(alm).square().sum().backward()
+
+    assert m.grad is not None
+    assert torch.isfinite(m.grad).all()
+    assert torch.linalg.vector_norm(m.grad) > 0
+
+
+def test_map2alm_weighted_analysis_synthesis_adjoint() -> None:
+    nside = 8
+    lmax = 5
+    npix = hp.nside2npix(nside)
+    m = torch.randn(npix, dtype=torch.float64)
+    alm = _random_alm(lmax, seed=83)
+    weights = spectral_mod._healpix_ring_quadrature_weights(nside)
+    analyzed = map2alm(m, nside=nside, lmax=lmax, use_weights=True)
+    synthesized = alm2map(alm, nside=nside, lmax=lmax)
+    m_index = spectral_mod._alm_m_array(lmax, lmax)
+    packed_weights = torch.where(m_index == 0, 1.0, 2.0)
+
+    lhs = (4.0 * math.pi / npix) * torch.dot(m * weights, synthesized)
+    rhs = torch.sum(
+        packed_weights * torch.real(torch.conj(analyzed) * alm)
+    )
+
+    torch.testing.assert_close(lhs, rhs, atol=2e-11, rtol=2e-11)
+
+
 def test_anafast_dipole_dominates_l1() -> None:
     nside = 32
     npix = hp.nside2npix(nside)
@@ -325,6 +470,19 @@ def test_synalm_zero_cls_returns_zero() -> None:
     alm = synalm(cl, lmax=lmax, mmax=lmax)
     assert getattr(alm, "shape", None) == (alm_size(lmax),)
     torch.testing.assert_close(alm, torch.zeros_like(alm), atol=0.0, rtol=0.0)
+
+
+def test_synalm_rejects_materially_indefinite_covariance() -> None:
+    spectra = torch.tensor([[1.0], [2.0], [1.0]], dtype=torch.float64)
+    with pytest.raises(ValueError, match="positive semidefinite"):
+        synalm(spectra, lmax=0)
+
+
+def test_synalm_clamps_roundoff_scale_negative_eigenvalue() -> None:
+    delta = torch.finfo(torch.float64).eps
+    spectra = torch.tensor([[1.0], [1.0 + delta], [1.0]], dtype=torch.float64)
+    alm = synalm(spectra, lmax=0)
+    assert torch.isfinite(alm).all()
 
 
 def test_synfast_zero_cls_returns_zero_map() -> None:
@@ -461,6 +619,131 @@ def test_alm2map_scalar_cpp_direct_parity(
     monkeypatch.setenv("TORCHSKY_SCALAR_ALM2MAP_CPP", "1")
     got = alm2map(alm, nside=nside, lmax=lmax, nest=nest)
     torch.testing.assert_close(got, ref, atol=1e-10, rtol=1e-10)
+
+
+def _scalar_alm2map_direct_at(
+    alm: torch.Tensor,
+    x: torch.Tensor,
+    phi: torch.Tensor,
+    lmax: int,
+    mmax: int | None = None,
+) -> torch.Tensor:
+    if _native_cpp is None or not hasattr(
+        _native_cpp, "_healpix_scalar_alm2map_direct_cpu"
+    ):
+        pytest.skip("cpp scalar alm2map direct kernel unavailable")
+    mm = lmax if mmax is None else mmax
+    return _native_cpp._healpix_scalar_alm2map_direct_cpu(
+        alm.to(torch.complex128).resolve_conj().contiguous(),
+        x.to(torch.float64).contiguous(),
+        phi.to(torch.float64).contiguous(),
+        lmax,
+        mm,
+    )[0]
+
+
+@pytest.mark.parametrize("lmax", [8, 32])
+def test_alm2map_scalar_cpp_direct_matches_scipy(lmax: int) -> None:
+    scipy_special = pytest.importorskip("scipy.special")
+    rng = np.random.default_rng(173 + lmax)
+    alm_np = rng.normal(size=alm_size(lmax)) + 1j * rng.normal(
+        size=alm_size(lmax)
+    )
+    alm = torch.from_numpy(alm_np)
+    x_np = np.array([0.0, 0.25, -0.7, 1.0 - 1e-12, -1.0 + 1e-12])
+    phi_np = np.array([0.0, 0.3, 1.7, 2.1, 5.4])
+    got = _scalar_alm2map_direct_at(
+        alm, torch.from_numpy(x_np), torch.from_numpy(phi_np), lmax
+    )
+
+    theta_np = np.arccos(x_np)
+    expected = np.zeros_like(x_np)
+    for m in range(lmax + 1):
+        weight = 1.0 if m == 0 else 2.0
+        for ell in range(m, lmax + 1):
+            a = alm_np[alm_index(ell, m, lmax)]
+            ylm = scipy_special.sph_harm_y(ell, m, theta_np, phi_np)
+            expected += weight * np.real(a * ylm)
+    torch.testing.assert_close(
+        got, torch.from_numpy(expected), atol=2e-12, rtol=2e-12
+    )
+
+
+def test_alm2map_scalar_cpp_direct_l256_diagonal_basis_stable() -> None:
+    lmax = 256
+    coefficient = 0.75 - 0.4j
+    alm = torch.zeros(alm_size(lmax), dtype=torch.complex128)
+    alm[alm_index(lmax, lmax, lmax)] = coefficient
+    x = torch.tensor(
+        [0.0, 0.3, 0.999, np.nextafter(1.0, 0.0), np.nextafter(-1.0, 0.0)],
+        dtype=torch.float64,
+    )
+    phi = torch.tensor([0.137, 0.7, 1.4, 2.2, 5.1], dtype=torch.float64)
+    got = _scalar_alm2map_direct_at(alm, x, phi, lmax)
+
+    log_lambda = 0.5 * (
+        math.log(2 * lmax + 1)
+        - math.log(4.0 * math.pi)
+        + math.lgamma(2 * lmax + 1)
+        - 2.0 * (lmax * math.log(2.0) + math.lgamma(lmax + 1))
+    ) + 0.5 * lmax * torch.log1p(-(x * x))
+    lambda_mm = torch.exp(log_lambda)
+    expected = 2.0 * torch.real(
+        torch.tensor(coefficient, dtype=torch.complex128)
+        * lambda_mm
+        * torch.exp(1j * lmax * phi)
+    )
+    assert torch.isfinite(got).all()
+    torch.testing.assert_close(got, expected, atol=2e-12, rtol=2e-12)
+
+    random_alm = _random_alm(lmax, seed=257)
+    random_got = _scalar_alm2map_direct_at(random_alm, x, phi, lmax)
+    random_stable = alm2lonlat(
+        random_alm,
+        torch.rad2deg(phi),
+        torch.rad2deg(torch.asin(x)),
+        lmax=lmax,
+    )
+    assert torch.isfinite(random_got).all()
+    torch.testing.assert_close(random_got, random_stable, atol=2e-10, rtol=2e-10)
+
+
+def test_alm2map_scalar_cpp_direct_random_linearity_and_conjugation() -> None:
+    lmax = 64
+    rng = np.random.default_rng(241)
+    shape = (alm_size(lmax),)
+    a = torch.from_numpy(rng.normal(size=shape) + 1j * rng.normal(size=shape))
+    b = torch.from_numpy(rng.normal(size=shape) + 1j * rng.normal(size=shape))
+    x = torch.tensor(
+        [0.0, 0.2, -0.8, 1.0 - 1e-14, -1.0 + 1e-14], dtype=torch.float64
+    )
+    phi = torch.tensor([0.0, 0.4, 1.3, 2.7, 5.8], dtype=torch.float64)
+
+    direct_a = _scalar_alm2map_direct_at(a, x, phi, lmax)
+    direct_b = _scalar_alm2map_direct_at(b, x, phi, lmax)
+    direct_sum = _scalar_alm2map_direct_at(1.25 * a - 0.3 * b, x, phi, lmax)
+    direct_conj = _scalar_alm2map_direct_at(torch.conj(a), x, phi, lmax)
+    direct_reflected = _scalar_alm2map_direct_at(a, x, -phi, lmax)
+    stable = alm2lonlat(
+        a, torch.rad2deg(phi), torch.rad2deg(torch.asin(x)), lmax=lmax
+    )
+
+    assert torch.isfinite(direct_sum).all()
+    torch.testing.assert_close(
+        direct_sum, 1.25 * direct_a - 0.3 * direct_b, atol=2e-12, rtol=2e-12
+    )
+    torch.testing.assert_close(direct_conj, direct_reflected, atol=2e-12, rtol=2e-12)
+    torch.testing.assert_close(direct_a, stable, atol=2e-11, rtol=2e-11)
+
+
+def test_alm2map_scalar_cpp_direct_rejects_nonfinite_inputs() -> None:
+    alm = torch.zeros(alm_size(2), dtype=torch.complex128)
+    x = torch.tensor([0.0], dtype=torch.float64)
+    phi = torch.tensor([0.0], dtype=torch.float64)
+    with pytest.raises(RuntimeError, match="finite alm_values"):
+        _scalar_alm2map_direct_at(alm.index_fill(0, torch.tensor([0]), math.nan), x, phi, 2)
+    with pytest.raises(RuntimeError, match="finite cos_theta and phi"):
+        _scalar_alm2map_direct_at(alm, x.fill_(math.nan), phi, 2)
 
 
 def test_alm2map_scalar_ring_torch_parity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -727,6 +1010,77 @@ def test_spin_torch_roundtrip_without_healpy_backend(spin: int) -> None:
     assert float(rel_b) < 3e-3
 
 
+def test_map2alm_spin_rejects_explicit_nside_mismatch() -> None:
+    maps = torch.zeros((2, hp.nside2npix(4)), dtype=torch.float64)
+    with pytest.raises(ValueError, match="map length does not match nside"):
+        map2alm_spin(maps, spin=2, nside=8, lmax=4)
+
+
+def test_map2alm_spin_iterative_weights_match_weighted_operator() -> None:
+    nside = 8
+    lmax = 5
+    spin = 2
+    maps = torch.randn((2, hp.nside2npix(nside)), dtype=torch.float64)
+    weights = spectral_mod._healpix_ring_quadrature_weights(nside)
+    weighted_maps = maps * weights.unsqueeze(0)
+    alm_e0, alm_b0 = map2alm_spin(
+        weighted_maps, spin=spin, nside=nside, lmax=lmax
+    )
+    reconstructed = alm2map_spin(
+        (alm_e0, alm_b0), nside=nside, spin=spin, lmax=lmax
+    )
+    residual = (maps - reconstructed) * weights.unsqueeze(0)
+    delta_e, delta_b = map2alm_spin(
+        residual, spin=spin, nside=nside, lmax=lmax
+    )
+
+    got_e, got_b = map2alm_spin(
+        maps,
+        spin=spin,
+        nside=nside,
+        lmax=lmax,
+        iter=1,
+        use_weights=True,
+    )
+
+    torch.testing.assert_close(got_e, alm_e0 + delta_e, atol=2e-12, rtol=2e-12)
+    torch.testing.assert_close(got_b, alm_b0 + delta_b, atol=2e-12, rtol=2e-12)
+
+
+def test_alm2map_spin_branches_preserve_dtype_and_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nside = 8
+    lmax = 5
+    a_e, a_b = _random_spin_alms(lmax, spin=2, seed=89)
+    expected_dtype = spectral_mod._preferred_real_dtype(a_e.device)
+
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "0")
+    dense = alm2map_spin((a_e, a_b), nside=nside, spin=2, lmax=lmax)
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
+    ring = alm2map_spin((a_e, a_b), nside=nside, spin=2, lmax=lmax)
+
+    assert dense.dtype == ring.dtype == expected_dtype
+    assert dense.device == ring.device == a_e.device
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_alm2map_spin_dense_mps_preserves_work_dtype(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nside = 4
+    lmax = 3
+    a_e, a_b = _random_spin_alms(lmax, spin=2, seed=97)
+    a_e = a_e.to(device="mps", dtype=torch.complex64)
+    a_b = a_b.to(device="mps", dtype=torch.complex64)
+    monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "0")
+
+    maps = alm2map_spin((a_e, a_b), nside=nside, spin=2, lmax=lmax)
+
+    assert maps.device.type == "mps"
+    assert maps.dtype == torch.float32
+
+
 @pytest.mark.skipif(_hp is None, reason="healpy not available")
 def test_compat_spin_and_smoothing() -> None:
     nside = 8
@@ -913,6 +1267,330 @@ def test_alm2map_spin_ring_torch_parity_nested(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("TORCHSKY_SPIN_ALM2MAP_RING_TORCH", "force")
     qu1 = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax, nest=True)
     torch.testing.assert_close(qu1, qu0, atol=1e-10, rtol=0.0)
+
+
+@pytest.mark.skipif(
+    not _has_cpp_ring_fourier(), reason="C++ ring Fourier kernels not available"
+)
+def test_ring_fourier_synthesis_cpp_accepts_empty_layout() -> None:
+    assert _native_cpp is not None
+    modes = torch.empty((1, 1, 0), dtype=torch.complex128)
+    starts = torch.empty((0,), dtype=torch.int64)
+    lengths = torch.empty((0,), dtype=torch.int64)
+
+    out = _native_cpp._healpix_ring_fourier_synthesis_cpu(modes, starts, lengths)
+
+    assert out.shape == (1, 0)
+    assert out.dtype == torch.complex128
+
+
+@pytest.mark.skipif(
+    not _has_cpp_spectral_contracts(), reason="C++ spectral kernels not available"
+)
+def test_native_spectral_bindings_reject_malformed_contracts() -> None:
+    assert _native_cpp is not None
+    lmax = 3
+    mmax = 2
+    spin = 2
+    nalm = alm_size(lmax, mmax)
+    nrings = 3
+    theta = torch.linspace(0.2, math.pi - 0.2, nrings, dtype=torch.float64)
+    weight = torch.ones(nrings, dtype=torch.float64)
+    modes = torch.zeros((mmax + 1, nrings), dtype=torch.complex128)
+    alms = torch.zeros((2, nalm), dtype=torch.complex128)
+    starts = torch.tensor([0, 2, 4], dtype=torch.int64)
+    lengths = torch.tensor([2, 2, 2], dtype=torch.int64)
+    phase = torch.ones((mmax + 1, nrings), dtype=torch.complex128)
+    maps = torch.zeros((2, 6), dtype=torch.float64)
+    basis = torch.zeros((nalm, nrings), dtype=torch.complex128)
+
+    cases = [
+        lambda: _native_cpp._healpix_spin_integrate_recurrence_cpu(
+            modes[:-1], modes, theta, weight, lmax, mmax, spin
+        ),
+        lambda: _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+            alms[:, :-1], theta, lmax, mmax, spin
+        ),
+        lambda: _native_cpp._healpix_scalar_integrate_recurrence_cpu(
+            modes, theta, weight[:-1], lmax, mmax
+        ),
+        lambda: _native_cpp._healpix_scalar_interpolate_recurrence_cpu(
+            alms[0, :-1], theta, lmax, mmax
+        ),
+        lambda: _native_cpp._healpix_ring_fourier_modes_cpu(
+            torch.zeros((1, 5), dtype=torch.complex128), starts, lengths, mmax
+        ),
+        lambda: _native_cpp._healpix_ring_fourier_synthesis_cpu(
+            modes, torch.tensor([0, 1, 4]), lengths
+        ),
+        lambda: _native_cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+            maps, starts, lengths, theta, phase[:, :-1], lmax, mmax, spin, 1.0
+        ),
+        lambda: _native_cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+            maps, starts, lengths, theta, phase, lmax, mmax, spin, math.inf
+        ),
+        lambda: _native_cpp._healpix_spin_alm2map_ring_recurrence_cpu(
+            alms[0, :-1], starts, lengths, theta, phase, lmax, mmax, spin, alms[1]
+        ),
+        lambda: _native_cpp._healpix_spin_alm2map_ring_recurrence_cpu(
+            alms[0], starts, lengths, theta[:-1], phase, lmax, mmax, spin, alms[1]
+        ),
+        lambda: _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+            alms.to(torch.complex64), theta, lmax, mmax, spin
+        ),
+        lambda: _native_cpp._healpix_spin_integrate_recurrence_cpu(
+            modes, modes, theta.reshape(1, -1), weight, lmax, mmax, spin
+        ),
+        lambda: _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+            alms, theta, lmax, mmax, lmax + 1
+        ),
+        lambda: _native_cpp._healpix_spin_interpolate_concat_cpu(
+            alms[0, :-1], alms[1], basis, basis, lmax, mmax
+        ),
+        lambda: _native_cpp._healpix_spin_integrate_concat_cpu(
+            modes, modes, basis, basis, lmax, mmax, math.nan
+        ),
+        lambda: _native_cpp._healpix_spin_map2alm_ring_concat_cpu(
+            torch.zeros(6, dtype=torch.complex128),
+            starts,
+            lengths,
+            phase,
+            basis[:, :-1],
+            basis[:, :-1],
+            lmax,
+            mmax,
+            1.0,
+        ),
+        lambda: _native_cpp._healpix_spin_map2alm_from_basis_cpu(
+            maps[:1], maps[1], torch.zeros((6, nalm), dtype=torch.complex128),
+            torch.zeros((6, nalm), dtype=torch.complex128), 1.0
+        ),
+    ]
+    for case in cases:
+        with pytest.raises(RuntimeError):
+            case()
+
+
+@pytest.mark.skipif(
+    not _has_cpp_spectral_contracts(), reason="C++ spectral kernels not available"
+)
+def test_native_spectral_bindings_define_empty_contracts() -> None:
+    assert _native_cpp is not None
+    lmax = 3
+    mmax = 2
+    spin = 2
+    nalm = alm_size(lmax, mmax)
+    empty_i64 = torch.empty(0, dtype=torch.int64)
+    empty_f64 = torch.empty(0, dtype=torch.float64)
+    empty_modes = torch.empty((mmax + 1, 0), dtype=torch.complex128)
+    empty_phase = torch.empty((mmax + 1, 0), dtype=torch.complex128)
+    alms = torch.zeros((2, nalm), dtype=torch.complex128)
+    empty_basis = torch.empty((nalm, 0), dtype=torch.complex128)
+
+    fourier = _native_cpp._healpix_ring_fourier_modes_cpu(
+        torch.empty((2, 0), dtype=torch.complex128), empty_i64, empty_i64, mmax
+    )
+    spin_fourier = _native_cpp._healpix_ring_fourier_modes_spin_conj_cpu(
+        torch.empty(0, dtype=torch.complex128), empty_i64, empty_i64, mmax
+    )
+    synthesis = _native_cpp._healpix_ring_fourier_synthesis_cpu(
+        empty_modes, empty_i64, empty_i64
+    )
+    finalized = _native_cpp._healpix_spin_ring_finalize_cpu(
+        empty_modes, empty_modes, empty_i64, empty_i64
+    )
+    spin_integrated = _native_cpp._healpix_spin_integrate_recurrence_cpu(
+        empty_modes, empty_modes, empty_f64, empty_f64, lmax, mmax, spin
+    )
+    spin_interpolated = _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+        alms, empty_f64, lmax, mmax, spin
+    )
+    scalar_integrated = _native_cpp._healpix_scalar_integrate_recurrence_cpu(
+        empty_modes, empty_f64, empty_f64, lmax, mmax
+    )
+    scalar_interpolated = _native_cpp._healpix_scalar_interpolate_recurrence_cpu(
+        alms[0], empty_f64, lmax, mmax
+    )
+    fused_integrated = _native_cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+        torch.empty((2, 0), dtype=torch.float64),
+        empty_i64,
+        empty_i64,
+        empty_f64,
+        empty_phase,
+        lmax,
+        mmax,
+        spin,
+        1.0,
+    )
+    fused_interpolated = _native_cpp._healpix_spin_alm2map_ring_recurrence_cpu(
+        alms[0],
+        empty_i64,
+        empty_i64,
+        empty_f64,
+        empty_phase,
+        lmax,
+        mmax,
+        spin,
+        alms[1],
+    )
+    concat_interpolated = _native_cpp._healpix_spin_interpolate_concat_cpu(
+        alms[0], alms[1], empty_basis, empty_basis, lmax, mmax
+    )
+    concat_integrated = _native_cpp._healpix_spin_integrate_concat_cpu(
+        empty_modes, empty_modes, empty_basis, empty_basis, lmax, mmax, 1.0
+    )
+    ring_concat_integrated = _native_cpp._healpix_spin_map2alm_ring_concat_cpu(
+        torch.empty(0, dtype=torch.complex128),
+        empty_i64,
+        empty_i64,
+        empty_phase,
+        empty_basis,
+        empty_basis,
+        lmax,
+        mmax,
+        1.0,
+    )
+    basis_integrated = _native_cpp._healpix_spin_map2alm_from_basis_cpu(
+        empty_f64,
+        empty_f64,
+        torch.empty((0, nalm), dtype=torch.complex128),
+        torch.empty((0, nalm), dtype=torch.complex128),
+        1.0,
+    )
+    basis_interpolated = _native_cpp._healpix_spin_alm2map_from_basis_cpu(
+        alms[0], alms[1], empty_basis, empty_basis,
+        torch.empty((lmax + 1, 0), dtype=torch.complex128),
+        torch.empty((lmax + 1, 0), dtype=torch.complex128),
+    )
+
+    assert fourier.shape == (2, mmax + 1, 0)
+    assert spin_fourier.shape == (2, mmax + 1, 0)
+    assert synthesis.shape == (0,)
+    assert finalized.shape == (2, 0)
+    assert spin_integrated.shape == (2, nalm)
+    assert not torch.count_nonzero(spin_integrated)
+    assert spin_interpolated.shape == (2, mmax + 1, 0)
+    assert scalar_integrated.shape == (nalm,)
+    assert not torch.count_nonzero(scalar_integrated)
+    assert scalar_interpolated.shape == (mmax + 1, 0)
+    assert fused_integrated.shape == (2, nalm)
+    assert not torch.count_nonzero(fused_integrated)
+    assert fused_interpolated.shape == (2, 0)
+    assert concat_interpolated[0].shape == (mmax + 1, 0)
+    assert concat_interpolated[1].shape == (mmax + 1, 0)
+    assert concat_integrated[0].shape == (nalm,)
+    assert concat_integrated[1].shape == (nalm,)
+    assert not torch.count_nonzero(concat_integrated[0])
+    assert not torch.count_nonzero(concat_integrated[1])
+    assert ring_concat_integrated[0].shape == (nalm,)
+    assert ring_concat_integrated[1].shape == (nalm,)
+    assert basis_integrated[0].shape == (nalm,)
+    assert basis_integrated[1].shape == (nalm,)
+    assert basis_interpolated.shape == (2, 0)
+
+
+@pytest.mark.skipif(
+    not _has_cpp_spectral_contracts(), reason="C++ spectral kernels not available"
+)
+def test_native_spectral_degree_zero_uses_empty_recurrence_table_safely() -> None:
+    assert _native_cpp is not None
+    theta = torch.tensor([math.pi / 2.0], dtype=torch.float64)
+    weight = torch.ones(1, dtype=torch.float64)
+    modes = torch.ones((1, 1), dtype=torch.complex128)
+    spin_alms = torch.ones((2, 1), dtype=torch.complex128)
+    scalar_alm = torch.ones(1, dtype=torch.complex128)
+
+    spin_integrated = _native_cpp._healpix_spin_integrate_recurrence_cpu(
+        modes, modes, theta, weight, 0, 0, 0
+    )
+    spin_interpolated = _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+        spin_alms, theta, 0, 0, 0
+    )
+    scalar_integrated = _native_cpp._healpix_scalar_integrate_recurrence_cpu(
+        modes, theta, weight, 0, 0
+    )
+    scalar_interpolated = _native_cpp._healpix_scalar_interpolate_recurrence_cpu(
+        scalar_alm, theta, 0, 0
+    )
+
+    assert spin_integrated.shape == (2, 1)
+    assert spin_interpolated.shape == (2, 1, 1)
+    assert scalar_integrated.shape == (1,)
+    assert scalar_interpolated.shape == (1, 1)
+    assert torch.isfinite(spin_integrated).all()
+    assert torch.isfinite(spin_interpolated).all()
+    assert torch.isfinite(scalar_integrated).all()
+    assert torch.isfinite(scalar_interpolated).all()
+
+
+@pytest.mark.skipif(
+    not _has_cpp_spectral_contracts(), reason="C++ spectral kernels not available"
+)
+def test_native_spectral_dangerous_contract_table_survives_subprocess() -> None:
+    _run_spectral_subprocess(
+        """
+        import math
+
+        import torch
+
+        from torchsky._native import cpp
+
+        lmax = 3
+        mmax = 2
+        spin = 2
+        nalm = 9
+        nrings = 3
+        theta = torch.linspace(0.2, math.pi - 0.2, nrings, dtype=torch.float64)
+        weight = torch.ones(nrings, dtype=torch.float64)
+        modes = torch.zeros((mmax + 1, nrings), dtype=torch.complex128)
+        alms = torch.zeros((2, nalm), dtype=torch.complex128)
+        starts = torch.tensor([0, 2, 4], dtype=torch.int64)
+        lengths = torch.tensor([2, 2, 2], dtype=torch.int64)
+        phase = torch.ones((mmax + 1, nrings), dtype=torch.complex128)
+        maps = torch.zeros((2, 6), dtype=torch.float64)
+
+        cases = {
+            "spin_integrate_short_modes": lambda: cpp._healpix_spin_integrate_recurrence_cpu(
+                modes[:, :-1], modes, theta, weight, lmax, mmax, spin
+            ),
+            "spin_interpolate_short_alms": lambda: cpp._healpix_spin_interpolate_recurrence_cpu(
+                alms[:, :-1], theta, lmax, mmax, spin
+            ),
+            "scalar_integrate_short_modes": lambda: cpp._healpix_scalar_integrate_recurrence_cpu(
+                modes[:, :-1], theta, weight, lmax, mmax
+            ),
+            "scalar_interpolate_short_alm": lambda: cpp._healpix_scalar_interpolate_recurrence_cpu(
+                alms[0, :-1], theta, lmax, mmax
+            ),
+            "fourier_extent_overrun": lambda: cpp._healpix_ring_fourier_modes_cpu(
+                torch.zeros((1, 5), dtype=torch.complex128), starts, lengths, mmax
+            ),
+            "fourier_checked_overflow": lambda: cpp._healpix_ring_fourier_modes_cpu(
+                torch.empty((1, 0), dtype=torch.complex128),
+                torch.tensor([torch.iinfo(torch.int64).max], dtype=torch.int64),
+                torch.tensor([2], dtype=torch.int64),
+                mmax,
+            ),
+            "synthesis_overlap": lambda: cpp._healpix_ring_fourier_synthesis_cpu(
+                modes, torch.tensor([0, 1, 4], dtype=torch.int64), lengths
+            ),
+            "fused_map_short_phase": lambda: cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+                maps, starts, lengths, theta, phase[:, :-1], lmax, mmax, spin, 1.0
+            ),
+            "fused_alm_short_storage": lambda: cpp._healpix_spin_alm2map_ring_recurrence_cpu(
+                alms[0, :-1], starts, lengths, theta, phase, lmax, mmax, spin, alms[1]
+            ),
+        }
+
+        for name, case in cases.items():
+            try:
+                case()
+            except RuntimeError:
+                continue
+            raise AssertionError(f"{name} did not reject malformed storage")
+        """,
+        {},
+    )
 
 
 @pytest.mark.skipif(
@@ -1191,6 +1869,227 @@ def test_spin_sht_small_nside_is_finite(
     rec = alm2map_spin((a_e, a_b), nside=nside, spin=spin, lmax=lmax)
     assert torch.isfinite(ae).all() and torch.isfinite(ab).all()
     assert torch.isfinite(rec).all()
+
+
+@pytest.mark.skipif(
+    not _has_cpp_spin_recurrence(), reason="C++ spin recurrence kernels not available"
+)
+def test_spin_pool_concurrent_mixed_shapes_preserve_parity() -> None:
+    _run_spectral_subprocess(
+        """
+        import math
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        import torch
+
+        from torchsky._native import cpp
+
+        torch.set_num_threads(4)
+
+        def alm_size(lmax, mmax):
+            return (mmax + 1) * (lmax + 1) - mmax * (mmax + 1) // 2
+
+        def make_case(lmax, mmax, nrings, spin, seed):
+            generator = torch.Generator().manual_seed(seed)
+            nalm = alm_size(lmax, mmax)
+            theta = torch.linspace(0.1, math.pi - 0.1, nrings, dtype=torch.float64)
+            alms = torch.randn(
+                (2, nalm), dtype=torch.complex128, generator=generator
+            )
+            s_plus = torch.randn(
+                (mmax + 1, nrings), dtype=torch.complex128, generator=generator
+            )
+            s_minus = torch.randn(
+                (mmax + 1, nrings), dtype=torch.complex128, generator=generator
+            )
+            weight = torch.tensor([0.25], dtype=torch.float64)
+            return lmax, mmax, spin, theta, alms, s_plus, s_minus, weight
+
+        cases = [
+            make_case(9, 5, 31, 1, 31),
+            make_case(12, 8, 47, 2, 47),
+            make_case(15, 7, 39, 3, 63),
+        ]
+
+        def run(kind, case_index):
+            lmax, mmax, spin, theta, alms, s_plus, s_minus, weight = cases[case_index]
+            if kind == "interpolate":
+                return cpp._healpix_spin_interpolate_recurrence_cpu(
+                    alms, theta, lmax, mmax, spin
+                )
+            return cpp._healpix_spin_integrate_recurrence_cpu(
+                s_plus, s_minus, theta, weight, lmax, mmax, spin
+            )
+
+        jobs = [
+            (kind, case_index)
+            for _ in range(2)
+            for case_index in range(len(cases))
+            for kind in ("interpolate", "integrate")
+        ]
+        references = {
+            (kind, case_index): run(kind, case_index)
+            for kind, case_index in set(jobs)
+        }
+        barrier = threading.Barrier(len(jobs))
+
+        def run_concurrent(job):
+            barrier.wait()
+            return job, run(*job)
+
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            results = list(executor.map(run_concurrent, jobs))
+
+        for job, result in results:
+            torch.testing.assert_close(
+                result, references[job], atol=0.0, rtol=0.0
+            )
+        """,
+        {
+            "TORCHSKY_SPIN_THREADS": "4",
+            "TORCHSKY_SPIN_ISHIOKA": "1",
+        },
+    )
+
+
+@pytest.mark.skipif(
+    not (_has_cpp_spin_recurrence() and _has_cpp_scalar_recurrence()),
+    reason="C++ spectral recurrence kernels not available",
+)
+def test_native_spectral_cache_snapshots_survive_concurrent_eviction() -> None:
+    _run_spectral_subprocess(
+        """
+        import math
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        import torch
+
+        from torchsky._native import cpp
+
+        torch.set_num_threads(4)
+
+        def alm_size(lmax, mmax):
+            return (mmax + 1) * (lmax + 1) - mmax * (mmax + 1) // 2
+
+        def make_spin_case(index, ishioka):
+            spin = 1 + index % 2 if ishioka else 3
+            lmax = (6 if ishioka else 25) + index
+            mmax = 3 + index
+            nrings = 31 + 2 * (index % 4)
+            generator = torch.Generator().manual_seed(1000 + 100 * int(ishioka) + index)
+            theta = torch.linspace(0.1, math.pi - 0.1, nrings, dtype=torch.float64)
+            alms = torch.randn(
+                (2, alm_size(lmax, mmax)),
+                dtype=torch.complex128,
+                generator=generator,
+            )
+            modes = torch.randn(
+                (2, mmax + 1, nrings),
+                dtype=torch.complex128,
+                generator=generator,
+            )
+            return lmax, mmax, spin, theta, alms, modes
+
+        def make_scalar_case(index):
+            lmax = 7 + index
+            mmax = 2 + index
+            nrings = 29 + 2 * (index % 5)
+            generator = torch.Generator().manual_seed(2000 + index)
+            theta = torch.linspace(0.1, math.pi - 0.1, nrings, dtype=torch.float64)
+            alm = torch.randn(
+                alm_size(lmax, mmax),
+                dtype=torch.complex128,
+                generator=generator,
+            )
+            modes = torch.randn(
+                (mmax + 1, nrings),
+                dtype=torch.complex128,
+                generator=generator,
+            )
+            return lmax, mmax, theta, alm, modes
+
+        jobs = []
+        for ishioka in (True, False):
+            for index in range(18):
+                jobs.append(("spin", index % 2, make_spin_case(index, ishioka)))
+        for index in range(18):
+            jobs.append(("scalar", index % 2, make_scalar_case(index)))
+
+        weight = torch.tensor([0.25], dtype=torch.float64)
+
+        def run(job):
+            family, integrate, case = job
+            if family == "spin":
+                lmax, mmax, spin, theta, alms, modes = case
+                if integrate:
+                    return cpp._healpix_spin_integrate_recurrence_cpu(
+                        modes[0], modes[1], theta, weight, lmax, mmax, spin
+                    )
+                return cpp._healpix_spin_interpolate_recurrence_cpu(
+                    alms, theta, lmax, mmax, spin
+                )
+            lmax, mmax, theta, alm, modes = case
+            if integrate:
+                return cpp._healpix_scalar_integrate_recurrence_cpu(
+                    modes, theta, weight, lmax, mmax
+                )
+            return cpp._healpix_scalar_interpolate_recurrence_cpu(
+                alm, theta, lmax, mmax
+            )
+
+        references = [run(job) for job in jobs]
+        barrier = threading.Barrier(len(jobs))
+
+        def run_concurrent(index):
+            barrier.wait()
+            return index, run(jobs[index])
+
+        with ThreadPoolExecutor(max_workers=len(jobs)) as executor:
+            results = list(executor.map(run_concurrent, range(len(jobs))))
+
+        for index, result in results:
+            torch.testing.assert_close(
+                result, references[index], atol=0.0, rtol=0.0
+            )
+        """,
+        {
+            "TORCHSKY_SPIN_THREADS": "4",
+            "TORCHSKY_SPIN_ISHIOKA": "1",
+        },
+    )
+
+
+@pytest.mark.skipif(
+    not _has_cpp_spin_recurrence(), reason="C++ spin recurrence kernels not available"
+)
+def test_spin_pool_thread_limit_honors_aten_cap() -> None:
+    result = _run_spectral_subprocess(
+        """
+        import math
+
+        import torch
+
+        from torchsky._native import cpp
+
+        torch.set_num_threads(1)
+        lmax = 4
+        nalm = (lmax + 1) * (lmax + 2) // 2
+        alms = torch.zeros((2, nalm), dtype=torch.complex128)
+        theta = torch.linspace(0.1, math.pi - 0.1, 15, dtype=torch.float64)
+        cpp._healpix_spin_interpolate_recurrence_cpu(alms, theta, lmax, lmax, 2)
+        """,
+        {
+            "TORCHSKY_SHT_PROFILE": "1",
+            "TORCHSKY_SPIN_THREADS": "999999999",
+        },
+    )
+    match = re.search(
+        r"SpinMPool workers=(\d+) aten_threads=(\d+)", result.stderr
+    )
+    assert match is not None, result.stderr
+    assert tuple(map(int, match.groups())) == (1, 1)
 
 
 

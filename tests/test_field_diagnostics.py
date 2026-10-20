@@ -369,6 +369,66 @@ def test_field_quality_metrics_ignore_nonfinite_pixels_and_weights() -> None:
     assert metrics["support_fraction"] == 0.25
 
 
+def test_field_quality_metrics_report_nan_for_empty_effective_support() -> None:
+    prediction = torch.ones((2, 3), dtype=torch.float32)
+    target = torch.zeros_like(prediction)
+    mask = torch.zeros_like(prediction, dtype=torch.bool)
+
+    metrics = field_image_quality_metrics(prediction, target, mask=mask)
+
+    assert metrics["effective_weight_sum"] == 0.0
+    assert metrics["support_count"] == 0.0
+    assert metrics["support_fraction"] == 0.0
+    for key in (
+        "weighted_rmse",
+        "weighted_mae",
+        "residual_bias",
+        "residual_std",
+        "target_rms",
+        "prediction_rms",
+        "residual_snr",
+        "residual_snr_db",
+        "prediction_sharpness",
+        "target_sharpness",
+        "sharpness_ratio",
+        "residual_rmse_scale_1",
+    ):
+        assert torch.isnan(torch.tensor(metrics[key]))
+
+
+def test_field_quality_aggregate_pools_residual_primitives() -> None:
+    first = field_image_quality_metrics(torch.tensor([[1.0]]), torch.tensor([[0.0]]))
+    second = field_image_quality_metrics(torch.tensor([[3.0]]), torch.tensor([[0.0]]))
+
+    aggregate = field_quality_scorecard((first, second))["aggregate"]
+
+    assert aggregate["weighted_rmse"] == pytest.approx(5.0**0.5)
+    assert aggregate["weighted_mae"] == pytest.approx(2.0)
+    assert aggregate["residual_bias"] == pytest.approx(2.0)
+    assert aggregate["residual_std"] == pytest.approx(1.0)
+    assert aggregate["support_count"] == 2.0
+    assert aggregate["support_fraction"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("device", "dtype"),
+    [("cpu", torch.float32), ("cpu", torch.float64)]
+    + ([("cuda", torch.float32), ("cuda", torch.float64)] if torch.cuda.is_available() else [])
+    + ([("mps", torch.float32)] if torch.backends.mps.is_available() else []),
+)
+def test_field_quality_metrics_preserve_device_and_dtype_semantics(
+    dtype: torch.dtype,
+    device: str,
+) -> None:
+    prediction = torch.tensor([[1.0, 3.0]], dtype=dtype, device=device)
+    target = torch.zeros_like(prediction)
+
+    metrics = field_image_quality_metrics(prediction, target, residual_scales=(1,))
+
+    assert metrics["weighted_rmse"] == pytest.approx(5.0**0.5, rel=1.0e-6)
+    assert metrics["weighted_mae"] == pytest.approx(2.0)
+
+
 def test_field_residual_product_carries_support_weight_and_metrics() -> None:
     prediction = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
     target = torch.tensor([[1.5, 2.0], [0.0, 4.0]], dtype=torch.float32)

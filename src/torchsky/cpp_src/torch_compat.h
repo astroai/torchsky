@@ -7,10 +7,10 @@
 
 namespace nb = nanobind;
 
+// Isolated compatibility bridge for query_disc and experimental basis only.
 // Manual declaration avoids importing pybind11 into this nanobind module.
 extern PyObject* THPVariable_Wrap(const at::TensorBase& var);
 
-// Helper function to convert torch::Tensor to Python object - FAST PATH
 inline nb::object tensor_to_python(const torch::Tensor& tensor) {
     PyObject* tensor_obj = THPVariable_Wrap(tensor);
     if (!tensor_obj) {
@@ -19,7 +19,6 @@ inline nb::object tensor_to_python(const torch::Tensor& tensor) {
     return nb::steal(tensor_obj);
 }
 
-// Helper function to convert any DLPack producer to torch::Tensor.
 inline torch::Tensor python_to_tensor(nb::object obj) {
     if (!PyObject_HasAttrString(obj.ptr(), "__dlpack__")) {
         throw std::runtime_error("Object does not implement __dlpack__");
@@ -40,18 +39,4 @@ inline torch::Tensor python_to_tensor(nb::object obj) {
         PyErr_Clear();
     }
     return tensor;
-}
-
-inline torch::Tensor as_f64_contig(nb::object obj) {
-    auto t = python_to_tensor(obj);
-    if (!t.device().is_cpu()) {
-        throw std::runtime_error("Expected a CPU tensor");
-    }
-    if (t.scalar_type() != torch::kFloat64) {
-        t = t.to(torch::kFloat64);
-    }
-    if (!t.is_contiguous()) {
-        t = t.contiguous();
-    }
-    return t;
 }

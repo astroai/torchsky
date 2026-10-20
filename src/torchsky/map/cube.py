@@ -20,7 +20,6 @@ from .image_plane import (
     _apply_observation_astrometric_shifts,
     _apply_observation_calibration,
     _coerce_target_header,
-    _effective_observation_photometric_scale,
     _load_observation_weight_map,
     _resolve_map_device,
     coadd_image_plane_cube,
@@ -74,7 +73,14 @@ def _coadd_ifu_3d_cube(
     emsm_scale: float,
     device: torch.device | str | None,
 ) -> CubeResult:
-    """Build a 3D (N_wave, H, W) cube from 2D IFU detector images with per-pixel (ra, dec, lambda)."""
+    """Build a 3D cube from IFU detector images.
+
+    ``inverse_variance`` contains diagonal voxel inverse variances only when every
+    source weight is declared to be an inverse variance. Resampling one detector
+    sample into multiple voxels induces cross-voxel covariance that is not stored;
+    ``correlation_factor`` reports the local first-to-squared coefficient ratio as
+    an aperture-noise diagnostic, not a covariance matrix.
+    """
     from ..wcs.gwcs_sampling import IFUSliceWCS
     from ..wcs.iau2006 import apply_dcr, apply_ephemeris_offset
 
@@ -123,11 +129,16 @@ def _coadd_ifu_3d_cube(
     target_wcs = WCS(header_dict).to(map_device)
     numer = torch.zeros((N_wave, H, W), dtype=torch.float32, device=map_device)
     denom = torch.zeros((N_wave, H, W), dtype=torch.float32, device=map_device)
+    variance_numer = torch.zeros_like(denom)
     overlap = torch.zeros((N_wave, H, W), dtype=torch.int32, device=map_device)
     band_obs_counts = torch.zeros((N_wave,), dtype=torch.int64)
 
     flat_numer = numer.reshape(-1)
     flat_denom = denom.reshape(-1)
+    flat_variance_numer = variance_numer.reshape(-1)
+    inverse_variance_available = bool(observations) and all(
+        obs.weight_is_inverse_variance for obs in observations
+    )
     stride_z = H * W
     stride_y = W
 
@@ -140,10 +151,6 @@ def _coadd_ifu_3d_cube(
             raw_img = raw_img.to(device=map_device, dtype=torch.float32)
         src_w = _load_observation_weight_map(obs, raw_img, device=map_device)
         cal_img, cal_w = _apply_observation_calibration(obs, raw_img, src_w)
-        s_eff = _effective_observation_photometric_scale(obs, hdr_obs)
-        if s_eff != 1.0:
-            cal_img = cal_img * float(s_eff)
-            cal_w = cal_w / float(s_eff * s_eff)
 
         valid = torch.isfinite(cal_img) & torch.isfinite(cal_w) & (cal_w > 0.0)
         ifu_obj = (
@@ -225,6 +232,8 @@ def _coadd_ifu_3d_cube(
                 idx = iz[in_b] * stride_z + iy[in_b] * stride_y + ix[in_b]
                 flat_numer.scatter_add_(0, idx, val_v[in_b] * w_v[in_b])
                 flat_denom.scatter_add_(0, idx, w_v[in_b])
+                if inverse_variance_available:
+                    flat_variance_numer.scatter_add_(0, idx, w_v[in_b])
                 obs_hit_mask[idx] = True
         elif spectral_kernel == "emsm":
             sigma = max(float(emsm_scale), 1e-3)
@@ -266,6 +275,10 @@ def _coadd_ifu_3d_cube(
                 eff_w = w_v[pos] * frac[pos]
                 flat_numer.scatter_add_(0, idx, val_v[pos] * eff_w)
                 flat_denom.scatter_add_(0, idx, eff_w)
+                if inverse_variance_available:
+                    flat_variance_numer.scatter_add_(
+                        0, idx, w_v[pos] * torch.square(frac[pos])
+                    )
                 obs_hit_mask[idx] = True
         else:
             # 3D voxel drizzle / trilinear ("drizzle" or "linear")
@@ -302,6 +315,10 @@ def _coadd_ifu_3d_cube(
                         eff_w = w_v[in_b] * frac[in_b]
                         flat_numer.scatter_add_(0, idx, val_v[in_b] * eff_w)
                         flat_denom.scatter_add_(0, idx, eff_w)
+                        if inverse_variance_available:
+                            flat_variance_numer.scatter_add_(
+                                0, idx, w_v[in_b] * torch.square(frac[in_b])
+                            )
                         obs_hit_mask[idx] = True
 
         obs_hit_3d = obs_hit_mask.reshape(N_wave, H, W)
@@ -310,6 +327,20 @@ def _coadd_ifu_3d_cube(
 
     nz = denom > 0.0
     data = torch.where(nz, numer / denom.clamp_min(1e-12), torch.zeros_like(numer))
+    inverse_variance = None
+    correlation_factor = None
+    if inverse_variance_available:
+        has_variance = variance_numer > 0.0
+        inverse_variance = torch.where(
+            has_variance,
+            torch.square(denom) / variance_numer.clamp_min(1e-12),
+            torch.zeros_like(denom),
+        )
+        correlation_factor = torch.where(
+            has_variance,
+            denom / variance_numer.clamp_min(1e-12),
+            torch.zeros_like(denom),
+        )
     centers_cpu = s_axis.values.to(dtype=torch.float64).cpu()
     if spectral_bin_edges is not None:
         edges_t = _validated_spectral_bin_edges(
@@ -336,7 +367,8 @@ def _coadd_ifu_3d_cube(
         weight=denom,
         header=header_dict,
         spatial_wcs=WCS(header_dict),
-        inverse_variance=denom,
+        inverse_variance=inverse_variance,
+        correlation_factor=correlation_factor,
         overlap_count=overlap,
     )
 
@@ -432,5 +464,3 @@ def coadd_cube(
         device=device,
         background_estimator=background_estimator,
     )
-
-

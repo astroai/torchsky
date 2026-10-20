@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 from astropy.coordinates import SkyCoord
+from astropy.time import Time
 import astropy.units as u
 
 from torchsky.wcs.astropy_interop import (
@@ -83,6 +85,30 @@ def test_catalog_state_astropy_roundtrip_positions() -> None:
         state.lon, torch.as_tensor(sky.ra.deg, dtype=torch.float64), atol=1e-12
     )
     assert abs(float(back.ra.deg[0] - sky.ra.deg[0])) < 1e-10
+
+
+def test_catalog_state_astropy_roundtrip_preserves_obstime_epoch() -> None:
+    obstime = Time(["2015-06-30T23:59:59", "2023-02-25T12:00:00"], scale="utc")
+    sky = SkyCoord(
+        ra=[10.0, 120.0] * u.deg,
+        dec=[20.0, -5.0] * u.deg,
+        pm_ra_cosdec=[1.0, -2.0] * u.mas / u.yr,
+        pm_dec=[0.5, 3.0] * u.mas / u.yr,
+        obstime=obstime,
+        frame="icrs",
+    )
+
+    state = catalog_state_from_astropy(sky)
+    back = catalog_state_to_astropy(state)
+
+    torch.testing.assert_close(
+        state.epoch,
+        torch.as_tensor(obstime.tt.jyear, dtype=torch.float64),
+        atol=0.0,
+        rtol=0.0,
+    )
+    assert back.obstime.scale == "tt"
+    np.testing.assert_allclose(back.obstime.tt.mjd, obstime.tt.mjd, atol=2.0e-11)
 
 
 def test_no_skycoord_class_in_torchsky_wcs() -> None:

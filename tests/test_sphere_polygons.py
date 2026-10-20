@@ -19,7 +19,7 @@ from torchsky.sphere import healpix as hp
 
 def _has_cpp_geom() -> bool:
     try:
-        from torchsky import cpp as _cpp_mod  # type: ignore
+        from torchsky._native import cpp as _cpp_mod  # type: ignore
     except Exception:
         return False
     return hasattr(_cpp_mod, "_sphere_planar_point_in_polygon_cpu") and hasattr(
@@ -292,7 +292,7 @@ def test_spherical_polygon_contains_cpp_matches_python_fallback(
         inclusive=False,
     )
 
-    monkeypatch.setattr(geom, "_cpp", None)
+    monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
     got_py = geom.spherical_polygon_contains(
         grid_lon,
         grid_lat,
@@ -323,9 +323,198 @@ def test_spherical_polygons_intersect_cpp_matches_python_fallback(
         geom.spherical_polygons_intersect(lon1, lat1, lon3, lat3),
     )
 
-    monkeypatch.setattr(geom, "_cpp", None)
+    monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
     got_py = (
         geom.spherical_polygons_intersect(lon1, lat1, lon2, lat2),
         geom.spherical_polygons_intersect(lon1, lat1, lon3, lat3),
     )
     assert got_cpp == got_py
+
+
+@pytest.mark.skipif(
+    not _has_cpp_geom(), reason="C++ sphere geometry kernels unavailable"
+)
+def test_cpp_geometry_predicate_accepts_autograd_inputs() -> None:
+    import torchsky.sphere.geom as geom
+
+    a0 = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64, requires_grad=True)
+    a1 = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64, requires_grad=True)
+    b0 = torch.tensor([[0.5, 0.5, -1.0]], dtype=torch.float64)
+    b0 = (b0 / torch.linalg.norm(b0, dim=-1, keepdim=True)).requires_grad_(True)
+    b1 = torch.tensor([[0.5, 0.5, 1.0]], dtype=torch.float64)
+    b1 = (b1 / torch.linalg.norm(b1, dim=-1, keepdim=True)).requires_grad_(True)
+
+    out = geom._great_circle_arcs_intersect_matrix(a0, a1, b0, b1)
+    assert out.dtype == torch.bool
+    assert not out.requires_grad
+
+
+def _unit_xyz_rad(lon_rad: torch.Tensor, lat_rad: torch.Tensor) -> torch.Tensor:
+    cos_lat = torch.cos(lat_rad)
+    return torch.stack(
+        (cos_lat * torch.cos(lon_rad), cos_lat * torch.sin(lon_rad), torch.sin(lat_rad)),
+        dim=-1,
+    )
+
+
+def test_short_great_circle_arcs_cross_at_two_e_minus_eight_radians(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torchsky.sphere.geom as geom
+
+    delta = 1e-8
+    zeros = torch.zeros(1, dtype=torch.float64)
+    a0 = _unit_xyz_rad(torch.tensor([-delta], dtype=torch.float64), zeros)
+    a1 = _unit_xyz_rad(torch.tensor([delta], dtype=torch.float64), zeros)
+    b0 = _unit_xyz_rad(zeros, torch.tensor([-delta], dtype=torch.float64))
+    b1 = _unit_xyz_rad(zeros, torch.tensor([delta], dtype=torch.float64))
+
+    got = geom._great_circle_arcs_intersect_matrix(a0, a1, b0, b1, tol_rad=0.0)
+    assert got.tolist() == [[True]]
+
+    monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
+    got_python = geom._great_circle_arcs_intersect_matrix(
+        a0, a1, b0, b1, tol_rad=0.0
+    )
+    assert got_python.tolist() == [[True]]
+
+
+def test_coincident_great_circle_arcs_overlap_touch_and_disjoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torchsky.sphere.geom as geom
+
+    lat = torch.zeros(3, dtype=torch.float64)
+    a0 = _unit_xyz_rad(torch.deg2rad(torch.tensor([0.0])), lat[:1])
+    a1 = _unit_xyz_rad(torch.deg2rad(torch.tensor([20.0])), lat[:1])
+    b0 = _unit_xyz_rad(torch.deg2rad(torch.tensor([10.0, 20.0, 21.0])), lat)
+    b1 = _unit_xyz_rad(torch.deg2rad(torch.tensor([30.0, 30.0, 30.0])), lat)
+    expected = [[True, True, False]]
+
+    got = geom._great_circle_arcs_intersect_matrix(a0, a1, b0, b1, tol_rad=0.0)
+    assert got.tolist() == expected
+
+    monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
+    got_python = geom._great_circle_arcs_intersect_matrix(
+        a0, a1, b0, b1, tol_rad=0.0
+    )
+    assert got_python.tolist() == expected
+
+
+def test_zero_length_and_antipodal_arc_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torchsky.sphere.geom as geom
+
+    zero = torch.zeros(3, dtype=torch.float64)
+    a0 = _unit_xyz_rad(
+        torch.deg2rad(torch.tensor([10.0, 30.0, 0.0], dtype=torch.float64)), zero
+    )
+    a1 = _unit_xyz_rad(
+        torch.deg2rad(torch.tensor([10.0, 30.0, 180.0], dtype=torch.float64)), zero
+    )
+    b0 = _unit_xyz_rad(
+        torch.deg2rad(torch.tensor([0.0], dtype=torch.float64)), zero[:1]
+    )
+    b1 = _unit_xyz_rad(
+        torch.deg2rad(torch.tensor([20.0], dtype=torch.float64)), zero[:1]
+    )
+    expected = [[True], [False], [False]]
+
+    got = geom._great_circle_arcs_intersect_matrix(a0, a1, b0, b1)
+    assert got.tolist() == expected
+
+    monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
+    got_python = geom._great_circle_arcs_intersect_matrix(a0, a1, b0, b1)
+    assert got_python.tolist() == expected
+
+
+def test_planar_point_in_polygon_handles_shallow_and_horizontal_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torchsky.sphere.geom as geom
+
+    polygon = torch.tensor(
+        [[0.0, 0.0], [2.0, 1e-16], [2.0, 1.0], [0.0, 1.0]],
+        dtype=torch.float64,
+    )
+    points = torch.tensor(
+        [[0.5, 5e-17], [1.5, 5e-17], [0.5, 0.5]], dtype=torch.float64
+    )
+    expected = [True, False, True]
+
+    monkeypatch.setattr(geom, "_PLANAR_PIP_CPP_MIN_OPS", 0)
+    got = geom._planar_point_in_polygon(points, polygon, eps=1e-15)
+    assert got.tolist() == expected
+
+    monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
+    got_python = geom._planar_point_in_polygon(points, polygon, eps=1e-15)
+    assert got_python.tolist() == expected
+
+
+@pytest.mark.parametrize("bad", [-1.0, math.inf, math.nan])
+def test_geometry_predicates_reject_invalid_tolerances(bad: float) -> None:
+    import torchsky.sphere.geom as geom
+
+    points = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
+    polygon = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64
+    )
+    arc0 = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
+    arc1 = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64)
+
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        geom._planar_point_in_polygon(points, polygon, eps=bad)
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        geom._great_circle_arcs_intersect_matrix(
+            arc0, arc1, arc0, arc1, tol_rad=bad
+        )
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        spherical_polygon_contains(
+            0.1,
+            0.1,
+            polygon[:, 0],
+            polygon[:, 1],
+            atol_deg=bad,
+        )
+
+
+def test_python_geometry_predicates_return_non_differentiable_bools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torchsky.sphere.geom as geom
+
+    monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
+    points = torch.tensor([[0.25, 0.25]], dtype=torch.float64, requires_grad=True)
+    polygon = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    pip = geom._planar_point_in_polygon(points, polygon)
+
+    a0 = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64, requires_grad=True)
+    a1 = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64, requires_grad=True)
+    arcs = geom._great_circle_arcs_intersect_matrix(a0, a1, a0, a1)
+
+    assert pip.dtype == torch.bool and not pip.requires_grad
+    assert arcs.dtype == torch.bool and not arcs.requires_grad
+
+
+@pytest.mark.skipif(
+    not _has_cpp_geom(), reason="C++ sphere geometry kernels unavailable"
+)
+def test_cpp_geometry_predicates_reject_invalid_tolerances() -> None:
+    from torchsky._native import cpp as cpp
+
+    points = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
+    polygon = torch.tensor(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64
+    )
+    arc0 = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
+    arc1 = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64)
+
+    with pytest.raises(RuntimeError, match="finite and nonnegative"):
+        cpp._sphere_planar_point_in_polygon_cpu(points, polygon, -1.0)
+    with pytest.raises(RuntimeError, match="finite and nonnegative"):
+        cpp._sphere_arc_intersections_matrix_cpu(arc0, arc1, arc0, arc1, math.inf)

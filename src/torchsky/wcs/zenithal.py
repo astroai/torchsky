@@ -123,7 +123,11 @@ def project_zenithal(
         # Zenithal Equidistant
         # R = 90 - theta (linear distance)
         # theta = 90 - R
-        theta = 90.0 - r
+        valid = torch.isfinite(r) & (r <= math.nextafter(180.0, math.inf))
+        theta = 90.0 - torch.clamp(r, max=180.0)
+        nan = torch.full_like(theta, float("nan"))
+        phi = torch.where(valid, phi, nan)
+        theta = torch.where(valid, theta, nan)
 
     elif projection_code == "ZPN":
         if pv2 is None:
@@ -333,8 +337,17 @@ def deproject_zenithal(
         # theta in degrees.
         # cot(theta) = 1/tan(theta)
         tan_theta = torch.tan(theta * D2R)
-        # Mask zeros?
-        r = (1.0 / (tan_theta + 1e-12)) * R2D
+        valid = (
+            torch.isfinite(theta)
+            & (theta > 64.0 * torch.finfo(theta.dtype).eps * R2D)
+            & (theta <= 90.0 + 1e-12)
+        )
+        tan_safe = torch.where(valid, tan_theta, torch.ones_like(tan_theta))
+        r = torch.where(
+            valid,
+            R2D / tan_safe,
+            torch.full_like(theta, float("nan")),
+        )
 
     elif projection_code == "SIN":
         theta_rad = theta * D2R
@@ -349,7 +362,12 @@ def deproject_zenithal(
         return xi, eta
 
     elif projection_code == "ARC":
-        r = 90.0 - theta
+        valid = torch.isfinite(theta) & (theta >= -90.0) & (theta <= 90.0)
+        r = torch.where(
+            valid,
+            90.0 - theta,
+            torch.full_like(theta, float("nan")),
+        )
 
     elif projection_code == "ZEA":
         r = 2.0 * torch.sin((90.0 - theta) * (0.5 * D2R)) * R2D
@@ -452,21 +470,20 @@ def deproject_zenithal(
         w4 = 1e-4  # tolerance
         phi_rad = phi * D2R
         sin_phi, cos_phi = _sincos(phi_rad)
+        valid = torch.isfinite(theta) & (theta > -90.0) & (theta <= 90.0)
+        safe_theta = torch.where(valid, theta, torch.zeros_like(theta))
         # Compute r for each theta: xi_half = (90 - theta)/2 in radians
-        xi_half = (90.0 - theta) * 0.5 * D2R
+        xi_half = (90.0 - safe_theta) * 0.5 * D2R
         cos_xi = torch.cos(xi_half)
         tan_xi = torch.tan(xi_half)
         # Small-r approximation: r = xi_half * w3 (linear)
         r_small = xi_half * w3
         # Full formula: r = -w0 * (log(cos(xi))/tan(xi) + w1*tan(xi))
-        r_large = -(w0 * (
-            torch.log(torch.clamp(cos_xi, min=1e-15))
-            / torch.clamp(tan_xi.abs(), min=1e-15) * tan_xi.sign()
-            + w1 * tan_xi
-        ))
+        safe_tan = torch.where(tan_xi == 0.0, torch.ones_like(tan_xi), tan_xi)
+        r_large = -(w0 * (torch.log(cos_xi) / safe_tan + w1 * tan_xi))
         r = torch.where(xi_half.abs() < w4, r_small, r_large)
-        r = torch.where(theta == 90.0, torch.zeros_like(theta), r)
-        r = torch.where(theta <= -90.0, torch.zeros_like(theta), r)
+        r = torch.where(safe_theta == 90.0, torch.zeros_like(theta), r)
+        r = torch.where(valid, r, torch.full_like(r, float("nan")))
         # Torchsky zenithal convention: xi = -x = -r*sin(phi)
         xi = -r * sin_phi
         eta = -r * cos_phi

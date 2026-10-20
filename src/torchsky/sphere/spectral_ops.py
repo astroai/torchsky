@@ -361,6 +361,16 @@ def synalm(
     # Default torch.linalg.cholesky might fail on slightly non-PSD matrices
     # We use eigh to be robust for theoretical spectra with zeros
     eigvals, eigvecs = torch.linalg.eigh(cov)
+    scale = eigvals.abs().amax(dim=-1)
+    tolerance = (
+        torch.finfo(eigvals.dtype).eps * max(n_fields, 1) * scale
+    )
+    invalid = eigvals[..., 0] < -tolerance
+    if bool(torch.any(invalid).item()):
+        first_ell = int(torch.nonzero(invalid, as_tuple=False)[0, 0].item())
+        raise ValueError(
+            f"cls covariance must be positive semidefinite at ell={first_ell}"
+        )
     eigvals = torch.clamp(eigvals, min=0.0)
     fac = eigvecs @ (
         torch.sqrt(eigvals).unsqueeze(-1)
@@ -640,4 +650,3 @@ def smoothmap(
         pixwin=False,
     )
     return sm[0] if single else sm
-

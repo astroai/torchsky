@@ -210,6 +210,31 @@ def test_residual_grid_exactly_removes_constant_and_affine_modes() -> None:
     torch.testing.assert_close(basis.T @ flat, torch.zeros(3, 2, dtype=flat.dtype), atol=2e-14, rtol=0)
 
 
+def test_two_by_two_residual_grid_has_finite_zero_bending_energy() -> None:
+    residual = AffineFreeResidualGrid2D(
+        torch.zeros((2, 2, 2), dtype=torch.float64), mode="bilinear"
+    )
+    energy = residual.bending_energy()
+    assert torch.isfinite(energy)
+    torch.testing.assert_close(energy, torch.zeros_like(energy))
+
+
+def test_grid_inverse_tolerances_are_in_output_units_and_tol_is_alias() -> None:
+    table = _sample_table(
+        2, 2, lambda x, y: torch.stack((1000.0 * x, 0.001 * y), dim=-1)
+    )
+    transform = RegularGridTransform2D(table, spacing=(10.0, 20.0))
+    target = torch.tensor([[1000.0 + 1.0e-6, 0.001]], dtype=torch.float64)
+
+    expected = torch.tensor([[10.0, 20.0]], dtype=torch.float64)
+    torch.testing.assert_close(transform.inverse(target, atol=2.0e-6), expected)
+    torch.testing.assert_close(transform.inverse(target, tol=2.0e-6), expected)
+    with pytest.raises(ValueError, match="atol"):
+        transform.inverse(target, atol=5.0e-7)
+    with pytest.raises(ValueError, match="aliases"):
+        transform.inverse(target, tol=2.0e-6, atol=2.0e-6)
+
+
 @pytest.mark.parametrize("parity", [1.0, -1.0])
 def test_non_affine_residual_and_composite_jacobian_are_consistent(
     parity: float,

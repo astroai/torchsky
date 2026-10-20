@@ -35,6 +35,7 @@ from .frames import (
     propagate_space_motion,
     propagate_space_motion_with_jacobian,
 )
+from .functional import pixel_to_world_fused, world_to_pixel_fused
 from .spectral import (
     SPEED_OF_LIGHT,
     air_wavelength_to_vacuum,
@@ -139,6 +140,7 @@ __all__ = [
     "observed_altaz",
     "transform",
     "precess_fk5",
+    "pixel_to_world_fused",
     "propagate_proper_motion",
     "propagate_proper_motion_with_jacobian",
     "propagate_space_motion",
@@ -150,6 +152,6 @@ __all__ = [
     "transform_spectral",
     "vacuum_wavelength_to_air",
     "validate_sampled_transform",
+    "world_to_pixel_fused",
 ]
-
 

@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
+from .. import _ops as _native_ops
 from .._dtype import work_complex_dtype as _preferred_complex_dtype
 from .._dtype import work_dtype as _preferred_real_dtype
 from .._native import cpp as _cpp
@@ -18,15 +19,9 @@ from torchfits.table import read_torch as read_table
 
 from . import healpix as _healpix
 
-_HAS_HEALPIX_SPIN_MAP2ALM_RING_REC = hasattr(
-    _cpp, "_healpix_spin_map2alm_ring_recurrence_cpu"
-)
-_HAS_HEALPIX_SPIN_ALM2MAP_RING_REC = hasattr(
-    _cpp, "_healpix_spin_alm2map_ring_recurrence_cpu"
-)
-_HAS_HEALPIX_SPIN_INTERPOLATE_REC = hasattr(
-    _cpp, "_healpix_spin_interpolate_recurrence_cpu"
-)
+_HAS_HEALPIX_SPIN_MAP2ALM_RING_REC = _native_ops.has_spectral_dispatcher()
+_HAS_HEALPIX_SPIN_ALM2MAP_RING_REC = _native_ops.has_spectral_dispatcher()
+_HAS_HEALPIX_SPIN_INTERPOLATE_REC = _native_ops.has_spectral_dispatcher()
 
 _ANGLE_CACHE: dict[tuple[int, bool], tuple[Tensor, Tensor, Tensor, float]] = {}
 _YLM_CACHE: dict[
@@ -1320,8 +1315,8 @@ class ScalarSHTIntegrate(torch.autograd.Function):
 
         s_modes_cpu = s_modes.detach().to(dtype=torch.complex128, device="cpu")
 
-        if hasattr(_cpp, "_healpix_scalar_integrate_recurrence_cpu"):
-            out = _cpp._healpix_scalar_integrate_recurrence_cpu(
+        if _native_ops.has_spectral_dispatcher():
+            out = _native_ops.spectral_scalar_integrate_recurrence(
                 s_modes_cpu.contiguous(),
                 theta_ring_cpu.contiguous(),
                 weight.contiguous(),
@@ -1330,7 +1325,7 @@ class ScalarSHTIntegrate(torch.autograd.Function):
             )
         else:
             s_minus = s_modes_cpu.clone()
-            alms_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+            alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
                 s_modes_cpu.contiguous(),
                 s_minus.contiguous(),
                 theta_ring_cpu.contiguous(),
@@ -1348,8 +1343,8 @@ class ScalarSHTIntegrate(torch.autograd.Function):
         grad_alm_cpu = grad_alm.detach().to(device="cpu", dtype=torch.complex128)
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(ctx.nside)
 
-        if hasattr(_cpp, "_healpix_scalar_interpolate_recurrence_cpu"):
-            grad_s = _cpp._healpix_scalar_interpolate_recurrence_cpu(
+        if _native_ops.has_spectral_dispatcher():
+            grad_s = _native_ops.spectral_scalar_interpolate_recurrence(
                 grad_alm_cpu.contiguous(),
                 theta_ring_cpu.contiguous(),
                 int(ctx.lmax),
@@ -1357,7 +1352,7 @@ class ScalarSHTIntegrate(torch.autograd.Function):
             )
         else:
             alm_stack = torch.stack([grad_alm_cpu, grad_alm_cpu], dim=0)
-            s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+            s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
                 alm_stack.contiguous(),
                 theta_ring_cpu.contiguous(),
                 int(ctx.lmax),
@@ -1380,8 +1375,8 @@ class ScalarSHTInterpolate(torch.autograd.Function):
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(nside)
         alm_cpu = alm.detach().to(dtype=torch.complex128, device="cpu")
 
-        if hasattr(_cpp, "_healpix_scalar_interpolate_recurrence_cpu"):
-            out = _cpp._healpix_scalar_interpolate_recurrence_cpu(
+        if _native_ops.has_spectral_dispatcher():
+            out = _native_ops.spectral_scalar_interpolate_recurrence(
                 alm_cpu.contiguous(),
                 theta_ring_cpu.contiguous(),
                 int(lmax),
@@ -1389,7 +1384,7 @@ class ScalarSHTInterpolate(torch.autograd.Function):
             )
         else:
             alm_stack = torch.stack([alm_cpu, alm_cpu], dim=0)
-            s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+            s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
                 alm_stack.contiguous(),
                 theta_ring_cpu.contiguous(),
                 int(lmax),
@@ -1408,8 +1403,8 @@ class ScalarSHTInterpolate(torch.autograd.Function):
         nrings = int(theta_ring_cpu.numel())
         weight = torch.ones((nrings,), dtype=torch.float64, device="cpu")
 
-        if hasattr(_cpp, "_healpix_scalar_integrate_recurrence_cpu"):
-            grad_alm = _cpp._healpix_scalar_integrate_recurrence_cpu(
+        if _native_ops.has_spectral_dispatcher():
+            grad_alm = _native_ops.spectral_scalar_integrate_recurrence(
                 grad_s_cpu.contiguous(),
                 theta_ring_cpu.contiguous(),
                 weight.contiguous(),
@@ -1418,7 +1413,7 @@ class ScalarSHTInterpolate(torch.autograd.Function):
             )
         else:
             s_minus = grad_s_cpu.clone()
-            alms_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+            alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
                 grad_s_cpu.contiguous(),
                 s_minus.contiguous(),
                 theta_ring_cpu.contiguous(),
@@ -1457,7 +1452,7 @@ class SpinSHTIntegrate(torch.autograd.Function):
         sp = s_plus.detach().to(dtype=torch.complex128, device="cpu")
         sm = s_minus.detach().to(dtype=torch.complex128, device="cpu")
 
-        alms_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+        alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
             sp.contiguous(),
             sm.contiguous(),
             theta_ring_cpu.contiguous(),
@@ -1478,7 +1473,7 @@ class SpinSHTIntegrate(torch.autograd.Function):
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(int(ctx.nside))
         alm_stack = torch.stack([gap, gam], dim=0)
 
-        s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+        s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
             alm_stack.contiguous(),
             theta_ring_cpu.contiguous(),
             int(ctx.lmax),
@@ -1522,7 +1517,7 @@ class SpinSHTInterpolate(torch.autograd.Function):
         am = a_minus.detach().to(dtype=torch.complex128, device="cpu")
         alm_stack = torch.stack([ap, am], dim=0)
 
-        s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+        s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
             alm_stack.contiguous(),
             theta_ring_cpu.contiguous(),
             int(lmax),
@@ -1542,7 +1537,7 @@ class SpinSHTInterpolate(torch.autograd.Function):
         nrings = int(theta_ring_cpu.numel())
         w_vec = torch.ones((nrings,), dtype=torch.float64, device="cpu")
 
-        alms_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+        alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
             gsp.contiguous(),
             gsm.contiguous(),
             theta_ring_cpu.contiguous(),
@@ -1767,14 +1762,13 @@ def _ring_fourier_modes(
 
     use_cpp = (
         (_RING_FOURIER_MODES_CPP_ENABLE or _RING_FOURIER_CPP_ENABLE)
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_ring_fourier_modes_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
         and int(mmax) <= _RING_FOURIER_MODES_CPP_MAX_M
         and (not rows.requires_grad)
     )
     if use_cpp:
-        return _cpp._healpix_ring_fourier_modes_cpu(
+        return _native_ops.spectral_ring_fourier_modes(
             rows.contiguous(),
             starts_cpu.contiguous(),
             lengths_cpu.contiguous(),
@@ -1882,20 +1876,19 @@ def _ring_fourier_modes_spin_conj(
 
     use_cpp = (
         (_RING_FOURIER_MODES_CPP_ENABLE or _RING_FOURIER_CPP_ENABLE)
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_ring_fourier_modes_spin_conj_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
         and int(mmax) <= _RING_FOURIER_MODES_CPP_MAX_M
         and (not p_plus.requires_grad)
     )
     if use_cpp:
-        out_cpp = _cpp._healpix_ring_fourier_modes_spin_conj_cpu(
+        out_cpp = _native_ops.spectral_ring_fourier_modes_spin_conj(
             p_plus.contiguous(),
             starts_cpu.contiguous(),
             lengths_cpu.contiguous(),
             int(mmax),
         )
-        return out_cpp[0], out_cpp[1]
+        return out_cpp
 
     if nside is not None:
         common_block, groups = _ring_grouping_for_nside(int(nside))
@@ -2028,8 +2021,7 @@ def _scalar_alm2map_ring_torch(
 
     use_cpp_recurrence = (
         _SCALAR_INTERP_CPP_ENABLE
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_scalar_interpolate_recurrence_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
     )
 
@@ -2124,8 +2116,7 @@ def _scalar_map2alm_ring_torch(
 
     use_cpp_recurrence = (
         _SCALAR_RECURRENCE_CPP_ENABLE
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_scalar_integrate_recurrence_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
     )
 
@@ -2189,17 +2180,17 @@ def _ring_fourier_synthesis(
 
     use_cpp = (
         (_RING_FOURIER_SYNTH_CPP_ENABLE or _RING_FOURIER_CPP_ENABLE)
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_ring_fourier_synthesis_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
         and int(mmax) <= _RING_FOURIER_SYNTH_CPP_MAX_M
         and (not s_m_batched.requires_grad)
     )
     if use_cpp:
-        out_cpp = _cpp._healpix_ring_fourier_synthesis_cpu(
+        out_cpp = _native_ops.spectral_ring_fourier_synthesis(
             s_m_batched.contiguous(),
             starts_cpu.contiguous(),
             lengths_cpu.contiguous(),
+            npix,
         )
         if squeeze_out:
             return out_cpp[0]
@@ -2335,15 +2326,14 @@ def _ring_spin_interpolate_blocks(
         y_minus = y_minus.to(device=device, dtype=dtype)
         use_cpp = (
             os.environ.get("TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP", "1") != "0"
-            and _cpp is not None
-            and hasattr(_cpp, "_healpix_spin_interpolate_concat_cpu")
+            and _native_ops.has_spectral_dispatcher()
             and device.type == "cpu"
             and dtype == torch.complex128
             and (not coeff_plus.requires_grad)
             and (not coeff_minus.requires_grad)
         )
         if use_cpp:
-            s_plus_cpp, s_minus_cpp = _cpp._healpix_spin_interpolate_concat_cpu(
+            s_plus_cpp, s_minus_cpp = _native_ops.spectral_spin_interpolate_concat(
                 coeff_plus.contiguous(),
                 coeff_minus.contiguous(),
                 y_plus.contiguous(),
@@ -2418,15 +2408,14 @@ def _ring_spin_integrate_blocks(
         y_minus = y_minus.to(device=device, dtype=dtype)
         use_cpp = (
             os.environ.get("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "1") != "0"
-            and _cpp is not None
-            and hasattr(_cpp, "_healpix_spin_integrate_concat_cpu")
+            and _native_ops.has_spectral_dispatcher()
             and device.type == "cpu"
             and dtype == torch.complex128
             and (not s_plus.requires_grad)
             and (not s_minus.requires_grad)
         )
         if use_cpp:
-            c_plus_cpp, c_minus_cpp = _cpp._healpix_spin_integrate_concat_cpu(
+            c_plus_cpp, c_minus_cpp = _native_ops.spectral_spin_integrate_concat(
                 s_plus.contiguous(),
                 s_minus.contiguous(),
                 y_plus.contiguous(),
@@ -2505,7 +2494,7 @@ def _spin_alm2map_ring_torch(
                 else coeff_minus.to(dtype=torch.complex128)
             )
             phase0_pos = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1)
-            return _cpp._healpix_spin_alm2map_ring_recurrence_cpu(
+            return _native_ops.spectral_spin_alm2map_ring_recurrence(
                 cp_cpu,
                 starts_cpu,
                 lengths_cpu,
@@ -2515,6 +2504,7 @@ def _spin_alm2map_ring_torch(
                 int(mmax),
                 int(spin),
                 cm_cpu,
+                _healpix.nside2npix(int(nside)),
             )
         if coeff_plus.requires_grad or coeff_minus.requires_grad:
             s_plus, s_minus = SpinSHTInterpolate.apply(
@@ -2528,7 +2518,7 @@ def _spin_alm2map_ring_torch(
             cm_cpu = coeff_minus.to(dtype=torch.complex128, device="cpu").contiguous()
             alm_stack = torch.stack([cp_cpu, cm_cpu], dim=0)
 
-            s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+            s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
                 alm_stack,
                 theta_ring_cpu.contiguous(),
                 int(lmax),
@@ -2558,18 +2548,18 @@ def _spin_alm2map_ring_torch(
     start_pix, lengths, _, _ = _ring_layout_for_nside(int(nside))
     use_cpp_finalize = (
         os.environ.get("TORCHSKY_SPIN_RING_FINALIZE_CPP", "1") != "0"
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_spin_ring_finalize_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and s_plus.device.type == "cpu"
         and (not s_plus.requires_grad)
         and (not s_minus.requires_grad)
     )
     if use_cpp_finalize:
-        return _cpp._healpix_spin_ring_finalize_cpu(
+        return _native_ops.spectral_spin_ring_finalize(
             s_plus.contiguous(),
             s_minus.contiguous(),
             start_pix.contiguous(),
             lengths.contiguous(),
+            _healpix.nside2npix(int(nside)),
         )
 
     p_pm_pos = _ring_fourier_synthesis(
@@ -2660,7 +2650,7 @@ def map2alm(
         rows = _reorder_nest_to_ring_rows(rows, ns)
         nest = False
 
-    rows = _apply_map2alm_weights(
+    analysis_rows = _apply_map2alm_weights(
         rows,
         nside=ns,
         gal_cut=gal_cut,
@@ -2671,13 +2661,26 @@ def map2alm(
 
     # Iterative solver (Matches healpy behavior)
     alm = _map2alm_single_pass(
-        rows, nside=ns, lmax=ll, mmax=mm, pol=pol, use_pixel_weights=False
+        analysis_rows, nside=ns, lmax=ll, mmax=mm, pol=pol, use_pixel_weights=False
     )
     for _ in range(iter):
         map_rec = alm2map(alm, nside=ns, lmax=ll, mmax=mm, nest=False, pol=pol)
         res = rows - _map_to_rows(map_rec)[0]
+        analysis_res = _apply_map2alm_weights(
+            res,
+            nside=ns,
+            gal_cut=gal_cut,
+            use_weights=use_weights,
+            use_pixel_weights=use_pixel_weights,
+            datapath=datapath,
+        )
         alm = alm + _map2alm_single_pass(
-            res, nside=ns, lmax=ll, mmax=mm, pol=pol, use_pixel_weights=False
+            analysis_res,
+            nside=ns,
+            lmax=ll,
+            mmax=mm,
+            pol=pol,
+            use_pixel_weights=False,
         )
 
     if single and not pol:
@@ -3157,15 +3160,14 @@ def alm2map(
             )
 
     use_cpp_direct = (
-        _cpp is not None
-        and hasattr(_cpp, "_healpix_scalar_alm2map_direct_cpu")
+        _native_ops.has_spectral_dispatcher()
         and rows_eff.device.type == "cpu"
         and (not rows_eff.requires_grad)
         and os.environ.get("TORCHSKY_SCALAR_ALM2MAP_CPP", "0") != "0"
     )
     if use_cpp_direct:
         _, phi, x, _ = _angles_for_nside(int(nside), bool(nest))
-        out_cpp = _cpp._healpix_scalar_alm2map_direct_cpu(
+        out_cpp = _native_ops.spectral_scalar_alm2map_direct(
             rows_eff.contiguous(),
             x.contiguous(),
             phi.contiguous(),
@@ -3399,10 +3401,12 @@ def map2alm_spin(
     raw_spin = float(torch.as_tensor(spin).item())
     npix = int(maps_t.shape[1])
     ns = _healpix.npix2nside(npix) if nside is None else int(nside)
+    if _healpix.nside2npix(ns) != npix:
+        raise ValueError("map length does not match nside")
     ll = int(3 * ns - 1 if lmax is None else lmax)
     mm = ll if mmax is None else int(mmax)
-    if mm < 0 or mm > ll:
-        raise ValueError("invalid mmax")
+    if ll < 0 or mm < 0 or mm > ll:
+        raise ValueError("invalid lmax/mmax")
     try:
         spin_i = int(spin)
     except Exception as exc:
@@ -3419,7 +3423,7 @@ def map2alm_spin(
         maps_t = torch.stack([m0, m1], dim=0)
         nest = False
 
-    maps_t = _apply_map2alm_weights(
+    analysis_maps = _apply_map2alm_weights(
         maps_t,
         nside=ns,
         gal_cut=gal_cut,
@@ -3429,13 +3433,23 @@ def map2alm_spin(
     )
 
     # Iterative solver
-    alm1, alm2 = _map2alm_spin_single_pass(maps_t, spin_i, nside=ns, lmax=ll, mmax=mm)
+    alm1, alm2 = _map2alm_spin_single_pass(
+        analysis_maps, spin_i, nside=ns, lmax=ll, mmax=mm
+    )
     for _ in range(iter):
         m_rec_0, m_rec_1 = alm2map_spin((alm1, alm2), ns, spin_i, lmax=ll, mmax=mm)
         res0 = maps_t[0] - m_rec_0
         res1 = maps_t[1] - m_rec_1
+        analysis_res = _apply_map2alm_weights(
+            torch.stack([res0, res1], dim=0),
+            nside=ns,
+            gal_cut=gal_cut,
+            use_weights=use_weights,
+            use_pixel_weights=use_pixel_weights,
+            datapath=datapath,
+        )
         res_alm1, res_alm2 = _map2alm_spin_single_pass(
-            torch.stack([res0, res1], dim=0), spin_i, nside=ns, lmax=ll, mmax=mm
+            analysis_res, spin_i, nside=ns, lmax=ll, mmax=mm
         )
         alm1 = alm1 + res_alm1
         alm2 = alm2 + res_alm2
@@ -3489,7 +3503,7 @@ def _map2alm_spin_single_pass(
                 else rows_ring.to(dtype=torch.float64)
             )
             phase0_neg = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=-1)
-            c_stacked = _cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+            c_stacked = _native_ops.spectral_spin_map2alm_ring_recurrence(
                 maps_f64,
                 starts_cpu,
                 lengths_cpu,
@@ -3516,8 +3530,7 @@ def _map2alm_spin_single_pass(
                     phase0_neg = phase0_neg.to(dtype=torch.complex128)
                 use_fused_cpp = (
                     os.environ.get("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "1") != "0"
-                    and _cpp is not None
-                    and hasattr(_cpp, "_healpix_spin_map2alm_ring_concat_cpu")
+                    and _native_ops.has_spectral_dispatcher()
                     and p_plus.device.type == "cpu"
                     and p_plus.dtype == torch.complex128
                     and (not p_plus.requires_grad)
@@ -3529,7 +3542,7 @@ def _map2alm_spin_single_pass(
                     if y_plus.device.type != "cpu":
                         use_fused_cpp = False
                     else:
-                        c_plus, c_minus = _cpp._healpix_spin_map2alm_ring_concat_cpu(
+                        c_plus, c_minus = _native_ops.spectral_spin_map2alm_ring_concat(
                             p_plus.contiguous(),
                             starts_cpu.contiguous(),
                             lengths_cpu.contiguous(),
@@ -3580,8 +3593,7 @@ def _map2alm_spin_single_pass(
                 s_minus = s_minus * phase0_neg
 
                 if (
-                    getattr(_cpp, "_healpix_spin_integrate_recurrence_cpu", None)
-                    is not None
+                    _native_ops.has_spectral_dispatcher()
                     and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1")
                     != "0"
                     and s_plus.device.type == "cpu"
@@ -3604,7 +3616,7 @@ def _map2alm_spin_single_pass(
                         )
                         sp_cpu = _cpu_c128(s_plus)
                         sm_cpu = _cpu_c128(s_minus)
-                        c_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+                        c_stacked = _native_ops.spectral_spin_integrate_recurrence(
                             sp_cpu,
                             sm_cpu,
                             theta_ring_cpu.contiguous(),
@@ -3644,8 +3656,7 @@ def _map2alm_spin_single_pass(
             s_plus = s_plus * phase0_neg
             s_minus = s_minus * phase0_neg
             if (
-                getattr(_cpp, "_healpix_spin_integrate_recurrence_cpu", None)
-                is not None
+                _native_ops.has_spectral_dispatcher()
                 and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1") != "0"
                 and s_plus.device.type == "cpu"
             ):
@@ -3667,7 +3678,7 @@ def _map2alm_spin_single_pass(
                     )
                     sp_cpu = _cpu_c128(s_plus)
                     sm_cpu = _cpu_c128(s_minus)
-                    c_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+                    c_stacked = _native_ops.spectral_spin_integrate_recurrence(
                         sp_cpu,
                         sm_cpu,
                         theta_ring_cpu.contiguous(),
@@ -3809,6 +3820,10 @@ def alm2map_spin(
                 y_plus_m0,
                 y_minus_m0,
             )
+        y_plus = y_plus.to(device=alm1.device, dtype=cdt)
+        y_minus = y_minus.to(device=alm1.device, dtype=cdt)
+        y_plus_m0 = y_plus_m0.to(device=alm1.device, dtype=cdt)
+        y_minus_m0 = y_minus_m0.to(device=alm1.device, dtype=cdt)
         p_plus_pos = coeff_plus @ y_plus
         p_minus_pos = coeff_minus @ y_minus
         if mm == 0:
@@ -3822,6 +3837,8 @@ def alm2map_spin(
     else:
         Y_plus, _ = _spin_ylm_basis_concat(int(nside), nest, ll, mm, spin_i)
         Y_minus, _ = _spin_ylm_basis_concat(int(nside), nest, ll, mm, -spin_i)
+        Y_plus = Y_plus.to(device=alm1.device, dtype=cdt)
+        Y_minus = Y_minus.to(device=alm1.device, dtype=cdt)
 
         # P = C @ Y
         # C: (Nalm,), Y: (Nalm, Npix)
@@ -3887,9 +3904,8 @@ def alm2map_spin(
     q = 0.5 * (p_plus + p_minus)
     u = -0.5j * (p_plus - p_minus)
     # Align sign convention with healpy Q/U synthesis.
-    return torch.stack(
-        [(-q).real.to(torch.float64), (-u).real.to(torch.float64)], dim=0
-    )
+    real_dtype = _preferred_real_dtype(q.device)
+    return torch.stack([(-q).real.to(real_dtype), (-u).real.to(real_dtype)], dim=0)
 
 
 def alm2map_der1(

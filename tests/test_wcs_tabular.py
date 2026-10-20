@@ -3,6 +3,7 @@ import math
 import pytest
 import torch
 import torchfits
+import torchsky.wcs.tabular as tabular_module
 
 from torchsky.wcs import (
     CoupledTabularLookupWCS,
@@ -170,6 +171,125 @@ def test_coupled_tabular_lookup_wcs_multilinear_forward_and_autograd() -> None:
         differentiable_pixel.grad,
         torch.tensor([[1.0, 0.1]], dtype=torch.float64),
     )
+
+
+def test_coupled_tabular_inverse_chunks_cell_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    x = torch.linspace(-2.0, 3.0, 12, dtype=torch.float64)
+    y = torch.linspace(4.0, 9.0, 11, dtype=torch.float64)
+    xx = x[:, None].expand(12, 11)
+    yy = y[None, :].expand(12, 11)
+    world = torch.stack((2.0 * xx + 0.25 * yy, -0.5 * xx + 3.0 * yy), dim=-1)
+    lookup = CoupledTabularLookupWCS((x, y), world)
+    pixels = torch.stack(
+        (torch.linspace(-1.9, 2.9, 25), torch.linspace(4.1, 8.9, 25)), dim=0
+    ).T.to(dtype=torch.float64)
+    assert not pixels.is_contiguous()
+    target = lookup.pixel_to_world(pixels)
+
+    original = tabular_module._point_in_convex_quad_2d
+    pair_counts: list[int] = []
+
+    def bounded_point_in_quad(point, c00, c10, c11, c01, *, tol):
+        pairs = int(point.shape[0] * c00.shape[0])
+        pair_counts.append(pairs)
+        assert pairs <= 64
+        return original(point, c00, c10, c11, c01, tol=tol)
+
+    monkeypatch.setattr(tabular_module, "_MAX_PAIRWISE_ENTRIES", 64)
+    monkeypatch.setattr(
+        tabular_module, "_point_in_convex_quad_2d", bounded_point_in_quad
+    )
+    back = lookup.world_to_pixel(target)
+
+    assert len(pair_counts) > 1
+    torch.testing.assert_close(back, pixels, atol=1e-8, rtol=0.0)
+
+
+def test_nearest_grid_indices_chunked_matches_eager() -> None:
+    target = torch.tensor(
+        [[0.0, 0.0], [0.5, 0.5], [2.0, -1.0], [0.0, 0.0]],
+        dtype=torch.float64,
+    )
+    grid = torch.tensor(
+        [[-1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [1.0, 1.0], [3.0, -2.0]],
+        dtype=torch.float64,
+    )
+    expected = torch.sum((target[:, None] - grid[None, :]) ** 2, dim=-1).argmin(
+        dim=-1
+    )
+
+    got = tabular_module._nearest_grid_indices(target, grid, max_pairs=3)
+
+    torch.testing.assert_close(got, expected)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_coupled_tabular_inverse_dtype_and_empty_contract(dtype: torch.dtype) -> None:
+    x = torch.linspace(0.0, 2.0, 4, dtype=dtype)
+    y = torch.linspace(-1.0, 1.0, 5, dtype=dtype)
+    xx = x[:, None].expand(4, 5)
+    yy = y[None, :].expand(4, 5)
+    lookup = CoupledTabularLookupWCS(
+        (x, y), torch.stack((xx, yy), dim=-1)
+    )
+    empty = torch.empty((2, 0, 2), dtype=dtype)
+
+    empty_out = lookup.world_to_pixel(empty)
+    pixels = torch.tensor([[0.25, -0.75], [1.75, 0.5]], dtype=dtype)
+    back = lookup.world_to_pixel(
+        lookup.pixel_to_world(pixels), tol=1.0e-5 if dtype == torch.float32 else 1.0e-10
+    )
+
+    assert empty_out.shape == (2, 0, 2)
+    assert empty_out.dtype == dtype
+    assert empty_out.device == empty.device
+    torch.testing.assert_close(
+        back,
+        pixels,
+        atol=2.0e-5 if dtype == torch.float32 else 1.0e-8,
+        rtol=0.0,
+    )
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not (
+                    hasattr(torch.backends, "mps")
+                    and torch.backends.mps.is_available()
+                ),
+                reason="MPS not available",
+            ),
+        ),
+    ],
+)
+def test_coupled_tabular_inverse_empty_device_contract(device: str) -> None:
+    dtype = torch.float32 if device == "mps" else torch.float64
+    axis = torch.tensor([0.0, 1.0], dtype=dtype, device=device)
+    xx = axis[:, None].expand(2, 2)
+    yy = axis[None, :].expand(2, 2)
+    lookup = CoupledTabularLookupWCS(
+        (axis, axis), torch.stack((xx, yy), dim=-1)
+    )
+    target = torch.empty((3, 0, 2), dtype=dtype, device=device)
+
+    got = lookup.world_to_pixel(target)
+
+    assert got.shape == (3, 0, 2)
+    assert got.dtype == dtype
+    assert got.device.type == device
 
 
 def test_coupled_tabular_lookup_wcs_inverse_fails_closed_for_folded_grid() -> None:
