@@ -570,134 +570,73 @@ def _run_coadd(args: argparse.Namespace) -> int:
     read_dev = _map_read_device_str(args)
 
     # Expand MEFs: probe each file for image HDUs and create per-HDU entries.
-    expanded_paths: list[str] = []
-    expanded_hdus: list[int] = []
-    expanded_weights: list[float] = []
-    expanded_photometric_scales: list[float] = []
-    expanded_background_offsets: list[float] = []
-    expanded_weight_maps: list[str | None] = []
-    expanded_weight_is_inverse_variance: list[bool] = []
-    expanded_mask_maps: list[str | None] = []
-    expanded_primary_beam_maps: list[str | None] = []
-
     resolved_inputs = getattr(args, "_resolved_plan_inputs", None)
     if resolved_inputs is not None:
-        for item in resolved_inputs:
-            identity = item["identity"]
-            expanded_paths.append(str(identity["path"]))
-            expanded_hdus.append(int(identity.get("hdu", 0)))
-            expanded_weights.append(float(item.get("weight", 1.0)))
-            expanded_photometric_scales.append(
-                float(item.get("photometric_scale", 1.0))
+        expanded = [
+            (
+                str(item["identity"]["path"]),
+                int(item["identity"].get("hdu", 0)),
+                float(item.get("weight", 1.0)),
+                float(item.get("photometric_scale", 1.0)),
+                float(item.get("background_offset", 0.0)),
+                item.get("weight_map"),
+                bool(
+                    item.get(
+                        "weight_is_inverse_variance", item.get("weight_map") is not None
+                    )
+                ),
+                item.get("mask_map"),
+                item.get("primary_beam_map"),
             )
-            expanded_background_offsets.append(
-                float(item.get("background_offset", 0.0))
-            )
-            weight_map = item.get("weight_map")
-            expanded_weight_maps.append(weight_map)
-            expanded_weight_is_inverse_variance.append(
-                bool(item.get("weight_is_inverse_variance", weight_map is not None))
-            )
-            expanded_mask_maps.append(item.get("mask_map"))
-            expanded_primary_beam_maps.append(item.get("primary_beam_map"))
+            for item in resolved_inputs
+        ]
     else:
-        user_hdu = int(args.hdu)
         explicit_scalar_weight = bool(
             getattr(args, "_weights_are_inverse_variance", False)
         )
-        for i, p in enumerate(inputs):
-            image_hdus = _probe_image_hdus(p)
-            if len(image_hdus) == 0:
-                expanded_paths.append(p)
-                expanded_hdus.append(user_hdu)
-                expanded_weights.append(float(args.weights[i]))
-                expanded_photometric_scales.append(float(args.photometric_scales[i]))
-                expanded_background_offsets.append(float(args.background_offsets[i]))
-                expanded_weight_maps.append(args.weight_maps[i])
-                expanded_weight_is_inverse_variance.append(
-                    explicit_scalar_weight or args.weight_maps[i] is not None
-                )
-                expanded_mask_maps.append(args.mask_maps[i])
-                expanded_primary_beam_maps.append(args.primary_beam_maps[i])
-            elif len(image_hdus) == 1:
-                hdu = user_hdu if user_hdu in image_hdus else image_hdus[0]
-                expanded_paths.append(p)
-                expanded_hdus.append(hdu)
-                expanded_weights.append(float(args.weights[i]))
-                expanded_photometric_scales.append(float(args.photometric_scales[i]))
-                expanded_background_offsets.append(float(args.background_offsets[i]))
-                expanded_weight_maps.append(args.weight_maps[i])
-                expanded_weight_is_inverse_variance.append(
-                    explicit_scalar_weight or args.weight_maps[i] is not None
-                )
-                expanded_mask_maps.append(args.mask_maps[i])
-                expanded_primary_beam_maps.append(args.primary_beam_maps[i])
-            else:
-                if user_hdu != 0 and user_hdu in image_hdus:
-                    expanded_paths.append(p)
-                    expanded_hdus.append(user_hdu)
-                    expanded_weights.append(float(args.weights[i]))
-                    expanded_photometric_scales.append(
-                        float(args.photometric_scales[i])
-                    )
-                    expanded_background_offsets.append(
-                        float(args.background_offsets[i])
-                    )
-                    expanded_weight_maps.append(args.weight_maps[i])
-                    expanded_weight_is_inverse_variance.append(
-                        explicit_scalar_weight or args.weight_maps[i] is not None
-                    )
-                    expanded_mask_maps.append(args.mask_maps[i])
-                    expanded_primary_beam_maps.append(args.primary_beam_maps[i])
-                else:
-                    for hdu in image_hdus:
-                        expanded_paths.append(p)
-                        expanded_hdus.append(hdu)
-                        expanded_weights.append(float(args.weights[i]))
-                        expanded_photometric_scales.append(
-                            float(args.photometric_scales[i])
-                        )
-                        expanded_background_offsets.append(
-                            float(args.background_offsets[i])
-                        )
-                        expanded_weight_maps.append(args.weight_maps[i])
-                        expanded_weight_is_inverse_variance.append(
-                            explicit_scalar_weight or args.weight_maps[i] is not None
-                        )
-                        expanded_mask_maps.append(args.mask_maps[i])
-                        expanded_primary_beam_maps.append(args.primary_beam_maps[i])
-                    print(
-                        f"  {p}: auto-expanded {len(image_hdus)} image HDUs "
-                        f"{list(image_hdus)}",
-                        file=sys.stderr,
-                    )
+        expanded = [
+            (
+                path,
+                hdu,
+                float(args.weights[i]),
+                float(args.photometric_scales[i]),
+                float(args.background_offsets[i]),
+                args.weight_maps[i],
+                explicit_scalar_weight or args.weight_maps[i] is not None,
+                args.mask_maps[i],
+                args.primary_beam_maps[i],
+            )
+            for i, path, hdu in _image_hdu_expansion(
+                inputs, int(args.hdu), announce=True
+            )
+        ]
 
     observations = [
         ImageObservation(
-            path=p,
+            path=path,
             hdu=hdu,
-            weight=float(w),
-            weight_is_inverse_variance=bool(weight_is_inverse_variance),
-            photometric_scale=float(ps),
-            background_offset=float(bg),
-            weight_path=wp,
+            weight=weight,
+            weight_is_inverse_variance=weight_is_inverse_variance,
+            photometric_scale=scale,
+            background_offset=background,
+            weight_path=weight_map,
             weight_hdu=args.weight_map_hdu,
-            mask_path=mp,
+            mask_path=mask_map,
             mask_hdu=args.mask_map_hdu,
-            primary_beam_path=pbp,
+            primary_beam_path=primary_beam_map,
             primary_beam_hdu=args.primary_beam_hdu,
         )
-        for p, hdu, w, weight_is_inverse_variance, ps, bg, wp, mp, pbp in zip(
-            expanded_paths,
-            expanded_hdus,
-            expanded_weights,
-            expanded_weight_is_inverse_variance,
-            expanded_photometric_scales,
-            expanded_background_offsets,
-            expanded_weight_maps,
-            expanded_mask_maps,
-            expanded_primary_beam_maps,
-        )
+        for (
+            path,
+            hdu,
+            weight,
+            scale,
+            background,
+            weight_map,
+            weight_is_inverse_variance,
+            mask_map,
+            primary_beam_map,
+        ) in expanded
     ]
 
     ref_header = None
@@ -764,7 +703,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
             product.shape,
             stacking_method=str(args.stack),
         )
-    elif args.stack == "median":
+    elif args.stack in ("median", "sigma_clipped"):
         reducer_shape = (
             product.shape
             if tile_hw is None
@@ -773,21 +712,12 @@ def _run_coadd(args: argparse.Namespace) -> int:
                 min(int(tile_hw[1]), int(product.shape[1])),
             )
         )
-        scratch_required_bytes = exact_median_scratch_bytes(
-            len(observations), reducer_shape
+        reducer_scratch = (
+            exact_median_scratch_bytes
+            if args.stack == "median"
+            else sigma_clipped_scratch_bytes
         )
-    elif args.stack == "sigma_clipped":
-        reducer_shape = (
-            product.shape
-            if tile_hw is None
-            else (
-                min(int(tile_hw[0]), int(product.shape[0])),
-                min(int(tile_hw[1]), int(product.shape[1])),
-            )
-        )
-        scratch_required_bytes = sigma_clipped_scratch_bytes(
-            len(observations), reducer_shape
-        )
+        scratch_required_bytes = reducer_scratch(len(observations), reducer_shape)
 
     plan_path = getattr(args, "plan_json", None)
     if plan_path is not None:
@@ -796,23 +726,13 @@ def _run_coadd(args: argparse.Namespace) -> int:
             path,
             hdu,
             weight,
-            weight_is_inverse_variance,
             scale,
             background,
             weight_map,
+            weight_is_inverse_variance,
             mask_map,
             primary_beam_map,
-        ) in zip(
-            expanded_paths,
-            expanded_hdus,
-            expanded_weights,
-            expanded_weight_is_inverse_variance,
-            expanded_photometric_scales,
-            expanded_background_offsets,
-            expanded_weight_maps,
-            expanded_mask_maps,
-            expanded_primary_beam_maps,
-        ):
+        ) in expanded:
             plan_inputs.append(
                 {
                     "path": _resolved_path(path),
@@ -967,13 +887,45 @@ def _run_field(args: argparse.Namespace) -> int:
                 ns.plan_json = base_plan.with_name(
                     f"{base_plan.stem}_{_safe_name(fk)}{suffix}"
                 )
-            rc = rc or _run_field_single(ns)
+            # Every band group runs even after an earlier failure; the first
+            # non-zero status is reported.
+            rc = _run_field_single(ns) or rc
         return rc
     return _run_field_single(args)
 
 
 def _safe_name(s: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in s) or "band"
+
+
+def _image_hdu_expansion(
+    paths: Sequence[str], hdu: int, *, announce: bool = False
+) -> list[tuple[int, str, int]]:
+    """Expand multi-extension files into ``(input_index, path, hdu)`` rows.
+
+    One policy for every map path: an unreadable or image-less file is passed
+    through so the reader reports the real error, a single-image file uses that
+    image, an explicit ``--hdu`` that exists wins, and an MEF otherwise
+    contributes every image HDU.
+    """
+    rows: list[tuple[int, str, int]] = []
+    for i, path in enumerate(paths):
+        image_hdus = _probe_image_hdus(path)
+        if len(image_hdus) == 0:
+            rows.append((i, path, hdu))
+        elif len(image_hdus) == 1:
+            rows.append((i, path, hdu if hdu in image_hdus else image_hdus[0]))
+        elif hdu != 0 and hdu in image_hdus:
+            rows.append((i, path, hdu))
+        else:
+            rows.extend((i, path, h) for h in image_hdus)
+            if announce:
+                print(
+                    f"  {path}: auto-expanded {len(image_hdus)} image HDUs "
+                    f"{list(image_hdus)}",
+                    file=sys.stderr,
+                )
+    return rows
 
 
 def _expand_field_inputs(
@@ -987,53 +939,14 @@ def _expand_field_inputs(
     list[str], list[int], list[float], list[float], list[str | None], list[str | None]
 ]:
     """Expand MEF files into per-HDU entries for INR processing."""
-    expanded_paths: list[str] = []
-    expanded_hdus: list[int] = []
-    expanded_weights: list[float] = []
-    expanded_background_offsets: list[float] = []
-    expanded_weight_maps: list[str | None] = []
-    expanded_mask_maps: list[str | None] = []
-
-    for i, p in enumerate(paths):
-        image_hdus = _probe_image_hdus(p)
-        if len(image_hdus) == 0:
-            expanded_paths.append(p)
-            expanded_hdus.append(hdu)
-            expanded_weights.append(float(weights[i]))
-            expanded_background_offsets.append(float(background_offsets[i]))
-            expanded_weight_maps.append(weight_maps[i])
-            expanded_mask_maps.append(mask_maps[i])
-        elif len(image_hdus) == 1:
-            h = hdu if hdu in image_hdus else image_hdus[0]
-            expanded_paths.append(p)
-            expanded_hdus.append(h)
-            expanded_weights.append(float(weights[i]))
-            expanded_background_offsets.append(float(background_offsets[i]))
-            expanded_weight_maps.append(weight_maps[i])
-            expanded_mask_maps.append(mask_maps[i])
-        else:
-            if hdu != 0 and hdu in image_hdus:
-                expanded_paths.append(p)
-                expanded_hdus.append(hdu)
-                expanded_weights.append(float(weights[i]))
-                expanded_background_offsets.append(float(background_offsets[i]))
-                expanded_weight_maps.append(weight_maps[i])
-                expanded_mask_maps.append(mask_maps[i])
-            else:
-                for h in image_hdus:
-                    expanded_paths.append(p)
-                    expanded_hdus.append(h)
-                    expanded_weights.append(float(weights[i]))
-                    expanded_background_offsets.append(float(background_offsets[i]))
-                    expanded_weight_maps.append(weight_maps[i])
-                    expanded_mask_maps.append(mask_maps[i])
+    rows = _image_hdu_expansion(paths, hdu)
     return (
-        expanded_paths,
-        expanded_hdus,
-        expanded_weights,
-        expanded_background_offsets,
-        expanded_weight_maps,
-        expanded_mask_maps,
+        [path for _, path, _ in rows],
+        [hdu_i for _, _, hdu_i in rows],
+        [float(weights[i]) for i, _, _ in rows],
+        [float(background_offsets[i]) for i, _, _ in rows],
+        [weight_maps[i] for i, _, _ in rows],
+        [mask_maps[i] for i, _, _ in rows],
     )
 
 
@@ -1083,10 +996,10 @@ def _run_field_single(args: argparse.Namespace) -> int:
             inr_paths
         ):
             raise SystemExit("field plan spectral metadata does not match inputs")
-    unique_bands = list(dict.fromkeys(observation_bands))
-    profiles_by_band = {
-        band: spectral_kws[observation_bands.index(band)] for band in unique_bands
-    }
+    profiles_by_band: dict[str, dict] = {}
+    for band, spectral_kw in zip(observation_bands, spectral_kws, strict=True):
+        profiles_by_band.setdefault(band, spectral_kw)
+    unique_bands = list(profiles_by_band)
     band_specs = [
         _map_bandpass_spec(band, profiles_by_band[band]) for band in unique_bands
     ]
@@ -1358,31 +1271,31 @@ def _run_field_single(args: argparse.Namespace) -> int:
     fit_result = None
     if not artifact_render_only:
         try:
-            from tqdm import tqdm as _tqdm
+            from tqdm import tqdm
+        except ImportError:
+            tqdm = None
+            print(
+                "torchsky map field: tqdm not installed — install 'tqdm' for progress bars",
+                file=sys.stderr,
+            )
+        if tqdm is None:
+            fit_result = fit_field_model(fields, model, **fit_options)
+        else:
+            bar = tqdm(total=steps, desc="INR fit", unit="step", file=sys.stderr)
 
             def _progress_callback(step_idx: int, loss_val: float) -> None:
-                _progress_callback._bar.update(1)
-                _progress_callback._bar.set_postfix(loss=f"{loss_val:.4f}")
+                bar.update(1)
+                bar.set_postfix(loss=f"{loss_val:.4f}")
 
-            _progress_callback._bar = _tqdm(
-                total=steps, desc="INR fit", unit="step", file=sys.stderr
-            )
-            if not _progress_callback._bar.disable:
+            try:
                 fit_result = fit_field_model(
                     fields,
                     model,
                     **fit_options,
                     _progress_callback=_progress_callback,
                 )
-            else:
-                fit_result = fit_field_model(fields, model, **fit_options)
-            _progress_callback._bar.close()
-        except ImportError:
-            print(
-                "torchsky map field: tqdm not installed — install 'tqdm' for progress bars",
-                file=sys.stderr,
-            )
-            fit_result = fit_field_model(fields, model, **fit_options)
+            finally:
+                bar.close()
     if fit_result is not None:
         model = fit_result.model
         if loaded_artifact is not None:

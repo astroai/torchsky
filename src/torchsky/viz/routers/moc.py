@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -53,7 +54,7 @@ def _moc_stats_sync(request: Request, path: str) -> JSONResponse:
         stats = {
             "area_sq_deg": round(moc.area_sq_deg, 4),
             "area_sr": round(moc.area, 6),
-            "sky_fraction": round(moc.area / (4 * 3.14159265358979), 6),
+            "sky_fraction": round(moc.area / (4.0 * math.pi), 6),
             "max_order": moc.max_order,
             "n_cells": int(moc.uniq.numel()),
         }

@@ -135,17 +135,10 @@ def _parse_hdu(raw: int | str) -> int | str:
 def _table_num_rows(data: Mapping[str, Any]) -> int:
     if not data:
         return 0
-    first = next(iter(data.values()))
-    try:
-        return int(len(first))
-    except TypeError:
-        return 1
+    return int(len(next(iter(data.values()))))
 
 
 def _row_value(column: Any, row_index: int) -> Any:
-    if isinstance(column, torch.Tensor):
-        item = column[row_index]
-        return _json_value(item)
     return _json_value(column[row_index])
 
 
@@ -211,12 +204,18 @@ def _info_handler(args: argparse.Namespace) -> int:
 
 
 def _cat_handler(args: argparse.Namespace) -> int:
+    rows = int(args.rows)
+    start_row = int(args.start_row)
+    if rows < 0:
+        raise SystemExit("--rows must be non-negative")
+    if start_row < 1:
+        raise SystemExit("--start-row is 1-based and must be at least 1")
     payload = _cat_payload(
         str(args.path),
         hdu=_parse_hdu(args.hdu),
         columns=_split_columns(args.columns),
-        rows=int(args.rows),
-        start_row=int(args.start_row),
+        rows=rows,
+        start_row=start_row,
     )
     if args.json:
         json.dump(payload, sys.stdout, indent=2, sort_keys=True)

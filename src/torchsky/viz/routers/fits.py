@@ -19,6 +19,9 @@ def _resolve_path(root: Path, rel_path: str) -> Path:
     return resolve_under_root(root, rel_path)
 
 
+_HISTOGRAM_SAMPLES = 1_000_000
+
+
 def _is_fits(name: str) -> bool:
     n = name.lower()
     return any(
@@ -79,7 +82,7 @@ async def file_tree(request: Request, path: str = "") -> JSONResponse:
 def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
     """Return FITS image metadata: shape, BITPIX, WCS summary, HDU list."""
     from torchfits import open as open_fits
-    from torchfits import read_tensor as read_image
+    from torchfits import read_header, read_shape
     from ...wcs import WCS
 
     root: Path = request.app.state.root_dir
@@ -104,9 +107,11 @@ def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
         ) from e
 
     try:
-        tensor, header = read_image(abs_path, hdu=hdu, return_header=True)
-        shape = list(tensor.shape)
-        bitpix = int(header.get("BITPIX", 0))
+        # Metadata only: reading the tensor here would materialize whole
+        # survey images just to report their shape.
+        bitpix, tensor_shape = read_shape(abs_path, hdu=hdu)
+        header = read_header(abs_path, hdu)
+        shape = list(tensor_shape)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
@@ -161,8 +166,9 @@ def _fits_histogram_sync(
     try:
         tensor = read_image(abs_path, hdu=hdu)
         flat = tensor.float().flatten()
-        if flat.numel() > 1_000_000:
-            flat = flat[:: flat.numel() // 1_000_000]
+        if flat.numel() > _HISTOGRAM_SAMPLES:
+            # Ceil division: floor can leave slightly more than the sample cap.
+            flat = flat[:: -(-flat.numel() // _HISTOGRAM_SAMPLES)]
         result = compute_histogram(flat.reshape(1, -1), n_bins=nbins)
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e)) from e

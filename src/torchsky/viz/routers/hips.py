@@ -86,7 +86,7 @@ def _register_survey_sync(
 
     The survey ID is used as the prefix for all subsequent tile requests.
     """
-    from torchfits import read_tensor as read_image
+    from torchfits import read_shape, read_tensor as read_image
     from ...wcs import WCS
 
     root: Path = request.app.state.root_dir
@@ -107,17 +107,28 @@ def _register_survey_sync(
             }
         )
 
+    # Enforce the pixel budget from metadata alone: checking after reading the
+    # tensor would defeat the guard it exists to provide.
+    try:
+        _, tensor_shape = read_shape(abs_path, hdu=hdu)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if len(tensor_shape) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail=f"HDU {hdu} is not a 2D image (shape {tuple(tensor_shape)}).",
+        )
+    h, w = int(tensor_shape[-2]), int(tensor_shape[-1])
+    n_pix = h * w
+    max_px = int(getattr(request.app.state, "max_image_pixels", 536_870_912))
+    if n_pix > max_px:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image has {n_pix} pixels; max allowed is {max_px} (--max-image-pixels).",
+        )
+
     try:
         tensor, header = read_image(abs_path, hdu=hdu, return_header=True)
-        h, w = int(tensor.shape[-2]), int(tensor.shape[-1])
-        n_pix = h * w
-        max_px = int(getattr(request.app.state, "max_image_pixels", 536_870_912))
-        if n_pix > max_px:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Image has {n_pix} pixels; max allowed is {max_px} (--max-image-pixels).",
-            )
-
         wcs = WCS(dict(header))
         max_order = compute_hips_order(wcs, (h, w))
 

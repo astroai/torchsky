@@ -11,6 +11,7 @@ polynomials only.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Literal
 
 import torch
@@ -56,10 +57,7 @@ def ccm89_ab(x_um_inv: Tensor) -> tuple[Tensor, Tensor]:
     are evaluated at the ``x=10`` boundary; the law is not defined there.
     """
     x = torch.as_tensor(x_um_inv).clamp_min(1e-3)
-    a = torch.zeros_like(x)
-    b = torch.zeros_like(x)
 
-    ir = x < 1.1
     a_ir = 0.574 * x**1.61
     b_ir = -0.527 * x**1.61
 
@@ -105,14 +103,13 @@ def ccm89_ab(x_um_inv: Tensor) -> tuple[Tensor, Tensor]:
     a_fuv = -1.073 - 0.628 * y_fuv + 0.137 * y_fuv**2 - 0.070 * y_fuv**3
     b_fuv = 13.670 + 4.257 * y_fuv - 0.420 * y_fuv**2 + 0.374 * y_fuv**3
 
-    a = torch.where(ir, a_ir, a)
-    a = torch.where(opt, a_opt, a)
-    a = torch.where(uv, a_uv, a)
-    a = torch.where(fuv, a_fuv, a)
-    b = torch.where(ir, b_ir, b)
-    b = torch.where(opt, b_opt, b)
-    b = torch.where(uv, b_uv, b)
-    b = torch.where(fuv, b_fuv, b)
+    # The four regions partition x > 0, so the IR branch is the remainder.
+    a = torch.where(
+        fuv, a_fuv, torch.where(uv, a_uv, torch.where(opt, a_opt, a_ir))
+    )
+    b = torch.where(
+        fuv, b_fuv, torch.where(uv, b_uv, torch.where(opt, b_opt, b_ir))
+    )
     return a, b
 
 
@@ -163,8 +160,6 @@ def _f99_kknots(r_v: Tensor) -> Tensor:
     """F99 spline knot values ``E(λ-V)/E(B-V)`` for ``r_v``; last dim is 9."""
     rv = r_v.unsqueeze(-1)
     rv2 = rv * rv
-    c2 = -0.824 + 4.717 / rv
-    c1 = 2.030 - 3.007 * c2
     k0 = -rv
     k1 = 0.26469 * rv / 3.1 - rv
     k2 = 0.82925 * rv / 3.1 - rv
@@ -179,17 +174,19 @@ def _f99_kknots(r_v: Tensor) -> Tensor:
         - 4.45636e-05 * rv2 * rv2
         - rv
     )
-    xk = torch.as_tensor(_F99_XKNOTS, device=r_v.device, dtype=r_v.dtype)
-    x_uv = xk[7:9].expand(*rv.shape[:-1], 2)
-    x2 = x_uv * x_uv
-    y = x2 - (_F99_X0 * _F99_X0)
-    d = x2 / (y * y + x2 * (_F99_GAMMA * _F99_GAMMA))
-    k_uv = c1 + c2 * x_uv + _F99_C3 * d
-    return torch.cat([k0, k1, k2, k3, k4, k5, k6, k_uv], dim=-1)
+    x_uv = torch.as_tensor(
+        _F99_XKNOTS[7:9], device=r_v.device, dtype=r_v.dtype
+    ).expand(*rv.shape[:-1], 2)
+    return torch.cat([k0, k1, k2, k3, k4, k5, k6, _f99_uv_k(x_uv, rv)], dim=-1)
 
 
+@lru_cache(maxsize=8)
 def _f99_spline_matrix(device: torch.device, dtype: torch.dtype) -> Tensor:
-    """Inverse of the 7×7 natural-cubic system for F99 knots (m0=m8=0)."""
+    """7×7 natural-cubic system for the F99 knots (``m0 = m8 = 0``).
+
+    Cached because the knot abscissae are constants; callers solve against it
+    instead of forming an explicit inverse.
+    """
     xk = torch.tensor(_F99_XKNOTS, device=device, dtype=dtype)
     h = xk[1:] - xk[:-1]
     matrix = torch.zeros((7, 7), device=device, dtype=dtype)
@@ -199,18 +196,18 @@ def _f99_spline_matrix(device: torch.device, dtype: torch.dtype) -> Tensor:
             matrix[row, row - 1] = h[i - 1] / 6.0
         if row < 6:
             matrix[row, row + 1] = h[i] / 6.0
-    return torch.linalg.inv(matrix)
+    return matrix
 
 
 def _natural_cubic_eval(x: Tensor, y_knots: Tensor) -> Tensor:
     """Evaluate the F99 natural cubic spline at inverse-micron ``x``."""
     xk = torch.tensor(_F99_XKNOTS, device=x.device, dtype=x.dtype)
     h = xk[1:] - xk[:-1]
-    inv = _f99_spline_matrix(x.device, x.dtype)
+    matrix = _f99_spline_matrix(x.device, x.dtype)
     rhs = (y_knots[..., 2:] - y_knots[..., 1:-1]) / h[1:] - (
         y_knots[..., 1:-1] - y_knots[..., :-2]
     ) / h[:-1]
-    m_int = torch.einsum("ij,...j->...i", inv, rhs)
+    m_int = torch.linalg.solve(matrix, rhs.transpose(-1, -2)).transpose(-1, -2)
     zeros = torch.zeros_like(y_knots[..., :1])
     m = torch.cat([zeros, m_int, zeros], dim=-1)
     idx = torch.searchsorted(xk, x, right=True).clamp(1, 8)
@@ -290,7 +287,11 @@ def _to_angstrom(wave: Tensor, wavelength_unit: WavelengthUnit) -> Tensor:
 
 def _compute_ab(wave_angstrom: Tensor, law: str) -> tuple[Tensor, Tensor]:
     x = 10000.0 / torch.clamp(wave_angstrom, min=1e-6)
-    return ccm89_ab(x) if law == "ccm89" else odonnell94_ab(x)
+    if law == "ccm89":
+        return ccm89_ab(x)
+    if law == "odonnell94":
+        return odonnell94_ab(x)
+    raise ValueError(f"{law!r} is not a polynomial extinction law")
 
 
 def _align_scale(scale: Tensor, wave: Tensor) -> Tensor:
@@ -325,7 +326,7 @@ def a_lambda(
     if (ebv is None) == (a_v is None):
         raise ValueError("provide exactly one of ebv or a_v")
     law_name = _normalize_law(law)
-    wave_a = torch.as_tensor(_to_angstrom(wave, wavelength_unit))
+    wave_a = _to_angstrom(wave, wavelength_unit)
     scale = a_v if a_v is not None else ebv
     scale_t = _align_scale(torch.as_tensor(scale), wave_a)
     r_v_t = _align_scale(torch.as_tensor(r_v), wave_a)
@@ -438,8 +439,7 @@ def transmission(
     mag = a_lambda(
         wave, ebv=ebv, r_v=r_v, law=law, wavelength_unit=wavelength_unit
     ).clamp_min(0.0)
-    exponent = torch.clamp(-0.4 * mag, min=-30.0, max=0.0)
-    return torch.pow(10.0, exponent)
+    return torch.pow(10.0, (-0.4 * mag).clamp(min=-30.0))
 
 
 def apply_extinction(

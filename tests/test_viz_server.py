@@ -374,6 +374,74 @@ def test_catalog_filter_moc_column_discovery(tmp_path: Path):
     assert body["n_in_moc"] >= 1
 
 
+def test_catalog_load_caps_rows_exactly(tmp_path: Path):
+    """`max_rows` is a hard cap: floor-division decimation used to overshoot it."""
+    from torchsky.viz.server import create_app
+
+    n = 1000
+    torchfits.write(
+        str(tmp_path / "cat.fits"),
+        {
+            "RA": torch.linspace(0.0, 10.0, n, dtype=torch.float64),
+            "DEC": torch.zeros(n, dtype=torch.float64),
+        },
+        header={"EXTNAME": "CAT"},  # type: ignore
+        overwrite=True,
+    )
+    c = TestClient(create_app(root_dir=str(tmp_path), cache_mb=8))
+    hdu = 1 if c.get("/api/catalog/load?path=cat.fits&hdu=1").status_code == 200 else 0
+    r = c.get(f"/api/catalog/load?path=cat.fits&hdu={hdu}&max_rows=300")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["n_total"] == n
+    assert body["n_returned"] <= 300
+    assert len(body["ra"]) == body["n_returned"]
+
+
+def _write_header_only_image(path: Path, shape: tuple[int, int]) -> None:
+    """Write a FITS header advertising ``shape`` with no pixel data at all."""
+    h, w = shape
+    cards = [
+        f"{'SIMPLE':<8}= {'T':>20}",
+        f"{'BITPIX':<8}= {-32:>20}",
+        f"{'NAXIS':<8}= {2:>20}",
+        f"{'NAXIS1':<8}= {w:>20}",
+        f"{'NAXIS2':<8}= {h:>20}",
+    ]
+    header = b"".join(line.ljust(80).encode() for line in cards)
+    header += b"END".ljust(80)
+    header += b" " * ((2880 - len(header) % 2880) % 2880)
+    path.write_bytes(header)
+
+
+def test_hips_register_rejects_oversize_image_before_loading(tmp_path: Path):
+    """The pixel budget must be enforced from header metadata, not after decode.
+
+    The fixture has no pixel data, so decoding it would fail with 422; a 413
+    proves the guard ran before the read.
+    """
+    from torchsky.viz.server import create_app
+
+    _write_header_only_image(tmp_path / "huge.fits", (100_000, 100_000))
+    c = TestClient(create_app(root_dir=str(tmp_path), max_image_pixels=1024))
+    r = c.get("/api/hips/register?path=huge.fits&hdu=0")
+    assert r.status_code == 413, r.text
+    assert "max allowed" in r.json()["detail"]
+
+
+def test_validate_register_rejects_oversize_image(tmp_path: Path):
+    from torchsky.viz.server import create_app
+
+    _write_minimal_fits(tmp_path / "a.fits", shape=(64, 64))
+    _write_minimal_fits(tmp_path / "b.fits", shape=(64, 64))
+    c = TestClient(create_app(root_dir=str(tmp_path), max_image_pixels=1024))
+    r = c.post(
+        "/api/validate/register",
+        json={"truth_path": "a.fits", "model_path": "b.fits"},
+    )
+    assert r.status_code == 413
+
+
 def test_viz_router_modules_import() -> None:
     import importlib
 

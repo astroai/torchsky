@@ -101,7 +101,7 @@ def pull_histogram(
     flat = flat[torch.isfinite(flat)]
 
     if flat.numel() == 0:
-        return {"bins": [], "counts": [], "gaussian": None, "stats": {}}
+        return {"bins": [], "counts": [], "gaussian_counts": [], "stats": {}}
 
     # Cap at ±10σ for display
     flat = flat.clamp(-10.0, 10.0)
@@ -109,18 +109,21 @@ def pull_histogram(
     std = float(flat.std().item())
     outlier_frac = float((flat.abs() > 3.0).float().mean().item())
 
-    counts = torch.histc(flat, bins=n_bins, min=-6.0, max=6.0)
-    edges = torch.linspace(-6.0, 6.0, n_bins + 1)
+    hist_min, hist_max = -6.0, 6.0
+    counts = torch.histc(flat, bins=n_bins, min=hist_min, max=hist_max)
+    edges = torch.linspace(hist_min, hist_max, n_bins + 1)
     centers = 0.5 * (edges[:-1] + edges[1:])
 
-    # Expected Gaussian counts for comparison
-    bin_width = 12.0 / n_bins
-    n_total = flat.numel()
+    # Expected Gaussian counts for comparison. The expectation is normalized to
+    # the samples inside the histogram window, not the full ±10σ range, or the
+    # observed and expected counts would be on different totals.
+    bin_width = (hist_max - hist_min) / n_bins
+    n_in_window = int(((flat >= hist_min) & (flat <= hist_max)).sum().item())
+    norm = (
+        n_in_window * bin_width / (std * math.sqrt(2 * math.pi)) if std > 0 else 0.0
+    )
     gaussian_counts = [
-        n_total
-        * bin_width
-        / (std * math.sqrt(2 * math.pi))
-        * math.exp(-0.5 * ((float(c.item()) - mu) / max(std, 1e-6)) ** 2)
+        norm * math.exp(-0.5 * ((float(c.item()) - mu) / max(std, 1e-6)) ** 2)
         for c in centers
     ]
 
@@ -156,9 +159,9 @@ def chi2_map_png(
     chi2 = (residual / sigma_f) ** 2
 
     # Log-stretch chi2 to reveal structure across dynamic range
-    vmax = float(
-        torch.quantile(chi2.flatten()[torch.isfinite(chi2.flatten())], 0.99).item()
-    )
+    flat = chi2.flatten()
+    finite = flat[torch.isfinite(flat)]
+    vmax = float(torch.quantile(finite, 0.99).item()) if finite.numel() > 0 else 1.0
     vmax = max(vmax, 1.0)
     stretched = apply_stretch(chi2, 0.0, vmax, "log")
     return to_png(stretched, cmap="viridis")
@@ -179,13 +182,12 @@ def chi2_stats(truth: Tensor, model: Tensor, sigma: Tensor) -> dict:
 
     mean_chi2 = float(finite.mean().item())
     median_chi2 = float(torch.median(finite).item())
-    # Reduced chi2 (DOF ≈ n_pixels - 1 for illustration)
-    reduced = mean_chi2  # already per-pixel
 
     return {
         "mean_chi2": round(mean_chi2, 4),
         "median_chi2": round(median_chi2, 4),
-        "reduced_chi2": round(reduced, 4),
+        # One degree of freedom per pixel, so the reduced chi2 is the mean.
+        "reduced_chi2": round(mean_chi2, 4),
         "fraction_gt1": round(float((finite > 1.0).float().mean().item()), 4),
         "fraction_gt9": round(float((finite > 9.0).float().mean().item()), 6),
     }

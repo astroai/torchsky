@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -59,46 +60,42 @@ def _evict_validation_fifo(
         del pairs[oldest]
 
 
-def _tensor_pixel_count(t: object) -> int:
-    import torch
-
-    ten = torch.as_tensor(t)
-    if ten.dim() < 2:
-        return int(ten.numel())
-    return int(ten.shape[-1] * ten.shape[-2])
-
-
 def _register_pair_sync(request: Request, pair: ValidationPair) -> JSONResponse:
     """Register a truth/model/(optional sigma) FITS pair. Returns pair ID."""
-    from torchfits import read_tensor as read_image
+    from torchfits import read_shape, read_tensor as read_image
 
     root: Path = request.app.state.root_dir
     max_px = int(getattr(request.app.state, "max_image_pixels", 512 * 1024 * 1024))
 
-    def load(rel: str, hdu: int) -> object:
-        abs_p = resolve_under_root(root, rel)
-        return read_image(str(abs_p), hdu=hdu)
+    def abs_path(rel: str) -> Path:
+        return resolve_under_root(root, rel)
 
+    # Reject oversized inputs from header metadata before loading pixels.
+    requested = [
+        ("truth", pair.truth_path, pair.truth_hdu),
+        ("model", pair.model_path, pair.model_hdu),
+    ]
+    if pair.sigma_path:
+        requested.append(("sigma", pair.sigma_path, pair.sigma_hdu))
+    loaded: dict[str, object] = {}
     try:
-        truth = load(pair.truth_path, pair.truth_hdu).float()
-        model = load(pair.model_path, pair.model_hdu).float()
-        sigma = (
-            load(pair.sigma_path, pair.sigma_hdu).float() if pair.sigma_path else None
-        )
+        for label, rel, hdu_i in requested:
+            _, shape = read_shape(str(abs_path(rel)), hdu=hdu_i)
+            n = int(math.prod(int(dim) for dim in shape)) if shape else 0
+            if n > max_px:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"{label} image has {n} pixels; max allowed is {max_px}.",
+                )
+            loaded[label] = read_image(str(abs_path(rel)), hdu=hdu_i).float()
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
-    for label, ten in ("truth", truth), ("model", model), ("sigma", sigma):
-        if ten is None:
-            continue
-        n = _tensor_pixel_count(ten)
-        if n > max_px:
-            raise HTTPException(
-                status_code=413,
-                detail=f"{label} image has {n} pixels; max allowed is {max_px}.",
-            )
+    truth = loaded["truth"]
+    model = loaded["model"]
+    sigma = loaded.get("sigma")
 
     pid = hashlib.sha256(
         f"{pair.truth_path}:{pair.truth_hdu}:{pair.model_path}:{pair.model_hdu}:{pair.sigma_path}:{pair.sigma_hdu}".encode()

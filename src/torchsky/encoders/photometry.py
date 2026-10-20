@@ -26,6 +26,63 @@ def _positive_int(value: int, name: str) -> None:
         raise ValueError(f"{name} must be a positive integer")
 
 
+def _clean_ids(
+    value: Tensor | None,
+    name: str,
+    flux: Tensor,
+    active: Tensor,
+    embedding: nn.Embedding,
+) -> Tensor:
+    """Validate caller-owned vocabulary ids and zero out padded entries."""
+    if value is None:
+        value = torch.zeros_like(flux, dtype=torch.int64)
+    if value.shape != flux.shape or value.device != flux.device:
+        raise ValueError(f"{name} must have the same shape/device as flux")
+    if value.dtype not in (
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.int64,
+        torch.uint8,
+    ):
+        raise ValueError(f"{name} must contain integer vocabulary IDs")
+    if ((value[active] < 0) | (value[active] >= embedding.num_embeddings)).any():
+        raise ValueError(f"{name} contains an out-of-range vocabulary ID")
+    return value.masked_fill(~active, 0).long()
+
+
+def _optional_channel(
+    value: Tensor | None,
+    name: str,
+    flux: Tensor,
+    active: Tensor,
+    dtype: torch.dtype,
+    *,
+    positive: bool = False,
+) -> tuple[Tensor, Tensor]:
+    """Normalize an optional float channel to ``(values, known)``.
+
+    ``None`` and NaN both mean unknown; unknown samples become zero so padding
+    can hold arbitrary values. ``positive=True`` requires finite values > 0.
+    """
+    if value is None:
+        value = torch.full_like(flux, torch.nan)
+    if (
+        value.shape != flux.shape
+        or value.device != flux.device
+        or not value.is_floating_point()
+    ):
+        raise ValueError(
+            f"{name} must be floating point with the same shape/device as flux"
+        )
+    if torch.isinf(value[active]).any():
+        raise ValueError(f"{name} must be finite or NaN for unknown values")
+    known = active & torch.isfinite(value)
+    if positive and bool((value[known] <= 0).any()):
+        raise ValueError("known error must be positive")
+    return torch.where(known, value, 0).to(dtype), known
+
+
 class MaskedSetFusion(nn.Module):
     """Permutation-invariant learned pooling of ``(..., items, latent_dim)``.
 
@@ -153,59 +210,32 @@ class PhotometryEncoder(nn.Module):
         if not torch.isfinite(flux[active]).all():
             raise ValueError("observed flux must be finite")
 
-        embedded: list[Tensor] = []
-        ids: list[Tensor] = []
-        for name, value, embedding in (
-            ("passband_id", passband_id, self.passband_embedding),
-            ("survey_id", survey_id, self.survey_embedding),
-            ("method_id", method_id, self.method_embedding),
-            ("status", status, self.status_embedding),
-        ):
-            if value is None:
-                value = torch.zeros_like(flux, dtype=torch.int64)
-            if value.shape != flux.shape or value.device != flux.device:
-                raise ValueError(f"{name} must have the same shape/device as flux")
-            if value.dtype not in (
-                torch.int8,
-                torch.int16,
-                torch.int32,
-                torch.int64,
-                torch.uint8,
-            ):
-                raise ValueError(f"{name} must contain integer vocabulary IDs")
-            if (
-                (value[active] < 0) | (value[active] >= embedding.num_embeddings)
-            ).any():
-                raise ValueError(f"{name} contains an out-of-range vocabulary ID")
-            clean_id = value.masked_fill(~active, 0).long()
-            ids.append(clean_id)
-            embedded.append(embedding(clean_id))
+        passband_clean = _clean_ids(
+            passband_id, "passband_id", flux, active, self.passband_embedding
+        )
+        metadata = (
+            self.passband_embedding(passband_clean)
+            + self.survey_embedding(
+                _clean_ids(survey_id, "survey_id", flux, active, self.survey_embedding)
+            )
+            + self.method_embedding(
+                _clean_ids(method_id, "method_id", flux, active, self.method_embedding)
+            )
+            + self.status_embedding(
+                _clean_ids(status, "status", flux, active, self.status_embedding)
+            )
+        )
 
-        optional: list[Tensor] = []
-        known: list[Tensor] = []
-        for name, value in (("error", error), ("epoch", epoch)):
-            if value is None:
-                value = torch.full_like(flux, torch.nan)
-            if (
-                value.shape != flux.shape
-                or value.device != flux.device
-                or not value.is_floating_point()
-            ):
-                raise ValueError(
-                    f"{name} must be floating point with the same shape/device as flux"
-                )
-            if torch.isinf(value[active]).any():
-                raise ValueError(f"{name} must be finite or NaN for unknown values")
-            available = active & torch.isfinite(value)
-            if name == "error" and (value[available] <= 0).any():
-                raise ValueError("known error must be positive")
-            optional.append(torch.where(available, value, 0).to(self.flux_scale.dtype))
-            known.append(available)
+        scale_dtype = self.flux_scale.dtype
+        error_value, error_known = _optional_channel(
+            error, "error", flux, active, scale_dtype, positive=True
+        )
+        epoch_value, epoch_known = _optional_channel(
+            epoch, "epoch", flux, active, scale_dtype
+        )
 
-        scale = self.flux_scale[ids[0]]
+        scale = self.flux_scale[passband_clean]
         clean_flux = torch.where(active, flux, 0).to(scale.dtype)
-        error_value, epoch_value = optional
-        error_known, epoch_known = known
         epoch_value = torch.where(
             epoch_known, (epoch_value - self.epoch_origin) / self.epoch_scale, 0
         )
@@ -219,7 +249,6 @@ class PhotometryEncoder(nn.Module):
             ),
             dim=-1,
         )
-        metadata = torch.stack(embedded).sum(dim=0)
         tokens = self.token_encoder(torch.cat((continuous, metadata), dim=-1))
         return self.fusion(tokens, active)
 
@@ -339,6 +368,8 @@ def marginalize_association_logits(
     log_weights = log_weights - torch.logsumexp(log_weights, dim=-1, keepdim=True)
     log_mass = torch.log_softmax(clean_logits, dim=-1)
     out_lse = torch.logsumexp(log_mass + log_weights.detach().unsqueeze(-1), dim=-2)
+    # Recompute the normalized weights from the raw ones: exp(-inf) would give
+    # an exactly-zero hypothesis a zero straight-through gradient.
     norm_weights = weights / weights.sum(dim=-1, keepdim=True)
     ratio = torch.where(
         valid_hyp.unsqueeze(-1),

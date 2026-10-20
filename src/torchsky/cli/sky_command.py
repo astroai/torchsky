@@ -55,6 +55,8 @@ def _run_match(args: argparse.Namespace) -> int:
 
     masks = None
     if args.masks:
+        if len(args.masks) != len(images):
+            raise SystemExit("--masks count must match the number of input images")
         masks = []
         for p in args.masks:
             m = read(str(p), hdu=int(args.mask_hdu), device=read_dev)

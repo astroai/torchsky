@@ -221,6 +221,39 @@ def test_svo_cache_hit_offline(tmp_path: Path) -> None:
     assert spec2["band_name"] == "G"
 
 
+def test_svo_truncated_cache_entry_is_refetched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A damaged cache entry must trigger a refetch instead of a hard failure."""
+    cache_dir = tmp_path / "svo_cache"
+    cache_dir.mkdir()
+    bad = cache_dir / "filter_Subaru_HSC.g.json"
+    # Mismatched column lengths: unusable, but valid JSON.
+    bad.write_text(
+        '{"filter_id": "Subaru/HSC.g", "wavelength": [4000.0, 4100.0], '
+        '"transmission": [0.1]}',
+        encoding="utf-8",
+    )
+
+    fake_table = [{"filterID": "Subaru/HSC.g"}]
+    wl_curve = np.linspace(4000.0, 5500.0, 40)
+    tr_curve = np.exp(-0.5 * ((wl_curve - 4800.0) / 300.0) ** 2)
+    _install_fake_astroquery(monkeypatch, fake_table, wl_curve, tr_curve)
+
+    from torchsky.filter_profiles.inr_bandpass import bandpass_from_svo
+
+    spec = bandpass_from_svo(
+        band_name="g",
+        facility="Subaru",
+        instrument="HSC",
+        filter_id="Subaru/HSC.g",
+        prefer="classic",
+        cache_dir=cache_dir,
+    )
+    assert spec["svo_filter_id"] == "Subaru/HSC.g"
+    assert spec["transmission_wavelength"].numel() == wl_curve.size
+
+
 def test_svo_cache_write_and_reload(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verify SvoFps download populates cache and second call reloads without SvoFps."""
     cache_dir = tmp_path / "svo_cache"

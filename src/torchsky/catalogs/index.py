@@ -6,10 +6,9 @@ import math
 from dataclasses import dataclass
 
 import torch
-
-from .._dtype import work_dtype as _work_dtype
 from torch import Tensor
 
+from .._dtype import work_dtype as _work_dtype
 from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
 
@@ -195,6 +194,30 @@ def nested_neighbor_rings(nside: int, pix: Tensor, hops: int) -> Tensor:
     return visited
 
 
+def _bucket_offsets(lengths: Tensor) -> tuple[Tensor, Tensor]:
+    """Expand ragged bucket sizes into ``(bucket_id, in-bucket offset)``.
+
+    Returns one entry per gathered row; callers index ``bucket_starts`` with
+    the bucket ids and add the offsets.
+    """
+    device = lengths.device
+    counts = lengths.to(torch.int64)
+    total = int(counts.sum().item())
+    group = torch.repeat_interleave(
+        torch.arange(counts.numel(), dtype=torch.int64, device=device), counts
+    )
+    offsets = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.int64, device=device),
+            torch.cumsum(counts[:-1], dim=0),
+        )
+    )
+    intra = torch.arange(total, dtype=torch.int64, device=device) - (
+        torch.repeat_interleave(offsets, counts)
+    )
+    return group, intra
+
+
 @dataclass
 class HealpixIndex:
     """Bucketed nested-HEALPix index over catalog rows.
@@ -306,28 +329,10 @@ class HealpixIndex:
 
         starts = self.bucket_starts[idx_safe[mask]]
         stops = self.bucket_stops[idx_safe[mask]]
-        lengths = (stops - starts).to(torch.int64)
-        total = int(lengths.sum().item())
-        if total == 0:
+        bucket, intra = _bucket_offsets(stops - starts)
+        if intra.numel() == 0:
             return self.order[:0]
-
-        device = self.order.device
-        bucket_ids = torch.repeat_interleave(
-            torch.arange(lengths.numel(), device=device, dtype=torch.int64),
-            lengths,
-        )
-        offsets = torch.cumsum(
-            torch.cat(
-                (
-                    torch.zeros(1, dtype=torch.int64, device=device),
-                    lengths[:-1],
-                )
-            ),
-            dim=0,
-        )
-        intra = torch.arange(total, device=device, dtype=torch.int64)
-        intra = intra - torch.repeat_interleave(offsets, lengths)
-        return self.order[starts[bucket_ids] + intra]
+        return self.order[starts[bucket] + intra]
 
     def expand(self, pixels: Tensor) -> tuple[Tensor, Tensor]:
         """Map per-query pixels ``[N]`` to ``(query_index, row_index)`` pairs."""
@@ -346,30 +351,16 @@ class HealpixIndex:
         match = (idx < n_uniq) & (self.unique_pixels[idx_safe] == pix) & (pix >= 0)
         if not bool(match.any()):
             return empty_q, empty_q
-        query = torch.arange(n_query, device=pix.device, dtype=torch.int64)[match]
+        query = torch.nonzero(match, as_tuple=False).squeeze(1)
         starts = self.bucket_starts[idx_safe[match]]
         stops = self.bucket_stops[idx_safe[match]]
         lengths = (stops - starts).to(torch.int64)
-        total = int(lengths.sum().item())
-        if total == 0:
+        bucket, intra = _bucket_offsets(lengths)
+        if intra.numel() == 0:
             return empty_q, empty_q
-        query_exp = torch.repeat_interleave(query, lengths)
-        bucket_ids = torch.repeat_interleave(
-            torch.arange(lengths.numel(), device=pix.device, dtype=torch.int64),
-            lengths,
-        )
-        offsets = torch.cumsum(
-            torch.cat(
-                (
-                    torch.zeros(1, dtype=torch.int64, device=pix.device),
-                    lengths[:-1],
-                )
-            ),
-            dim=0,
-        )
-        intra = torch.arange(total, device=pix.device, dtype=torch.int64)
-        intra = intra - torch.repeat_interleave(offsets, lengths)
-        return query_exp, self.order[starts[bucket_ids] + intra]
+        return torch.repeat_interleave(query, lengths), self.order[
+            starts[bucket] + intra
+        ]
 
     def query_disc(
         self, lon: Tensor | float, lat: Tensor | float, radius_deg: float

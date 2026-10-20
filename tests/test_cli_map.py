@@ -1247,6 +1247,7 @@ def test_run_field_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path
 
     assert map_command._run_field(args) == 0
     by_band = {ns.inr_band: ns for ns in captured}
+    assert set(by_band) == {"F277W", "F356W"}
     assert by_band["F277W"].inputs == [paths[0], paths[2]]
     assert by_band["F277W"].weights == [1.0, 3.0]
     assert by_band["F277W"].background_offsets == [0.1, 0.3]
@@ -1254,3 +1255,47 @@ def test_run_field_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path
     assert by_band["F277W"].mask_maps == ["a_mask.fits", "c_mask.fits"]
     assert by_band["F356W"].inputs == [paths[1]]
     assert by_band["F356W"].weights == [2.0]
+
+
+def test_run_field_per_filter_keeps_running_after_a_group_fails(
+    monkeypatch, tmp_path
+) -> None:
+    from torchsky.cli import map_command
+
+    paths = [str(tmp_path / name) for name in ("a.fits", "b.fits")]
+    filters = {"a.fits": "F277W", "b.fits": "F356W"}
+    calls: list[str] = []
+
+    def fake_read(path, *, hdu=0, return_header=False, device=None):
+        header = _simple_header()
+        header["FILTER"] = filters[Path(path).name]
+        image = torch.zeros((8, 8), dtype=torch.float32)
+        if return_header:
+            return image, header
+        return image
+
+    def fake_run_single(ns):
+        calls.append(ns.inr_band)
+        return 1 if ns.inr_band == "F277W" else 0
+
+    monkeypatch.setattr(map_command, "read", fake_read)
+    monkeypatch.setattr(map_command, "_run_field_single", fake_run_single)
+
+    args = argparse.Namespace(
+        inputs=paths,
+        weights=[1.0, 1.0],
+        background_offsets=[0.0, 0.0],
+        weight_maps=[None, None],
+        mask_maps=[None, None],
+        primary_beam_maps=[None, None],
+        hdu=0,
+        output=str(tmp_path / "out"),
+        per_filter=True,
+        inr_band=None,
+        device="cpu",
+    )
+
+    # A failing band must not short-circuit the remaining bands, and its status
+    # is what the command reports.
+    assert map_command._run_field(args) == 1
+    assert calls == ["F277W", "F356W"]

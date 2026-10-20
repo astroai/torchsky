@@ -16,7 +16,7 @@ from torchfits import read
 _ROLES = {"psf", "background"}
 
 def load_operator_calibration_split(
-    manifest: Path | dict[str, Any],
+    manifest: Path | str | dict[str, Any],
     *,
     split: str,
     role: str,
@@ -35,8 +35,8 @@ def load_operator_calibration_split(
     role = role.lower()
     if role not in _ROLES:
         raise ValueError("role must be psf or background")
-    if isinstance(manifest, Path):
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    if isinstance(manifest, (str, Path)):
+        payload = json.loads(Path(manifest).read_text(encoding="utf-8"))
     else:
         payload = manifest
     products = payload.get("extraction", {}).get("products", {})

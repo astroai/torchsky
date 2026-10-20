@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import shutil
 import tempfile
 from dataclasses import dataclass
 from itertools import islice
@@ -281,15 +282,8 @@ def _accumulate_ring_chunk(
         sep_hits.append(sep[mask] * 3600.0)
 
 
-def _choose_default_coarse_nside(
-    left_ra: Tensor,
-    left_dec: Tensor,
-    right_ra: Tensor,
-    right_dec: Tensor,
-    *,
-    radius_arcsec: float,
-) -> int:
-    del left_ra, left_dec, right_ra, right_dec
+def _choose_default_coarse_nside(*, radius_arcsec: float) -> int:
+    """Coarsest nested NSIDE whose pixels are no larger than the cap radius."""
     if radius_arcsec <= 0:
         raise ValueError("radius_arcsec must be positive")
     if radius_arcsec >= 180.0 * 3600.0:
@@ -600,13 +594,7 @@ def _crossmatch_sky_coarse_indexed(
         radius_arcsec, int(left_ra.numel()), device
     )
     if right_index is None:
-        coarse_nside = _choose_default_coarse_nside(
-            left_ra,
-            left_dec,
-            right_ra,
-            right_dec,
-            radius_arcsec=radius_max,
-        )
+        coarse_nside = _choose_default_coarse_nside(radius_arcsec=radius_max)
         coarse_index = _build_coarse_healpix_index(
             right_ra, right_dec, coarse_nside=coarse_nside
         )
@@ -897,13 +885,7 @@ def crossmatch_sky_streamed(
     if right_chunk_size <= 0:
         raise ValueError("chunk sizes must be positive")
 
-    coarse_nside = _choose_default_coarse_nside(
-        torch.empty(0, device=device),
-        torch.empty(0, device=device),
-        right_ra,
-        right_dec,
-        radius_arcsec=radius_arcsec,
-    )
+    coarse_nside = _choose_default_coarse_nside(radius_arcsec=radius_arcsec)
     coarse_index = HealpixIndex.build(
         right_ra, right_dec, nside=coarse_nside, nest=True
     )
@@ -1106,46 +1088,25 @@ def _tile_catalog_to_parquet(
             pix_sorted = pixels_np[order]
             row_sorted = order.astype(np.int64) + n_rows
 
-            pixel_start = 0
-            for i in range(1, n):
-                if pix_sorted[i] != pix_sorted[pixel_start]:
-                    pix = int(pix_sorted[pixel_start])
-                    pixel_batch = pa.RecordBatch.from_arrays(
-                        [
-                            pa.array(ra_sorted[pixel_start:i]),
-                            pa.array(dec_sorted[pixel_start:i]),
-                            pa.array(pix_sorted[pixel_start:i]),
-                            pa.array(row_sorted[pixel_start:i]),
-                        ],
-                        names=["lon", "lat", "coarse_pixel", "source_row"],
-                    )
-                    if writer is None:
-                        writer = pq.ParquetWriter(str(path), pixel_batch.schema)
-                    assert writer is not None
-                    writer.write_batch(pixel_batch)
-                    n_rows += len(pixel_batch)
-                    pixel_to_rgs.setdefault(pix, []).append(rg_idx)
-                    rg_idx += 1
-                    pixel_start = i
-
-            # last pixel group in this batch
-            pix = int(pix_sorted[pixel_start])
-            pixel_batch = pa.RecordBatch.from_arrays(
-                [
-                    pa.array(ra_sorted[pixel_start:n]),
-                    pa.array(dec_sorted[pixel_start:n]),
-                    pa.array(pix_sorted[pixel_start:n]),
-                    pa.array(row_sorted[pixel_start:n]),
-                ],
-                names=["lon", "lat", "coarse_pixel", "source_row"],
-            )
-            if writer is None:
-                writer = pq.ParquetWriter(str(path), pixel_batch.schema)
-            assert writer is not None
-            writer.write_batch(pixel_batch)
-            n_rows += len(pixel_batch)
-            pixel_to_rgs.setdefault(pix, []).append(rg_idx)
-            rg_idx += 1
+            # One row group per contiguous pixel run.
+            cuts = np.flatnonzero(pix_sorted[1:] != pix_sorted[:-1]) + 1
+            bounds = np.concatenate(([0], cuts, [n]))
+            for start, stop in zip(bounds[:-1], bounds[1:], strict=True):
+                pixel_batch = pa.RecordBatch.from_arrays(
+                    [
+                        pa.array(ra_sorted[start:stop]),
+                        pa.array(dec_sorted[start:stop]),
+                        pa.array(pix_sorted[start:stop]),
+                        pa.array(row_sorted[start:stop]),
+                    ],
+                    names=["lon", "lat", "coarse_pixel", "source_row"],
+                )
+                if writer is None:
+                    writer = pq.ParquetWriter(str(path), pixel_batch.schema)
+                writer.write_batch(pixel_batch)
+                n_rows += len(pixel_batch)
+                pixel_to_rgs.setdefault(int(pix_sorted[start]), []).append(rg_idx)
+                rg_idx += 1
     finally:
         if writer is not None:
             writer.close()
@@ -1205,13 +1166,7 @@ def crossmatch_sky_from_arrow(
     try:
         left_path = Path(tmpdir) / "left.parquet"
         right_path = Path(tmpdir) / "right.parquet"
-        coarse_nside = _choose_default_coarse_nside(
-            torch.empty(0),
-            torch.empty(0),
-            torch.empty(0),
-            torch.empty(0),
-            radius_arcsec=radius_arcsec,
-        )
+        coarse_nside = _choose_default_coarse_nside(radius_arcsec=radius_arcsec)
 
         left_pixel_map, n_left = _tile_catalog_to_parquet(
             left_source,
@@ -1314,6 +1269,4 @@ def crossmatch_sky_from_arrow(
             sort_within_left=find == "all",
         )
     finally:
-        import shutil
-
         shutil.rmtree(tmpdir, ignore_errors=True)

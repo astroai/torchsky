@@ -90,7 +90,7 @@ def _register_viz_parser(subparsers: argparse.Action) -> None:
         default=None,
         dest="cors_origins",
         metavar="URL",
-        help="Allowed CORS origin (repeatable). Default: all origins, no credentials.",
+        help="Allowed CORS origin (repeatable). Default: no cross-origin requests.",
     )
     p.add_argument(
         "--cors-credentials",
@@ -101,17 +101,19 @@ def _register_viz_parser(subparsers: argparse.Action) -> None:
 
 
 def _viz_handler(args: argparse.Namespace) -> int:
-    try:
-        from torchsky.viz import serve
-    except ImportError:
-        import sys
+    import sys
 
+    try:
+        import uvicorn  # noqa: F401  (thin probe for the optional extra)
+    except ImportError:
         print(
             "torchsky[viz] extra not installed.\n"
             "Install with: pip install 'torchsky[viz]'",
             file=sys.stderr,
         )
         return 1
+    from torchsky.viz import serve
+
     cors = list(args.cors_origins) if args.cors_origins else None
     serve(
         root=args.root,

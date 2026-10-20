@@ -491,11 +491,16 @@
     "create_validation_transform"
   ],
   "torchsky.viz": [
+    "SkyGrid",
+    "healpix_sky_grid",
+    "plot_healpix_sky",
     "plot_pixel_spectrum",
     "plot_pseudo_rgb",
+    "plot_sky_grid",
     "serve",
     "serve_background",
-    "show_url"
+    "show_url",
+    "sky_grid"
   ],
   "torchsky.wcs": [
     "AffineFitResult",

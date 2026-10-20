@@ -15,91 +15,8 @@ import numpy as np
 import torch
 from torch import Tensor
 
-# ---------------------------------------------------------------------------
-# Colormap LUTs — embedded 256×3 uint8 numpy arrays.
-# ---------------------------------------------------------------------------
-
-
-def _make_lut(*keypoints: tuple[float, tuple[int, int, int]]) -> np.ndarray:
-    """Linearly interpolate between (position, RGB) keypoints → 256×3 uint8."""
-    lut = np.zeros((256, 3), dtype=np.float32)
-    positions = [p for p, _ in keypoints]
-    colors = [np.array(c, dtype=np.float32) for _, c in keypoints]
-    for i in range(256):
-        t = i / 255.0
-        # find segment
-        idx = 0
-        for j in range(len(positions) - 1):
-            if t >= positions[j]:
-                idx = j
-        if idx >= len(positions) - 1:
-            lut[i] = colors[-1]
-        else:
-            t0, t1 = positions[idx], positions[idx + 1]
-            alpha = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
-            lut[i] = (1 - alpha) * colors[idx] + alpha * colors[idx + 1]
-    return np.clip(lut, 0, 255).astype(np.uint8)
-
-
-_COLORMAPS: dict[str, np.ndarray] = {
-    "gray": _make_lut(
-        (0.0, (0, 0, 0)),
-        (1.0, (255, 255, 255)),
-    ),
-    "viridis": _make_lut(
-        (0.000, (68, 1, 84)),
-        (0.125, (72, 40, 120)),
-        (0.250, (62, 83, 140)),
-        (0.375, (49, 120, 150)),
-        (0.500, (38, 153, 137)),
-        (0.625, (53, 183, 121)),
-        (0.750, (110, 206, 88)),
-        (0.875, (181, 222, 43)),
-        (1.000, (253, 231, 37)),
-    ),
-    "hot": _make_lut(
-        (0.000, (0, 0, 0)),
-        (0.330, (255, 0, 0)),
-        (0.660, (255, 255, 0)),
-        (1.000, (255, 255, 255)),
-    ),
-    "thermal": _make_lut(
-        (0.000, (0, 0, 128)),
-        (0.250, (0, 128, 255)),
-        (0.500, (0, 255, 0)),
-        (0.750, (255, 165, 0)),
-        (1.000, (255, 0, 0)),
-    ),
-    "rdbu_r": _make_lut(
-        (0.000, (103, 0, 31)),
-        (0.200, (214, 96, 77)),
-        (0.350, (244, 165, 130)),
-        (0.500, (247, 247, 247)),
-        (0.650, (146, 197, 222)),
-        (0.800, (67, 147, 195)),
-        (1.000, (5, 48, 97)),
-    ),
-    "seismic": _make_lut(
-        (0.000, (0, 0, 76)),
-        (0.250, (0, 102, 255)),
-        (0.450, (138, 190, 255)),
-        (0.500, (255, 255, 255)),
-        (0.550, (255, 138, 138)),
-        (0.750, (255, 26, 26)),
-        (1.000, (76, 0, 0)),
-    ),
-}
-
-COLORMAP_NAMES = list(_COLORMAPS.keys())
-
-
-def get_lut(name: str) -> np.ndarray:
-    """Return 256×3 uint8 colormap LUT by name."""
-    key = name.lower().replace("-", "_")
-    if key not in _COLORMAPS:
-        raise ValueError(f"Unknown colormap {name!r}. Choose from {COLORMAP_NAMES}")
-    return _COLORMAPS[key]
-
+from ..palettes import COLORMAP_NAMES as COLORMAP_NAMES
+from ..palettes import get_lut as get_lut
 
 # ---------------------------------------------------------------------------
 # ZScale — full IRAF iterative algorithm
@@ -245,11 +162,12 @@ def to_png(
     indices = (arr_cpu * 255).long().numpy()  # H×W
     rgb = lut[indices]  # H×W×3
 
-    if alpha_mask is not None or nan_mask.any():
+    has_nan = bool(nan_mask.any())
+    if alpha_mask is not None or has_nan:
         rgba = np.zeros((*indices.shape, 4), dtype=np.uint8)
         rgba[:, :, :3] = rgb
         alpha = np.ones(indices.shape, dtype=np.uint8) * 255
-        if nan_mask.any():
+        if has_nan:
             alpha[nan_mask.numpy()] = 0
         if alpha_mask is not None:
             alpha[~alpha_mask.cpu().numpy()] = 0
@@ -300,11 +218,12 @@ def detect_dynamic_range(arr: Tensor) -> dict:
     Analyze image dynamic range and return display recommendations.
 
     Returns dict with:
-        dr_ratio            : max / 99th-pctile (robust DR)
-        has_negatives       : fraction of pixels < 0
+        dr_ratio            : 99th / 1st percentile of positive pixels (robust DR)
+        neg_fraction        : fraction of pixels < 0
         cr_fraction         : fraction of pixels > 5σ above median
         recommended_stretch : 'linear' | 'log' | 'asinh'
         warnings            : list of warning strings
+        stats               : min/max/median/std/p1/p99 of finite pixels
     """
     flat = arr.flatten().float()
     finite = flat[torch.isfinite(flat)]
@@ -366,7 +285,7 @@ def compute_histogram(arr: Tensor, n_bins: int = 256) -> dict:
     """
     Compute histogram + statistics for image display.
 
-    Returns dict with bins (edges), counts, stats, and dynamic range info.
+    Returns dict with bin centres, counts, ZScale limits, and dynamic range info.
     """
     flat = arr.flatten().float()
     finite = flat[torch.isfinite(flat)]

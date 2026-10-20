@@ -101,11 +101,7 @@ def extinction_from_a_v(
     """
     from .extinction import ccm89
 
-    a_lambda = ccm89(wave_angstrom, a_v, r_v=r_v)
-    return torch.pow(
-        torch.as_tensor(10.0, device=a_lambda.device, dtype=a_lambda.dtype),
-        -0.4 * a_lambda,
-    )
+    return torch.pow(10.0, -0.4 * ccm89(wave_angstrom, a_v, r_v=r_v))
 
 
 def dib_optical_depth(
@@ -137,8 +133,9 @@ def dib_optical_depth(
         dtype=wave.dtype,
     )
     for center, tau_0, sigma in zip(bands, tau_per_ebv, sigma_angstrom):
-        gaussian = torch.exp(-0.5 * ((wave - center) / sigma) ** 2)
-        tau = tau + tau_0 * ebv_t * scale * gaussian
+        tau = tau + tau_0 * ebv_t * scale * torch.exp(
+            -0.5 * ((wave - center) / sigma).square()
+        )
     return tau
 
 

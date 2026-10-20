@@ -229,14 +229,14 @@ def comoving_distance(
         return z_t
     z_nonneg = _nonnegative_redshift(z_t)
     z_limit = z_nonneg.detach().amax() * 1.01 + 1e-5
-    table_size = max(int(n_steps), 2)
+    table_size = int(n_steps)
     z_grid = (
         torch.linspace(0.0, 1.0, table_size, device=z_t.device, dtype=z_t.dtype)
         * z_limit
     )
     integrand = 1.0 / e_of_z(z_grid, om0=om0, ok0=ok0, w0=w0, wa=wa)
-    dz = z_limit / (table_size - 1)
-    areas = (integrand[:-1] + integrand[1:]) * 0.5 * dz
+    step = z_limit / (table_size - 1)
+    areas = (integrand[:-1] + integrand[1:]) * 0.5 * step
     integral = torch.cat(
         (
             torch.zeros(1, device=z_t.device, dtype=z_t.dtype),
@@ -244,7 +244,6 @@ def comoving_distance(
         )
     )
     d_c_grid = _hubble_distance_mpc(H0, device=z_t.device, dtype=z_t.dtype) * integral
-    step = z_limit / (table_size - 1)
     idx_float = z_nonneg / step
     idx_floor = idx_float.floor().to(dtype=torch.long).clamp(0, table_size - 2)
     weight = idx_float - idx_floor.to(dtype=z_t.dtype)

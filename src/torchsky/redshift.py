@@ -68,9 +68,10 @@ def normalize_v_kind(kind: Any) -> int:
 
 
 def one_plus_z_from_beta(beta: Tensor, relativistic: bool = True) -> Tensor:
+    """``1 + z = sqrt((1+b)/(1-b))``; ``b`` is clamped short of ``+-1``."""
     if relativistic:
         beta = torch.clamp(beta, min=-0.99999, max=0.99999)
-        return torch.sqrt((1.0 + beta) / torch.clamp(1.0 - beta, min=1e-12))
+        return torch.sqrt((1.0 + beta) / (1.0 - beta))
     return 1.0 + beta
 
 
@@ -86,22 +87,21 @@ def redshift_from_velocity_kms(v_kms: Tensor, relativistic: bool = True) -> Tens
     return one_plus_z_from_velocity_kms(v_kms, relativistic=relativistic) - 1.0
 
 
+def _beta_from_one_plus_z(one_plus_z: Tensor) -> Tensor:
+    """Invert ``sqrt((1+b)/(1-b)) = 1 + z``; ``(1+z)^2 + 1 >= 1`` always."""
+    squared = one_plus_z.square()
+    return (squared - 1.0) / (squared + 1.0)
+
+
 def velocity_kms_from_redshift(z: Tensor, relativistic: bool = True) -> Tensor:
     if relativistic:
-        one_plus_z = 1.0 + z
-        beta = (one_plus_z.pow(2) - 1.0) / torch.clamp(
-            one_plus_z.pow(2) + 1.0, min=1e-12
-        )
-        return beta * C_KM_S
+        return _beta_from_one_plus_z(1.0 + z) * C_KM_S
     return z * C_KM_S
 
 
 def beta_from_redshift(z: Tensor, relativistic: bool = True) -> Tensor:
     if relativistic:
-        one_plus_z = 1.0 + z
-        return (one_plus_z.pow(2) - 1.0) / torch.clamp(
-            one_plus_z.pow(2) + 1.0, min=1e-12
-        )
+        return _beta_from_one_plus_z(1.0 + z)
     return z
 
 

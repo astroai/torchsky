@@ -65,6 +65,7 @@ viz = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",   # uvloop + httptools for high-throughput PNG streaming
     "pillow>=10.0",              # PNG encoding: tensor → uint8 → PNG bytes
+    "matplotlib>=3.8",           # all-sky and cube figures (torchsky.viz.allsky)
 ]
 
 dev = [
@@ -88,6 +89,7 @@ test = [
     "pyarrow>=14.0",
     "pandas>=2.2",
     "astropy>=5.0",
+    "matplotlib>=3.8",
     "pyright>=1.1.350",
 ]
 examples = [

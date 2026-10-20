@@ -194,13 +194,22 @@ def evaluate_throughput(
     return torch.exp(-0.5 * torch.square((wave - center_t) / float(sigma)))
 
 
+def _first(spec: Mapping[str, Any], *keys: str) -> Any:
+    """First present, non-``None`` value for ``keys`` (no truthiness testing)."""
+    for key in keys:
+        value = spec.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def throughput_from_mapping(
     band_id: str, spec: Mapping[str, Any]
 ) -> Passband | dict[str, Any]:
     """Build a :class:`Passband` or Gaussian/LVF dict from a filter-profile mapping."""
-    wl = spec.get("transmission_wavelength_nm") or spec.get("transmission_wavelength")
-    tr = spec.get("transmission_value") or spec.get("transmission")
-    lvf = bool(spec.get("lvf", False) or spec.get("position_dependent", False))
+    wl = _first(spec, "transmission_wavelength_nm", "transmission_wavelength")
+    tr = _first(spec, "transmission_value", "transmission")
+    lvf = bool(_first(spec, "lvf", "position_dependent"))
     if wl is not None and tr is not None and not isinstance(tr, (int, float)):
         unit: WavelengthUnit = (
             "nm" if spec.get("transmission_wavelength_nm") is not None else "angstrom"
@@ -213,12 +222,8 @@ def throughput_from_mapping(
             name=band_id,
             wavelength_unit=unit,
         )
-    center = (
-        spec.get("transmission_center")
-        or spec.get("lambda_eff_nm")
-        or spec.get("wavelength")
-    )
-    sigma = spec.get("transmission_sigma") or spec.get("sigma_nm")
+    center = _first(spec, "transmission_center", "lambda_eff_nm", "wavelength")
+    sigma = _first(spec, "transmission_sigma", "sigma_nm")
     if sigma is None and spec.get("fwhm_nm") is not None:
         sigma = float(spec["fwhm_nm"]) / 2.354820045
     if center is None and spec.get("wavelength_range") is not None:
@@ -381,7 +386,7 @@ def synthetic_photometry(
                 covs[i] = 0.0
                 valids[i] = False
                 continue
-            row, cov, ok, unit = _integrate_masked(
+            row, cov, ok, _ = _integrate_masked(
                 _to_angstrom(row_wave),
                 row_flux,
                 passband,
@@ -447,7 +452,8 @@ def flux_to_magnitude(
     zero = torch.as_tensor(zero_point, dtype=values.dtype, device=values.device)
     if torch.any(zero <= 0) or not torch.all(torch.isfinite(zero)):
         raise ValueError("zero_point must be finite and positive")
-    return torch.where(values > 0, -2.5 * torch.log10(values / zero), torch.nan)
+    safe = torch.where(values > 0, values, torch.ones_like(values))
+    return torch.where(values > 0, -2.5 * torch.log10(safe / zero), torch.nan)
 
 
 def magnitude_to_flux(
@@ -512,11 +518,11 @@ def _integrate_masked(
     den_lambda = zero.clone()
     den_nu = zero.clone()
     covered = zero.clone()
-    pb_wave = passband.wavelength.to(device=wave.device, dtype=wave.dtype)
-    pb_response = passband.throughput.to(device=wave.device, dtype=wave.dtype)
-    full_weight = torch.trapezoid(pb_response * pb_wave, pb_wave)
+    full_weight = _passband_weight(passband, wave)
     for start, stop in runs:
-        grid, response, piece_coverage = _covered_grid(wave[start:stop], passband)
+        grid, response, piece_coverage = _covered_grid(
+            wave[start:stop], passband, full_weight
+        )
         if grid.numel() < 2:
             continue
         sampled_flux = _linear_interpolate(wave[start:stop], batch[:, start:stop], grid)
@@ -549,15 +555,23 @@ def _to_angstrom(wavelength: torch.Tensor) -> torch.Tensor:
     return wavelength
 
 
-def _covered_grid(
-    wave: torch.Tensor, passband: Passband
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def _passband_weight(passband: Passband, wave: torch.Tensor) -> torch.Tensor:
+    """Full :math:`\\int \\lambda R_\\lambda d\\lambda` reference weight."""
     pb_wave = passband.wavelength.to(device=wave.device, dtype=wave.dtype)
     pb_response = passband.throughput.to(device=wave.device, dtype=wave.dtype)
-    full_weight = torch.trapezoid(pb_response * pb_wave, pb_wave)
-    lo, hi = wave[0], wave[-1]
-    left = torch.maximum(lo, pb_wave[0])
-    right = torch.minimum(hi, pb_wave[-1])
+    return torch.trapezoid(pb_response * pb_wave, pb_wave)
+
+
+def _covered_grid(
+    wave: torch.Tensor, passband: Passband, full_weight: torch.Tensor | None = None
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Union grid of the spectrum and passband support with linear responses."""
+    pb_wave = passband.wavelength.to(device=wave.device, dtype=wave.dtype)
+    pb_response = passband.throughput.to(device=wave.device, dtype=wave.dtype)
+    if full_weight is None:
+        full_weight = torch.trapezoid(pb_response * pb_wave, pb_wave)
+    left = torch.maximum(wave[0], pb_wave[0])
+    right = torch.minimum(wave[-1], pb_wave[-1])
     if not bool(right > left):
         return (
             pb_wave[:0],
@@ -566,11 +580,11 @@ def _covered_grid(
         )
     pb_inside = pb_wave[(pb_wave > left) & (pb_wave < right)]
     spectrum_inside = wave[(wave > left) & (wave < right)]
-    grid = torch.cat((left[None], pb_inside, spectrum_inside, right[None]))
-    grid = torch.sort(grid).values
+    # Sorted, not deduplicated: coincident spectrum and passband samples must
+    # each keep their own gradient path into the integral.
+    grid = torch.sort(torch.cat((left[None], pb_inside, spectrum_inside, right[None]))).values
     response = _linear_interpolate(pb_wave, pb_response.unsqueeze(0), grid).squeeze(0)
-    covered_weight = torch.trapezoid(response * grid, grid)
-    coverage = covered_weight / full_weight
+    coverage = torch.trapezoid(response * grid, grid) / full_weight
     return grid, response, coverage
 
 
@@ -589,7 +603,9 @@ def _linear_interpolate(
 
     index = torch.searchsorted(x, query).clamp(1, x.numel() - 1)
     x0, x1 = x[index - 1], x[index]
-    fraction = (query - x0) / (x1 - x0)
+    # A zero-width cell can only sit at the grid start, where both endpoints
+    # hold the same value; the floor keeps that cell at fraction zero.
+    fraction = (query - x0) / (x1 - x0).clamp_min(torch.finfo(x.dtype).tiny)
     if y.ndim == 1:
         return y[index - 1] + fraction * (y[index] - y[index - 1])
     y0, y1 = y[:, index - 1], y[:, index]

@@ -81,7 +81,8 @@ def _tile_lon_lat(
 
     Uses the HEALPix NESTED subdivision: each tile at (order, pix)
     corresponds to NESTED sub-pixels at order+log2(tile_size).
-    Returns (lon, lat) tensors of shape (tile_size, tile_size), in degrees.
+    Returns (lon, lat) tensors of shape (tile_size, tile_size), in degrees,
+    in raster order: row 0 is the northern edge.
     """
     _lazy_import()
     nside_tile = 1 << order
@@ -94,11 +95,12 @@ def _tile_lon_lat(
     sub_pix = torch.arange(start, start + tile_size * tile_size, dtype=torch.int64)
 
     lon, lat = _healpix.pix2ang(nside_sub, sub_pix, nest=True, lonlat=True)
-    # Standard HiPS tile: reshape so rows run South→North, cols West→East
-    # The NESTED space-filling curve gives a specific 2D layout
     lon = lon.reshape(tile_size, tile_size)
     lat = lat.reshape(tile_size, tile_size)
-    return lon, lat
+    # NESTED order runs south -> north, but HiPS PNG/JPG tiles store scanlines
+    # top -> down (unlike FITS), so the raster array is flipped once: the first
+    # row of the encoded tile is the northern edge.
+    return lon.flip(0), lat.flip(0)
 
 
 def _world_to_sample_grid(
@@ -113,7 +115,7 @@ def _world_to_sample_grid(
 
     Returns (grid_x, grid_y) ready for F.grid_sample, and a validity mask.
     """
-    #Project (lon, lat) -> 0-based pixel coordinates
+    # Project (lon, lat) -> 0-based pixel coordinates
     x_pix, y_pix = wcs.world_to_pixel(lon.reshape(-1), lat.reshape(-1), origin=0)
 
     # Normalize 0-based pixel centers [0, W-1] to [-1, 1] for grid_sample(align_corners=True)
@@ -216,7 +218,7 @@ def render_hips_tile(
         src, grid, mode="bilinear", align_corners=True, padding_mode="zeros"
     )
     # sampled: 1×1×(tile^2)×1
-    sampled = sampled.squeeze().reshape(tile_size, tile_size)
+    sampled = sampled.reshape(tile_size, tile_size)
 
     # Mask out-of-bounds pixels
     valid_2d = valid.to(device=image.device).reshape(tile_size, tile_size)
@@ -247,12 +249,16 @@ def render_preview(
     if scale < 1.0:
         new_h = max(1, int(h * scale))
         new_w = max(1, int(w * scale))
-        img = F.interpolate(
-            image.float().unsqueeze(0).unsqueeze(0),
-            size=(new_h, new_w),
-            mode="bilinear",
-            align_corners=False,
-        ).squeeze()
+        img = (
+            F.interpolate(
+                image.float().unsqueeze(0).unsqueeze(0),
+                size=(new_h, new_w),
+                mode="bilinear",
+                align_corners=False,
+            )
+            .squeeze(0)
+            .squeeze(0)
+        )
     else:
         img = image.float()
 

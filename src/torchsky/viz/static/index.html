@@ -799,9 +799,19 @@ async function api(path, opts = {}) {
   const r = await fetch(`${API}/api${path}`, opts);
   if (!r.ok) {
     const err = await r.json().catch(() => ({detail: r.statusText}));
-    throw new Error(err.detail || r.statusText);
+    throw new Error(errorText(err.detail, r.statusText));
   }
   return r.json();
+}
+
+// FastAPI returns a string for raised errors and an array of objects for
+// request-validation failures; stringify both into something readable.
+function errorText(detail, fallback) {
+  if (Array.isArray(detail)) {
+    const parts = detail.map(d => d?.msg || JSON.stringify(d)).filter(Boolean);
+    return parts.length ? parts.join('; ') : fallback;
+  }
+  return detail || fallback;
 }
 
 function status(msg) {
@@ -910,7 +920,7 @@ async function openFile(path, hdu = 0) {
     populateHDUSelect(info.hdu_list, hdu);
     updateWCSInfo(info.wcs);
 
-    // 2. Register HiPS survey
+    // 2. Histogram + display statistics
     const reg = await api(`/fits/histogram?path=${encodeURIComponent(path)}&hdu=${hdu}`);
     state.histData = reg;
     drawHistogram(reg);
@@ -1238,7 +1248,6 @@ function drawPullHistogram(data) {
 
   // Gaussian overlay
   if (data.gaussian_counts) {
-    const gmax = Math.max(...data.gaussian_counts, 1);
     ctx.strokeStyle = 'oklch(80% 0.05 260)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();

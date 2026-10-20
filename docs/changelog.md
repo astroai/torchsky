@@ -27,6 +27,22 @@ owned by `torchfits`.
   imported from `torchfits.data`.
 
 ### Added
+- **Slide-ready all-sky figures**: `torchsky.viz.plot_healpix_sky` and
+  `plot_sky_grid` draw dense or sparse HEALPix maps and scattered samples on
+  Mollweide, Aitoff, Hammer and north-polar projections, with tensor-native
+  gridding, hour/degree tick rows, themed colorbars, MOC footprint and catalog
+  overlays, and `dark`/`paper` themes. `torchsky.viz.palettes` is now the shared
+  colormap source for both figures and PNG tiles, and matplotlib joined the
+  `viz` extra (imported lazily). See `docs/viz.md`.
+  - The polar view resamples onto an azimuth/radius raster with a cap-averaged
+    inner ring, so the pole no longer draws a starburst of converging columns.
+  - Overlay legends keep a reserved band under the map for every projection
+    instead of sitting on the rim, and declination labels carry background
+    halos so they stay legible over data.
+  - Colour-bar ticks are pinned to evenly spaced positions for `asinh`/`linear`
+    and to decades for `log` (falling back to even spacing when the range
+    straddles no decade), which also fixes the tick crowding and the many-decade
+    overflows of wide `log` displays.
 - **py.typed**: PEP 561 type-checker marker for downstream type inference.
 - Flux-conserving spectral rebinning and wavelength-aware relativistic Doppler
   shifts with batched tensor, mask, and inverse-variance propagation.

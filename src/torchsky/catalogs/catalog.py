@@ -100,12 +100,9 @@ class Catalog:
         extras: dict[str, Tensor] = {}
         for name, col in self.columns.items():
             tensor = _move_column(torch.as_tensor(col), device)
-            if tensor.ndim == 0:
-                raise ValueError(f"columns[{name!r}] must be a 1-D row column")
-            flat = tensor.reshape(tensor.shape[0], *tensor.shape[1:])
-            if int(flat.shape[0]) != n:
+            if tensor.ndim == 0 or int(tensor.shape[0]) != n:
                 raise ValueError(f"columns[{name!r}] must match the number of rows")
-            extras[str(name)] = flat
+            extras[str(name)] = tensor
         self.columns = extras
         self._index = None
 
@@ -128,34 +125,24 @@ class Catalog:
         return self.lon.device
 
     def to(self, device: torch.device | str) -> Catalog:
+        """Return a copy on ``device``; ``__post_init__`` re-normalises dtypes."""
         device_t = torch.device(device)
 
-        def _move(value: Tensor | None, *, floating: bool = True) -> Tensor | None:
-            if value is None:
-                return None
-            if floating and value.is_floating_point():
-                return _to_device(value, device_t)
-            return value.to(device=device_t)
+        def _move(value: Tensor | None) -> Tensor | None:
+            return None if value is None else value.to(device=device_t)
 
-        extras: dict[str, Tensor] = {
-            name: _move_column(col, device_t) for name, col in self.columns.items()
-        }
-        epoch = (
-            _to_device(self.epoch, device_t)
-            if isinstance(self.epoch, Tensor)
-            else torch.as_tensor(self.epoch, dtype=_work_dtype(device_t), device=device_t)
-        )
+        epoch = self.epoch.to(device=device_t) if isinstance(self.epoch, Tensor) else self.epoch
         return Catalog(
-            lon=_to_device(self.lon, device_t),
-            lat=_to_device(self.lat, device_t),
+            lon=self.lon.to(device=device_t),
+            lat=self.lat.to(device=device_t),
             frame=self.frame,
             epoch=epoch,
             pm_lon_coslat_mas_yr=_move(self.pm_lon_coslat_mas_yr),
             pm_lat_mas_yr=_move(self.pm_lat_mas_yr),
             parallax_mas=_move(self.parallax_mas),
             radial_velocity_km_s=_move(self.radial_velocity_km_s),
-            valid=_move(self.valid, floating=False),
-            columns=extras,
+            valid=_move(self.valid),
+            columns={name: _move(col) for name, col in self.columns.items()},
         )
 
     @property

@@ -12,12 +12,6 @@ import os
 import re
 from pathlib import Path
 from typing import Any, Literal
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    pass
-else:
-    pass
 
 import torch
 
@@ -265,17 +259,24 @@ def _atomic_write_json(path: Path, data: Any) -> None:
 def _load_cached_transmission(
     cache_dir: Path, filter_id: str
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
+    """Return a cached curve, or ``None`` when missing/truncated/inconsistent.
+
+    A damaged entry must trigger a refetch rather than a hard failure, so shape
+    consistency is validated here instead of surfacing from ``_prepare_curve_for_field``.
+    """
     cache_file = cache_dir / f"filter_{_sanitize_filename(filter_id)}.json"
     if not cache_file.is_file():
         return None
     try:
         with open(cache_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        wl = torch.as_tensor(data["wavelength"], dtype=torch.float64)
-        tr = torch.as_tensor(data["transmission"], dtype=torch.float64)
-        return wl, tr
+        wl = torch.as_tensor(data["wavelength"], dtype=torch.float64).reshape(-1)
+        tr = torch.as_tensor(data["transmission"], dtype=torch.float64).reshape(-1)
     except Exception:
         return None
+    if wl.numel() < 2 or wl.shape != tr.shape:
+        return None
+    return wl, tr
 
 
 def _save_cached_transmission(
@@ -336,6 +337,39 @@ def _save_cached_filter_list(
     _atomic_write_json(cache_file, rows)
 
 
+def _svo_fps() -> Any:
+    """Import astroquery's SVO FPS client, failing with an install hint."""
+    try:
+        from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "astroquery is required for --inr-spectral-source=svo when the filter "
+            "profile is not cached. Install with: pip install 'astroquery>=0.4.6'"
+        ) from exc
+    return SvoFps
+
+
+def _svo_transmission(
+    cache_dir: Path | None, filter_id: str
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return one SVO transmission curve, preferring the on-disk cache."""
+    if cache_dir is not None:
+        cached = _load_cached_transmission(cache_dir, filter_id)
+        if cached is not None:
+            return cached
+    data = _svo_fps().get_transmission_data(filter_id)
+    wl = torch.as_tensor(_column_values(data["Wavelength"]), dtype=torch.float64)
+    tr = torch.as_tensor(_column_values(data["Transmission"]), dtype=torch.float64)
+    if cache_dir is not None:
+        _save_cached_transmission(cache_dir, filter_id, wl, tr)
+    return wl, tr
+
+
+def _column_values(column: Any) -> Any:
+    """Return an astropy column/Quantity as raw values."""
+    return column.value if hasattr(column, "value") else column
+
+
 def bandpass_from_svo(
     *,
     band_name: str,
@@ -351,97 +385,25 @@ def bandpass_from_svo(
 
     if filter_id:
         fid = str(filter_id).strip()
-        if cdir is not None:
-            cached = _load_cached_transmission(cdir, fid)
-            if cached is not None:
-                wl, tr = cached
-                spec = _summarize_transmission_curve(wl, tr, band_name=bn)
-                spec["svo_filter_id"] = fid
-                return spec
-
-        try:
-            from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
-        except Exception as exc:  # pragma: no cover - optional dependency
-            raise ImportError(
-                "astroquery is required for --inr-spectral-source=svo when filter profile is not cached. "
-                "Install with: pip install 'astroquery>=0.4.6'"
-            ) from exc
-
-        data = SvoFps.get_transmission_data(fid)
-        wl = torch.as_tensor(
-            data["Wavelength"].value
-            if hasattr(data["Wavelength"], "value")
-            else data["Wavelength"],
-            dtype=torch.float64,
+    else:
+        rows = (
+            _load_cached_filter_list(cdir, facility=facility, instrument=instrument)
+            if cdir is not None
+            else None
         )
-        tr = torch.as_tensor(
-            data["Transmission"].value
-            if hasattr(data["Transmission"], "value")
-            else data["Transmission"],
-            dtype=torch.float64,
-        )
-        if cdir is not None:
-            _save_cached_transmission(cdir, fid, wl, tr)
-        spec = _summarize_transmission_curve(wl, tr, band_name=bn)
-        spec["svo_filter_id"] = fid
-        return spec
-
-    fl: Any = None
-    if cdir is not None:
-        fl = _load_cached_filter_list(cdir, facility=facility, instrument=instrument)
-
-    if fl is None:
-        try:
-            from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
-        except Exception as exc:  # pragma: no cover - optional dependency
-            raise ImportError(
-                "astroquery is required for --inr-spectral-source=svo when filter list is not cached. "
-                "Install with: pip install 'astroquery>=0.4.6'"
-            ) from exc
-
-        fl_raw = SvoFps.get_filter_list(facility=facility, instrument=instrument)
-        if cdir is not None:
-            _save_cached_filter_list(
-                cdir, facility=facility, instrument=instrument, table=fl_raw
+        if rows is None:
+            rows = _svo_fps().get_filter_list(
+                facility=facility, instrument=instrument
             )
-        fl = fl_raw
+            if cdir is not None:
+                _save_cached_filter_list(
+                    cdir, facility=facility, instrument=instrument, table=rows
+                )
+        fid = str(_pick_svo_row(rows, band_token=band_name, prefer=prefer)["filterID"])
 
-    row = _pick_svo_row(fl, band_token=band_name, prefer=prefer)
-    fid_out = str(row["filterID"])
-
-    if cdir is not None:
-        cached = _load_cached_transmission(cdir, fid_out)
-        if cached is not None:
-            wl, tr = cached
-            spec = _summarize_transmission_curve(wl, tr, band_name=bn)
-            spec["svo_filter_id"] = fid_out
-            return spec
-
-    try:
-        from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
-    except Exception as exc:  # pragma: no cover - optional dependency
-        raise ImportError(
-            "astroquery is required for --inr-spectral-source=svo when filter profile is not cached. "
-            "Install with: pip install 'astroquery>=0.4.6'"
-        ) from exc
-
-    data = SvoFps.get_transmission_data(fid_out)
-    wl = torch.as_tensor(
-        data["Wavelength"].value
-        if hasattr(data["Wavelength"], "value")
-        else data["Wavelength"],
-        dtype=torch.float64,
-    )
-    tr = torch.as_tensor(
-        data["Transmission"].value
-        if hasattr(data["Transmission"], "value")
-        else data["Transmission"],
-        dtype=torch.float64,
-    )
-    if cdir is not None:
-        _save_cached_transmission(cdir, fid_out, wl, tr)
+    wl, tr = _svo_transmission(cdir, fid)
     spec = _summarize_transmission_curve(wl, tr, band_name=bn)
-    spec["svo_filter_id"] = fid_out
+    spec["svo_filter_id"] = fid
     return spec
 
 
