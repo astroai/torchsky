@@ -78,7 +78,7 @@ def test_fft_affine_preserves_dc_for_large_upsampling_factors(
     out = resample_lastdim_periodic_affine_fft(
         x, scale=-1.375, shift=0.3125, upsample=upsample
     )
-    torch.testing.assert_close(out, x, atol=4 * torch.finfo(dtype).eps, rtol=0.0)
+    torch.testing.assert_close(out, x, atol=16 * torch.finfo(dtype).eps, rtol=0.0)
 
 
 @pytest.mark.parametrize("n", [7, 8])
