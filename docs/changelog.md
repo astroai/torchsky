@@ -50,6 +50,11 @@ owned by `torchfits`.
   `sphere/spectral_ops.py`; the SHT primitives are imported lazily so the
   module graph stays acyclic, and `spectral` re-exports the historical names.
   spectral.py drops from 4,636 to 4,031 lines.
+- **Solver package split**: the 2,788-line `map/solvers.py` is now a package
+  with `_core` (operators, probes, preconditioners), `_state` (state-layout
+  operators and component decomposition), `_priors` (harmonic/TEB priors), and
+  `_hooks` (survey hooks). `torchsky.map.solvers` re-exports the full historical
+  surface.
 - **Image-plane mapmaking split**: the 3,984-line `map/image_plane.py` now
   re-exports three role modules: `image_plane_common` (device/validation and
   observation loading), `image_plane_projection` (resampling/projection
