@@ -598,9 +598,7 @@ std::pair<torch::Tensor, torch::Tensor> wcs_inverse_spherical_rotation_pole(
     auto u = X * east_x + Y * east_y;
     auto n = X * north_x + Y * north_y + Z * north_z;
     auto w = X * radial_x + Y * radial_y + Z * radial_z;
-    w = w.clamp(-1.0, 1.0);
-
-    auto theta = w.asin() * R2D;
+    auto theta = torch::atan2(w, torch::hypot(u, n)) * R2D;
     auto phi = (torch::atan2(u, n) + phi_p_rad) * R2D;
     phi = torch::remainder(phi, 360.0);
     return {phi, theta};
@@ -2722,15 +2720,15 @@ void wcs_world_to_pixel_fused_cpu(
             if (native_is_pole) {
                 double u_rot = X * east_x + Y * east_y;
                 double n_rot = X * north_x + Y * north_y + Z * north_z;
-                double w_rot = std::max(-1.0, std::min(1.0, X * radial_x + Y * radial_y + Z * radial_z));
-                theta = std::asin(w_rot) * R2D;
+                double w_rot = X * radial_x + Y * radial_y + Z * radial_z;
+                theta = std::atan2(w_rot, std::hypot(u_rot, n_rot)) * R2D;
                 phi = std::atan2(u_rot, n_rot) * R2D + phi_p_rad * R2D;
                 phi = std::fmod(phi + 360.0, 360.0);
             } else {
                 double u_rot = X * east_x + Y * east_y;
                 double v_rot = -(X * radial_x + Y * radial_y + Z * radial_z);
-                double w_rot = std::max(-1.0, std::min(1.0, X * north_x + Y * north_y + Z * north_z));
-                theta = std::asin(w_rot) * R2D;
+                double w_rot = X * north_x + Y * north_y + Z * north_z;
+                theta = std::atan2(w_rot, std::hypot(u_rot, v_rot)) * R2D;
                 phi = std::atan2(u_rot, -v_rot) * R2D;
                 phi = std::fmod(phi + 360.0, 360.0);
             }

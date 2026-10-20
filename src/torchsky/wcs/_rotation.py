@@ -318,7 +318,7 @@ class _RotationMixin:
                 + y_cel * self._radial_y
                 + z_cel * self._radial_z
             )
-            theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
+            theta = torch.atan2(w, torch.hypot(u, v)) * r2d
             phi = torch.remainder(torch.atan2(u, -v) * r2d, 360.0)
             return phi, theta
 
@@ -373,7 +373,7 @@ class _RotationMixin:
             + z_cel * self._pole_radial_z
         )
 
-        theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
+        theta = torch.atan2(w, torch.hypot(u, v)) * r2d
         phi = torch.remainder(torch.atan2(u, v) * r2d + self.phi_p, 360.0)
 
         return phi, theta
