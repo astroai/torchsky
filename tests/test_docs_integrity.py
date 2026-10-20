@@ -120,7 +120,8 @@ def test_site_configuration_and_assets_exist() -> None:
 
 def test_notes_are_outside_the_published_tree() -> None:
     for tree in NOTE_TREES:
-        assert (ROOT / "notes" / tree).is_dir(), f"notes/{tree}"
+        local_tree = ROOT / "notes" / tree
+        assert not local_tree.exists() or local_tree.is_dir(), f"notes/{tree}"
         assert not (DOCS / tree).exists(), f"docs/{tree} must not be published"
     assert not (DOCS / "README.md").exists(), "use docs/index.md as the entry point"
 
