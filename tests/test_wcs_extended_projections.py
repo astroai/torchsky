@@ -214,11 +214,16 @@ def test_paper2_cuda_matches_cpu(
     assert bool(valid.any()), f"No finite CUDA points for {projection}"
     dra = _ra_wrap_delta(ra_g.cpu().numpy()[valid.numpy()], ra_c.numpy()[valid.numpy()])
     ddec = dec_g.cpu().numpy()[valid.numpy()] - dec_c.numpy()[valid.numpy()]
-    np.testing.assert_allclose(dra, 0.0, atol=1e-10)
-    np.testing.assert_allclose(ddec, 0.0, atol=1e-10)
+    # CSC evaluates the WCSLIB Chan-O'Neill polynomial in float32; at the
+    # sextant seams that amplifies the CUDA/CPU operation-order difference to
+    # ~1e-6 even though both paths agree away from the seams. TSC/QSC and all
+    # non-quad-cube projections are expected to match at 1e-10.
+    parity_atol = 1.0e-6 if projection == "CSC" else 1.0e-10
+    np.testing.assert_allclose(dra, 0.0, atol=parity_atol)
+    np.testing.assert_allclose(ddec, 0.0, atol=parity_atol)
     ra_v = ra_c[valid]
     dec_v = dec_c[valid]
     x_c, y_c = cpu.world_to_pixel(ra_v, dec_v, origin=0)
     x_g, y_g = gpu.world_to_pixel(ra_v.cuda(), dec_v.cuda(), origin=0)
-    np.testing.assert_allclose(x_g.cpu().numpy(), x_c.numpy(), atol=1e-10)
-    np.testing.assert_allclose(y_g.cpu().numpy(), y_c.numpy(), atol=1e-10)
+    np.testing.assert_allclose(x_g.cpu().numpy(), x_c.numpy(), atol=parity_atol)
+    np.testing.assert_allclose(y_g.cpu().numpy(), y_c.numpy(), atol=parity_atol)
