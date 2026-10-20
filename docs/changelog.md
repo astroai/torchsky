@@ -50,6 +50,11 @@ owned by `torchfits`.
   `sphere/spectral_ops.py`; the SHT primitives are imported lazily so the
   module graph stays acyclic, and `spectral` re-exports the historical names.
   spectral.py drops from 4,636 to 4,031 lines.
+- **Power Foam primitives split**: the 4,071-line `map/field/foam.py` now
+  re-exports role modules: `foam_geometry` (distance/ownership/candidate graphs),
+  `foam_solvers` (basis rendering and least-squares solves), `foam_operators`
+  (bounded pixel operators), and `foam_field` (`SpectralPowerFoam` and
+  adaptation). `torchsky.map.field.foam` imports are unchanged.
 - **Field model classes split**: the 4,666-line `map/field/models.py` now keeps
   only re-exports; the model zoo lives in `models_foam`, `models_component`,
   `models_implicit`, `models_encoder`, and `models_skylambda` by representation
