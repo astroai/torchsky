@@ -3,7 +3,9 @@ import numpy as np
 import pytest
 import torch
 from astropy.coordinates import (
+    BarycentricMeanEcliptic,
     FK5,
+    Galactic,
     SkyCoord,
 )
 from astropy.time import Time
@@ -18,6 +20,7 @@ from torchsky.wcs import (
     propagate_space_motion,
     propagate_space_motion_with_jacobian,
 )
+from torchsky.wcs.frames import convert_celestial
 
 
 def _wrap_delta(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -485,3 +488,36 @@ def test_ecliptic_of_date_roundtrip_and_erfa() -> None:
     lat_e = np.rad2deg(np.arcsin(np.clip(v_ecl[:, 2], -1.0, 1.0)))
     np.testing.assert_allclose(_wrap_delta(lon.numpy(), lon_e), 0.0, atol=1e-10)
     np.testing.assert_allclose(lat.numpy(), lat_e, atol=1e-10)
+
+
+def test_icrs_galactic_fk5_ecliptic_match_astropy() -> None:
+    """ICRS frame bias is applied before the FK5/derived frame rotations."""
+    rng = np.random.default_rng(20261021)
+    ra = rng.uniform(0.0, 360.0, 256)
+    dec = rng.uniform(-80.0, 80.0, 256)
+    coords = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    cases = (
+        (Galactic(), "GALACTIC"),
+        (FK5(equinox="J2000"), "FK5"),
+        (BarycentricMeanEcliptic(equinox="J2000"), "ECLIPTIC"),
+    )
+    for frame, torch_frame in cases:
+        expected = coords.transform_to(frame)
+        lon, lat = convert_celestial(
+            torch.tensor(ra), torch.tensor(dec),
+            from_frame="ICRS", to_frame=torch_frame,
+        )
+        np.testing.assert_allclose(
+            _wrap_delta(lon.numpy(), expected.spherical.lon.deg),
+            0.0, atol=1e-10,
+        )
+        np.testing.assert_allclose(
+            lat.numpy(), expected.spherical.lat.deg, atol=1e-10,
+        )
+        back_lon, back_lat = convert_celestial(
+            lon, lat, from_frame=torch_frame, to_frame="ICRS",
+        )
+        np.testing.assert_allclose(
+            _wrap_delta(back_lon.numpy(), ra), 0.0, atol=1e-10,
+        )
+        np.testing.assert_allclose(back_lat.numpy(), dec, atol=1e-10)
