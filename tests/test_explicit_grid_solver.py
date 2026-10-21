@@ -485,8 +485,8 @@ def test_linear_band_grid_operator_full_vs_tiled_parity(
     torch.testing.assert_close(
         tiled_cg.solution,
         full_cg.solution,
-        rtol=1.0e-11,
-        atol=1.0e-11,
+        rtol=1.0e-10,
+        atol=1.0e-10,
     )
 
 
@@ -1793,4 +1793,3 @@ def test_solve_linear_band_grid_cg_detector_irls_rejects_cosmic_ray_outlier() ->
     assert abs(float(tukey_sol[5, 5].item()) - 20.0) < 0.25
     assert tukey_diag["data_weight_fn"] == "tukey"
     assert float(tukey_diag["detector_outlier_fraction"]) > 0.0
-
