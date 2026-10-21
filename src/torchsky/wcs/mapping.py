@@ -712,7 +712,6 @@ __all__ = [
     "AffineMapping",
     "CallableMapping",
     "IdentityMapping",
-    "Mapping",
     "NumericalInverseMapping",
     "NumericalInverseResult",
     "ParallelMapping",
@@ -722,4 +721,7 @@ __all__ = [
     "UnitConversionMapping",
     "UnsupportedInverseError",
     "WCSMapping",
+    "TransformMapping",
 ]
+
+TransformMapping = Mapping

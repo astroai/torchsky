@@ -17,7 +17,7 @@ from torchsky.wcs import (
     FrameSpec,
     GeneralizedWCS,
     IdentityMapping,
-    Mapping,
+    TransformMapping,
     ParallelMapping,
     PortRoute,
     PortRoutingMapping,
@@ -370,7 +370,7 @@ def test_wcs_as_mapping_and_generalized_wcs_match_astropy() -> None:
     torch.testing.assert_close(torch.stack((ra, dec), dim=-1), generalized.pixel_to_world(pixels))
     metadata, tensors = mapping.to_state()
     json.dumps(metadata)
-    restored = Mapping.from_state(metadata, tensors)
+    restored = TransformMapping.from_state(metadata, tensors)
     torch.testing.assert_close(restored(pixels), mapping(pixels))
 
 

@@ -90,7 +90,6 @@ from .mapping import (
     AffineMapping,
     CallableMapping,
     IdentityMapping,
-    Mapping,
     NumericalInverseMapping,
     NumericalInverseResult,
     ParallelMapping,
@@ -100,6 +99,7 @@ from .mapping import (
     UnitConversionMapping,
     UnsupportedInverseError,
     WCSMapping,
+    TransformMapping,
 )
 from .semantics import AxisSpec, DomainSpec, Epoch, FrameSpec, TimeSpec, UnitSpec
 from .frames import (
@@ -220,7 +220,7 @@ __all__ = [
     "GeneralizedWCS",
     "IFUSliceWCS",
     "IdentityMapping",
-    "Mapping",
+    "TransformMapping",
     "NumericalInverseMapping",
     "NumericalInverseResult",
     "ParallelMapping",

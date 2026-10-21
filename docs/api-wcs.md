@@ -127,7 +127,7 @@ Validation helpers: `validate_sampled_transform`, `SampledTransformValidation`,
 | Name | Role |
 |---|---|
 | `UnitSpec`, `TimeSpec`, `AxisSpec`, `FrameSpec`, `DomainSpec` | Explicit units, time scales, axes, frames, tensor domains, and compatibility validation. |
-| `Mapping`, `IdentityMapping`, `AffineMapping`, `UnitConversionMapping`, `CallableMapping`, `WCSMapping` | Tensor-native primitive mappings; arbitrary callables remain non-serializable adapters. |
+| `TransformMapping`, `IdentityMapping`, `AffineMapping`, `UnitConversionMapping`, `CallableMapping`, `WCSMapping` | Tensor-native primitive mappings; arbitrary callables remain non-serializable adapters. |
 | `SerialMapping`, `ParallelMapping`, `PortRoute`, `PortRoutingMapping` | Typed serial/parallel composition and explicit axis routing. |
 | `NumericalInverseMapping`, `NumericalInverseResult`, `UnsupportedInverseError` | Bounded fail-closed numerical inverse with per-row convergence evidence. |
 | `TransformEdge`, `TransformGraph`, `GeneralizedWCS` | Named frame graph, validated paths, intermediate frames, and N-D generalized WCS. |
