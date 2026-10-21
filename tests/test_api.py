@@ -54,11 +54,15 @@ def test_top_level_namespaces_expose_science_modules() -> None:
 def test_map_root_keeps_workflow_api_small() -> None:
     assert set(torchsky.map.__all__) == {
         "Observation",
+        "IFUObservation",
         "Target",
         "CubeTarget",
         "ResampleConfig",
         "SkyConfig",
         "OutlierConfig",
+        "DQPolicy",
+        "DQRejectionLog",
+        "QualityProduct",
         "StackConfig",
         "MapResult",
         "CubeResult",
@@ -70,8 +74,10 @@ def test_map_root_keeps_workflow_api_small() -> None:
         "ProductResult",
         "UncertaintyProduct",
         "TargetRenderSpec",
+        "AdaptiveResampleConfig",
         "plan",
         "plan_cube",
+        "plan_ifu_cube_response",
         "plan_product",
         "resample",
         "resample_healpix",
@@ -81,9 +87,11 @@ def test_map_root_keeps_workflow_api_small() -> None:
         "coadd",
         "coadd_multiband",
         "coadd_cube",
+        "build_ifu_cube",
         "coadd_healpix",
         "stack_product",
         "aperture_uncertainty",
+        "adaptive_reprojection_response",
     }
     assert "fit_field_model" not in torchsky.map.__all__
     assert torchsky.field.fit is torchsky.map.field.fit_field_model
