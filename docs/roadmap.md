@@ -51,6 +51,35 @@ PyPI yet; it ships when the goals below are met.
 
 ---
 
+## Upstream collaboration: torch-harmonics
+
+TorchSky uses `torch-harmonics` as an optional regular-grid backend and upstream
+partner, not as a required dependency or a replacement sky index. Generic
+spherical numerical primitives should be contributed upstream when they benefit
+both astronomy and geospatial applications.
+
+Planned upstream sequence:
+
+1. Propose a shared `IsoLatitudeGrid` contract with explicit synthesis,
+   analysis, adjoint, quadrature, dtype, device, and spin semantics.
+2. Add exact HEALPix RING geometry metadata needed by numerical operators:
+   ring offsets, lengths, colatitudes, longitude origins, and quadrature weights.
+3. Add scalar HEALPix synthesis, analysis, and exact adjoint operators using
+   ragged ring FFTs and blocked Legendre recurrences, with CUDA and distributed
+   tests.
+4. Extend the same contract to general spin-weighted transforms, including
+   spin-2 E/B conventions and distributed execution.
+5. Consider generic scalar masked-spectrum coupling and bandpower operators
+   only after transform semantics are stable.
+
+TorchSky continues to own astronomy-specific semantics: FITS/WCS integration,
+HEALPix indexing and queries, MOC and multi-order products, survey provenance,
+beam/pixel conventions, pseudo-`C_ell` workspaces, pure E/B policy, and
+mapmaking. The existing `TorchHarmonicsBackend` remains the compatibility
+boundary while focused upstream PRs are reviewed and released.
+
+---
+
 ## Later
 
 - Bounded-memory spectral and HEALPix products at survey scale.
