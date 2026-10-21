@@ -4,7 +4,7 @@
 covers value semantics, kernels, and workflows; this page is the reference for
 the promoted facade and the implementation submodules.
 
-The facade is intentionally small: 31 names. Everything else lives in an
+The facade is intentionally small: 39 names. Everything else lives in an
 explicit submodule and is imported from there.
 
 ---
@@ -19,11 +19,13 @@ from torchsky.map import Observation, coadd, plan
 
 | Name | Role |
 |---|---|
-| `Observation` | One image-plane exposure: data, WCS, weight, mask, spectral band metadata. |
+| `Observation`, `IFUObservation` | Image-plane and physical IFU detector observations with explicit WCS, noise, DQ, spectral, and provenance contracts. |
 | `Target`, `CubeTarget` | Planned target grids (2D and 3D spatial-spectral). |
 | `ResampleConfig` | Resampling kernel, drizzle pixfrac, output value semantics. |
 | `SkyConfig` | Per-exposure, overlap, planar, or mesh sky matching. |
 | `OutlierConfig` | AstroDrizzle / stcal-compatible outlier detection settings. |
+| `DQPolicy`, `DQRejectionLog`, `QualityProduct` | Input-bit policy, rejection audit trail, and propagated quality products. |
+| `AdaptiveResampleConfig` | Error bounds, subdivision limits, and value semantics for adaptive reprojection. |
 | `StackConfig` | Stacking method and uncertainty propagation settings. |
 | `MapResult`, `CubeResult`, `MultibandResult`, `HealpixResult` | Product results with data, weight, header, and provenance. |
 | `ApertureUncertainty` | Exact detector variance for one finite weighted aperture. |
@@ -36,10 +38,12 @@ from torchsky.map import Observation, coadd, plan
 |---|---|
 | `plan(observations, ...)` | Plan a 2D target grid covering the observations. |
 | `plan_cube(...)` | Plan a 3D spatial-spectral target cube. |
+| `plan_ifu_cube_response(...)` | Build the physical spatial/spectral IFU response plan. |
 | `plan_product(...)` | Plan a multi-band product from observations. |
 | `coadd(observations, target, ...)` | Unified 2D mosaic/coadd entry point. |
 | `coadd_multiband(...)` | Multi-band image-plane coadd. |
 | `coadd_cube(...)` | Spectral cube from 2D filter bands or 3D IFU slices. |
+| `build_ifu_cube(...)` | Build a footprint-aware IFU cube with DQ, variance components, context, and covariance actions. |
 | `coadd_healpix(...)` | Direct coadd onto a dense or sparse HEALPix grid. |
 | `stack_product(...)` | Stack bands into a labeled product. |
 | `resample(...)` | Project observations onto a target grid without stacking. |
@@ -48,6 +52,7 @@ from torchsky.map import Observation, coadd, plan
 | `detect_outliers(...)` | Cosmic-ray / transient detection via blot + derivative tests. |
 | `match_sky(...)` | Solve and subtract sky background across exposures. |
 | `aperture_uncertainty(...)` | Aperture variance from the map and weight. |
+| `adaptive_reprojection_response(...)` | Construct an opt-in bounded adaptive response with exact adjoint and uncertainty propagation. |
 
 ---
 

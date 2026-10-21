@@ -59,6 +59,7 @@ docstring says otherwise (some table or reference paths are CPU-only).
 | `RegionAreaEstimate` | Controlled-error area estimate summary over an nside ladder. |
 | `MOC`, `BMOC`, `STMOC` | Multi-order coverage maps (spatial, boolean, space-time). |
 | `MultiOrderHealpixMap` | Differentiable values over standard UNIQ cells; MOC retains coverage semantics. |
+| `UniqValueMapProtocol`, `HealSparseHostProtocol` | Optional host/interchange protocols over existing UNIQ and HealSparse indexing; they do not define another sky index. |
 | `SparseHealpixMap`, `HealSparseMap`, `SparseMap`, `SkyMaskPipe` | Sparse HEALPix maps and mask pipelines. |
 | `sum_intersection`, `sum_union` | Sparse-map combination rules. |
 | `spherical_polygon_area`, `spherical_polygon_signed_area`, `spherical_triangle_area` | Exact-area helpers. |
@@ -89,6 +90,20 @@ Geometry utilities: `lonlat_to_unit_xyz`, `unit_xyz_to_lonlat`,
 | `alm_size`, `alm_index` | healpy-compatible alm sizing and indexing. |
 | `PseudoClField`, `coupled_spectra` | Masked CAR scalar and spin-2 coupled auto/cross spectra. |
 | `BandpowerBinning`, `ModeCouplingWorkspace` | Exact scalar pseudo-C_ell coupling, fail-closed decoupling, and bandpower windows. |
+| `ModeCouplingDiagnostics`, `ModeCouplingError` | Rank/conditioning diagnostics and fail-closed workspace errors. |
+| `pure_alms` | Validated pure E/B masked-field coefficients. |
+
+Explicit transform semantics live in `torchsky.sphere.sht`:
+
+| Name | Role |
+|---|---|
+| `SHTGeometry`, `HEALPixGeometry` | Immutable transform geometry contracts for generic and HEALPix rings. |
+| `CARSampling` | Strict CAR quadrature/sampling convention. |
+| `SHTOperation`, `SHTAnalysisKind`, `SpinConvention` | Synthesis/adjoint/analysis semantics and spin-basis convention. |
+| `SHTRequest`, `SHTResult`, `SHTAnalysisResult` | Typed transform requests and outputs. |
+| `SHTBackend`, `SHTBackendCapabilities`, `SHTCapabilityError` | Backend protocol, declared capabilities, and explicit unsupported-request failure. |
+| `NativeSHTBackend` | TorchSky HEALPix/CAR backend. |
+| `TorchHarmonicsBackend` | Optional regular-grid adapter; torch-harmonics remains an optional peer dependency. |
 
 The implementation lives under `torchsky.sphere` submodules
 (`torchsky.sphere.healpix`, `torchsky.sphere.spectral`,

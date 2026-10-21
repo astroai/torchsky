@@ -32,6 +32,16 @@ representations, targets, operators, and rendering behind one vocabulary. The
 | `SplatDiagnostics` | Per-batch accounting for bilinear deposits at grid edges. |
 | `as_scene_representation(value)` | Coerce a supported object into a scene representation. |
 
+## Supplied-source scenes
+
+| Name | Contract |
+|---|---|
+| `SourceCatalogScene` | Fixed caller-supplied component identities, positions, morphology, spectral coefficients, supports, and parameter slices. |
+| `SourceStamp` | One bounded fixed-template morphology stamp with explicit native-grid placement. |
+| `POINT_MORPHOLOGY`, `GAUSSIAN_MORPHOLOGY`, `SERSIC_MORPHOLOGY`, `TEMPLATE_MORPHOLOGY` | Supported known-component morphology identifiers. |
+
+Source scenes never detect, create, delete, or silently exchange components.
+
 ## Operators, rendering, and binding
 
 | Name | Contract |

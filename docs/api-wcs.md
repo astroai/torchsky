@@ -120,5 +120,53 @@ Validation helpers: `validate_sampled_transform`, `SampledTransformValidation`,
 | `TangentPlaneFrame`, `TangentPlaneAffine` | Gnomonic frame and learnable affine correction. |
 | `AffineFreeResidualGrid2D` | Smooth detector-coordinate residual with constant/affine modes removed. |
 
+---
+
+## Typed mappings and transform graphs
+
+| Name | Role |
+|---|---|
+| `UnitSpec`, `TimeSpec`, `AxisSpec`, `FrameSpec`, `DomainSpec` | Explicit units, time scales, axes, frames, tensor domains, and compatibility validation. |
+| `Mapping`, `IdentityMapping`, `AffineMapping`, `UnitConversionMapping`, `CallableMapping`, `WCSMapping` | Tensor-native primitive mappings; arbitrary callables remain non-serializable adapters. |
+| `SerialMapping`, `ParallelMapping`, `PortRoute`, `PortRoutingMapping` | Typed serial/parallel composition and explicit axis routing. |
+| `NumericalInverseMapping`, `NumericalInverseResult`, `UnsupportedInverseError` | Bounded fail-closed numerical inverse with per-row convergence evidence. |
+| `TransformEdge`, `TransformGraph`, `GeneralizedWCS` | Named frame graph, validated paths, intermediate frames, and N-D generalized WCS. |
+| `AmbiguousPathError`, `UnsupportedPathError` | Explicit graph-path failures. |
+
+## Global astrometry and coupled photometry
+
+| Name | Role |
+|---|---|
+| `AstrometricObservation`, `AstrometricMatchGraph`, `AstrometryConfig` | Supplied detector centroids/covariance, associations, model blocks, gauges, and solve policy. |
+| `AstrometryDiagnostics`, `AstrometrySolution` | Convergence, rank/gauge, robust weights, covariance, component, and corrected-transform results. |
+| `ApproximateMatchResult`, `match_approximate_wcs(...)` | Existing-HEALPix approximate-WCS catalog association; no detection or new sky index. |
+| `tangent_plane_block_residuals(...)`, `solve_astrometry(...)` | Whitened residual kernel and sparse Schur/CG supplied-catalog bundle solve. |
+| `PhotometricMeasurementBlock`, `PhotometricReference`, `CoupledCalibrationGraph`, `CoupledCalibrationConfig` | Supplied flux measurements, standards, shared graph, global/local photometric blocks, and alternating calibration policy. |
+| `PhotometricCalibrationDiagnostics`, `PhotometricCalibrationSolution` | Relative/absolute gauges, zeropoint, star-flat, color, variability, covariance, and holdout diagnostics. |
+| `CoupledCalibrationDiagnostics`, `CoupledCalibrationSolution`, `solve_coupled_calibration(...)` | Joint astrometry/photometry/DCR convergence and result surface. |
+| `photometric_log_residuals(...)` | Covariance-weighted photometric residual kernel. |
+
+## Astrometry.net supplied-XYLS bootstrap
+
+| Name | Role |
+|---|---|
+| `AstrometryNetConfig`, `AstrometryNetVerificationConfig` | Pinned executable/index, bounds, timeout, scale hints, and held-out verification policy. |
+| `AstrometryNetIndexIdentity`, `AstrometryNetProvenance` | Immutable external index/executable and run provenance. |
+| `AstrometryNetHypothesis`, `AstrometryNetVerification`, `AstrometryNetBootstrapResult` | Parsed hypothesis, independent unused-centroid verification, and refined bundle result. |
+| `solve_with_astrometry_net(...)` | Optional bootstrap from caller-supplied XYLS followed by TorchSky bundle refinement. |
+| `AstrometryNetError`, `AstrometryNetUnavailableError`, `AstrometryNetIdentityError`, `AstrometryNetExecutionError`, `AstrometryNetHypothesisRejected` | Fail-closed external bootstrap errors. |
+
+## Gauge-safe astrometric residual models
+
+| Name | Role |
+|---|---|
+| `TangentPlaneGauge`, `ResidualModeDesign`, `ResidualSupport`, `CorrectionEnvelope` | Exact gauge projection, interpretable modes, support envelope, and correction/Jacobian safety bounds. |
+| `ResidualComponentInput`, `ResidualComponentResult`, `AstrometricResidualFeatures` | Supplied residual/context features and component-level results. |
+| `BayesianModeState`, `BayesianModePrediction`, `fit_bayesian_modes(...)`, `predict_bayesian_modes(...)`, `update_bayesian_modes(...)`, `shadow_update_bayesian_modes(...)` | Low-rank instrument/atmosphere model, Bayesian updates, and versioned shadow promotion. |
+| `SparseGPResidual`, `SparseGPResidualPrediction`, `fit_sparse_gp_residual(...)` | Torch-native sparse-GP baseline with calibrated covariance and strict support fallback. |
+| `ExperimentalConditionalResidual`, `ConditionalResidualPrediction` | Experimental permutation-invariant compact-support neural residual and uncertainty head. |
+| `VersionedResidualState`, `ShadowUpdateResult` | Replay/anchor identities, compatibility, no-forgetting, and rollback state. |
+| `AstrometricResidualLadder`, `ResidualLadderPrediction`, `interpretable_residual_modes(...)` | Full hybrid prediction and component-wise fallback ladder. |
+
 See also: [coordinates](coordinates.md), [astrometric calibration](astrometric_calibration.md),
 and the [WCS guide](wcs.md) for distortion and `-TAB` walkthroughs.
