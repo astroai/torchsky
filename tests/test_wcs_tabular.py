@@ -1309,18 +1309,12 @@ def test_coupled_tabular_wcs_cuda_roundtrip() -> None:
     }
     cpu = WCS(header, tables=tables)
     gpu = WCS(header, tables=tables).to("cuda")
-    pixels = torch.tensor([[0.5, 1.5], [2.0, 2.5]], dtype=torch.float64)
+    # FITS -TAB default indexing vectors are 1-based (see
+    # test_tabular_fits_default_index_vector_is_one_based), so the valid pixel
+    # domain is [1, 4], not [0, 3].
+    pixels = torch.tensor([[1.5, 2.5], [2.0, 3.0]], dtype=torch.float64)
     world_c = cpu.pixel_to_world(pixels)
     world_g = gpu.pixel_to_world(pixels.cuda())
-    print(
-        "DBG tabular",
-        "world_c", world_c.tolist(),
-        "world_g", world_g.tolist(),
-        "gpu.crval", gpu.crval.tolist(), gpu.crval.device,
-        "gpu.cd", gpu.cd_full.tolist(), gpu.cd_full.device,
-        "coupled_world", gpu.coupled_tabular.world.device if gpu.coupled_tabular else None,
-        "axes", [a.device for a in gpu.coupled_tabular.pixel_axes] if gpu.coupled_tabular else None,
-    )
     assert world_g.device.type == "cuda"
     torch.testing.assert_close(world_g.cpu(), world_c, atol=1e-10, rtol=0.0)
     pix_g = gpu.world_to_pixel(world_g)
