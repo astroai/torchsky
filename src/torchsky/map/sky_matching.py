@@ -27,6 +27,8 @@ from .observation import (
     Target,
 )
 from .sky import CrossExposureSkyCorrector, MeshSkyEstimator
+from .quality import DQPolicy, DQRejectionLog
+from .operators.mask_weight import load_image_observation_dq
 from .windowing import _build_target_world_grid
 from ..wcs import WCS
 
@@ -73,8 +75,11 @@ def detect_outliers(
     ]
     | None = None,
     update_masks: bool = True,
+    return_logs: bool = False,
     device: torch.device | str | None = None,
-) -> tuple[list[Tensor], list[Observation]]:
+) -> tuple[list[Tensor], list[Observation]] | tuple[
+    list[Tensor], list[Observation], tuple[dict[str, int], ...]
+]:
     """Detect cosmic rays and transient outliers via AstroDrizzle / JWST blot + spatial derivative test.
 
     Returns ``(outlier_masks, updated_observations)`` where ``outlier_masks[i]`` is a boolean
@@ -93,6 +98,10 @@ def detect_outliers(
     grow_px = int(grow if grow is not None else cfg.grow)
     blot_kernel = kernel if kernel is not None else cfg.blot_kernel
     should_update = bool(update_masks and cfg.mode != "flag_only")
+    if cfg.parity_mode and cfg.mode == "flag_only":
+        raise ValueError("certified parity mode requires a final usability mask")
+    if grow_px < 0:
+        raise ValueError("outlier grow radius must be non-negative")
 
     map_device = _image_plane()._resolve_map_device(device)
     if coadd_result is None:
@@ -115,8 +124,11 @@ def detect_outliers(
 
     outlier_masks: list[Tensor] = []
     updated_observations: list[Observation] = []
+    rejection_logs: list[DQRejectionLog] = []
     read_dev = str(map_device)
-    for obs, blotted in zip(observations, blotted_list):
+    for observation_index, (obs, blotted) in enumerate(
+        zip(observations, blotted_list, strict=True)
+    ):
         raw_img, hdr = _image_plane().load_observation_image_and_header(obs, device=read_dev)
         raw_img_dev = raw_img.to(device=map_device, dtype=torch.float32)
         src_w = _image_plane()._load_observation_weight_map(obs, raw_img_dev, device=map_device)
@@ -127,7 +139,11 @@ def detect_outliers(
 
         # Estimate per-pixel 1-sigma noise in calibrated units from variance planes, weight map, or robust MAD
         noise_sigma: Tensor | None = None
-        if obs.var_poisson is not None or obs.var_rnoise is not None:
+        if (
+            obs.var_poisson is not None
+            or obs.var_rnoise is not None
+            or obs.var_flat is not None
+        ):
             var_tot = torch.zeros_like(cal_img)
             if isinstance(obs.var_poisson, Tensor):
                 var_tot = var_tot + obs.var_poisson.to(
@@ -137,7 +153,16 @@ def detect_outliers(
                 var_tot = var_tot + obs.var_rnoise.to(
                     device=map_device, dtype=torch.float32
                 )
-            noise_sigma = float(s_eff) * torch.sqrt(torch.clamp(var_tot, min=1e-12))
+            if isinstance(obs.var_flat, Tensor):
+                var_tot = var_tot + obs.var_flat.to(
+                    device=map_device, dtype=torch.float32
+                )
+            valid_variance = torch.isfinite(var_tot) & (var_tot > 0.0)
+            noise_sigma = torch.where(
+                valid_variance,
+                float(s_eff) * torch.sqrt(torch.clamp(var_tot, min=1e-12)),
+                torch.full_like(var_tot, float("inf")),
+            )
         elif (
             (obs.weight_map is not None or obs.weight_path is not None)
             and obs.weight_type in ("ivm", "rms", "variance")
@@ -146,6 +171,10 @@ def detect_outliers(
                 cal_w > 0.0,
                 torch.rsqrt(torch.clamp(cal_w, min=1e-12)),
                 torch.full_like(cal_img, float("inf")),
+            )
+        if noise_sigma is None and cfg.parity_mode:
+            raise ValueError(
+                "certified outlier parity requires declared detector variance"
             )
         if noise_sigma is None:
             finite_diff = diff[torch.isfinite(diff)]
@@ -182,6 +211,17 @@ def detect_outliers(
         else:
             cr_mask = primary_cr
         outlier_masks.append(cr_mask)
+        rejection_logs.append(
+            DQRejectionLog(
+                observation_index=observation_index,
+                primary_count=int(primary_cr.sum().item()),
+                grown_count=int((cr_mask & ~primary_cr).sum().item()),
+                rejected_count=int(cr_mask.sum().item()),
+                cosmic_ray_bit=int(
+                    (cfg.dq_policy or obs.dq_policy or DQPolicy()).cosmic_ray_bit
+                ),
+            )
+        )
         if should_update:
             obs_shape = (int(raw_img_dev.shape[0]), int(raw_img_dev.shape[1]))
             prev_valid = _load_existing_observation_valid_mask(
@@ -195,16 +235,42 @@ def detect_outliers(
                     obs.weight_map.to(device=map_device),
                     torch.zeros_like(obs.weight_map.to(device=map_device)),
                 )
-            updated_observations.append(
-                dataclasses.replace(
+            if cfg.parity_mode:
+                policy = cfg.dq_policy or obs.dq_policy or DQPolicy()
+                existing_dq = load_image_observation_dq(
                     obs,
-                    mask=valid_mask,
-                    good_bits=None,
-                    weight_map=new_wmap,
+                    raw_img_dev,
+                    device=map_device,
                 )
-            )
+                if existing_dq is None:
+                    existing_dq = torch.zeros_like(raw_img_dev, dtype=torch.int64)
+                updated_dq = policy.with_cosmic_rays(existing_dq, cr_mask)
+                valid_mask = valid_mask & policy.usability_mask(updated_dq)
+                updated_observations.append(
+                    dataclasses.replace(
+                        obs,
+                        mask=valid_mask,
+                        good_bits=None,
+                        weight_map=new_wmap,
+                        dq=updated_dq,
+                        dq_path=None,
+                        dq_policy=policy,
+                    )
+                )
+            else:
+                updated_observations.append(
+                    dataclasses.replace(
+                        obs,
+                        mask=valid_mask,
+                        good_bits=None,
+                        weight_map=new_wmap,
+                    )
+                )
         else:
             updated_observations.append(obs)
+    logs = tuple(log.to_dict() for log in rejection_logs)
+    if return_logs:
+        return outlier_masks, updated_observations, logs
     return outlier_masks, updated_observations
 
 
@@ -488,6 +554,5 @@ def _resolve_tile_hw(
     if isinstance(raw, int):
         return (int(raw), int(raw))
     return (int(raw[0]), int(raw[1]))
-
 
 

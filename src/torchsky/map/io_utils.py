@@ -108,6 +108,26 @@ def write_map_product(
                 {"UNCKIND": result.uncertainty.kind},
             )
         )
+    if "DQ" in requested and result.quality is not None:
+        policy = result.quality.policy
+        dq_header: dict[str, Any] = {"DQOR": "BITWISE_OR"}
+        if policy is not None:
+            dq_header.update(
+                {
+                    "DQREJECT": -1
+                    if policy.reject_bits is None
+                    else policy.reject_bits,
+                    "DQCRBIT": policy.cosmic_ray_bit,
+                    "DQUNKN": policy.unknown_bit_policy,
+                }
+            )
+        planes.append(
+            (
+                "DQ",
+                _product_plane(result.quality.dq),
+                dq_header,
+            )
+        )
     if "CTX" in requested and result.context is not None:
         planes.append(
             ("CTX", _product_plane(result.context), _context_cards(result))

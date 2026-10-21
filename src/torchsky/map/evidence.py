@@ -9,6 +9,8 @@ from typing import ClassVar
 
 from torch import Tensor
 
+from .provenance import PlanFingerprint
+
 
 def _revision_token(value: object) -> object:
     if value is None:
@@ -54,6 +56,9 @@ class EvidenceSnapshot:
     _revision: Callable[[], object] | None = field(default=None, repr=False)
     _token: object = field(default=None, repr=False)
     _parents: tuple[EvidenceSnapshot, ...] = field(default=(), repr=False)
+    _plans: tuple[tuple[str, object, PlanFingerprint], ...] = field(
+        default=(), repr=False
+    )
 
     @classmethod
     def capture(
@@ -61,6 +66,7 @@ class EvidenceSnapshot:
         tensors: Mapping[str, Tensor] | None = None,
         *,
         revision: Callable[[], object] | None = None,
+        plans: Mapping[str, object] | None = None,
     ) -> EvidenceSnapshot:
         if revision is not None and not callable(revision):
             raise TypeError("revision must be callable")
@@ -80,13 +86,35 @@ class EvidenceSnapshot:
                     ),
                 )
             )
-        return cls(tuple(tracked), revision, token)
+        tracked_plans = []
+        for name, plan in ({} if plans is None else plans).items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("plan dependency names must be nonempty strings")
+            fingerprint = (
+                plan if isinstance(plan, PlanFingerprint) else getattr(plan, "fingerprint", None)
+            )
+            if not isinstance(fingerprint, PlanFingerprint):
+                raise TypeError("plan dependencies must expose a PlanFingerprint")
+            tracked_plans.append((name, plan, fingerprint))
+        return cls(tuple(tracked), revision, token, (), tuple(tracked_plans))
 
     def with_tensors(self, tensors: Mapping[str, Tensor]) -> EvidenceSnapshot:
         """Extend an unchanged snapshot, retaining its explicit revision policy."""
         self.validate()
         local = EvidenceSnapshot.capture(tensors, revision=self._revision)
         return EvidenceSnapshot(local._tensors, local._revision, local._token, (self,))
+
+    def with_plans(self, plans: Mapping[str, object]) -> EvidenceSnapshot:
+        """Extend an unchanged snapshot with immutable graph/plan lineage."""
+        self.validate()
+        local = EvidenceSnapshot.capture(plans=plans, revision=self._revision)
+        return EvidenceSnapshot(
+            (),
+            local._revision,
+            local._token,
+            (self,),
+            local._plans,
+        )
 
     def validate(self) -> None:
         for parent in self._parents:
@@ -105,6 +133,16 @@ class EvidenceSnapshot:
             ):
                 raise RuntimeError(
                     f"stale evidence dependency {name!r}; rebuild the factor/system/query"
+                )
+        for name, plan, fingerprint in self._plans:
+            current = (
+                plan
+                if isinstance(plan, PlanFingerprint)
+                else getattr(plan, "fingerprint", None)
+            )
+            if current != fingerprint:
+                raise RuntimeError(
+                    f"stale evidence plan {name!r}; rebuild the factor/system/query"
                 )
 
 

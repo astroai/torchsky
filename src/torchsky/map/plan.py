@@ -20,7 +20,7 @@ from .operators.config import (
 _HASH_CHUNK_BYTES = 8 * 1024 * 1024
 _PLAN_WORKFLOWS = ("native", "drizzle", "swarp", "montage")
 _PLAN_BACKGROUND_MODES = ("none", "per-exposure", "overlap")
-_PLAN_PRODUCTS = ("SCI", "WHT", "IVAR", "CTX", "MASK", "NEXP", "NCORR")
+_PLAN_PRODUCTS = ("SCI", "WHT", "IVAR", "DQ", "CTX", "MASK", "NEXP", "NCORR")
 _PLAN_DTYPES = ("float16", "bfloat16", "float32", "float64")
 _PLAN_FIELD_PRESETS = ("fast", "balanced", "spectral", "operator_constrained")
 _PLAN_FIELD_SAMPLING = ("center", "gauss_legendre_2x2")

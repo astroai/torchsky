@@ -42,6 +42,14 @@ from .operators import (
     operator_bundle_for_observation,
     operator_bundles_for_observations,
 )
+from .sources import (
+    GAUSSIAN_MORPHOLOGY,
+    POINT_MORPHOLOGY,
+    SERSIC_MORPHOLOGY,
+    TEMPLATE_MORPHOLOGY,
+    SourceCatalogScene,
+    SourceStamp,
+)
 
 Scene: TypeAlias = SceneRepresentation
 
@@ -125,18 +133,24 @@ __all__ = [
     "FieldObservation",
     "ForwardContext",
     "HarmonicAlmScene",
+    "GAUSSIAN_MORPHOLOGY",
     "HealpixMapScene",
     "ImageObservation",
     "ObservationOperatorAdapter",
     "ObservationOperatorBundle",
     "ObservationOperatorBundleProtocol",
+    "POINT_MORPHOLOGY",
+    "SERSIC_MORPHOLOGY",
     "PSFSpec",
     "ProductSpec",
     "Scene",
     "SceneRepresentation",
+    "SourceCatalogScene",
+    "SourceStamp",
     "SpinHarmonicAlmScene",
     "SplatDiagnostics",
     "TargetRenderSpec",
+    "TEMPLATE_MORPHOLOGY",
     "as_scene_representation",
     "bind_image_plane_observations_to_target",
     "field_observation",

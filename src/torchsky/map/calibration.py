@@ -70,6 +70,18 @@ def _observation_operator_provenance(
         "weight_hdu": observation.weight_hdu,
         "mask_path": observation.mask_path,
         "mask_hdu": observation.mask_hdu,
+        "dq_path": observation.dq_path,
+        "dq_hdu": observation.dq_hdu,
+        "dq_policy": (
+            None
+            if observation.dq_policy is None
+            else {
+                "reject_bits": observation.dq_policy.reject_bits,
+                "propagate_bits": observation.dq_policy.propagate_bits,
+                "cosmic_ray_bit": observation.dq_policy.cosmic_ray_bit,
+                "unknown_bit_policy": observation.dq_policy.unknown_bit_policy,
+            }
+        ),
         "primary_beam_path": observation.primary_beam_path,
         "primary_beam_hdu": observation.primary_beam_hdu,
         "photometric_scale": float(observation.photometric_scale),
@@ -246,4 +258,3 @@ def _apply_observation_calibration(
         image=image,
         source_weight=source_weight,
     )
-

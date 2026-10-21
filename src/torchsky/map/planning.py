@@ -21,7 +21,11 @@ from .observation import (
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
 )
-from ..spectral import SpectralAxis, spectral_axis_from_header, spectral_bin_edges_from_header
+from ..spectral import (
+    SpectralAxis,
+    spectral_axis_from_header,
+    spectral_bin_edges_from_header,
+)
 from .spectral_projection import (
     _build_band_metadata,
     _build_spectral_projection,
@@ -30,6 +34,7 @@ from .spectral_projection import (
     _validated_spectral_bin_edges,
 )
 from .operators.image_grid import normalized_header_for_shape, target_shape_from_header
+from .operators.subdivision import bounded_subdivide_boundary
 from ..wcs import WCS
 
 
@@ -97,8 +102,7 @@ def _adaptive_tangent_boundary(
     tolerance_px: float,
     max_depth: int,
 ) -> Tensor:
-    def project(pixel: tuple[float, float]) -> Tensor:
-        pixel_tensor = torch.tensor([pixel], dtype=torch.float64)
+    def project(pixel_tensor: Tensor) -> Tensor:
         world = wcs.pixel_to_world(pixel_tensor)
         if isinstance(world, tuple):
             world = torch.stack(world[:2], dim=-1)
@@ -108,61 +112,62 @@ def _adaptive_tangent_boundary(
             center_ra_deg=center_ra_deg,
             center_dec_deg=center_dec_deg,
         )
-        point = torch.stack((xi[0], eta[0]))
-        if not bool(torch.isfinite(point).all()):
+        points = torch.stack((xi, eta), dim=-1) / float(pixel_scale_deg)
+        if not bool(torch.isfinite(points).all()):
             raise RuntimeError("Observation boundary produced non-finite coordinates")
-        return point
-
-    output: list[Tensor] = []
-
-    def sample_segment(
-        p0: tuple[float, float],
-        p1: tuple[float, float],
-        q0: Tensor,
-        q1: Tensor,
-        depth: int,
-    ) -> None:
-        fractions = (0.25, 0.5, 0.75)
-        pixels = [
-            (
-                p0[0] + fraction * (p1[0] - p0[0]),
-                p0[1] + fraction * (p1[1] - p0[1]),
-            )
-            for fraction in fractions
-        ]
-        projected = [project(pixel) for pixel in pixels]
-        errors = [
-            torch.linalg.vector_norm(value - ((1.0 - fraction) * q0 + fraction * q1))
-            / float(pixel_scale_deg)
-            for fraction, value in zip(fractions, projected, strict=True)
-        ]
-        if max(float(error) for error in errors) <= float(tolerance_px):
-            output.append(q1)
-            return
-        if depth >= int(max_depth):
-            raise RuntimeError(
-                "Could not bound curved observation footprint within the requested tolerance"
-            )
-        midpoint = pixels[1]
-        q_midpoint = projected[1]
-        sample_segment(p0, midpoint, q0, q_midpoint, depth + 1)
-        sample_segment(midpoint, p1, q_midpoint, q1, depth + 1)
+        return points
 
     corners = (
-        (-0.5, -0.5),
-        (float(width) - 0.5, -0.5),
-        (float(width) - 0.5, float(height) - 0.5),
-        (-0.5, float(height) - 0.5),
+        torch.tensor((-0.5, -0.5), dtype=torch.float64),
+        torch.tensor((float(width) - 0.5, -0.5), dtype=torch.float64),
+        torch.tensor((float(width) - 0.5, float(height) - 0.5), dtype=torch.float64),
+        torch.tensor((-0.5, float(height) - 0.5), dtype=torch.float64),
     )
-    for edge_index in range(4):
-        p0 = corners[edge_index]
-        p1 = corners[(edge_index + 1) % 4]
-        q0 = project(p0)
-        q1 = project(p1)
-        if not output:
-            output.append(q0)
-        sample_segment(p0, p1, q0, q1, 0)
-    return torch.stack(output, dim=0)
+    return bounded_subdivide_boundary(
+        corners,
+        map_points=project,
+        tolerance=float(tolerance_px),
+        max_depth=int(max_depth),
+    ) * float(pixel_scale_deg)
+
+
+def _adaptive_projected_boundary(
+    wcs: WCS,
+    *,
+    height: int,
+    width: int,
+    target_frame: str,
+    target_equinox: float | None,
+    target_wcs: WCS,
+    tolerance_px: float,
+    max_depth: int,
+) -> Tensor:
+    def project(pixel_tensor: Tensor) -> Tensor:
+        lon, lat = wcs.pixel_to_world(pixel_tensor[:, 0], pixel_tensor[:, 1])
+        if getattr(wcs, "celestial_frame", "ICRS") != target_frame or (
+            target_equinox is not None
+            and getattr(wcs, "celestial_equinox", None) != target_equinox
+        ):
+            lon, lat = wcs.convert_celestial(
+                lon, lat, target_frame, to_equinox=target_equinox
+            )
+        px, py = target_wcs.world_to_pixel(lon, lat)
+        return (
+            torch.stack((px, py), dim=-1).detach().to(device="cpu", dtype=torch.float64)
+        )
+
+    corners = (
+        torch.tensor((-0.5, -0.5), dtype=torch.float64),
+        torch.tensor((float(width) - 0.5, -0.5), dtype=torch.float64),
+        torch.tensor((float(width) - 0.5, float(height) - 0.5), dtype=torch.float64),
+        torch.tensor((-0.5, float(height) - 0.5), dtype=torch.float64),
+    )
+    return bounded_subdivide_boundary(
+        corners,
+        map_points=project,
+        tolerance=float(tolerance_px),
+        max_depth=int(max_depth),
+    )
 
 
 def _resolve_plan_frame_prefixes(
@@ -225,7 +230,9 @@ def _plan_union_footprint_target(
     pixel_scales: list[float] = []
     footprint_records: list[tuple[WCS, int, int]] = []
     for observation in observations:
-        header = _image_plane()._observation_header_for_footprint(observation, device=device)
+        header = _image_plane()._observation_header_for_footprint(
+            observation, device=device
+        )
         wcs = WCS(header)
         height, width = _image_plane()._true_image_shape(header)
         pixel_edges = torch.tensor(
@@ -281,7 +288,9 @@ def _plan_union_footprint_target(
             score = 0.0
             for idx_j, (ra_j, dec_j) in enumerate(obs_centers):
                 sep = _image_plane()._angular_separation_deg(ra_i, dec_i, ra_j, dec_j)
-                score += 1.0 / (1.0 + (sep / max(pixel_scales[idx_j] * 512.0, 1e-3)) ** 2)
+                score += 1.0 / (
+                    1.0 + (sep / max(pixel_scales[idx_j] * 512.0, 1e-3)) ** 2
+                )
             if score > best_score:
                 best_score = score
                 best_idx = idx_i
@@ -409,36 +418,22 @@ def _plan_union_footprint_target(
         probe_header["CRPIX2"] = 0.5 * (naxis2 + 1)
         return probe_header, (naxis2, naxis1)
 
-    boundary_world: list[Tensor] = []
-    t_steps = torch.linspace(0.0, 1.0, 33, dtype=torch.float64)
-    for wcs, height, width in footprint_records:
-        w_lim = float(width) - 0.5
-        h_lim = float(height) - 0.5
-        e0 = torch.stack((-0.5 + (w_lim + 0.5) * t_steps, torch.full_like(t_steps, -0.5)), dim=-1)
-        e1 = torch.stack((torch.full_like(t_steps, w_lim), -0.5 + (h_lim + 0.5) * t_steps), dim=-1)
-        e2 = torch.stack((w_lim - (w_lim + 0.5) * t_steps, torch.full_like(t_steps, h_lim)), dim=-1)
-        e3 = torch.stack((torch.full_like(t_steps, -0.5), h_lim - (h_lim + 0.5) * t_steps), dim=-1)
-        edges_pix = torch.cat((e0, e1, e2, e3), dim=0)
-        lon_e, lat_e = wcs.pixel_to_world(edges_pix[:, 0], edges_pix[:, 1])
-        lon_e = lon_e.detach().to(device="cpu", dtype=torch.float64)
-        lat_e = lat_e.detach().to(device="cpu", dtype=torch.float64)
-        if getattr(wcs, "celestial_frame", "ICRS") != target_frame or (
-            equinox is not None and getattr(wcs, "celestial_equinox", None) != equinox
-        ):
-            lon_e, lat_e = wcs.convert_celestial(
-                lon_e, lat_e, target_frame, to_equinox=equinox
-            )
-        boundary_world.append(torch.stack((lon_e, lat_e), dim=-1))
-
-    all_world = torch.cat(boundary_world, dim=0)
-    px, py = probe_wcs.world_to_pixel(all_world[:, 0], all_world[:, 1])
-    finite = torch.isfinite(px) & torch.isfinite(py)
-    if not bool(finite.any()):
-        raise RuntimeError(
-            f"Observation footprints could not be projected into {proj_code}"
+    projected_boundaries = [
+        _adaptive_projected_boundary(
+            wcs,
+            height=height,
+            width=width,
+            target_frame=target_frame,
+            target_equinox=equinox,
+            target_wcs=probe_wcs,
+            tolerance_px=float(tolerance_px),
+            max_depth=int(max_depth),
         )
-    px = px[finite]
-    py = py[finite]
+        for wcs, height, width in footprint_records
+    ]
+    projected_boundary = torch.cat(projected_boundaries, dim=0)
+    px = projected_boundary[:, 0]
+    py = projected_boundary[:, 1]
     px_mid = 0.5 * float(px.min() + px.max())
     py_mid = 0.5 * float(py.min() + py.max())
     px_half = (0.5 * float(px.max() - px.min()) + float(tolerance_px)) * float(padding)
@@ -520,7 +515,9 @@ def plan_image_plane_target(
 
     ref = observations[reference_index]
     read_dev = str(_image_plane()._resolve_map_device(device))
-    image, header = _image_plane().load_observation_image_and_header(ref, device=read_dev)
+    image, header = _image_plane().load_observation_image_and_header(
+        ref, device=read_dev
+    )
     shape_out = tuple(image.shape) if shape is None else (int(shape[0]), int(shape[1]))
     shape_out = target_shape_from_header(header_overrides or {}, fallback=shape_out)
     normalized_header = normalized_header_for_shape(
@@ -713,13 +710,31 @@ def _obs_target_pixel_bbox(
     if hs <= 0 or ws <= 0:
         return (0.0, -1.0, 0.0, -1.0)
     try:
-        t = torch.linspace(0.0, 1.0, 9, dtype=source_wcs.crval.dtype, device=source_wcs.device)
+        t = torch.linspace(
+            0.0, 1.0, 9, dtype=source_wcs.crval.dtype, device=source_wcs.device
+        )
         x0, x1 = -0.5, float(ws) - 0.5
         y0, y1 = -0.5, float(hs) - 0.5
-        xs = torch.cat([x0 + t * (x1 - x0), torch.full_like(t, x1), x1 - t * (x1 - x0), torch.full_like(t, x0)])
-        ys = torch.cat([torch.full_like(t, y0), y0 + t * (y1 - y0), torch.full_like(t, y1), y1 - t * (y1 - y0)])
+        xs = torch.cat(
+            [
+                x0 + t * (x1 - x0),
+                torch.full_like(t, x1),
+                x1 - t * (x1 - x0),
+                torch.full_like(t, x0),
+            ]
+        )
+        ys = torch.cat(
+            [
+                torch.full_like(t, y0),
+                y0 + t * (y1 - y0),
+                torch.full_like(t, y1),
+                y1 - t * (y1 - y0),
+            ]
+        )
         ra, dec = source_wcs.pixel_to_world(xs, ys)
-        ra, dec = _image_plane()._convert_world_between_wcs(ra, dec, source_wcs, full_target_wcs)
+        ra, dec = _image_plane()._convert_world_between_wcs(
+            ra, dec, source_wcs, full_target_wcs
+        )
         tx, ty = full_target_wcs.world_to_pixel(ra, dec)
         if not bool((torch.isfinite(tx) & torch.isfinite(ty)).all()):
             return None
@@ -731,4 +746,3 @@ def _obs_target_pixel_bbox(
         )
     except Exception:
         return None
-

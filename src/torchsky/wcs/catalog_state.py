@@ -22,6 +22,7 @@ from .frames import (
     propagate_space_motion,
     radec_to_unit,
 )
+from .semantics import Epoch, TimeSpec
 
 Representation = Literal["lonlat_deg", "unit_xyz", "barycentric_au"]
 
@@ -57,7 +58,9 @@ class CatalogState:
     lon: Tensor
     lat: Tensor
     frame: str = "ICRS"
-    epoch: Tensor | float = 2000.0
+    epoch: Tensor | float | Epoch = 2000.0
+    epoch_scale: str | None = None
+    epoch_format: str | None = None
     pm_lon_coslat_mas_yr: Tensor | None = None
     pm_lat_mas_yr: Tensor | None = None
     parallax_mas: Tensor | None = None
@@ -69,7 +72,19 @@ class CatalogState:
         lat = _to_device(_as_f64(self.lat), lon.device)
         self.lon, self.lat = torch.broadcast_tensors(lon, lat)
         self.frame = canonical_celestial_frame(self.frame)
-        self.epoch = _to_device(_as_f64(self.epoch), self.lon.device)
+        if isinstance(self.epoch, Epoch):
+            epoch = self.epoch
+        else:
+            epoch = Epoch(
+                self.epoch,
+                TimeSpec(
+                    format="jyear" if self.epoch_format is None else self.epoch_format,
+                    scale="tcb" if self.epoch_scale is None else self.epoch_scale,
+                ),
+            )
+        self.epoch = _to_device(_as_f64(epoch.value), self.lon.device)
+        self.epoch_scale = epoch.spec.scale
+        self.epoch_format = epoch.spec.format
         if self.pm_lon_coslat_mas_yr is not None:
             self.pm_lon_coslat_mas_yr = _to_device(
                 _as_f64(self.pm_lon_coslat_mas_yr), self.lon.device
@@ -161,24 +176,34 @@ class CatalogState:
             pm_lat_mas_yr=pm_lat,
         )
 
-    def propagate_angular(self, epoch: Tensor | float) -> CatalogState:
+    def _target_epoch_value(self, epoch: Tensor | float | Epoch) -> Tensor:
+        if isinstance(epoch, Epoch):
+            if self.epoch_scale is None or self.epoch_format is None:
+                raise RuntimeError("catalog epoch metadata was not initialized")
+            epoch = epoch.to(
+                TimeSpec(format=self.epoch_format, scale=self.epoch_scale)
+            ).value
+        return _to_device(_as_f64(epoch), self.lon.device)
+
+    def propagate_angular(self, epoch: Tensor | float | Epoch) -> CatalogState:
         if self.pm_lon_coslat_mas_yr is None or self.pm_lat_mas_yr is None:
             raise ValueError(
                 "angular propagation requires pm_lon_coslat_mas_yr and pm_lat_mas_yr"
             )
+        if self.epoch_format != "jyear":
+            raise ValueError("angular propagation requires jyear epochs")
+        target_epoch = self._target_epoch_value(epoch)
         lon, lat = propagate_proper_motion(
             self.lon,
             self.lat,
             self.pm_lon_coslat_mas_yr,
             self.pm_lat_mas_yr,
             source_epoch_jyear=self.epoch,
-            target_epoch_jyear=epoch,
+            target_epoch_jyear=target_epoch,
         )
-        return replace(
-            self, lon=lon, lat=lat, epoch=_to_device(_as_f64(epoch), lon.device)
-        )
+        return replace(self, lon=lon, lat=lat, epoch=target_epoch)
 
-    def propagate_physical(self, epoch: Tensor | float) -> CatalogState:
+    def propagate_physical(self, epoch: Tensor | float | Epoch) -> CatalogState:
         if (
             self.pm_lon_coslat_mas_yr is None
             or self.pm_lat_mas_yr is None
@@ -189,6 +214,9 @@ class CatalogState:
                 "physical space motion requires proper motion, parallax, and "
                 "radial velocity; missing components are not imputed"
             )
+        if self.epoch_scale != "tcb" or self.epoch_format != "jyear":
+            raise ValueError("physical space motion requires TCB jyear epochs")
+        target_epoch = self._target_epoch_value(epoch)
         state = self if self.frame == "ICRS" else self.to_frame("ICRS")
         lon, lat, pm_lon, pm_lat, parallax, rv = propagate_space_motion(
             state.lon,
@@ -198,13 +226,13 @@ class CatalogState:
             state.parallax_mas,
             state.radial_velocity_km_s,
             source_epoch_jyear=state.epoch,
-            target_epoch_jyear=epoch,
+            target_epoch_jyear=target_epoch,
         )
         out = replace(
             state,
             lon=lon,
             lat=lat,
-            epoch=_to_device(_as_f64(epoch), lon.device),
+            epoch=target_epoch,
             pm_lon_coslat_mas_yr=pm_lon,
             pm_lat_mas_yr=pm_lat,
             parallax_mas=parallax,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Literal, Any, TYPE_CHECKING
+from typing import Literal, Any, Protocol, TYPE_CHECKING, runtime_checkable
 
 import torch
 from torch import Tensor
@@ -12,6 +12,19 @@ from . import healpix as _healpix
 if TYPE_CHECKING:
     from .geom import PixelizedRegion
     from .moc import MOC
+
+
+@runtime_checkable
+class HealSparseHostProtocol(Protocol):
+    nside_sparse: int
+    nside_coverage: int
+    sentinel: Any
+    metadata: Any
+
+    @property
+    def valid_pixels(self) -> Any: ...
+
+    def get_values_pix(self, pixels: Any, **kwargs: Any) -> Any: ...
 
 _CPP_BLOCK_DTYPES = frozenset(
     {
@@ -851,6 +864,61 @@ class SparseHealpixMap:
         from .moc import MOC
 
         return MOC.from_sparse_map(self)
+
+    @classmethod
+    def from_healsparse(
+        cls, map_obj: HealSparseHostProtocol
+    ) -> "SparseHealpixMap":
+        """Import a host-side ``healsparse.HealSparseMap`` without dense expansion."""
+        import numpy as np
+
+        valid_pixels = map_obj.valid_pixels
+        if callable(valid_pixels):
+            valid_pixels = valid_pixels()
+        pixels_np = np.asarray(valid_pixels, dtype=np.int64)
+        values_np = np.asarray(map_obj.get_values_pix(pixels_np, nest=True))
+        if values_np.dtype.fields is not None:
+            raise ValueError("structured HealSparse maps require selecting a field")
+        return cls.from_pixels(
+            torch.as_tensor(pixels_np, dtype=torch.int64),
+            torch.as_tensor(values_np),
+            int(map_obj.nside_sparse),
+            nest=True,
+            nside_coverage=int(map_obj.nside_coverage),
+            sentinel=map_obj.sentinel,
+            metadata=dict(map_obj.metadata) if map_obj.metadata is not None else None,
+        )
+
+    def to_healsparse(self) -> Any:
+        """Export to ``healsparse.HealSparseMap`` when healsparse is installed."""
+        try:
+            import healsparse
+        except ImportError as exc:
+            raise ImportError("healsparse is required for to_healsparse()") from exc
+
+        if self.values.ndim != 1:
+            raise ValueError("HealSparse interchange requires one-dimensional values")
+        nside_coverage = self.nside_coverage
+        if nside_coverage is None:
+            nside_coverage = max(1, int(self.nside) // 16)
+        metadata = (
+            {str(key).upper(): value for key, value in self.metadata.items()}
+            if self.metadata is not None
+            else None
+        )
+        result = healsparse.HealSparseMap.make_empty(
+            int(nside_coverage),
+            int(self.nside),
+            self.values.detach().cpu().numpy().dtype,
+            sentinel=self.fill_value,
+            metadata=metadata,
+        )
+        result.update_values_pix(
+            self.pixels.detach().cpu().numpy(),
+            self.values.detach().cpu().numpy(),
+            nest=bool(self.nest),
+        )
+        return result
 
     def to_pixelized_region(
         self,
@@ -2016,6 +2084,7 @@ def _positive_mask_pixels(mask: SparseHealpixMap) -> Tensor:
 
 
 __all__ = [
+    "HealSparseHostProtocol",
     "SparseHealpixMap",
     "HealSparseMap",
     "SparseMap",

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 import torch
 from torch import Tensor
@@ -17,6 +17,7 @@ from .operators.config import (
     MapStackingMethod,
     MapValueSemantics,
 )
+from .quality import DQPolicy, QualityProduct
 
 
 @dataclass
@@ -46,6 +47,10 @@ class ImageObservation:
     wcs: WCS | dict[str, Any] | Any | None = None
     weight_map: Tensor | None = None
     mask: Tensor | None = None
+    dq_path: str | None = None
+    dq_hdu: int | str | None = "DQ"
+    dq: Tensor | None = None
+    dq_policy: DQPolicy | None = None
     primary_beam: Tensor | None = None
     weight_type: str = "weight"
     weight_thresh: float | None = None
@@ -79,6 +84,81 @@ Observation = ImageObservation
 
 
 @dataclass(frozen=True)
+class IFUObservation:
+    """In-memory detector product for runtime-independent IFU cube building."""
+
+    sci: Tensor
+    detector_to_world: Any
+    dq: Tensor | None = None
+    variance_components: Mapping[str, Tensor] = field(default_factory=dict)
+    slice_id: Tensor | None = None
+    detector_pixel_footprint: Tensor | None = None
+    spectral_unit: str = "Angstrom"
+    spectral_type: str = "WAVE"
+    value_semantics: MapValueSemantics = "surface_brightness"
+    weight: Tensor | float | None = None
+    dq_policy: DQPolicy | None = None
+    provenance: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        science = torch.as_tensor(self.sci)
+        if science.ndim != 2 or not science.is_floating_point():
+            raise ValueError("IFU science must be a floating detector image")
+        if not callable(getattr(self.detector_to_world, "pixel_to_world", None)):
+            raise TypeError("detector_to_world must expose pixel_to_world(x, y)")
+        if self.dq is not None:
+            dq = DQPolicy._coerce(self.dq)
+            if dq.shape != science.shape:
+                raise ValueError("IFU DQ must match the science image")
+            object.__setattr__(self, "dq", dq.to(device=science.device))
+        components: dict[str, Tensor] = {}
+        for name, value in self.variance_components.items():
+            if not isinstance(name, str) or not name:
+                raise ValueError("variance component names must be non-empty")
+            component = torch.as_tensor(value, device=science.device, dtype=science.dtype)
+            if component.shape != science.shape:
+                raise ValueError("IFU variance components must match the science image")
+            components[name] = component
+        if self.slice_id is not None:
+            slice_id = torch.as_tensor(self.slice_id, device=science.device, dtype=torch.int64)
+            if slice_id.shape != science.shape:
+                raise ValueError("IFU slice_id must match the science image")
+            object.__setattr__(self, "slice_id", slice_id)
+        if self.detector_pixel_footprint is not None:
+            footprint = torch.as_tensor(
+                self.detector_pixel_footprint,
+                device=science.device,
+                dtype=science.dtype,
+            )
+            if (
+                footprint.ndim != 4
+                or footprint.shape[:2] != science.shape
+                or footprint.shape[-1] not in {2, 3}
+                or footprint.shape[-2] < 3
+            ):
+                raise ValueError(
+                    "detector_pixel_footprint must have shape (H, W, vertices>=3, 2|3)"
+                )
+            object.__setattr__(self, "detector_pixel_footprint", footprint)
+        if not isinstance(self.spectral_unit, str) or not self.spectral_unit.strip():
+            raise ValueError("IFU spectral_unit must be explicit")
+        if self.value_semantics not in {"surface_brightness", "flux"}:
+            raise ValueError("IFU value_semantics must be surface_brightness or flux")
+        if self.weight is not None:
+            weight = torch.as_tensor(self.weight, device=science.device, dtype=science.dtype)
+            if weight.numel() != 1 and weight.shape != science.shape:
+                raise ValueError("IFU weight must be scalar or match the science image")
+            object.__setattr__(self, "weight", weight)
+        object.__setattr__(self, "sci", science)
+        object.__setattr__(self, "variance_components", components)
+        object.__setattr__(self, "provenance", dict(self.provenance))
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return int(self.sci.shape[0]), int(self.sci.shape[1])
+
+
+@dataclass(frozen=True)
 class ResampleConfig:
     """Configuration for single-exposure or mosaic resampling."""
 
@@ -86,9 +166,16 @@ class ResampleConfig:
     pixfrac: float = 1.0
     semantics: MapValueSemantics = "surface_brightness"
     area_scaling: bool | None = None
-    spectral_kernel: Literal["linear", "drizzle", "emsm", "nearest"] = "linear"
+    spectral_kernel: Literal["linear", "drizzle", "emsm", "msm", "nearest"] = "linear"
     spectral_pixfrac: float = 1.0
     emsm_scale: float = 1.0
+    spatial_roi: Any | None = None
+    spectral_roi: Any | None = None
+    resolving_power: Any | None = None
+    response_chunk_size: int = 65_536
+    max_response_entries: int | None = None
+    footprint_tolerance: float = 0.02
+    footprint_max_depth: int = 10
 
 
 @dataclass(frozen=True)
@@ -120,6 +207,8 @@ class OutlierConfig:
     min_floor: float = 0.0
     grow: int = 1
     mode: Literal["mask", "weight_zero", "flag_only"] = "mask"
+    parity_mode: bool = False
+    dq_policy: DQPolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +239,10 @@ class MapResult:
     var_poisson: Tensor | None = None
     var_rnoise: Tensor | None = None
     var_flat: Tensor | None = None
+    dq: Tensor | None = None
+    usability_mask: Tensor | None = None
+    rejection_log: tuple[dict[str, Any], ...] = ()
+    dq_policy: DQPolicy | None = None
 
     @property
     def image(self) -> Tensor:
@@ -162,6 +255,17 @@ class MapResult:
     @property
     def wcs(self) -> WCS:
         return WCS(self.header)
+
+    @property
+    def quality(self) -> QualityProduct | None:
+        if self.dq is None or self.usability_mask is None:
+            return None
+        return QualityProduct(
+            dq=self.dq,
+            usability_mask=self.usability_mask,
+            rejection_log=self.rejection_log,
+            policy=self.dq_policy,
+        )
 
 
 @dataclass
@@ -327,7 +431,95 @@ class PlannedImagePlaneCubeTarget:
         return self.band_metadata.to_dict()
 
 
-CubeTarget = PlannedImagePlaneCubeTarget
+@dataclass(frozen=True, init=False)
+class CubeTarget:
+    """Physical IFU cube grid: a spatial WCS and explicit spectral bin edges."""
+
+    spatial_wcs: WCS
+    shape: tuple[int, int]
+    spectral_bin_edges: Tensor
+    spectral_unit: str
+    spectral_type: str
+    value_semantics: MapValueSemantics
+
+    def __init__(
+        self,
+        spatial_wcs: WCS | dict[str, Any] | PlannedImagePlaneTarget,
+        spectral_bin_edges: Tensor | list[float] | tuple[float, ...],
+        *,
+        shape: tuple[int, int] | None = None,
+        spectral_unit: str = "Angstrom",
+        spectral_type: str = "WAVE",
+        value_semantics: MapValueSemantics = "surface_brightness",
+    ) -> None:
+        if isinstance(spatial_wcs, PlannedImagePlaneTarget):
+            wcs = spatial_wcs.wcs
+            target_shape = spatial_wcs.shape
+        else:
+            wcs = spatial_wcs if isinstance(spatial_wcs, WCS) else WCS(spatial_wcs)
+            inferred = wcs.array_shape
+            if shape is None and inferred is None:
+                raise ValueError("CubeTarget shape is required when WCS has no array shape")
+            target_shape = (
+                (int(shape[0]), int(shape[1]))
+                if shape is not None
+                else (int(inferred[0]), int(inferred[1]))
+            )
+        edges = torch.as_tensor(spectral_bin_edges)
+        if edges.ndim != 1 or edges.numel() < 2 or not edges.is_floating_point():
+            raise ValueError("CubeTarget spectral_bin_edges must be a floating 1D vector")
+        if not bool(torch.isfinite(edges).all()) or not bool(
+            torch.all(edges[1:] > edges[:-1])
+        ):
+            raise ValueError("CubeTarget spectral_bin_edges must be finite and increasing")
+        if not isinstance(spectral_unit, str) or not spectral_unit.strip():
+            raise ValueError("CubeTarget spectral_unit must be explicit")
+        if value_semantics not in {"surface_brightness", "flux"}:
+            raise ValueError("CubeTarget value_semantics must be surface_brightness or flux")
+        object.__setattr__(self, "spatial_wcs", wcs)
+        object.__setattr__(self, "shape", target_shape)
+        object.__setattr__(self, "spectral_bin_edges", edges.detach().clone())
+        object.__setattr__(self, "spectral_unit", spectral_unit)
+        object.__setattr__(self, "spectral_type", spectral_type)
+        object.__setattr__(self, "value_semantics", value_semantics)
+
+    @property
+    def spatial_target(self) -> PlannedImagePlaneTarget:
+        return PlannedImagePlaneTarget(wcs=self.spatial_wcs, shape=self.shape)
+
+    @property
+    def header(self) -> dict[str, Any]:
+        header = self.spatial_wcs.to_header(relax=True, include_naxis=True)
+        header["NAXIS1"] = self.shape[1]
+        header["NAXIS2"] = self.shape[0]
+        return header
+
+    @property
+    def spectral_axis(self) -> SpectralAxis:
+        edges = self.spectral_bin_edges
+        return SpectralAxis(
+            values=0.5 * (edges[:-1] + edges[1:]),
+            unit=self.spectral_unit,
+            type=self.spectral_type,
+        )
+
+    @property
+    def band_metadata(self) -> BandMetadataTable:
+        centers = self.spectral_axis.values.to(dtype=torch.float64).cpu()
+        edges = self.spectral_bin_edges.to(dtype=torch.float64).cpu()
+        count = centers.numel()
+        return BandMetadataTable(
+            band_index=torch.arange(count, dtype=torch.int64),
+            center=centers,
+            lower=edges[:-1],
+            upper=edges[1:],
+            observation_count=torch.zeros(count, dtype=torch.int64),
+            spectral_weight_sum=torch.zeros(count, dtype=torch.float64),
+            band_names=tuple(None for _ in range(count)),
+        )
+
+    def to_band_table(self) -> dict[str, object]:
+        return self.band_metadata.to_dict()
 
 
 @dataclass
@@ -342,6 +534,14 @@ class CubeResult:
     correlation_factor: Tensor | None = None
     overlap_count: Tensor | None = None
     coverage_mocs: tuple[MOC | None, ...] | None = None
+    variance_components: Mapping[str, Tensor] = field(default_factory=dict)
+    dq: Tensor | None = None
+    usability_mask: Tensor | None = None
+    context: Tensor | None = None
+    covariance: Any | None = None
+    response_plan: Any | None = None
+    provenance: Mapping[str, Any] | None = None
+    value_semantics: MapValueSemantics = "surface_brightness"
 
     @property
     def cube(self) -> Tensor:
@@ -359,3 +559,54 @@ class CubeResult:
             header=self.header,
             spectral_axis_index=0,
         )
+
+    @property
+    def quality(self) -> QualityProduct | None:
+        if self.dq is None or self.usability_mask is None:
+            return None
+        return QualityProduct(dq=self.dq, usability_mask=self.usability_mask)
+
+    def query_uncertainty(self, query: Tensor) -> ApertureUncertainty:
+        value = torch.as_tensor(query, device=self.data.device, dtype=self.data.dtype)
+        if value.shape != self.data.shape:
+            raise ValueError("cube uncertainty query must match the cube shape")
+        if self.covariance is None:
+            raise ValueError("matrix-free cube covariance is unavailable")
+        variance = self.covariance.query_variance(value)
+        diagonal = self.covariance.diagonal()
+        diagonal_variance = torch.sum(value.square() * diagonal)
+        return ApertureUncertainty(variance=variance, diagonal_variance=diagonal_variance)
+
+    def aperture_uncertainty(
+        self,
+        spatial_aperture: Tensor,
+        spectral_weights: Tensor | None = None,
+    ) -> ApertureUncertainty:
+        spatial = torch.as_tensor(
+            spatial_aperture,
+            device=self.data.device,
+            dtype=self.data.dtype,
+        )
+        if spatial.shape != self.data.shape[-2:]:
+            raise ValueError("spatial aperture must match the cube spatial shape")
+        spectral = (
+            torch.ones(
+                self.data.shape[0], device=self.data.device, dtype=self.data.dtype
+            )
+            if spectral_weights is None
+            else torch.as_tensor(
+                spectral_weights,
+                device=self.data.device,
+                dtype=self.data.dtype,
+            )
+        )
+        if spectral.shape != self.data.shape[:1]:
+            raise ValueError("spectral weights must match the cube spectral length")
+        return self.query_uncertainty(spectral[:, None, None] * spatial[None])
+
+    def line_uncertainty(
+        self,
+        spatial_aperture: Tensor,
+        spectral_weights: Tensor,
+    ) -> ApertureUncertainty:
+        return self.aperture_uncertainty(spatial_aperture, spectral_weights)

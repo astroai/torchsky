@@ -23,6 +23,7 @@ from .observation import (
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
 )
+from .quality import QualityProduct
 from .image_plane import coadd_image_plane, coadd_image_plane_cube
 from .planning import plan_image_plane_cube_target, plan_image_plane_target
 from .field.types import FieldSpatialSampling
@@ -190,6 +191,19 @@ class ProductResult:
     mask: Tensor | None = None
     context: Tensor | None = None
     provenance: Mapping[str, Any] | None = None
+    quality: QualityProduct | None = None
+
+    @property
+    def dq(self) -> Tensor | None:
+        return None if self.quality is None else self.quality.dq
+
+    @property
+    def usability_mask(self) -> Tensor | None:
+        return None if self.quality is None else self.quality.usability_mask
+
+    @property
+    def rejection_log(self) -> tuple[Mapping[str, Any], ...]:
+        return () if self.quality is None else self.quality.rejection_log
 
     @property
     def n_bands(self) -> int:
@@ -547,9 +561,23 @@ def _wrap_map_result(result: MapResult, product: ProductSpec) -> ProductResult:
         ),
         coverage_mocs=coverage_mocs,
         uncertainty=uncertainty,
-        mask=(result.weight > 0.0).unsqueeze(0),
+        mask=(
+            result.usability_mask.unsqueeze(0)
+            if result.usability_mask is not None
+            else (result.weight > 0.0).unsqueeze(0)
+        ),
         context=(result.context.unsqueeze(0) if result.context is not None else None),
         provenance=result.provenance,
+        quality=(
+            QualityProduct(
+                dq=result.dq.unsqueeze(0),
+                usability_mask=result.usability_mask.unsqueeze(0),
+                rejection_log=result.rejection_log,
+                policy=result.dq_policy,
+            )
+            if result.dq is not None and result.usability_mask is not None
+            else None
+        ),
     )
 
 

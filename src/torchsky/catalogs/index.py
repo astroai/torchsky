@@ -11,6 +11,7 @@ from torch import Tensor
 from .._dtype import work_dtype as _work_dtype
 from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
+from ..sphere.moc import MOC, nest2uniq
 
 _MAX_NSIDE = 65536
 _TARGET_POINTS_PER_PIXEL = 64
@@ -361,6 +362,28 @@ class HealpixIndex:
         return torch.repeat_interleave(query, lengths), self.order[
             starts[bucket] + intra
         ]
+
+    def occupied_moc(self) -> MOC:
+        """Coverage of occupied catalog buckets as canonical NUNIQ cells."""
+        pixels = self.unique_pixels
+        if not self.nest and pixels.numel() > 0:
+            pixels = _healpix.ring2nest(self.nside, pixels)
+        return MOC(nest2uniq(self.nside, pixels))
+
+    def lookup_moc(self, footprint: MOC) -> Tensor:
+        """Rows inside a MOC using occupied buckets for candidate pruning."""
+        if self.unique_pixels.numel() == 0 or footprint.uniq.numel() == 0:
+            return self.order[:0]
+        bucket_pixels = self.unique_pixels
+        nested = bucket_pixels
+        if not self.nest:
+            nested = _healpix.ring2nest(self.nside, bucket_pixels)
+        bucket_uniq = nest2uniq(self.nside, nested)
+        candidates = self.lookup(bucket_pixels[footprint.intersects_uniq(bucket_uniq)])
+        if candidates.numel() == 0:
+            return candidates
+        inside = footprint.contains(self.lon[candidates], self.lat[candidates])
+        return torch.sort(candidates[inside]).values
 
     def query_disc(
         self, lon: Tensor | float, lat: Tensor | float, radius_deg: float

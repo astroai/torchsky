@@ -9,7 +9,7 @@ otherwise. The projection engine and the 2D image-plane coadd live in
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import torch
 from torch import Tensor
@@ -29,6 +29,7 @@ from .observation import (
     BandMetadataTable,
     CubeResult,
     CubeTarget,
+    IFUObservation,
     Observation,
     PlannedImagePlaneCubeTarget,
     ResampleConfig,
@@ -48,11 +49,12 @@ from .spectral_projection import (
 )
 
 
-def _has_3d_ifu_observations(observations: Sequence[Observation]) -> bool:
+def _has_3d_ifu_observations(observations: Sequence[Observation | IFUObservation]) -> bool:
     from ..wcs.gwcs_sampling import IFUSliceWCS
 
     return any(
-        obs.wavelength_map is not None
+        isinstance(obs, IFUObservation)
+        or obs.wavelength_map is not None
         or obs.ifu_wcs is not None
         or isinstance(obs.wcs, IFUSliceWCS)
         for obs in observations
@@ -67,7 +69,7 @@ def _coadd_ifu_3d_cube(
     spectral_bin_edges: Sequence[float] | Tensor | None,
     spectral_unit: str,
     spectral_type: str,
-    spectral_kernel: Literal["linear", "drizzle", "emsm", "nearest"],
+    spectral_kernel: Literal["linear", "drizzle", "emsm", "msm", "nearest"],
     pixfrac: float,
     spectral_pixfrac: float,
     emsm_scale: float,
@@ -374,7 +376,7 @@ def _coadd_ifu_3d_cube(
 
 
 def coadd_cube(
-    observations: Sequence[Observation],
+    observations: Sequence[Observation | IFUObservation],
     target: CubeTarget | Target | Mapping[str, Any] | WCS | None = None,
     *,
     resample: ResampleConfig | None = None,
@@ -383,9 +385,16 @@ def coadd_cube(
     pixfrac: float | None = None,
     semantics: MapValueSemantics | None = None,
     method: MapStackingMethod | None = None,
-    spectral_kernel: Literal["linear", "drizzle", "emsm", "nearest"] | None = None,
+    spectral_kernel: Literal["linear", "drizzle", "emsm", "msm", "nearest"] | None = None,
     spectral_pixfrac: float | None = None,
     emsm_scale: float | None = None,
+    spatial_roi: Any | None = None,
+    spectral_roi: Any | None = None,
+    resolving_power: Any | None = None,
+    response_chunk_size: int | None = None,
+    max_response_entries: int | None = None,
+    footprint_tolerance: float | None = None,
+    footprint_max_depth: int | None = None,
     footprint_order: int | None = None,
     spectral_axis: SpectralAxis | Sequence[float] | Tensor | None = None,
     wavelengths: SpectralAxis | Sequence[float] | Tensor | None = None,
@@ -403,9 +412,61 @@ def coadd_cube(
     resolved_spec_kernel = (
         spectral_kernel if spectral_kernel is not None else r_cfg.spectral_kernel
     )
-    if _has_3d_ifu_observations(observations) or resolved_spec_kernel == "emsm":
+    if any(isinstance(observation, IFUObservation) for observation in observations):
+        if not all(isinstance(observation, IFUObservation) for observation in observations):
+            raise TypeError("physical IFU cube building cannot mix IFUObservation and Observation")
+        if not isinstance(target, CubeTarget):
+            raise TypeError("IFUObservation requires a CubeTarget with spectral bin edges")
+        if resolved_spec_kernel not in {"drizzle", "emsm", "msm"}:
+            resolved_spec_kernel = "drizzle"
+        from .ifu import build_ifu_cube
+
+        return build_ifu_cube(
+            cast(Sequence[IFUObservation], observations),
+            target,
+            kernel=resolved_spec_kernel,
+            pixfrac=pixfrac if pixfrac is not None else r_cfg.pixfrac,
+            spectral_pixfrac=(
+                spectral_pixfrac
+                if spectral_pixfrac is not None
+                else r_cfg.spectral_pixfrac
+            ),
+            emsm_scale=emsm_scale if emsm_scale is not None else r_cfg.emsm_scale,
+            spatial_roi=spatial_roi if spatial_roi is not None else r_cfg.spatial_roi,
+            spectral_roi=(
+                spectral_roi if spectral_roi is not None else r_cfg.spectral_roi
+            ),
+            resolving_power=(
+                resolving_power
+                if resolving_power is not None
+                else r_cfg.resolving_power
+            ),
+            chunk_size=(
+                response_chunk_size
+                if response_chunk_size is not None
+                else r_cfg.response_chunk_size
+            ),
+            max_response_entries=(
+                max_response_entries
+                if max_response_entries is not None
+                else r_cfg.max_response_entries
+            ),
+            footprint_tolerance=(
+                footprint_tolerance
+                if footprint_tolerance is not None
+                else r_cfg.footprint_tolerance
+            ),
+            footprint_max_depth=(
+                footprint_max_depth
+                if footprint_max_depth is not None
+                else r_cfg.footprint_max_depth
+            ),
+            device=device,
+        )
+    legacy_observations = cast(Sequence[Observation], observations)
+    if _has_3d_ifu_observations(legacy_observations) or resolved_spec_kernel == "emsm":
         return _coadd_ifu_3d_cube(
-            observations,
+            legacy_observations,
             target,
             spectral_axis=spectral_axis,
             spectral_bin_edges=spectral_bin_edges,

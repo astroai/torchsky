@@ -220,6 +220,9 @@ nested pixels without materializing a full dense HEALPix mask. Maps with
 int64 coverage plus `EXTNAME=SPARSE` image, `PIXTYPE=HEALSPARSE`). Boolean maps
 are stored as `uint8` with `BOOLMAP`. Pixel-list maps without coverage still use
 a PIXEL/VALUE table. Sentinel values are not valid pixels on the image path.
+`from_healsparse(...)` and `to_healsparse()` provide optional CPU-host
+interchange when `healsparse` is installed; the production implementation does
+not import or delegate computation to HealSparse.
 
 ### `WideBitMask` / `SkyMaskPipe`
 
@@ -258,6 +261,7 @@ json_repr = moc.to_json()
 | `MOC.from_ascii(text)` | IVOA ASCII roundtrip, including compact pixel ranges like `3/5-7` |
 | `MOC.from_json(text)` | IVOA JSON roundtrip |
 | `MOC.read_fits(path)` | IVOA FITS roundtrip |
+| `MOC.from_mocpy(moc)` / `moc.to_mocpy()` | Optional host-side mocpy interchange through IVOA JSON |
 
 **Key methods and properties:**
 
@@ -266,8 +270,11 @@ json_repr = moc.to_json()
 | `contains(lon_deg, lat_deg)` | Point-in-MOC predicate |
 | `contains_rows(catalog)` | Same mask from a `Catalog` (or any object with `lon`/`lat`) |
 | `contains_pixels(nside, pixels, nest=True)` | Pixel-in-MOC predicate for HEALPix-indexed catalogs or sparse maps |
+| `overlap_fraction(uniq)` | Exact covered fraction for canonical UNIQ cells without leaf expansion |
+| `intersects_uniq(uniq)` / `contains_uniq(uniq)` | Intersecting or fully covered UNIQ cells |
 | `filter_catalog(lon_deg, lat_deg)` | Filter catalog coordinates by coverage; prefer `Catalog.take(moc.contains(...))` |
 | `contains_moc(other)` | Subset check |
+| `overlaps(other)` | Non-empty intersection predicate for exposure footprints |
 | `union(other)` / `intersection(other)` / `difference(other)` | Boolean operations on sorted NEST ranges; also `\|`, `&`, `-` |
 | `degrade(max_order)` | Drop cells finer than `max_order` onto nested parents |
 | `flatten(nside)` | Dense boolean mask at fixed resolution |
@@ -287,6 +294,36 @@ moc = MOC.from_circle(10.0, 20.0, 0.5, max_order=8)
 inside = cat.inside(moc)
 subset = cat.take(inside)
 ```
+
+`HealpixIndex.lookup_moc(moc)` prunes source queries with the index's occupied
+fixed-resolution buckets and then applies exact point-in-MOC containment.
+`HealpixIndex.occupied_moc()` exposes those buckets as standard MOC coverage,
+without introducing another sky index.
+
+### Class `MultiOrderHealpixMap`
+
+`MultiOrderHealpixMap` is a value layer over sorted, disjoint IVOA UNIQ cells.
+MOC owns coverage and overlap semantics; this class does not define another
+index. Values may require gradients, while integer UNIQ topology does not.
+
+```python
+from torchsky.sphere import MOC, MultiOrderHealpixMap
+
+probability = MultiOrderHealpixMap(
+    uniq,
+    probdensity,
+    values_are_densities=True,
+)
+mass = probability.integral(footprint_moc)
+values, valid = probability.get_values_pos(lon, lat, return_valid=True)
+```
+
+`from_columns(...)` and `to_columns(...)` exchange standard `UNIQ` plus value
+columns. Fixed-order maps convert to and from `SparseHealpixMap`. Optional
+host-side adapters cover `mhealpy.HealpixMap` and
+`cdshealpix.skymap.SkymapExplicit` when those packages are installed. These
+adapters detach and copy values to CPU; tensor-native computation has no peer
+dependency or backend.
 
 `boundary()` returns one or more closed loops of shape `[N, 2]` in `(lon_deg, lat_deg)` coordinates. The loops are traced from stitched HEALPix cell edges at the MOC's current maximum order.
 
@@ -347,6 +384,13 @@ spin SHT. Comparator setup and parity criteria are maintained in
 [`torchsky-harness`](https://github.com/astroai/torchsky-harness); these packages
 are not core dependencies and must not appear under `src/torchsky`.
 
+`torchsky.sphere.sht` provides immutable geometry, request, capability, and
+result contracts with separate `synthesize`, `adjoint_synthesize`, quadrature
+`analyze`, and least-squares `pseudo_analyze` operations. `CARGeometry` accepts
+only separable, unrotated, full-longitude CAR grids with Clenshaw-Curtis or
+Fejer-1 latitude centers. Unsupported WCS and backend semantics fail explicitly.
+The historical HEALPix `map2alm` and `alm2map` defaults are unchanged.
+
 s2fft conventions that differ from healpy/torchsky:
 
 - Bandlimit `L` is `lmax + 1`.
@@ -362,8 +406,10 @@ HEALPix↔lat-lon regrid. It is not a core backend, has no spin-2 path, defaults
 to `lmax = 2*nside+1` and float32, and must not be compared blindly to healpy's
 `3*nside-1`. See [Limitations](#limitations).
 
-SFNO / torch-harmonics stay out: they are lat-lon weather architectures, not a
-HEALPix SHT backend.
+**torch-harmonics** remains optional. Its adapter supports scalar synthesis and
+quadrature analysis on compatible equiangular Clenshaw-Curtis CAR grids; it is
+not a HEALPix backend and does not provide adjoint-synthesis or least-squares
+semantics through this adapter.
 
 ### `map2alm_spin(maps, spin, *, nside=None, lmax=None, mmax=None, nest=False, iter=0)`
 
@@ -393,6 +439,32 @@ Auto/cross angular power spectrum C_ell.
 ### `alm2cl(alms1, alms2=None, *, lmax=None)`
 
 Power spectrum from alm coefficients.
+
+### CAR pseudo-C_ell estimation
+
+`PseudoClField` binds a CAR map, scalar mask, bandlimit, and optional beam,
+pixel windows, and deprojection templates. `coupled_spectra` uses IAU E/B
+signs and returns scalar spectra, `(TE, TB)` for spin-0 x spin-2, or
+`(EE, EB, BE, BB)` for spin-2 x spin-2. `ModeCouplingWorkspace` provides exact
+scalar and E/B block coupling through blocked correlation-space
+Gauss-Legendre quadrature, binned decoupling, and bandpower windows. Workspace
+construction analyzes masks through `2*lmax` and requires
+`nlat >= 2*lmax + 1` and `nlon >= 4*lmax + 1`. Spin binning must exclude
+multipoles below two.
+
+`BandpowerBinning` carries paired binning and unbinning operators. Decoupling
+uses a direct solve only after explicit rank and condition checks; it never
+selects a ridge or pseudoinverse fallback. `couple_noise` propagates unbinned
+sky noise through mask, beam, pixel, and E/B blocks; `noise_bias` and
+`deprojection_bias` are coupled spectra subtracted before binning.
+`template_deprojection_bias` estimates the additive cleaning bias from an
+explicit ensemble of already beam/pixel-convolved signal realizations.
+
+`ApodizedMask.from_mask` constructs and validates the first and second spin
+derivatives needed for pure E/B integration by parts. The current pure
+estimator intentionally accepts only band-limited masks that vanish with
+their first derivative on the two polar boundary rings and remain positive in
+the interior; masks with holes or other boundary geometries fail closed.
 
 ### `synalm(cls, lmax=None)`
 

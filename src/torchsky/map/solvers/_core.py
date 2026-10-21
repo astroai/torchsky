@@ -9,6 +9,14 @@ from ._types import (
     NormalOperatorFn,
     PreconditionerFn,
 )
+from ._foundation import (
+    DiagonalPreconditioner,
+    GaugeProjection,
+    LinearSolveResult,
+    Preconditioner,
+    conjugate_gradient,
+    lsqr,
+)
 
 from dataclasses import dataclass
 import math
@@ -92,12 +100,6 @@ class NormalEquationProbe:
 
 
 @dataclass(frozen=True)
-class LinearSolveResult:
-    solution: Tensor
-    residual_norm_history: tuple[float, ...]
-
-
-@dataclass(frozen=True)
 class MultiObservationNormalEquationProbe:
     """Normal-equation probes for a shared scene seen by multiple observations."""
 
@@ -142,26 +144,18 @@ def _inner_product(lhs: Tensor, rhs: Tensor) -> Tensor:
     return torch.sum(torch.conj(lhs_flat) * rhs_flat)
 
 
-def make_diagonal_preconditioner(diagonal: Tensor) -> PreconditionerFn:
-    diagonal_t = torch.as_tensor(diagonal)
-    reciprocal = torch.where(
-        torch.abs(diagonal_t) > 0,
-        1.0 / diagonal_t,
-        torch.zeros_like(diagonal_t),
-    )
-
-    def _apply(vector: Tensor) -> Tensor:
-        return reciprocal.to(dtype=vector.dtype, device=vector.device) * vector
-
-    return _apply
+def make_diagonal_preconditioner(diagonal: Tensor) -> DiagonalPreconditioner:
+    return DiagonalPreconditioner(diagonal)
 
 
 def _apply_preconditioner(
-    preconditioner: PreconditionerFn | Tensor | None,
+    preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None,
     vector: Tensor,
 ) -> Tensor:
     if preconditioner is None:
         return vector
+    if isinstance(preconditioner, Preconditioner):
+        return torch.as_tensor(preconditioner.apply(vector))
     if callable(preconditioner):
         return torch.as_tensor(preconditioner(vector))
     return (
@@ -177,65 +171,51 @@ def _solve_normal_system_cg(
     initial_solution: Tensor | None = None,
     iterations: int = 16,
     damping: float = 0.0,
-    preconditioner: PreconditionerFn | Tensor | None = None,
+    preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+    rtol: float = 1.0e-11,
+    atol: float = 0.0,
+    projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
+    operator_is_hpd: bool = True,
+    record_residual_history: bool = True,
 ) -> LinearSolveResult:
+    if not isinstance(iterations, int) or isinstance(iterations, bool):
+        raise TypeError("iterations must be an integer")
     if iterations < 1:
         raise ValueError("iterations must be positive")
-    if damping < 0.0:
-        raise ValueError("damping must be non-negative")
+    if not math.isfinite(float(damping)) or damping < 0.0:
+        raise ValueError("damping must be finite and non-negative")
     rhs_t = torch.as_tensor(rhs)
     if not (torch.is_floating_point(rhs_t) or torch.is_complex(rhs_t)):
         raise TypeError("rhs must have a floating-point or complex dtype")
-    solution = (
-        torch.zeros_like(rhs_t)
-        if initial_solution is None
-        else torch.as_tensor(initial_solution)
-        .to(
-            dtype=rhs_t.dtype,
-            device=rhs_t.device,
-        )
-        .clone()
-    )
-    if tuple(solution.shape) != tuple(rhs_t.shape):
-        raise ValueError("initial_solution shape must match rhs")
-
     def _action(state: Tensor) -> Tensor:
-        image = torch.as_tensor(normal_action(state)).to(dtype=state.dtype)
+        image = torch.as_tensor(normal_action(state)).to(
+            dtype=state.dtype, device=state.device
+        )
         if tuple(image.shape) != tuple(rhs_t.shape):
             raise ValueError("normal operator output shape must match rhs")
         if damping > 0.0:
             image = image + float(damping) * state
         return image
 
-    residual = rhs_t - _action(solution)
-    preconditioned_residual = _apply_preconditioner(preconditioner, residual).to(
-        dtype=residual.dtype
+    result = conjugate_gradient(
+        _action,
+        rhs_t,
+        operator_is_hpd=operator_is_hpd,
+        initial_solution=(
+            None
+            if initial_solution is None
+            else torch.as_tensor(initial_solution).to(
+                dtype=rhs_t.dtype, device=rhs_t.device
+            )
+        ),
+        max_iterations=iterations,
+        rtol=rtol,
+        atol=atol,
+        preconditioner=preconditioner,
+        projection=projection,
+        record_residual_history=record_residual_history,
     )
-    direction = preconditioned_residual.clone()
-    rz_old = _inner_product(residual, preconditioned_residual).real
-    history: list[float] = []
-    for _ in range(int(iterations)):
-        history.append(float(torch.linalg.vector_norm(residual).item()))
-        ap = _action(direction)
-        denom = _inner_product(direction, ap).real
-        if float(torch.abs(denom).item()) <= 0.0:
-            break
-        alpha = rz_old / denom
-        solution = solution + alpha.to(dtype=solution.dtype) * direction
-        residual = residual - alpha.to(dtype=residual.dtype) * ap
-        preconditioned_residual = _apply_preconditioner(preconditioner, residual).to(
-            dtype=residual.dtype
-        )
-        rz_new = _inner_product(residual, preconditioned_residual).real
-        if float(torch.sqrt(torch.clamp_min(rz_new, 0.0)).item()) == 0.0:
-            break
-        beta = rz_new / rz_old
-        direction = preconditioned_residual + beta.to(dtype=direction.dtype) * direction
-        rz_old = rz_new
-    return LinearSolveResult(
-        solution=solution,
-        residual_norm_history=tuple(history),
-    )
+    return result
 
 
 def _estimate_inverse_diagonal_hutchinson(
@@ -384,7 +364,11 @@ class BoundObservationOperator:
         initial_solution: Tensor | None = None,
         iterations: int = 16,
         damping: float = 0.0,
-        preconditioner: PreconditionerFn | Tensor | None = None,
+        preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+        rtol: float = 1.0e-11,
+        atol: float = 0.0,
+        projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
+        operator_is_hpd: bool = True,
     ) -> LinearSolveResult:
         """Solve ``(A^T N^-1 A + damping I) x = rhs`` matrix-free."""
         return _solve_normal_system_cg(
@@ -394,6 +378,33 @@ class BoundObservationOperator:
             iterations=iterations,
             damping=damping,
             preconditioner=preconditioner,
+            rtol=rtol,
+            atol=atol,
+            projection=projection,
+            operator_is_hpd=operator_is_hpd,
+        )
+
+    def solve_least_squares_lsqr(
+        self,
+        data: Tensor,
+        *,
+        initial_solution: Tensor | None = None,
+        iterations: int = 100,
+        rtol: float = 1.0e-5,
+        atol: float = 0.0,
+        damping: float = 0.0,
+        projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
+    ) -> LinearSolveResult:
+        return lsqr(
+            self.apply,
+            self.adjoint,
+            torch.as_tensor(data),
+            initial_solution=initial_solution,
+            max_iterations=iterations,
+            rtol=rtol,
+            atol=atol,
+            damping=damping,
+            projection=projection,
         )
 
     def estimate_posterior_variance_diagonal(
@@ -575,58 +586,24 @@ class BoundObservationOperator:
         initial_solution: Tensor | None = None,
         iterations: int = 16,
         damping: float = 0.0,
-        preconditioner: PreconditionerFn | Tensor | None = None,
+        preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+        rtol: float = 1.0e-11,
+        atol: float = 0.0,
+        projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
+        operator_is_hpd: bool = True,
     ) -> LinearSolveResult:
-        if iterations < 1:
-            raise ValueError("iterations must be positive")
-        if damping < 0.0:
-            raise ValueError("damping must be non-negative")
         data_t = torch.as_tensor(data)
         rhs = self.adjoint(self.apply_noise_model(data_t))
-        if initial_solution is None:
-            solution = torch.zeros_like(rhs)
-        else:
-            solution = torch.as_tensor(initial_solution).clone()
-
-        def _normal_action(state: Tensor) -> Tensor:
-            image = self.adjoint(self.apply_noise_model(self.apply(state)))
-            if damping > 0.0:
-                image = image + float(damping) * state
-            return image
-
-        residual = rhs - _normal_action(solution)
-        preconditioned_residual = _apply_preconditioner(preconditioner, residual).to(
-            dtype=residual.dtype
-        )
-        direction = preconditioned_residual.clone()
-        rz_old = _inner_product(residual, preconditioned_residual).real
-        history: list[float] = []
-        for _ in range(int(iterations)):
-            image_residual = data_t.to(dtype=self.apply(solution).dtype) - self.apply(
-                solution
-            )
-            history.append(float(torch.linalg.vector_norm(image_residual).item()))
-            ap = _normal_action(direction)
-            denom = _inner_product(direction, ap).real
-            if float(torch.abs(denom).item()) <= 0.0:
-                break
-            alpha = rz_old / denom
-            solution = solution + alpha.to(dtype=solution.dtype) * direction
-            residual = residual - alpha.to(dtype=residual.dtype) * ap
-            preconditioned_residual = _apply_preconditioner(
-                preconditioner, residual
-            ).to(dtype=residual.dtype)
-            rz_new = _inner_product(residual, preconditioned_residual).real
-            if float(torch.sqrt(torch.clamp_min(rz_new, 0.0)).item()) == 0.0:
-                break
-            beta = rz_new / rz_old
-            direction = (
-                preconditioned_residual + beta.to(dtype=direction.dtype) * direction
-            )
-            rz_old = rz_new
-        return LinearSolveResult(
-            solution=solution,
-            residual_norm_history=tuple(history),
+        return self.solve_normal_system_cg(
+            rhs,
+            initial_solution=initial_solution,
+            iterations=iterations,
+            damping=damping,
+            preconditioner=preconditioner,
+            rtol=rtol,
+            atol=atol,
+            projection=projection,
+            operator_is_hpd=operator_is_hpd,
         )
 
 
@@ -723,7 +700,11 @@ class BoundObservationOperatorSet:
         initial_solution: Tensor | None = None,
         iterations: int = 16,
         damping: float = 0.0,
-        preconditioner: PreconditionerFn | Tensor | None = None,
+        preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+        rtol: float = 1.0e-11,
+        atol: float = 0.0,
+        projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
+        operator_is_hpd: bool = True,
     ) -> LinearSolveResult:
         """Solve ``(A^T N^-1 A + damping I) x = rhs`` matrix-free."""
         return _solve_normal_system_cg(
@@ -733,6 +714,36 @@ class BoundObservationOperatorSet:
             iterations=iterations,
             damping=damping,
             preconditioner=preconditioner,
+            rtol=rtol,
+            atol=atol,
+            projection=projection,
+            operator_is_hpd=operator_is_hpd,
+        )
+
+    def solve_least_squares_lsqr(
+        self,
+        data: Sequence[Tensor],
+        *,
+        initial_solution: Tensor | None = None,
+        iterations: int = 100,
+        rtol: float = 1.0e-5,
+        atol: float = 0.0,
+        damping: float = 0.0,
+        projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
+    ) -> LinearSolveResult:
+        if len(data) != len(self.operators):
+            raise ValueError("data count must match operator count")
+        data_t = tuple(torch.as_tensor(item) for item in data)
+        return lsqr(
+            self.apply,
+            self.adjoint,
+            data_t,
+            initial_solution=initial_solution,
+            max_iterations=iterations,
+            rtol=rtol,
+            atol=atol,
+            damping=damping,
+            projection=projection,
         )
 
     def estimate_posterior_variance_diagonal(
@@ -976,58 +987,26 @@ class BoundObservationOperatorSet:
         initial_solution: Tensor | None = None,
         iterations: int = 16,
         damping: float = 0.0,
-        preconditioner: PreconditionerFn | Tensor | None = None,
+        preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+        rtol: float = 1.0e-11,
+        atol: float = 0.0,
+        projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
+        operator_is_hpd: bool = True,
     ) -> LinearSolveResult:
-        if iterations < 1:
-            raise ValueError("iterations must be positive")
-        if damping < 0.0:
-            raise ValueError("damping must be non-negative")
         if len(data) != len(self.operators):
             raise ValueError("data count must match operator count")
         data_t = tuple(torch.as_tensor(item) for item in data)
         rhs = self.weighted_adjoint(data_t)
-        if initial_solution is None:
-            solution = torch.zeros_like(rhs)
-        else:
-            solution = torch.as_tensor(initial_solution).clone()
-
-        def _normal_action(state: Tensor) -> Tensor:
-            image = self.normal_operator_action(state)
-            if damping > 0.0:
-                image = image + float(damping) * state
-            return image
-
-        residual = rhs - _normal_action(solution)
-        preconditioned_residual = _apply_preconditioner(preconditioner, residual).to(
-            dtype=residual.dtype
-        )
-        direction = preconditioned_residual.clone()
-        rz_old = _inner_product(residual, preconditioned_residual).real
-        history: list[float] = []
-        for _ in range(int(iterations)):
-            residual_norm = self._residual_norm(solution, data_t)
-            history.append(float(residual_norm.item()))
-            ap = _normal_action(direction)
-            denom = _inner_product(direction, ap).real
-            if float(torch.abs(denom).item()) <= 0.0:
-                break
-            alpha = rz_old / denom
-            solution = solution + alpha.to(dtype=solution.dtype) * direction
-            residual = residual - alpha.to(dtype=residual.dtype) * ap
-            preconditioned_residual = _apply_preconditioner(
-                preconditioner, residual
-            ).to(dtype=residual.dtype)
-            rz_new = _inner_product(residual, preconditioned_residual).real
-            if float(torch.sqrt(torch.clamp_min(rz_new, 0.0)).item()) == 0.0:
-                break
-            beta = rz_new / rz_old
-            direction = (
-                preconditioned_residual + beta.to(dtype=direction.dtype) * direction
-            )
-            rz_old = rz_new
-        return LinearSolveResult(
-            solution=solution,
-            residual_norm_history=tuple(history),
+        return self.solve_normal_system_cg(
+            rhs,
+            initial_solution=initial_solution,
+            iterations=iterations,
+            damping=damping,
+            preconditioner=preconditioner,
+            rtol=rtol,
+            atol=atol,
+            projection=projection,
+            operator_is_hpd=operator_is_hpd,
         )
 
 

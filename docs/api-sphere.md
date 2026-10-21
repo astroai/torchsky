@@ -58,7 +58,8 @@ docstring says otherwise (some table or reference paths are CPU-only).
 | `PixelizedRegion`, `WideBitMask` | Pixelized masks and set operations. |
 | `RegionAreaEstimate` | Controlled-error area estimate summary over an nside ladder. |
 | `MOC`, `BMOC`, `STMOC` | Multi-order coverage maps (spatial, boolean, space-time). |
-| `HealSparseMap`, `SparseMap`, `SkyMaskPipe` | Sparse HEALPix maps and mask pipelines. |
+| `MultiOrderHealpixMap` | Differentiable values over standard UNIQ cells; MOC retains coverage semantics. |
+| `SparseHealpixMap`, `HealSparseMap`, `SparseMap`, `SkyMaskPipe` | Sparse HEALPix maps and mask pipelines. |
 | `sum_intersection`, `sum_union` | Sparse-map combination rules. |
 | `spherical_polygon_area`, `spherical_polygon_signed_area`, `spherical_triangle_area` | Exact-area helpers. |
 | `convex_polygon_contains`, `spherical_polygon_contains`, `spherical_polygons_intersect` | Predicates. |
@@ -86,6 +87,8 @@ Geometry utilities: `lonlat_to_unit_xyz`, `unit_xyz_to_lonlat`,
 | `alm2lonlat`, `alm2lonlat_spin` | Evaluate alms at arbitrary sky coordinates. |
 | `alm2map_der1` | Map plus first angular derivatives. |
 | `alm_size`, `alm_index` | healpy-compatible alm sizing and indexing. |
+| `PseudoClField`, `coupled_spectra` | Masked CAR scalar and spin-2 coupled auto/cross spectra. |
+| `BandpowerBinning`, `ModeCouplingWorkspace` | Exact scalar pseudo-C_ell coupling, fail-closed decoupling, and bandpower windows. |
 
 The implementation lives under `torchsky.sphere` submodules
 (`torchsky.sphere.healpix`, `torchsky.sphere.spectral`,

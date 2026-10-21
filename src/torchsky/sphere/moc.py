@@ -8,6 +8,7 @@ from typing import Any, Literal
 import torch
 from torch import Tensor
 
+from .._dtype import work_dtype as _work_dtype
 from . import healpix as _healpix
 from .core import great_circle_distance, lonlat_to_unit_xyz
 from .geom import PixelizedRegion, spherical_polygon_contains
@@ -629,6 +630,62 @@ class MOC:
         mask = in_range & (pix_nest < ends[idx_safe])
         return mask.reshape(shape)
 
+    def overlap_fraction(self, uniq: Tensor | int) -> Tensor:
+        """Fraction of each canonical UNIQ cell covered by this MOC."""
+        query = _as_int64_exact(uniq, name="uniq")
+        shape = query.shape
+        query = query.reshape(-1)
+        fraction_dtype = _work_dtype(query.device)
+        if query.numel() == 0:
+            return torch.zeros(shape, dtype=fraction_dtype, device=query.device)
+        query_orders = _order_from_uniq(query)
+        if self.uniq.numel() == 0:
+            return torch.zeros(shape, dtype=fraction_dtype, device=query.device)
+
+        max_order = max(self.max_order, int(query_orders.max().item()))
+        ranges = self._to_ranges(max_order)
+        starts = torch.tensor(
+            [start for start, _ in ranges], dtype=torch.int64, device=query.device
+        )
+        ends = torch.tensor(
+            [end for _, end in ranges], dtype=torch.int64, device=query.device
+        )
+        lengths = ends - starts
+        cumulative = torch.cat(
+            (
+                torch.zeros(1, dtype=torch.int64, device=query.device),
+                torch.cumsum(lengths, dim=0),
+            )
+        )
+        _, pixels = uniq2nest(query)
+        shifts = 2 * (max_order - query_orders)
+        query_starts = pixels << shifts
+        query_ends = (pixels + 1) << shifts
+
+        def covered_before(position: Tensor) -> Tensor:
+            count = torch.searchsorted(ends, position, right=True)
+            safe = count.clamp(max=ends.numel() - 1)
+            partial = torch.where(
+                count < ends.numel(),
+                torch.minimum(
+                    (position - starts[safe]).clamp_min(0), lengths[safe]
+                ),
+                torch.zeros_like(position),
+            )
+            return cumulative[count] + partial
+
+        overlap = covered_before(query_ends) - covered_before(query_starts)
+        cell_size = query_ends - query_starts
+        return (overlap.to(fraction_dtype) / cell_size.to(fraction_dtype)).reshape(shape)
+
+    def intersects_uniq(self, uniq: Tensor | int) -> Tensor:
+        """Return which canonical UNIQ cells intersect this MOC."""
+        return self.overlap_fraction(uniq) > 0.0
+
+    def contains_uniq(self, uniq: Tensor | int) -> Tensor:
+        """Return which canonical UNIQ cells are fully covered by this MOC."""
+        return self.overlap_fraction(uniq) == 1.0
+
     def filter_catalog(self, lon_deg: Tensor, lat_deg: Tensor) -> tuple[Tensor, Tensor]:
         """Filter a catalogue by point-in-MOC containment. Returns (lon, lat) of contained points."""
         mask = self.contains(lon_deg, lat_deg)
@@ -656,6 +713,10 @@ class MOC:
         # self contains other if intersection(self, other) == other
         inter = self.intersection(other)
         return torch.equal(inter.uniq, other.uniq)
+
+    def overlaps(self, other: "MOC") -> bool:
+        """Return whether two footprint MOCs have non-empty intersection."""
+        return bool(self.intersection(other))
 
     def union(self, other: "MOC") -> "MOC":
         if self.uniq.numel() == 0:
@@ -1018,6 +1079,23 @@ class MOC:
         table = read_table(filename, hdu=hdu)
         uniqs = _uniq_column_from_table_dict(table)
         return cls(uniqs)
+
+    @classmethod
+    def from_mocpy(cls, moc: Any) -> "MOC":
+        """Import a host-side ``mocpy.MOC`` through IVOA JSON."""
+        payload = moc.to_json()
+        if isinstance(payload, str):
+            return cls.from_json(payload)
+        return cls.from_json(json.dumps(payload))
+
+    def to_mocpy(self) -> Any:
+        """Export to ``mocpy.MOC`` when mocpy is installed."""
+        try:
+            from mocpy import MOC as MocpyMOC
+        except ImportError as exc:
+            raise ImportError("mocpy is required for to_mocpy()") from exc
+
+        return MocpyMOC.from_json(json.loads(self.to_json()))
 
     def boundary(self) -> list[Tensor]:
         """

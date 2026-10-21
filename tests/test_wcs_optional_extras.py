@@ -103,12 +103,13 @@ def test_catalog_state_astropy_roundtrip_preserves_obstime_epoch() -> None:
 
     torch.testing.assert_close(
         state.epoch,
-        torch.as_tensor(obstime.tt.jyear, dtype=torch.float64),
+        torch.as_tensor(obstime.tcb.jyear, dtype=torch.float64),
         atol=0.0,
         rtol=0.0,
     )
-    assert back.obstime.scale == "tt"
-    np.testing.assert_allclose(back.obstime.tt.mjd, obstime.tt.mjd, atol=2.0e-11)
+    assert state.epoch_scale == "tcb"
+    assert back.obstime.scale == "tcb"
+    np.testing.assert_allclose(back.obstime.tcb.mjd, obstime.tcb.mjd, atol=2.0e-11)
 
 
 def test_no_skycoord_class_in_torchsky_wcs() -> None:

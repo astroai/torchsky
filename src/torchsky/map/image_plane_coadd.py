@@ -65,6 +65,8 @@ from .operators.pixel_area import (
 from .operators.resampling import (
     sample_image_plane_batched_channels,
 )
+from .operators.mask_weight import load_image_observation_dq
+from .quality import DQPolicy
 from .sky import CrossExposureSkyCorrector, MeshSkyEstimator
 from .spectral_projection import (
     _build_band_metadata,
@@ -139,6 +141,35 @@ _FINITE_APERTURE_COVARIANCE_KERNELS = frozenset(
         "splat_box",
     }
 )
+
+
+def _observations_have_quality(observations: Sequence[ImageObservation]) -> bool:
+    for observation in observations:
+        if observation.dq is not None or observation.dq_path is not None:
+            return True
+        components = [
+            value
+            for value in (
+                observation.var_poisson,
+                observation.var_rnoise,
+                observation.var_flat,
+            )
+            if isinstance(value, Tensor)
+        ]
+        if components:
+            total = torch.zeros_like(torch.as_tensor(components[0]), dtype=torch.float32)
+            valid = torch.ones_like(total, dtype=torch.bool)
+            for component in components:
+                component_t = torch.as_tensor(component, dtype=torch.float32)
+                valid = valid & torch.isfinite(component_t) & (component_t >= 0.0)
+                total = total + torch.where(
+                    torch.isfinite(component_t) & (component_t >= 0.0),
+                    component_t,
+                    torch.zeros_like(component_t),
+                )
+            if bool((~valid | (total <= 0.0)).any()):
+                return True
+    return False
 
 
 def _coadd_image_plane_spatial_tiles(
@@ -587,6 +618,16 @@ def _coadd_image_plane_spatial_tiles(
             if variance_available
             else None
         )
+    output_dq = _propagate_observation_dq(
+        observations,
+        target_header=header_dict,
+        target_shape=target_shape,
+        resampling_kernel=resampling_kernel,
+        value_semantics=value_semantics,
+        drizzle_pixfrac=drizzle_pixfrac,
+        output_weight=full_weight,
+        device=device,
+    )
     result = MapResult(
         data=full_data,
         weight=full_weight,
@@ -612,11 +653,136 @@ def _coadd_image_plane_spatial_tiles(
         overlap_count=full_overlap,
         coverage_moc=None,
         observation_mocs=None,
+        dq=output_dq,
+        usability_mask=(full_weight > 0.0) if output_dq is not None else None,
+        dq_policy=(
+            next(
+                (
+                    observation.dq_policy
+                    for observation in observations
+                    if observation.dq_policy is not None
+                ),
+                DQPolicy(),
+            )
+            if output_dq is not None
+            else None
+        ),
     )
     if output_path is not None:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         write(output_path, full_data, header=header_dict, overwrite=True)
     return result
+
+
+def _propagate_observation_dq(
+    observations: Sequence[ImageObservation],
+    *,
+    target_header: dict[str, Any],
+    target_shape: tuple[int, int],
+    resampling_kernel: MapResamplingKernel,
+    value_semantics: MapValueSemantics,
+    drizzle_pixfrac: float,
+    output_weight: Tensor,
+    device: torch.device,
+) -> Tensor | None:
+    if not _observations_have_quality(observations):
+        return None
+    output = torch.zeros(target_shape, dtype=torch.int64, device=device)
+    prepared_target = _prepare_target(
+        header=target_header,
+        target_wcs=WCS(target_header),
+        target_shape=target_shape,
+        device=device,
+        include_pixel_area=(value_semantics == "flux"),
+        include_representative_pixel_area=False,
+        include_quadrature=(value_semantics == "flux"),
+        include_world_grid=False,
+    )
+    for observation in observations:
+        image, observation_header = load_observation_image_and_header(
+            observation,
+            device=str(device),
+        )
+        image = image.to(device=device)
+        dq = load_image_observation_dq(observation, image, device=device)
+        if dq is None:
+            continue
+        policy = observation.dq_policy or DQPolicy()
+        flags = policy.propagated(dq)
+        source_weight = _load_observation_weight_map(
+            observation,
+            image,
+            device=device,
+        )
+        usable = source_weight > 0.0
+        present = 0
+        if flags.numel():
+            for value in torch.unique(flags).tolist():
+                present |= int(value)
+        bit = 1
+        while bit <= present:
+            if present & bit:
+                bit_is_set = (flags & bit) != 0
+                for support, rejected in (
+                    (usable & bit_is_set, False),
+                    ((~usable) & bit_is_set, True),
+                ):
+                    if not bool(support.any()):
+                        continue
+                    flag_observation = dataclasses.replace(
+                        observation,
+                        data=torch.ones_like(image, dtype=torch.float32),
+                        header=dict(observation_header),
+                        wcs=dict(observation_header),
+                        weight=1.0,
+                        photometric_scale=1.0,
+                        background_offset=0.0,
+                        weight_map=support.to(dtype=torch.float32),
+                        weight_path=None,
+                        weight_is_inverse_variance=False,
+                        mask=None,
+                        mask_path=None,
+                        good_bits=None,
+                        dq=None,
+                        dq_path=None,
+                        dq_policy=None,
+                        primary_beam=None,
+                        primary_beam_path=None,
+                        var_poisson=None,
+                        var_rnoise=None,
+                        var_flat=None,
+                    )
+                    projected = _project_observation_to_target_chunk(
+                        flag_observation,
+                        image=flag_observation.data,
+                        header_dict_obs=dict(observation_header),
+                        source_wcs=WCS(observation_header),
+                        prepared_target=prepared_target,
+                        target_header=target_header,
+                        target_shape=target_shape,
+                        device=device,
+                        footprint_order=None,
+                        resampling_kernel=resampling_kernel,
+                        value_semantics=value_semantics,
+                        drizzle_pixfrac=drizzle_pixfrac,
+                        background_estimator=None,
+                    )
+                    flagged = projected.weight > 0.0
+                    if projected.target_window is None:
+                        if rejected:
+                            flagged = flagged & (output_weight <= 0.0)
+                        output.bitwise_or_(flagged.to(torch.int64) * bit)
+                    else:
+                        y0, y1, x0, x1 = projected.target_window
+                        if rejected:
+                            flagged = flagged & (
+                                output_weight[y0:y1, x0:x1] <= 0.0
+                            )
+                        output[y0:y1, x0:x1].bitwise_or_(
+                            flagged.to(torch.int64) * bit
+                        )
+            bit <<= 1
+    return output
 
 
 def coadd_image_plane(
@@ -1177,6 +1343,16 @@ def coadd_image_plane(
         for moc in observation_mocs:
             coverage_moc = coverage_moc.union(moc)
 
+    output_dq = _propagate_observation_dq(
+        observations,
+        target_header=header_dict,
+        target_shape=target_shape,
+        resampling_kernel=resampling_kernel,
+        value_semantics=value_semantics,
+        drizzle_pixfrac=drizzle_pixfrac,
+        output_weight=denom,
+        device=device,
+    )
     result = MapResult(
         data=coadd,
         weight=denom,
@@ -1202,6 +1378,20 @@ def coadd_image_plane(
         observation_mocs=tuple(observation_mocs)
         if observation_mocs is not None
         else None,
+        dq=output_dq,
+        usability_mask=(denom > 0.0) if output_dq is not None else None,
+        dq_policy=(
+            next(
+                (
+                    observation.dq_policy
+                    for observation in observations
+                    if observation.dq_policy is not None
+                ),
+                DQPolicy(),
+            )
+            if output_dq is not None
+            else None
+        ),
     )
     if output_path is not None:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1928,33 +2118,77 @@ def _propagate_observation_variance_components(
                 )
             source_wcs = WCS(header_dict_obs)
             s_eff = _effective_observation_photometric_scale(obs, header_dict_obs)
-            # _apply_observation_calibration multiplies data by s_eff once;
-            # pre-multiplying by s_eff yields s_eff^2 * var_raw in calibrated units.
-            scaled_var = comp_t * float(s_eff)
+            calibrated_variance = comp_t * float(s_eff) ** 2
+            prepared_observation = prepare_image_observation_data(
+                obs,
+                image_dev,
+                device=device,
+                resampling_kernel=resampling_kernel,
+                load_weight_map_fn=_load_observation_weight_map,
+                apply_calibration_fn=_apply_observation_calibration,
+                background_estimator=None,
+            )
+            source_term = (
+                torch.square(prepared_observation.source_weight)
+                * torch.where(
+                    torch.isfinite(calibrated_variance)
+                    & (calibrated_variance >= 0.0),
+                    calibrated_variance,
+                    torch.zeros_like(calibrated_variance),
+                )
+            )
             if value_semantics == "flux":
                 src_area = pixel_area_sr_map(
                     source_wcs,
                     (int(comp_t.shape[0]), int(comp_t.shape[1])),
                     device=device,
                 )
-                scaled_var = scaled_var / torch.clamp(
-                    torch.square(src_area),
-                    min=torch.finfo(src_area.dtype).tiny,
-                )
-            scaled_var = torch.where(
-                torch.isfinite(image_dev),
-                scaled_var,
-                torch.full_like(scaled_var, float("nan")),
+                source_term = source_term * torch.square(src_area)
+            source_term = torch.where(
+                torch.isfinite(image_dev), source_term, torch.zeros_like(source_term)
             )
             var_obs = dataclasses.replace(
                 obs,
-                data=scaled_var,
+                data=torch.zeros_like(image_dev),
                 wcs=header_dict_obs,
+                weight=1.0,
+                photometric_scale=1.0,
                 background_offset=0.0,
+                weight_map=source_term,
+                weight_path=None,
+                weight_type="weight",
+                weight_is_inverse_variance=True,
+                mask=None,
+                mask_path=None,
+                good_bits=None,
+                dq=None,
+                dq_path=None,
+                dq_policy=None,
+                primary_beam=None,
+                primary_beam_path=None,
+                var_poisson=None,
+                var_rnoise=None,
+                var_flat=None,
             )
-            proj = _project_observation_to_target_chunk(
+            actual = _project_observation_to_target_chunk(
+                obs,
+                image=image_dev,
+                header_dict_obs=header_dict_obs,
+                source_wcs=source_wcs,
+                prepared_observation=prepared_observation,
+                prepared_target=prepared_target,
+                target_header=target_header,
+                target_shape=target_shape,
+                device=device,
+                footprint_order=None,
+                resampling_kernel=resampling_kernel,
+                value_semantics=value_semantics,
+                drizzle_pixfrac=drizzle_pixfrac,
+                background_estimator=None,
+            )
+            squared = _project_observation_to_target_chunk(
                 var_obs,
-                image=scaled_var,
+                image=var_obs.data,
                 header_dict_obs=header_dict_obs,
                 source_wcs=source_wcs,
                 prepared_target=prepared_target,
@@ -1967,29 +2201,38 @@ def _propagate_observation_variance_components(
                 drizzle_pixfrac=drizzle_pixfrac,
                 background_estimator=None,
             )
-            w = proj.weight
-            v_est = torch.where(w > 0.0, proj.numer / w, torch.zeros_like(proj.numer))
-            if value_semantics == "flux" and prepared_target.pixel_area_sr is not None:
-                pa = prepared_target.pixel_area_sr
-                if proj.target_window is not None:
-                    y0, y1, x0, x1 = proj.target_window
-                    pa = pa[y0:y1, x0:x1]
-                v_est = v_est * torch.square(pa)
-            contrib_num = torch.square(w) * torch.clamp(v_est, min=0.0)
-            if proj.target_window is None:
-                var_num.add_(contrib_num)
-                var_den.add_(w)
+            if squared.variance_weight is None:
+                raise RuntimeError(
+                    "squared response is unavailable for the selected variance kernel"
+                )
+            if actual.target_window != squared.target_window:
+                raise RuntimeError("science and variance response support differ")
+            if actual.target_window is None:
+                var_num.add_(squared.variance_weight)
+                var_den.add_(actual.weight)
             else:
-                y0, y1, x0, x1 = proj.target_window
+                y0, y1, x0, x1 = actual.target_window
                 if y1 > y0 and x1 > x0:
-                    var_num[y0:y1, x0:x1].add_(contrib_num)
-                    var_den[y0:y1, x0:x1].add_(w)
+                    var_num[y0:y1, x0:x1].add_(squared.variance_weight)
+                    var_den[y0:y1, x0:x1].add_(actual.weight)
+        if value_semantics == "flux":
+            assert prepared_target.pixel_area_sr is not None
+            target_area_squared = torch.square(prepared_target.pixel_area_sr)
+            var_num = var_num / torch.clamp(
+                target_area_squared,
+                min=torch.finfo(target_area_squared.dtype).tiny,
+            )
+            var_den = var_den / torch.clamp(
+                target_area_squared,
+                min=torch.finfo(target_area_squared.dtype).tiny,
+            )
         safe_den_sq = torch.clamp(
             torch.square(var_den), min=torch.finfo(var_den.dtype).tiny
         )
-        return torch.where(
+        output = torch.where(
             var_den > 0.0, var_num / safe_den_sq, torch.zeros_like(var_num)
         )
+        return output
 
     vp = _accumulate_component("var_poisson") if has_poisson else None
     vr = _accumulate_component("var_rnoise") if has_rnoise else None
@@ -2339,6 +2582,7 @@ def coadd(
     sky_corr = cross_exposure_sky_corrector
     obs_to_stack = _apply_observation_astrometric_shifts(observations, device)
     target_header = _coerce_target_header(target)
+    rejection_log: tuple[dict[str, int], ...] = ()
 
     if sky is not None and sky.mode != "none" and sky.subtract:
         if sky.mode in ("per_exposure", "local"):
@@ -2381,21 +2625,43 @@ def coadd(
             raise ValueError(f"Unsupported SkyConfig.mode: {sky.mode!r}")
 
     if outliers is not None and outliers.enabled:
+        if outliers.parity_mode and resolved_kernel not in {
+            "drizzle_point",
+            "drizzle_square",
+        }:
+            raise ValueError(
+                "certified outlier parity requires drizzle_point or drizzle_square"
+            )
+        if outliers.parity_mode and resolved_method != "weighted_mean":
+            raise ValueError(
+                "certified outlier parity requires weighted_mean final stacking"
+            )
         init_coadd = coadd_image_plane(
             obs_to_stack,
             target_header=target_header,
-            resampling_kernel="bilinear",
+            resampling_kernel=(resolved_kernel if outliers.parity_mode else "bilinear"),
             value_semantics="surface_brightness",
             stacking_method="median" if len(obs_to_stack) >= 3 else "weighted_mean",
+            drizzle_pixfrac=resolved_pixfrac,
             device=device,
         )
-        _, obs_to_stack = detect_outliers(
-            obs_to_stack,
-            init_coadd,
-            config=outliers,
-            update_masks=True,
-            device=device,
-        )
+        if outliers.parity_mode:
+            _, obs_to_stack, rejection_log = detect_outliers(
+                obs_to_stack,
+                init_coadd,
+                config=outliers,
+                update_masks=True,
+                return_logs=True,
+                device=device,
+            )
+        else:
+            _, obs_to_stack = detect_outliers(
+                obs_to_stack,
+                init_coadd,
+                config=outliers,
+                update_masks=True,
+                device=device,
+            )
 
     result = coadd_image_plane(
         obs_to_stack,
@@ -2429,6 +2695,18 @@ def coadd(
             result = dataclasses.replace(
                 result, var_poisson=vp, var_rnoise=vr, var_flat=vf
             )
+    if rejection_log:
+        provenance = dict(result.provenance or {})
+        provenance["outlier_rejection"] = {
+            "mode": "certified_drizzle_parity",
+            "logs": list(rejection_log),
+        }
+        result = dataclasses.replace(
+            result,
+            rejection_log=rejection_log,
+            usability_mask=result.weight > 0.0,
+            provenance=provenance,
+        )
     return result
 
 

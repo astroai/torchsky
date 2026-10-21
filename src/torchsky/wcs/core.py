@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 import math
 import os
 import numpy as np
@@ -40,6 +50,9 @@ from .frames import (
     precess_fk5 as _precess_fk5,
 )
 from .functional import pixel_to_world_fused, world_to_pixel_fused
+
+if TYPE_CHECKING:
+    from .mapping import WCSMapping
 
 _HAS_TORCH_SINCOS = hasattr(torch, "sincos")
 
@@ -3116,6 +3129,12 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
     def world_n_dim(self) -> int:
         """Number of world axes."""
         return self.naxis
+
+    def as_mapping(self) -> WCSMapping:
+        """Return a typed tensor mapping backed by this optimized WCS."""
+        from .mapping import WCSMapping
+
+        return WCSMapping(self)
 
     @property
     def world_axis_names(self) -> tuple[str, ...]:
