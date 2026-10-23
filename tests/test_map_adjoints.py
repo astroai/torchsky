@@ -23,7 +23,7 @@ from torchsky.map.operators import (
 )
 from torchsky.map.operators.radiometry import apply_image_observation_calibration
 from torchsky.map.windowing import _prepare_target
-from torchsky.map.image_plane import (
+from torchsky.map.image_plane_projection import (
     _resample_weighted_to_target,
     _forward_project_weighted_to_target,
 )

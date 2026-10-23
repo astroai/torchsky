@@ -208,11 +208,6 @@ def _decode_healsparse_images(
     return pix[valid], block_vals[valid]
 
 
-class _CallablePixelTensor(Tensor):
-    def __call__(self) -> Tensor:
-        return self.as_subclass(Tensor)
-
-
 @dataclass
 class SparseHealpixMap:
     """
@@ -753,7 +748,7 @@ class SparseHealpixMap:
         device: torch.device | str | None = None,
     ) -> tuple[Tensor, Tensor]:
         """Draw ``n`` points uniformly in solid angle (or weighted) inside this sparse map."""
-        from .moc import sample_randoms
+        from .randoms import sample_randoms
 
         return sample_randoms(
             n,
@@ -948,8 +943,8 @@ class SparseHealpixMap:
 
     @property
     def valid_pixels(self) -> Tensor:
-        """Returns the list of valid pixel indices (also callable as ``valid_pixels()``)."""
-        return self.pixels.as_subclass(_CallablePixelTensor)
+        """Valid pixel indices. External HealSparse hosts may still expose a method."""
+        return self.pixels
 
     def get_values(self, pixels: Tensor) -> Tensor:
         query_shape = tuple(torch.as_tensor(pixels).shape)

@@ -136,7 +136,7 @@ def deproject_cylindrical(
         return xi, eta
 
     elif projection_code == "MER":
-        valid = torch.isfinite(phi) & torch.isfinite(theta) & (theta.abs() <= 90.0)
+        valid = torch.isfinite(phi) & torch.isfinite(theta) & (theta.abs() < 90.0)
         half_theta = theta / 2.0
         tan_arg = torch.tan((45.0 + half_theta) * D2R)
         eta = R2D * torch.log(tan_arg)

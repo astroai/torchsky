@@ -9,11 +9,11 @@ import torch
 from torch import Tensor
 
 from ...wcs import WCS
-from ..image_plane import (
-    ImageObservation,
+from ..image_plane_projection import (
     _forward_project_weighted_to_target,
     _resample_weighted_to_target,
 )
+from ..observation import ImageObservation
 from ..io_utils import _observation_header_for_area_scaling
 from ..solvers import BoundObservationOperator, BoundObservationOperatorSet
 from ..target import TargetRenderSpec

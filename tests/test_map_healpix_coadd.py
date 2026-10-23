@@ -214,7 +214,7 @@ def test_coadd_chunking_matches_single_chunk_and_bounds_sampling(
     torch.testing.assert_close(chunked.data, reference.data, rtol=0, atol=0)
     torch.testing.assert_close(chunked.weight, reference.weight, rtol=0, atol=0)
     torch.testing.assert_close(chunked.overlap_count, reference.overlap_count)
-    pixels = sparse_result.data.valid_pixels()
+    pixels = sparse_result.data.valid_pixels
     torch.testing.assert_close(
         sparse_result.data.get_values(pixels), chunked.data[pixels], rtol=0, atol=0
     )
@@ -286,7 +286,7 @@ def test_empty_sparse_coadd_preserves_order_device_and_dtypes(nest: bool) -> Non
     assert result.weight.values.dtype == torch.float32
     assert result.overlap_count.values.dtype == torch.int32
     assert result.data.values.device.type == "cpu"
-    assert result.data.valid_pixels().numel() == 0
+    assert result.data.valid_pixels.numel() == 0
 
 
 def test_sparse_high_nside_retains_only_observed_support() -> None:
@@ -308,7 +308,7 @@ def test_sparse_high_nside_retains_only_observed_support() -> None:
         reduction_chunk_size=19,
     )
 
-    pixels = result.data.valid_pixels()
+    pixels = result.data.valid_pixels
     assert 0 < pixels.numel() < 12 * 4096 * 4096
     assert result.data.values.numel() == pixels.numel()
     assert result.weight.values.numel() == pixels.numel()

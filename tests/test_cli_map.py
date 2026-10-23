@@ -1001,7 +1001,6 @@ def test_run_field_single_uses_reference_header(monkeypatch, tmp_path) -> None:
     written: dict[str, object] = {}
 
     monkeypatch.setattr(map_command, "read", fake_read)
-    monkeypatch.setattr("torchsky.map.image_plane.read", fake_read)
     monkeypatch.setattr("torchsky.map.image_plane_common.read", fake_read)
     monkeypatch.setattr(
         map_command,
@@ -1099,7 +1098,6 @@ def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
         return image
 
     monkeypatch.setattr(map_command, "read", fake_read)
-    monkeypatch.setattr("torchsky.map.image_plane.read", fake_read)
     monkeypatch.setattr("torchsky.map.image_plane_common.read", fake_read)
     monkeypatch.setattr(
         map_command,

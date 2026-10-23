@@ -46,6 +46,11 @@ import torchfits
 pytest.importorskip("torchsky._cpp")
 
 
+def test_historical_image_plane_reexports_remain_available() -> None:
+    assert image_plane_mod.read is torchfits.read
+    assert image_plane_mod.WCS is torchsky.wcs.WCS
+
+
 def test_batched_square_drizzle_areas_match_independent_quads() -> None:
     quad_x = torch.tensor(
         [[-0.2, 0.8, 0.8, -0.2], [0.4, 1.6, 1.4, 0.2]],
@@ -663,6 +668,34 @@ def test_coadd_image_plane_spatial_tile_single_canvas_matches_non_tiled(
     torch.testing.assert_close(tiled.overlap_count, full.overlap_count)
 
 
+def test_spatial_tile_ignores_non_grid_header_metadata(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "metadata.fits"
+    header = _simple_header()
+    image = torch.arange(64, dtype=torch.float32).reshape(8, 8)
+    torchfits.write(str(path), image, header=header, overwrite=True)
+    original_load = image_plane_coadd_mod.load_observation_image_and_header
+
+    def load_with_metadata(*args, **kwargs):
+        loaded, loaded_header = original_load(*args, **kwargs)
+        return loaded, {**loaded_header, "CHECKSUM": "source-only"}
+
+    def reject_preparation(*args, **kwargs):
+        raise AssertionError("metadata-only differences must not prepare a target")
+
+    monkeypatch.setattr(
+        image_plane_coadd_mod,
+        "load_observation_image_and_header",
+        load_with_metadata,
+    )
+    monkeypatch.setattr(image_plane_coadd_mod, "_prepare_target", reject_preparation)
+    result = coadd_image_plane(
+        [ImageObservation(str(path))],
+        target_header=header,
+        spatial_tile_hw=(8, 8),
+    )
+    torch.testing.assert_close(result.data, image)
+
+
 def test_coadd_image_plane_spatial_tiles_are_exposure_major(
     tmp_path, monkeypatch
 ) -> None:
@@ -681,7 +714,7 @@ def test_coadd_image_plane_spatial_tiles_are_exposure_major(
 
     read_calls: list[tuple[str, int | str | None]] = []
     prepare_calls: list[str] = []
-    original_read = image_plane_mod.read
+    original_read = torchfits.read
     original_prepare = image_plane_mod.prepare_image_observation_data
 
     def counted_read(path, *, hdu=None, **kwargs):
@@ -1326,7 +1359,7 @@ def test_tiled_overlap_background_uses_one_read_per_exposure_and_cleans_scratch(
     )
 
     read_calls: list[str] = []
-    original_read = image_plane_mod.read
+    original_read = torchfits.read
 
     def counted_read(path, **kwargs):
         read_calls.append(str(path))
@@ -3542,7 +3575,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
     device = data.device
     prepared_target = image_plane_mod._prepare_target(
         header=target_header,
-        target_wcs=image_plane_mod.WCS(target_header),
+        target_wcs=torchsky.WCS(target_header),
         target_shape=target_shape,
         device=device,
         include_pixel_area=False,
@@ -3552,7 +3585,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
     obs = ImageObservation(str(path))
     image, header = torchfits.read(str(path), return_header=True)
     image = validate_image_plane_2d(image)
-    source_wcs = image_plane_mod.WCS(dict(header))
+    source_wcs = torchsky.WCS(dict(header))
 
     original_threshold = windowing_mod._LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
     original_resample = image_plane_mod._resample_weighted_to_target
@@ -3630,7 +3663,7 @@ def test_project_observation_window_no_overlap_skips_geometry(monkeypatch) -> No
     target_shape = (8, 8)
     prepared_target = image_plane_mod._prepare_target(
         header=target_header,
-        target_wcs=image_plane_mod.WCS(target_header),
+        target_wcs=torchsky.WCS(target_header),
         target_shape=target_shape,
         device=torch.device("cpu"),
         include_pixel_area=False,
@@ -3653,7 +3686,7 @@ def test_project_observation_window_no_overlap_skips_geometry(monkeypatch) -> No
         ImageObservation("mock.fits"),
         image=image,
         header_dict_obs=source_header,
-        source_wcs=image_plane_mod.WCS(source_header),
+        source_wcs=torchsky.WCS(source_header),
         prepared_target=prepared_target,
         target_header=target_header,
         target_shape=target_shape,

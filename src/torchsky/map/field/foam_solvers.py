@@ -547,6 +547,56 @@ def solve_spectral_cell_coefficients(
     return torch.where(observed[:, None], coefficients, torch.zeros_like(coefficients))
 
 
+def _batched_jacobi_pcg(
+    apply_normal: Callable[[Tensor], Tensor],
+    solution: Tensor,
+    residual: Tensor,
+    preconditioner: Tensor,
+    *,
+    iterations: int,
+    threshold: float,
+    reference_norm: Tensor,
+) -> Tensor:
+    """Multi-RHS Jacobi PCG. ``reference_norm`` is the per-row stopping scale."""
+    preconditioned = residual / preconditioner
+    direction = preconditioned.clone()
+    residual_dot = torch.sum(residual * preconditioned, dim=1)
+    active = torch.linalg.vector_norm(residual, dim=1) > threshold * reference_norm
+    tiny = torch.finfo(solution.dtype).tiny
+    for _ in range(iterations):
+        if not bool(torch.any(active)):
+            break
+        normal_direction = apply_normal(direction)
+        denominator = torch.sum(direction * normal_direction, dim=1)
+        safe_denominator = torch.where(
+            torch.abs(denominator) > tiny,
+            denominator,
+            torch.ones_like(denominator),
+        )
+        step = torch.where(active, residual_dot / safe_denominator, 0.0)
+        solution = solution + step[:, None] * direction
+        residual = residual - step[:, None] * normal_direction
+        next_active = active & (
+            torch.linalg.vector_norm(residual, dim=1) > threshold * reference_norm
+        )
+        preconditioned = residual / preconditioner
+        next_residual_dot = torch.sum(residual * preconditioned, dim=1)
+        safe_residual_dot = torch.where(
+            torch.abs(residual_dot) > tiny,
+            residual_dot,
+            torch.ones_like(residual_dot),
+        )
+        momentum = torch.where(
+            next_active,
+            next_residual_dot / safe_residual_dot,
+            0.0,
+        )
+        direction = preconditioned + momentum[:, None] * direction
+        residual_dot = next_residual_dot
+        active = next_active
+    return solution
+
+
 def solve_power_pixel_least_squares(
     operator: PowerPixelOperator,
     pixel_values: Tensor,
@@ -656,48 +706,20 @@ def solve_power_pixel_least_squares(
         weighted_values = pixel_rmatvec(weighted_values)
     rhs = operator.rmatvec(weighted_values, semantics=semantics)
     residual = rhs - apply_normal(solution)
-    preconditioned = residual / preconditioner
-    direction = preconditioned.clone()
-    residual_dot = torch.sum(residual * preconditioned, dim=1)
     rhs_norm = torch.linalg.vector_norm(rhs, dim=1)
     residual_norm = torch.linalg.vector_norm(residual, dim=1)
     reference_norm = torch.where(rhs_norm > 0, rhs_norm, residual_norm)
-    active = residual_norm > threshold * reference_norm
-    tiny = torch.finfo(pixel_values.dtype).tiny
-    # ponytail: fixed-iteration PCG avoids a solver dependency; the Jacobi
-    # preconditioner ignores optional pixel mixing and can be upgraded if a
-    # broad PSF makes convergence profiling justify it.
-    for _ in range(iterations):
-        if not bool(torch.any(active)):
-            break
-        normal_direction = apply_normal(direction)
-        denominator = torch.sum(direction * normal_direction, dim=1)
-        safe_denominator = torch.where(
-            torch.abs(denominator) > tiny,
-            denominator,
-            torch.ones_like(denominator),
-        )
-        step = torch.where(active, residual_dot / safe_denominator, 0.0)
-        solution = solution + step[:, None] * direction
-        residual = residual - step[:, None] * normal_direction
-        next_active = active & (
-            torch.linalg.vector_norm(residual, dim=1) > threshold * reference_norm
-        )
-        preconditioned = residual / preconditioner
-        next_residual_dot = torch.sum(residual * preconditioned, dim=1)
-        safe_residual_dot = torch.where(
-            torch.abs(residual_dot) > tiny,
-            residual_dot,
-            torch.ones_like(residual_dot),
-        )
-        momentum = torch.where(
-            next_active,
-            next_residual_dot / safe_residual_dot,
-            0.0,
-        )
-        direction = preconditioned + momentum[:, None] * direction
-        residual_dot = next_residual_dot
-        active = next_active
+    # ponytail: Jacobi PCG ignores optional pixel mixing; upgrade the shared
+    # loop if a broad PSF makes convergence profiling justify a block preconditioner.
+    solution = _batched_jacobi_pcg(
+        apply_normal,
+        solution,
+        residual,
+        preconditioner,
+        iterations=iterations,
+        threshold=threshold,
+        reference_norm=reference_norm,
+    )
     return solution.reshape(output_shape)
 
 
@@ -819,39 +841,18 @@ def solve_power_pixel_affine_least_squares(
     )
     solution = torch.zeros_like(rhs)
     residual = rhs.clone()
-    preconditioned = residual / preconditioner
-    direction = preconditioned.clone()
-    residual_dot = torch.sum(residual * preconditioned, dim=1)
     rhs_norm = torch.linalg.vector_norm(rhs, dim=1)
-    active = torch.linalg.vector_norm(residual, dim=1) > threshold * rhs_norm
-    tiny = torch.finfo(pixel_values.dtype).tiny
     # ponytail: the block-Jacobi diagonal ignores value/slope cross-terms; use
     # a small per-cell block preconditioner only if real convergence requires it.
-    for _ in range(iterations):
-        if not bool(torch.any(active)):
-            break
-        normal_direction = apply_normal(direction)
-        denominator = torch.sum(direction * normal_direction, dim=1)
-        safe_denominator = torch.where(
-            torch.abs(denominator) > tiny, denominator, torch.ones_like(denominator)
-        )
-        step = torch.where(active, residual_dot / safe_denominator, 0.0)
-        solution = solution + step[:, None] * direction
-        residual = residual - step[:, None] * normal_direction
-        next_active = active & (
-            torch.linalg.vector_norm(residual, dim=1) > threshold * rhs_norm
-        )
-        preconditioned = residual / preconditioner
-        next_residual_dot = torch.sum(residual * preconditioned, dim=1)
-        safe_residual_dot = torch.where(
-            torch.abs(residual_dot) > tiny,
-            residual_dot,
-            torch.ones_like(residual_dot),
-        )
-        momentum = torch.where(next_active, next_residual_dot / safe_residual_dot, 0.0)
-        direction = preconditioned + momentum[:, None] * direction
-        residual_dot = next_residual_dot
-        active = next_active
+    solution = _batched_jacobi_pcg(
+        apply_normal,
+        solution,
+        residual,
+        preconditioner,
+        iterations=iterations,
+        threshold=threshold,
+        reference_norm=rhs_norm,
+    )
     solved_values, solved_gradients = unpack(solution)
     leading = pixel_values.shape[:-1]
     return (

@@ -12,6 +12,7 @@ from torch import Tensor
 
 from ..catalogs import HealpixIndex
 from ..sphere import great_circle_distance
+from ._graph import _UnionFind
 from .alignment import TangentPlaneFrame
 from .semantics import Epoch, TimeSpec
 
@@ -397,23 +398,6 @@ def match_approximate_wcs(
         matched[row] = candidates[closest]
         separation[row] = distances[closest] * 3600.0
     return ApproximateMatchResult(matched, separation)
-
-
-class _UnionFind:
-    def __init__(self, size: int) -> None:
-        self.parent = list(range(size))
-
-    def find(self, item: int) -> int:
-        while self.parent[item] != item:
-            self.parent[item] = self.parent[self.parent[item]]
-            item = self.parent[item]
-        return item
-
-    def union(self, left: int, right: int) -> None:
-        a = self.find(left)
-        b = self.find(right)
-        if a != b:
-            self.parent[b] = a
 
 
 class AstrometricMatchGraph:

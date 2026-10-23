@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from typing import Sequence
 import math
 
@@ -34,8 +32,36 @@ from .types import (
 )
 
 
-if TYPE_CHECKING:
-    pass
+def _triplane_names(spatial_dim: int) -> tuple[str, ...]:
+    if spatial_dim == 3:
+        return ("xy", "xl", "yl", "xz", "yz", "zl")
+    return ("xy", "xl", "yl")
+
+
+def _sample_triplane(
+    planes: nn.ParameterDict,
+    *,
+    prefix: str,
+    x: Tensor,
+    y: Tensor,
+    lam_unit: Tensor,
+    z: Tensor | None,
+) -> list[Tensor]:
+    sampled = [
+        sample_feature_plane(planes[f"{prefix}xy"], x, y),
+        sample_feature_plane(planes[f"{prefix}xl"], x, lam_unit),
+        sample_feature_plane(planes[f"{prefix}yl"], y, lam_unit),
+    ]
+    if z is not None:
+        sampled.extend(
+            [
+                sample_feature_plane(planes[f"{prefix}xz"], x, z),
+                sample_feature_plane(planes[f"{prefix}yz"], y, z),
+                sample_feature_plane(planes[f"{prefix}zl"], z, lam_unit),
+            ]
+        )
+    return sampled
+
 
 class SkyLambdaPlanesField(_BaseFieldModel):
     def __init__(
@@ -51,9 +77,7 @@ class SkyLambdaPlanesField(_BaseFieldModel):
         self.spatial_dim = 2 if self.coord_mode == "local_tangent" else 3
         self.plane_resolution = int(plane_resolution)
         self.features_per_plane = int(features_per_plane)
-        plane_names = ["xy", "xl", "yl"]
-        if self.spatial_dim == 3:
-            plane_names.extend(["xz", "yz", "zl"])
+        plane_names = _triplane_names(self.spatial_dim)
         self.planes = nn.ParameterDict(
             {
                 name: nn.Parameter(
@@ -106,20 +130,10 @@ class SkyLambdaPlanesField(_BaseFieldModel):
         lam_unit = 0.5 * (torch.tanh(lam) + 1.0)
         x = spatial_unit[..., 0]
         y = spatial_unit[..., 1]
-        sampled = [
-            sample_feature_plane(self.planes["xy"], x, y),
-            sample_feature_plane(self.planes["xl"], x, lam_unit),
-            sample_feature_plane(self.planes["yl"], y, lam_unit),
-        ]
-        if self.spatial_dim == 3:
-            z = spatial_unit[..., 2]
-            sampled.extend(
-                [
-                    sample_feature_plane(self.planes["xz"], x, z),
-                    sample_feature_plane(self.planes["yz"], y, z),
-                    sample_feature_plane(self.planes["zl"], z, lam_unit),
-                ]
-            )
+        z = spatial_unit[..., 2] if self.spatial_dim == 3 else None
+        sampled = _sample_triplane(
+            self.planes, prefix="", x=x, y=y, lam_unit=lam_unit, z=z
+        )
         plane_feats = torch.cat(sampled, dim=-1)
         feats = torch.cat([spatial_raw, lam.unsqueeze(-1), plane_feats], dim=-1)
         out = self.output(self.hidden(feats)).squeeze(-1)
@@ -143,9 +157,7 @@ class SkyLambdaKPlanesField(_BaseFieldModel):
         self.base_resolution = int(base_resolution)
         self.num_scales = int(num_scales)
         self.features_per_plane = int(features_per_plane)
-        plane_names = ["xy", "xl", "yl"]
-        if self.spatial_dim == 3:
-            plane_names.extend(["xz", "yz", "zl"])
+        plane_names = _triplane_names(self.spatial_dim)
         self._plane_names = tuple(plane_names)
         self.planes = nn.ParameterDict()
         for scale_idx in range(self.num_scales):
@@ -216,26 +228,19 @@ class SkyLambdaKPlanesField(_BaseFieldModel):
         lam_unit = 0.5 * (torch.tanh(lam) + 1.0)
         x = spatial_unit[..., 0]
         y = spatial_unit[..., 1]
+        z = spatial_unit[..., 2] if self.spatial_dim == 3 else None
         sampled: list[Tensor] = []
         for scale_idx in range(self.num_scales):
             sampled.extend(
-                [
-                    sample_feature_plane(self.planes[f"s{scale_idx}_xy"], x, y),
-                    sample_feature_plane(self.planes[f"s{scale_idx}_xl"], x, lam_unit),
-                    sample_feature_plane(self.planes[f"s{scale_idx}_yl"], y, lam_unit),
-                ]
-            )
-            if self.spatial_dim == 3:
-                z = spatial_unit[..., 2]
-                sampled.extend(
-                    [
-                        sample_feature_plane(self.planes[f"s{scale_idx}_xz"], x, z),
-                        sample_feature_plane(self.planes[f"s{scale_idx}_yz"], y, z),
-                        sample_feature_plane(
-                            self.planes[f"s{scale_idx}_zl"], z, lam_unit
-                        ),
-                    ]
+                _sample_triplane(
+                    self.planes,
+                    prefix=f"s{scale_idx}_",
+                    x=x,
+                    y=y,
+                    lam_unit=lam_unit,
+                    z=z,
                 )
+            )
         plane_feats = torch.cat(sampled, dim=-1)
         feats = torch.cat([spatial_raw, lam.unsqueeze(-1), plane_feats], dim=-1)
         hidden = self.hidden(feats)
@@ -315,9 +320,7 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         self.predict_variance = bool(predict_variance)
         self.predictive_distribution_available = self.predict_variance
         self._curriculum_progress = 1.0
-        plane_names = ["xy", "xl", "yl"]
-        if self.spatial_dim == 3:
-            plane_names.extend(["xz", "yz", "zl"])
+        plane_names = _triplane_names(self.spatial_dim)
         self._plane_names = tuple(plane_names)
         self.planes = nn.ParameterDict()
         for scale_idx in range(self.num_scales):
@@ -459,25 +462,18 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         lam_unit = 0.5 * (torch.tanh(lam) + 1.0)
         x = spatial_unit[..., 0]
         y = spatial_unit[..., 1]
+        z = spatial_unit[..., 2] if self.spatial_dim == 3 else None
         context = torch.cat([spatial_raw, lam.unsqueeze(-1)], dim=-1)
         per_scale_hidden: list[Tensor] = []
         for scale_idx, mlp in enumerate(self.scale_mlps):
-            sampled = [
-                sample_feature_plane(self.planes[f"s{scale_idx}_xy"], x, y),
-                sample_feature_plane(self.planes[f"s{scale_idx}_xl"], x, lam_unit),
-                sample_feature_plane(self.planes[f"s{scale_idx}_yl"], y, lam_unit),
-            ]
-            if self.spatial_dim == 3:
-                z = spatial_unit[..., 2]
-                sampled.extend(
-                    [
-                        sample_feature_plane(self.planes[f"s{scale_idx}_xz"], x, z),
-                        sample_feature_plane(self.planes[f"s{scale_idx}_yz"], y, z),
-                        sample_feature_plane(
-                            self.planes[f"s{scale_idx}_zl"], z, lam_unit
-                        ),
-                    ]
-                )
+            sampled = _sample_triplane(
+                self.planes,
+                prefix=f"s{scale_idx}_",
+                x=x,
+                y=y,
+                lam_unit=lam_unit,
+                z=z,
+            )
             scale_feats = torch.cat([context, torch.cat(sampled, dim=-1)], dim=-1)
             per_scale_hidden.append(mlp(scale_feats))
         scale_hidden = torch.stack(per_scale_hidden, dim=-2)
@@ -1553,30 +1549,19 @@ class SkyLambdaAtlasField(_BaseFieldModel):
     ) -> Tensor:
         x = local_xy[..., 0]
         y = local_xy[..., 1]
+        z = spatial_unit[..., 2] if expert.spatial_dim == 3 else None
         sampled: list[Tensor] = []
         for scale_idx in range(expert.num_scales):
             sampled.extend(
-                [
-                    sample_feature_plane(expert.planes[f"s{scale_idx}_xy"], x, y),
-                    sample_feature_plane(
-                        expert.planes[f"s{scale_idx}_xl"], x, lam_unit
-                    ),
-                    sample_feature_plane(
-                        expert.planes[f"s{scale_idx}_yl"], y, lam_unit
-                    ),
-                ]
-            )
-            if expert.spatial_dim == 3:
-                z = spatial_unit[..., 2]
-                sampled.extend(
-                    [
-                        sample_feature_plane(expert.planes[f"s{scale_idx}_xz"], x, z),
-                        sample_feature_plane(expert.planes[f"s{scale_idx}_yz"], y, z),
-                        sample_feature_plane(
-                            expert.planes[f"s{scale_idx}_zl"], z, lam_unit
-                        ),
-                    ]
+                _sample_triplane(
+                    expert.planes,
+                    prefix=f"s{scale_idx}_",
+                    x=x,
+                    y=y,
+                    lam_unit=lam_unit,
+                    z=z,
                 )
+            )
         plane_feats = torch.cat(sampled, dim=-1)
         local_xy_raw = 2.0 * local_xy - 1.0
         if expert.spatial_dim == 3:

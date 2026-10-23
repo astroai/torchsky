@@ -575,6 +575,21 @@ def _catastrophic_swap(
     return not bool(torch.equal(nearest, torch.arange(sources.numel(), device=sources.device)))
 
 
+def _require_deblend_controls(
+    *,
+    max_iterations: int,
+    max_group_size: int,
+    adequacy_sigma: float,
+    failure_policy: str,
+) -> None:
+    if max_iterations < 1 or max_group_size < 1:
+        raise ValueError("max_iterations and max_group_size must be positive")
+    if not math.isfinite(float(adequacy_sigma)) or adequacy_sigma <= 0:
+        raise ValueError("adequacy_sigma must be finite and positive")
+    if failure_policy not in {"raise", "return"}:
+        raise ValueError("failure_policy must be 'raise' or 'return'")
+
+
 def fit_parametric_deblending(
     observations: Sequence[FieldObservation],
     scene: SourceCatalogScene,
@@ -607,19 +622,20 @@ def fit_parametric_deblending(
     ) | (scene.morphology_codes == SERSIC_MORPHOLOGY)
     if not bool(allowed.all()):
         raise ValueError("parametric deblending accepts only point, Gaussian, and Sersic components")
-    if max_iterations < 1 or max_group_size < 1:
-        raise ValueError("max_iterations and max_group_size must be positive")
+    _require_deblend_controls(
+        max_iterations=max_iterations,
+        max_group_size=max_group_size,
+        adequacy_sigma=adequacy_sigma,
+        failure_policy=failure_policy,
+    )
     for value, name in (
         (initial_damping, "initial_damping"),
         (finite_difference_step, "finite_difference_step"),
         (step_tolerance, "step_tolerance"),
         (objective_tolerance, "objective_tolerance"),
-        (adequacy_sigma, "adequacy_sigma"),
     ):
         if not math.isfinite(float(value)) or value <= 0:
             raise ValueError(f"{name} must be finite and positive")
-    if failure_policy not in {"raise", "return"}:
-        raise ValueError("failure_policy must be 'raise' or 'return'")
     bounds = ParametricBounds() if bounds is None else bounds
     position_mask = _component_mask(refine_positions, scene, name="refine_positions")
     shape_mask = _component_mask(refine_shapes, scene, name="refine_shapes")
@@ -1026,16 +1042,16 @@ def fit_morphology_spectrum_deblending(
         raise ValueError(
             "morphology-spectrum deblending requires template slices to cover template_data"
         )
-    if max_iterations < 1 or max_group_size < 1:
-        raise ValueError("max_iterations and max_group_size must be positive")
+    _require_deblend_controls(
+        max_iterations=max_iterations,
+        max_group_size=max_group_size,
+        adequacy_sigma=adequacy_sigma,
+        failure_policy=failure_policy,
+    )
     if not math.isfinite(step_size) or step_size <= 0:
         raise ValueError("step_size must be finite and positive")
     if not math.isfinite(backtracking) or not 0 < backtracking < 1:
         raise ValueError("backtracking must be finite and in (0, 1)")
-    if not math.isfinite(adequacy_sigma) or adequacy_sigma <= 0:
-        raise ValueError("adequacy_sigma must be finite and positive")
-    if failure_policy not in {"raise", "return"}:
-        raise ValueError("failure_policy must be 'raise' or 'return'")
     monotonic_mask = _component_mask(monotonic, scene, name="monotonic")
     symmetric_mask = _component_mask(symmetric, scene, name="symmetric")
     holdout = _validate_holdout_masks(observations, heldout_masks)

@@ -283,6 +283,7 @@ json_repr = moc.to_json()
 | `boundary()` | Boundary loops at the MOC's maximum order |
 | `write_fits(path)` | Write IVOA MOC FITS |
 | `to_ascii(compact=False)` / `to_json()` | Text serialization; compact ASCII emits contiguous pixel runs as ranges |
+| `is_empty` | Whether the MOC has no covered cells |
 | `area` / `area_sq_deg` | Covered area |
 
 ```python

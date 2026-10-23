@@ -1932,6 +1932,99 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         rel0, rel1 = self._apply_cd_inv_rel_2d(xi, eta)
         return rel0 + self._crpix0, rel1 + self._crpix1
 
+    def _is_center_cylindrical_shortcut(self) -> bool:
+        return self._use_center_equator_fast and (
+            self._is_car or self._is_sfl or self._is_cea or self._is_mer or self._is_cyp
+        )
+
+    def _cylindrical_native_to_intermediate(
+        self, phi: Tensor, theta: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        """Native spherical degrees to intermediate degrees for CAR/SFL/CEA/MER/CYP."""
+        if self._is_car:
+            return _wrap_lon180(phi), theta
+        if self._is_sfl:
+            return _wrap_lon180(phi) * torch.cos(theta * self._d2r), theta
+        if self._is_cea:
+            return (
+                _wrap_lon180(phi),
+                self._cea_eta_scale * torch.sin(theta * self._d2r),
+            )
+        if self._is_cyp:
+            return deproject_cylindrical(
+                phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
+            )
+        return deproject_cylindrical(phi, theta, "MER")
+
+    def _center_equator_deproject(
+        self, ra: Tensor, dec: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        phi = _wrap_lon180(ra - self.alpha0)
+        return self._cylindrical_native_to_intermediate(phi, dec)
+
+    def _center_equator_project(
+        self, xi: Tensor, eta: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        """Inverse of :meth:`_center_equator_deproject` for the same projections."""
+        if self._is_car:
+            return _wrap_lon360(xi + self.alpha0), eta
+        if self._is_sfl:
+            dec = eta
+            cos_dec = torch.cos(dec * self._d2r)
+            cos_safe = torch.sign(cos_dec) * torch.clamp(
+                torch.abs(cos_dec), min=1e-12
+            )
+            return _wrap_lon360((xi / cos_safe) + self.alpha0), dec
+        if self._is_cea:
+            value = eta / self._cea_eta_scale
+            valid = torch.isfinite(value) & (value.abs() <= 1.0 + 1e-12)
+            theta = torch.asin(torch.clamp(value, -1.0, 1.0)) * self._r2d
+            ra = _wrap_lon360(xi + self.alpha0)
+            nan = torch.full_like(theta, float("nan"))
+            return torch.where(valid, ra, nan), torch.where(valid, theta, nan)
+        if self._is_mer:
+            arg = torch.clamp(eta * self._d2r, -20.0, 20.0)
+            theta = 2.0 * (torch.atan(torch.exp(arg)) * self._r2d - 45.0)
+            return _wrap_lon360(xi + self.alpha0), theta
+        phi, theta = project_cylindrical(
+            xi, eta, "CYP", self._pv1_tensor, self._pv2_tensor
+        )
+        return _wrap_lon360(phi + self.alpha0), theta
+
+    def _detector_relative_pixels(
+        self, x: Tensor, y: Tensor, origin: float
+    ) -> Tuple[Tensor, Tensor]:
+        """Corrected pixels to CD-input offsets, including SIP and lookup distortions."""
+        x, y = self._corrected_pixels_to_source(x, y, origin)
+        x1 = x + (1.0 - origin)
+        y1 = y + (1.0 - origin)
+        if self.det2im1 is not None or self.det2im2 is not None:
+            x1, y1 = self._apply_det2im_forward(x1, y1)
+        rel_x = x1 - self._crpix0
+        rel_y = y1 - self._crpix1
+        if self.sip is not None:
+            rel_x, rel_y = self.sip.distort(rel_x, rel_y)
+        if self.cpdis1 is not None or self.cpdis2 is not None:
+            rel_x, rel_y = self._apply_cpdis_forward(rel_x, rel_y)
+        return rel_x, rel_y
+
+    def _pixels_from_intermediate(
+        self, xi: Tensor, eta: Tensor, origin: float
+    ) -> Tuple[Tensor, Tensor]:
+        """CD inverse, SIP, lookup distortions, CRPIX, and pixel-affine correction."""
+        rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
+        if self.cpdis1 is not None or self.cpdis2 is not None:
+            rel_x, rel_y = self._apply_cpdis_inverse(rel_x, rel_y)
+        if self.sip is not None:
+            rel_x, rel_y = self.sip.invert_distortion(rel_x, rel_y)
+        x1 = rel_x + self._crpix0
+        y1 = rel_y + self._crpix1
+        if self.det2im1 is not None or self.det2im2 is not None:
+            x1, y1 = self._apply_det2im_inverse(x1, y1)
+        px = x1 - (1.0 - origin)
+        py = y1 - (1.0 - origin)
+        return self._source_pixels_to_corrected(px, py, origin)
+
     def _alloc_pix_internal_like(self, world: Tensor) -> Tensor:
         """Allocate output for analytic world->pixel without zeroing 2D hot path."""
         pix_internal = torch.empty_like(world)
@@ -1950,6 +2043,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         """Use the center-equator C++ helper only where it is a measured win."""
         if (
             not self._use_center_equator_fast
+            or self.sip is not None
             or self._cpp_center_pixel_to_world is None
             or not device_ok
             or not dtype_ok
@@ -1966,6 +2060,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         """Use the center-equator C++ helper only where it is a measured win."""
         if (
             not self._use_center_equator_fast
+            or self.sip is not None
             or self._cpp_center_world_to_pixel is None
             or not device_ok
             or not dtype_ok
@@ -2062,54 +2157,15 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         """
         Unified 2D spatial pixel-to-world core.
         """
-        x, y = self._corrected_pixels_to_source(x, y, origin)
-        x1 = x + (1.0 - origin)
-        y1 = y + (1.0 - origin)
-        if self.det2im1 is not None or self.det2im2 is not None:
-            x1, y1 = self._apply_det2im_forward(x1, y1)
-        # 1. Coordinate frame relative to CRPIX
-        rel_x = x1 - self._crpix0
-        rel_y = y1 - self._crpix1
-
-        # 2. Distortion & Linear
-        if self.sip is not None:
-            rel_x, rel_y = self.sip.distort(rel_x, rel_y)
-        if self.cpdis1 is not None or self.cpdis2 is not None:
-            rel_x, rel_y = self._apply_cpdis_forward(rel_x, rel_y)
-
-        # Apply CD matrix
+        rel_x, rel_y = self._detector_relative_pixels(x, y, origin)
         xi, eta = self._apply_cd_2d(rel_x, rel_y)
 
         if self._is_gls:
             return self._gls_forward(xi, eta)
 
-        # Common center-equator specializations avoid full spherical rotation.
-        if self._use_center_equator_fast and self._is_car:
-            ra = _wrap_lon360(xi + self.alpha0)
-            return ra, eta
-        if self._use_center_equator_fast and self._is_sfl:
-            dec = eta
-            cos_dec = torch.cos(dec * self._d2r)
-            cos_safe = torch.sign(cos_dec) * torch.clamp(torch.abs(cos_dec), min=1e-12)
-            ra = _wrap_lon360((xi / cos_safe) + self.alpha0)
-            return ra, dec
-        if self._use_center_equator_fast and self._is_cea:
-            value = eta / self._cea_eta_scale
-            valid = torch.isfinite(value) & (value.abs() <= 1.0 + 1e-12)
-            theta = torch.asin(torch.clamp(value, -1.0, 1.0)) * self._r2d
-            ra = _wrap_lon360(xi + self.alpha0)
-            nan = torch.full_like(theta, float("nan"))
-            return torch.where(valid, ra, nan), torch.where(valid, theta, nan)
-        if self._use_center_equator_fast and self._is_mer:
-            arg = torch.clamp(eta * self._d2r, -20.0, 20.0)
-            theta = 2.0 * (torch.atan(torch.exp(arg)) * self._r2d - 45.0)
-            ra = _wrap_lon360(xi + self.alpha0)
-            return ra, theta
-        if self._use_center_equator_fast and self._is_cyp:
-            phi, theta = project_cylindrical(
-                xi, eta, "CYP", self._pv1_tensor, self._pv2_tensor
-            )
-            return _wrap_lon360(phi + self.alpha0), theta
+        # Center-equator cylindrical projections skip spherical rotation.
+        if self._is_center_cylindrical_shortcut():
+            return self._center_equator_project(xi, eta)
 
         # 3. TPV / Special distortions
         zpx_native = False
@@ -2321,31 +2377,10 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 self._hpx_k,
             )
 
-        if self._use_center_equator_fast and (
-            self._is_car or self._is_sfl or self._is_cea or self._is_mer
-        ):
-            rel_x = x + (1.0 - origin) - self._crpix0
-            rel_y = y + (1.0 - origin) - self._crpix1
+        if self._is_center_cylindrical_shortcut():
+            rel_x, rel_y = self._detector_relative_pixels(x, y, float(origin))
             xi, eta = self._apply_cd_2d(rel_x, rel_y)
-            if self._is_car:
-                return _wrap_lon360(xi + self.alpha0), eta
-            if self._is_sfl:
-                dec = eta
-                cos_dec = torch.cos(dec * self._d2r)
-                cos_safe = torch.sign(cos_dec) * torch.clamp(
-                    torch.abs(cos_dec), min=1e-12
-                )
-                return _wrap_lon360((xi / cos_safe) + self.alpha0), dec
-            if self._is_cea:
-                value = eta / self._cea_eta_scale
-                valid = torch.isfinite(value) & (value.abs() <= 1.0 + 1e-12)
-                theta = torch.asin(torch.clamp(value, -1.0, 1.0)) * self._r2d
-                ra = _wrap_lon360(xi + self.alpha0)
-                nan = torch.full_like(theta, float("nan"))
-                return torch.where(valid, ra, nan), torch.where(valid, theta, nan)
-            arg = torch.clamp(eta * self._d2r, -20.0, 20.0)
-            theta = 2.0 * (torch.atan(torch.exp(arg)) * self._r2d - 45.0)
-            return _wrap_lon360(xi + self.alpha0), theta
+            return self._center_equator_project(xi, eta)
 
         cpp_kind = self._cpp_p2w_direct_kind
         prefer_small_zenithal_fused = (
@@ -2509,61 +2544,13 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         Unified 2D spatial world-to-pixel core.
         Designed to be graph-break free for torch.compile.
         """
-        # Common center-equator specializations avoid full spherical rotation.
-        if self._use_center_equator_fast and self.sip is None:
-            if self._is_car:
-                xi = _wrap_lon180(ra - self.alpha0)
-                eta = dec
-                if intermediate_only:
-                    return xi, eta
-                rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
-            if self._is_sfl:
-                phi = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-                xi = phi * torch.cos(theta * self._d2r)
-                eta = theta
-                if intermediate_only:
-                    return xi, eta
-                rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
-            if self._is_cea:
-                phi = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-                xi = phi
-                eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
-                if intermediate_only:
-                    return xi, eta
-                rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
-            if self._is_mer:
-                phi = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-                xi, eta = deproject_cylindrical(phi, theta, "MER")
-                if intermediate_only:
-                    return xi, eta
-                rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
-            if self._is_cyp:
-                phi = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-                xi, eta = deproject_cylindrical(
-                    phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
-                )
-                if intermediate_only:
-                    return xi, eta
-                rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
+        # Center-equator cylindrical projections skip spherical rotation.
+        # SIP and lookup distortions are applied by the shared pixel tail.
+        if self._is_center_cylindrical_shortcut():
+            xi, eta = self._center_equator_deproject(ra, dec)
+            if intermediate_only:
+                return xi, eta
+            return self._pixels_from_intermediate(xi, eta, origin)
 
         # 1. Inverse Spherical Rotation (Celestial -> Native)
         if self._is_gls:
@@ -2663,25 +2650,14 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 )
                 xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
                 eta = torch.where(mask_eq, self._hpx_eta_scale * s_theta, eta_pol)
-            elif self._is_cea:
-                xi = _wrap_lon180(phi)
-                eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
-            elif self._is_mer:
-                xi = _wrap_lon180(phi)
-                tan_arg = torch.tan((45.0 + theta * 0.5) * self._d2r)
-                tan_arg = torch.clamp(tan_arg, min=1e-12)
-                eta = self._r2d * torch.log(tan_arg)
-            elif self._is_cyp:
-                xi, eta = deproject_cylindrical(
-                    phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
-                )
-            elif self._is_car:
-                # Inline trivial CAR projection: native RA -> intermediate xi, native Dec -> intermediate eta
-                xi = _wrap_lon180(phi)
-                eta = theta
-            elif self._is_sfl:
-                xi = _wrap_lon180(phi) * torch.cos(theta * self._d2r)
-                eta = theta
+            elif (
+                self._is_cea
+                or self._is_mer
+                or self._is_cyp
+                or self._is_car
+                or self._is_sfl
+            ):
+                xi, eta = self._cylindrical_native_to_intermediate(phi, theta)
             elif self._is_zpn:
                 if self._is_zpn_linear:
                     phi_w = _wrap_lon180(phi)
@@ -2759,24 +2735,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
         if intermediate_only:
             return xi, eta
-
-        # 4. Inverse Linear (CD matrix)
-        rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
-
-        # 5. Inverse CPDIS / SIP / DET2IM (if any)
-        if self.cpdis1 is not None or self.cpdis2 is not None:
-            rel_x, rel_y = self._apply_cpdis_inverse(rel_x, rel_y)
-        if self.sip is not None:
-            rel_x, rel_y = self.sip.invert_distortion(rel_x, rel_y)
-
-        # 6. Origin adjustment
-        x1 = rel_x + self._crpix0
-        y1 = rel_y + self._crpix1
-        if self.det2im1 is not None or self.det2im2 is not None:
-            x1, y1 = self._apply_det2im_inverse(x1, y1)
-        px = x1 - (1.0 - origin)
-        py = y1 - (1.0 - origin)
-        return self._source_pixels_to_corrected(px, py, origin)
+        return self._pixels_from_intermediate(xi, eta, origin)
 
     def _stacked_world_to_pixel_flat(
         self,
@@ -2830,7 +2789,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
         valid_center_input = bool(torch.isfinite(ra).all() and torch.isfinite(dec).all())
         if self._is_mer:
-            valid_center_input = valid_center_input and bool((dec.abs() <= 90.0).all())
+            valid_center_input = valid_center_input and bool((dec.abs() < 90.0).all())
         if valid_center_input and self._use_cpp_center_world_to_pixel_small_n(
             ra, dec, device_ok=device_ok, dtype_ok=dtype_ok
         ):
@@ -2854,26 +2813,9 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             except (TypeError, RuntimeError):
                 pass
 
-        if self._use_center_equator_fast and (
-            self._is_car or self._is_sfl or self._is_cea or self._is_mer
-        ):
-            phi = _wrap_lon180(ra - self.alpha0)
-            theta = dec
-            if self._is_car:
-                xi = phi
-                eta = theta
-            elif self._is_sfl:
-                xi = phi * torch.cos(theta * self._d2r)
-                eta = theta
-            elif self._is_cea:
-                xi = phi
-                eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
-            else:
-                xi, eta = deproject_cylindrical(phi, theta, "MER")
-            rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
-            px = rel_x + self._crpix0 - (1.0 - origin)
-            py = rel_y + self._crpix1 - (1.0 - origin)
-            return px, py
+        if self._is_center_cylindrical_shortcut():
+            xi, eta = self._center_equator_deproject(ra, dec)
+            return self._pixels_from_intermediate(xi, eta, float(origin))
 
         cpp_kind = self._cpp_w2p_direct_kind
         use_cpp_direct = (

@@ -125,7 +125,6 @@ namespace `torchsky.sphere` unless the group text says otherwise.
         - BMOC
         - MOC
         - nest2uniq
-        - sample_randoms
         - uniq2nest
       heading_level: 3
       show_root_heading: false
@@ -165,6 +164,17 @@ namespace `torchsky.sphere` unless the group text says otherwise.
         - coupled_spectra
         - pure_alms
         - template_deprojection_bias
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
+## Randoms
+
+::: torchsky.sphere
+    options:
+      members:
+        - sample_randoms
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false

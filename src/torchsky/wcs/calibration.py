@@ -15,6 +15,7 @@ from .astrometry import (
     AstrometryConfig,
     AstrometrySolution,
 )
+from ._graph import _UnionFind
 
 MissingColorPolicy = Literal["error", "zero", "drop"]
 
@@ -320,23 +321,6 @@ def photometric_log_residuals(
             raise ValueError("weights must have shape (N,)")
         residual = residual * torch.sqrt(weight)
     return residual
-
-
-class _UnionFind:
-    def __init__(self, count: int) -> None:
-        self.parent = list(range(count))
-
-    def find(self, item: int) -> int:
-        while self.parent[item] != item:
-            self.parent[item] = self.parent[self.parent[item]]
-            item = self.parent[item]
-        return item
-
-    def union(self, left: int, right: int) -> None:
-        a = self.find(left)
-        b = self.find(right)
-        if a != b:
-            self.parent[b] = a
 
 
 class CoupledCalibrationGraph:

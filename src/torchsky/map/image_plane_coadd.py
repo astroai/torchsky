@@ -143,6 +143,32 @@ _FINITE_APERTURE_COVARIANCE_KERNELS = frozenset(
 )
 
 
+def _prepare_canvas_tile(
+    sub_header: dict,
+    tile_shape: tuple[int, int],
+    *,
+    device: torch.device,
+    canvas_shape: tuple[int, int],
+    origin_yx: tuple[int, int],
+    value_semantics: MapValueSemantics,
+    representative_pixel_area_sr: float | None,
+) -> _PreparedImagePlaneTarget:
+    prepared = _prepare_target(
+        header=sub_header,
+        target_wcs=WCS(sub_header),
+        target_shape=tile_shape,
+        device=device,
+        canvas_shape=canvas_shape,
+        canvas_origin_yx=origin_yx,
+        include_pixel_area=(value_semantics == "flux"),
+        include_representative_pixel_area=False,
+        include_quadrature=(value_semantics == "flux"),
+        include_world_grid=False,
+    )
+    prepared.representative_pixel_area_sr = representative_pixel_area_sr
+    return prepared
+
+
 def _observations_have_quality(observations: Sequence[ImageObservation]) -> bool:
     for observation in observations:
         if observation.dq is not None or observation.dq_path is not None:
@@ -279,28 +305,24 @@ def _coadd_image_plane_spatial_tiles(
                         )
                         need_prepared_target = (
                             value_semantics == "flux"
-                            or header_dict_obs != sub_header
                             or tuple(image.shape) != tile_shape
+                            or not headers_equivalent_for_direct_copy(
+                                header_dict_obs, sub_header
+                            )
                         )
-                        prepared_target = None
-                        if need_prepared_target:
-                            prepared_target = _prepare_target(
-                                header=sub_header,
-                                target_wcs=WCS(sub_header),
-                                target_shape=tile_shape,
+                        prepared_target = (
+                            _prepare_canvas_tile(
+                                sub_header,
+                                tile_shape,
                                 device=device,
                                 canvas_shape=(H, W),
-                                canvas_origin_yx=(y0, x0),
-                                include_pixel_area=(value_semantics == "flux"),
-                                include_representative_pixel_area=bool(
-                                    mosaic_surface_brightness_area_scaling
-                                ),
-                                include_quadrature=(value_semantics == "flux"),
-                                include_world_grid=False,
+                                origin_yx=(y0, x0),
+                                value_semantics=value_semantics,
+                                representative_pixel_area_sr=mosaic_representative_area_sr,
                             )
-                            prepared_target.representative_pixel_area_sr = (
-                                mosaic_representative_area_sr
-                            )
+                            if need_prepared_target
+                            else None
+                        )
                         projected = _project_observation_to_target_chunk(
                             obs,
                             image=image,
@@ -513,28 +535,24 @@ def _coadd_image_plane_spatial_tiles(
                     )
                     need_prepared_target = (
                         value_semantics == "flux"
-                        or header_dict_obs != sub_header
                         or tuple(image.shape) != tile_shape
+                        or not headers_equivalent_for_direct_copy(
+                            header_dict_obs, sub_header
+                        )
                     )
-                    prepared_target = None
-                    if need_prepared_target:
-                        prepared_target = _prepare_target(
-                            header=sub_header,
-                            target_wcs=WCS(sub_header),
-                            target_shape=tile_shape,
+                    prepared_target = (
+                        _prepare_canvas_tile(
+                            sub_header,
+                            tile_shape,
                             device=device,
                             canvas_shape=(H, W),
-                            canvas_origin_yx=(y0, x0),
-                            include_pixel_area=(value_semantics == "flux"),
-                            include_representative_pixel_area=bool(
-                                mosaic_surface_brightness_area_scaling
-                            ),
-                            include_quadrature=(value_semantics == "flux"),
-                            include_world_grid=False,
+                            origin_yx=(y0, x0),
+                            value_semantics=value_semantics,
+                            representative_pixel_area_sr=mosaic_representative_area_sr,
                         )
-                        prepared_target.representative_pixel_area_sr = (
-                            mosaic_representative_area_sr
-                        )
+                        if need_prepared_target
+                        else None
+                    )
                     projected = _project_observation_to_target_chunk(
                         obs,
                         image=image,
@@ -959,24 +977,11 @@ def coadd_image_plane(
             image, header_dict_obs = load_observation_image_and_header(
                 obs, device=read_dev
             )
-        need_prepared_target = (
-            value_semantics == "flux"
-            or footprint_order is not None
-            or header_dict_obs != header_dict
-            or tuple(image.shape) != target_shape
-        )
-        source_wcs = None
-        if need_prepared_target and not (
-            headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
-            and tuple(image.shape) == target_shape
-        ):
-            source_wcs = WCS(header_dict_obs)
         sampled_numer, sampled_weight, overlap, moc = _project_observation_to_target(
             obs,
             image=image,
             header_dict_obs=header_dict_obs,
-            source_wcs=source_wcs,
-            prepared_target=ensure_prepared_target() if need_prepared_target else None,
+            prepare_target=ensure_prepared_target,
             target_header=header_dict,
             target_shape=target_shape,
             device=device,
@@ -1026,24 +1031,11 @@ def coadd_image_plane(
             image, header_dict_obs = load_observation_image_and_header(
                 obs, device=read_dev
             )
-        need_prepared_target = (
-            value_semantics == "flux"
-            or footprint_order is not None
-            or header_dict_obs != header_dict
-            or tuple(image.shape) != target_shape
-        )
-        source_wcs = None
-        if need_prepared_target and not (
-            headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
-            and tuple(image.shape) == target_shape
-        ):
-            source_wcs = WCS(header_dict_obs)
         projected = _project_observation_to_target_chunk(
             obs,
             image=image,
             header_dict_obs=header_dict_obs,
-            source_wcs=source_wcs,
-            prepared_target=ensure_prepared_target() if need_prepared_target else None,
+            prepare_target=ensure_prepared_target,
             target_header=header_dict,
             target_shape=target_shape,
             device=device,
@@ -1139,26 +1131,11 @@ def coadd_image_plane(
                 image, header_dict_obs = load_observation_image_and_header(
                     obs, device=read_dev
                 )
-            need_prepared_target = (
-                value_semantics == "flux"
-                or footprint_order is not None
-                or header_dict_obs != header_dict
-                or tuple(image.shape) != target_shape
-            )
-            source_wcs = None
-            if need_prepared_target and not (
-                headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
-                and tuple(image.shape) == target_shape
-            ):
-                source_wcs = WCS(header_dict_obs)
             projected = _project_observation_to_target_chunk(
                 obs,
                 image=image,
                 header_dict_obs=header_dict_obs,
-                source_wcs=source_wcs,
-                prepared_target=ensure_prepared_target()
-                if need_prepared_target
-                else None,
+                prepare_target=ensure_prepared_target,
                 target_header=header_dict,
                 target_shape=target_shape,
                 device=device,
@@ -1172,9 +1149,7 @@ def coadd_image_plane(
             if value_semantics == "flux":
                 prepared = ensure_prepared_target()
                 if prepared.pixel_area_sr is None:
-                    raise RuntimeError(
-                        "target pixel area is required for flux semantics"
-                    )
+                    raise RuntimeError("target pixel area is required for flux semantics")
                 pixel_area_sr = prepared.pixel_area_sr
                 if projected.target_window is not None:
                     y0, y1, x0, x1 = projected.target_window
@@ -1259,7 +1234,9 @@ def coadd_image_plane(
             if value_semantics == "flux":
                 prepared = ensure_prepared_target()
                 if prepared.pixel_area_sr is None:
-                    raise RuntimeError("target pixel area is required for flux semantics")
+                    raise RuntimeError(
+                        "target pixel area is required for flux semantics"
+                    )
                 corr_pixel_area_sr = prepared.pixel_area_sr
             for i, ps in enumerate(projected_store):
                 w = ps["weight"]
@@ -1570,9 +1547,15 @@ def evaluate_image_plane_aperture_uncertainty(
         if tile_height <= 0 or tile_width <= 0:
             raise ValueError("spatial_tile_hw dimensions must be positive")
 
-    exact_variance = torch.zeros(
-        (), dtype=accumulator_dtype, device=map_device
-    )
+    active_tiles: list[tuple[int, int, int, int]] = []
+    for y0 in range(0, target_shape[0], tile_height):
+        for x0 in range(0, target_shape[1], tile_width):
+            y1 = min(y0 + tile_height, target_shape[0])
+            x1 = min(x0 + tile_width, target_shape[1])
+            if bool((linear_form_weight[y0:y1, x0:x1] != 0.0).any()):
+                active_tiles.append((y0, y1, x0, x1))
+
+    exact_variance = torch.zeros((), dtype=accumulator_dtype, device=map_device)
     for observation_index, observation in enumerate(observations):
         if observation_index == 0:
             image = first_image
@@ -1607,80 +1590,73 @@ def evaluate_image_plane_aperture_uncertainty(
         )
         source_wcs = WCS(observation_header)
         source_gradient = torch.zeros_like(source_image)
-        for y0 in range(0, target_shape[0], tile_height):
-            for x0 in range(0, target_shape[1], tile_width):
-                y1 = min(y0 + tile_height, target_shape[0])
-                x1 = min(x0 + tile_width, target_shape[1])
-                aperture_tile = linear_form_weight[y0:y1, x0:x1]
-                if not bool((aperture_tile != 0.0).any()):
+        for y0, y1, x0, x1 in active_tiles:
+            aperture_tile = linear_form_weight[y0:y1, x0:x1]
+            tile_shape = (y1 - y0, x1 - x0)
+            sub_header, _ = _subtarget_header_for_window(
+                header_dict,
+                full_shape=target_shape,
+                y0=y0,
+                y1=y1,
+                x0=x0,
+                x1=x1,
+            )
+            needs_target = (
+                value_semantics == "flux"
+                or tuple(source_image.shape) != tile_shape
+                or not headers_equivalent_for_direct_copy(
+                    observation_header, sub_header
+                )
+            )
+            prepared_target = (
+                _prepare_canvas_tile(
+                    sub_header,
+                    tile_shape,
+                    device=map_device,
+                    canvas_shape=target_shape,
+                    origin_yx=(y0, x0),
+                    value_semantics=value_semantics,
+                    representative_pixel_area_sr=full_representative_area_sr,
+                )
+                if needs_target
+                else None
+            )
+            with torch.enable_grad():
+                projected = _project_observation_to_target_chunk(
+                    observation,
+                    image=source_image,
+                    header_dict_obs=observation_header,
+                    source_wcs=source_wcs,
+                    prepared_observation=differentiable,
+                    prepared_target=prepared_target,
+                    target_header=sub_header,
+                    target_shape=tile_shape,
+                    device=map_device,
+                    footprint_order=None,
+                    resampling_kernel=resampling_kernel,
+                    value_semantics=value_semantics,
+                    drizzle_pixfrac=drizzle_pixfrac,
+                    background_estimator=None,
+                )
+                if projected.numer.numel() == 0:
                     continue
-                tile_shape = (y1 - y0, x1 - x0)
-                sub_header, _ = _subtarget_header_for_window(
-                    header_dict,
-                    full_shape=target_shape,
-                    y0=y0,
-                    y1=y1,
-                    x0=x0,
-                    x1=x1,
-                )
-                needs_target = (
-                    value_semantics == "flux"
-                    or observation_header != sub_header
-                    or tuple(source_image.shape) != tile_shape
-                )
-                prepared_target = None
-                if needs_target:
-                    prepared_target = _prepare_target(
-                        header=sub_header,
-                        target_wcs=WCS(sub_header),
-                        target_shape=tile_shape,
-                        device=map_device,
-                        canvas_shape=target_shape,
-                        canvas_origin_yx=(y0, x0),
-                        include_pixel_area=(value_semantics == "flux"),
-                        include_representative_pixel_area=apply_area_scaling,
-                        include_quadrature=(value_semantics == "flux"),
-                        include_world_grid=False,
-                    )
-                    prepared_target.representative_pixel_area_sr = (
-                        full_representative_area_sr
-                    )
-                with torch.enable_grad():
-                    projected = _project_observation_to_target_chunk(
-                        observation,
-                        image=source_image,
-                        header_dict_obs=observation_header,
-                        source_wcs=source_wcs,
-                        prepared_observation=differentiable,
-                        prepared_target=prepared_target,
-                        target_header=sub_header,
-                        target_shape=tile_shape,
-                        device=map_device,
-                        footprint_order=None,
-                        resampling_kernel=resampling_kernel,
-                        value_semantics=value_semantics,
-                        drizzle_pixfrac=drizzle_pixfrac,
-                        background_estimator=None,
-                    )
-                    if projected.numer.numel() == 0:
-                        continue
-                    if projected.target_window is None:
-                        projected_aperture = aperture_tile
-                    else:
-                        py0, py1, px0, px1 = projected.target_window
-                        projected_aperture = aperture_tile[py0:py1, px0:px1]
-                    linear_form = torch.sum(projected.numer * projected_aperture)
-                    if not linear_form.requires_grad:
-                        continue
-                    gradient = torch.autograd.grad(
-                        linear_form,
-                        source_image,
-                        retain_graph=False,
-                        create_graph=False,
-                        allow_unused=True,
-                    )[0]
-                if gradient is not None:
-                    source_gradient.add_(gradient.detach())
+                if projected.target_window is None:
+                    projected_aperture = aperture_tile
+                else:
+                    py0, py1, px0, px1 = projected.target_window
+                    projected_aperture = aperture_tile[py0:py1, px0:px1]
+                linear_form = torch.sum(projected.numer * projected_aperture)
+                if not linear_form.requires_grad:
+                    continue
+                gradient = torch.autograd.grad(
+                    linear_form,
+                    source_image,
+                    retain_graph=False,
+                    create_graph=False,
+                    allow_unused=True,
+                )[0]
+            if gradient is not None:
+                source_gradient.add_(gradient.detach())
         source_variance = torch.where(
             source_weight > 0.0,
             source_weight.reciprocal(),
@@ -1907,24 +1883,11 @@ def coadd_image_plane_cube(
             image, header_dict_obs = load_observation_image_and_header(
                 obs, device=read_dev
             )
-        need_prepared_target = (
-            value_semantics == "flux"
-            or footprint_order is not None
-            or header_dict_obs != header_dict
-            or tuple(image.shape) != target_shape
-        )
-        source_wcs = None
-        if need_prepared_target and not (
-            headers_equivalent_for_direct_copy(header_dict_obs, header_dict)
-            and tuple(image.shape) == target_shape
-        ):
-            source_wcs = WCS(header_dict_obs)
         projected = _project_observation_to_target_chunk(
             obs,
             image=image,
             header_dict_obs=header_dict_obs,
-            source_wcs=source_wcs,
-            prepared_target=ensure_prepared_target() if need_prepared_target else None,
+            prepare_target=ensure_prepared_target,
             target_header=header_dict,
             target_shape=target_shape,
             device=device,

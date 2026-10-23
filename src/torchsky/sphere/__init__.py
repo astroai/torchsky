@@ -87,7 +87,8 @@ from .geom import (
     spherical_triangle_area,
     to_exact_region,
 )
-from .moc import BMOC, MOC, nest2uniq, sample_randoms, uniq2nest
+from .moc import BMOC, MOC, nest2uniq, uniq2nest
+from .randoms import sample_randoms
 from .stmoc import STMOC, mjd_to_time_us, time_us_to_mjd
 from .sparse import (
     HealSparseHostProtocol,

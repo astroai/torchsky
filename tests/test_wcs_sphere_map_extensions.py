@@ -203,16 +203,16 @@ def test_dcr_and_ephemeris_offsets() -> None:
 
 def test_bmoc_and_moc_from_wcs_and_randoms() -> None:
     bmoc = BMOC.from_cone(150.0, 2.0, 1.5, max_order=6)
-    assert not bmoc.empty
+    assert not bmoc.is_empty
     assert bmoc.area_sq_deg >= bmoc.interior_area_sq_deg > 0.0
-    assert (bmoc.interior_moc() & bmoc.boundary_moc()).empty
+    assert (bmoc.interior_moc() & bmoc.boundary_moc()).is_empty
     assert (bmoc.interior_moc() | bmoc.boundary_moc()) == bmoc.to_moc()
 
     w = _make_tan_wcs(crval=(150.0, 2.0), cdelt=0.02, shape=(32, 32))
     moc_w = MOC.from_wcs(w, max_order=8)
     bmoc_w = BMOC.from_wcs(w, max_order=8)
-    assert not moc_w.empty
-    assert not bmoc_w.empty
+    assert not moc_w.is_empty
+    assert not bmoc_w.is_empty
     assert bool(moc_w.contains(torch.tensor([150.0]), torch.tensor([2.0])).item())
     assert bool(bmoc_w.contains(torch.tensor([150.0]), torch.tensor([2.0])).item())
 
@@ -226,7 +226,7 @@ def test_bmoc_and_moc_from_wcs_and_randoms() -> None:
     poly_ra = torch.tensor([149.5, 150.5, 150.5, 149.5], dtype=torch.float64)
     poly_dec = torch.tensor([1.5, 1.5, 2.5, 2.5], dtype=torch.float64)
     bmoc_poly = BMOC.from_polygon(poly_ra, poly_dec, max_order=8)
-    assert not bmoc_poly.empty
+    assert not bmoc_poly.is_empty
     assert bmoc_poly.interior_area_sq_deg > 0.0
 
 
@@ -265,7 +265,7 @@ def test_healsparse_wide_columns_and_from_observations() -> None:
     )
     cov_map = HealSparseMap.from_observations([obs], nside_sparse=128, nside_coverage=16)
     assert cov_map.column_names == ("weight", "nexp", "fracdet")
-    assert cov_map.valid_pixels().numel() > 0
+    assert cov_map.valid_pixels.numel() > 0
 
 
 def test_coadd_healpix_and_resample_healpix() -> None:
@@ -283,7 +283,7 @@ def test_coadd_healpix_and_resample_healpix() -> None:
 
     hp_sparse = coadd_healpix([obs], nside=64, nest=True, sparse=True, nside_coverage=16)
     assert hp_sparse.sparse_map is not None
-    assert hp_sparse.sparse_map.valid_pixels().numel() == int(cov.sum().item())
+    assert hp_sparse.sparse_map.valid_pixels.numel() == int(cov.sum().item())
 
     target = Target(wcs=_make_tan_wcs(crval=(150.0, 2.0), cdelt=0.04, shape=(16, 16)), shape=(16, 16))
     cutout = resample_healpix(hp_res, target)

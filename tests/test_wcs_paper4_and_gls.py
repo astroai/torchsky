@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs import WCS, DistortionLookupTable
 
@@ -132,8 +133,8 @@ def test_paper4_distortion_lookup_table_roundtrip_native() -> None:
     torch.testing.assert_close(py_post, py, atol=1e-6, rtol=0.0)
 
 
-def test_car_sip_and_sfl_sip_at_equator_apply_sip_inversion() -> None:
-    for proj in ("CAR", "SFL", "MER"):
+def test_cylindrical_sip_at_equator_matches_astropy() -> None:
+    for proj in ("CAR", "SFL", "CEA", "MER", "CYP"):
         hdr = {
             "NAXIS": 2,
             "NAXIS1": 64,
@@ -153,10 +154,20 @@ def test_car_sip_and_sfl_sip_at_equator_apply_sip_inversion() -> None:
             "A_2_0": 1.5e-4,
             "B_0_2": -1.2e-4,
         }
+        if proj == "CEA":
+            hdr["PV2_1"] = 1.0
+        elif proj == "CYP":
+            hdr["PV2_1"] = 1.0
+            hdr["PV2_2"] = 1.0
         w = WCS(hdr)
         x = torch.tensor([12.0, 24.0, 48.0], dtype=torch.float64)
         y = torch.tensor([16.0, 40.0, 52.0], dtype=torch.float64)
         ra, dec = w.pixel_to_world(x, y)
+        expected = torch.from_numpy(
+            AstropyWCS(hdr).all_pix2world(torch.stack((x, y), dim=-1).numpy(), 0)
+        )
+        torch.testing.assert_close(ra, expected[:, 0], atol=1e-10, rtol=0.0)
+        torch.testing.assert_close(dec, expected[:, 1], atol=1e-10, rtol=0.0)
         x_back, y_back = w.world_to_pixel(ra, dec)
         torch.testing.assert_close(x_back, x, atol=1e-5, rtol=0.0)
         torch.testing.assert_close(y_back, y, atol=1e-5, rtol=0.0)

@@ -1173,7 +1173,7 @@ def _project_observation_to_target_chunk(
     header_dict_obs: dict | None = None,
     source_wcs: WCS | None = None,
     prepared_observation: PreparedImageObservationData | None = None,
-    prepared_target: _PreparedImagePlaneTarget | None,
+    prepared_target: _PreparedImagePlaneTarget | None = None,
     target_header: dict,
     target_shape: tuple[int, int],
     device: torch.device,
@@ -1182,6 +1182,7 @@ def _project_observation_to_target_chunk(
     value_semantics: MapValueSemantics,
     drizzle_pixfrac: float,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+    prepare_target: Callable[[], _PreparedImagePlaneTarget] | None = None,
 ) -> _ProjectedImagePlaneObservation:
     if not torch.isfinite(torch.tensor(obs.weight, dtype=torch.float64)):
         raise ValueError("Observation weights must be finite")
@@ -1207,12 +1208,23 @@ def _project_observation_to_target_chunk(
     source_weight = prepared_observation.source_weight
     operator_bundle = prepared_observation.operator_bundle
     has_explicit_noise = operator_bundle.noise is not None
+    direct_copy = (
+        tuple(image.shape) == target_shape
+        and headers_equivalent_for_direct_copy(header_dict_obs, target_header)
+    )
+    if prepared_target is None and (
+        not direct_copy or value_semantics == "flux" or footprint_order is not None
+    ):
+        if prepare_target is None:
+            raise RuntimeError(
+                "prepared_target is required for reprojection, flux area, or a footprint"
+            )
+        prepared_target = prepare_target()
+    if not direct_copy and source_wcs is None:
+        source_wcs = WCS(header_dict_obs)
     prepared_target_view = prepared_target
     target_window = None
-    if (
-        headers_equivalent_for_direct_copy(header_dict_obs, target_header)
-        and tuple(image.shape) == target_shape
-    ):
+    if direct_copy:
         if value_semantics == "flux":
             if prepared_target is None or prepared_target.pixel_area_sr is None:
                 raise RuntimeError(
@@ -1233,8 +1245,6 @@ def _project_observation_to_target_chunk(
     else:
         if prepared_target is None:
             raise RuntimeError("prepared_target is required for reprojection")
-        if source_wcs is None:
-            source_wcs = WCS(header_dict_obs)
         prepared_target_view, target_window = _window_large_tan_target(
             source_wcs=source_wcs,
             source_shape=tuple(image.shape),
@@ -1306,7 +1316,7 @@ def _project_observation_to_target(
     image: Tensor | None = None,
     header_dict_obs: dict | None = None,
     source_wcs: WCS | None = None,
-    prepared_target: _PreparedImagePlaneTarget | None,
+    prepared_target: _PreparedImagePlaneTarget | None = None,
     target_header: dict,
     target_shape: tuple[int, int],
     device: torch.device,
@@ -1315,6 +1325,7 @@ def _project_observation_to_target(
     value_semantics: MapValueSemantics,
     drizzle_pixfrac: float = 1.0,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
+    prepare_target: Callable[[], _PreparedImagePlaneTarget] | None = None,
 ) -> tuple[Tensor, Tensor, Tensor, MOC | None]:
     projected = _project_observation_to_target_chunk(
         obs,
@@ -1330,6 +1341,7 @@ def _project_observation_to_target(
         value_semantics=value_semantics,
         drizzle_pixfrac=drizzle_pixfrac,
         background_estimator=background_estimator,
+        prepare_target=prepare_target,
     )
     if projected.target_window is None:
         return projected.numer, projected.weight, projected.overlap, projected.moc
