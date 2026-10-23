@@ -189,11 +189,56 @@ def _resolve_plan_frame_prefixes(
     )
 
 
+def _padding_pixels(span_pixels: int, padding: float) -> int:
+    """Whole-pixel padding for a requested multiplicative footprint padding."""
+    span = max(int(span_pixels), 1)
+    return int(math.ceil(0.5 * max(float(padding) - 1.0, 0.0) * span))
+
+
+def _aligned_centre_bounds(
+    lo: float,
+    hi: float,
+    *,
+    padding: float = 1.0,
+) -> tuple[float, float]:
+    """Half-integer pixel centres that tile a tangent-plane span exactly.
+
+    ``lo`` and ``hi`` are offsets in pixels from the reference point. Returning
+    half-integer centres keeps the output on the source grid: with one input the
+    spans are integral, so no pixel is resampled onto a subpixel offset.
+    """
+    if not math.isfinite(lo) or not math.isfinite(hi) or hi < lo:
+        raise ValueError("pixel span must be finite and non-decreasing")
+    first = math.ceil(lo + 0.5) - 0.5
+    last = math.floor(hi - 0.5) + 0.5
+    if last < first:
+        last = first
+    pad = _padding_pixels(int(round(last - first)) + 1, padding)
+    return first - pad, last + pad
+
+
+def _aligned_index_bounds(
+    lo: float,
+    hi: float,
+    *,
+    padding: float = 1.0,
+) -> tuple[int, int]:
+    """Integer pixel indices whose areas cover a span given in pixel coordinates."""
+    if not math.isfinite(lo) or not math.isfinite(hi) or hi < lo:
+        raise ValueError("pixel span must be finite and non-decreasing")
+    first = math.floor(lo + 0.5)
+    last = math.ceil(hi - 0.5)
+    if last < first:
+        last = first
+    pad = _padding_pixels(last - first + 1, padding)
+    return first - pad, last + pad
+
+
 def _plan_union_footprint_target(
     observations: Sequence[ImageObservation],
     *,
     device: torch.device | str | None = None,
-    padding: float = 1.05,
+    padding: float = 1.0,
     tolerance_px: float = 0.25,
     max_depth: int = 20,
     projection: str = "TAN",
@@ -340,17 +385,18 @@ def _plan_union_footprint_target(
         tangent_boundary = torch.cat(tangent_boundaries, dim=0)
         xi = tangent_boundary[:, 0]
         eta = tangent_boundary[:, 1]
-        xi_mid = 0.5 * float(xi.min() + xi.max())
-        eta_mid = 0.5 * float(eta.min() + eta.max())
-        chord_margin_deg = float(tolerance_px) * resolved_scale
-        xi_half = (0.5 * float(xi.max() - xi.min()) + chord_margin_deg) * float(padding)
-        eta_half = (0.5 * float(eta.max() - eta.min()) + chord_margin_deg) * float(
-            padding
+        col0, col1 = _aligned_centre_bounds(
+            float(xi.min()) / resolved_scale,
+            float(xi.max()) / resolved_scale,
+            padding=float(padding),
         )
-        xi_min, xi_max = xi_mid - xi_half, xi_mid + xi_half
-        eta_min, eta_max = eta_mid - eta_half, eta_mid + eta_half
-        naxis1 = max(1, int(math.ceil((xi_max - xi_min) / resolved_scale)))
-        naxis2 = max(1, int(math.ceil((eta_max - eta_min) / resolved_scale)))
+        row0, row1 = _aligned_centre_bounds(
+            float(eta.min()) / resolved_scale,
+            float(eta.max()) / resolved_scale,
+            padding=float(padding),
+        )
+        naxis1 = max(1, int(round(col1 - col0)) + 1)
+        naxis2 = max(1, int(round(row1 - row0)) + 1)
         header: dict = {
             "NAXIS": 2,
             "NAXIS1": naxis1,
@@ -361,8 +407,10 @@ def _plan_union_footprint_target(
             "CUNIT2": "deg",
             "CRVAL1": center_ra,
             "CRVAL2": center_dec,
-            "CRPIX1": 0.5 + xi_max / resolved_scale,
-            "CRPIX2": 0.5 - eta_min / resolved_scale,
+            # Both axes stay on the source pixel grid: an index offset is
+            # integral, so a single input keeps its centres and its flux.
+            "CRPIX1": 1.0 - float(col0),
+            "CRPIX2": 1.0 - float(row0),
             "CD1_1": -resolved_scale,
             "CD1_2": 0.0,
             "CD2_1": 0.0,
@@ -434,18 +482,18 @@ def _plan_union_footprint_target(
     projected_boundary = torch.cat(projected_boundaries, dim=0)
     px = projected_boundary[:, 0]
     py = projected_boundary[:, 1]
-    px_mid = 0.5 * float(px.min() + px.max())
-    py_mid = 0.5 * float(py.min() + py.max())
-    px_half = (0.5 * float(px.max() - px.min()) + float(tolerance_px)) * float(padding)
-    py_half = (0.5 * float(py.max() - py.min()) + float(tolerance_px)) * float(padding)
-    px_min, px_max = px_mid - px_half, px_mid + px_half
-    py_min, py_max = py_mid - py_half, py_mid + py_half
-    naxis1 = max(1, int(math.ceil(px_max - px_min)))
-    naxis2 = max(1, int(math.ceil(py_max - py_min)))
+    col0, col1 = _aligned_index_bounds(
+        float(px.min()), float(px.max()), padding=float(padding)
+    )
+    row0, row1 = _aligned_index_bounds(
+        float(py.min()), float(py.max()), padding=float(padding)
+    )
+    naxis1 = max(1, col1 - col0 + 1)
+    naxis2 = max(1, row1 - row0 + 1)
     probe_header["NAXIS1"] = naxis1
     probe_header["NAXIS2"] = naxis2
-    probe_header["CRPIX1"] = 1.0 - px_min + 0.5
-    probe_header["CRPIX2"] = 1.0 - py_min + 0.5
+    probe_header["CRPIX1"] = 1.0 - float(col0)
+    probe_header["CRPIX2"] = 1.0 - float(row0)
     return probe_header, (naxis2, naxis1)
 
 
@@ -456,7 +504,7 @@ def plan_image_plane_target(
     header_overrides: dict | None = None,
     device: torch.device | str | None = None,
     union_footprint: bool = False,
-    footprint_padding: float = 1.05,
+    footprint_padding: float = 1.0,
     footprint_tolerance_px: float = 0.25,
     footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,
@@ -539,7 +587,7 @@ def plan_image_plane_cube_target(
     spectral_type: str = "WAVE",
     device: torch.device | str | None = None,
     union_footprint: bool = False,
-    footprint_padding: float = 1.05,
+    footprint_padding: float = 1.0,
     footprint_tolerance_px: float = 0.25,
     footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,
@@ -635,7 +683,7 @@ def plan(
     pixel_scale_arcsec: float | None = None,
     shape: tuple[int, int] | None = None,
     rotation_deg: float = 0.0,
-    padding: float = 1.05,
+    padding: float = 1.0,
     reference_index: int | None = None,
     header_overrides: dict | None = None,
     max_pixels: int | None = None,
@@ -670,7 +718,7 @@ def plan_cube(
     spectral_type: str = "WAVE",
     reference_index: int | None = None,
     header_overrides: dict | None = None,
-    padding: float = 1.05,
+    padding: float = 1.0,
     max_pixels: int | None = None,
     device: torch.device | str | None = None,
 ) -> PlannedImagePlaneCubeTarget:

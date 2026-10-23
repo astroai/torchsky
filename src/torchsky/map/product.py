@@ -336,7 +336,7 @@ def plan_map_product(
     value_semantics: MapValueSemantics = "surface_brightness",
     footprint_order: int | None = None,
     union_footprint: bool = False,
-    footprint_padding: float = 1.05,
+    footprint_padding: float = 1.0,
     footprint_tolerance_px: float = 0.25,
     footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,

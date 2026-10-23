@@ -154,7 +154,7 @@ def test_map_parser_help_is_renderable(capsys) -> None:
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
     assert "--union-footprint" in help_text
-    assert "1.05 = 5%" in help_text
+    assert "1.0 = exact" in help_text.replace("\n", " ")
 
 
 @mock.patch("torchsky.cli.map_command._expand_inputs")
@@ -477,7 +477,7 @@ def test_cli_map_dry_run_writes_resolved_plan_json(monkeypatch, tmp_path) -> Non
     assert plan["inputs"][0]["weight_is_inverse_variance"] is False
     assert plan["inputs"][0]["identity"]["path"] == str(input_path.resolve())
     assert "sha256" in plan["inputs"][0]["identity"]
-    assert plan["target"]["shape"] == [9, 9]
+    assert plan["target"]["shape"] == [8, 8]
     assert plan["execution"]["workflow"] == "native"
     assert plan["execution"]["kernel"] == "bilinear"
     assert plan["execution"]["stack"] == "weighted_mean"
@@ -485,7 +485,7 @@ def test_cli_map_dry_run_writes_resolved_plan_json(monkeypatch, tmp_path) -> Non
     assert plan["execution"]["clip_iterations"] == 3
     assert plan["execution"]["scratch_required_bytes"] == 0
     assert plan["execution"]["resolved_device"] == "cpu"
-    assert plan["requested_products"] == ["SCI", "WHT", "IVAR", "CTX", "MASK", "NEXP"]
+    assert plan["requested_products"] == ["SCI", "WHT", "IVAR", "MASK", "NEXP"]
     assert plan["software"]["torchsky"] == torchsky.__version__
     assert plan["runtime"]["dtype"] == "float32"
     assert not list(plan_path.parent.glob("*.tmp"))
@@ -704,6 +704,13 @@ def test_cli_map_writes_standard_mef_products(monkeypatch, tmp_path) -> None:
             "--weights",
             "4.0",
             "--no-union-footprint",
+            "--output-planes",
+            "SCI",
+            "WHT",
+            "IVAR",
+            "CTX",
+            "MASK",
+            "NEXP",
             "--device",
             "cpu",
         ],
@@ -1228,7 +1235,13 @@ def test_run_field_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path
         captured.append(ns)
         return 0
 
+    def fake_read_header(path, hdu=0):
+        header = _simple_header()
+        header["FILTER"] = filters[Path(path).name]
+        return header
+
     monkeypatch.setattr(map_command, "read", fake_read)
+    monkeypatch.setattr(map_command, "read_header", fake_read_header)
     monkeypatch.setattr(map_command, "_run_field_single", fake_run_single)
 
     args = argparse.Namespace(
@@ -1278,7 +1291,13 @@ def test_run_field_per_filter_keeps_running_after_a_group_fails(
         calls.append(ns.inr_band)
         return 1 if ns.inr_band == "F277W" else 0
 
+    def fake_read_header(path, hdu=0):
+        header = _simple_header()
+        header["FILTER"] = filters[Path(path).name]
+        return header
+
     monkeypatch.setattr(map_command, "read", fake_read)
+    monkeypatch.setattr(map_command, "read_header", fake_read_header)
     monkeypatch.setattr(map_command, "_run_field_single", fake_run_single)
 
     args = argparse.Namespace(
@@ -1299,3 +1318,230 @@ def test_run_field_per_filter_keeps_running_after_a_group_fails(
     # is what the command reports.
     assert map_command._run_field(args) == 1
     assert calls == ["F277W", "F356W"]
+
+
+def test_cli_map_per_filter_coadd_writes_one_product_per_filter(
+    monkeypatch, tmp_path
+) -> None:
+    from torchsky.cli import main
+
+    paths = []
+    for name, band, value in (("a", "F277W", 1.0), ("b", "F356W", 3.0)):
+        header = _simple_header()
+        header["FILTER"] = band
+        path = tmp_path / f"{name}.fits"
+        torchfits.write(str(path), torch.full((8, 8), value), header=header, overwrite=True)
+        paths.append(str(path))
+    output = tmp_path / "coadd.fits"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output),
+            *paths,
+            "--per-filter",
+            "--no-union-footprint",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    assert not output.exists()
+    for band, value in (("F277W", 1.0), ("F356W", 3.0)):
+        product = tmp_path / f"coadd_{band}.fits"
+        assert product.is_file()
+        data = torchfits.read(str(product), device="cpu")
+        assert tuple(data.shape) == (8, 8)
+        torch.testing.assert_close(
+            data[2:6, 2:6],
+            torch.full((4, 4), value, dtype=torch.float32),
+            atol=1e-5,
+            rtol=0.0,
+        )
+
+
+def test_cli_map_rejects_mixed_filters_without_per_filter(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    paths = []
+    for name, band in (("a", "F277W"), ("b", "F356W")):
+        header = _simple_header()
+        header["FILTER"] = band
+        path = tmp_path / f"{name}.fits"
+        torchfits.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
+        paths.append(str(path))
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(tmp_path / "coadd.fits"),
+            *paths,
+            "--no-union-footprint",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="multiple filters"):
+        main()
+
+
+def test_cli_map_no_overwrite_preserves_existing_product(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    output_path = tmp_path / "coadd.fits"
+    header = _simple_header()
+    torchfits.write(
+        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
+    )
+    argv = [
+        "torchsky",
+        "map",
+        str(output_path),
+        str(input_path),
+        "--no-union-footprint",
+        "--output-planes",
+        "SCI",
+        "--device",
+        "cpu",
+        "--no-overwrite",
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    assert main() == 0
+    first = torchfits.read(str(output_path), device="cpu").clone()
+
+    torchfits.write(
+        str(input_path), torch.full((8, 8), 9.0), header=header, overwrite=True
+    )
+    with pytest.raises(SystemExit, match="no-overwrite"):
+        main()
+
+    torch.testing.assert_close(
+        torchfits.read(str(output_path), device="cpu"), first
+    )
+
+
+def test_cli_map_ivar_header_scales_science_bunit(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    second_path = tmp_path / "input2.fits"
+    output_path = tmp_path / "coadd.fits"
+    header = _simple_header()
+    header["BUNIT"] = "nJy"
+    for path in (input_path, second_path):
+        torchfits.write(
+            str(path), torch.ones((8, 8)), header=header, overwrite=True
+        )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            str(input_path),
+            str(second_path),
+            "--weights",
+            "4.0",
+            "4.0",
+            "--no-union-footprint",
+            "--output-planes",
+            "SCI",
+            "IVAR",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    ivar_header = dict(torchfits.read_header(str(output_path), 1))
+    assert ivar_header["EXTNAME"] == "IVAR"
+    assert ivar_header["BUNIT"] == "(nJy)**-2"
+
+
+def test_cli_map_dq_map_zeroes_rejected_pixels(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    dq_path = tmp_path / "dq.fits"
+    output_path = tmp_path / "coadd.fits"
+    header = _simple_header()
+    torchfits.write(
+        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
+    )
+    dq = torch.zeros((8, 8), dtype=torch.int16)
+    dq[0, 0] = 1
+    torchfits.write(str(dq_path), dq, header=header, overwrite=True)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            str(input_path),
+            "--dq-maps",
+            str(dq_path),
+            "--dq-hdu",
+            "0",
+            "--no-union-footprint",
+            "--output-planes",
+            "SCI",
+            "WHT",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    weight = torchfits.read(str(output_path), hdu=1, device="cpu")
+    assert float(weight[0, 0]) == 0.0
+    assert float(weight[1, 1]) == 1.0
+
+
+def test_cli_map_good_bits_reads_mask_map_as_bitmask(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    mask_path = tmp_path / "mask.fits"
+    output_path = tmp_path / "coadd.fits"
+    header = _simple_header()
+    torchfits.write(
+        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
+    )
+    torchfits.write(
+        str(mask_path),
+        torch.full((8, 8), 2.0),
+        header=header,
+        overwrite=True,
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            str(input_path),
+            "--mask-maps",
+            str(mask_path),
+            "--good-bits",
+            "1",
+            "--no-union-footprint",
+            "--output-planes",
+            "SCI",
+            "WHT",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    weight = torchfits.read(str(output_path), hdu=1, device="cpu")
+    assert float(weight.abs().sum()) == 0.0

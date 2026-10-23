@@ -100,12 +100,17 @@ def write_map_product(
     ]
     if "WHT" in requested and result.weight is not None:
         planes.append(("WHT", _product_plane(result.weight), {}))
+    bunit = dict(result.header).get("BUNIT")
+    bunit_text = bunit.strip() if isinstance(bunit, str) else ""
     if "IVAR" in requested and result.uncertainty is not None:
+        ivar_header: dict[str, Any] = {"UNCKIND": result.uncertainty.kind}
+        if bunit_text:
+            ivar_header["BUNIT"] = f"({bunit_text})**-2"
         planes.append(
             (
                 "IVAR",
                 _product_plane(result.uncertainty.inverse_variance),
-                {"UNCKIND": result.uncertainty.kind},
+                ivar_header,
             )
         )
     if "DQ" in requested and result.quality is not None:
