@@ -70,10 +70,24 @@ typecheck = "pixi run -e test pyright"
 # Run every example script as a bounded smoke gate.
 examples = "pixi run -e test python examples/test_examples.py"
 # Documentation site (Zensical + Material theme). See zensical.toml.
-docs-build = "bash scripts/sync_docs_examples.sh && pixi run -e docs zensical build --clean --strict"
+docs-build = "pixi run docs-reference-check && bash scripts/sync_docs_examples.sh && pixi run -e docs zensical build --clean --strict"
+docs-reference = "pixi run -e docs python scripts/gen_reference.py --write"
+docs-reference-check = "pixi run -e docs python scripts/gen_reference.py --check"
 docs-serve = "pixi run -e docs zensical serve"
 docs-links = "pixi run -e docs python scripts/check_docs_links.py"
-docs-contract = "pixi run docs-build && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py tests/test_docs_coverage.py -q"
+docs-examples = "pixi run -e test python scripts/gen_example_index.py --write"
+docs-examples-check = "pixi run -e test python scripts/gen_example_index.py --check"
+docs-bench = "pixi run -e test python scripts/bench_docs.py --write"
+docs-bench-tables = "pixi run -e test python scripts/gen_benchmark_tables.py --write"
+docs-bench-tables-check = "pixi run -e test python scripts/gen_benchmark_tables.py --check"
+docs-gallery = "pixi run -e test python scripts/gen_gallery.py"
+docs-example-output = "pixi run -e test python scripts/capture_example_output.py"
+docs-snippets = "pixi run -e test python scripts/run_docs_snippets.py"
+docs-docstrings = "pixi run -e test python scripts/docstring_audit.py --report"
+docs-docstrings-baseline = "pixi run -e test python scripts/docstring_audit.py --write-baseline"
+docs-docstrings-check = "pixi run -e test python scripts/docstring_audit.py --check"
+docs-anchors = "python scripts/check_reference_anchors.py"
+docs-contract = "pixi run docs-build && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run docs-anchors && pixi run docs-examples-check && pixi run docs-bench-tables-check && pixi run docs-docstrings-check && pixi run docs-snippets && pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py tests/test_docs_coverage.py tests/test_docs_reference.py tests/test_docs_claims.py tests/test_docstrings.py -q"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 
 audit-refactor-cohesion = "pixi run -e default -- python scripts/audit_refactor_cohesion.py"
@@ -115,9 +129,12 @@ pyright = ">=1.1.350"
 pytest-xdist = ">=3.0"
 requests = ">=2.28"
 
-# Documentation feature: static site generator for the published docs.
+# Documentation feature: static site generator + Python API reference.
 [feature.docs.dependencies]
-zensical = ">=0.0.61"
+zensical = ">=0.0.71,<0.1"
+
+[feature.docs.pypi-dependencies]
+mkdocstrings-python = ">=1.16,<2"
 
 # Benchmark feature with additional dependencies
 [feature.cuda]

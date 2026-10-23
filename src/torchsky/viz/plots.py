@@ -100,7 +100,8 @@ def plot_pseudo_rgb(
         stretch: ``asinh`` (default), ``linear``, ``log`` or ``sqrt``.
         ax: Optional matplotlib axes; when omitted a themed figure is created.
         theme: ``dark`` (default) or ``paper``.
-        title/subtitle: Figure headline and quieter second line.
+        title: Figure headline.
+        subtitle: Quieter second line under the headline.
         percentile: Display limits in percentiles of the finite data.
         show_band_key: Print the wavelength range of each channel.
         save: Path to write the figure; returns the axes either way.
@@ -231,13 +232,16 @@ def plot_pixel_spectrum(
     Args:
         cube: 3D data cube tensor.
         spectral_axis: SpectralAxis for the spectral dimension.
-        y, x: Pixel coordinates of the spectrum (spatial axes in y, x order).
+        y: Row coordinate of the spectrum in pixel space.
+        x: Column coordinate of the spectrum in pixel space.
         spectral_axis_index: Dimension index of the spectral axis (0, 1 or 2).
         ax: Optional matplotlib axes; a themed figure is created when omitted.
         theme: ``dark`` (default) or ``paper``.
-        title/subtitle: Figure headline and quieter second line.
+        title: Figure headline.
+        subtitle: Quieter second line under the headline.
         label: Legend label for the spectrum; defaults to the pixel position.
-        legend/grid: Toggle the legend and graticule.
+        legend: Toggle the legend.
+        grid: Toggle the graticule.
         save: Path to write the figure.
         dpi: Output resolution used when creating/saving the figure.
         kwargs: Forwarded to ``plot``.

@@ -196,7 +196,7 @@ from torchsky.sphere import HealSparseMap
 sparse = HealSparseMap(nside=64, nest=True, pixels=pix_tensor, values=val_tensor)
 sparse = HealSparseMap.from_dense(dense_map, nside=64, nest=True)
 
-sparse.coverage_fraction
+sparse.coverage_mask
 sparse.to_dense()
 sparse.interpolate(lon_deg=lon, lat_deg=lat, method='bilinear')
 sparse.ud_grade(nside_out=32)
@@ -415,9 +415,10 @@ semantics through this adapter.
 
 Spin-weighted map → alm transform. Input `maps` shape must be `(2, npix)`.
 
-### `alm2map_spin(alm_plus, alm_minus, nside, spin, *, lmax=None, mmax=None, nest=False)`
+### `alm2map_spin(alms, nside, spin, *, lmax=None, mmax=None, nest=False)`
 
-Synthesize two spin-component maps from `(alm_plus, alm_minus)` coefficient pairs.
+Synthesize a `(2, npix)` spin-component map pair from an `(alm_plus, alm_minus)`
+tuple of coefficients.
 
 ### Coefficient Utilities
 
@@ -622,10 +623,10 @@ are recorded in the harness.
 ## See Also
 
 - [healpy documentation](https://healpy.readthedocs.io/)
-- [HEALPix home page](https://healpix.jpl.nasa.gov/)
+- [HEALPix home page](https://healpix.sourceforge.io/)
 - [hpgeom](https://github.com/LSSTDESC/hpgeom)
 - [astropy-healpix](https://astropy-healpix.readthedocs.io/)
 - [healsparse](https://healsparse.readthedocs.io/)
 - [spherical-geometry](https://github.com/spacetelescope/spherical_geometry)
-- [API guide](api.md)
-- [Scientific evaluation ownership](benchmarks.md)
+- [API reference](reference/sphere.md)
+- [Scientific evaluation ownership](evaluation/benchmarks.md)

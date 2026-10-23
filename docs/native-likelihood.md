@@ -133,7 +133,7 @@ The NLL now uses separate prior and observation-conditioned modal polynomial sum
 
 Derivative requests fail closed when modal reference scales or degree-multiplied curvature intermediates exceed the dtype range. This contract is conservative: at rate `1e-6`, observed values `±1000` and unit gain/read variance, a finite final derivative still rejects because a reference scale underflows. A tested Float32 shifted-mode case also rejects despite a representable final Hessian; Float64 evaluates it. In these domains, no-grad/inference values remain available from the same retained law's log sums. This is not a universally certified derivative engine. Forward JVP under no-grad still counts as a derivative request.
 
-The observed NLL Hessian need not be positive semidefinite: the two-count law at rate `0.2`, observation `0.3` and unit gain/variance has negative rate curvature. Do not substitute it directly for an expected Fisher information or claim calibrated covariance from its inverse. [Positive-rate tests](../tests/test_poisson_gaussian_positive_nll.py) independently check finite-polynomial mixed Hessians/JVPs, closed-form tiny-rate scores, shifted/wide supports and range failures.
+The observed NLL Hessian need not be positive semidefinite: the two-count law at rate `0.2`, observation `0.3` and unit gain/variance has negative rate curvature. Do not substitute it directly for an expected Fisher information or claim calibrated covariance from its inverse. [Positive-rate tests](https://github.com/astroai/torchsky/blob/main/tests/test_poisson_gaussian_positive_nll.py) independently check finite-polynomial mixed Hessians/JVPs, closed-form tiny-rate scores, shifted/wide supports and range failures.
 
 ## Native physical single-read likelihood
 

@@ -23,7 +23,7 @@ REQUIRED_TASKS: Mapping[str, tuple[str, ...]] = {"audit-refactor-cohesion": ("sc
 
 REQUIRED_FILES = (
     "docs/architecture.md",
-    "docs/benchmarks.md",
+    "docs/evaluation/benchmarks.md",
     "docs/map.md",
     "docs/field.md",
     "docs/scene.md",
@@ -32,7 +32,7 @@ REQUIRED_FILES = (
     "notes/planned.md",
 )
 
-DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {'docs/benchmarks.md': ('torchsky-harness', 'Torchsky retains production implementations'), 'docs/map.md': ('ObservationOperatorBundle', 'LearnedInstrumentOperator', 'ConstrainedKernelPSF'), 'docs/field.md': ('field.fit', 'field.render', 'field.sample', 'operator_constrained'), 'docs/architecture.md': ('scene', 'world', 'io')}
+DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {'docs/evaluation/benchmarks.md': ('torchsky-harness', 'Torchsky retains production implementations'), 'docs/map.md': ('ObservationOperatorBundle', 'LearnedInstrumentOperator', 'ConstrainedKernelPSF'), 'docs/field.md': ('field.fit', 'field.render', 'field.sample', 'operator_constrained'), 'docs/architecture.md': ('scene', 'world', 'io')}
 
 REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
     "src/torchsky/field/__init__.py": (

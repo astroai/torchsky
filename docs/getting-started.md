@@ -4,14 +4,11 @@ This is the shortest path through the main `torchsky` surfaces.
 
 ## Install
 
-```bash
-pip install torchsky
-```
-
-Package metadata supports Python `>=3.12` and PyTorch `>=2.13`; native wheels
-enforce their compiled PyTorch ABI at import. Install `torchfits`
-alongside torchsky for FITS-backed workflows. See [install.md](install.md) for
-source builds, Pixi contributor setup, and optional integrations.
+The 0.4.0 line is not on PyPI yet; [install.md](install.md) covers the release
+wheel, source build, and Pixi paths. Package metadata supports Python `>=3.12`
+and PyTorch `>=2.13`; native wheels enforce their compiled PyTorch ABI at
+import. `torchfits>=1.0` is a required runtime dependency for FITS-backed
+workflows and is installed with torchsky.
 
 ## Read FITS Data
 
@@ -102,4 +99,4 @@ For details, see [scene.md](scene.md).
 
 - [examples.md](examples.md) for runnable scripts.
 - [compatibility.md](compatibility.md) for migration from common astronomy libraries.
-- [benchmarks.md](benchmarks.md) for validation and performance surfaces.
+- [benchmarks.md](evaluation/benchmarks.md) for validation and performance surfaces.

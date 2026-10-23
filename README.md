@@ -53,7 +53,7 @@ and scorecards are maintained in the sibling
 [`torchsky-harness`](https://github.com/astroai/torchsky-harness) repository.
 Torchsky retains bounded package tests and performance smoke checks for its own
 runtime paths. FITS image/table throughput belongs to `torchfits`. See the
-[scientific evaluation guide](docs/benchmarks.md) for the ownership boundary.
+[scientific evaluation guide](docs/evaluation/benchmarks.md) for the ownership boundary.
 
 Current release-candidate evidence (same-machine, reference comparisons):
 
@@ -189,11 +189,7 @@ For more information, see the [Contributing Guide](docs/contributing.md).
 - [Examples](docs/examples.md) &mdash; Runnable scripts, gated by `pixi run examples`.
 
 ### API Reference
-- [API Router](docs/api.md) &mdash; Map of goals to namespaces and reference pages.
-- [WCS](docs/api-wcs.md), [Sphere/HEALPix](docs/api-sphere.md), [Map](docs/api-map.md),
-  [Field](docs/api-field.md), [Catalogs](docs/api-catalogs.md),
-  [Spectral](docs/api-spectral.md), [Scene](docs/api-scene.md),
-  [Runtime](docs/api-runtime.md).
+- [API reference](docs/reference/index.md) &mdash; Generated signature-level reference for every public namespace.
 
 ### Core Modules
 - [I/O Boundary Guide](docs/io.md) &mdash; `torchfits` integration and tensor/metadata contracts.
@@ -215,7 +211,7 @@ For more information, see the [Contributing Guide](docs/contributing.md).
 - [CLI Guide](docs/cli.md) &mdash; Command-line query, print, and viz tools.
 - [Visualization Guide](docs/viz.md) &mdash; Browser sky/HiPS server.
 - [Ecosystem Compatibility Matrix](docs/compatibility.md) &mdash; AST, astropy, healpy interop boundaries.
-- [Benchmarks Guide](docs/benchmarks.md) &mdash; Command lines, runs, and correctness gates.
+- [Benchmarks Guide](docs/evaluation/benchmarks.md) &mdash; Command lines, runs, and correctness gates.
 - [Contributing Guidelines](docs/contributing.md) &mdash; PR policy and code rules.
 - [Release Checklist](docs/release.md) &mdash; Step-by-step maintainer runbook.
 - [Agent & Maintainer Operating Guide](AGENTS.md) &mdash; Engineering guidelines for agents.

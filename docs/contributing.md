@@ -107,7 +107,7 @@ Scientific benchmarks, exhaustive parity, real-data validation, comparator
 environments, and CANFAR campaigns run from
 [`torchsky-harness`](https://github.com/astroai/torchsky-harness). Core changes
 retain bounded correctness and performance smoke contracts. See the
-[evaluation guide](benchmarks.md) for the boundary and harness methodology for
+[evaluation guide](evaluation/benchmarks.md) for the boundary and harness methodology for
 run instructions.
 
 ## Documentation Policy
@@ -119,9 +119,10 @@ behavior belongs in `docs/`.
 - Root `README.md`: user-facing only.
 - `docs/index.md`: site home and documentation map.
 - `docs/quickstart.md`: the shortest working path.
-- `docs/api.md`: public API guide and namespace router.
+- `docs/reference/index.md`: generated public API router; page identity and
+  ordering live in `docs/reference/_registry.toml`.
 - `docs/changelog.md`: release notes.
-- `docs/examples.md` and `docs/benchmarks.md`: operational guides.
+- `docs/examples.md` and `docs/evaluation/benchmarks.md`: operational guides.
 - `notes/planned.md`: the single tracked plan for work that is committed for a
   future release.
 - Untracked research, reviews, archives, and brainstorming stay outside git
@@ -136,8 +137,10 @@ pixi run docs-contract  # strict build + offline link check + docs tests
 ```
 
 If a PR changes a public API, update the relevant namespace guide and
-`docs/api.md` routing in the same PR. FITS I/O documentation and benchmarks
-belong in `torchfits`; update only the cross-package contract here.
+`docs/reference/_registry.toml` routing in the same PR, then run
+`pixi run docs-reference`. See [authoring.md](authoring.md) for the page and
+snippet conventions. FITS I/O documentation and benchmarks belong in
+`torchfits`; update only the cross-package contract here.
 
 ## Release Checklist (Maintainers)
 

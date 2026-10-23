@@ -41,7 +41,7 @@ Runnable references:
 
 ## `field.Observation`
 
-Defined in [`types.py`](../src/torchsky/map/field/types.py). Important fields:
+Defined in [`types.py`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/types.py). Important fields:
 
 | Field | Role |
 |-------|------|
@@ -66,7 +66,7 @@ header edits or image-shape changes recompute RA/Dec grids on the next render.
 
 ## `field.Domain`
 
-[`FieldDomain`](../src/torchsky/map/field/types.py) normalizes sky + wavelength coordinates inside the network:
+[`FieldDomain`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/types.py) normalizes sky + wavelength coordinates inside the network:
 
 - **`center_ra_deg`, `center_dec_deg`** — patch center (degrees).
 - **`spatial_scale_deg`** — characteristic sky extent (degrees); used to normalize tangent-plane offsets.
@@ -137,7 +137,7 @@ model = field.preset("fast", domain, hidden_dim=64, hidden_layers=2)
 
 Exact constructor kwargs vary by kind (hidden sizes, grid resolution, Fourier frequencies, etc.). Start from **`example_map_field_survey_split.py`** and the public constructors, then tune. Scientific model comparisons and real-data tuning are documented in the [harness](https://github.com/astroai/torchsky-harness).
 
-**Capacity hints:** **`spectral_data_budget`** / **`spectral_model_capacity_hints`** in [`spectral_budget.py`](../src/torchsky/map/field/spectral_budget.py) suggest model families from your observation list.
+**Capacity hints:** **`spectral_data_budget`** / **`spectral_model_capacity_hints`** in [`spectral_budget.py`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/spectral_budget.py) suggest model families from your observation list.
 
 ## Spatially, spectrally, and temporally varying observation models
 
@@ -445,7 +445,7 @@ returns `None` only when `steps=0`.
 
 - **`field.render(model, observation, ...)`** — mean prediction on the observation’s pixel grid (bandpass integral + PSF + backgrounds via the operator bundle).
 
-  Optional **`exposure_pose`**: an **`ExposurePose`** module applied to sky coordinates before `world_to_pixel` (see [`exposure_pose.py`](../src/torchsky/map/exposure_pose.py)). Use **`None`** for fixed WCS.
+  Optional **`exposure_pose`**: an **`ExposurePose`** module applied to sky coordinates before `world_to_pixel` (see [`exposure_pose.py`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/exposure_pose.py)). Use **`None`** for fixed WCS.
 
   Set **`spatial_sampling="gauss_legendre_2x2"`** to render the detector-pixel
   average from four Gauss–Legendre samples instead of the default pixel-centre
@@ -496,7 +496,7 @@ not a default model path.
 
 ## Bundle adjustment / alignment (gauge-aware)
 
-**`ExposurePose`** ([`map/exposure_pose.py`](../src/torchsky/map/exposure_pose.py)) adds a small **learnable** tangent-plane residual per exposure: translation (`delta_ra_deg`, `delta_dec_deg`), in-plane rotation (`delta_theta_rad`), and log-scale (`delta_log_scale`). Defaults are zero ⇒ identity.
+**`ExposurePose`** ([`map/exposure_pose.py`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/exposure_pose.py)) adds a small **learnable** tangent-plane residual per exposure: translation (`delta_ra_deg`, `delta_dec_deg`), in-plane rotation (`delta_theta_rad`), and log-scale (`delta_log_scale`). Defaults are zero ⇒ identity.
 
 For the common case, pass **`refine_poses=True`** to **`field.fit(...)`** /
 **`fit_field_model(...)`**. This creates one pose per observation, freezes the

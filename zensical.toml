@@ -7,8 +7,20 @@ repo_name = "astroai/torchsky"
 edit_uri = "edit/main/docs/"
 copyright = "Copyright &copy; 2026 torchsky contributors"
 
+# Authoring inputs that live beside the pages but are not published.
+exclude_docs = """
+reference/_registry.toml
+evaluation/_benchmarks_template.md
+tier1.txt
+"""
+
 extra_css = [
   "stylesheets/extra.css",
+]
+
+extra_javascript = [
+  "javascripts/mathjax.js",
+  "https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js",
 ]
 
 nav = [
@@ -17,46 +29,93 @@ nav = [
     "install.md",
     "quickstart.md",
     "getting-started.md",
+    "migration.md",
     "compatibility.md",
   ]},
   {"User Guide" = [
-    {"Coordinates and WCS" = ["wcs.md", "coordinates.md"]},
-    {"Sphere and HEALPix" = ["sphere.md"]},
-    {"Catalogs" = ["catalogs.md", "catalogue-foundations.md"]},
-    {"Mapmaking" = ["map.md", "scene.md"]},
-    {"Spectral data" = ["spectral.md", "photometry-encoders.md"]},
-    {"Fields and models" = ["field.md", "field-formulation.md", "encoders.md", "ml.md"]},
-    {"Observation operators" = [
+    {"Coordinates and WCS" = ["wcs.md", "coordinates.md", "astrometry.md"]},
+    {"Sphere and HEALPix" = ["sphere.md", "sht.md", "moc-and-sparse.md"]},
+    {"Catalogs" = ["catalogs.md", "crossmatch.md", "catalogue-foundations.md"]},
+    {"Mapmaking" = ["map.md", "cubes.md", "healpix-maps.md"]},
+    {"Scenes and operators" = [
+      "scene.md",
       "psf-response-conventions.md",
-      "astrometric_calibration.md",
-      "implicit_forward.md",
       "native-likelihood.md",
+      "implicit_forward.md",
+    ]},
+    {"Fields and models" = [
+      "field.md",
+      "field-formulation.md",
+      "encoders.md",
+      "photometry-encoders.md",
+      "ml.md",
+    ]},
+    {"Spectral and photometry" = [
+      "spectral.md",
+      "spectrophotometry.md",
+      "extinction.md",
+      "cosmology.md",
     ]},
     {"I/O boundary" = ["io.md", "table.md"]},
-    {"CLI and visualization" = ["cli.md", "viz.md"]},
-    "examples.md",
+    {"CLI and visualization" = ["cli.md", "cli-recipes.md", "viz.md"]},
+    {"Gallery and examples" = ["gallery.md", "examples.md"]},
   ]},
-  {"API Reference" = [
-    "api.md",
-    "api-wcs.md",
-    "api-sphere.md",
-    "api-map.md",
-    "api-field.md",
-    "api-catalogs.md",
-    "api-spectral.md",
-    "api-scene.md",
-    "api-runtime.md",
+  {"Reference" = [
+    "reference/index.md",
+    "reference/torchsky.md",
+    {"Core namespaces" = [
+      "reference/wcs.md",
+      "reference/coords.md",
+      "reference/sphere.md",
+      "reference/sphere-healpix.md",
+      "reference/catalogs.md",
+      "reference/map.md",
+      "reference/spectral.md",
+      "reference/spectrophotometry.md",
+      "reference/extinction.md",
+      "reference/cosmology.md",
+      "reference/redshift.md",
+      "reference/log-lambda.md",
+      "reference/transforms.md",
+      "reference/encoders.md",
+      "reference/quality.md",
+    ]},
+    {"Experimental namespaces" = [
+      "reference/scene.md",
+      "reference/field.md",
+      "reference/map-likelihood.md",
+      "reference/map-query.md",
+      "reference/map-evidence.md",
+      "reference/map-operators-continuous-response.md",
+      "reference/map-operators-detector-response.md",
+      "reference/map-operators-epsf.md",
+      "reference/map-operators-nuisance.md",
+      "reference/map-operators-pixel-calibration.md",
+      "reference/map-field-gaussian.md",
+      "reference/map-field-joint-native-likelihood.md",
+      "reference/map-field-native-integrated-read.md",
+      "reference/map-field-native-response.md",
+      "reference/viz.md",
+    ]},
+    {"Compatibility modules" = [
+      "reference/sphere-compat.md",
+      "reference/sphere-healpy.md",
+    ]},
+    "reference/exceptions.md",
+    "reference/runtime-contract.md",
     "architecture.md",
   ]},
   {"Evaluation" = [
-    "benchmarks.md",
+    "evaluation/benchmarks.md",
+    "evaluation/parity.md",
+    "evaluation/performance.md",
   ]},
   {"Project" = [
     "changelog.md",
     "roadmap.md",
     "release.md",
     "contributing.md",
-    "modernization-audit-report.md",
+    "authoring.md",
   ]},
 ]
 
@@ -121,3 +180,18 @@ emoji_generator = "zensical.extensions.emoji.to_svg"
 
 [project.markdown_extensions.toc]
 permalink = true
+
+[project.markdown_extensions.pymdownx.arithmatex]
+generic = true
+
+# ── Plugins ─────────────────────────────────────────────────
+
+[project.plugins.mkdocstrings]
+default_handler = "python"
+enable_inventory = false
+
+[project.plugins.mkdocstrings.handlers.python]
+options = { allow_inspection = true, docstring_options = { ignore_init_summary = true }, docstring_section_style = "table", filters = ["!^_"], inherited_members = false, merge_init_into_class = true, separate_signature = true, show_if_no_docstring = true, show_root_heading = true, show_signature_annotations = true, show_source = false, signature_crossrefs = true, summary = { modules = false } }
+paths = ["src"]
+
+[project.plugins.autorefs]

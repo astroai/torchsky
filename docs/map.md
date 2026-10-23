@@ -31,6 +31,9 @@ the implementation still lives under `torchsky.map.field`.
   treated as detector inverse variance only when
   `weight_is_inverse_variance=True`; `weight_path` is explicit inverse variance.
   Default/support/mask-only weights produce no `IVAR` or uncertainty object.
+  When you propagate quality masks yourself, `torchsky.quality.build_weight_product`
+  attaches the inverse-variance, confidence, and mask-polarity semantics instead
+  of leaving a bare array.
 - **Target & Product:** `Target` / `CubeTarget` / `ProductSpec` describe the
   final requested grid and bands.
 - **Value semantics:** `surface_brightness` and `flux` products use different
@@ -253,7 +256,7 @@ product, gradient, adjoint, and device-contract tests with the core operators.
 - [Field survey split](published-examples/example_map_field_survey_split.py)
 - [Spin harmonic inverse solve](published-examples/example_map_spin_harmonic_inverse.py)
 
-See [examples.md](examples.md#core-examples) for the full map example index.
+See [examples.md](examples.md) for the full example index.
 
 ## Compatibility And Validation
 
@@ -264,6 +267,6 @@ Bounded package contracts:
 - `tests/test_map_cube_spectral_axis.py`
 
 Scientific parity and performance evaluation live in the harness. See
-[benchmarks.md](benchmarks.md) for the ownership boundary and the
-[harness methodology](https://github.com/astroai/torchsky-harness/blob/main/docs/benchmarks.md)
+[benchmarks.md](evaluation/benchmarks.md) for the ownership boundary and the
+[harness methodology](https://github.com/astroai/torchsky-harness/blob/main/docs/evaluation/benchmarks.md)
 for run instructions and evidence policy.

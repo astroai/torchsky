@@ -942,7 +942,8 @@ def plot_sky_grid(
         cmap: any matplotlib colormap name, or a bundled tile palette name.
         stretch: ``asinh`` (default, keeps faint structure visible across a
             high dynamic range), ``linear`` or ``log`` normalization.
-        vmin/vmax: explicit display limits; otherwise ``percentile`` decides.
+        vmin: lower display limit; ``percentile`` decides when omitted.
+        vmax: upper display limit; ``percentile`` decides when omitted.
         unit: colorbar unit; short units of the plotted quantity.
         cbar_label: overrides the colorbar caption entirely.
         colorbar_extend: force colorbar arrow ends; ``None`` derives them from

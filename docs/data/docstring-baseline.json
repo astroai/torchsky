@@ -1,0 +1,322 @@
+{
+  "torchsky.WCS": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.catalogs.BackgroundModel": [
+    "summary"
+  ],
+  "torchsky.catalogs.Catalog": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.catalogs.FailurePolicy": [
+    "summary"
+  ],
+  "torchsky.catalogs.PhotometrySolver": [
+    "summary"
+  ],
+  "torchsky.catalogs.crossmatch_sky": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.coords.apply_refraction": [
+    "summary"
+  ],
+  "torchsky.coords.transform": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.cosmology.FLRW": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.cosmology.comoving_distance": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.extinction.ExtinctionLaw": [
+    "summary"
+  ],
+  "torchsky.extinction.WavelengthUnit": [
+    "summary"
+  ],
+  "torchsky.extinction.apply_extinction": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.field.FieldModelKind": [
+    "summary"
+  ],
+  "torchsky.field.PresetName": [
+    "summary"
+  ],
+  "torchsky.field.RenderTarget": [
+    "summary"
+  ],
+  "torchsky.field.SpectralCapacityProfile": [
+    "summary"
+  ],
+  "torchsky.field.estimate_domain": [
+    "summary"
+  ],
+  "torchsky.field.fit": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.field.load_artifact": [
+    "summary"
+  ],
+  "torchsky.field.model": [
+    "Args",
+    "Examples",
+    "Returns",
+    "summary"
+  ],
+  "torchsky.field.render": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.field.save_artifact": [
+    "summary"
+  ],
+  "torchsky.field.spectral_data_budget": [
+    "summary"
+  ],
+  "torchsky.map.Observation": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.map.coadd": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.map.coadd_cube": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.map.coadd_healpix": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.map.plan": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.map.resample": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.map.stack_product": [
+    "summary"
+  ],
+  "torchsky.quality.build_weight_product": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.redshift.apply_redshift": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.redshift.beta_from_redshift": [
+    "summary"
+  ],
+  "torchsky.redshift.convert_velocity_kind": [
+    "summary"
+  ],
+  "torchsky.redshift.normalize_v_kind": [
+    "summary"
+  ],
+  "torchsky.redshift.one_plus_z_from_kind": [
+    "summary"
+  ],
+  "torchsky.redshift.one_plus_z_from_redshift": [
+    "summary"
+  ],
+  "torchsky.redshift.one_plus_z_from_velocity_kms": [
+    "summary"
+  ],
+  "torchsky.redshift.redshift_from_velocity_kms": [
+    "summary"
+  ],
+  "torchsky.redshift.velocity_kms_from_redshift": [
+    "summary"
+  ],
+  "torchsky.scene.as_scene_representation": [
+    "summary"
+  ],
+  "torchsky.scene.image_observation": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.scene.render": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.scene.sample_image_plane_batched_channels": [
+    "summary"
+  ],
+  "torchsky.scene.target_to_field_observation": [
+    "summary"
+  ],
+  "torchsky.spectral.SpectralAxis": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.spectral.flux_conserving_rebin": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.spectrophotometry.Passband": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.spectrophotometry.PhotometryOutput": [
+    "summary"
+  ],
+  "torchsky.spectrophotometry.WavelengthUnit": [
+    "summary"
+  ],
+  "torchsky.spectrophotometry.synthetic_photometry": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.sphere.MOC": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.sphere.NativeSHTBackend": [
+    "summary"
+  ],
+  "torchsky.sphere.SkyMaskPipe": [
+    "summary"
+  ],
+  "torchsky.sphere.TorchHarmonicsBackend": [
+    "summary"
+  ],
+  "torchsky.sphere.WideBitMask": [
+    "summary"
+  ],
+  "torchsky.sphere.adjoint_synthesize": [
+    "summary"
+  ],
+  "torchsky.sphere.anafast": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.sphere.analyze": [
+    "summary"
+  ],
+  "torchsky.sphere.ang2pix": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.sphere.pix2ang": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.sphere.pseudo_analyze": [
+    "summary"
+  ],
+  "torchsky.sphere.query_disc": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.sphere.query_polygon": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.sphere.synfast": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.sphere.synthesize": [
+    "summary"
+  ],
+  "torchsky.transforms.Compose": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.wcs.AstrometricResidualLadder": [
+    "summary"
+  ],
+  "torchsky.wcs.TabularBoundsMode": [
+    "summary"
+  ],
+  "torchsky.wcs.WCS": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.wcs.apply_refraction": [
+    "summary"
+  ],
+  "torchsky.wcs.fit_affine_2d": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.wcs.fit_bayesian_modes": [
+    "summary"
+  ],
+  "torchsky.wcs.fit_sparse_gp_residual": [
+    "summary"
+  ],
+  "torchsky.wcs.interpretable_residual_modes": [
+    "summary"
+  ],
+  "torchsky.wcs.photometric_log_residuals": [
+    "summary"
+  ],
+  "torchsky.wcs.predict_bayesian_modes": [
+    "summary"
+  ],
+  "torchsky.wcs.propagate_proper_motion": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.wcs.propagate_space_motion": [
+    "Args",
+    "Examples"
+  ],
+  "torchsky.wcs.shadow_update_bayesian_modes": [
+    "summary"
+  ],
+  "torchsky.wcs.solve_astrometry": [
+    "summary"
+  ],
+  "torchsky.wcs.solve_coupled_calibration": [
+    "summary"
+  ],
+  "torchsky.wcs.transform": [
+    "Args",
+    "Examples",
+    "Returns"
+  ],
+  "torchsky.wcs.update_bayesian_modes": [
+    "summary"
+  ]
+}

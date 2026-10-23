@@ -37,7 +37,7 @@ FITS/HDU/table parity and throughput are owned by
 [`torchfits`](https://github.com/astroai/torchfits).
 
 Consult the harness's
-[compatibility and benchmark methodology](https://github.com/astroai/torchsky-harness/blob/main/docs/benchmarks.md)
+[compatibility and benchmark methodology](https://github.com/astroai/torchsky-harness/blob/main/docs/evaluation/benchmarks.md)
 for current comparator requirements and evidence. A passing package test or
 smoke run does not certify cross-library or scientific acceptance.
 

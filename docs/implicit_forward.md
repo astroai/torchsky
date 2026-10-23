@@ -1,6 +1,6 @@
 # Implicit forward modeling (`torchsky.map.field.implicit_forward`)
 
-This note matches the code in [`src/torchsky/map/field/implicit_forward.py`](../src/torchsky/map/field/implicit_forward.py). It describes how to compose a **shared continuous scene** \(F_\theta\) with **per-observation rendering** (bandpass, WCS, PSF—handled by `torchsky.field.render`), optional **spectral kinematics** \(\zeta\), exposure **context** \(c\), and a **modular multi-term loss** \(\sum_s w_s L_s\).
+This note matches the code in [`src/torchsky/map/field/implicit_forward.py`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/implicit_forward.py). It describes how to compose a **shared continuous scene** \(F_\theta\) with **per-observation rendering** (bandpass, WCS, PSF—handled by `torchsky.field.render`), optional **spectral kinematics** \(\zeta\), exposure **context** \(c\), and a **modular multi-term loss** \(\sum_s w_s L_s\).
 
 It does **not** replace [`field.fit`](field.md); use that for full training loops with curricula and diagnostics. Use `implicit_forward` when you want a **small, explicit** scaffold: predict means, apply Charbonnier (robust L1-like) losses with masks/weights, and sum over surveys or instruments.
 
@@ -13,7 +13,7 @@ Rendering usually goes through `field.render(model, observation, ...)`; the impl
 
 ## 2. Context `ForwardContext`
 
-[`ForwardContext`](../src/torchsky/map/field/types.py) labels an exposure for models that accept **`forward_context`** in `forward` / `render_bandpass`:
+[`ForwardContext`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/types.py) labels an exposure for models that accept **`forward_context`** in `forward` / `render_bandpass`:
 
 - `survey`, `instrument`, `detector`, `exposure_id`, `time_mjd`, plus `extra: dict`.
 
@@ -21,7 +21,7 @@ Use this when one shared field is conditioned on instrument or survey (e.g. HST 
 
 ## 3. Kinematics `KinematicState`
 
-[`KinematicState`](../src/torchsky/map/field/implicit_forward.py) holds optional **`one_plus_z`**: observed-to-rest wavelength ratio
+[`KinematicState`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/implicit_forward.py) holds optional **`one_plus_z`**: observed-to-rest wavelength ratio
 
 \[
 \lambda_{\mathrm{obs}} = (1+z)\,\lambda_{\mathrm{emit}} .
@@ -29,11 +29,11 @@ Use this when one shared field is conditioned on instrument or survey (e.g. HST 
 
 This is a **user-chosen linear map** on the spectral axis (no embedded cosmology).
 
-When **`rest_frame_scene=True`** in [`predict_observation_mean`](../src/torchsky/map/field/implicit_forward.py), spectral metadata on the observation is scaled by [`scale_observation_for_rest_frame_scene`](../src/torchsky/map/field/implicit_forward.py) so a scene stored in **rest-frame** \(\lambda_{\mathrm{emit}}\) is queried correctly for **observed** bands.
+When **`rest_frame_scene=True`** in [`predict_observation_mean`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/implicit_forward.py), spectral metadata on the observation is scaled by [`scale_observation_for_rest_frame_scene`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/implicit_forward.py) so a scene stored in **rest-frame** \(\lambda_{\mathrm{emit}}\) is queried correctly for **observed** bands.
 
 ## 4. Survey terms `SurveyDataTerm`
 
-[`SurveyDataTerm`](../src/torchsky/map/field/implicit_forward.py) groups:
+[`SurveyDataTerm`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/implicit_forward.py) groups:
 
 - **`name`** — label for logging.
 - **`observations`** — tuple of `field.Observation`.

@@ -56,7 +56,8 @@ torchsky = "torchsky.cli:main"
 
 # Documentation site build (zensical + Material theme).
 docs = [
-    "zensical>=0.0.61",
+    "zensical>=0.0.71,<0.1",
+    "mkdocstrings-python>=1.16,<2",
 ]
 
 # Browser-based visualization server: torchsky viz --root /data --port 8822

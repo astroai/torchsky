@@ -32,6 +32,8 @@ _skbuild/
 data/
 !tests/data/
 !tests/data/radio_mm_stub.fits
+!docs/data/
+!docs/data/**
 examples/data_*/
 data_wcs_examples/
 
@@ -48,6 +50,8 @@ examples/**/*.fits.fz
 *.log*
 *.json
 !docs/api-manifest.json
+!docs/data/reference_benchmarks.json
+!docs/data/docstring-baseline.json
 torchfits_exhaustive_*
 pytest_filtered.log
 

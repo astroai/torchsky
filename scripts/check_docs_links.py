@@ -98,7 +98,18 @@ def _resolve_local(html_file: Path, href: str, base_path: str) -> Path | None:
             path_part = path_part[len(base_path) :]
         target = SITE_DIR / path_part.lstrip("/")
     else:
-        target = (html_file.parent / path_part).resolve()
+        # Resolve with URL semantics: a pretty-URL page lives at /dir/ and its
+        # relative links are authored against that URL. ``..`` segments clamp
+        # at the site root instead of escaping to the repository root.
+        base = html_file.parent
+        for part in Path(path_part).parts:
+            if part in {".", ""}:
+                continue
+            if part == "..":
+                base = base.parent if base != SITE_DIR else SITE_DIR
+            else:
+                base = base / part
+        target = base
 
     return target
 

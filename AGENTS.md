@@ -297,7 +297,7 @@ Scientific benchmark surfaces live in:
 
 - the sibling [`torchsky-harness`](https://github.com/astroai/torchsky-harness)
   repository's `benchmarks/` and `campaigns/` trees
-- `docs/benchmarks.md`
+- `docs/evaluation/benchmarks.md`
 - upstream-derived benchmark and parity gates linked from the scientific
   evaluation guide
 
@@ -325,6 +325,11 @@ Before finishing a non-trivial change, check:
 - Update user-facing docs if public behavior changes.
 - Update benchmark docs when benchmark surfaces or benchmark policy change.
 - Keep repository guidance in this file aligned with actual practice.
+- Follow `docs/authoring.md`: guides are hand-written, `docs/reference/*.md`
+  is generated from `docs/reference/_registry.toml` by `scripts/gen_reference.py`
+  (never hand-edit it), and runnable snippets carry `<!-- docs: run -->`.
+- For documentation work, run `pixi run docs-contract` (strict build, local
+  links, anchors, generated pages, snippet execution, and the docs tests).
 
 ## Agent PR hygiene and lint gates
 

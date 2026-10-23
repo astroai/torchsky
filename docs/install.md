@@ -1,25 +1,29 @@
 # Installation
 
-`torchsky` can be installed via pip or built from source.
+`torchsky` can be installed from a release wheel, built from source, or used
+through the repository's Pixi environment.
 
-## Standard Installation (Pip)
+## Release status
 
-The easiest way to install `torchsky` is using `pip`:
+!!! warning "0.4.0 is not on PyPI yet"
+    The current development line is **0.4.0**. Published `pip install torchsky`
+    installs the older 0.3.x line, which does not match this documentation.
+    Install the 0.3.x release only if you are intentionally using that API;
+    otherwise build a 0.4.0 wheel from this repository (see below) or use Pixi.
+    This note is updated in the same change that publishes 0.4.0.
+
+`torchsky` does not own or bundle CFITSIO. [`torchfits`](https://github.com/astroai/torchfits)
+is a required runtime dependency for FITS file and table I/O and is installed
+together with torchsky:
 
 ```bash
-pip install torchsky
+pip install "torchsky @ file:///path/to/torchsky-0.4.0-*.whl"
 ```
 
-Pre-built wheels are available for Linux (x86_64, aarch64) and macOS (x86_64,
-arm64). Torchsky does not own or bundle CFITSIO. Install
-[`torchfits`](https://github.com/astroai/torchfits) for FITS file and table I/O:
-
-```bash
-pip install torchsky torchfits
-```
-
-The supported integration baseline is `torchfits 1.0.0` or newer. Torchsky
-keeps thin compatibility import paths for one migration release.
+Release wheels are built for Linux (x86_64, aarch64) and macOS arm64 on the
+CPython versions listed in the wheel workflow; building from source is supported
+on the platforms in `pyproject.toml`. The supported integration baseline is
+`torchfits 1.0.0` or newer.
 
 Package metadata requires Python **>=3.12** and
 [PyTorch](https://pytorch.org/) **>=2.13**, with no upper dependency caps.

@@ -263,7 +263,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         cpdis2: DistortionLookupTable | Any | None = None,
         det2im1: DistortionLookupTable | Any | None = None,
         det2im2: DistortionLookupTable | Any | None = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         """
         Initialize WCS object.
@@ -3001,7 +3001,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         core_fn = self._compiled_world_to_pixel_2d_fn or self._world_to_pixel_2d_core
         return core_fn(ra, dec, float(origin))
 
-    def compile(self, **kwargs):
+    def compile(self, **kwargs: Any) -> "WCS":
         """
         Wrap the pure-Python 2D spatial cores in ``torch.compile``.
 

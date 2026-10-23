@@ -25,14 +25,10 @@ jobs:
           pixi-version: latest
       - name: Install docs environment
         run: pixi install --frozen -e docs
-      - name: Build site (strict, examples synced)
-        run: pixi run docs-build
-      - name: Local link check (offline)
-        run: pixi run -e docs python scripts/check_docs_links.py --skip-external
       - name: Install test environment
         run: pixi install --frozen -e test
-      - name: Docs contract tests
-        run: pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py -q
+      - name: Docs contract (strict build, links, anchors, generated pages, snippets, tests)
+        run: pixi run docs-contract
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

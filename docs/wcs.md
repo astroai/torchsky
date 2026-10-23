@@ -225,4 +225,4 @@ performance measurements are maintained in
 [torchsky-harness](https://github.com/astroai/torchsky-harness).
 
 See [compatibility.md](compatibility.md) for the ownership boundary and
-[benchmarks.md](benchmarks.md) for the harness workflow.
+[benchmarks.md](evaluation/benchmarks.md) for the harness workflow.

@@ -181,7 +181,7 @@ tensors, on whatever device you ask for.
 
     ---
 
-    [API guide](api.md) · [Architecture](architecture.md) ·
+    [API reference](reference/index.md) · [Architecture](architecture.md) ·
     [Compatibility](compatibility.md) ·
     [PSF conventions](psf-response-conventions.md)
 

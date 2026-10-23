@@ -68,14 +68,10 @@ jobs:
         pixi-version: latest
     - name: Install docs environment
       run: pixi install --frozen -e docs
-    - name: Build site (strict)
-      run: pixi run docs-build
-    - name: Local link check (offline)
-      run: pixi run -e docs python scripts/check_docs_links.py --skip-external
     - name: Install test environment
       run: pixi install --frozen -e test
-    - name: Docs contract tests
-      run: pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py tests/test_docs_coverage.py -q
+    - name: Docs contract (strict build, links, anchors, generated pages, snippets, tests)
+      run: pixi run docs-contract
     - uses: actions/upload-artifact@v4
       with:
         name: torchsky-docs-site
