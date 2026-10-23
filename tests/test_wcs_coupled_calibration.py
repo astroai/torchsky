@@ -14,6 +14,7 @@ from torchsky.wcs import (
     TangentPlaneFrame,
     photometric_log_residuals,
 )
+from torchsky.wcs.calibration import _PhotometrySolver
 
 
 DTYPE = torch.float64
@@ -331,6 +332,102 @@ def test_missing_band_holdouts_disconnected_gauges_and_association_rejection() -
                 )
             ],
         )
+
+
+def test_photometric_components_match_order_under_many_row_permutations() -> None:
+    frame = TangentPlaneFrame(120.0, 20.0)
+    component_count = 48
+    source_count = 3 * component_count
+    source_ids = torch.arange(source_count)
+    source = torch.stack(
+        (
+            torch.arange(source_count, dtype=DTYPE),
+            torch.arange(source_count, dtype=DTYPE).remainder(11),
+        ),
+        dim=-1,
+    )
+    permutation = torch.tensor([2, 0, 1])
+
+    def make_graph(permute: bool) -> CoupledCalibrationGraph:
+        observations = []
+        blocks = []
+        for component in range(component_count):
+            selected = source_ids[3 * component : 3 * component + 3]
+            if permute:
+                selected = selected[permutation]
+            band = ("g", "r")[component % 2]
+            for suffix in ("a", "b"):
+                exposure_id = f"c{component}{suffix}"
+                observations.append(
+                    AstrometricObservation(
+                        exposure_id,
+                        source[selected],
+                        selected,
+                        torch.eye(2, dtype=DTYPE).expand(3, 2, 2) * 0.01**2,
+                        sky_position=_world(frame, source[selected]),
+                        covariance_space="tangent",
+                    )
+                )
+                blocks.append(
+                    PhotometricMeasurementBlock(
+                        exposure_id,
+                        selected,
+                        band,
+                        torch.full((3,), 10.0 + component, dtype=DTYPE),
+                        torch.full((3,), 0.01, dtype=DTYPE),
+                    )
+                )
+        astrometry = AstrometricMatchGraph(observations, tangent_frame=frame)
+        referenced = source_ids[::9]
+        reference_flux = torch.full((referenced.numel(), 2), float("nan"), dtype=DTYPE)
+        reference_variance = torch.full_like(reference_flux, float("nan"))
+        for row, component in enumerate(range(0, component_count, 3)):
+            band = component % 2
+            reference_flux[row, band] = 10.0 + component
+            reference_variance[row, band] = 0.01
+        reference = PhotometricReference(
+            referenced,
+            ("g", "r"),
+            reference_flux,
+            reference_variance,
+        )
+        return CoupledCalibrationGraph(astrometry, blocks, reference=reference)
+
+    config = CoupledCalibrationConfig(
+        fit_extinction=False,
+        fit_cloud=False,
+        fit_star_flat=False,
+        fit_color_terms=False,
+    )
+    baseline = _PhotometrySolver(make_graph(False), config)
+    permuted = _PhotometrySolver(make_graph(True), config)
+    expected_exposures = tuple(
+        (2 * component, 2 * component + 1)
+        for component in range(component_count)
+    )
+    expected_components = tuple(
+        tuple(
+            2 * source_index + component % 2
+            for source_index in range(3 * component, 3 * component + 3)
+        )
+        for component in range(component_count)
+    )
+    expected_anchored = tuple(component % 3 == 0 for component in range(component_count))
+
+    assert baseline.components == expected_components
+    assert baseline.component_exposures == expected_exposures
+    assert baseline.component_anchored == expected_anchored
+    assert baseline.gauge_exposure_indices == tuple(
+        exposures[0]
+        for exposures, anchored in zip(
+            expected_exposures, expected_anchored, strict=True
+        )
+        if not anchored
+    )
+    assert permuted.components == baseline.components
+    assert permuted.component_exposures == baseline.component_exposures
+    assert permuted.component_anchored == baseline.component_anchored
+    assert permuted.gauge_exposure_indices == baseline.gauge_exposure_indices
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])

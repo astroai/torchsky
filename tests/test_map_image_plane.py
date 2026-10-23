@@ -739,6 +739,116 @@ def test_coadd_image_plane_spatial_tiles_are_exposure_major(
     torch.testing.assert_close(tiled.overlap_count, expected.overlap_count)
 
 
+def test_tiled_target_cache_hits_misses_admission_and_zero_capacity() -> None:
+    header = _simple_header()
+    target_header = {**header, "CRPIX1": float(header["CRPIX1"]) + 0.2}
+    observations = [
+        ImageObservation(
+            data=torch.arange(64, dtype=torch.float32).reshape(8, 8) + index,
+            header=header,
+            weight=1.0 + index,
+            weight_is_inverse_variance=True,
+        )
+        for index in range(4)
+    ]
+
+    cached = coadd_image_plane(
+        observations,
+        target_header=target_header,
+        spatial_tile_hw=(4, 4),
+        target_cache_capacity=4,
+    )
+    uncached = coadd_image_plane(
+        observations,
+        target_header=target_header,
+        spatial_tile_hw=(4, 4),
+        target_cache_capacity=0,
+    )
+    evicted = coadd_image_plane(
+        observations,
+        target_header=target_header,
+        spatial_tile_hw=(4, 4),
+        target_cache_capacity=2,
+    )
+
+    assert cached.provenance is not None
+    assert uncached.provenance is not None
+    assert evicted.provenance is not None
+    assert cached.provenance["target_tile_cache"] == {
+        "capacity": 4,
+        "size": 4,
+        "hits": 12,
+        "misses": 4,
+        "evictions": 0,
+        "admission_skips": 0,
+    }
+    assert uncached.provenance["target_tile_cache"] == {
+        "capacity": 0,
+        "size": 0,
+        "hits": 0,
+        "misses": 16,
+        "evictions": 0,
+        "admission_skips": 0,
+    }
+    assert evicted.provenance["target_tile_cache"] == {
+        "capacity": 2,
+        "size": 2,
+        "hits": 6,
+        "misses": 10,
+        "evictions": 0,
+        "admission_skips": 8,
+    }
+    torch.testing.assert_close(cached.data, uncached.data)
+    torch.testing.assert_close(cached.weight, uncached.weight)
+    torch.testing.assert_close(cached.overlap_count, uncached.overlap_count)
+    torch.testing.assert_close(cached.context, uncached.context)
+    assert cached.inverse_variance is not None and uncached.inverse_variance is not None
+    assert cached.correlation_factor is not None
+    assert uncached.correlation_factor is not None
+    torch.testing.assert_close(cached.inverse_variance, uncached.inverse_variance)
+    torch.testing.assert_close(cached.correlation_factor, uncached.correlation_factor)
+    torch.testing.assert_close(evicted.data, uncached.data)
+
+
+def test_tiled_target_cache_preserves_source_gradients() -> None:
+    header = _simple_header()
+    target_header = {**header, "CRPIX2": float(header["CRPIX2"]) - 0.25}
+    base = torch.linspace(0.5, 3.0, 64).reshape(8, 8)
+
+    def evaluate(capacity: int) -> tuple[torch.Tensor, torch.Tensor]:
+        source = base.clone().requires_grad_(True)
+        result = coadd_image_plane(
+            [
+                ImageObservation(data=source, header=header),
+                ImageObservation(data=source * 1.5, header=header),
+            ],
+            target_header=target_header,
+            spatial_tile_hw=(4, 4),
+            target_cache_capacity=capacity,
+        )
+        coefficients = torch.linspace(-1.0, 1.0, 64).reshape(8, 8)
+        torch.sum(result.data * coefficients).backward()
+        assert source.grad is not None
+        return result.data.detach(), source.grad.detach()
+
+    uncached_data, uncached_gradient = evaluate(0)
+    cached_data, cached_gradient = evaluate(4)
+
+    torch.testing.assert_close(cached_data, uncached_data)
+    torch.testing.assert_close(cached_gradient, uncached_gradient)
+
+
+def test_target_cache_capacity_must_be_non_negative() -> None:
+    header = _simple_header()
+    observation = ImageObservation(data=torch.ones((8, 8)), header=header)
+    with pytest.raises(ValueError, match="non-negative"):
+        coadd_image_plane(
+            [observation],
+            spatial_tile_hw=(4, 4),
+            target_cache_capacity=-1,
+        )
+
+
 def test_coadd_image_plane_does_not_reuse_overwritten_input(tmp_path) -> None:
     path = tmp_path / "mutable.fits"
     header = _simple_header()
@@ -2234,6 +2344,58 @@ def test_finite_aperture_uncertainty_keeps_covariance_across_tiles(
     assert float(empirical_variance) == pytest.approx(
         float(uncertainty.variance), rel=0.03
     )
+
+
+def test_aperture_uncertainty_reuses_call_scoped_target_tiles(monkeypatch) -> None:
+    source_header = _simple_header()
+    target_header = {**source_header, "CRPIX1": source_header["CRPIX1"] + 0.25}
+    observations = [
+        ImageObservation(
+            data=torch.zeros((8, 8), dtype=torch.float32),
+            header=source_header,
+            weight=1.0,
+            weight_is_inverse_variance=True,
+        )
+        for _ in range(2)
+    ]
+    result = coadd_image_plane(
+        observations,
+        target_header=target_header,
+        resampling_kernel="bilinear",
+        spatial_tile_hw=(4, 4),
+    )
+    aperture = (result.weight > 0.0).to(dtype=result.data.dtype)
+    original_prepare = image_plane_coadd_mod._prepare_canvas_tile
+    prepare_calls = 0
+
+    def counted_prepare(*args, **kwargs):
+        nonlocal prepare_calls
+        prepare_calls += 1
+        return original_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(image_plane_coadd_mod, "_prepare_canvas_tile", counted_prepare)
+    cached = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+        observations,
+        result,
+        aperture,
+        resampling_kernel="bilinear",
+        spatial_tile_hw=(4, 4),
+        target_cache_capacity=4,
+    )
+    assert prepare_calls == 4
+
+    prepare_calls = 0
+    uncached = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+        observations,
+        result,
+        aperture,
+        resampling_kernel="bilinear",
+        spatial_tile_hw=(4, 4),
+        target_cache_capacity=0,
+    )
+    assert prepare_calls == 8
+    torch.testing.assert_close(cached.variance, uncached.variance)
+    torch.testing.assert_close(cached.diagonal_variance, uncached.diagonal_variance)
 
 
 @pytest.mark.parametrize("device", ["cuda", "mps"])

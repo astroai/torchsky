@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import torch
@@ -13,6 +14,132 @@ from . import healpix as _healpix
 if TYPE_CHECKING:
     from .moc import BMOC, MOC
     from .sparse import HealSparseMap
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedRandomSampler:
+    """Immutable, device-bound state for repeated random sky draws.
+
+    Preparation snapshots the footprint, ordering conversion, and normalized
+    selection state onto ``device``. Later mutation of tensors in the source
+    MOC, BMOC, sparse map, or weights does not change this sampler; prepare a
+    new sampler to observe such mutations. The private snapshot tensors are
+    immutable implementation state and must not be mutated.
+    """
+
+    _pix_nested: Tensor = field(repr=False, compare=False)
+    _nsides: Tensor | int = field(repr=False, compare=False)
+    _cdf: Tensor | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def device(self) -> torch.device:
+        """Device on which sampling state and returned coordinates reside."""
+        return self._pix_nested.device
+
+    def sample_randoms(
+        self,
+        n: int,
+        *,
+        generator: torch.Generator | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """Draw ``n`` points using this sampler's snapshotted selection state."""
+        n_i = int(n)
+        if n_i < 0:
+            raise ValueError("n must be non-negative")
+        f_dtype = _healpix._float_dtype_for_device(self.device)
+        if n_i == 0:
+            empty = torch.empty(0, dtype=f_dtype, device=self.device)
+            return empty, empty
+
+        if self._cdf is None:
+            idx = torch.randint(
+                0,
+                self._pix_nested.numel(),
+                (n_i,),
+                device=self.device,
+                generator=generator,
+            )
+        else:
+            u_cell = (
+                torch.rand(
+                    n_i,
+                    dtype=f_dtype,
+                    device=self.device,
+                    generator=generator,
+                )
+                * self._cdf[-1]
+            )
+            idx = torch.searchsorted(self._cdf, u_cell, right=False).clamp(
+                max=self._pix_nested.numel() - 1
+            )
+        ux = torch.rand(n_i, dtype=f_dtype, device=self.device, generator=generator)
+        uy = torch.rand(n_i, dtype=f_dtype, device=self.device, generator=generator)
+        nsides = self._nsides[idx] if isinstance(self._nsides, Tensor) else self._nsides
+        return _sample_in_nested_cells(nsides, self._pix_nested[idx], ux, uy)
+
+
+def _prepare_moc_random_sampler(
+    uniq: Tensor,
+    *,
+    device: torch.device | str | None = None,
+    snapshot: bool = True,
+) -> PreparedRandomSampler:
+    from .moc import uniq2nest
+
+    dev = uniq.device if device is None else torch.device(device)
+    uniq_snapshot = uniq.to(device=dev)
+    if snapshot:
+        uniq_snapshot = uniq_snapshot.clone()
+    if uniq_snapshot.numel() == 0:
+        raise ValueError("cannot sample randoms from an empty MOC")
+    nsides, pix_nested = uniq2nest(uniq_snapshot)
+    f_dtype = _healpix._float_dtype_for_device(dev)
+    ns_f = nsides.to(f_dtype)
+    cdf = torch.cumsum(1.0 / (ns_f * ns_f), dim=0)
+    if snapshot:
+        pix_nested = pix_nested.clone()
+        nsides = nsides.clone()
+    return PreparedRandomSampler(pix_nested, nsides, cdf)
+
+
+def _prepare_sparse_random_sampler(
+    footprint: HealSparseMap,
+    *,
+    weights: HealSparseMap | Tensor | str | None = None,
+    device: torch.device | str | None = None,
+    snapshot: bool = True,
+) -> PreparedRandomSampler:
+    from .sparse import HealSparseMap
+
+    dev = footprint.pixels.device if device is None else torch.device(device)
+    pix = footprint.pixels.to(device=dev)
+    if pix.numel() == 0:
+        raise ValueError("cannot sample randoms from an empty HealSparseMap")
+    pix_nested = pix if footprint.nest else _healpix.ring2nest(footprint.nside, pix)
+    if snapshot:
+        pix_nested = pix_nested.clone()
+    if weights is None:
+        return PreparedRandomSampler(pix_nested, footprint.nside)
+
+    if isinstance(weights, str):
+        if weights == "values":
+            w_raw = footprint.values
+        elif footprint.column_names and weights in footprint.column_names:
+            w_raw = footprint[weights].values
+        else:
+            raise ValueError(f"unknown weights specification: {weights!r}")
+    elif isinstance(weights, HealSparseMap):
+        w_raw = weights.get_values(footprint.pixels)
+    else:
+        w_raw = torch.as_tensor(weights, device=dev)
+    f_dtype = _healpix._float_dtype_for_device(dev)
+    w = w_raw.to(device=dev, dtype=f_dtype).reshape(-1)
+    if w.numel() != pix_nested.numel():
+        raise ValueError("weights must have one entry per valid pixel in footprint")
+    w = torch.where(torch.isfinite(w) & (w > 0), w, torch.zeros_like(w))
+    if float(w.sum().item()) <= 0.0:
+        raise ValueError("weights must have positive sum")
+    return PreparedRandomSampler(pix_nested, footprint.nside, torch.cumsum(w, dim=0))
 
 
 def _sample_in_nested_cells(
@@ -88,7 +215,7 @@ def sample_randoms(
     :class:`HealSparseMap`, with optional per-pixel depth/completeness weights.
     """
     # Imported here: moc imports this module, and moc imports sparse.
-    from .moc import BMOC, MOC, uniq2nest
+    from .moc import BMOC, MOC
     from .sparse import HealSparseMap
 
     n_i = int(n)
@@ -111,79 +238,38 @@ def sample_randoms(
         lat_deg = torch.rad2deg(torch.asin(torch.clamp(z, -1.0, 1.0)))
         return lon_deg, lat_deg
 
-    if isinstance(footprint, BMOC):
-        footprint = footprint.to_moc(include_boundary=True)
-
-    if isinstance(footprint, MOC):
-        dev = footprint.uniq.device if device is None else torch.device(device)
-        f_dtype = _healpix._float_dtype_for_device(dev)
-        if n_i == 0:
-            empty = torch.empty(0, dtype=f_dtype, device=dev)
-            return empty, empty
-        if footprint.uniq.numel() == 0:
-            raise ValueError("cannot sample randoms from an empty MOC")
-        uniq = footprint.uniq.to(device=dev)
-        nsides, pix_nested = uniq2nest(uniq)
-        ns_f = nsides.to(f_dtype)
-        cell_weights = 1.0 / (ns_f * ns_f)
-        cdf = torch.cumsum(cell_weights, dim=0)
-        u_cell = (
-            torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator) * cdf[-1]
+    if isinstance(footprint, (MOC, BMOC, HealSparseMap)):
+        source = (
+            footprint.pixels if isinstance(footprint, HealSparseMap) else footprint.uniq
         )
-        idx = torch.searchsorted(cdf, u_cell, right=False).clamp(max=uniq.numel() - 1)
-        ux = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
-        uy = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
-        return _sample_in_nested_cells(nsides[idx], pix_nested[idx], ux, uy)
-
-    if isinstance(footprint, HealSparseMap):
-        dev = footprint.pixels.device if device is None else torch.device(device)
-        f_dtype = _healpix._float_dtype_for_device(dev)
+        dev = source.device if device is None else torch.device(device)
         if n_i == 0:
-            empty = torch.empty(0, dtype=f_dtype, device=dev)
+            empty = torch.empty(
+                0, dtype=_healpix._float_dtype_for_device(dev), device=dev
+            )
             return empty, empty
-        pix = footprint.pixels.to(device=dev)
-        if pix.numel() == 0:
-            raise ValueError("cannot sample randoms from an empty HealSparseMap")
-        if not footprint.nest:
-            pix_nest = _healpix.ring2nest(footprint.nside, pix)
-        else:
-            pix_nest = pix
-
-        if weights is None:
-            idx = torch.randint(
-                0, pix_nest.numel(), (n_i,), device=dev, generator=generator
+        if isinstance(footprint, HealSparseMap):
+            prepared = _prepare_sparse_random_sampler(
+                footprint,
+                weights=weights,
+                device=dev,
+                snapshot=False,
+            )
+        elif isinstance(footprint, BMOC):
+            prepared = _prepare_moc_random_sampler(
+                footprint.to_moc().uniq,
+                device=dev,
+                snapshot=False,
             )
         else:
-            if isinstance(weights, str):
-                if weights == "values":
-                    w_raw = footprint.values
-                elif footprint.column_names and weights in footprint.column_names:
-                    w_raw = footprint[weights].values
-                else:
-                    raise ValueError(f"unknown weights specification: {weights!r}")
-            elif isinstance(weights, HealSparseMap):
-                w_raw = weights.get_values(footprint.pixels)
-            else:
-                w_raw = torch.as_tensor(weights, device=dev)
-            w = w_raw.to(device=dev, dtype=f_dtype).reshape(-1)
-            if w.numel() != pix_nest.numel():
-                raise ValueError(
-                    "weights must have one entry per valid pixel in footprint"
-                )
-            w = torch.where(torch.isfinite(w) & (w > 0), w, torch.zeros_like(w))
-            total_w = float(w.sum().item())
-            if total_w <= 0.0:
-                raise ValueError("weights must have positive sum")
-            cdf = torch.cumsum(w, dim=0)
-            u_cell = (
-                torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
-                * cdf[-1]
+            prepared = _prepare_moc_random_sampler(
+                footprint.uniq,
+                device=dev,
+                snapshot=False,
             )
-            idx = torch.searchsorted(cdf, u_cell, right=False).clamp(
-                max=pix_nest.numel() - 1
-            )
-        ux = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
-        uy = torch.rand(n_i, dtype=f_dtype, device=dev, generator=generator)
-        return _sample_in_nested_cells(footprint.nside, pix_nest[idx], ux, uy)
+        return prepared.sample_randoms(n_i, generator=generator)
 
     raise TypeError("footprint must be a MOC, BMOC, HealSparseMap, or None")
+
+
+__all__ = ["PreparedRandomSampler", "sample_randoms"]

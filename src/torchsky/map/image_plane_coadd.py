@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import operator
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -142,6 +144,116 @@ _FINITE_APERTURE_COVARIANCE_KERNELS = frozenset(
     }
 )
 
+_DEFAULT_TARGET_CACHE_CAPACITY = 0
+
+
+def _validated_target_cache_capacity(capacity: int) -> int:
+    try:
+        resolved = operator.index(capacity)
+    except TypeError as exc:
+        raise TypeError("target_cache_capacity must be an integer") from exc
+    if resolved < 0:
+        raise ValueError("target_cache_capacity must be non-negative")
+    return resolved
+
+
+def _target_grid_cache_signature(
+    header: Mapping[str, Any],
+) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((str(key), repr(value)) for key, value in header.items()))
+
+
+class _PreparedTargetTileCache:
+    def __init__(
+        self,
+        *,
+        capacity: int,
+        target_header: Mapping[str, Any],
+        canvas_shape: tuple[int, int],
+        device: torch.device,
+        value_semantics: MapValueSemantics,
+        representative_pixel_area_sr: float | None,
+    ) -> None:
+        self.capacity = _validated_target_cache_capacity(capacity)
+        self._grid_signature = _target_grid_cache_signature(target_header)
+        self._canvas_shape = (int(canvas_shape[0]), int(canvas_shape[1]))
+        self._device = str(device)
+        self._coordinate_dtype = str(
+            torch.float32 if device.type == "mps" else torch.float64
+        )
+        self._value_semantics = value_semantics
+        self._representative_pixel_area_sr = representative_pixel_area_sr
+        self._entries: OrderedDict[tuple[Any, ...], _PreparedImagePlaneTarget] = (
+            OrderedDict()
+        )
+        self.hits = 0
+        self.misses = 0
+        self.evictions = 0
+        self.admission_skips = 0
+
+    def get_or_prepare(
+        self,
+        sub_header: dict,
+        tile_shape: tuple[int, int],
+        *,
+        bounds: tuple[int, int, int, int],
+    ) -> _PreparedImagePlaneTarget:
+        include_area = self._value_semantics == "flux"
+        quadrature_offsets = (
+            (
+                (-0.5 / math.sqrt(3.0), -0.5 / math.sqrt(3.0)),
+                (-0.5 / math.sqrt(3.0), 0.5 / math.sqrt(3.0)),
+                (0.5 / math.sqrt(3.0), -0.5 / math.sqrt(3.0)),
+                (0.5 / math.sqrt(3.0), 0.5 / math.sqrt(3.0)),
+            )
+            if include_area
+            else ()
+        )
+        key = (
+            self._grid_signature,
+            tuple(int(value) for value in bounds),
+            self._canvas_shape,
+            (int(tile_shape[0]), int(tile_shape[1])),
+            self._device,
+            self._coordinate_dtype,
+            self._value_semantics,
+            include_area,
+            self._representative_pixel_area_sr,
+            quadrature_offsets,
+        )
+        cached = self._entries.get(key)
+        if cached is not None:
+            self.hits += 1
+            self._entries.move_to_end(key)
+            return cached
+        self.misses += 1
+        prepared = _prepare_canvas_tile(
+            sub_header,
+            tile_shape,
+            device=torch.device(self._device),
+            canvas_shape=self._canvas_shape,
+            origin_yx=(bounds[0], bounds[2]),
+            value_semantics=self._value_semantics,
+            representative_pixel_area_sr=self._representative_pixel_area_sr,
+        )
+        if self.capacity == 0:
+            return prepared
+        if len(self._entries) >= self.capacity:
+            self.admission_skips += 1
+            return prepared
+        self._entries[key] = prepared
+        return prepared
+
+    def stats(self) -> dict[str, int]:
+        return {
+            "capacity": self.capacity,
+            "size": len(self._entries),
+            "hits": self.hits,
+            "misses": self.misses,
+            "evictions": self.evictions,
+            "admission_skips": self.admission_skips,
+        }
+
 
 def _prepare_canvas_tile(
     sub_header: dict,
@@ -215,6 +327,7 @@ def _coadd_image_plane_spatial_tiles(
     clip_sigma: float,
     clip_iterations: int,
     map_device: torch.device,
+    target_cache_capacity: int,
     scratch_dir: str | Path | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
@@ -248,6 +361,14 @@ def _coadd_image_plane_spatial_tiles(
         )
         if mosaic_surface_brightness_area_scaling
         else None
+    )
+    target_cache = _PreparedTargetTileCache(
+        capacity=target_cache_capacity,
+        target_header=header_dict,
+        canvas_shape=(H, W),
+        device=device,
+        value_semantics=value_semantics,
+        representative_pixel_area_sr=mosaic_representative_area_sr,
     )
 
     if cross_exposure_sky_corrector is not None and len(observations) == 1:
@@ -311,14 +432,10 @@ def _coadd_image_plane_spatial_tiles(
                             )
                         )
                         prepared_target = (
-                            _prepare_canvas_tile(
+                            target_cache.get_or_prepare(
                                 sub_header,
                                 tile_shape,
-                                device=device,
-                                canvas_shape=(H, W),
-                                origin_yx=(y0, x0),
-                                value_semantics=value_semantics,
-                                representative_pixel_area_sr=mosaic_representative_area_sr,
+                                bounds=(y0, y1, x0, x1),
                             )
                             if need_prepared_target
                             else None
@@ -541,14 +658,10 @@ def _coadd_image_plane_spatial_tiles(
                         )
                     )
                     prepared_target = (
-                        _prepare_canvas_tile(
+                        target_cache.get_or_prepare(
                             sub_header,
                             tile_shape,
-                            device=device,
-                            canvas_shape=(H, W),
-                            origin_yx=(y0, x0),
-                            value_semantics=value_semantics,
-                            representative_pixel_area_sr=mosaic_representative_area_sr,
+                            bounds=(y0, y1, x0, x1),
                         )
                         if need_prepared_target
                         else None
@@ -646,6 +759,19 @@ def _coadd_image_plane_spatial_tiles(
         output_weight=full_weight,
         device=device,
     )
+    provenance = _context_provenance(
+        observations,
+        resampling_kernel=resampling_kernel,
+        value_semantics=value_semantics,
+        stacking_method=stacking_method,
+        drizzle_pixfrac=drizzle_pixfrac,
+        surface_brightness_area_scaling=bool(mosaic_surface_brightness_area_scaling),
+        data_dependent_background=(
+            background_estimator is not None or cross_exposure_sky_corrector is not None
+        ),
+        has_correlation_factor=full_correlation_factor is not None,
+    )
+    provenance["target_tile_cache"] = target_cache.stats()
     result = MapResult(
         data=full_data,
         weight=full_weight,
@@ -653,21 +779,7 @@ def _coadd_image_plane_spatial_tiles(
         inverse_variance=full_inverse_variance,
         correlation_factor=full_correlation_factor,
         context=full_context,
-        provenance=_context_provenance(
-            observations,
-            resampling_kernel=resampling_kernel,
-            value_semantics=value_semantics,
-            stacking_method=stacking_method,
-            drizzle_pixfrac=drizzle_pixfrac,
-            surface_brightness_area_scaling=bool(
-                mosaic_surface_brightness_area_scaling
-            ),
-            data_dependent_background=(
-                background_estimator is not None
-                or cross_exposure_sky_corrector is not None
-            ),
-            has_correlation_factor=full_correlation_factor is not None,
-        ),
+        provenance=provenance,
         overlap_count=full_overlap,
         coverage_moc=None,
         observation_mocs=None,
@@ -816,6 +928,7 @@ def coadd_image_plane(
     clip_sigma: float = 4.0,
     clip_iterations: int = 3,
     spatial_tile_hw: tuple[int, int] | None = None,
+    target_cache_capacity: int = _DEFAULT_TARGET_CACHE_CAPACITY,
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
     scratch_dir: str | Path | None = None,
@@ -832,6 +945,7 @@ def coadd_image_plane(
     drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
     clip_sigma = float(clip_sigma)
     clip_iterations = int(clip_iterations)
+    target_cache_capacity = _validated_target_cache_capacity(target_cache_capacity)
     if not math.isfinite(clip_sigma) or clip_sigma <= 0.0:
         raise ValueError("clip_sigma must be finite and positive")
     if clip_iterations <= 0:
@@ -903,6 +1017,7 @@ def coadd_image_plane(
             clip_sigma=clip_sigma,
             clip_iterations=clip_iterations,
             map_device=map_device,
+            target_cache_capacity=target_cache_capacity,
             scratch_dir=scratch_dir,
             background_estimator=background_estimator,
             cross_exposure_sky_corrector=cross_exposure_sky_corrector,
@@ -1385,6 +1500,7 @@ def evaluate_image_plane_aperture_uncertainty(
     value_semantics: MapValueSemantics = "surface_brightness",
     drizzle_pixfrac: float = 1.0,
     spatial_tile_hw: tuple[int, int] | None = None,
+    target_cache_capacity: int = _DEFAULT_TARGET_CACHE_CAPACITY,
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
 ) -> ApertureUncertainty:
@@ -1406,6 +1522,7 @@ def evaluate_image_plane_aperture_uncertainty(
         )
     value_semantics = _validated_map_value_semantics(value_semantics)
     drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
+    target_cache_capacity = _validated_target_cache_capacity(target_cache_capacity)
     if result.data.ndim != 2 or result.weight.ndim != 2:
         raise ValueError("finite-aperture covariance requires a 2D MapResult")
     provenance = result.provenance
@@ -1555,6 +1672,15 @@ def evaluate_image_plane_aperture_uncertainty(
             if bool((linear_form_weight[y0:y1, x0:x1] != 0.0).any()):
                 active_tiles.append((y0, y1, x0, x1))
 
+    target_cache = _PreparedTargetTileCache(
+        capacity=target_cache_capacity,
+        target_header=header_dict,
+        canvas_shape=target_shape,
+        device=map_device,
+        value_semantics=value_semantics,
+        representative_pixel_area_sr=full_representative_area_sr,
+    )
+
     exact_variance = torch.zeros((), dtype=accumulator_dtype, device=map_device)
     for observation_index, observation in enumerate(observations):
         if observation_index == 0:
@@ -1609,14 +1735,10 @@ def evaluate_image_plane_aperture_uncertainty(
                 )
             )
             prepared_target = (
-                _prepare_canvas_tile(
+                target_cache.get_or_prepare(
                     sub_header,
                     tile_shape,
-                    device=map_device,
-                    canvas_shape=target_shape,
-                    origin_yx=(y0, x0),
-                    value_semantics=value_semantics,
-                    representative_pixel_area_sr=full_representative_area_sr,
+                    bounds=(y0, y1, x0, x1),
                 )
                 if needs_target
                 else None
@@ -1693,6 +1815,7 @@ class ImagePlaneMapMaker:
         clip_sigma: float = 4.0,
         clip_iterations: int = 3,
         spatial_tile_hw: tuple[int, int] | None = None,
+        target_cache_capacity: int = _DEFAULT_TARGET_CACHE_CAPACITY,
         device: torch.device | str | None = None,
         scratch_dir: str | Path | None = None,
         background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
@@ -1709,6 +1832,9 @@ class ImagePlaneMapMaker:
             None
             if spatial_tile_hw is None
             else (int(spatial_tile_hw[0]), int(spatial_tile_hw[1]))
+        )
+        self.target_cache_capacity = _validated_target_cache_capacity(
+            target_cache_capacity
         )
         self.device = device
         self.scratch_dir = scratch_dir
@@ -1734,6 +1860,7 @@ class ImagePlaneMapMaker:
             clip_sigma=self.clip_sigma,
             clip_iterations=self.clip_iterations,
             spatial_tile_hw=self.spatial_tile_hw,
+            target_cache_capacity=self.target_cache_capacity,
             device=eff_device,
             scratch_dir=self.scratch_dir,
             background_estimator=self.background_estimator,
@@ -2508,6 +2635,7 @@ def coadd(
     footprint_order: int | None = None,
     tile_size: int | tuple[int, int] | None = None,
     spatial_tile_hw: tuple[int, int] | None = None,
+    target_cache_capacity: int = _DEFAULT_TARGET_CACHE_CAPACITY,
     surface_brightness_area_scaling: bool | None = None,
     output_path: str | None = None,
     scratch_dir: str | Path | None = None,
@@ -2638,6 +2766,7 @@ def coadd(
         clip_sigma=resolved_clip_sigma,
         clip_iterations=resolved_clip_iter,
         spatial_tile_hw=resolved_tile_hw,
+        target_cache_capacity=target_cache_capacity,
         surface_brightness_area_scaling=resolved_area_scaling,
         device=device,
         scratch_dir=resolved_scratch,
@@ -2716,6 +2845,7 @@ def aperture_uncertainty(
     pixfrac: float | None = None,
     semantics: MapValueSemantics | None = None,
     spatial_tile_hw: tuple[int, int] | None = None,
+    target_cache_capacity: int = _DEFAULT_TARGET_CACHE_CAPACITY,
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
 ) -> ApertureUncertainty:
@@ -2729,6 +2859,7 @@ def aperture_uncertainty(
         value_semantics=semantics if semantics is not None else r_cfg.semantics,
         drizzle_pixfrac=pixfrac if pixfrac is not None else r_cfg.pixfrac,
         spatial_tile_hw=spatial_tile_hw,
+        target_cache_capacity=target_cache_capacity,
         surface_brightness_area_scaling=(
             surface_brightness_area_scaling
             if surface_brightness_area_scaling is not None

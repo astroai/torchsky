@@ -88,7 +88,7 @@ from .geom import (
     to_exact_region,
 )
 from .moc import BMOC, MOC, nest2uniq, uniq2nest
-from .randoms import sample_randoms
+from .randoms import PreparedRandomSampler, sample_randoms
 from .stmoc import STMOC, mjd_to_time_us, time_us_to_mjd
 from .sparse import (
     HealSparseHostProtocol,
@@ -192,6 +192,7 @@ __all__ = [
     "HealSparseHostProtocol",
     "UniqValueMapProtocol",
     "SparseMap",
+    "PreparedRandomSampler",
     "WideBitMask",
     "SkyMaskPipe",
     # Submodules

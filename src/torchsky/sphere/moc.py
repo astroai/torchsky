@@ -12,7 +12,7 @@ from .._dtype import work_dtype as _work_dtype
 from . import healpix as _healpix
 from .core import great_circle_distance, lonlat_to_unit_xyz
 from .geom import PixelizedRegion, spherical_polygon_contains
-from .randoms import sample_randoms
+from .randoms import PreparedRandomSampler, _prepare_moc_random_sampler, sample_randoms
 from .sparse import HealSparseMap
 
 
@@ -43,9 +43,7 @@ def _nside_from_max_order(max_order: int) -> int:
     if order < 0:
         raise ValueError("max_order must be non-negative")
     if order > _MAX_HEALPIX_ORDER:
-        raise ValueError(
-            f"max_order must be <= {_MAX_HEALPIX_ORDER}; got {order}"
-        )
+        raise ValueError(f"max_order must be <= {_MAX_HEALPIX_ORDER}; got {order}")
     return 1 << order
 
 
@@ -71,9 +69,7 @@ def _order_from_uniq(uniq: Tensor) -> Tensor:
     # uniq in [4**(order+1), 4**(order+2) - 1]
     order = torch.bitwise_right_shift(exponent - 2, 1)
     if bool((order > _MAX_HEALPIX_ORDER).any()):
-        raise ValueError(
-            f"UNIQ values must encode nside <= {_MAX_HEALPIX_NSIDE}"
-        )
+        raise ValueError(f"UNIQ values must encode nside <= {_MAX_HEALPIX_NSIDE}")
     nside = torch.bitwise_left_shift(torch.ones_like(order), order)
     pix = u - 4 * (nside * nside)
     if bool(((pix < 0) | (pix >= 12 * nside * nside)).any()):
@@ -90,9 +86,7 @@ def nest2uniq(nside: int | Tensor, pix: int | Tensor) -> Tensor:
     p = p.to(device=device)
     n, p = torch.broadcast_tensors(n, p)
     if bool((n <= 0).any()) or bool((n > _MAX_HEALPIX_NSIDE).any()):
-        raise ValueError(
-            f"nside must be in [1, {_MAX_HEALPIX_NSIDE}]"
-        )
+        raise ValueError(f"nside must be in [1, {_MAX_HEALPIX_NSIDE}]")
     if bool((n & (n - 1) != 0).any()):
         raise ValueError("nside must be a positive power of two")
     if bool(((p < 0) | (p >= 12 * n * n)).any()):
@@ -237,12 +231,9 @@ def _normalize_bmoc(uniq: Tensor, flag: Tensor) -> tuple[Tensor, Tensor]:
 
     index_t = torch.tensor(kept_indices, dtype=torch.int64, device=uniq.device)
     normalized_uniq = uniq[index_t]
-    normalized_flag = torch.tensor(
-        kept_flags, dtype=torch.uint8, device=flag.device
-    )
+    normalized_flag = torch.tensor(kept_flags, dtype=torch.uint8, device=flag.device)
     order = torch.argsort(normalized_uniq)
     return normalized_uniq[order], normalized_flag[order]
-
 
 
 def _hierarchical_disc_bmoc(
@@ -346,9 +337,9 @@ def _hierarchical_polygon_bmoc(
         center_xyz[0], center_xyz[1], center_xyz[2]
     )
     poly_radius = float(
-        great_circle_distance(
-            cen_lon, cen_lat, poly_lon, poly_lat, degrees=True
-        ).max().item()
+        great_circle_distance(cen_lon, cen_lat, poly_lon, poly_lat, degrees=True)
+        .max()
+        .item()
     )
     r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
     order = 0
@@ -442,7 +433,6 @@ def _hierarchical_polygon_uniq(
     lon_p, lat_p = _healpix.pix2ang(nside, pix_b, nest=True, lonlat=True)
     c_in = spherical_polygon_contains(lon_p, lat_p, poly_lon, poly_lat)
     return torch.cat([interior, bndry[c_in]])
-
 
 
 def _resolve_moc_table_hdu_index(path: str) -> int:
@@ -645,16 +635,16 @@ class MOC:
             safe = count.clamp(max=ends.numel() - 1)
             partial = torch.where(
                 count < ends.numel(),
-                torch.minimum(
-                    (position - starts[safe]).clamp_min(0), lengths[safe]
-                ),
+                torch.minimum((position - starts[safe]).clamp_min(0), lengths[safe]),
                 torch.zeros_like(position),
             )
             return cumulative[count] + partial
 
         overlap = covered_before(query_ends) - covered_before(query_starts)
         cell_size = query_ends - query_starts
-        return (overlap.to(fraction_dtype) / cell_size.to(fraction_dtype)).reshape(shape)
+        return (overlap.to(fraction_dtype) / cell_size.to(fraction_dtype)).reshape(
+            shape
+        )
 
     def intersects_uniq(self, uniq: Tensor | int) -> Tensor:
         """Return which canonical UNIQ cells intersect this MOC."""
@@ -911,9 +901,9 @@ class MOC:
         """Coverage of catalog points, compacted to parent UNIQ cells."""
         order = int(max_order)
         nside = _nside_from_max_order(order)
-        pix = _healpix.ang2pix(
-            nside, lon_deg, lat_deg, nest=True, lonlat=True
-        ).to(torch.int64)
+        pix = _healpix.ang2pix(nside, lon_deg, lat_deg, nest=True, lonlat=True).to(
+            torch.int64
+        )
         return cls(nest2uniq(nside, pix))
 
     @classmethod
@@ -1298,6 +1288,16 @@ class MOC:
         """Draw ``n`` points uniformly in solid angle inside this MOC."""
         return sample_randoms(n, self, generator=generator, device=device)
 
+    def prepare_random_sampler(
+        self, *, device: torch.device | str | None = None
+    ) -> PreparedRandomSampler:
+        """Snapshot immutable, device-bound state for repeated random draws.
+
+        Mutating ``self.uniq`` afterward does not update the returned sampler;
+        call this method again to prepare from the changed MOC.
+        """
+        return _prepare_moc_random_sampler(self.uniq, device=device)
+
 
 def _wcs_perimeter_lonlat(
     wcs: Any,
@@ -1387,7 +1387,11 @@ def _combine_bmoc(left: "BMOC", right: "BMOC", operation: str) -> "BMOC":
         if operation == "union":
             state = max(left_state, right_state)
         elif operation == "intersection":
-            state = min(left_state, right_state) if min(left_state, right_state) >= 0 else -1
+            state = (
+                min(left_state, right_state)
+                if min(left_state, right_state) >= 0
+                else -1
+            )
         else:
             state = left_state if left_state >= 0 and right_state < 0 else -1
         if state < 0:
@@ -1428,9 +1432,7 @@ class BMOC:
             f = torch.ones_like(u, dtype=torch.uint8)
         else:
             raw_flag = torch.as_tensor(flag, device=u.device).reshape(-1)
-            if raw_flag.numel() > 0 and bool(
-                ((raw_flag != 0) & (raw_flag != 1)).any()
-            ):
+            if raw_flag.numel() > 0 and bool(((raw_flag != 0) & (raw_flag != 1)).any()):
                 raise ValueError("flag values must be 0 or 1")
             f = raw_flag.to(torch.uint8)
             if f.numel() != u.numel():
@@ -1475,7 +1477,9 @@ class BMOC:
             return 0.0
         nsides, _ = uniq2nest(self.uniq)
         nsides_f64 = nsides.to(torch.float64)
-        return float(((4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))).sum().item())
+        return float(
+            ((4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))).sum().item()
+        )
 
     @property
     def area_sq_deg(self) -> float:
@@ -1489,7 +1493,9 @@ class BMOC:
             return 0.0
         nsides, _ = uniq2nest(ins)
         nsides_f64 = nsides.to(torch.float64)
-        return float(((4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))).sum().item())
+        return float(
+            ((4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))).sum().item()
+        )
 
     @property
     def interior_area_sq_deg(self) -> float:
@@ -1645,6 +1651,21 @@ class BMOC:
             generator=generator,
             device=device,
         )
+
+    def prepare_random_sampler(
+        self,
+        *,
+        include_boundary: bool = True,
+        device: torch.device | str | None = None,
+    ) -> PreparedRandomSampler:
+        """Snapshot immutable, device-bound state for repeated random draws.
+
+        Boundary filtering and cell state are captured during preparation.
+        Later mutation of ``uniq`` or ``flag`` has no effect; prepare again to
+        observe changes.
+        """
+        uniq = self.uniq if include_boundary else self.uniq[self.flag > 0]
+        return _prepare_moc_random_sampler(uniq, device=device)
 
 
 __all__ = ["BMOC", "MOC", "nest2uniq", "sample_randoms", "uniq2nest"]

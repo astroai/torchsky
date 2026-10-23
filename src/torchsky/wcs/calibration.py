@@ -594,17 +594,24 @@ class _PhotometrySolver:
         source_node_count = self.n_source * self.n_band
         union = _UnionFind(self.n_exposure + source_node_count)
         active_rows = torch.nonzero(self.global_fit_mask, as_tuple=False).flatten()
-        for row in active_rows.detach().cpu().tolist():
-            source = int(self.graph.row_source[row])
-            band = int(self.graph.row_band[row])
+        active_exposure = self.graph.row_exposure[active_rows].detach().cpu().tolist()
+        active_source = self.graph.row_source[active_rows].detach().cpu().tolist()
+        active_band = self.graph.row_band[active_rows].detach().cpu().tolist()
+        for exposure, source, band in zip(
+            active_exposure, active_source, active_band, strict=True
+        ):
             union.union(
-                int(self.graph.row_exposure[row]),
-                self.n_exposure + source * self.n_band + band,
+                int(exposure),
+                self.n_exposure + int(source) * self.n_band + int(band),
             )
         roots = sorted(
-            {
-                union.find(int(self.graph.row_exposure[row]))
-                for row in active_rows.detach().cpu().tolist()
+            {union.find(int(exposure)) for exposure in active_exposure}
+        )
+        active_nodes = sorted(
+            {int(exposure) for exposure in active_exposure}
+            | {
+                self.n_exposure + int(source) * self.n_band + int(band)
+                for source, band in zip(active_source, active_band, strict=True)
             }
         )
         ref_source, ref_band, _, _ = self.reference_rows
@@ -620,16 +627,16 @@ class _PhotometrySolver:
         exposures = []
         anchored = []
         gauges = []
+        groups: dict[int, list[int]] = {}
+        for node in active_nodes:
+            groups.setdefault(union.find(node), []).append(node)
         for root in roots:
-            exp = tuple(
-                exposure
-                for exposure in range(self.n_exposure)
-                if union.find(exposure) == root
-            )
+            grouped = groups[root]
+            exp = tuple(node for node in grouped if node < self.n_exposure)
             nodes = tuple(
-                node
-                for node in range(source_node_count)
-                if union.find(self.n_exposure + node) == root
+                node - self.n_exposure
+                for node in grouped
+                if node >= self.n_exposure
             )
             is_anchored = any(node in reference_nodes for node in nodes)
             components.append(nodes)

@@ -908,36 +908,31 @@ class _AstrometrySolver:
     ]:
         union = _UnionFind(self.n_exposure + self.n_source)
         active_rows = torch.nonzero(self.fit_mask, as_tuple=False).flatten()
-        for row in active_rows.detach().cpu().tolist():
-            union.union(
-                int(self.graph.row_exposure[row]),
-                self.n_exposure + int(self.graph.row_source[row]),
-            )
+        active_exposure = self.graph.row_exposure[active_rows].detach().cpu().tolist()
+        active_source = self.graph.row_source[active_rows].detach().cpu().tolist()
+        for exposure, source in zip(active_exposure, active_source, strict=True):
+            union.union(int(exposure), self.n_exposure + int(source))
         roots = sorted(
-            {
-                union.find(int(self.graph.row_exposure[row]))
-                for row in active_rows.detach().cpu().tolist()
-            }
+            {union.find(int(exposure)) for exposure in active_exposure}
         )
+        active_nodes = sorted(
+            {int(exposure) for exposure in active_exposure}
+            | {self.n_exposure + int(source) for source in active_source}
+        )
+        groups: dict[int, list[int]] = {}
+        for node in active_nodes:
+            groups.setdefault(union.find(node), []).append(node)
         components = []
         exposures = []
         anchored = []
+        reference_mask = self.graph.reference_mask.detach().cpu().tolist()
         for root in roots:
-            exp = tuple(
-                index
-                for index in range(self.n_exposure)
-                if union.find(index) == root
-            )
-            src = tuple(
-                index
-                for index in range(self.n_source)
-                if union.find(self.n_exposure + index) == root
-            )
-            components.append(
-                exp + tuple(self.n_exposure + index for index in src)
-            )
+            nodes = groups[root]
+            exp = tuple(node for node in nodes if node < self.n_exposure)
+            src = tuple(node - self.n_exposure for node in nodes if node >= self.n_exposure)
+            components.append(tuple(nodes))
             exposures.append(exp)
-            anchored.append(any(bool(self.graph.reference_mask[index]) for index in src))
+            anchored.append(any(reference_mask[index] for index in src))
         return tuple(components), tuple(exposures), tuple(anchored)
 
     def _optional_rows(self, name: str) -> Tensor:

@@ -13,6 +13,7 @@ from torchsky.wcs import (
     match_approximate_wcs,
     tangent_plane_block_residuals,
 )
+from torchsky.wcs.astrometry import _AstrometrySolver
 
 
 DTYPE = torch.float64
@@ -198,6 +199,79 @@ def test_disconnected_components_receive_explicit_exposure_gauges() -> None:
     assert solution.diagnostics.gauge_exposures == ("a0", "b0")
     torch.testing.assert_close(solution.pose_for("a0"), torch.zeros(2, dtype=DTYPE))
     torch.testing.assert_close(solution.pose_for("b0"), torch.zeros(2, dtype=DTYPE))
+
+
+def test_component_materialization_matches_order_under_many_row_permutations() -> None:
+    frame = TangentPlaneFrame(250.0, 15.0)
+    component_count = 48
+    source_count = 3 * component_count
+    source = torch.stack(
+        (
+            torch.arange(source_count, dtype=DTYPE),
+            torch.arange(source_count, dtype=DTYPE).remainder(7),
+        ),
+        dim=-1,
+    )
+    permutation = torch.tensor([2, 0, 1])
+
+    def make_graph(permute: bool) -> AstrometricMatchGraph:
+        observations = []
+        for component in range(component_count):
+            selected = torch.arange(3 * component, 3 * component + 3)
+            if permute:
+                selected = selected[permutation]
+            for suffix in ("a", "b"):
+                observations.append(
+                    _observation(
+                        f"c{component}{suffix}",
+                        frame,
+                        source[selected],
+                        selected,
+                    )
+                )
+        referenced = torch.arange(0, source_count, 9)
+        return AstrometricMatchGraph(
+            observations,
+            reference_source_ids=referenced,
+            reference_positions=_world(frame, source[referenced]),
+            reference_covariance=torch.eye(2, dtype=DTYPE) * 0.01**2,
+            tangent_frame=frame,
+        )
+
+    config = AstrometryConfig(pose_model="shift")
+    baseline = _AstrometrySolver(make_graph(False), config)
+    permuted = _AstrometrySolver(make_graph(True), config)
+    expected_exposures = tuple(
+        (2 * component, 2 * component + 1)
+        for component in range(component_count)
+    )
+    expected_components = tuple(
+        exposures
+        + tuple(
+            2 * component_count + source_index
+            for source_index in range(3 * component, 3 * component + 3)
+        )
+        for component, exposures in enumerate(expected_exposures)
+    )
+    expected_anchored = tuple(component % 3 == 0 for component in range(component_count))
+
+    assert baseline.fit_components == expected_components
+    assert baseline.fit_component_exposures == expected_exposures
+    assert baseline.fit_component_reference_anchored == expected_anchored
+    assert baseline.gauge_exposure_indices == tuple(
+        exposures[0]
+        for exposures, anchored in zip(
+            expected_exposures, expected_anchored, strict=True
+        )
+        if not anchored
+    )
+    assert permuted.fit_components == baseline.fit_components
+    assert permuted.fit_component_exposures == baseline.fit_component_exposures
+    assert (
+        permuted.fit_component_reference_anchored
+        == baseline.fit_component_reference_anchored
+    )
+    assert permuted.gauge_exposure_indices == baseline.gauge_exposure_indices
 
 
 def test_motion_rank_policy_and_identifiable_pm_parallax() -> None:

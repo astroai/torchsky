@@ -12,6 +12,7 @@ from . import healpix as _healpix
 if TYPE_CHECKING:
     from .geom import PixelizedRegion
     from .moc import MOC
+    from .randoms import PreparedRandomSampler
 
 
 @runtime_checkable
@@ -25,6 +26,7 @@ class HealSparseHostProtocol(Protocol):
     def valid_pixels(self) -> Any: ...
 
     def get_values_pix(self, pixels: Any, **kwargs: Any) -> Any: ...
+
 
 _CPP_BLOCK_DTYPES = frozenset(
     {
@@ -758,6 +760,22 @@ class SparseHealpixMap:
             device=device,
         )
 
+    def prepare_random_sampler(
+        self,
+        *,
+        weights: SparseHealpixMap | Tensor | str | None = None,
+        device: torch.device | str | None = None,
+    ) -> PreparedRandomSampler:
+        """Snapshot immutable, device-bound state for repeated random draws.
+
+        Pixels, ordering conversion, and resolved weights are captured during
+        preparation. Later mutation of this map or weight tensors does not
+        update the sampler; call this method again to observe changes.
+        """
+        from .randoms import _prepare_sparse_random_sampler
+
+        return _prepare_sparse_random_sampler(self, weights=weights, device=device)
+
     def _coverage_pixels(self) -> Tensor:
         if self.nside_coverage is None:
             return self.pixels
@@ -861,9 +879,7 @@ class SparseHealpixMap:
         return MOC.from_sparse_map(self)
 
     @classmethod
-    def from_healsparse(
-        cls, map_obj: HealSparseHostProtocol
-    ) -> "SparseHealpixMap":
+    def from_healsparse(cls, map_obj: HealSparseHostProtocol) -> "SparseHealpixMap":
         """Import a host-side ``healsparse.HealSparseMap`` without dense expansion."""
         import numpy as np
 
