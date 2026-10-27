@@ -55,6 +55,7 @@ def test_wheel_workflow_matches_supported_artifact_matrix() -> None:
     assert "needs: upload_pypi" in workflow
     assert "Validate version sources and tag" in workflow
     assert "Build and smoke-test from source distribution" in workflow
+    assert "pixi-version: v0.82.0" in workflow
     refs = re.findall(r"uses:\s+\S+@([^\s]+)", workflow)
     assert refs
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in refs)

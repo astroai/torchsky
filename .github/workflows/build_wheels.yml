@@ -62,7 +62,7 @@ jobs:
           sudo apt-get install -y build-essential
       - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
         with:
-          pixi-version: 0.82.0
+          pixi-version: v0.82.0
       - name: Install exact test environment
         run: pixi install --frozen -e ${{ matrix.pixi-environment }}
       - name: Build exact release candidate
@@ -85,7 +85,7 @@ jobs:
           sudo apt-get install -y build-essential
       - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
         with:
-          pixi-version: 0.82.0
+          pixi-version: v0.82.0
       - name: Install and build exact release candidate
         run: |
           pixi install --frozen -e test-py313
