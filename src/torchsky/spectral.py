@@ -209,6 +209,23 @@ def flux_conserving_rebin(
     dimensions are batches; all tensors remain on the input device. Output bins
     that extend beyond the input range or overlap invalid input samples are
     marked false without renormalising away missing flux.
+
+    Args:
+        flux: Flux density with spectral bins on the trailing axis.
+        input_edges: Monotonic edges of the input bins.
+        output_edges: Monotonic edges of the requested output bins.
+        ivar: Optional inverse variance matching ``flux``.
+        mask: Optional valid-sample mask matching ``flux``.
+
+    Returns:
+        Rebinned flux, optional inverse variance, and output validity mask.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.spectral import flux_conserving_rebin
+        >>> result = flux_conserving_rebin(torch.tensor([1.0]), torch.tensor([0.0, 1.0]), torch.tensor([0.0, 1.0]))
+        >>> result.flux.tolist()
+        [1.0]
     """
     if flux.ndim < 1 or not flux.is_floating_point():
         raise ValueError("flux must be a floating-point tensor with a spectral axis")
@@ -590,7 +607,22 @@ def spectral_bin_edges_from_header(
 
 @dataclass
 class SpectralAxis:
-    """Represents a spectral axis with wavelength/frequency information."""
+    """Represent sampled wavelength, frequency, energy, or velocity coordinates.
+
+    Args:
+        values: One-dimensional coordinate samples.
+        unit: Physical unit label such as ``"Angstrom"`` or ``"Hz"``.
+        type: FITS-style spectral coordinate type.
+        rest_frequency: Optional rest frequency required by velocity conversions.
+        redshift: Optional reference redshift.
+        bin_edges: Optional coordinate-bin edges with one more element than values.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.spectral import SpectralAxis
+        >>> SpectralAxis(torch.tensor([5000.0]), "Angstrom", "WAVE").quantity
+        'wavelength'
+    """
 
     values: torch.Tensor  # Wavelength/frequency values
     unit: str  # Units (e.g., 'Angstrom', 'Hz', 'keV')

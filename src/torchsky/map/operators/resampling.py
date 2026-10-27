@@ -276,6 +276,7 @@ def sample_image_plane_batched_channels(
     grid: Tensor,
     kernel: MapResamplingKernel,
 ) -> Tensor:
+    """Sample batched image channels at source-plane coordinates."""
     if image.ndim not in {3, 4} or not image.is_floating_point():
         raise ValueError(
             "batched channel sampling expects floating [C,H,W] or [B,C,H,W] input"

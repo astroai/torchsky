@@ -106,12 +106,10 @@ def load_operator_calibration_split(
 
 
 def calibration_exposure_id(row: dict[str, Any]) -> str:
-    """Return the explicit exposure identity; legacy evidence stores it as exposure."""
-    value = row.get("exposure_id", row.get("exposure"))
+    """Return the explicit exposure identity."""
+    value = row.get("exposure_id")
     if not isinstance(value, str) or not value.strip():
-        raise ValueError(
-            "exposure calibration requires a nonempty exposure_id or exposure provenance field"
-        )
+        raise ValueError("exposure calibration requires a nonempty exposure_id")
     return value
 
 

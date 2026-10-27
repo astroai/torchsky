@@ -2,8 +2,8 @@
 
 ``coadd_cube`` dispatches to the 3D IFU path when observations carry a per-pixel
 wavelength (``wavelength_map``/``ifu_wcs``) and to the 2D filter-band path
-otherwise. The projection engine and the 2D image-plane coadd live in
-:mod:`torchsky.map.image_plane`.
+otherwise. The projection engine and the 2D image-plane coadd live in dedicated
+map implementation modules.
 """
 
 from __future__ import annotations
@@ -16,13 +16,17 @@ from torch import Tensor
 
 from ..spectral import SpectralAxis
 from ..wcs import WCS
-from .image_plane import (
-    _apply_observation_astrometric_shifts,
+from .calibration import (
     _apply_observation_calibration,
-    _coerce_target_header,
     _load_observation_weight_map,
-    _resolve_map_device,
+)
+from .image_plane_coadd import (
+    _apply_observation_astrometric_shifts,
     coadd_image_plane_cube,
+)
+from .image_plane_common import (
+    _coerce_target_header,
+    _resolve_map_device,
     load_observation_image_and_header,
 )
 from .observation import (
@@ -49,7 +53,9 @@ from .spectral_projection import (
 )
 
 
-def _has_3d_ifu_observations(observations: Sequence[Observation | IFUObservation]) -> bool:
+def _has_3d_ifu_observations(
+    observations: Sequence[Observation | IFUObservation],
+) -> bool:
     from ..wcs.gwcs_sampling import IFUSliceWCS
 
     return any(
@@ -99,7 +105,9 @@ def _coadd_ifu_3d_cube(
     else:
         raw_hdr = _coerce_target_header(target)
         if raw_hdr is None:
-            raise ValueError("target header or CubeTarget is required for 3D IFU cube building")
+            raise ValueError(
+                "target header or CubeTarget is required for 3D IFU cube building"
+            )
         H, W = target_shape_from_header(raw_hdr, fallback=(32, 32))
         header_dict = normalized_header_for_shape(dict(raw_hdr), (H, W), overrides=None)
 
@@ -111,7 +119,9 @@ def _coadd_ifu_3d_cube(
                 wmap = torch.as_tensor(obs.wavelength_map, dtype=torch.float64)
                 all_lams.append(wmap[torch.isfinite(wmap)])
             elif obs.wavelength is not None:
-                all_lams.append(torch.tensor([float(obs.wavelength)], dtype=torch.float64))
+                all_lams.append(
+                    torch.tensor([float(obs.wavelength)], dtype=torch.float64)
+                )
         if not all_lams:
             raise ValueError("spectral_axis must be provided for 3D IFU cube building")
         cat_lam = torch.cat(all_lams)
@@ -186,7 +196,9 @@ def _coadd_ifu_3d_cube(
             elif obs.wavelength is not None:
                 lam_d = torch.full_like(ra_d, float(obs.wavelength))
             else:
-                raise ValueError("Observation must define ifu_wcs, wavelength_map, or wavelength")
+                raise ValueError(
+                    "Observation must define ifu_wcs, wavelength_map, or wavelength"
+                )
 
         if obs.dcr_zenith_deg is not None:
             ra_d, dec_d = apply_dcr(
@@ -229,7 +241,9 @@ def _coadd_ifu_3d_cube(
             ix = torch.round(xt).to(torch.int64)
             iy = torch.round(yt).to(torch.int64)
             iz = torch.round(zt).to(torch.int64)
-            in_b = (ix >= 0) & (ix < W) & (iy >= 0) & (iy < H) & (iz >= 0) & (iz < N_wave)
+            in_b = (
+                (ix >= 0) & (ix < W) & (iy >= 0) & (iy < H) & (iz >= 0) & (iz < N_wave)
+            )
             if bool(in_b.any()):
                 idx = iz[in_b] * stride_z + iy[in_b] * stride_y + ix[in_b]
                 flat_numer.scatter_add_(0, idx, val_v[in_b] * w_v[in_b])
@@ -285,7 +299,11 @@ def _coadd_ifu_3d_cube(
         else:
             # 3D voxel drizzle / trilinear ("drizzle" or "linear")
             pf_xy = max(float(pixfrac), 1e-6) if spectral_kernel == "drizzle" else 1.0
-            pf_z = max(float(spectral_pixfrac), 1e-6) if spectral_kernel == "drizzle" else 1.0
+            pf_z = (
+                max(float(spectral_pixfrac), 1e-6)
+                if spectral_kernel == "drizzle"
+                else 1.0
+            )
             xs = xt - 0.5 * (pf_xy - 1.0)
             ys = yt - 0.5 * (pf_xy - 1.0)
             zs = zt - 0.5 * (pf_z - 1.0)
@@ -385,7 +403,8 @@ def coadd_cube(
     pixfrac: float | None = None,
     semantics: MapValueSemantics | None = None,
     method: MapStackingMethod | None = None,
-    spectral_kernel: Literal["linear", "drizzle", "emsm", "msm", "nearest"] | None = None,
+    spectral_kernel: Literal["linear", "drizzle", "emsm", "msm", "nearest"]
+    | None = None,
     spectral_pixfrac: float | None = None,
     emsm_scale: float | None = None,
     spatial_roi: Any | None = None,
@@ -404,7 +423,27 @@ def coadd_cube(
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     device: torch.device | str | None = None,
 ) -> CubeResult:
-    """Clean spectral-cube image-plane coadd entry point (supports 2D filter bands and 3D IFU slices)."""
+    """Coadd filter images or IFU slices into an image-plane spectral cube.
+
+    Args:
+        observations: Filter-image or IFU observations to combine.
+        target: Spatial and optional spectral target geometry.
+        resample: Structured spatial and spectral resampling configuration.
+        stack: Structured stacking configuration.
+        spectral_axis: Output spectral-axis definition.
+        spectral_bin_edges: Explicit output spectral-bin edges.
+        spectral_unit: Unit label for a constructed output spectral axis.
+        spectral_type: FITS-style spectral coordinate type.
+        device: Optional compute device.
+
+    Returns:
+        Coadded cube, weights, coverage, mask, and target metadata.
+
+    Examples:
+        >>> from torchsky.map import coadd_cube
+        >>> callable(coadd_cube)
+        True
+    """
     if spectral_axis is None and wavelengths is not None:
         spectral_axis = wavelengths
     r_cfg = resample or ResampleConfig()
@@ -413,10 +452,16 @@ def coadd_cube(
         spectral_kernel if spectral_kernel is not None else r_cfg.spectral_kernel
     )
     if any(isinstance(observation, IFUObservation) for observation in observations):
-        if not all(isinstance(observation, IFUObservation) for observation in observations):
-            raise TypeError("physical IFU cube building cannot mix IFUObservation and Observation")
+        if not all(
+            isinstance(observation, IFUObservation) for observation in observations
+        ):
+            raise TypeError(
+                "physical IFU cube building cannot mix IFUObservation and Observation"
+            )
         if not isinstance(target, CubeTarget):
-            raise TypeError("IFUObservation requires a CubeTarget with spectral bin edges")
+            raise TypeError(
+                "IFUObservation requires a CubeTarget with spectral bin edges"
+            )
         if resolved_spec_kernel not in {"drizzle", "emsm", "msm"}:
             resolved_spec_kernel = "drizzle"
         from .ifu import build_ifu_cube
@@ -484,7 +529,11 @@ def coadd_cube(
         )
 
     obs_shifted = _apply_observation_astrometric_shifts(observations, device)
-    if isinstance(target, PlannedImagePlaneCubeTarget) and spectral_axis is None and spectral_bin_edges is None:
+    if (
+        isinstance(target, PlannedImagePlaneCubeTarget)
+        and spectral_axis is None
+        and spectral_bin_edges is None
+    ):
         return coadd_image_plane_cube(
             obs_shifted,
             target=target,

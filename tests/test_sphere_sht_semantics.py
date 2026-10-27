@@ -353,6 +353,17 @@ def test_torch_harmonics_adapter_fails_for_missing_semantics() -> None:
         pseudo_analyze(torch.zeros(geometry.shape), geometry, lmax=3, backend=backend)
 
 
+def test_torch_harmonics_adapter_rejects_unsupported_solver_controls() -> None:
+    geometry = _geometry(nlat=9, nlon=16)
+    request = SHTRequest(geometry, 3, operation=SHTOperation.ANALYZE)
+    backend = TorchHarmonicsBackend()
+    values = torch.zeros(geometry.shape)
+    with pytest.raises(SHTCapabilityError, match="does not implement tolerance"):
+        backend.execute(values, request, tolerance=1.0e-10, max_iterations=0)
+    with pytest.raises(SHTCapabilityError, match="does not implement tolerance"):
+        backend.execute(values, request, tolerance=0.0, max_iterations=1)
+
+
 def test_torch_harmonics_adapter_uses_optional_grid_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -75,18 +75,17 @@ Current release-candidate evidence (same-machine, reference comparisons):
 
 ## Installation
 
-The 0.4.0 line is not yet on PyPI (0.1.x–0.3.1 are); install the release wheel
-or build from source in the meantime:
+Torchsky is not yet published on PyPI; install a repository release wheel or
+build from source in the meantime:
 
 ```bash
 # Wheel built from this repository (see docs/release.md)
 pip install "torchsky @ file:///path/to/torchsky-0.4.0-cp*-*.whl"
 ```
 
-Package metadata supports Python `>=3.12`, PyTorch `>=2.13`, and torchfits
-`>=1.0.0` without upper caps. Native wheels fail closed on a mismatched
-compiled PyTorch ABI; build from source against a newer supported runtime when
-needed. Install `torchfits` alongside torchsky when a workflow reads or writes
+Package metadata supports Python `>=3.12`, PyTorch `>=2.13,<2.14`, and torchfits
+`>=1.0.0`. Native wheels fail closed on a mismatched compiled PyTorch ABI.
+Install `torchfits` alongside torchsky when a workflow reads or writes
 FITS files:
 
 ```bash

@@ -30,7 +30,7 @@ def nside_for_cap(radius_rad: float, *, max_nside: int = _MAX_NSIDE) -> int:
     _healpix._validate_nside(max_nside)
     nside = 1
     while nside < max_nside:
-        if _healpix.max_pixrad(nside, degrees=False) <= radius_rad:
+        if _healpix.max_pixel_radius(nside, degrees=False) <= radius_rad:
             return nside
         nside *= 2
     return max_nside
@@ -83,7 +83,7 @@ def cap_covering_pixels(
             return pix
         return _healpix.nest2ring(nside, pix)
 
-    pixrad = _healpix.max_pixrad(nside, degrees=False)
+    pixrad = _healpix.max_pixel_radius(nside, degrees=False)
     hops = max(1, int(math.ceil(radius_rad / max(pixrad, 1e-12)))) + 1
     if hops > 16:
         x, y, z = _healpix.lonlat_to_xyz(lon_t, lat_t)
@@ -404,7 +404,7 @@ class HealpixIndex:
             self.nside, lon_t, lat_t, nest=True, lonlat=True
         ).to(torch.int64)
         candidate_radius_rad = math.radians(radius) + (
-            2.0 * _healpix.max_pixrad(self.nside, degrees=False)
+            2.0 * _healpix.max_pixel_radius(self.nside, degrees=False)
         )
         cand_nest = candidate_coarse_pixels_for_left_pixel(
             self.nside,

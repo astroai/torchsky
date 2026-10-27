@@ -1,4 +1,4 @@
-"""Resolve INR :class:`~torchsky.map.field.FieldObservation` spectral kwargs.
+"""Resolve field :class:`~torchsky.map.field.FieldObservation` spectral kwargs.
 
 Default path uses the `SVO Filter Profile Service <https://svo2.cab.inta-csic.es/theory/fps/>`_
 via ``astroquery.svo_fps`` (optional dependency).
@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 import torch
 
-InrSpectralSource = Literal["svo", "builtin", "file", "gaussian"]
+FieldSpectralSource = Literal["svo", "builtin", "file", "gaussian"]
 
 _GAUSS_FWHM_SIGMA = 2.0 * math.sqrt(2.0 * math.log(2.0))
 
@@ -343,7 +343,7 @@ def _svo_fps() -> Any:
         from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
     except Exception as exc:  # pragma: no cover - optional dependency
         raise ImportError(
-            "astroquery is required for --inr-spectral-source=svo when the filter "
+            "astroquery is required for --field-spectral-source=svo when the filter "
             "profile is not cached. Install with: pip install 'astroquery>=0.4.6'"
         ) from exc
     return SvoFps
@@ -380,6 +380,7 @@ def bandpass_from_svo(
     cache_dir: Path | str | None = None,
     use_cache: bool = True,
 ) -> dict[str, Any]:
+    """Resolve an SVO filter profile and summarize it for a field observation."""
     bn = str(band_name).strip().upper()
     cdir = _svo_cache_dir(cache_dir) if use_cache else None
 
@@ -407,9 +408,9 @@ def bandpass_from_svo(
     return spec
 
 
-def resolve_inr_bandpass(
+def resolve_field_bandpass(
     *,
-    source: InrSpectralSource,
+    source: FieldSpectralSource,
     band_name: str,
     builtin_table: dict[str, tuple[float, float, float, float]],
     svo_facility: str,
@@ -429,13 +430,13 @@ def resolve_inr_bandpass(
     """Resolve spectral kwargs for one band name (e.g. ``F277W``)."""
     src = str(source)
     if src not in {"svo", "builtin", "file", "gaussian"}:
-        raise ValueError(f"unknown INR spectral source {source!r}")
+        raise ValueError(f"unknown field spectral source {source!r}")
     bn = str(band_name).strip().upper()
     if src == "builtin":
         if bn not in builtin_table:
             raise ValueError(
-                f"Unknown filter/band {bn!r} for builtin INR table; "
-                "use --inr-spectral-source=svo, file, or gaussian"
+                f"Unknown filter/band {bn!r} for builtin field table; "
+                "use --field-spectral-source=svo, file, or gaussian"
             )
         smin, smax, tc, ts = builtin_table[bn]
         return {
@@ -453,8 +454,8 @@ def resolve_inr_bandpass(
             or gaussian_lambda_max is None
         ):
             raise ValueError(
-                "gaussian spectral source requires --inr-gaussian-lambda-eff, "
-                "--inr-gaussian-lambda-min, and --inr-gaussian-lambda-max"
+                "gaussian spectral source requires --field-gaussian-lambda-eff, "
+                "--field-gaussian-lambda-min, and --field-gaussian-lambda-max"
             )
         return bandpass_gaussian(
             band_name=bn,
@@ -474,8 +475,8 @@ def resolve_inr_bandpass(
                     break
         if path is None:
             raise ValueError(
-                "file spectral source requires --inr-transmission or a file "
-                f"{bn}.txt|dat|csv under --inr-transmission-dir"
+                "file spectral source requires --field-transmission or a file "
+                f"{bn}.txt|dat|csv under --field-transmission-dir"
             )
         return bandpass_from_transmission_file(
             path, band_name=bn, wavelength_unit=transmission_unit

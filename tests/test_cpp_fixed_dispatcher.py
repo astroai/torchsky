@@ -49,14 +49,14 @@ def test_fixed_dispatcher_schemas_are_clean() -> None:
         )
 
 
-def test_geometry_dispatcher_matches_legacy_adapters() -> None:
+def test_geometry_dispatcher_matches_ops_helpers() -> None:
     polygon = torch.tensor(
         [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]],
         dtype=torch.float64,
     )
     points = torch.tensor([[1.0, 1.0], [3.0, 1.0]], dtype=torch.float64)
     actual = torch.ops.torchsky.sphere_planar_point_in_polygon(points, polygon, 1e-15)
-    expected = _cpp._sphere_planar_point_in_polygon_cpu(points, polygon, 1e-15)
+    expected = _ops.sphere_planar_point_in_polygon(points, polygon, 1e-15)
     torch.testing.assert_close(actual, expected)
 
     a0 = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
@@ -68,12 +68,12 @@ def test_geometry_dispatcher_matches_legacy_adapters() -> None:
     actual_arcs = torch.ops.torchsky.sphere_arc_intersections_matrix(
         a0, a1, b0, b1, 1e-10
     )
-    expected_arcs = _cpp._sphere_arc_intersections_matrix_cpu(a0, a1, b0, b1, 1e-10)
+    expected_arcs = _ops.sphere_arc_intersections_matrix(a0, a1, b0, b1, 1e-10)
     torch.testing.assert_close(actual_arcs, expected_arcs)
 
 
 @pytest.mark.parametrize("nested", [False, True])
-def test_healpix_dispatcher_matches_legacy_adapters(nested: bool) -> None:
+def test_healpix_dispatcher_matches_ops_helpers(nested: bool) -> None:
     nside = 4
     pixels = torch.tensor([[0, 1], [23, 47]], dtype=torch.int64)
     lon = torch.tensor([[0.0, 45.0], [123.0, 359.0]], dtype=torch.float64)
@@ -85,58 +85,57 @@ def test_healpix_dispatcher_matches_legacy_adapters(nested: bool) -> None:
     neighbor_op = getattr(torch.ops.torchsky, f"healpix_neighbors_{suffix}")
     weights_op = getattr(torch.ops.torchsky, f"healpix_get_interp_weights_{suffix}")
     values_op = getattr(torch.ops.torchsky, f"healpix_get_interp_val_{suffix}")
-    legacy_ang = getattr(_cpp, f"healpix_ang2pix_{suffix}_torch_cpu")
-    legacy_pix = getattr(_cpp, f"healpix_pix2ang_{suffix}_torch_cpu")
-    legacy_neighbors = getattr(_cpp, f"healpix_neighbors_{suffix}_torch_cpu")
-    legacy_weights = getattr(_cpp, f"healpix_get_interp_weights_{suffix}_torch_cpu")
-    legacy_values = getattr(_cpp, f"healpix_get_interp_val_{suffix}_torch_cpu")
+    helper_ang = getattr(_ops, f"healpix_ang2pix_{suffix}")
+    helper_pix = getattr(_ops, f"healpix_pix2ang_{suffix}")
+    helper_neighbors = getattr(_ops, f"healpix_neighbors_{suffix}")
+    helper_weights = getattr(_ops, f"healpix_get_interp_weights_{suffix}")
+    helper_values = getattr(_ops, f"healpix_get_interp_val_{suffix}")
 
-    torch.testing.assert_close(ang_op(nside, lon, lat), legacy_ang(nside, lon, lat))
+    torch.testing.assert_close(ang_op(nside, lon, lat), helper_ang(nside, lon, lat))
     actual_lon, actual_lat = pix_op(nside, pixels)
-    expected_lon, expected_lat = legacy_pix(nside, pixels)
+    expected_lon, expected_lat = helper_pix(nside, pixels)
     torch.testing.assert_close(actual_lon, expected_lon)
     torch.testing.assert_close(actual_lat, expected_lat)
     torch.testing.assert_close(
-        neighbor_op(nside, pixels), legacy_neighbors(nside, pixels)
+        neighbor_op(nside, pixels), helper_neighbors(nside, pixels)
     )
     actual_pixels, actual_weights = weights_op(nside, lon, lat)
-    expected_pixels, expected_weights = legacy_weights(nside, lon, lat)
+    expected_pixels, expected_weights = helper_weights(nside, lon, lat)
     torch.testing.assert_close(actual_pixels, expected_pixels)
     torch.testing.assert_close(actual_weights, expected_weights)
 
     maps = torch.arange(12 * nside * nside, dtype=torch.float64).reshape(1, -1)
     torch.testing.assert_close(
-        values_op(nside, maps, lon, lat), legacy_values(nside, maps, lon, lat)
+        values_op(nside, maps, lon, lat), helper_values(nside, maps, lon, lat)
     )
 
     conversion = "nest2ring" if nested else "ring2nest"
-    legacy_conversion = getattr(_cpp, f"healpix_{conversion}_torch_cpu")
+    helper_conversion = getattr(_ops, f"healpix_{conversion}")
     torch.testing.assert_close(
         getattr(torch.ops.torchsky, f"healpix_{conversion}")(nside, pixels),
-        legacy_conversion(nside, pixels),
+        helper_conversion(nside, pixels),
     )
 
 
-def test_sparse_dispatcher_matches_legacy_adapter() -> None:
+def test_sparse_dispatcher_matches_ops_helper() -> None:
     query = torch.tensor([-1, 0, 3, 4, 99], dtype=torch.int64)
     index = torch.tensor([1, 0], dtype=torch.int64)
     blocks = torch.tensor([[[-1.0, -1.0, -1.0, -1.0], [10.0, 11.0, 12.0, 13.0]]])
     fill = torch.tensor(-1.0)
     actual = torch.ops.torchsky.sparse_get_values_blocks(query, index, blocks, fill)
-    expected = _cpp._sparse_get_values_blocks_cpu(query, index, blocks, fill)
+    expected = _ops.sparse_get_values_blocks(query, index, blocks, fill)
     torch.testing.assert_close(actual, expected)
 
 
 @pytest.mark.parametrize("nest", [False, True])
-def test_query_disc_dispatcher_matches_public_and_compatibility(nest: bool) -> None:
+def test_query_disc_dispatcher_matches_public_and_ops_helper(nest: bool) -> None:
     vec = torch.tensor([0.3, -0.4, 0.5], dtype=torch.float64)
     cos_lim = 0.25
     actual = torch.ops.torchsky.healpix_query_disc(8, vec, cos_lim, nest)
     expected = healpix.query_disc(8, vec, torch.acos(torch.tensor(cos_lim)).item(), nest=nest)
-    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
-        compatibility = _cpp.healpix_query_disc_torch_cpu(8, vec, cos_lim, nest)
+    helper = _ops.healpix_query_disc(8, vec, cos_lim, nest)
     torch.testing.assert_close(actual, expected)
-    torch.testing.assert_close(actual, compatibility)
+    torch.testing.assert_close(actual, helper)
     assert actual.dtype == torch.int64
     assert actual.device.type == "cpu"
 

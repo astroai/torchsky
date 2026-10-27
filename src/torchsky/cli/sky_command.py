@@ -15,9 +15,12 @@ def _resolve_estimator(args: argparse.Namespace):
         return MeshSkyEstimator(
             block_size=int(args.block_size),
             statistic=str(args.statistic),
-            mesh_filter=args.mesh_filter,
+            mesh_filter=None if args.mesh_filter == "none" else args.mesh_filter,
+            mesh_filter_size=int(args.mesh_filter_size),
             interpolate=str(args.interpolate),
         )
+    if args.statistic == "median":
+        raise SystemExit("--statistic median is available only with --method mesh")
     return PolynomialSkyModel(
         order=int(args.order),
         statistic=str(args.statistic),
@@ -80,10 +83,27 @@ def register_sky_parsers(subparsers: argparse.Action) -> None:
     p = subparsers.add_parser(
         "sky",
         help="Sky background estimation and multi-exposure matching.",
+        description="Estimate detector backgrounds or solve additive offsets across aligned exposures.",
+        epilog=(
+            "Examples:\n"
+            "  torchsky sky estimate --help\n"
+            "  torchsky sky match --help"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = p.add_subparsers(dest="sky_command", required=True)
 
-    est = sub.add_parser("estimate", help="Estimate 2D sky background for an image.")
+    est = sub.add_parser(
+        "estimate",
+        help="Estimate 2D sky background for an image.",
+        description="Estimate a mesh or polynomial background model from one FITS image.",
+        epilog=(
+            "Examples:\n"
+            "  torchsky sky estimate input.fits sky.fits\n"
+            "  torchsky sky estimate input.fits sky.fits --method mesh --block-size 64 --device cuda"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     est.add_argument("image", help="Input FITS image path.")
     est.add_argument("output", help="Output FITS path for sky model.")
     est.add_argument("--hdu", default=0, type=int, help="Image HDU index.")
@@ -109,9 +129,15 @@ def register_sky_parsers(subparsers: argparse.Action) -> None:
     )
     est.add_argument(
         "--mesh-filter",
-        default="median_3",
-        choices=("median_3", "gaussian_3", "none"),
-        help="Mesh post-filter (mesh method, default: median_3).",
+        default="median",
+        choices=("median", "gaussian", "none"),
+        help="Mesh post-filter (mesh method, default: median).",
+    )
+    est.add_argument(
+        "--mesh-filter-size",
+        default=3,
+        type=int,
+        help="Mesh post-filter kernel size (mesh method, default: 3).",
     )
     est.add_argument(
         "--interpolate",
@@ -136,6 +162,13 @@ def register_sky_parsers(subparsers: argparse.Action) -> None:
     match = sub.add_parser(
         "match",
         help="Compute additive sky offsets across overlapping exposures.",
+        description="Estimate and optionally apply additive background offsets to aligned FITS images.",
+        epilog=(
+            "Examples:\n"
+            "  torchsky sky match exposure1.fits exposure2.fits\n"
+            "  torchsky sky match exposure*.fits --output corrected_{i}.fits --method polynomial --order 2"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     match.add_argument("images", nargs="+", help="Input FITS images (same pixel grid).")
     match.add_argument("--hdu", default=0, type=int, help="Image HDU index.")
@@ -150,9 +183,9 @@ def register_sky_parsers(subparsers: argparse.Action) -> None:
     )
     match.add_argument(
         "--statistic",
-        default="median",
+        default="huber",
         choices=("median", "huber", "tukey"),
-        help="Per-mesh statistic (default: median).",
+        help="Robust statistic; median is mesh-only (default: huber).",
     )
     match.add_argument(
         "--block-size",
@@ -174,9 +207,15 @@ def register_sky_parsers(subparsers: argparse.Action) -> None:
     )
     match.add_argument(
         "--mesh-filter",
-        default="median_3",
-        choices=("median_3", "gaussian_3", "none"),
-        help="Mesh post-filter (mesh method, default: median_3).",
+        default="median",
+        choices=("median", "gaussian", "none"),
+        help="Mesh post-filter (mesh method, default: median).",
+    )
+    match.add_argument(
+        "--mesh-filter-size",
+        default=3,
+        type=int,
+        help="Mesh post-filter kernel size (mesh method, default: 3).",
     )
     match.add_argument(
         "--interpolate",

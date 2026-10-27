@@ -298,8 +298,8 @@ def cmd_full(args: argparse.Namespace) -> int:
             "--kernel", args.kernel,
             "--stack", args.stack,
         ]
-        if args.sky:
-            coadd_cmd.append("--sky")
+        if args.background_mode:
+            coadd_cmd.extend(["--background-mode", args.background_mode])
         if args.device:
             coadd_cmd.extend(["--device", args.device])
 
@@ -344,7 +344,11 @@ def main() -> None:
     # Coadd options
     p_full.add_argument("--kernel", default="lanczos3", help="Resampling kernel")
     p_full.add_argument("--stack", default="weighted_mean", help="Stacking method")
-    p_full.add_argument("--sky", action="store_true", help="Estimate and subtract sky")
+    p_full.add_argument(
+        "--background-mode",
+        choices=("none", "per-exposure", "overlap"),
+        help="Background policy passed to torchsky map",
+    )
     p_full.add_argument("--device", help="Torch device (cpu, cuda, mps)")
 
     # SCAMP options

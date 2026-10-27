@@ -1,6 +1,6 @@
 """Observation calibration, variance weighting, and provenance helpers.
 
-Split out of :mod:`torchsky.map.image_plane`; these are leaf helpers shared by
+Split out of the former image-plane monolith; these are leaf helpers shared by
 the coadd, sky-matching, and aperture paths.
 """
 
@@ -115,9 +115,7 @@ def _context_provenance(
             "value_semantics": value_semantics,
             "stacking_method": stacking_method,
             "drizzle_pixfrac": float(drizzle_pixfrac),
-            "surface_brightness_area_scaling": bool(
-                surface_brightness_area_scaling
-            ),
+            "surface_brightness_area_scaling": bool(surface_brightness_area_scaling),
             "data_dependent_background": bool(data_dependent_background),
         },
     }

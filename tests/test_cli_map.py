@@ -56,9 +56,62 @@ def test_map_parser_defaults():
     assert args.weight_maps is None
     assert args.mask_maps is None
     assert args.primary_beam_maps is None
-    assert args.inr_spectral_source == "svo"
-    assert args.inr_spatial_sampling == "center"
+    assert args.field_spectral_source == "svo"
+    assert args.field_spatial_sampling == "center"
     assert args.field_amp == "none"
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--sky",
+        "--inr-model",
+        "--inr-band",
+        "--inr-spectral-source",
+        "--inr-transmission",
+        "--inr-transmission-dir",
+        "--inr-transmission-unit",
+        "--inr-gaussian-lambda-eff",
+        "--inr-gaussian-lambda-min",
+        "--inr-gaussian-lambda-max",
+        "--inr-gaussian-sigma",
+        "--inr-quiet-svo",
+        "--inr-steps",
+        "--inr-lr",
+        "--inr-patch-size",
+        "--inr-patches-per-obs",
+        "--inr-obs-per-step",
+        "--inr-spectral-samples",
+        "--inr-spatial-sampling",
+        "--inr-render-tile",
+        "--inr-max-pixels",
+        "--per-band",
+    ],
+)
+def test_map_parser_rejects_removed_option_spellings(option: str) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["map", "out.fits", "in.fits", option])
+    assert exc_info.value.code == 2
+
+
+def test_map_field_options_use_field_destinations() -> None:
+    args = build_parser().parse_args(
+        [
+            "map",
+            "out.fits",
+            "in.fits",
+            "--field-model",
+            "sine_implicit",
+            "--field-band",
+            "F277W",
+            "--field-steps",
+            "12",
+        ]
+    )
+    assert args.field_model == "sine_implicit"
+    assert args.field_band == "F277W"
+    assert args.field_steps == 12
 
 
 @pytest.mark.parametrize(
@@ -82,7 +135,6 @@ def test_map_workflow_presets_expand_to_explicit_controls(
         kernel=None,
         stack=None,
         background_mode=None,
-        sky=False,
     )
 
     _resolve_map_workflow(args)
@@ -100,7 +152,6 @@ def test_map_workflow_explicit_controls_override_preset() -> None:
         kernel="bilinear",
         stack="median",
         background_mode="none",
-        sky=False,
     )
 
     _resolve_map_workflow(args)
@@ -129,21 +180,6 @@ def test_map_parser_accepts_sigma_clipped_stack() -> None:
     assert args.stack == "sigma_clipped"
     assert args.clip_sigma == 3.5
     assert args.clip_iterations == 5
-
-
-def test_map_sky_alias_rejects_conflicting_background_mode() -> None:
-    from torchsky.cli.map_command import _resolve_map_workflow
-
-    args = SimpleNamespace(
-        workflow="native",
-        kernel=None,
-        stack=None,
-        background_mode="overlap",
-        sky=True,
-    )
-
-    with pytest.raises(SystemExit, match="--sky conflicts with --background-mode"):
-        _resolve_map_workflow(args)
 
 
 def test_map_parser_help_is_renderable(capsys) -> None:
@@ -184,7 +220,7 @@ def test_dispatch_map_weight_map_count_mismatch(mock_expand):
 
 
 @mock.patch("torchsky.cli.map_command._expand_inputs")
-def test_dispatch_map_rejects_invalid_inr_tile(mock_expand):
+def test_dispatch_map_rejects_invalid_field_tile(mock_expand):
     mock_expand.return_value = ["in1.fits"]
     args = argparse.Namespace(
         inputs=["in1.fits"],
@@ -193,9 +229,9 @@ def test_dispatch_map_rejects_invalid_inr_tile(mock_expand):
         mask_maps=None,
         primary_beam_maps=None,
         method="field",
-        inr_render_tile=0,
+        field_render_tile=0,
     )
-    with pytest.raises(SystemExit, match="--inr-render-tile must be positive"):
+    with pytest.raises(SystemExit, match="--field-render-tile must be positive"):
         _dispatch_map(args)
 
 
@@ -774,12 +810,12 @@ def test_cli_map_writes_requested_noise_correlation_plane(
         )
 
 
-def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
+def test_cli_map_field_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
     from torchsky.cli import main
 
     input_path = tmp_path / "input.fits"
     output_path = tmp_path / "output.fits"
-    plan_path = tmp_path / "output.inr.plan.json"
+    plan_path = tmp_path / "output.field.plan.json"
     torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
@@ -795,11 +831,11 @@ def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
             str(input_path),
             "--method",
             "field",
-            "--inr-band",
+            "--field-band",
             "F277W",
-            "--inr-spectral-source",
+            "--field-spectral-source",
             "builtin",
-            "--inr-spatial-sampling",
+            "--field-spatial-sampling",
             "gauss_legendre_2x2",
             "--dry-run",
             "--plan-json",
@@ -817,8 +853,25 @@ def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
     assert plan["spectral"]["band"] == "F277W"
     assert plan["spectral"]["source"] == "builtin"
     assert plan["execution"]["field_preset"] == "balanced"
-    assert plan["execution"]["model"] == "sky_lambda_feature_field"
-    assert plan["execution"]["spatial_sampling"] == "gauss_legendre_2x2"
+    assert plan["execution"]["field_model"] == "sky_lambda_feature_field"
+    assert plan["execution"]["field_spatial_sampling"] == "gauss_legendre_2x2"
+
+    legacy_plan = json.loads(json.dumps(plan))
+    legacy_plan["execution"]["model"] = legacy_plan["execution"].pop("field_model")
+    legacy_path = tmp_path / "legacy-field-plan.json"
+    legacy_path.write_text(json.dumps(legacy_plan), encoding="utf-8")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            "--from-plan",
+            str(legacy_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match=r"execution\.field_model"):
+        main()
 
 
 def test_cli_map_field_defaults_to_joint_header_derived_bands(
@@ -842,7 +895,7 @@ def test_cli_map_field_defaults_to_joint_header_derived_bands(
             *(str(path) for path in input_paths),
             "--method",
             "field",
-            "--inr-spectral-source",
+            "--field-spectral-source",
             "builtin",
             "--dry-run",
             "--plan-json",
@@ -884,19 +937,19 @@ def test_cli_map_field_artifact_resumes_training(monkeypatch, tmp_path) -> None:
         "field",
         "--field-model",
         "sine_implicit",
-        "--inr-band",
+        "--field-band",
         "F277W",
-        "--inr-spectral-source",
+        "--field-spectral-source",
         "builtin",
-        "--inr-steps",
+        "--field-steps",
         "1",
-        "--inr-patch-size",
+        "--field-patch-size",
         "4",
-        "--inr-patches-per-obs",
+        "--field-patches-per-obs",
         "1",
-        "--inr-obs-per-step",
+        "--field-obs-per-step",
         "1",
-        "--inr-spectral-samples",
+        "--field-spectral-samples",
         "3",
         "--no-union-footprint",
         "--device",
@@ -1009,7 +1062,7 @@ def test_run_field_single_uses_reference_header(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         map_command,
-        "_inr_spectral_field_kwargs",
+        "_field_spectral_kwargs",
         lambda args, band: {
             "spectral_min": 1.0,
             "spectral_max": 2.0,
@@ -1063,17 +1116,17 @@ def test_run_field_single_uses_reference_header(monkeypatch, tmp_path) -> None:
         reference=reference_path,
         reference_hdu=0,
         plan_reference=0,
-        inr_band="F277W",
-        inr_spectral_source="builtin",
-        inr_model="sine_implicit",
-        inr_patch_size=0,
-        inr_steps=0,
-        inr_lr=1e-3,
-        inr_patches_per_obs=1,
-        inr_obs_per_step=1,
-        inr_spectral_samples=1,
-        inr_render_tile=512,
-        inr_max_pixels=100,
+        field_band="F277W",
+        field_spectral_source="builtin",
+        field_model="sine_implicit",
+        field_patch_size=0,
+        field_steps=0,
+        field_lr=1e-3,
+        field_patches_per_obs=1,
+        field_obs_per_step=1,
+        field_spectral_samples=1,
+        field_render_tile=512,
+        field_max_pixels=100,
         output=str(output_path),
         device="cpu",
         dry_run=False,
@@ -1086,7 +1139,7 @@ def test_run_field_single_uses_reference_header(monkeypatch, tmp_path) -> None:
     assert written["header"]["NAXIS2"] == 5
 
 
-def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
+def test_run_field_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
     from torchsky.cli import map_command
 
     reference_header = _simple_header((6, 7))
@@ -1108,7 +1161,7 @@ def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         map_command,
-        "_inr_spectral_field_kwargs",
+        "_field_spectral_kwargs",
         lambda args, band: {
             "spectral_min": 1.0,
             "spectral_max": 2.0,
@@ -1128,11 +1181,11 @@ def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
         reference=tmp_path / "reference.fits",
         reference_hdu=0,
         plan_reference=0,
-        inr_band="F277W",
-        inr_spectral_source="builtin",
-        inr_model="sine_implicit",
-        inr_render_tile=512,
-        inr_max_pixels=100,
+        field_band="F277W",
+        field_spectral_source="builtin",
+        field_model="sine_implicit",
+        field_render_tile=512,
+        field_max_pixels=100,
         output=str(tmp_path / "out.fits"),
         device="cpu",
         dry_run=True,
@@ -1252,12 +1305,12 @@ def test_run_field_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path
         hdu=0,
         output=str(tmp_path / "out"),
         per_filter=True,
-        inr_band=None,
+        field_band=None,
         device="cpu",
     )
 
     assert map_command._run_field(args) == 0
-    by_band = {ns.inr_band: ns for ns in captured}
+    by_band = {ns.field_band: ns for ns in captured}
     assert set(by_band) == {"F277W", "F356W"}
     assert by_band["F277W"].inputs == [paths[0], paths[2]]
     assert by_band["F277W"].weights == [1.0, 3.0]
@@ -1286,8 +1339,8 @@ def test_run_field_per_filter_keeps_running_after_a_group_fails(
         return image
 
     def fake_run_single(ns):
-        calls.append(ns.inr_band)
-        return 1 if ns.inr_band == "F277W" else 0
+        calls.append(ns.field_band)
+        return 1 if ns.field_band == "F277W" else 0
 
     def fake_read_header(path, hdu=0):
         header = _simple_header()
@@ -1308,7 +1361,7 @@ def test_run_field_per_filter_keeps_running_after_a_group_fails(
         hdu=0,
         output=str(tmp_path / "out"),
         per_filter=True,
-        inr_band=None,
+        field_band=None,
         device="cpu",
     )
 

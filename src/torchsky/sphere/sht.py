@@ -885,6 +885,7 @@ def _pseudo_analyze_native(
 
 
 class NativeSHTBackend:
+    """Spherical-harmonic backend implemented by torchsky native kernels."""
     name = "native"
     capabilities = SHTBackendCapabilities(
         backend=name,
@@ -1020,6 +1021,7 @@ def _packed_alm(alm: Tensor, lmax: int, mmax: int) -> Tensor:
 
 
 class TorchHarmonicsBackend:
+    """Spherical-harmonic backend using the optional torch-harmonics package."""
     name = "torch-harmonics"
     capabilities = SHTBackendCapabilities(
         backend=name,
@@ -1069,9 +1071,12 @@ class TorchHarmonicsBackend:
         tolerance: float,
         max_iterations: int,
     ) -> SHTResult:
-        del tolerance, max_iterations
         values = torch.as_tensor(values)
         self.capabilities.require(request, values)
+        if tolerance != 0.0 or max_iterations != 0:
+            raise SHTCapabilityError(
+                "torch-harmonics does not implement tolerance or iterative refinement"
+            )
         geometry = request.geometry
         if not isinstance(geometry, CARGeometry):
             raise SHTCapabilityError("torch-harmonics supports only CARGeometry")
@@ -1152,6 +1157,7 @@ def synthesize(
     backend: str | SHTBackend | None = None,
     latitude_block_size: int = 64,
 ) -> SHTResult:
+    """Synthesize a scalar or spin map from packed harmonic coefficients."""
     request = _request(
         geometry_or_request,
         SHTOperation.SYNTHESIZE,
@@ -1177,6 +1183,7 @@ def adjoint_synthesize(
     backend: str | SHTBackend | None = None,
     latitude_block_size: int = 64,
 ) -> SHTResult:
+    """Apply the adjoint of harmonic synthesis to map samples."""
     request = _request(
         geometry_or_request,
         SHTOperation.ADJOINT_SYNTHESIZE,
@@ -1202,6 +1209,7 @@ def analyze(
     backend: str | SHTBackend | None = None,
     latitude_block_size: int = 64,
 ) -> SHTResult:
+    """Analyze a scalar or spin map into packed harmonic coefficients."""
     request = _request(
         geometry_or_request,
         SHTOperation.ANALYZE,
@@ -1229,6 +1237,7 @@ def pseudo_analyze(
     max_iterations: int = 50,
     latitude_block_size: int = 64,
 ) -> SHTResult:
+    """Solve a least-squares harmonic analysis on incomplete geometries."""
     if tolerance <= 0.0:
         raise ValueError("tolerance must be positive")
     if max_iterations < 0:

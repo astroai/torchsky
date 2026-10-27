@@ -8,6 +8,7 @@ MOC GeoJSON, and validation diagnostics — all without a running HTTP server.
 from __future__ import annotations
 
 import math
+from typing import Any, cast
 
 import pytest
 import torch
@@ -81,6 +82,12 @@ class TestApplyStretch:
         out = apply_stretch(t, 0.0, 1000.0, "linear")
         assert float(out[0].item()) == pytest.approx(0.0)
         assert float(out[2].item()) == pytest.approx(1.0)
+
+    def test_zscale_is_not_a_low_level_stretch(self):
+        from torchsky.viz.renderers.image import apply_stretch
+
+        with pytest.raises(ValueError, match="Unknown stretch"):
+            cast(Any, apply_stretch)(torch.arange(3), 0.0, 2.0, "zscale")
 
 
 class TestColormaps:
@@ -266,7 +273,13 @@ class TestHipsTile:
         from torchsky.viz.renderers.hips_tile import render_preview
 
         image = torch.rand(128, 128) * 1000
-        png = render_preview(image, max_pixels=64, stretch="linear", cmap="gray")
+        png = render_preview(
+            image,
+            max_pixels=64,
+            stretch="linear",
+            limit_policy="zscale",
+            cmap="gray",
+        )
         assert png[:4] == b"\x89PNG"
 
     def test_compute_hips_order(self):

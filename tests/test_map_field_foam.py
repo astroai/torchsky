@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from torchsky.map.field.foam import (
+from torchsky.map.field.foam_geometry import (
     bounded_power_ownership,
     cech_adjacency,
     polygon_disk_candidate_csr,
@@ -500,15 +500,28 @@ def test_streamed_polygon_candidates_match_randomized_disk_aabb_oracle() -> None
         lower = torch.rand((18, 2), generator=generator, dtype=torch.float64) * 3 - 1
         upper = lower + 0.4
         polygons = torch.stack(
-            (lower, torch.stack((upper[:, 0], lower[:, 1]), -1), upper,
-             torch.stack((lower[:, 0], upper[:, 1]), -1)), dim=1
+            (
+                lower,
+                torch.stack((upper[:, 0], lower[:, 1]), -1),
+                upper,
+                torch.stack((lower[:, 0], upper[:, 1]), -1),
+            ),
+            dim=1,
         )
         sites = torch.rand((13, 2), generator=generator, dtype=torch.float64) * 3 - 1
         radii = torch.rand(13, generator=generator, dtype=torch.float64) * 0.8
-        closest = torch.minimum(torch.maximum(sites[None], lower[:, None]), upper[:, None])
-        expected = ((sites[None] - closest).square().sum(-1) <= radii.square()).nonzero()
+        closest = torch.minimum(
+            torch.maximum(sites[None], lower[:, None]), upper[:, None]
+        )
+        expected = (
+            (sites[None] - closest).square().sum(-1) <= radii.square()
+        ).nonzero()
         result = polygon_disk_candidate_csr(
-            polygons, sites, radii, bin_size=0.1, max_candidate_pairs=max(len(expected), 1)
+            polygons,
+            sites,
+            radii,
+            bin_size=0.1,
+            max_candidate_pairs=max(len(expected), 1),
         )
         assert result.raw_candidate_pairs > max(len(expected), 1)
         torch.testing.assert_close(result.polygon_ids, expected[:, 0])

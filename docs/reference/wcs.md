@@ -337,7 +337,6 @@ namespace `torchsky.wcs` unless the group text says otherwise.
         - frequency_to_spectral
         - rest_frequency_from_header
         - spectral_to_frequency
-        - transform_spectral
         - vacuum_wavelength_to_air
       heading_level: 3
       show_root_heading: false

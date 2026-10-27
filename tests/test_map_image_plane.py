@@ -6,10 +6,11 @@ import sys
 
 import pytest
 import torch
+import torchfits
 from torchfits import HDUList, TensorHDU
 
 import torchsky
-import torchsky.map.image_plane as image_plane_mod
+import torchsky.map.calibration as calibration_mod
 import torchsky.map.image_plane_coadd as image_plane_coadd_mod
 import torchsky.map.image_plane_common as image_plane_common_mod
 import torchsky.map.image_plane_projection as image_plane_projection_mod
@@ -19,11 +20,13 @@ from torchsky.map.operators.geometry_drizzle import (
 )
 import torchsky.map.operators.resampling as resampling_mod
 import torchsky.map.windowing as windowing_mod
-from torchsky.map import stack_product
-from torchsky.map.image_plane import (
+from torchsky.map import aperture_uncertainty, stack_product
+from torchsky.map.image_plane_coadd import (
     coadd_image_plane,
     coadd_image_plane_cube,
     coadd_image_plane_multiband,
+)
+from torchsky.map.planning import (
     plan_image_plane_cube_target,
     plan_image_plane_cube_target_from_header,
     plan_image_plane_target,
@@ -41,14 +44,8 @@ from torchsky.map.operators import (
     validate_image_plane_2d,
 )
 from torchsky.spectral import SpectralAxis
-import torchfits
 
 pytest.importorskip("torchsky._cpp")
-
-
-def test_historical_image_plane_reexports_remain_available() -> None:
-    assert image_plane_mod.read is torchfits.read
-    assert image_plane_mod.WCS is torchsky.wcs.WCS
 
 
 def test_batched_square_drizzle_areas_match_independent_quads() -> None:
@@ -214,7 +211,9 @@ def test_distorted_target_disables_spherical_cap_rejection() -> None:
     assert prepared.cap_radius_deg == 180.0
 
 
-def test_small_target_cap_does_not_reject_off_center_tpv_overlap(tmp_path: Path) -> None:
+def test_small_target_cap_does_not_reject_off_center_tpv_overlap(
+    tmp_path: Path,
+) -> None:
     target_header = _simple_header()
     target_header.update(
         {
@@ -715,7 +714,7 @@ def test_coadd_image_plane_spatial_tiles_are_exposure_major(
     read_calls: list[tuple[str, int | str | None]] = []
     prepare_calls: list[str] = []
     original_read = torchfits.read
-    original_prepare = image_plane_mod.prepare_image_observation_data
+    original_prepare = execution_mod.prepare_image_observation_data
 
     def counted_read(path, *, hdu=None, **kwargs):
         read_calls.append((str(path), hdu))
@@ -1597,9 +1596,7 @@ def test_tiled_overlap_background_uses_one_global_chain_graph(tmp_path) -> None:
             overwrite=True,
         )
         torchfits.write(str(mask_path), mask, header=header, overwrite=True)
-        observations.append(
-            ImageObservation(str(image_path), mask_path=str(mask_path))
-        )
+        observations.append(ImageObservation(str(image_path), mask_path=str(mask_path)))
     corrector = CrossExposureSkyCorrector(
         estimator=PolynomialSkyModel(order=0, statistic="huber")
     )
@@ -1670,7 +1667,7 @@ def test_tiled_overlap_background_rejects_scratch_shortage_before_projection(
         overwrite=True,
     )
     prepared = False
-    original_prepare = image_plane_mod.prepare_image_observation_data
+    original_prepare = execution_mod.prepare_image_observation_data
 
     def counted_prepare(*args, **kwargs):
         nonlocal prepared
@@ -1681,7 +1678,7 @@ def test_tiled_overlap_background_rejects_scratch_shortage_before_projection(
         free = 1
 
     monkeypatch.setattr(
-        image_plane_mod,
+        execution_mod,
         "prepare_image_observation_data",
         counted_prepare,
     )
@@ -2017,7 +2014,9 @@ def test_sample_image_plane_batched_channels_matches_separate_sampling(
 
 @pytest.mark.parametrize("kernel", ["lanczos3", "lanczos5"])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-def test_lanczos_sampling_preserves_constant_on_complete_support(kernel: str, dtype) -> None:
+def test_lanczos_sampling_preserves_constant_on_complete_support(
+    kernel: str, dtype
+) -> None:
     image = torch.ones((16, 16), dtype=dtype)
     x_src = torch.tensor([[5.25, 8.6], [6.7, 9.1]], dtype=dtype)
     y_src = torch.tensor([[6.4, 7.2], [8.3, 5.8]], dtype=dtype)
@@ -2208,9 +2207,7 @@ def test_bilinear_diagonal_variance_matches_monte_carlo() -> None:
     assert float(empirical) == pytest.approx(float(expected), rel=0.03)
 
 
-def test_bilinear_local_correlation_factor_predicts_large_aperture_variance() -> (
-    None
-):
+def test_bilinear_local_correlation_factor_predicts_large_aperture_variance() -> None:
     generator = torch.Generator().manual_seed(20260901)
     draws = 10_000
     width = 64
@@ -2287,11 +2284,11 @@ def test_finite_aperture_uncertainty_keeps_covariance_across_tiles(
     aperture[3, 1:7] = 1.0
 
     with torch.no_grad():
-        uncertainty = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+        uncertainty = aperture_uncertainty(
             observations,
             result,
             aperture,
-            resampling_kernel="bilinear",
+            kernel="bilinear",
             spatial_tile_hw=(2, 3),
         )
 
@@ -2338,9 +2335,7 @@ def test_finite_aperture_uncertainty_keeps_covariance_across_tiles(
         grid=grid,
         kernel="bilinear",
     )
-    empirical_variance = torch.var(
-        resampled.sum(dim=(-2, -1)), unbiased=True
-    )
+    empirical_variance = torch.var(resampled.sum(dim=(-2, -1)), unbiased=True)
     assert float(empirical_variance) == pytest.approx(
         float(uncertainty.variance), rel=0.03
     )
@@ -2374,22 +2369,22 @@ def test_aperture_uncertainty_reuses_call_scoped_target_tiles(monkeypatch) -> No
         return original_prepare(*args, **kwargs)
 
     monkeypatch.setattr(image_plane_coadd_mod, "_prepare_canvas_tile", counted_prepare)
-    cached = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    cached = aperture_uncertainty(
         observations,
         result,
         aperture,
-        resampling_kernel="bilinear",
+        kernel="bilinear",
         spatial_tile_hw=(4, 4),
         target_cache_capacity=4,
     )
     assert prepare_calls == 4
 
     prepare_calls = 0
-    uncached = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    uncached = aperture_uncertainty(
         observations,
         result,
         aperture,
-        resampling_kernel="bilinear",
+        kernel="bilinear",
         spatial_tile_hw=(4, 4),
         target_cache_capacity=0,
     )
@@ -2414,9 +2409,7 @@ def test_finite_aperture_uncertainty_device_parity(
         str(path), torch.zeros((8, 8)), header=source_header, overwrite=True
     )
     observations = [
-        ImageObservation(
-            str(path), weight=1.0, weight_is_inverse_variance=True
-        )
+        ImageObservation(str(path), weight=1.0, weight_is_inverse_variance=True)
     ]
     cpu_result = coadd_image_plane(
         observations,
@@ -2433,19 +2426,19 @@ def test_finite_aperture_uncertainty_device_parity(
     aperture = torch.zeros((8, 8), dtype=torch.float32)
     aperture[3, 1:7] = 1.0
 
-    cpu = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    cpu = aperture_uncertainty(
         observations,
         cpu_result,
         aperture,
-        resampling_kernel="bilinear",
+        kernel="bilinear",
         spatial_tile_hw=(2, 3),
         device="cpu",
     )
-    accelerator = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    accelerator = aperture_uncertainty(
         observations,
         accelerator_result,
         aperture.to(device),
-        resampling_kernel="bilinear",
+        kernel="bilinear",
         spatial_tile_hw=(2, 3),
         device=device,
     )
@@ -2485,16 +2478,14 @@ def test_finite_aperture_uncertainty_matches_source_basis_oracle(
         drizzle_pixfrac=0.8,
     )
     aperture = torch.zeros_like(result.data)
-    aperture[1:3, 1:3] = torch.tensor(
-        [[1.0, 0.75], [0.5, -0.25]], dtype=aperture.dtype
-    )
+    aperture[1:3, 1:3] = torch.tensor([[1.0, 0.75], [0.5, -0.25]], dtype=aperture.dtype)
 
-    uncertainty = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    uncertainty = aperture_uncertainty(
         observations,
         result,
         aperture,
-        resampling_kernel=kernel,
-        drizzle_pixfrac=0.8,
+        kernel=kernel,
+        pixfrac=0.8,
         spatial_tile_hw=(2, 2),
     )
 
@@ -2522,7 +2513,7 @@ def test_finite_aperture_uncertainty_matches_source_basis_oracle(
 
 @pytest.mark.parametrize(
     "kernel",
-    sorted(image_plane_mod._FINITE_APERTURE_COVARIANCE_KERNELS),
+    sorted(image_plane_coadd_mod._FINITE_APERTURE_COVARIANCE_KERNELS),
 )
 def test_finite_aperture_uncertainty_single_pixel_matches_diagonal_plane(
     tmp_path: Path,
@@ -2535,9 +2526,7 @@ def test_finite_aperture_uncertainty_single_pixel_matches_diagonal_plane(
         str(path), torch.zeros((8, 8)), header=source_header, overwrite=True
     )
     observations = [
-        ImageObservation(
-            str(path), weight=2.0, weight_is_inverse_variance=True
-        )
+        ImageObservation(str(path), weight=2.0, weight_is_inverse_variance=True)
     ]
     result = coadd_image_plane(
         observations,
@@ -2548,12 +2537,12 @@ def test_finite_aperture_uncertainty_single_pixel_matches_diagonal_plane(
     aperture = torch.zeros_like(result.data)
     aperture[3, 3] = 1.0
 
-    uncertainty = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    uncertainty = aperture_uncertainty(
         observations,
         result,
         aperture,
-        resampling_kernel=kernel,
-        drizzle_pixfrac=0.7,
+        kernel=kernel,
+        pixfrac=0.7,
         spatial_tile_hw=(3, 3),
     )
 
@@ -2588,9 +2577,7 @@ def test_finite_aperture_uncertainty_matches_distorted_wcs_basis_oracle(
     image = torch.zeros((4, 4), dtype=torch.float32)
     torchfits.write(str(path), image, header=source_header, overwrite=True)
     observations = [
-        ImageObservation(
-            str(path), weight=1.0, weight_is_inverse_variance=True
-        )
+        ImageObservation(str(path), weight=1.0, weight_is_inverse_variance=True)
     ]
     result = coadd_image_plane(
         observations,
@@ -2599,11 +2586,11 @@ def test_finite_aperture_uncertainty_matches_distorted_wcs_basis_oracle(
     )
     aperture = torch.zeros_like(result.data)
     aperture[1:3, 1:3] = 1.0
-    uncertainty = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    uncertainty = aperture_uncertainty(
         observations,
         result,
         aperture,
-        resampling_kernel="bilinear",
+        kernel="bilinear",
         spatial_tile_hw=(2, 2),
     )
 
@@ -2649,9 +2636,7 @@ def test_distorted_surface_brightness_area_scaling_is_tile_invariant(
         overwrite=True,
     )
     observations = [
-        ImageObservation(
-            str(path), weight=2.0, weight_is_inverse_variance=True
-        )
+        ImageObservation(str(path), weight=2.0, weight_is_inverse_variance=True)
     ]
 
     full = coadd_image_plane(
@@ -2687,9 +2672,7 @@ def test_flux_aperture_uncertainty_matches_source_basis_oracle(
     image = torch.zeros((4, 4), dtype=torch.float32)
     torchfits.write(str(path), image, header=source_header, overwrite=True)
     observations = [
-        ImageObservation(
-            str(path), weight=3.0, weight_is_inverse_variance=True
-        )
+        ImageObservation(str(path), weight=3.0, weight_is_inverse_variance=True)
     ]
     result = coadd_image_plane(
         observations,
@@ -2699,12 +2682,12 @@ def test_flux_aperture_uncertainty_matches_source_basis_oracle(
     )
     aperture = torch.zeros_like(result.data)
     aperture[1:3, 1:3] = 1.0
-    uncertainty = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    uncertainty = aperture_uncertainty(
         observations,
         result,
         aperture,
-        resampling_kernel="bilinear",
-        value_semantics="flux",
+        kernel="bilinear",
+        semantics="flux",
         spatial_tile_hw=(2, 2),
     )
 
@@ -2759,14 +2742,12 @@ def test_aperture_uncertainty_matches_spatial_noise_map_basis_oracle(
         resampling_kernel="bilinear",
     )
     aperture = torch.zeros_like(result.data)
-    aperture[1:3, 1:3] = torch.tensor(
-        [[1.0, -0.5], [0.25, 0.75]], dtype=aperture.dtype
-    )
-    uncertainty = image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+    aperture[1:3, 1:3] = torch.tensor([[1.0, -0.5], [0.25, 0.75]], dtype=aperture.dtype)
+    uncertainty = aperture_uncertainty(
         observations,
         result,
         aperture,
-        resampling_kernel="bilinear",
+        kernel="bilinear",
         spatial_tile_hw=(2, 2),
     )
 
@@ -2774,9 +2755,7 @@ def test_aperture_uncertainty_matches_spatial_noise_map_basis_oracle(
     for source_index in range(image.numel()):
         basis = torch.zeros_like(image)
         basis.reshape(-1)[source_index] = 1.0
-        torchfits.write(
-            str(image_path), basis, header=source_header, overwrite=True
-        )
+        torchfits.write(str(image_path), basis, header=source_header, overwrite=True)
         basis_result = coadd_image_plane(
             observations,
             target_header=target_header,
@@ -2784,8 +2763,7 @@ def test_aperture_uncertainty_matches_spatial_noise_map_basis_oracle(
         )
         response = torch.sum(aperture * basis_result.data)
         contributions.append(
-            torch.square(response)
-            / source_inverse_variance.reshape(-1)[source_index]
+            torch.square(response) / source_inverse_variance.reshape(-1)[source_index]
         )
     expected = torch.sum(torch.stack(contributions))
 
@@ -2802,59 +2780,49 @@ def test_finite_aperture_uncertainty_rejects_missing_noise_and_global_kernels(
 ) -> None:
     header = _simple_header()
     path = tmp_path / "no-noise.fits"
-    torchfits.write(
-        str(path), torch.zeros((8, 8)), header=header, overwrite=True
-    )
+    torchfits.write(str(path), torch.zeros((8, 8)), header=header, overwrite=True)
     result = coadd_image_plane([ImageObservation(str(path))])
     aperture = torch.ones_like(result.data)
 
     with pytest.raises(ValueError, match="explicit detector inverse variance"):
-        image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+        aperture_uncertainty(
             [ImageObservation(str(path))],
             result,
             aperture,
         )
 
-    noisy = [
-        ImageObservation(
-            str(path), weight=1.0, weight_is_inverse_variance=True
-        )
-    ]
+    noisy = [ImageObservation(str(path), weight=1.0, weight_is_inverse_variance=True)]
     noisy_result = coadd_image_plane(noisy)
     changed_noise = [
-        ImageObservation(
-            str(path), weight=2.0, weight_is_inverse_variance=True
-        )
+        ImageObservation(str(path), weight=2.0, weight_is_inverse_variance=True)
     ]
     with pytest.raises(ValueError, match="observation-operator provenance"):
-        image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+        aperture_uncertainty(
             changed_noise,
             noisy_result,
             aperture,
         )
     with pytest.raises(ValueError, match="execution provenance does not match"):
-        image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+        aperture_uncertainty(
             noisy,
             noisy_result,
             aperture,
-            resampling_kernel="nearest",
+            kernel="nearest",
         )
     with pytest.raises(ValueError, match="finite-support"):
-        image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+        aperture_uncertainty(
             noisy,
             noisy_result,
             aperture,
-            resampling_kernel="fft_shift",
+            kernel="fft_shift",
         )
 
     background_result = coadd_image_plane(
         noisy,
-        background_estimator=lambda image, _mask: torch.full_like(
-            image, image.mean()
-        ),
+        background_estimator=lambda image, _mask: torch.full_like(image, image.mean()),
     )
     with pytest.raises(ValueError, match="data-dependent background"):
-        image_plane_mod.evaluate_image_plane_aperture_uncertainty(
+        aperture_uncertainty(
             noisy,
             background_result,
             aperture,
@@ -3572,8 +3540,6 @@ def test_coadd_image_plane_rejects_non_positive_drizzle_pixfrac(
         )
 
 
-
-
 def test_coadd_image_plane_flux_semantics_improves_flux_conservation(tmp_path) -> None:
     source_path = tmp_path / "flux_source.fits"
     target_header = _simple_header()
@@ -3637,7 +3603,9 @@ def test_coadd_image_plane_weighted_mean_scales_surface_brightness_weights_only_
     coarse_source = dict(coarse_target)
     coarse_source_path = tmp_path / "coarse_source.fits"
     coarse_weight_path = tmp_path / "coarse_source_wht.fits"
-    torchfits.write(str(coarse_source_path), image, header=coarse_source, overwrite=True)
+    torchfits.write(
+        str(coarse_source_path), image, header=coarse_source, overwrite=True
+    )
     torchfits.write(
         str(coarse_weight_path), weight, header=coarse_source, overwrite=True
     )
@@ -3699,7 +3667,7 @@ def test_coadd_image_plane_builds_target_grid_once_per_run(
     torchfits.write(str(path_b), data + 1.0, header=header_b, overwrite=True)
 
     calls = 0
-    original = image_plane_mod._prepare_target
+    original = windowing_mod._prepare_target
 
     def counted(*args, **kwargs):
         nonlocal calls
@@ -3735,7 +3703,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
     target_header["CRPIX2"] = 48.0
     target_shape = (96, 128)
     device = data.device
-    prepared_target = image_plane_mod._prepare_target(
+    prepared_target = windowing_mod._prepare_target(
         header=target_header,
         target_wcs=torchsky.WCS(target_header),
         target_shape=target_shape,
@@ -3750,7 +3718,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
     source_wcs = torchsky.WCS(dict(header))
 
     original_threshold = windowing_mod._LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
-    original_resample = image_plane_mod._resample_weighted_to_target
+    original_resample = image_plane_projection_mod._resample_weighted_to_target
     try:
         forced_shapes: list[tuple[int, int]] = []
 
@@ -3764,7 +3732,7 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
         )
         monkeypatch.setattr(windowing_mod, "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS", 0)
         forced_numer, forced_weight, _, _ = (
-            image_plane_mod._project_observation_to_target(
+            image_plane_projection_mod._project_observation_to_target(
                 obs,
                 image=image,
                 header_dict_obs=dict(header),
@@ -3789,18 +3757,20 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
             "_LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS",
             10**9,
         )
-        full_numer, full_weight, _, _ = image_plane_mod._project_observation_to_target(
-            obs,
-            image=image,
-            header_dict_obs=dict(header),
-            source_wcs=source_wcs,
-            prepared_target=prepared_target,
-            target_header=target_header,
-            target_shape=target_shape,
-            device=device,
-            footprint_order=None,
-            resampling_kernel="bilinear",
-            value_semantics="surface_brightness",
+        full_numer, full_weight, _, _ = (
+            image_plane_projection_mod._project_observation_to_target(
+                obs,
+                image=image,
+                header_dict_obs=dict(header),
+                source_wcs=source_wcs,
+                prepared_target=prepared_target,
+                target_header=target_header,
+                target_shape=target_shape,
+                device=device,
+                footprint_order=None,
+                resampling_kernel="bilinear",
+                value_semantics="surface_brightness",
+            )
         )
     finally:
         monkeypatch.setattr(
@@ -3809,7 +3779,9 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
             original_threshold,
         )
         monkeypatch.setattr(
-            image_plane_mod, "_resample_weighted_to_target", original_resample
+            image_plane_projection_mod,
+            "_resample_weighted_to_target",
+            original_resample,
         )
 
     torch.testing.assert_close(forced_numer, full_numer, atol=0.0, rtol=0.0)
@@ -3823,7 +3795,7 @@ def test_project_observation_window_no_overlap_skips_geometry(monkeypatch) -> No
     target_header = dict(source_header)
     target_header["CRVAL1"] = target_header["CRVAL1"] + 10.0
     target_shape = (8, 8)
-    prepared_target = image_plane_mod._prepare_target(
+    prepared_target = windowing_mod._prepare_target(
         header=target_header,
         target_wcs=torchsky.WCS(target_header),
         target_shape=target_shape,
@@ -3839,12 +3811,16 @@ def test_project_observation_window_no_overlap_skips_geometry(monkeypatch) -> No
     def fail_projection(*args, **kwargs):
         raise AssertionError("no-overlap window must not call geometry projection")
 
-    monkeypatch.setattr(image_plane_projection_mod, "_window_large_tan_target", no_overlap_window)
     monkeypatch.setattr(
-        image_plane_projection_mod, "project_image_observation_geometry", fail_projection
+        image_plane_projection_mod, "_window_large_tan_target", no_overlap_window
+    )
+    monkeypatch.setattr(
+        image_plane_projection_mod,
+        "project_image_observation_geometry",
+        fail_projection,
     )
 
-    projected = image_plane_mod._project_observation_to_target_chunk(
+    projected = image_plane_projection_mod._project_observation_to_target_chunk(
         ImageObservation("mock.fits"),
         image=image,
         header_dict_obs=source_header,
@@ -3888,12 +3864,12 @@ def test_surface_brightness_area_scaling_gate_uses_target_vs_harmonic_source_sca
     fine_target["CDELT1"] = -0.004
     fine_target["CDELT2"] = 0.004
 
-    assert image_plane_mod._should_apply_surface_brightness_area_scaling(
+    assert calibration_mod._should_apply_surface_brightness_area_scaling(
         observations,
         target_header=coarse_target,
         target_shape=(8, 8),
     )
-    assert not image_plane_mod._should_apply_surface_brightness_area_scaling(
+    assert not calibration_mod._should_apply_surface_brightness_area_scaling(
         observations,
         target_header=fine_target,
         target_shape=(8, 8),
@@ -3911,7 +3887,7 @@ def test_coadd_image_plane_skips_target_grid_for_identical_wcs_without_footprint
     torchfits.write(str(path_b), data + 1.0, header=header, overwrite=True)
 
     calls = 0
-    original = image_plane_mod._build_target_world_grid
+    original = windowing_mod._build_target_world_grid
 
     def counted(*args, **kwargs):
         nonlocal calls
@@ -4238,7 +4214,7 @@ def test_tpv_source_cap_radius_covers_in_bounds_points(tmp_path) -> None:
     target_header["CRPIX2"] = 24.0
     target_header["CRVAL1"] = float(header["CRVAL1"])
     target_header["CRVAL2"] = float(header["CRVAL2"])
-    prepared = image_plane_mod._prepare_target(
+    prepared = windowing_mod._prepare_target(
         header=target_header,
         target_wcs=torchsky.WCS(target_header),
         target_shape=(48, 48),
@@ -4246,11 +4222,11 @@ def test_tpv_source_cap_radius_covers_in_bounds_points(tmp_path) -> None:
         include_pixel_area=False,
         include_quadrature=False,
     )
-    source_cap = image_plane_mod._tpv_source_cap_radius_deg(
+    source_cap = image_plane_projection_mod._tpv_source_cap_radius_deg(
         source_wcs,
         tuple(int(v) for v in image.shape),
     )
-    center_sep = image_plane_mod._angular_separation_deg(
+    center_sep = image_plane_projection_mod._angular_separation_deg(
         float(source_wcs.alpha0),
         float(source_wcs.delta0),
         prepared.center_ra_deg,

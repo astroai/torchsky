@@ -1822,6 +1822,7 @@ class _AstrometrySolver:
 def solve_astrometry(
     graph: AstrometricMatchGraph, config: AstrometryConfig | None = None
 ) -> AstrometrySolution:
+    """Solve an astrometric match graph for exposure and source parameters."""
     return graph.solve(config)
 
 

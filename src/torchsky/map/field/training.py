@@ -956,6 +956,24 @@ def fit_field_model(
     its gradient. Renderer activations are bounded by tile size; prediction,
     residual, and noise-model storage still scale with exposure size. As with
     activation checkpointing, rendering must not mutate model state.
+
+    Args:
+        observations: Non-empty sequence of field observations to fit.
+        model: Field module whose parameters are optimized in place.
+        steps: Number of optimizer steps.
+        lr: Initial learning rate.
+        device: Optional training device.
+        loss_kind: Per-pixel fitting loss.
+        num_spectral_samples: Spectral quadrature samples per observation.
+        render_spatial_tile_hw: Optional renderer tile height and width.
+
+    Returns:
+        Fit diagnostics, optimizer state, and reproducibility state.
+
+    Examples:
+        >>> from torchsky.field import fit
+        >>> callable(fit)
+        True
     """
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")

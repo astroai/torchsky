@@ -43,17 +43,10 @@ namespace `torchsky.sphere` unless the group text says otherwise.
 ::: torchsky.sphere
     options:
       members:
-        - Box
-        - Cap
-        - Circle
-        - Cone
-        - Ellipse
         - ExactSphericalRegion
         - LonLat
-        - MultiPolygon
-        - NativeExactSphericalRegion
+        - NativeApproximateSphericalRegion
         - PixelizedRegion
-        - Polygon
         - RegionAreaEstimate
         - SphericalBooleanRegion
         - SphericalBox
@@ -102,7 +95,6 @@ namespace `torchsky.sphere` unless the group text says otherwise.
         - pixels_to_pixel_ranges
         - query_box
         - query_circle
-        - query_cone
         - query_disc
         - query_polygon
         - query_strip
@@ -174,6 +166,7 @@ namespace `torchsky.sphere` unless the group text says otherwise.
 ::: torchsky.sphere
     options:
       members:
+        - PreparedRandomSampler
         - sample_randoms
       heading_level: 3
       show_root_heading: false
@@ -229,10 +222,8 @@ namespace `torchsky.sphere` unless the group text says otherwise.
 ::: torchsky.sphere
     options:
       members:
-        - HealSparseMap
         - SkyMaskPipe
         - SparseHealpixMap
-        - SparseMap
         - WideBitMask
         - sum_intersection
         - sum_union
@@ -304,4 +295,3 @@ namespace `torchsky.sphere` unless the group text says otherwise.
 |---|---|---|
 | `torchsky.sphere.compat` | compatibility | [reference](sphere-compat.md) |
 | `torchsky.sphere.healpix` | core | [reference](sphere-healpix.md) |
-| `torchsky.sphere.healpy` | compatibility | [reference](sphere-healpy.md) |

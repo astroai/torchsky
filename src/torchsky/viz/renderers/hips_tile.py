@@ -151,7 +151,8 @@ def render_hips_tile(
     wcs,
     order: int,
     pix: int,
-    stretch: str = "zscale",
+    stretch: str = "linear",
+    limit_policy: str = "zscale",
     cmap: str = "gray",
     vmin: float | None = None,
     vmax: float | None = None,
@@ -166,6 +167,7 @@ def render_hips_tile(
         order:   HiPS order (HEALPix nside = 2^order).
         pix:     HEALPix NESTED pixel index.
         stretch: Stretch algorithm name.
+        limit_policy: Display-limit policy, ``"zscale"`` or ``"minmax"``.
         cmap:    Colormap name.
         vmin/vmax: Display limits. If None, computed from a sample of the full image.
         tile_size: Output tile size in pixels (default 512).
@@ -173,6 +175,8 @@ def render_hips_tile(
     Returns:
         PNG bytes, or None if the tile is entirely outside the image footprint.
     """
+    if limit_policy not in {"zscale", "minmax"}:
+        raise ValueError(f"Unknown limit policy {limit_policy!r}")
     _lazy_import()
     image_h, image_w = image.shape[-2], image.shape[-1]
 
@@ -182,7 +186,12 @@ def render_hips_tile(
         sample = sample[torch.isfinite(sample)]
         if sample.numel() == 0:
             return None
-        _vmin, _vmax = zscale_limits(sample)
+        if limit_policy == "zscale":
+            _vmin, _vmax = zscale_limits(sample)
+        elif limit_policy == "minmax":
+            _vmin, _vmax = float(sample.min().item()), float(sample.max().item())
+        else:
+            raise ValueError(f"Unknown limit policy {limit_policy!r}")
         if vmin is None:
             vmin = _vmin
         if vmax is None:
@@ -234,7 +243,8 @@ def render_hips_tile(
 def render_preview(
     image: Tensor,
     max_pixels: int = 1024,
-    stretch: str = "zscale",
+    stretch: str = "linear",
+    limit_policy: str = "zscale",
     cmap: str = "gray",
     vmin: float | None = None,
     vmax: float | None = None,
@@ -244,6 +254,8 @@ def render_preview(
 
     Used for quick previews and Aladin FITS image loading.
     """
+    if limit_policy not in {"zscale", "minmax"}:
+        raise ValueError(f"Unknown limit policy {limit_policy!r}")
     h, w = image.shape[-2], image.shape[-1]
     scale = min(1.0, max_pixels / max(h, w))
     if scale < 1.0:
@@ -265,7 +277,14 @@ def render_preview(
     if vmin is None or vmax is None:
         sample = img.flatten()
         sample = sample[torch.isfinite(sample)]
-        _vmin, _vmax = zscale_limits(sample) if sample.numel() > 0 else (0.0, 1.0)
+        if sample.numel() == 0:
+            _vmin, _vmax = 0.0, 1.0
+        elif limit_policy == "zscale":
+            _vmin, _vmax = zscale_limits(sample)
+        elif limit_policy == "minmax":
+            _vmin, _vmax = float(sample.min().item()), float(sample.max().item())
+        else:
+            raise ValueError(f"Unknown limit policy {limit_policy!r}")
         if vmin is None:
             vmin = _vmin
         if vmax is None:

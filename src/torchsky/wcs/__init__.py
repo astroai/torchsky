@@ -130,7 +130,6 @@ from .spectral import (
     frequency_to_spectral,
     rest_frequency_from_header,
     spectral_to_frequency,
-    transform_spectral,
     vacuum_wavelength_to_air,
 )
 from .tabular import (
@@ -313,7 +312,6 @@ __all__ = [
     "coupled_tabular_wcs_from_fits",
     "tabular_axes_from_fits",
     "tangent_plane_block_residuals",
-    "transform_spectral",
     "update_bayesian_modes",
     "vacuum_wavelength_to_air",
     "validate_sampled_transform",

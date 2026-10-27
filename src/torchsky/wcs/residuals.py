@@ -367,6 +367,7 @@ class ResidualModeDesign:
 def interpretable_residual_modes(
     features: AstrometricResidualFeatures,
 ) -> ResidualModeDesign:
+    """Build named affine, color, and detector residual-mode columns."""
     x, y = features.focal_xy.unbind(-1)
     quadratic = torch.stack(
         (x.square() - y.square(), 2.0 * x * y, x.square() + y.square()), dim=-1
@@ -473,6 +474,7 @@ def fit_bayesian_modes(
     prior_scale: tuple[float, float, float] = (0.1, 0.05, 0.1),
     gauge: TangentPlaneGauge | None = None,
 ) -> BayesianModeState:
+    """Fit residual modes with Gaussian priors and correlated noise."""
     values = _finite_real(residual, "residual", ndim=2).to(
         dtype=design.stable.dtype, device=design.stable.device
     )
@@ -519,6 +521,7 @@ def fit_bayesian_modes(
 def predict_bayesian_modes(
     state: BayesianModeState, design: ResidualModeDesign
 ) -> BayesianModePrediction:
+    """Predict residual-mode means and covariance from a fitted state."""
     if state.widths != design.widths:
         raise ValueError("state and design mode widths differ")
     matrix = design.matrix
@@ -545,6 +548,7 @@ def update_bayesian_modes(
     *,
     component: ResidualComponent = "local",
 ) -> BayesianModeState:
+    """Update one residual component while preserving the other components."""
     if state.widths != design.widths:
         raise ValueError("state and design mode widths differ")
     values = _finite_real(residual, "residual", ndim=2).to(
@@ -774,6 +778,7 @@ def fit_sparse_gp_residual(
     gauge: TangentPlaneGauge | None = None,
     jitter: float = 1.0e-8,
 ) -> SparseGPResidual:
+    """Fit a sparse Gaussian-process model to tangent-plane residuals."""
     train = _finite_real(features, "features", ndim=2)
     values = _finite_real(residual, "residual", ndim=2).to(train)
     inducing = _finite_real(inducing_features, "inducing_features", ndim=2).to(train)
@@ -1065,6 +1070,7 @@ class ResidualLadderPrediction:
 
 
 class AstrometricResidualLadder:
+    """Compose global, local, and sparse astrometric residual corrections."""
     def __init__(self, gauge: TangentPlaneGauge, envelope: CorrectionEnvelope) -> None:
         self.gauge = gauge
         self.envelope = envelope
@@ -1284,6 +1290,7 @@ def shadow_update_bayesian_modes(
     component: ResidualComponent = "local",
     max_anchor_nll_increase: float = 0.0,
 ) -> ShadowUpdateResult:
+    """Evaluate and conditionally accept a residual-mode state update."""
     if not math.isfinite(max_anchor_nll_increase) or max_anchor_nll_increase < 0.0:
         raise ValueError("max_anchor_nll_increase must be finite and non-negative")
     candidate_coefficients = update_bayesian_modes(

@@ -2,10 +2,10 @@ import torch
 from torchsky.sphere import (
     LonLat,
     UnitVector3d,
-    Box,
-    Circle,
-    Ellipse,
-    HealSparseMap,
+    SphericalBox,
+    SphericalCap,
+    SphericalEllipse,
+    SparseHealpixMap,
     SkyMaskPipe,
     MOC,
     degrade_pixels,
@@ -30,17 +30,17 @@ def test_geom_primitives():
     assert ll_rev.lat == 0.0
 
     # Box
-    box = Box(10, 20, -5, 5)
+    box = SphericalBox(10, 20, -5, 5)
     assert box.contains(15, 0).item()
     assert not box.contains(25, 0).item()
 
     # Circle (Cap)
-    circ = Circle(0, 0, 1.0)
+    circ = SphericalCap(0, 0, 1.0)
     assert circ.contains(0.5, 0).item()
     assert not circ.contains(2.0, 0).item()
 
     # Ellipse
-    ell = Ellipse(0, 0, 2.0, 1.0, pa_deg=90)
+    ell = SphericalEllipse(0, 0, 2.0, 1.0, pa_deg=90)
     assert ell.contains(1.5, 0).item()
     assert not ell.contains(0, 1.5).item()
 
@@ -52,7 +52,7 @@ def test_sparse_map():
     dense = torch.zeros(12 * 4**2)
     dense[0:16] = 1.0  # First coverage pixel
 
-    sm = HealSparseMap.convert_healpix_map(dense, nside_cov, sentinel=0)
+    sm = SparseHealpixMap.convert_healpix_map(dense, nside_cov, sentinel=0)
     assert sm.nside_coverage == 1
     assert sm.nside_sparse == 4
     assert sm.coverage_map[0] == 0
@@ -86,11 +86,15 @@ def test_mask_pipe():
 
     dense1 = torch.zeros(192)
     dense1[0:16] = 1
-    m1 = HealSparseMap.convert_healpix_map(dense1, nside_coverage=1, sentinel=0)
+    m1 = SparseHealpixMap.convert_healpix_map(
+        dense1, nside_coverage=1, sentinel=0
+    )
 
     dense2 = torch.zeros(192)
     dense2[8:24] = 1
-    m2 = HealSparseMap.convert_healpix_map(dense2, nside_coverage=1, sentinel=0)
+    m2 = SparseHealpixMap.convert_healpix_map(
+        dense2, nside_coverage=1, sentinel=0
+    )
 
     pipe.add_stage("s1", m1)
     pipe.add_stage("s2", m2)

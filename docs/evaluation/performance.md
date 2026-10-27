@@ -38,7 +38,7 @@ Survey-scale products are bounded by configuration, not by hope. The main knobs:
 | `torchsky.map` scratch paths | `scratch_dir=...` | Location of capacity-checked scratch storage for exact median, sigma-clipped stacks, and overlap background fits |
 | `torchsky.sphere.query_*` | `chunk_size=1_000_000`, `fact` | Query working set and subsampling |
 | `torchsky.catalogs` + `torchfits.table.scan` | `batch_size` | Streamed table batches instead of a full in-memory catalog |
-| HEALPix | `SparseHealpixMap`, `HealSparseMap`, `MultiOrderHealpixMap` | Sparse coverage instead of dense `12 * nside**2` arrays |
+| HEALPix | `SparseHealpixMap`, `MultiOrderHealpixMap` | Sparse coverage instead of dense `12 * nside**2` arrays |
 
 Things that are deliberately not bounded by a silent fallback: a custom
 background estimator without compact tile rendering is rejected in the bounded

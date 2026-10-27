@@ -96,10 +96,35 @@ def test_map_root_keeps_workflow_api_small() -> None:
     assert "fit_field_model" not in torchsky.map.__all__
     assert torchsky.field.fit is torchsky.map.field.fit_field_model
     assert torchsky.field.model is torchsky.map.field.make_field_model
-    assert torchsky.sphere.Polygon is torchsky.sphere.SphericalPolygon
-    assert torchsky.sphere.MultiPolygon is torchsky.sphere.SphericalMultiPolygon
-    assert torchsky.sphere.Cone is torchsky.sphere.SphericalCap
-    assert callable(torchsky.sphere.query_cone)
+    for removed in (
+        "Polygon",
+        "MultiPolygon",
+        "Circle",
+        "Cone",
+        "Cap",
+        "Box",
+        "Ellipse",
+        "NativeExactSphericalRegion",
+        "HealSparseMap",
+        "SparseMap",
+        "query_cone",
+    ):
+        assert not hasattr(torchsky.sphere, removed)
+    for removed in (
+        "max_pixrad",
+        "ring_to_nested",
+        "nested_to_ring",
+        "neighbours",
+        "query_cone",
+    ):
+        assert not hasattr(torchsky.sphere.healpix, removed)
+    for removed in (
+        "get_values_pix",
+        "lookup_With_valid",
+        "generate_healpix_map",
+        "write",
+    ):
+        assert not hasattr(torchsky.sphere.SparseHealpixMap, removed)
     assert callable(torchsky.sphere.query_polygon)
     assert callable(torchsky.sphere.sample_map)
     assert callable(torchsky.catalogs.crossmatch)

@@ -1,4 +1,4 @@
-"""``torchsky map`` — high-SNR image-plane coadd or INR field render."""
+"""``torchsky map`` — high-SNR image-plane coadd or continuous field render."""
 
 from __future__ import annotations
 
@@ -51,17 +51,17 @@ from ..map.operators.execution import (
 from ..map.sky import CrossExposureSkyCorrector, MeshSkyEstimator, PolynomialSkyModel
 from ..spectrophotometry import Passband
 
-from ..filter_profiles import field_observation_spectral_kwargs, resolve_inr_bandpass
+from ..filter_profiles import field_observation_spectral_kwargs, resolve_field_bandpass
 from ..instrument import NIRCAM_UPDEC_BANDS, nircam_imaging_band
 
 # Offline fallback when FITS headers lack spectral metadata (Angstrom).
-_INR_BAND_TABLE: dict[str, tuple[float, float, float, float]] = {}
+_FIELD_BAND_TABLE: dict[str, tuple[float, float, float, float]] = {}
 for _band_name in NIRCAM_UPDEC_BANDS:
     _band_metadata = nircam_imaging_band(_band_name)
     _fwhm = (
         _band_metadata.half_power_max_angstrom - _band_metadata.half_power_min_angstrom
     )
-    _INR_BAND_TABLE[_band_name] = (
+    _FIELD_BAND_TABLE[_band_name] = (
         _band_metadata.half_power_min_angstrom,
         _band_metadata.half_power_max_angstrom,
         _band_metadata.pivot_wavelength_angstrom,
@@ -138,10 +138,6 @@ def _resolve_map_workflow(args: argparse.Namespace) -> None:
     if getattr(args, "stack", None) is None:
         args.stack = default_stack
     explicit_background = getattr(args, "background_mode", None)
-    if bool(getattr(args, "sky", False)):
-        if explicit_background not in (None, "per-exposure"):
-            raise SystemExit("--sky conflicts with --background-mode")
-        explicit_background = "per-exposure"
     args.background_mode = explicit_background or default_background
     args.workflow = workflow
 
@@ -152,11 +148,12 @@ def _sky_estimator(args: argparse.Namespace):
             order=int(getattr(args, "sky_order", 3)),
             statistic=str(getattr(args, "sky_statistic", "huber")),
         )
-    mesh_filter = getattr(args, "sky_mesh_filter", "median_3")
+    mesh_filter = getattr(args, "sky_mesh_filter", "median")
     return MeshSkyEstimator(
         block_size=int(getattr(args, "sky_block_size", 128)),
         statistic=str(getattr(args, "sky_statistic", "huber")),
         mesh_filter=None if mesh_filter == "none" else str(mesh_filter),
+        mesh_filter_size=int(getattr(args, "sky_mesh_filter_size", 3)),
         interpolate=str(getattr(args, "sky_interpolate", "bicubic")),
     )
 
@@ -248,39 +245,39 @@ def _header_filter_keyword(header: dict) -> str | None:
     return None
 
 
-def _inr_spectral_field_kwargs(args: argparse.Namespace, band: str) -> dict:
-    """Spectral keyword args for :class:`FieldObservation` (INR only)."""
+def _field_spectral_kwargs(args: argparse.Namespace, band: str) -> dict:
+    """Spectral keyword args for :class:`FieldObservation`."""
     try:
-        raw = resolve_inr_bandpass(
-            source=str(args.inr_spectral_source),
+        raw = resolve_field_bandpass(
+            source=str(args.field_spectral_source),
             band_name=str(band).strip().upper(),
-            builtin_table=_INR_BAND_TABLE,
+            builtin_table=_FIELD_BAND_TABLE,
             svo_facility=str(args.svo_facility),
             svo_instrument=str(args.svo_instrument),
             svo_filter_id=args.svo_filter_id,
             svo_prefer=str(args.svo_prefer),
             svo_cache_dir=getattr(args, "svo_cache_dir", None),
             svo_use_cache=not getattr(args, "no_svo_cache", False),
-            transmission_path=args.inr_transmission,
-            transmission_dir=args.inr_transmission_dir,
-            transmission_unit=str(args.inr_transmission_unit),
-            gaussian_lambda_eff=args.inr_gaussian_lambda_eff,
-            gaussian_lambda_min=args.inr_gaussian_lambda_min,
-            gaussian_lambda_max=args.inr_gaussian_lambda_max,
-            gaussian_sigma=args.inr_gaussian_sigma,
+            transmission_path=args.field_transmission,
+            transmission_dir=args.field_transmission_dir,
+            transmission_unit=str(args.field_transmission_unit),
+            gaussian_lambda_eff=args.field_gaussian_lambda_eff,
+            gaussian_lambda_min=args.field_gaussian_lambda_min,
+            gaussian_lambda_max=args.field_gaussian_lambda_max,
+            gaussian_sigma=args.field_gaussian_sigma,
         )
     except ImportError as exc:
         raise SystemExit(str(exc)) from exc
     except ValueError as exc:
-        raise SystemExit(f"torchsky map inr: {exc}") from exc
+        raise SystemExit(f"torchsky map field: {exc}") from exc
     fid = raw.get("svo_filter_id")
     if (
-        str(args.inr_spectral_source) == "svo"
+        str(args.field_spectral_source) == "svo"
         and fid
-        and not getattr(args, "inr_quiet_svo", False)
+        and not getattr(args, "field_quiet_svo", False)
     ):
         print(
-            f"torchsky map inr: SVO bandpass {str(band).upper()} -> {fid}",
+            f"torchsky map field: SVO bandpass {str(band).upper()} -> {fid}",
             file=sys.stderr,
         )
     return field_observation_spectral_kwargs(raw)
@@ -401,7 +398,7 @@ def _paths_to_field_observations(
     return out
 
 
-def _resolve_inr_observation_spectra(
+def _resolve_field_observation_spectra(
     args: argparse.Namespace,
     paths: Sequence[str],
     hdus: Sequence[int],
@@ -409,7 +406,7 @@ def _resolve_inr_observation_spectra(
     read_device: str,
 ) -> tuple[list[str], list[dict]]:
     """Resolve one passband per exposure, caching repeated filter profiles."""
-    explicit_band = getattr(args, "inr_band", None)
+    explicit_band = getattr(args, "field_band", None)
     if explicit_band is not None:
         bands = [str(explicit_band).strip().upper()] * len(paths)
     else:
@@ -420,22 +417,22 @@ def _resolve_inr_observation_spectra(
             if band is None:
                 raise SystemExit(
                     f"{path}[{hdu}]: field fitting requires FILTER/FILTNAM "
-                    "or an explicit --inr-band"
+                    "or an explicit --field-band"
                 )
             bands.append(str(band).strip().upper())
 
     unique_bands = tuple(dict.fromkeys(bands))
-    source = str(getattr(args, "inr_spectral_source", "svo"))
+    source = str(getattr(args, "field_spectral_source", "svo"))
     if len(unique_bands) > 1:
         if source == "gaussian":
             raise SystemExit(
                 "joint multiband fitting cannot use one Gaussian profile for "
                 "multiple header filters; use builtin, SVO, or a transmission directory"
             )
-        if source == "file" and getattr(args, "inr_transmission", None) is not None:
+        if source == "file" and getattr(args, "field_transmission", None) is not None:
             raise SystemExit(
-                "joint multiband fitting requires --inr-transmission-dir, not one "
-                "--inr-transmission file"
+                "joint multiband fitting requires --field-transmission-dir, not one "
+                "--field-transmission file"
             )
         if source == "svo" and getattr(args, "svo_filter_id", None) is not None:
             raise SystemExit(
@@ -443,7 +440,7 @@ def _resolve_inr_observation_spectra(
                 "multiple header filters"
             )
 
-    profiles = {band: _inr_spectral_field_kwargs(args, band) for band in unique_bands}
+    profiles = {band: _field_spectral_kwargs(args, band) for band in unique_bands}
     return bands, [profiles[band] for band in bands]
 
 
@@ -873,14 +870,14 @@ def _run_field(args: argparse.Namespace) -> int:
         rc = 0
         for fk, indices in sorted(groups.items()):
             gpaths = [inputs[i] for i in indices]
-            if fk == "UNKNOWN" and args.inr_band is None:
+            if fk == "UNKNOWN" and args.field_band is None:
                 print(
-                    f"torchsky map inr: skip UNKNOWN filter group ({len(gpaths)} files); "
-                    "set --inr-band",
+                    f"torchsky map field: skip UNKNOWN filter group ({len(gpaths)} files); "
+                    "set --field-band",
                     file=sys.stderr,
                 )
                 continue
-            band = str(args.inr_band).upper() if fk == "UNKNOWN" else str(fk).upper()
+            band = str(args.field_band).upper() if fk == "UNKNOWN" else str(fk).upper()
             sub_out = _filter_output_path(args.output, fk)
             sub_out.parent.mkdir(parents=True, exist_ok=True)
             ns = argparse.Namespace(**vars(args))
@@ -892,7 +889,7 @@ def _run_field(args: argparse.Namespace) -> int:
             ns.mask_maps = [args.mask_maps[i] for i in indices]
             ns.primary_beam_maps = [args.primary_beam_maps[i] for i in indices]
             ns.per_filter = False
-            ns.inr_band = band
+            ns.field_band = band
             if getattr(args, "plan_json", None) is not None:
                 ns.plan_json = _per_filter_plan_path(Path(args.plan_json), fk)
             # Every band group runs even after an earlier failure; the first
@@ -1061,7 +1058,7 @@ def _expand_field_inputs(
 ) -> tuple[
     list[str], list[int], list[float], list[float], list[str | None], list[str | None]
 ]:
-    """Expand MEF files into per-HDU entries for INR processing."""
+    """Expand MEF files into per-HDU entries for field processing."""
     rows = _image_hdu_expansion(paths, hdu)
     return (
         [path for _, path, _ in rows],
@@ -1079,12 +1076,12 @@ def _run_field_single(args: argparse.Namespace) -> int:
     if resolved_plan_inputs is None:
         inputs = _expand_inputs(args.inputs)
         (
-            inr_paths,
-            inr_hdus,
-            inr_weights,
-            inr_bg,
-            inr_wmaps,
-            inr_mmaps,
+            field_paths,
+            field_hdus,
+            field_weights,
+            field_backgrounds,
+            field_weight_maps,
+            field_mask_maps,
         ) = _expand_field_inputs(
             inputs,
             hdu=args.hdu,
@@ -1094,29 +1091,29 @@ def _run_field_single(args: argparse.Namespace) -> int:
             mask_maps=args.mask_maps,
         )
     else:
-        inr_paths = [str(item["identity"]["path"]) for item in resolved_plan_inputs]
-        inr_hdus = [int(item["hdu"]) for item in resolved_plan_inputs]
-        inr_weights = [float(item.get("weight", 1.0)) for item in resolved_plan_inputs]
-        inr_bg = [
+        field_paths = [str(item["identity"]["path"]) for item in resolved_plan_inputs]
+        field_hdus = [int(item["hdu"]) for item in resolved_plan_inputs]
+        field_weights = [float(item.get("weight", 1.0)) for item in resolved_plan_inputs]
+        field_backgrounds = [
             float(item.get("background_offset", 0.0)) for item in resolved_plan_inputs
         ]
-        inr_wmaps = [item.get("weight_map") for item in resolved_plan_inputs]
-        inr_mmaps = [item.get("mask_map") for item in resolved_plan_inputs]
+        field_weight_maps = [item.get("weight_map") for item in resolved_plan_inputs]
+        field_mask_maps = [item.get("mask_map") for item in resolved_plan_inputs]
 
     planned_bands = getattr(args, "_plan_observation_bands", None)
     planned_spectral_kws = getattr(args, "_plan_spectral_kws", None)
     if planned_bands is None or planned_spectral_kws is None:
-        observation_bands, spectral_kws = _resolve_inr_observation_spectra(
+        observation_bands, spectral_kws = _resolve_field_observation_spectra(
             args,
-            inr_paths,
-            inr_hdus,
+            field_paths,
+            field_hdus,
             read_device=read_dev,
         )
     else:
         observation_bands = list(planned_bands)
         spectral_kws = list(planned_spectral_kws)
-        if len(observation_bands) != len(inr_paths) or len(spectral_kws) != len(
-            inr_paths
+        if len(observation_bands) != len(field_paths) or len(spectral_kws) != len(
+            field_paths
         ):
             raise SystemExit("field plan spectral metadata does not match inputs")
     profiles_by_band: dict[str, dict] = {}
@@ -1127,12 +1124,12 @@ def _run_field_single(args: argparse.Namespace) -> int:
         _map_bandpass_spec(band, profiles_by_band[band]) for band in unique_bands
     ]
     band_summary = ",".join(unique_bands)
-    planned_model_kind = getattr(args, "_plan_model_kind", None)
-    requested_model = getattr(args, "inr_model", None)
+    planned_model_kind = getattr(args, "_plan_field_model_kind", None)
+    requested_model = getattr(args, "field_model", None)
     if planned_model_kind is not None:
         preset_name = getattr(args, "_plan_field_preset", None)
         model_kind = str(planned_model_kind)
-        model_kwargs = dict(getattr(args, "_plan_model_kwargs", {}))
+        model_kwargs = dict(getattr(args, "_plan_field_model_kwargs", {}))
     elif requested_model is None:
         preset_name = str(getattr(args, "field_preset", "balanced"))
         preset = get_field_model_preset(preset_name)
@@ -1144,7 +1141,10 @@ def _run_field_single(args: argparse.Namespace) -> int:
         model_kwargs = {}
 
     # Plan the product — use product pipeline for target planning.
-    image_obs = [ImageObservation(path=p, hdu=h) for p, h in zip(inr_paths, inr_hdus)]
+    image_obs = [
+        ImageObservation(path=path, hdu=hdu)
+        for path, hdu in zip(field_paths, field_hdus)
+    ]
     ref_header = getattr(args, "_plan_target_header", None)
     if ref_header is not None:
         ref_header = dict(ref_header)
@@ -1170,13 +1170,13 @@ def _run_field_single(args: argparse.Namespace) -> int:
         device=args.device,
     )
     h, w = product.shape
-    max_px = int(args.inr_max_pixels)
+    max_px = int(args.field_max_pixels)
     if h * w > max_px:
         raise SystemExit(
-            f"INR target {h}×{w} exceeds --inr-max-pixels={max_px}; "
+            f"field target {h}×{w} exceeds --field-max-pixels={max_px}; "
             "use a smaller subset, coadd first, or increase the limit (memory)."
         )
-    th = int(args.inr_render_tile)
+    th = int(args.field_render_tile)
     render_tiled = h > th or w > th
 
     resume_path = getattr(args, "resume", None)
@@ -1194,12 +1194,12 @@ def _run_field_single(args: argparse.Namespace) -> int:
             mask_map,
             observation_band,
         ) in zip(
-            inr_paths,
-            inr_hdus,
-            inr_weights,
-            inr_bg,
-            inr_wmaps,
-            inr_mmaps,
+            field_paths,
+            field_hdus,
+            field_weights,
+            field_backgrounds,
+            field_weight_maps,
+            field_mask_maps,
             observation_bands,
         ):
             plan_inputs.append(
@@ -1245,7 +1245,7 @@ def _run_field_single(args: argparse.Namespace) -> int:
                     for band in unique_bands
                 ],
                 "observation_bands": observation_bands,
-                "source": str(args.inr_spectral_source),
+                "source": str(args.field_spectral_source),
                 "spectral_min": (
                     profiles_by_band[unique_bands[0]].get("spectral_min")
                     if len(unique_bands) == 1
@@ -1266,31 +1266,31 @@ def _run_field_single(args: argparse.Namespace) -> int:
                     if len(unique_bands) == 1
                     else None
                 ),
-                "transmission_path": _resolved_path(args.inr_transmission),
+                "transmission_path": _resolved_path(args.field_transmission),
                 "transmission_identity": _optional_input_identity(
-                    str(args.inr_transmission)
-                    if args.inr_transmission is not None
+                    str(args.field_transmission)
+                    if args.field_transmission is not None
                     else None,
                     0,
                 ),
-                "transmission_dir": _resolved_path(args.inr_transmission_dir),
+                "transmission_dir": _resolved_path(args.field_transmission_dir),
                 "svo_filter_id": args.svo_filter_id,
             },
             "execution": {
                 "field_preset": preset_name,
-                "model": model_kind,
-                "model_kwargs": model_kwargs,
-                "steps": int(args.inr_steps),
-                "learning_rate": float(args.inr_lr),
-                "patch_size": int(args.inr_patch_size),
-                "patches_per_observation": int(args.inr_patches_per_obs),
-                "observations_per_step": int(args.inr_obs_per_step),
-                "spectral_samples": int(args.inr_spectral_samples),
-                "spatial_sampling": str(
-                    getattr(args, "inr_spatial_sampling", "center")
+                "field_model": model_kind,
+                "field_model_kwargs": model_kwargs,
+                "field_steps": int(args.field_steps),
+                "field_learning_rate": float(args.field_lr),
+                "field_patch_size": int(args.field_patch_size),
+                "field_patches_per_observation": int(args.field_patches_per_obs),
+                "field_observations_per_step": int(args.field_obs_per_step),
+                "field_spectral_samples": int(args.field_spectral_samples),
+                "field_spatial_sampling": str(
+                    getattr(args, "field_spatial_sampling", "center")
                 ),
-                "amp_dtype": str(getattr(args, "field_amp", "none")),
-                "render_tile": th if render_tiled else None,
+                "field_amp_dtype": str(getattr(args, "field_amp", "none")),
+                "field_render_tile": th if render_tiled else None,
                 "requested_device": args.device,
                 "resolved_device": read_dev,
                 "artifact": _resolved_path(artifact_path),
@@ -1306,26 +1306,26 @@ def _run_field_single(args: argparse.Namespace) -> int:
         )
 
     if getattr(args, "dry_run", False):
-        n_obs = len(inr_paths)
+        n_obs = len(field_paths)
         print(
             f"torchsky map: dry-run output_shape={h}×{w} method=field "
             f"model={model_kind} bands={band_summary} render_tiled={render_tiled} "
-            f"spatial_sampling={getattr(args, 'inr_spatial_sampling', 'center')} "
-            f"observations={n_obs} steps={getattr(args, 'inr_steps', 0)} "
+            f"spatial_sampling={getattr(args, 'field_spatial_sampling', 'center')} "
+            f"observations={n_obs} steps={getattr(args, 'field_steps', 0)} "
             f"device={torch.device(args.device) if args.device else default_compute_device()}",
             file=sys.stderr,
         )
         return 0
 
     fields = _paths_to_field_observations(
-        inr_paths,
-        hdu=inr_hdus,
+        field_paths,
+        hdu=field_hdus,
         spectral_kw=spectral_kws,
         read_device=read_dev,
-        weights=inr_weights,
-        background_offsets=inr_bg,
-        weight_maps=inr_wmaps,
-        mask_maps=inr_mmaps,
+        weights=field_weights,
+        background_offsets=field_backgrounds,
+        weight_maps=field_weight_maps,
+        mask_maps=field_mask_maps,
         weight_hdu=args.weight_map_hdu,
         mask_hdu=args.mask_map_hdu,
     )
@@ -1340,7 +1340,7 @@ def _run_field_single(args: argparse.Namespace) -> int:
     input_identities = (
         [
             build_map_input_identity(path, hdu=hdu)
-            for path, hdu in zip(inr_paths, inr_hdus)
+            for path, hdu in zip(field_paths, field_hdus)
         ]
         if artifact_path is not None
         else []
@@ -1363,21 +1363,21 @@ def _run_field_single(args: argparse.Namespace) -> int:
         model = make_field_model(cast(Any, model_kind), domain, **model_kwargs)
     total_params = sum(p.numel() for p in model.parameters())
     print(
-        f"torchsky map inr: domain centre=({domain.center_ra_deg:.2f}°, {domain.center_dec_deg:.2f}°) "
+        f"torchsky map field: domain centre=({domain.center_ra_deg:.2f}°, {domain.center_dec_deg:.2f}°) "
         f"spatial_scale={domain.spatial_scale_deg:.4f}° "
         f"wavelength=[{domain.wavelength_center - domain.wavelength_scale:.0f}, "
         f"{domain.wavelength_center + domain.wavelength_scale:.0f}] Å "
         f"params={total_params:,}",
         file=sys.stderr,
     )
-    patch = int(args.inr_patch_size)
-    steps = int(args.inr_steps)
+    patch = int(args.field_patch_size)
+    steps = int(args.field_steps)
     fit_options = {
         "steps": steps,
-        "lr": float(args.inr_lr),
+        "lr": float(args.field_lr),
         "training_patch_size": None if patch <= 0 else patch,
-        "training_patches_per_observation": int(args.inr_patches_per_obs),
-        "observations_per_step": min(len(fields), int(args.inr_obs_per_step)),
+        "training_patches_per_observation": int(args.field_patches_per_obs),
+        "observations_per_step": min(len(fields), int(args.field_obs_per_step)),
         "device": args.device,
         "amp_dtype": str(getattr(args, "field_amp", "none")),
         "amp_scaler_state": (
@@ -1391,7 +1391,7 @@ def _run_field_single(args: argparse.Namespace) -> int:
         ),
     }
     artifact_render_only = bool(getattr(args, "_artifact_render_only", False)) or (
-        resume_path is not None and int(args.inr_steps) == 0
+        resume_path is not None and int(args.field_steps) == 0
     )
     fit_result = None
     if not artifact_render_only:
@@ -1406,7 +1406,7 @@ def _run_field_single(args: argparse.Namespace) -> int:
         if tqdm is None:
             fit_result = fit_field_model(fields, model, **fit_options)
         else:
-            bar = tqdm(total=steps, desc="INR fit", unit="step", file=sys.stderr)
+            bar = tqdm(total=steps, desc="field fit", unit="step", file=sys.stderr)
 
             def _progress_callback(step_idx: int, loss_val: float) -> None:
                 bar.update(1)
@@ -1441,16 +1441,16 @@ def _run_field_single(args: argparse.Namespace) -> int:
             domain=domain,
             operator_manifest={"enabled_operators": operator_names},
             calibration_manifest={
-                "background_offsets": [float(value) for value in inr_bg],
+                "background_offsets": [float(value) for value in field_backgrounds],
             },
             fit_config={
                 "field_preset": preset_name,
                 "steps": int(fit_result.completed_steps),
-                "learning_rate": float(args.inr_lr),
+                "learning_rate": float(args.field_lr),
                 "patch_size": patch,
-                "patches_per_observation": int(args.inr_patches_per_obs),
-                "observations_per_step": min(len(fields), int(args.inr_obs_per_step)),
-                "spectral_samples": int(args.inr_spectral_samples),
+                "patches_per_observation": int(args.field_patches_per_obs),
+                "observations_per_step": min(len(fields), int(args.field_obs_per_step)),
+                "spectral_samples": int(args.field_spectral_samples),
                 "amp_dtype": str(getattr(args, "field_amp", "none")),
                 "observation_bands": observation_bands,
                 "validation_split": [],
@@ -1471,10 +1471,10 @@ def _run_field_single(args: argparse.Namespace) -> int:
     result = render_field_product(
         model,
         product,
-        num_spectral_samples=int(args.inr_spectral_samples),
+        num_spectral_samples=int(args.field_spectral_samples),
         spatial_sampling=cast(
             FieldSpatialSampling,
-            str(getattr(args, "inr_spatial_sampling", "center")),
+            str(getattr(args, "field_spatial_sampling", "center")),
         ),
         spatial_tile_hw=(th, th) if render_tiled else None,
     )
@@ -1491,7 +1491,7 @@ def _run_field_single(args: argparse.Namespace) -> int:
     print(
         f"wrote {args.output} shape={tuple(result.data.shape)} method=field "
         f"model={model_kind} bands={band_summary} "
-        f"spatial_sampling={getattr(args, 'inr_spatial_sampling', 'center')} "
+        f"spatial_sampling={getattr(args, 'field_spatial_sampling', 'center')} "
         f"planes={','.join(written_planes)}",
         file=sys.stderr,
     )
@@ -1501,7 +1501,18 @@ def _run_field_single(args: argparse.Namespace) -> int:
 def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     p = subparsers.add_parser(
         "map",
-        help="High-SNR sky map: coadd (SWarp/drizzle-like) or INR field render",
+        help="High-SNR sky map: coadd (SWarp/drizzle-like) or continuous field render",
+        description=(
+            "Build a pixelized coadd or fit and render a continuous sky field from "
+            "FITS observations. Select the workflow with --method coadd or --method field."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  torchsky map coadd.fits exposure1.fits exposure2.fits\n"
+            "  torchsky map field.fits exposure*.fits --method field --field-model sine "
+            "--field-steps 200 --device cuda"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("output", help="Output FITS path (or directory with --per-filter)")
     p.add_argument(
@@ -1579,12 +1590,7 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         nargs="*",
         type=float,
-        help="Per-input background offsets; coadd subtracts them, INR models them in rendering",
-    )
-    p.add_argument(
-        "--sky",
-        action="store_true",
-        help="Deprecated alias for --background-mode=per-exposure",
+        help="Per-input background offsets; coadd subtracts them, fields model them in rendering",
     )
     p.add_argument(
         "--background-mode",
@@ -1612,9 +1618,15 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--sky-mesh-filter",
-        default="median_3",
-        choices=("median_3", "gaussian_3", "none"),
-        help="Mesh post-filter (mesh method, default: median_3)",
+        default="median",
+        choices=("median", "gaussian", "none"),
+        help="Mesh post-filter (mesh method, default: median)",
+    )
+    p.add_argument(
+        "--sky-mesh-filter-size",
+        type=int,
+        default=3,
+        help="Mesh post-filter kernel size (mesh method, default: 3)",
     )
     p.add_argument(
         "--sky-interpolate",
@@ -1692,12 +1704,17 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="FITS whose WCS+shape define the output grid",
     )
-    p.add_argument("--reference-hdu", default=0, type=int)
+    p.add_argument(
+        "--reference-hdu",
+        default=0,
+        type=int,
+        help="Zero-based image HDU index in --reference (default: 0)",
+    )
     p.add_argument(
         "--plan-reference",
         type=int,
         default=0,
-        help="Which input (0-based) defines grid when --reference omitted (coadd/inr)",
+        help="Which input (0-based) defines grid when --reference omitted (coadd/field)",
     )
     p.add_argument(
         "--stack",
@@ -1749,6 +1766,7 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         "--value-semantics",
         default="surface_brightness",
         choices=("surface_brightness", "flux"),
+        help="Input pixel value meaning used for area scaling (default: surface_brightness)",
     )
     p.add_argument(
         "--auto-tile",
@@ -1783,9 +1801,9 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     p.add_argument(
         "--field-model",
-        "--inr-model",
-        dest="inr_model",
+        dest="field_model",
         default=None,
+        metavar="MODEL",
         help="Experimental raw field model kind; overrides --field-preset",
     )
     p.add_argument(
@@ -1801,29 +1819,34 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Resume model, optimizer, and RNG state from a field artifact",
     )
     p.add_argument(
-        "--inr-band", default=None, help="Filter name for bandpass, e.g. F277W (inr)"
+        "--field-band",
+        dest="field_band",
+        default=None,
+        metavar="BAND",
+        help="Filter name for the field bandpass, e.g. F277W",
     )
     p.add_argument(
-        "--inr-spectral-source",
+        "--field-spectral-source",
+        dest="field_spectral_source",
         choices=("svo", "builtin", "file", "gaussian"),
         default="svo",
         help=(
-            "How to set FieldObservation spectral metadata for INR: "
+            "How to set FieldObservation spectral metadata: "
             "svo=astroquery SVO FPS (default; needs pip install astroquery), "
             "builtin=small JWST table in torchsky, "
             "file=two-column wavelength transmission table, "
-            "gaussian=effective wavelength + min/max (Gaussian sigma from width or --inr-gaussian-sigma)"
+            "gaussian=effective wavelength + min/max (Gaussian sigma from width or --field-gaussian-sigma)"
         ),
     )
     p.add_argument(
         "--svo-facility",
         default="JWST",
-        help="SVO get_filter_list facility (field --inr-spectral-source=svo)",
+        help="SVO get_filter_list facility (--field-spectral-source=svo)",
     )
     p.add_argument(
         "--svo-instrument",
         default="NIRCAM",
-        help="SVO get_filter_list instrument (field --inr-spectral-source=svo)",
+        help="SVO get_filter_list instrument (--field-spectral-source=svo)",
     )
     p.add_argument(
         "--svo-filter-id",
@@ -1831,14 +1854,14 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         metavar="ID",
         help=(
             "Exact SVO filterID (e.g. JWST/NIRCam.F277W); if set, transmission is "
-            "downloaded for this ID (--inr-band still labels band_name)"
+            "downloaded for this ID (--field-band still labels band_name)"
         ),
     )
     p.add_argument(
         "--svo-prefer",
         choices=("classic", "2025", "any"),
         default="classic",
-        help="When multiple SVO rows match a band token, prefer classic vs NIRCam2025 (inr)",
+        help="When multiple SVO rows match a band token, prefer classic vs NIRCam2025",
     )
     p.add_argument(
         "--svo-cache-dir",
@@ -1852,93 +1875,144 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Disable reading or writing persistent local disk cache for SVO filter profiles",
     )
     p.add_argument(
-        "--inr-transmission",
+        "--field-transmission",
+        dest="field_transmission",
         type=Path,
         default=None,
-        help="Two-column wavelength, transmission file (field --inr-spectral-source=file)",
+        metavar="PATH",
+        help="Two-column wavelength, transmission file (--field-spectral-source=file)",
     )
     p.add_argument(
-        "--inr-transmission-dir",
+        "--field-transmission-dir",
+        dest="field_transmission_dir",
         type=Path,
         default=None,
+        metavar="DIR",
         help=(
-            "Directory with {BAND}.txt|dat|csv per filter (inr --per-filter + file source)"
+            "Directory with {BAND}.txt|dat|csv per filter (--per-filter + file source)"
         ),
     )
     p.add_argument(
-        "--inr-transmission-unit",
+        "--field-transmission-unit",
+        dest="field_transmission_unit",
         choices=("angstrom", "nm"),
         default="angstrom",
-        help="Wavelength unit in --inr-transmission file columns (inr)",
+        help="Wavelength unit in --field-transmission file columns",
     )
     p.add_argument(
-        "--inr-gaussian-lambda-eff",
+        "--field-gaussian-lambda-eff",
+        dest="field_gaussian_lambda_eff",
         type=float,
         default=None,
         metavar="ANGSTROM",
-        help="Effective wavelength (Å) for gaussian spectral source (inr)",
+        help="Effective wavelength (Å) for gaussian spectral source",
     )
     p.add_argument(
-        "--inr-gaussian-lambda-min",
+        "--field-gaussian-lambda-min",
+        dest="field_gaussian_lambda_min",
         type=float,
         default=None,
         metavar="ANGSTROM",
-        help="Bandpass lower edge (Å) for gaussian spectral source (inr)",
+        help="Bandpass lower edge (Å) for gaussian spectral source",
     )
     p.add_argument(
-        "--inr-gaussian-lambda-max",
+        "--field-gaussian-lambda-max",
+        dest="field_gaussian_lambda_max",
         type=float,
         default=None,
         metavar="ANGSTROM",
-        help="Bandpass upper edge (Å) for gaussian spectral source (inr)",
+        help="Bandpass upper edge (Å) for gaussian spectral source",
     )
     p.add_argument(
-        "--inr-gaussian-sigma",
+        "--field-gaussian-sigma",
+        dest="field_gaussian_sigma",
         type=float,
         default=None,
         metavar="ANGSTROM",
-        help="Gaussian transmission sigma (Å); default from lambda_max-lambda_min FWHM (inr)",
+        help="Gaussian transmission sigma (Å); default from lambda_max-lambda_min FWHM",
     )
     p.add_argument(
-        "--inr-quiet-svo",
+        "--field-quiet-svo",
+        dest="field_quiet_svo",
         action="store_true",
-        help="Do not log resolved SVO filterID to stderr (inr)",
+        help="Do not log resolved SVO filterID to stderr",
     )
-    p.add_argument("--inr-steps", type=int, default=80)
-    p.add_argument("--inr-lr", type=float, default=5.0e-3)
     p.add_argument(
-        "--inr-patch-size",
+        "--field-steps",
+        dest="field_steps",
+        type=int,
+        default=80,
+        metavar="N",
+        help="Number of field-optimization steps (default: 80)",
+    )
+    p.add_argument(
+        "--field-lr",
+        dest="field_lr",
+        type=float,
+        default=5.0e-3,
+        metavar="RATE",
+        help="Field optimizer learning rate (default: 0.005)",
+    )
+    p.add_argument(
+        "--field-patch-size",
+        dest="field_patch_size",
         type=int,
         default=64,
-        help="Training crop size in pixels (inr); 0 = full frame each step",
+        metavar="PIXELS",
+        help="Training crop size in pixels; 0 = full frame each step",
     )
-    p.add_argument("--inr-patches-per-obs", type=int, default=2)
-    p.add_argument("--inr-obs-per-step", type=int, default=2)
-    p.add_argument("--inr-spectral-samples", type=int, default=9)
     p.add_argument(
-        "--inr-spatial-sampling",
+        "--field-patches-per-obs",
+        dest="field_patches_per_obs",
+        type=int,
+        default=2,
+        metavar="N",
+        help="Training patches sampled from each observation per step (default: 2)",
+    )
+    p.add_argument(
+        "--field-obs-per-step",
+        dest="field_obs_per_step",
+        type=int,
+        default=2,
+        metavar="N",
+        help="Observations sampled for each field-optimization step (default: 2)",
+    )
+    p.add_argument(
+        "--field-spectral-samples",
+        dest="field_spectral_samples",
+        type=int,
+        default=9,
+        metavar="N",
+        help="Quadrature samples across each observation passband (default: 9)",
+    )
+    p.add_argument(
+        "--field-spatial-sampling",
+        dest="field_spatial_sampling",
         choices=("center", "gauss_legendre_2x2"),
         default="center",
         help=(
-            "Detector-pixel sampling for INR rendering: center (fast) or "
+            "Detector-pixel sampling for field rendering: center (fast) or "
             "gauss_legendre_2x2 (anti-aliased pixel average)"
         ),
     )
     p.add_argument(
-        "--inr-render-tile",
+        "--field-render-tile",
+        dest="field_render_tile",
         type=int,
         default=512,
-        help="spatial_tile_hw for render when map is larger than this (inr)",
+        metavar="PIXELS",
+        help="spatial_tile_hw for render when the field map is larger than this",
     )
     p.add_argument(
-        "--inr-max-pixels",
+        "--field-max-pixels",
+        dest="field_max_pixels",
         type=int,
         default=2048 * 2048,
-        help="Refuse INR if output grid exceeds this many pixels (memory guard)",
+        metavar="N",
+        help="Refuse field rendering if output grid exceeds this many pixels",
     )
     p.add_argument(
         "--per-filter",
-        "--per-band",
         action="store_true",
         help=(
             "Group inputs by FITS FILTER and write one product per filter "
@@ -1977,7 +2051,7 @@ def register_map_parser(subparsers: argparse._SubParsersAction) -> None:
         "--max-footprint-pixels",
         type=int,
         default=None,
-        help="Refuse targets exceeding this many pixels (memory guard, coadd/inr)",
+        help="Refuse targets exceeding this many pixels (memory guard, coadd/field)",
     )
     p.add_argument(
         "--overwrite",
@@ -2116,28 +2190,28 @@ def _dispatch_map_from_plan(args: argparse.Namespace) -> int:
         args.method = "field"
         args._plan_observation_bands = bands
         args._plan_spectral_kws = spectral_kws
-        args._plan_model_kind = str(execution["model"])
-        args._plan_model_kwargs = dict(execution.get("model_kwargs", {}))
-        args._plan_field_preset = execution.get("field_preset")
+        args._plan_field_model_kind = str(execution["field_model"])
+        args._plan_field_model_kwargs = dict(execution["field_model_kwargs"])
+        args._plan_field_preset = execution["field_preset"]
         args._artifact_render_only = True
         args.artifact = None
         args.resume = Path(artifact)
-        args.inr_model = None
-        args.inr_steps = int(execution.get("steps", 0))
-        args.inr_lr = float(execution.get("learning_rate", 5.0e-3))
-        args.inr_patch_size = int(execution.get("patch_size", 0))
-        args.inr_patches_per_obs = int(execution.get("patches_per_observation", 1))
-        args.inr_obs_per_step = int(execution.get("observations_per_step", 1))
-        args.inr_spectral_samples = int(execution.get("spectral_samples", 9))
-        args.inr_spatial_sampling = str(execution.get("spatial_sampling", "center"))
-        args.field_amp = str(execution.get("amp_dtype", "none"))
-        render_tile = execution.get("render_tile")
-        args.inr_render_tile = (
+        args.field_model = None
+        args.field_steps = int(execution["field_steps"])
+        args.field_lr = float(execution["field_learning_rate"])
+        args.field_patch_size = int(execution["field_patch_size"])
+        args.field_patches_per_obs = int(execution["field_patches_per_observation"])
+        args.field_obs_per_step = int(execution["field_observations_per_step"])
+        args.field_spectral_samples = int(execution["field_spectral_samples"])
+        args.field_spatial_sampling = str(execution["field_spatial_sampling"])
+        args.field_amp = str(execution["field_amp_dtype"])
+        render_tile = execution["field_render_tile"]
+        args.field_render_tile = (
             int(render_tile)
             if render_tile is not None
             else max(int(target["shape"][0]), int(target["shape"][1]))
         )
-        args.inr_max_pixels = args.max_footprint_pixels
+        args.field_max_pixels = args.max_footprint_pixels
         args.per_filter = False
         return _run_field_single(args)
 
@@ -2164,16 +2238,25 @@ def _validate_map_option_matrix(args: argparse.Namespace) -> None:
             raise SystemExit("--dq-maps require --method=coadd")
         return
     field_only = (
-        ("--inr-band", getattr(args, "inr_band", None)),
-        ("--field-model", getattr(args, "inr_model", None)),
+        ("--field-band", getattr(args, "field_band", None)),
+        ("--field-model", getattr(args, "field_model", None)),
         ("--artifact", getattr(args, "artifact", None)),
         ("--resume", getattr(args, "resume", None)),
-        ("--inr-transmission", getattr(args, "inr_transmission", None)),
-        ("--inr-transmission-dir", getattr(args, "inr_transmission_dir", None)),
-        ("--inr-gaussian-lambda-eff", getattr(args, "inr_gaussian_lambda_eff", None)),
-        ("--inr-gaussian-lambda-min", getattr(args, "inr_gaussian_lambda_min", None)),
-        ("--inr-gaussian-lambda-max", getattr(args, "inr_gaussian_lambda_max", None)),
-        ("--inr-gaussian-sigma", getattr(args, "inr_gaussian_sigma", None)),
+        ("--field-transmission", getattr(args, "field_transmission", None)),
+        ("--field-transmission-dir", getattr(args, "field_transmission_dir", None)),
+        (
+            "--field-gaussian-lambda-eff",
+            getattr(args, "field_gaussian_lambda_eff", None),
+        ),
+        (
+            "--field-gaussian-lambda-min",
+            getattr(args, "field_gaussian_lambda_min", None),
+        ),
+        (
+            "--field-gaussian-lambda-max",
+            getattr(args, "field_gaussian_lambda_max", None),
+        ),
+        ("--field-gaussian-sigma", getattr(args, "field_gaussian_sigma", None)),
         ("--svo-filter-id", getattr(args, "svo_filter_id", None)),
     )
     used = [option for option, value in field_only if value is not None]
@@ -2313,35 +2396,35 @@ def _dispatch_map(args: argparse.Namespace) -> int:
         raise SystemExit("--footprint-tolerance-px must be finite and positive")
     if int(getattr(args, "footprint_max_depth", 20)) <= 0:
         raise SystemExit("--footprint-max-depth must be positive")
-    inr_steps = int(getattr(args, "inr_steps", 0))
-    if inr_steps < 0:
-        raise SystemExit("--inr-steps must be non-negative")
+    field_steps = int(getattr(args, "field_steps", 0))
+    if field_steps < 0:
+        raise SystemExit("--field-steps must be non-negative")
     if (
         field_method
-        and hasattr(args, "inr_steps")
-        and inr_steps == 0
+        and hasattr(args, "field_steps")
+        and field_steps == 0
         and getattr(args, "resume", None) is None
         and not getattr(args, "dry_run", False)
     ):
         raise SystemExit(
-            "--inr-steps must be positive; pass --resume to render a saved artifact "
+            "--field-steps must be positive; pass --resume to render a saved artifact "
             "without further fitting"
         )
-    inr_lr = float(getattr(args, "inr_lr", 1.0))
-    if not math.isfinite(inr_lr) or inr_lr <= 0.0:
-        raise SystemExit("--inr-lr must be finite and positive")
-    if int(getattr(args, "inr_patch_size", 0)) < 0:
-        raise SystemExit("--inr-patch-size must be non-negative")
-    if int(getattr(args, "inr_patches_per_obs", 1)) <= 0:
-        raise SystemExit("--inr-patches-per-obs must be positive")
-    if int(getattr(args, "inr_obs_per_step", 1)) <= 0:
-        raise SystemExit("--inr-obs-per-step must be positive")
-    if int(getattr(args, "inr_spectral_samples", 1)) <= 0:
-        raise SystemExit("--inr-spectral-samples must be positive")
-    if int(getattr(args, "inr_render_tile", 1)) <= 0:
-        raise SystemExit("--inr-render-tile must be positive")
-    if int(getattr(args, "inr_max_pixels", 1)) <= 0:
-        raise SystemExit("--inr-max-pixels must be positive")
+    field_lr = float(getattr(args, "field_lr", 1.0))
+    if not math.isfinite(field_lr) or field_lr <= 0.0:
+        raise SystemExit("--field-lr must be finite and positive")
+    if int(getattr(args, "field_patch_size", 0)) < 0:
+        raise SystemExit("--field-patch-size must be non-negative")
+    if int(getattr(args, "field_patches_per_obs", 1)) <= 0:
+        raise SystemExit("--field-patches-per-obs must be positive")
+    if int(getattr(args, "field_obs_per_step", 1)) <= 0:
+        raise SystemExit("--field-obs-per-step must be positive")
+    if int(getattr(args, "field_spectral_samples", 1)) <= 0:
+        raise SystemExit("--field-spectral-samples must be positive")
+    if int(getattr(args, "field_render_tile", 1)) <= 0:
+        raise SystemExit("--field-render-tile must be positive")
+    if int(getattr(args, "field_max_pixels", 1)) <= 0:
+        raise SystemExit("--field-max-pixels must be positive")
     args.inputs = expanded
     if args.method == "coadd":
         if getattr(args, "per_filter", False) and (

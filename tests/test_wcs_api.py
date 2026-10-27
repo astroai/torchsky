@@ -528,12 +528,15 @@ def test_wcs_value_aliases_and_array_index_helpers_match_pixel_world():
     y = torch.tensor([47.4, 51.1], dtype=torch.float64)
 
     ra, dec = wcs.pixel_to_world_values(x, y)
+    x_values, y_values = wcs.world_to_pixel_values(ra, dec)
     pixels = wcs.world_to_pixel(torch.stack([ra, dec], dim=-1))
     y_index, x_index = wcs.world_to_array_index_values(ra, dec)
     ra_arr, dec_arr = wcs.array_index_to_world_values(y, x)
 
     torch.testing.assert_close(pixels[:, 0], x, atol=2e-7, rtol=1e-9)
     torch.testing.assert_close(pixels[:, 1], y, atol=2e-7, rtol=1e-9)
+    torch.testing.assert_close(x_values, x, atol=2e-7, rtol=1e-9)
+    torch.testing.assert_close(y_values, y, atol=2e-7, rtol=1e-9)
     torch.testing.assert_close(ra_arr, ra)
     torch.testing.assert_close(dec_arr, dec)
     torch.testing.assert_close(x_index, torch.round(x).to(dtype=torch.long))

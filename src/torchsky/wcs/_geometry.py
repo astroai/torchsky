@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -77,18 +77,12 @@ class _GeometryMixin:
         sx = float(torch.hypot(cd2[0, 0], cd2[1, 0]).item())
         sy = float(torch.hypot(cd2[0, 1], cd2[1, 1]).item())
         return (sx, sy)
-    def proj_plane_pixel_scales(self) -> tuple[float, float]:
-        """Alias for :meth:`pixel_scales` matching ``astropy.wcs.utils.proj_plane_pixel_scales``."""
-        return self.pixel_scales()
     def pixel_area(self) -> float:
         """Return nominal projection-plane pixel solid angle in ``deg**2`` at CRPIX."""
         rows = [self._celestial_lon_axis, self._celestial_lat_axis]
         cols = list(self._celestial_axes)
         cd2 = self.cd_full[rows, :][:, cols].detach().cpu().to(torch.float64)
         return abs(float((cd2[0, 0] * cd2[1, 1] - cd2[0, 1] * cd2[1, 0]).item()))
-    def proj_plane_pixel_area(self) -> float:
-        """Alias for :meth:`pixel_area` matching ``astropy.wcs.utils.proj_plane_pixel_area``."""
-        return self.pixel_area()
     def position_angle(self) -> float:
         """Return position angle (degrees East of North) of the +y pixel axis at CRPIX."""
         rows = [self._celestial_lon_axis, self._celestial_lat_axis]
@@ -165,22 +159,6 @@ class _GeometryMixin:
         corners[:, pixel_axes[1]] = ys
         world = self.pixel_to_world(corners, origin=origin)
         return world[:, [self._celestial_lon_axis, self._celestial_lat_axis]]
-    def calc_footprint(
-        self,
-        header: Mapping[str, Any] | None = None,
-        undistort: bool = True,
-        axes: tuple[int, int] | None = None,
-        center: bool = True,
-    ) -> Tensor:
-        """Astropy-compatible footprint helper (``axes=(NAXIS1, NAXIS2)``)."""
-        del undistort
-        if axes is not None:
-            shape: tuple[int, int] | None = (int(axes[1]), int(axes[0]))
-        elif header is not None and "NAXIS1" in header and "NAXIS2" in header:
-            shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
-        else:
-            shape = None
-        return self.footprint(shape=shape, center=center)
     def pixel_area_map(
         self,
         shape: tuple[int, int] | None = None,

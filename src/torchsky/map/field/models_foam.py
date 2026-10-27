@@ -15,14 +15,14 @@ from torch import Tensor
 from ._core_helpers import (
     _BaseFieldModel,
 )
-from .foam import (
+from .foam_common import PowerValueSemantics
+from .foam_field import (
     FoamAdaptationResult,
-    PowerPixelOperator,
-    PowerValueSemantics,
     SpectralPowerFoam,
     adapt_spectral_power_foam,
-    sparse_bounded_power_pixel_operator,
 )
+from .foam_operators import sparse_bounded_power_pixel_operator
+from .foam_solvers import PowerPixelOperator
 from .models_implicit import SineImplicitField
 from .networks import (
     reset_silu_mlp_linears,
@@ -35,6 +35,7 @@ from .types import (
 
 if TYPE_CHECKING:
     pass
+
 
 class SpectralPowerFoamField(_BaseFieldModel):
     """Adapt a spectral Power Foam to the common sky-field forward interface.
@@ -419,7 +420,9 @@ class DiffuseFoamHybridField(_BaseFieldModel):
             or sparsity_weight < 0.0
             or separation_weight < 0.0
         ):
-            raise ValueError("hybrid regularization weights must be finite and non-negative")
+            raise ValueError(
+                "hybrid regularization weights must be finite and non-negative"
+            )
         diffuse, localized = self.diagnostic_components(
             ra_deg,
             dec_deg,
@@ -435,7 +438,10 @@ class DiffuseFoamHybridField(_BaseFieldModel):
             scale,
             min=torch.finfo(diffuse.dtype).tiny,
         )
-        return sparsity_weight * localized.abs().mean() + separation_weight * correlation_squared
+        return (
+            sparsity_weight * localized.abs().mean()
+            + separation_weight * correlation_squared
+        )
 
     def forward(
         self,

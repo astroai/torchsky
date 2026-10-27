@@ -14,8 +14,21 @@ from . import plan as _plan_module  # noqa: F401 — pre-populate sys.modules["t
 
 
 def plan(*args: Any, **kwargs: Any) -> Any:
-    """Plan a 2D target WCS grid covering a sequence of observations."""
-    from .image_plane import plan as _plan_fn
+    """Plan a 2D target WCS grid covering a sequence of observations.
+
+    Args:
+        *args: Observation sequence accepted by :func:`torchsky.map.planning.plan`.
+        **kwargs: Projection, scale, rotation, footprint, and device controls.
+
+    Returns:
+        Target plan containing the output WCS, shape, and footprint metadata.
+
+    Examples:
+        >>> from torchsky.map import plan
+        >>> callable(plan)
+        True
+    """
+    from .planning import plan as _plan_fn
 
     return _plan_fn(*args, **kwargs)
 
@@ -47,22 +60,25 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "ProductResult": ("torchsky.map.product", "ProductResult"),
     "UncertaintyProduct": ("torchsky.map.product", "UncertaintyProduct"),
     "TargetRenderSpec": ("torchsky.map.target", "TargetRenderSpec"),
-    "plan": ("torchsky.map.image_plane", "plan"),
-    "plan_cube": ("torchsky.map.image_plane", "plan_cube"),
+    "plan": ("torchsky.map.planning", "plan"),
+    "plan_cube": ("torchsky.map.planning", "plan_cube"),
     "plan_product": ("torchsky.map.product", "plan_map_product"),
-    "resample": ("torchsky.map.image_plane", "resample"),
+    "resample": ("torchsky.map.image_plane_coadd", "resample"),
     "resample_healpix": ("torchsky.map.healpix_coadd", "resample_healpix"),
-    "blot": ("torchsky.map.image_plane", "blot"),
-    "detect_outliers": ("torchsky.map.image_plane", "detect_outliers"),
-    "match_sky": ("torchsky.map.image_plane", "match_sky"),
-    "coadd": ("torchsky.map.image_plane", "coadd"),
-    "coadd_multiband": ("torchsky.map.image_plane", "coadd_multiband"),
+    "blot": ("torchsky.map.image_plane_coadd", "blot"),
+    "detect_outliers": ("torchsky.map.sky_matching", "detect_outliers"),
+    "match_sky": ("torchsky.map.sky_matching", "match_sky"),
+    "coadd": ("torchsky.map.image_plane_coadd", "coadd"),
+    "coadd_multiband": ("torchsky.map.image_plane_coadd", "coadd_multiband"),
     "coadd_cube": ("torchsky.map.cube", "coadd_cube"),
     "plan_ifu_cube_response": ("torchsky.map.ifu", "plan_ifu_cube_response"),
     "build_ifu_cube": ("torchsky.map.ifu", "build_ifu_cube"),
     "coadd_healpix": ("torchsky.map.healpix_coadd", "coadd_healpix"),
     "stack_product": ("torchsky.map.product", "stack_product"),
-    "aperture_uncertainty": ("torchsky.map.image_plane", "aperture_uncertainty"),
+    "aperture_uncertainty": (
+        "torchsky.map.image_plane_coadd",
+        "aperture_uncertainty",
+    ),
     "adaptive_reprojection_response": (
         "torchsky.map.operators.adaptive",
         "adaptive_reprojection_response",
@@ -74,12 +90,6 @@ def __getattr__(name: str) -> Any:
     if name in _EXPORTS:
         module_name, attr_name = _EXPORTS[name]
         module = import_module(module_name)
-        if module_name == "torchsky.map.plan":
-            # Python binds the submodule `plan` into package globals() on import;
-            # restore the public `plan` function from `torchsky.map.image_plane`.
-            globals()["plan"] = getattr(
-                import_module("torchsky.map.image_plane"), "plan"
-            )
         value = getattr(module, attr_name)
         globals()[name] = value
         return value
@@ -87,7 +97,6 @@ def __getattr__(name: str) -> Any:
     # Keep compatibility with internal module access (e.g. torchsky.map.field)
     if name in {
         "field",
-        "image_plane",
         "product",
         "target",
         "solvers",
@@ -117,15 +126,11 @@ if TYPE_CHECKING:
         build_ifu_cube as build_ifu_cube,
         plan_ifu_cube_response as plan_ifu_cube_response,
     )
-    from .image_plane import (
+    from .image_plane_coadd import (
         aperture_uncertainty as aperture_uncertainty,
         blot as blot,
         coadd as coadd,
         coadd_multiband as coadd_multiband,
-        detect_outliers as detect_outliers,
-        match_sky as match_sky,
-        plan as plan,
-        plan_cube as plan_cube,
         resample as resample,
     )
     from .observation import (
@@ -159,6 +164,11 @@ if TYPE_CHECKING:
         UncertaintyProduct as UncertaintyProduct,
         plan_map_product as plan_product,
         stack_product as stack_product,
+    )
+    from .planning import plan as plan, plan_cube as plan_cube
+    from .sky_matching import (
+        detect_outliers as detect_outliers,
+        match_sky as match_sky,
     )
     from .target import (
         TargetRenderSpec as TargetRenderSpec,

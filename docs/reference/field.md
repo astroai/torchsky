@@ -23,7 +23,6 @@ namespace `torchsky.field` unless the group text says otherwise.
     options:
       members:
         - FIELD_MODEL_KINDS
-        - FIELD_MODEL_PRESETS
         - FIELD_MODEL_PRESET_NAMES
         - RECOMMENDED_FIELD_MODEL_KINDS
         - distribution

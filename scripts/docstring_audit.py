@@ -21,6 +21,7 @@ import inspect
 import json
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,7 @@ SRC = ROOT / "src"
 MANIFEST = ROOT / "docs" / "api-manifest.json"
 TIER1 = ROOT / "docs" / "tier1.txt"
 BASELINE = ROOT / "docs" / "data" / "docstring-baseline.json"
+REGISTRY = ROOT / "docs" / "reference" / "_registry.toml"
 SECTION = re.compile(r"^\s*(Args|Arguments|Parameters|Returns|Yields|Raises|Example|Examples):\s*$", re.M)
 
 
@@ -65,8 +67,26 @@ def _present_sections(doc: str) -> set[str]:
     return present
 
 
+def _registered_type_alias_docs() -> dict[str, str]:
+    registry = tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
+    docs = registry.get("public_type_aliases", {})
+    if not isinstance(docs, dict):
+        raise TypeError("public_type_aliases must be a TOML table")
+    for name, summary in docs.items():
+        if not isinstance(summary, str) or not summary.strip() or "\n" in summary:
+            raise ValueError(f"public type-alias summary must be one non-empty line: {name}")
+    return docs
+
+
 def collect() -> dict[str, list[str]]:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    alias_docs = _registered_type_alias_docs()
+    public_names = {
+        f"{namespace}.{name}" for namespace, names in manifest.items() for name in names
+    }
+    stale_alias_docs = sorted(set(alias_docs) - public_names)
+    if stale_alias_docs:
+        raise ValueError(f"registered type aliases are not public: {stale_alias_docs}")
     tier1 = {
         line.strip()
         for line in TIER1.read_text(encoding="utf-8").splitlines()
@@ -81,6 +101,10 @@ def collect() -> dict[str, list[str]]:
                 continue
             full = f"{namespace}.{name}"
             doc = inspect.getdoc(obj) or ""
+            if full in alias_docs:
+                if getattr(obj, "__module__", None) != "typing":
+                    raise TypeError(f"registered public type alias is not a typing object: {full}")
+                doc = alias_docs[full]
             present = _present_sections(doc)
             if full in tier1:
                 missing = sorted(_required_sections(obj) - present)

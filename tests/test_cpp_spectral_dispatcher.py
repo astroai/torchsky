@@ -5,7 +5,6 @@ import torch
 from torch._subclasses.fake_tensor import FakeTensorMode, is_fake
 
 from torchsky import _ops
-from torchsky._native import cpp as _cpp
 from torchsky.sphere import spectral
 
 
@@ -112,11 +111,11 @@ def test_spectral_dispatcher_schemas_are_clean_and_basis_schemas_are_private() -
         schema = str(getattr(torch.ops.torchsky, name).default._schema)
         assert schema.startswith(f"torchsky::{name}(")
         assert torch._C._dispatch_has_kernel_for_dispatch_key(f"torchsky::{name}", "CPU")
-    assert hasattr(_cpp, "_healpix_spin_map2alm_from_basis_cpu")
-    assert hasattr(_cpp, "_healpix_spin_alm2map_from_basis_cpu")
+    assert hasattr(_ops, "_spectral_spin_map2alm_from_basis")
+    assert hasattr(_ops, "_spectral_spin_alm2map_from_basis")
 
 
-def test_private_basis_dispatcher_parity_and_compatibility() -> None:
+def test_private_basis_dispatcher_parity_and_ops_helper() -> None:
     torch.manual_seed(12)
     npix, nalm, m0 = 7, 5, 2
     q = torch.randn(npix, dtype=torch.float64)
@@ -145,11 +144,10 @@ def test_private_basis_dispatcher_parity_and_compatibility() -> None:
             coeff_plus, coeff_minus, y_plus, y_minus, y_plus_m0, y_minus_m0
         ),
     )
-    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
-        compatibility = _cpp._healpix_spin_alm2map_from_basis_cpu(
-            coeff_plus, coeff_minus, y_plus, y_minus, y_plus_m0, y_minus_m0
-        )
-    torch.testing.assert_close(compatibility, synthesis)
+    helper = _ops._spectral_spin_alm2map_from_basis(
+        coeff_plus, coeff_minus, y_plus, y_minus, y_plus_m0, y_minus_m0
+    )
+    torch.testing.assert_close(helper, synthesis)
 
 
 def test_private_basis_dispatcher_autograd_matches_tensor_adjoint() -> None:
@@ -200,7 +198,7 @@ def test_private_basis_dispatcher_autograd_matches_tensor_adjoint() -> None:
     torch.testing.assert_close(coeff_minus.grad, coeff_minus_ref.grad)
 
 
-def test_spectral_dispatcher_parity_with_legacy_adapters() -> None:
+def test_spectral_dispatcher_parity_with_ops_helpers() -> None:
     x = _inputs()
     lmax, mmax, spin = x["lmax"], x["mmax"], x["spin"]
     starts, lengths, theta = x["starts"], x["lengths"], x["theta"]
@@ -222,51 +220,51 @@ def test_spectral_dispatcher_parity_with_legacy_adapters() -> None:
     )
     torch.testing.assert_close(
         direct,
-        _cpp._healpix_scalar_alm2map_direct_cpu(cp.unsqueeze(0), cos_theta, phi, lmax, mmax),
+        _ops.spectral_scalar_alm2map_direct(cp.unsqueeze(0), cos_theta, phi, lmax, mmax),
     )
 
     fourier = torch.ops.torchsky.spectral_ring_fourier_modes(rows, starts, lengths, mmax)
     torch.testing.assert_close(
-        fourier, _cpp._healpix_ring_fourier_modes_cpu(rows, starts, lengths, mmax)
+        fourier, _ops.spectral_ring_fourier_modes(rows, starts, lengths, mmax)
     )
     p_plus = x["p_plus"]
     assert isinstance(p_plus, torch.Tensor)
     spin_modes = torch.ops.torchsky.spectral_ring_fourier_modes_spin_conj(
         p_plus, starts, lengths, mmax
     )
-    legacy_spin_modes = _cpp._healpix_ring_fourier_modes_spin_conj_cpu(
+    helper_spin_modes = _ops.spectral_ring_fourier_modes_spin_conj(
         p_plus, starts, lengths, mmax
     )
-    torch.testing.assert_close(torch.stack(spin_modes), legacy_spin_modes)
+    torch.testing.assert_close(torch.stack(spin_modes), torch.stack(helper_spin_modes))
     torch.testing.assert_close(
         torch.ops.torchsky.spectral_ring_fourier_synthesis(
             fourier, starts, lengths, x["npix"]
         ),
-        _cpp._healpix_ring_fourier_synthesis_cpu(fourier, starts, lengths),
+        _ops.spectral_ring_fourier_synthesis(fourier, starts, lengths, x["npix"]),
     )
 
     interp = torch.ops.torchsky.spectral_spin_interpolate_concat(
         cp, cm, yp, ym, lmax, mmax
     )
-    legacy_interp = _cpp._healpix_spin_interpolate_concat_cpu(cp, cm, yp, ym, lmax, mmax)
-    torch.testing.assert_close(interp, legacy_interp)
+    helper_interp = _ops.spectral_spin_interpolate_concat(cp, cm, yp, ym, lmax, mmax)
+    torch.testing.assert_close(interp, helper_interp)
     integrated = torch.ops.torchsky.spectral_spin_integrate_concat(
         interp[0], interp[1], yp, ym, lmax, mmax, 0.25
     )
-    legacy_integrated = _cpp._healpix_spin_integrate_concat_cpu(
+    helper_integrated = _ops.spectral_spin_integrate_concat(
         interp[0], interp[1], yp, ym, lmax, mmax, 0.25
     )
-    torch.testing.assert_close(integrated, legacy_integrated)
+    torch.testing.assert_close(integrated, helper_integrated)
 
     phase_neg, phase_pos = x["phase_neg"], x["phase_pos"]
     assert isinstance(phase_neg, torch.Tensor) and isinstance(phase_pos, torch.Tensor)
     ring_concat = torch.ops.torchsky.spectral_spin_map2alm_ring_concat(
         p_plus, starts, lengths, phase_neg, yp, ym, lmax, mmax, 0.25
     )
-    legacy_ring_concat = _cpp._healpix_spin_map2alm_ring_concat_cpu(
+    helper_ring_concat = _ops.spectral_spin_map2alm_ring_concat(
         p_plus, starts, lengths, phase_neg, yp, ym, lmax, mmax, 0.25
     )
-    torch.testing.assert_close(ring_concat, legacy_ring_concat)
+    torch.testing.assert_close(ring_concat, helper_ring_concat)
 
     modes_minus = modes.conj().resolve_conj()
     spin_integrated = torch.ops.torchsky.spectral_spin_integrate_recurrence(
@@ -274,7 +272,7 @@ def test_spectral_dispatcher_parity_with_legacy_adapters() -> None:
     )
     torch.testing.assert_close(
         spin_integrated,
-        _cpp._healpix_spin_integrate_recurrence_cpu(
+        _ops.spectral_spin_integrate_recurrence(
             modes, modes_minus, theta, weight, lmax, mmax, spin
         ),
     )
@@ -282,7 +280,7 @@ def test_spectral_dispatcher_parity_with_legacy_adapters() -> None:
         torch.ops.torchsky.spectral_spin_interpolate_recurrence(
             spin_integrated, theta, lmax, mmax, spin
         ),
-        _cpp._healpix_spin_interpolate_recurrence_cpu(
+        _ops.spectral_spin_interpolate_recurrence(
             spin_integrated, theta, lmax, mmax, spin
         ),
     )
@@ -291,13 +289,13 @@ def test_spectral_dispatcher_parity_with_legacy_adapters() -> None:
     )
     torch.testing.assert_close(
         scalar_integrated,
-        _cpp._healpix_scalar_integrate_recurrence_cpu(modes, theta, weight, lmax, mmax),
+        _ops.spectral_scalar_integrate_recurrence(modes, theta, weight, lmax, mmax),
     )
     torch.testing.assert_close(
         torch.ops.torchsky.spectral_scalar_interpolate_recurrence(
             scalar_integrated, theta, lmax, mmax
         ),
-        _cpp._healpix_scalar_interpolate_recurrence_cpu(
+        _ops.spectral_scalar_interpolate_recurrence(
             scalar_integrated, theta, lmax, mmax
         ),
     )
@@ -309,7 +307,7 @@ def test_spectral_dispatcher_parity_with_legacy_adapters() -> None:
     )
     torch.testing.assert_close(
         fused_analysis,
-        _cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+        _ops.spectral_spin_map2alm_ring_recurrence(
             maps, starts, lengths, theta, phase_neg, lmax, mmax, spin, 0.25
         ),
     )
@@ -317,15 +315,17 @@ def test_spectral_dispatcher_parity_with_legacy_adapters() -> None:
         torch.ops.torchsky.spectral_spin_alm2map_ring_recurrence(
             cp, starts, lengths, theta, phase_pos, lmax, mmax, spin, cm, x["npix"]
         ),
-        _cpp._healpix_spin_alm2map_ring_recurrence_cpu(
-            cp, starts, lengths, theta, phase_pos, lmax, mmax, spin, cm
+        _ops.spectral_spin_alm2map_ring_recurrence(
+            cp, starts, lengths, theta, phase_pos, lmax, mmax, spin, cm, x["npix"]
         ),
     )
     torch.testing.assert_close(
         torch.ops.torchsky.spectral_spin_ring_finalize(
             interp[0], interp[1], starts, lengths, x["npix"]
         ),
-        _cpp._healpix_spin_ring_finalize_cpu(interp[0], interp[1], starts, lengths),
+        _ops.spectral_spin_ring_finalize(
+            interp[0], interp[1], starts, lengths, x["npix"]
+        ),
     )
 
 

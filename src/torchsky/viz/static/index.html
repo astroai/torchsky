@@ -613,8 +613,7 @@
       <div class="sidebar-section">
         <div class="section-title">Stretch</div>
         <div class="pill-group" id="stretch-group" role="group" aria-label="Image stretch">
-          <button type="button" class="pill active" data-v="zscale" aria-pressed="true">ZScale</button>
-          <button type="button" class="pill" data-v="linear" aria-pressed="false">Linear</button>
+          <button type="button" class="pill active" data-v="linear" aria-pressed="true">Linear</button>
           <button type="button" class="pill" data-v="log" aria-pressed="false">Log</button>
           <button type="button" class="pill" data-v="sqrt" aria-pressed="false">√</button>
           <button type="button" class="pill" data-v="asinh" aria-pressed="false">Asinh</button>
@@ -778,7 +777,8 @@ const htmlEscape = (str) => String(str).replace(/[&<>'"]/g, tag => ({
 const state = {
   activePanel: 'fits',   // 'fits' | 'sky' | 'validate'
   currentFile: null,     // { path, hdu, surveyId, shape, vmin, vmax, wcs }
-  stretch:  'zscale',
+  stretch:  'linear',
+  limitPolicy: 'zscale',
   cmap:     'gray',
   gridOn:   true,
   symScale: false,
@@ -929,7 +929,7 @@ async function openFile(path, hdu = 0) {
 
     // 3. Register HiPS
     const survey = await api(
-      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&cmap=${state.cmap}`
+      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&limit_policy=${state.limitPolicy}&cmap=${state.cmap}`
     );
     state.currentFile = { path, hdu, surveyId: survey.id, shape: survey.shape,
                           vmin: survey.vmin, vmax: survey.vmax, wcs: info.wcs };
@@ -1170,7 +1170,7 @@ async function rerenderSurvey() {
   const { path, hdu } = state.currentFile;
   try {
     const survey = await api(
-      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&cmap=${state.cmap}&vmin=${vmin}&vmax=${vmax}`
+      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&limit_policy=${state.limitPolicy}&cmap=${state.cmap}&vmin=${vmin}&vmax=${vmax}`
     );
     await A.init;
     const hipsUrl = `${window.location.origin}/api/hips/${survey.id}`;

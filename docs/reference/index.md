@@ -43,10 +43,11 @@ reference pages carry the contracts.
 | `torchsky.redshift` | core | 30 | [reference](redshift.md) |
 | `torchsky.spectral` | core | 14 | [reference](spectral.md) |
 | `torchsky.spectrophotometry` | core | 10 | [reference](spectrophotometry.md) |
-| `torchsky.sphere` | core | 146 | [reference](sphere.md) |
+| `torchsky.sphere` | core | 136 | [reference](sphere.md) |
 | `torchsky.transforms` | core | 20 | [reference](transforms.md) |
-| `torchsky.wcs` | core | 148 | [reference](wcs.md) |
-| `torchsky.field` | experimental | 53 | [reference](field.md) |
+| `torchsky.wcs` | core | 147 | [reference](wcs.md) |
+| `torchsky.field` | experimental | 52 | [reference](field.md) |
+| `torchsky.filter_profiles` | experimental | 5 | [reference](filter-profiles.md) |
 | `torchsky.map.evidence` | experimental | 1 | [reference](map-evidence.md) |
 | `torchsky.map.field.gaussian` | experimental | 1 | [reference](map-field-gaussian.md) |
 | `torchsky.map.field.joint_native_likelihood` | experimental | 1 | [reference](map-field-joint-native-likelihood.md) |
@@ -59,7 +60,7 @@ reference pages carry the contracts.
 | `torchsky.map.operators.nuisance` | experimental | 2 | [reference](map-operators-nuisance.md) |
 | `torchsky.map.operators.pixel_calibration` | experimental | 1 | [reference](map-operators-pixel-calibration.md) |
 | `torchsky.map.query` | experimental | 2 | [reference](map-query.md) |
-| `torchsky.scene` | experimental | 39 | [reference](scene.md) |
+| `torchsky.scene` | experimental | 38 | [reference](scene.md) |
 | `torchsky.viz` | experimental | 10 | [reference](viz.md) |
 
 ## Public modules
@@ -68,7 +69,6 @@ reference pages carry the contracts.
 |---|---|---|
 | `torchsky.sphere.compat` | compatibility | [reference](sphere-compat.md) |
 | `torchsky.sphere.healpix` | core | [reference](sphere-healpix.md) |
-| `torchsky.sphere.healpy` | compatibility | [reference](sphere-healpy.md) |
 
 Every public name in these namespaces is listed exactly once. The
 `api-manifest.json` artifact is the frozen name-level contract checked in CI.

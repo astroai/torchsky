@@ -8,7 +8,10 @@ import pytest
 import torch
 from torchfits import write
 
-from torchsky.calibration_evidence import load_operator_calibration_split
+from torchsky.calibration_evidence import (
+    calibration_exposure_id,
+    load_operator_calibration_split,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -81,3 +84,9 @@ def test_load_operator_calibration_split_rejects_product_hash_mismatch(
         load_operator_calibration_split(
             manifest, split="test", role="psf", detector="NRCALONG"
         )
+
+
+def test_calibration_exposure_id_requires_canonical_key() -> None:
+    assert calibration_exposure_id({"exposure_id": "exp-1"}) == "exp-1"
+    with pytest.raises(ValueError, match="nonempty exposure_id"):
+        calibration_exposure_id({"exposure": "exp-1"})

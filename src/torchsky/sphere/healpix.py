@@ -628,11 +628,6 @@ def nside2resol(nside: int, arcmin: bool = False) -> float:
     return resol_rad * (180.0 * 60.0 / math.pi)
 
 
-def max_pixrad(nside: int, degrees: bool = False) -> float:
-    """Healpy-style alias for `max_pixel_radius`."""
-    return max_pixel_radius(nside, degrees=degrees)
-
-
 def ang2pix(
     nside: int, theta: Tensor, phi: Tensor, nest: bool = False, lonlat: bool = False
 ) -> Tensor:
@@ -641,6 +636,22 @@ def ang2pix(
 
     If lonlat is False, inputs are (theta, phi) in radians with theta=colatitude.
     If lonlat is True, inputs are (lon, lat) in degrees.
+
+    Args:
+        nside: HEALPix resolution parameter.
+        theta: Colatitude in radians, or longitude in degrees with ``lonlat=True``.
+        phi: Longitude in radians, or latitude in degrees with ``lonlat=True``.
+        nest: Use nested rather than ring ordering.
+        lonlat: Interpret inputs as longitude and latitude in degrees.
+
+    Returns:
+        Integer HEALPix indices with the broadcast input shape.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.sphere import ang2pix
+        >>> ang2pix(1, torch.tensor([0.0]), torch.tensor([0.0]), lonlat=True).shape
+        torch.Size([1])
     """
     if lonlat:
         lon = _as_float64(theta)
@@ -683,6 +694,22 @@ def pix2ang(
 
     If lonlat is False, returns (theta, phi) in radians with theta=colatitude.
     If lonlat is True, returns (lon, lat) in degrees.
+
+    Args:
+        nside: HEALPix resolution parameter.
+        ipix: Integer pixel indices.
+        nest: Use nested rather than ring ordering.
+        lonlat: Return longitude and latitude in degrees.
+
+    Returns:
+        Two tensors containing angular coordinates.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.sphere import pix2ang
+        >>> lon, lat = pix2ang(1, torch.tensor([0]), lonlat=True)
+        >>> lon.shape == lat.shape
+        True
     """
     if nest:
         lon, lat = pix2ang_nested(nside, ipix)
@@ -825,16 +852,6 @@ def boundaries(nside: int, pix: Tensor, step: int = 1, nest: bool = False) -> Te
     return xyz
 
 
-def ring_to_nested(nside: int, ipix: Tensor) -> Tensor:
-    """Alias for ring2nest."""
-    return ring2nest(nside, ipix)
-
-
-def nested_to_ring(nside: int, ipix: Tensor) -> Tensor:
-    """Alias for nest2ring."""
-    return nest2ring(nside, ipix)
-
-
 def neighbors(nside: int, ipix: Tensor | int, nest: bool = False) -> Tensor:
     """
     Return 8 neighbors (SW, W, NW, N, NE, E, SE, S) for input pixels.
@@ -962,11 +979,6 @@ def neighbors(nside: int, ipix: Tensor | int, nest: bool = False) -> Tensor:
     if scalar_input:
         return out[0]
     return out.reshape(*pix_t.shape, 8)
-
-
-def neighbours(nside: int, ipix: Tensor | int, nest: bool = False) -> Tensor:
-    """British spelling alias for `neighbors`."""
-    return neighbors(nside, ipix, nest=nest)
 
 
 def get_all_neighbours(
@@ -1434,6 +1446,23 @@ def query_disc(
     MPS stays on-device via the chunked tensor fallback. CUDA copies a length-3
     ``vec`` to host; that copy is O(1) and far below 10% of nside≥512 wall, so
     the query stays on the CPU kernel.
+
+    Args:
+        nside: HEALPix resolution parameter.
+        vec: Cartesian unit vector at the disc center.
+        radius: Angular radius in radians.
+        inclusive: Include pixels overlapping the disc boundary.
+        fact: Oversampling factor for inclusive queries.
+        nest: Return nested rather than ring indices.
+        chunk_size: Pixel chunk size for the tensor fallback.
+
+    Returns:
+        One-dimensional integer tensor of matching pixels.
+
+    Examples:
+        >>> from torchsky.sphere import query_disc
+        >>> query_disc(1, [1.0, 0.0, 0.0], 0.1).ndim
+        1
     """
     _validate_nside(nside)
     radius = float(radius)
@@ -1532,6 +1561,7 @@ def query_circle(
     *,
     degrees: bool = True,
     inclusive: bool = False,
+    fact: int = 4,
     nest: bool = False,
     chunk_size: int = 1_000_000,
 ) -> Tensor:
@@ -1549,12 +1579,10 @@ def query_circle(
         vec,
         radius,
         inclusive=inclusive,
+        fact=fact,
         nest=nest,
         chunk_size=chunk_size,
     )
-
-
-query_cone = query_circle
 
 
 def query_circle_vec(
@@ -1563,7 +1591,7 @@ def query_circle_vec(
     radius: float,
     *,
     inclusive: bool = False,
-    fact: int = 4,  # noqa: ARG001 - kept for API compatibility
+    fact: int = 4,
     nest: bool = False,
     chunk_size: int = 1_000_000,
 ) -> Tensor:
@@ -1586,7 +1614,6 @@ def query_strip(
     *,
     nest: bool = False,
     inclusive: bool = False,
-    chunk_size: int = 1_000_000,  # noqa: ARG001 - API compatibility; strip is ring-pruned
 ) -> Tensor:
     """
     Return pixels with center colatitude in [theta1, theta2] (radians).
@@ -1626,6 +1653,23 @@ def query_polygon(
     - ``query_polygon(nside, lon_deg, lat_deg, ...)`` (1D degree sequences/tensors)
     - ``query_polygon(nside, vertices, lonlat=True, ...)`` with shape ``(N, 2)`` or ``(2, N)``
     - ``query_polygon(nside, vertices, lonlat=False, ...)`` with Cartesian shape ``(N, 3)`` or ``(3, N)``
+
+    Args:
+        nside: HEALPix resolution parameter.
+        vertices: Longitude samples or two-/three-dimensional polygon vertices.
+        lat_deg: Latitude samples for the separate longitude/latitude form.
+        inclusive: Include pixels overlapping the polygon boundary.
+        nest: Return nested rather than ring indices.
+        lonlat: Interpret paired vertices as degrees rather than Cartesian vectors.
+        chunk_size: Pixel chunk size for the tensor fallback.
+
+    Returns:
+        One-dimensional integer tensor of matching pixels.
+
+    Examples:
+        >>> from torchsky.sphere import query_polygon
+        >>> callable(query_polygon)
+        True
     """
     _validate_nside(nside)
     if lat_deg is not None:
@@ -1767,13 +1811,10 @@ def query_polygon_vec(
     vertices: Tensor | Sequence[Sequence[float]],
     *,
     inclusive: bool = False,
-    fact: int = 4,
     nest: bool = False,
     chunk_size: int = 1_000_000,
 ) -> Tensor:
     """Cartesian-vector convenience wrapper around `query_polygon`."""
-    if int(fact) != 4:
-        raise ValueError("query_polygon_vec fact is unused; pass fact=4 or omit it.")
     return query_polygon(
         nside,
         vertices,
@@ -2052,7 +2093,6 @@ def query_box(
         theta2,
         nest=nest,
         inclusive=False,
-        chunk_size=chunk_size,
     )
     if cand.numel() == 0:
         return cand
@@ -2430,13 +2470,10 @@ __all__ = [
     "lonlat_to_xyz",
     "mask_bad",
     "max_pixel_radius",
-    "max_pixrad",
     "neighbors",
-    "neighbours",
     "nest2ring",
     "nest_children",
     "nest_parent",
-    "nested_to_ring",
     "npix2nside",
     "nside2npix",
     "nside2order",
@@ -2453,14 +2490,12 @@ __all__ = [
     "query_box",
     "query_circle",
     "query_circle_vec",
-    "query_cone",
     "query_disc",
     "query_polygon",
     "query_polygon_vec",
     "query_strip",
     "reorder",
     "ring2nest",
-    "ring_to_nested",
     "spread_bits",
     "ud_grade",
     "upgrade_pixels",

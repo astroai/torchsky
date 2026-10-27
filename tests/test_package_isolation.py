@@ -54,16 +54,18 @@ def test_native_torch_abi_contract_is_consistent() -> None:
 
     assert "scikit-build-core>=1.0.0" in pyproject["build-system"]["requires"]
     assert pyproject["project"]["requires-python"] == ">=3.12"
-    assert "torch>=2.13" in pyproject["build-system"]["requires"]
-    assert "torch>=2.13" in pyproject["project"]["dependencies"]
+    assert "torch>=2.13,<2.14" in pyproject["build-system"]["requires"]
+    assert "torch>=2.13,<2.14" in pyproject["project"]["dependencies"]
     assert "torchfits>=1.0.0" in pyproject["project"]["dependencies"]
     for section in ("build-dependencies", "host-dependencies", "run-dependencies"):
-        assert pixi["package"][section]["pytorch"] == ">=2.13"
+        assert pixi["package"][section]["pytorch"] == ">=2.13,<2.14"
+    assert pixi["package"]["run-dependencies"]["numpy"] == ">=1.20"
     assert pixi["dependencies"]["pytorch"] == "==2.13.0"
-    assert pixi["feature"]["prod"]["dependencies"]["python"] == "==3.13.14"
     assert pixi["feature"]["prod"]["pypi-dependencies"]["torchfits"] == "==1.0.0"
+    assert pixi["feature"]["py312"]["dependencies"]["python"] == "3.12.*"
+    assert pixi["feature"]["py313"]["dependencies"]["python"] == "3.13.*"
     install_docs = (REPO_ROOT / "docs" / "install.md").read_text(encoding="utf-8")
-    assert '"torch>=2.13"' in install_docs
+    assert '"torch>=2.13,<2.14"' in install_docs
 
     cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
     bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")

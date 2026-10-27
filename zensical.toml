@@ -62,6 +62,7 @@ nav = [
   ]},
   {"Reference" = [
     "reference/index.md",
+    "reference/cli.md",
     "reference/torchsky.md",
     {"Core namespaces" = [
       "reference/wcs.md",
@@ -83,6 +84,7 @@ nav = [
     {"Experimental namespaces" = [
       "reference/scene.md",
       "reference/field.md",
+      "reference/filter-profiles.md",
       "reference/map-likelihood.md",
       "reference/map-query.md",
       "reference/map-evidence.md",
@@ -99,7 +101,6 @@ nav = [
     ]},
     {"Compatibility modules" = [
       "reference/sphere-compat.md",
-      "reference/sphere-healpy.md",
     ]},
     "reference/exceptions.md",
     "reference/runtime-contract.md",

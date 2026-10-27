@@ -13,7 +13,7 @@ from . import healpix as _healpix
 from .core import great_circle_distance, lonlat_to_unit_xyz
 from .geom import PixelizedRegion, spherical_polygon_contains
 from .randoms import PreparedRandomSampler, _prepare_moc_random_sampler, sample_randoms
-from .sparse import HealSparseMap
+from .sparse import SparseHealpixMap
 
 
 def _order_from_nside(nside: int, *, name: str = "nside") -> int:
@@ -507,7 +507,16 @@ def _format_ascii_pixels(pixels: Tensor, *, compact: bool) -> str:
 
 
 class MOC:
-    """Multi-Order Coverage map."""
+    """Multi-order sky coverage encoded as normalized IVOA NUNIQ cells.
+
+    Args:
+        uniq: Integer tensor of NUNIQ cell identifiers.
+
+    Examples:
+        >>> from torchsky.sphere import MOC
+        >>> MOC.empty().is_empty
+        True
+    """
 
     def __init__(self, uniq: Tensor):
         self.uniq = _normalize_moc(_as_int64_exact(uniq, name="uniq"))
@@ -529,8 +538,7 @@ class MOC:
         return bool(torch.equal(self.uniq, other.uniq.to(device=self.uniq.device)))
 
     @classmethod
-    def full(cls, max_order: int = 0) -> "MOC":
-        del max_order
+    def full(cls) -> "MOC":
         return cls(nest2uniq(1, torch.arange(12, dtype=torch.int64)))
 
     @property
@@ -831,12 +839,12 @@ class MOC:
         *,
         nside_coverage: int | None = None,
         dtype: torch.dtype = torch.float32,
-    ) -> HealSparseMap:
+    ) -> SparseHealpixMap:
         """Realize MOC coverage as a sparse HEALPix map at fixed resolution."""
         nside_i = int(nside)
         if nside_coverage is None:
             nside_coverage = max(1, nside_i // 8)
-        return HealSparseMap.from_moc(
+        return SparseHealpixMap.from_moc(
             self,
             nside=nside_i,
             nside_coverage=nside_coverage,
@@ -865,7 +873,7 @@ class MOC:
         return PixelizedRegion(nside=int(nside), nest=nest, pixels=pix)
 
     @classmethod
-    def from_sparse_map(cls, smap: HealSparseMap) -> "MOC":
+    def from_sparse_map(cls, smap: SparseHealpixMap) -> "MOC":
         """Create MOC from the coverage of a sparse map."""
         # Get all sparse pixels
         pix = smap.get_covered_pixels()
@@ -991,7 +999,7 @@ class MOC:
     @classmethod
     def from_threshold(
         cls,
-        smap: HealSparseMap,
+        smap: SparseHealpixMap,
         threshold: float,
         op: Literal[">", ">=", "<", "<="] = ">",
     ) -> "MOC":

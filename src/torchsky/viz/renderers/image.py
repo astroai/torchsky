@@ -60,9 +60,7 @@ def zscale_limits(
 # Stretch functions
 # ---------------------------------------------------------------------------
 
-# 'zscale' is an alias for 'linear' — ZScale only computes vmin/vmax;
-# the actual pixel mapping is always linear after normalization.
-StretchName = Literal["linear", "log", "sqrt", "asinh", "histeq", "power", "zscale"]
+StretchName = Literal["linear", "log", "sqrt", "asinh", "histeq", "power"]
 
 
 def apply_stretch(
@@ -78,6 +76,8 @@ def apply_stretch(
 
     Returns float32 tensor in [0, 1].
     """
+    if stretch not in {"linear", "log", "sqrt", "asinh", "histeq", "power"}:
+        raise ValueError(f"Unknown stretch {stretch!r}")
     arr = arr.float()
     span = vmax - vmin
     if abs(span) < 1e-30:
@@ -86,10 +86,7 @@ def apply_stretch(
     # Clip + normalize
     normed = (arr.clamp(vmin, vmax) - vmin) / span
 
-    if stretch in (
-        "linear",
-        "zscale",
-    ):  # zscale = linear after external limit computation
+    if stretch == "linear":
         return normed
 
     if stretch == "log":

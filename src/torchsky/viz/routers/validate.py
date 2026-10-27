@@ -122,6 +122,7 @@ def _panel_pngs_sync(
     pid: str,
     request: Request,
     stretch: str,
+    limit_policy: str,
     pull_range: float,
 ) -> JSONResponse:
     pairs = _pairs(request)
@@ -134,6 +135,7 @@ def _panel_pngs_sync(
             r.model,
             r.sigma,
             stretch=stretch,
+            limit_policy=limit_policy,
             pull_sigma_range=pull_range,
         )
     except Exception as e:
@@ -145,13 +147,16 @@ def _panel_pngs_sync(
 async def panel_pngs(
     pid: str,
     request: Request,
-    stretch: str = "zscale",
+    stretch: str = "linear",
+    limit_policy: str = "zscale",
     pull_range: float = 5.0,
 ) -> JSONResponse:
     """Return truth/model/residual/pull as base64-encoded PNGs."""
     from .._blocking import run_in_thread
 
-    return await run_in_thread(_panel_pngs_sync, pid, request, stretch, pull_range)
+    return await run_in_thread(
+        _panel_pngs_sync, pid, request, stretch, limit_policy, pull_range
+    )
 
 
 def _pull_hist_sync(pid: str, request: Request) -> JSONResponse:
@@ -213,5 +218,4 @@ async def val_chi2_map(pid: str, request: Request) -> Response:
     from .._blocking import run_in_thread
 
     return await run_in_thread(_chi2_map_sync, pid, request)
-
 

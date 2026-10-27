@@ -297,6 +297,7 @@ def photometric_log_residuals(
     weights: Any | None = None,
     whiten: bool = True,
 ) -> Tensor:
+    """Compute optionally whitened log-flux residuals for calibration."""
     measured = torch.as_tensor(measured_flux)
     predicted = torch.as_tensor(
         predicted_flux, dtype=measured.dtype, device=measured.device
@@ -1441,6 +1442,7 @@ def solve_coupled_calibration(
     graph: CoupledCalibrationGraph,
     config: CoupledCalibrationConfig | None = None,
 ) -> CoupledCalibrationSolution:
+    """Solve the coupled astrometric and photometric calibration graph."""
     return graph.solve(config)
 
 

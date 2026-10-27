@@ -24,17 +24,18 @@ scikit-build-core = ">=1.0.0"
 cmake = ">=3.21"
 ninja = ">=1.10"
 python = ">=3.12"
-pytorch = ">=2.13"
+pytorch = ">=2.13,<2.14"
 
 # Host dependencies - libraries that will be linked into the package
 [package.host-dependencies]
 python = ">=3.12"
-pytorch = ">=2.13"
+pytorch = ">=2.13,<2.14"
 nanobind = ">=2.10.2"
 
 # Run dependencies - packages needed at runtime
 [package.run-dependencies]
-pytorch = ">=2.13"
+pytorch = ">=2.13,<2.14"
+numpy = ">=1.20"
 
 # Workspace dependencies — default (lean) dev shell: build tools + pytest driver only.
 # Retained fixture/interop packages live in `test`; scientific comparators and
@@ -53,7 +54,6 @@ nanobind = ">=2.10.2"
 pytorch = "==2.13.0"
 numpy = ">=1.20"
 pre-commit = ">=3.5.0"
-twine = ">=5.0"
 
 [tasks]
 # Development tasks
@@ -73,6 +73,8 @@ examples = "pixi run -e test python examples/test_examples.py"
 docs-build = "pixi run docs-reference-check && bash scripts/sync_docs_examples.sh && pixi run -e docs zensical build --clean --strict"
 docs-reference = "pixi run -e docs python scripts/gen_reference.py --write"
 docs-reference-check = "pixi run -e docs python scripts/gen_reference.py --check"
+cli-reference = "pixi run -e test python scripts/gen_cli_reference.py --write"
+cli-reference-check = "pixi run -e test python scripts/gen_cli_reference.py --check"
 docs-serve = "pixi run -e docs zensical serve"
 docs-links = "pixi run -e docs python scripts/check_docs_links.py"
 docs-examples = "pixi run -e test python scripts/gen_example_index.py --write"
@@ -87,7 +89,7 @@ docs-docstrings = "pixi run -e test python scripts/docstring_audit.py --report"
 docs-docstrings-baseline = "pixi run -e test python scripts/docstring_audit.py --write-baseline"
 docs-docstrings-check = "pixi run -e test python scripts/docstring_audit.py --check"
 docs-anchors = "python scripts/check_reference_anchors.py"
-docs-contract = "pixi run docs-build && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run docs-anchors && pixi run docs-examples-check && pixi run docs-bench-tables-check && pixi run docs-docstrings-check && pixi run docs-snippets && pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py tests/test_docs_coverage.py tests/test_docs_reference.py tests/test_docs_claims.py tests/test_docstrings.py -q"
+docs-contract = "pixi run docs-build && pixi run cli-reference-check && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run docs-anchors && pixi run docs-examples-check && pixi run docs-bench-tables-check && pixi run docs-docstrings-check && pixi run docs-snippets && pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py tests/test_docs_coverage.py tests/test_docs_reference.py tests/test_docs_claims.py tests/test_docstrings.py -q"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 
 audit-refactor-cohesion = "pixi run -e default -- python scripts/audit_refactor_cohesion.py"
@@ -95,7 +97,6 @@ api-manifest = "pixi run -e test -- python scripts/api_manifest.py --write docs/
 api-manifest-check = "pixi run -e test -- python scripts/api_manifest.py --check docs/api-manifest.json"
 setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
-release-manual = "twine upload dist/*"
 
 
 
@@ -110,10 +111,15 @@ test-dataloader = "pixi run -e default -- pytest tests/test_dataloader.py -v"
 platforms = ["osx-arm64", "linux-64"]
 
 [feature.prod.dependencies]
-python = "==3.13.14"
 
 [feature.prod.pypi-dependencies]
 torchfits = "==1.0.0"
+
+[feature.py312.dependencies]
+python = "3.12.*"
+
+[feature.py313.dependencies]
+python = "3.13.*"
 
 # Test feature with comparison libraries
 [feature.test.dependencies]
@@ -165,8 +171,10 @@ astromatic-source-extractor = ">=2.28"
 
 # Environment definitions
 [environments]
-default = { features = ["prod"], solve-group = "default" }
-test = { features = ["prod", "test"], solve-group = "default" }
+default = { features = ["prod", "py313"], solve-group = "default" }
+test = { features = ["prod", "test", "py313"], solve-group = "default" }
+test-py312 = { features = ["prod", "test", "py312"], solve-group = "py312" }
+test-py313 = { features = ["prod", "test", "py313"], solve-group = "default" }
 cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
-astrometry = { features = ["prod", "astrometry"], solve-group = "default" }
-docs = { features = ["prod", "docs"], solve-group = "default" }
+astrometry = { features = ["prod", "astrometry", "py313"], solve-group = "default" }
+docs = { features = ["prod", "docs", "py313"], solve-group = "default" }

@@ -2,38 +2,31 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from typing import Any
 
 import pytest
 import torch
+from torch._subclasses.fake_tensor import FakeTensorMode, is_fake
 
-from torchsky._native import cpp
-
-
-pytestmark = pytest.mark.skipif(cpp is None, reason="native extension unavailable")
+from torchsky import _ops
 
 
-def _call_fused(
+pytestmark = pytest.mark.skipif(
+    not _ops.has_wcs_dispatcher(), reason="native extension unavailable"
+)
+
+
+def _call_operator(
     direction: str,
     input1: torch.Tensor | None = None,
     input2: torch.Tensor | None = None,
-    output1: torch.Tensor | None = None,
-    output2: torch.Tensor | None = None,
-    **overrides: object,
+    **overrides: Any,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     input1 = torch.tensor([1.0, 2.0], dtype=torch.float64) if input1 is None else input1
     input2 = torch.tensor([3.0, 4.0], dtype=torch.float64) if input2 is None else input2
-    output1 = torch.empty_like(input1) if output1 is None else output1
-    output2 = torch.empty_like(input1) if output2 is None else output2
-    tensors = {
-        "pixel_to_world": ("x_tensor", "y_tensor", "ra_tensor", "dec_tensor"),
-        "world_to_pixel": ("ra_tensor", "dec_tensor", "x_tensor", "y_tensor"),
-    }
-    names = tensors[direction]
-    kwargs: dict[str, object] = {
-        names[0]: input1,
-        names[1]: input2,
-        names[2]: output1,
-        names[3]: output2,
+    idx = torch.empty((0, 3), dtype=torch.int64, device=input1.device)
+    coeff = torch.empty(0, dtype=torch.float64, device=input1.device)
+    kwargs: dict[str, Any] = {
         "crpix0": 0.0,
         "crpix1": 0.0,
         "lambda_param": 1.0,
@@ -55,6 +48,10 @@ def _call_fused(
         "alpha0": 0.0,
         "delta0": 0.0,
         "is_tpv": False,
+        "tpv_idx1": idx,
+        "tpv_c1": coeff,
+        "tpv_idx2": idx.clone(),
+        "tpv_c2": coeff.clone(),
     }
     matrix_prefix = "cd" if direction == "pixel_to_world" else "cdi"
     kwargs.update(
@@ -66,28 +63,26 @@ def _call_fused(
         }
     )
     kwargs.update(overrides)
-    function = getattr(cpp, f"wcs_{direction}_fused_cpu")
-    function(**kwargs)
-    return output1, output2
+    return getattr(torch.ops.torchsky, f"wcs_{direction}")(input1, input2, **kwargs)
 
 
 @pytest.mark.parametrize("direction", ["pixel_to_world", "world_to_pixel"])
-def test_fused_wcs_default_tpv_arguments_mutate_outputs(direction: str) -> None:
-    output1, output2 = _call_fused(direction)
+def test_wcs_operator_default_arguments_return_functional_outputs(direction: str) -> None:
+    output1, output2 = _call_operator(direction)
     torch.testing.assert_close(output1, torch.tensor([1.0, 2.0], dtype=torch.float64))
     torch.testing.assert_close(output2, torch.tensor([3.0, 4.0], dtype=torch.float64))
 
 
 @pytest.mark.parametrize("direction", ["pixel_to_world", "world_to_pixel"])
-def test_fused_wcs_valid_empty_inputs_and_tpv(direction: str) -> None:
+def test_wcs_operator_accepts_empty_inputs_and_tpv(direction: str) -> None:
     empty = torch.empty((0, 2), dtype=torch.float64)
-    output1, output2 = _call_fused(direction, empty, empty.clone())
+    output1, output2 = _call_operator(direction, empty, empty.clone())
     assert output1.shape == (0, 2)
     assert output2.shape == (0, 2)
 
     idx = torch.empty((0, 3), dtype=torch.int64)
-    coeff = torch.empty((0,), dtype=torch.float64)
-    output1, output2 = _call_fused(
+    coeff = torch.empty(0, dtype=torch.float64)
+    output1, output2 = _call_operator(
         direction,
         is_tpv=True,
         tpv_idx1=idx,
@@ -101,43 +96,55 @@ def test_fused_wcs_valid_empty_inputs_and_tpv(direction: str) -> None:
 
 @pytest.mark.parametrize("direction", ["pixel_to_world", "world_to_pixel"])
 @pytest.mark.parametrize(
-    "mutation,match",
+    "input1,input2,overrides,match",
     [
-        ({"input2": torch.ones(3, dtype=torch.float64)}, "identical shapes"),
-        ({"output1": torch.empty(1, dtype=torch.float64)}, "identical shapes"),
-        ({"input1": torch.ones(2, dtype=torch.float32)}, "float64"),
-        ({"input1": torch.ones((2, 2), dtype=torch.float64).t()}, "contiguous"),
-        ({"proj_code": "BAD"}, "unsupported fused WCS projection"),
-        ({"native_type": "bad"}, "unsupported fused WCS native_type"),
-        ({"alpha0": float("nan")}, "alpha0 must be finite"),
+        (
+            torch.ones(2, dtype=torch.float64),
+            torch.ones(3, dtype=torch.float64),
+            {},
+            "identical shapes",
+        ),
+        (
+            torch.ones(2, dtype=torch.float32),
+            torch.ones(2, dtype=torch.float32),
+            {},
+            "float64",
+        ),
+        (
+            torch.ones(2, dtype=torch.float64),
+            torch.ones(2, dtype=torch.float64),
+            {"proj_code": "BAD"},
+            "unsupported fused WCS projection",
+        ),
+        (
+            torch.ones(2, dtype=torch.float64),
+            torch.ones(2, dtype=torch.float64),
+            {"native_type": "bad"},
+            "unsupported fused WCS native_type",
+        ),
+        (
+            torch.ones(2, dtype=torch.float64),
+            torch.ones(2, dtype=torch.float64),
+            {"alpha0": float("nan")},
+            "alpha0 must be finite",
+        ),
     ],
 )
-def test_fused_wcs_rejects_invalid_raw_buffer_contracts(
-    direction: str, mutation: dict[str, object], match: str
+def test_wcs_operator_rejects_malformed_inputs_and_parameters(
+    direction: str,
+    input1: torch.Tensor,
+    input2: torch.Tensor,
+    overrides: dict[str, Any],
+    match: str,
 ) -> None:
-    tensor_keys = {"input1", "input2", "output1", "output2"}
-    tensor_args = {key: value for key, value in mutation.items() if key in tensor_keys}
-    overrides = {key: value for key, value in mutation.items() if key not in tensor_keys}
     with pytest.raises(RuntimeError, match=match):
-        _call_fused(direction, **tensor_args, **overrides)
-
-
-@pytest.mark.parametrize("direction", ["pixel_to_world", "world_to_pixel"])
-def test_fused_wcs_rejects_output_overlap(direction: str) -> None:
-    input1 = torch.tensor([1.0, 2.0], dtype=torch.float64)
-    input2 = torch.tensor([3.0, 4.0], dtype=torch.float64)
-    with pytest.raises(RuntimeError, match="must not overlap"):
-        _call_fused(direction, input1, input2, input1, torch.empty_like(input1))
-    output = torch.empty_like(input1)
-    with pytest.raises(RuntimeError, match="must not overlap"):
-        _call_fused(direction, input1, input2, output, output)
+        _call_operator(direction, input1, input2, **overrides)
 
 
 @pytest.mark.parametrize("direction", ["pixel_to_world", "world_to_pixel"])
 @pytest.mark.parametrize(
     "tpv_args,match",
     [
-        ({}, "TPV index and coefficient tensors are required"),
         (
             {
                 "tpv_idx1": torch.empty((0, 2), dtype=torch.int64),
@@ -151,13 +158,6 @@ def test_fused_wcs_rejects_output_overlap(direction: str) -> None:
                 "tpv_c1": torch.ones(1, dtype=torch.float64),
             },
             "int64",
-        ),
-        (
-            {
-                "tpv_idx1": torch.zeros((3, 2), dtype=torch.int64).t(),
-                "tpv_c1": torch.ones(2, dtype=torch.float64),
-            },
-            "contiguous",
         ),
         (
             {
@@ -182,31 +182,50 @@ def test_fused_wcs_rejects_output_overlap(direction: str) -> None:
         ),
     ],
 )
-def test_fused_wcs_rejects_malformed_tpv(
-    direction: str, tpv_args: dict[str, object], match: str
+def test_wcs_operator_rejects_malformed_tpv(
+    direction: str, tpv_args: dict[str, Any], match: str
 ) -> None:
     idx = torch.empty((0, 3), dtype=torch.int64)
     coeff = torch.empty(0, dtype=torch.float64)
-    arguments: dict[str, object] = {
+    arguments: dict[str, Any] = {
         "is_tpv": True,
         "tpv_idx1": idx,
         "tpv_c1": coeff,
         "tpv_idx2": idx.clone(),
         "tpv_c2": coeff.clone(),
     }
-    if tpv_args:
-        arguments.update(tpv_args)
-    else:
-        arguments = {"is_tpv": True}
+    arguments.update(tpv_args)
     with pytest.raises(RuntimeError, match=match):
-        _call_fused(direction, **arguments)
+        _call_operator(direction, **arguments)
 
 
-def test_fused_wcs_dangerous_malformed_calls_raise_in_subprocess() -> None:
+def test_wcs_operator_schema_has_functional_outputs() -> None:
+    for name in ("wcs_pixel_to_world", "wcs_world_to_pixel"):
+        schema = str(getattr(torch.ops.torchsky, name).default._schema)
+        assert schema.startswith(f"torchsky::{name}(Tensor")
+        assert ") -> (Tensor " in schema
+        assert schema.count("Tensor ") >= 8
+        assert "out" not in schema
+
+
+@pytest.mark.parametrize("direction", ["pixel_to_world", "world_to_pixel"])
+def test_wcs_operator_fake_tensor_outputs_are_safe(direction: str) -> None:
+    mode = FakeTensorMode()
+    with mode:
+        first = torch.empty_strided((2, 3), (1, 2), dtype=torch.float64)
+        second = torch.empty_strided((2, 3), (1, 2), dtype=torch.float64)
+        outputs = _call_operator(direction, first, second)
+    assert all(is_fake(output) for output in outputs)
+    assert all(output.shape == first.shape for output in outputs)
+    assert all(output.is_contiguous() for output in outputs)
+
+
+def test_wcs_operator_dangerous_malformed_calls_raise_in_subprocess() -> None:
     code = """
 import torch
-from torchsky._native import cpp
+import torchsky._ops as ops
 
+assert ops.has_wcs_dispatcher()
 common = dict(
     crpix0=0.0, crpix1=0.0, cd00=1.0, cd01=0.0, cd10=0.0, cd11=1.0,
     proj_code="CAR", lambda_param=1.0, hpx_H=4.0, hpx_K=3.0,
@@ -216,19 +235,22 @@ common = dict(
 )
 x = torch.ones(2, dtype=torch.float64)
 y = torch.ones(2, dtype=torch.float64)
-idx = torch.tensor([[8, 0, 0]], dtype=torch.int64)
-coeff = torch.ones(1, dtype=torch.float64)
+empty_idx = torch.empty((0, 3), dtype=torch.int64)
+empty_coeff = torch.empty(0, dtype=torch.float64)
+bad_idx = torch.tensor([[8, 0, 0]], dtype=torch.int64)
 cases = [
-    dict(x_tensor=x, y_tensor=y, ra_tensor=torch.empty(1, dtype=torch.float64), dec_tensor=torch.empty_like(y), is_tpv=False),
-    dict(x_tensor=x, y_tensor=y, ra_tensor=torch.empty_like(x), dec_tensor=torch.empty_like(y), is_tpv=True, tpv_idx1=idx, tpv_c1=coeff, tpv_idx2=idx, tpv_c2=coeff),
+    dict(first=x, second=torch.ones(1, dtype=torch.float64), is_tpv=False, tpv_idx1=empty_idx, tpv_c1=empty_coeff, tpv_idx2=empty_idx, tpv_c2=empty_coeff),
+    dict(first=x, second=y, is_tpv=True, tpv_idx1=bad_idx, tpv_c1=torch.ones(1, dtype=torch.float64), tpv_idx2=bad_idx, tpv_c2=torch.ones(1, dtype=torch.float64)),
 ]
 for case in cases:
+    first = case.pop("first")
+    second = case.pop("second")
     try:
-        cpp.wcs_pixel_to_world_fused_cpu(**case, **common)
+        torch.ops.torchsky.wcs_pixel_to_world(first, second, **common, **case)
     except RuntimeError:
         pass
     else:
-        raise AssertionError("malformed fused WCS call did not raise")
+        raise AssertionError("malformed WCS operator call did not raise")
 """
     result = subprocess.run(
         [sys.executable, "-c", code],

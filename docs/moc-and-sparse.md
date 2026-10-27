@@ -11,7 +11,7 @@ gate expensive map operations without materializing a full-sky array.
 | Representation | Stores | Use when | Reference |
 |---|---|---|---|
 | [`MOC`](reference/sphere.md#torchsky.sphere.MOC) | IVOA UNIQ cells, NESTED ordering | Coverage only: footprints, exposure unions, region membership, cross-match pruning | `MOC` |
-| [`HealSparseMap`](reference/sphere.md#torchsky.sphere.HealSparseMap) | Values on a sorted pixel list, optional coverage map | Sparse values at one resolution (masks, weights, depth maps) | `HealSparseMap` |
+| [`SparseHealpixMap`](reference/sphere.md#torchsky.sphere.SparseHealpixMap) | Values on a sorted pixel list, optional coverage map | Sparse values at one resolution (masks, weights, depth maps) | `SparseHealpixMap` |
 | [`MultiOrderHealpixMap`](reference/sphere.md#torchsky.sphere.MultiOrderHealpixMap) | Values on disjoint UNIQ cells | Probabilistic sky maps whose resolution varies with density | `MultiOrderHealpixMap` |
 | [`PixelizedRegion`](reference/sphere.md#torchsky.sphere.PixelizedRegion) | A set of pixels at one `nside` | Boolean geometry at a fixed resolution | `PixelizedRegion` |
 | Dense `torch.Tensor` | Every pixel | The map is genuinely full-sky and fits in memory | — |
@@ -165,18 +165,17 @@ represented explicitly; `STMOC` covers space-time (next section).
 
 A sparse map stores values only for a sorted pixel list. `from_pixels` takes
 explicit indices, `from_dense` extracts the valid pixels of a dense array, and
-`from_moc` realizes coverage without building the dense mask first. `HealSparseMap`
-and `SparseMap` are aliases for the same class.
+`from_moc` realizes coverage without building the dense mask first.
 
 <!-- docs: run -->
 ```python
 import torch
-from torchsky.sphere import HealSparseMap
+from torchsky.sphere import SparseHealpixMap
 
 nside = 16
 dense = torch.randn(12 * nside**2, dtype=torch.float64)
 pixels = torch.arange(100, dtype=torch.int64)
-sparse = HealSparseMap.from_pixels(
+sparse = SparseHealpixMap.from_pixels(
     pixels=pixels,
     values=dense[:100],
     nside_sparse=nside,
@@ -222,10 +221,10 @@ high-order MOC into dense pixels; it realizes only the requested resolution.
 <!-- docs: run -->
 ```python
 import torch
-from torchsky.sphere import HealSparseMap, MOC
+from torchsky.sphere import MOC, SparseHealpixMap
 
 nside = 16
-sparse = HealSparseMap.from_pixels(
+sparse = SparseHealpixMap.from_pixels(
     pixels=torch.arange(64, dtype=torch.int64),
     values=torch.ones(64, dtype=torch.float64),
     nside_sparse=nside,

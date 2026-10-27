@@ -131,13 +131,10 @@ def _inverse_tolerances(
     *,
     target: Tensor,
     output_scale: Tensor,
-    tol: float | None,
     atol: float | None,
     rtol: float,
 ) -> tuple[float, float]:
-    if tol is not None and atol is not None:
-        raise ValueError("tol and atol are aliases; specify only one")
-    absolute = tol if tol is not None else atol
+    absolute = atol
     if absolute is None:
         eps = torch.finfo(target.dtype).eps
         scale = float(output_scale.detach().abs().cpu().item())
@@ -306,15 +303,11 @@ class RegularGridTransform2D(nn.Module):
         values: Any,
         *,
         max_iter: int = 25,
-        tol: float | None = None,
         atol: float | None = None,
         rtol: float = 0.0,
         fail_closed: bool = True,
     ) -> Tensor:
-        """Newton inverse with output-unit ``atol`` and dimensionless ``rtol``.
-
-        ``tol`` remains a compatibility alias for ``atol``.
-        """
+        """Newton inverse with output-unit ``atol`` and dimensionless ``rtol``."""
         tgt = self._coerce_points(values)
         origin = self.origin.to(device=tgt.device, dtype=tgt.dtype)
         spacing = self.spacing.to(device=tgt.device, dtype=tgt.dtype)
@@ -341,7 +334,6 @@ class RegularGridTransform2D(nn.Module):
         atol_value, rtol_value = _inverse_tolerances(
             target=tgt,
             output_scale=output_extent,
-            tol=tol,
             atol=atol,
             rtol=rtol,
         )
@@ -567,7 +559,6 @@ class DetectorToTangentTransform(nn.Module):
         values: Any,
         *,
         max_iter: int = 25,
-        tol: float | None = None,
         atol: float | None = None,
         rtol: float = 0.0,
     ) -> Tensor:
@@ -579,7 +570,6 @@ class DetectorToTangentTransform(nn.Module):
             return self.table.inverse(
                 mid,
                 max_iter=max_iter,
-                tol=tol,
                 atol=atol,
                 rtol=rtol,
             )
@@ -599,7 +589,6 @@ class DetectorToTangentTransform(nn.Module):
         atol_value, rtol_value = _inverse_tolerances(
             target=tgt,
             output_scale=output_extent,
-            tol=tol,
             atol=atol,
             rtol=rtol,
         )

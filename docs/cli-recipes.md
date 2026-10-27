@@ -141,7 +141,7 @@ torchsky map /work/mosaic_field.fits "/data/exposures/r_*.fits" \
 `operator_constrained`. `--field-amp float16|bfloat16` opts into CUDA autocast
 with local gradient scaling; leave it at `none` unless you have measured the
 tradeoff. Spectral field runs may need the `map` extra for SVO profiles, or an
-explicit `--inr-transmission` / `--inr-transmission-dir` file source.
+explicit `--field-transmission` / `--field-transmission-dir` file source.
 
 ## One product per filter
 
@@ -149,7 +149,7 @@ explicit `--inr-transmission` / `--inr-transmission-dir` file source.
 torchsky map /work/coadds/ "/data/exposures/*.fits" --per-filter
 ```
 
-With `--per-filter` (alias `--per-band`) the output positional is a directory,
+With `--per-filter` the output positional is a directory,
 inputs are grouped by their FITS `FILTER`, and one product is written per
 filter. Without it, inputs from different filters are rejected. With
 `--plan-json`, one plan per filter is written using the filter name as a suffix.
@@ -179,7 +179,8 @@ torchsky sky estimate \
   --device cuda
 ```
 
-- `--method mesh|polynomial`; mesh accepts `--mesh-filter median_3|gaussian_3|none`
+- `--method mesh|polynomial`; mesh accepts `--mesh-filter median|gaussian|none`
+  with an explicit `--mesh-filter-size` (default `3`)
   and `--interpolate bilinear|bicubic`; polynomial accepts `--order`.
 - `--statistic median|huber|tukey` is the per-cell robust statistic.
 - `--mask` is an optional FITS mask where true pixels are excluded.
@@ -224,25 +225,18 @@ network or behind an authenticated reverse proxy; it can read any file under
 `critical`, `error`, `warning`, `info`, or `debug`. For remote clusters, see
 [visualization](viz.md).
 
-## Legacy FITS inspection
+## FITS inspection with torchfits
 
-`torchsky info` and `torchsky cat` remain as migration-only commands. Prefer
-`torchfits` for new automation.
+FITS inspection and table previews are provided directly by `torchfits`.
 
 ```bash
-torchsky info /data/exposures/r_0001.fits --headers
-torchsky info /data/exposures/r_0001.fits --json
-
-torchsky cat /data/catalogs/catalog.fits \
-  --hdu 1 \
-  --columns RA,DEC,MAG_G \
-  --rows 20 \
-  --start-row 1
+torchfits info /data/exposures/r_0001.fits
+torchfits header /data/exposures/r_0001.fits
+torchfits table /data/catalogs/catalog.fits -e 1 -n 20
 ```
 
-`info` summarizes HDUs without materializing data; `--headers` includes per-HDU
-FITS headers and `--json` switches to machine-readable output. `cat` prints a
-bounded table sample (JSON with `--json`).
+Use `-f json` for structured `header` or `table` output; see the torchfits CLI
+reference for column selection, batch input, and output formats.
 
 ## Related guides
 

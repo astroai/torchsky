@@ -373,6 +373,7 @@ def refraction_arcmin(
 def apply_refraction(
     alt_deg: Tensor, *, pressure_mbar: Tensor | float, temperature_c: Tensor | float
 ) -> Tensor:
+    """Apply atmospheric refraction to altitude in degrees."""
     p = torch.as_tensor(pressure_mbar, dtype=alt_deg.dtype, device=alt_deg.device)
     t = torch.as_tensor(temperature_c, dtype=alt_deg.dtype, device=alt_deg.device)
     return alt_deg + refraction_arcmin(alt_deg, pressure_mbar=p, temperature_c=t) / 60.0
@@ -507,4 +508,3 @@ def apply_ephemeris_offset(
     ra_out = torch.remainder(ra_deg + sign * (dra_cosdec_deg / cos_dec), 360.0)
     dec_out = (dec_deg + sign * ddec_deg).clamp(-90.0, 90.0)
     return ra_out, dec_out
-

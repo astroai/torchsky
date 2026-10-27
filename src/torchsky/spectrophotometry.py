@@ -43,7 +43,21 @@ PhotometryOutput = Literal["mean_f_lambda", "f_nu_microjy", "ab_mag"]
 
 @dataclass(frozen=True)
 class Passband:
-    """Validated dimensionless throughput curve for one astronomical band."""
+    """Validated dimensionless throughput curve for one astronomical band.
+
+    Args:
+        wavelength: Strictly increasing one-dimensional wavelength samples.
+        throughput: Dimensionless nonnegative response at each wavelength.
+        name: Optional band identifier.
+        wavelength_unit: ``"angstrom"`` or ``"nm"``.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.spectrophotometry import Passband
+        >>> band = Passband(torch.tensor([4000.0, 5000.0]), torch.tensor([0.0, 1.0]))
+        >>> band.wavelength_unit
+        'angstrom'
+    """
 
     wavelength: torch.Tensor
     throughput: torch.Tensor
@@ -312,6 +326,24 @@ def synthetic_photometry(
 
     ``mask``, when given, is True for samples that exist. Masked wavelengths
     are dropped from the integral and do not count toward filter coverage.
+
+    Args:
+        wavelength: Shared or per-spectrum wavelength samples.
+        flux_lambda: Flux density per Angstrom on the trailing spectral axis.
+        passband: Photon-counting throughput curve.
+        output: Requested mean-flux, microjansky, or AB-magnitude representation.
+        min_coverage: Minimum passband response fraction required for validity.
+        mask: Optional valid-sample mask.
+
+    Returns:
+        Photometry values, unit, passband coverage, and validity mask.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.spectrophotometry import Passband, synthetic_photometry
+        >>> band = Passband(torch.tensor([4000.0, 5000.0]), torch.ones(2))
+        >>> synthetic_photometry(band.wavelength, torch.ones(2), band).value.item()
+        1.0
     """
     if output not in ("mean_f_lambda", "f_nu_microjy", "ab_mag"):
         raise ValueError("output must be 'mean_f_lambda', 'f_nu_microjy', or 'ab_mag'")

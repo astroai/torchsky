@@ -38,7 +38,26 @@ def anafast(
     gal_cut: float = 0.0,
     datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor | tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
-    """Compute auto/cross angular power spectrum C_l from scalar or polarized maps."""
+    """Compute auto- or cross-angular power spectra from full-sky maps.
+
+    Args:
+        map1: Scalar map or polarized map stack.
+        map2: Optional second map for cross spectra.
+        nside: Explicit HEALPix resolution, otherwise inferred from map length.
+        lmax: Maximum output multipole.
+        mmax: Maximum harmonic order.
+        nest: Inputs use nested ordering.
+        alm: Also return analyzed harmonic coefficients.
+        pol: Interpret leading triplets as polarized I/Q/U maps.
+
+    Returns:
+        Power spectra, optionally together with harmonic coefficients.
+
+    Examples:
+        >>> from torchsky.sphere import anafast
+        >>> callable(anafast)
+        True
+    """
     m1 = torch.as_tensor(map1)
     if m1.ndim not in (1, 2):
         raise ValueError("map1 must be 1D or 2D")
@@ -326,7 +345,6 @@ def synalm(
     mmax: int | None = None,
     *,
     new: bool = False,
-    verbose: bool = True,  # noqa: ARG001 - compatibility signature
 ) -> Tensor:
     """Generate alm coefficient vector(s) from power spectra."""
     seq, pairs, n_fields = _normalize_cls_input(cls, new=bool(new))
@@ -449,10 +467,30 @@ def synfast(
     fwhm: float = 0.0,
     sigma: float | None = None,
     new: bool = False,
-    verbose: bool = True,  # noqa: ARG001 - compatibility signature
 ) -> Tensor | tuple[Tensor, Tensor]:
-    """Synthesize map(s) from input C_l spectrum/spectra."""
-    alms = synalm(cls, lmax=lmax, mmax=mmax, new=new, verbose=verbose)
+    """Draw and synthesize scalar or polarized maps from power spectra.
+
+    Args:
+        cls: Scalar spectrum or polarized spectrum sequence.
+        nside: Output HEALPix resolution parameter.
+        lmax: Maximum synthesized multipole.
+        mmax: Maximum harmonic order.
+        alm: Also return the sampled harmonic coefficients.
+        pol: Interpret spectra as polarized when possible.
+        pixwin: Apply the HEALPix pixel window.
+        fwhm: Gaussian smoothing FWHM in radians.
+        sigma: Gaussian smoothing sigma in radians, overriding ``fwhm``.
+        new: Use the modern polarized-spectrum ordering.
+
+    Returns:
+        Synthesized map tensor, optionally with harmonic coefficients.
+
+    Examples:
+        >>> from torchsky.sphere import synfast
+        >>> callable(synfast)
+        True
+    """
+    alms = synalm(cls, lmax=lmax, mmax=mmax, new=new)
     rows, single = _spectral()._alm_to_rows(alms)
     ll, mm = _spectral()._infer_lmax_mmax_from_nalm(int(rows.shape[1]), lmax, mmax)
 
@@ -575,7 +613,6 @@ def smoothmap(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
-    verbose: bool = True,
     datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
     """Smooth HEALPix map(s) with scalar or polarized beam."""

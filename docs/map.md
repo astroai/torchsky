@@ -2,9 +2,9 @@
 
 `torchsky.map` is the promoted mapmaking facade: image-plane coadds, spectral
 cube coadds, multiband coadds, and declared map-product specs/results.
-Implementation modules such as `torchsky.map.field`, `torchsky.map.product`,
-and `torchsky.map.image_plane` remain available for advanced workflows, but the
-flat `torchsky.map` namespace is intentionally lean.
+Use the flat `torchsky.map` namespace for supported mapmaking workflows and
+`torchsky.field` for continuous fields. Implementation modules are private
+organization details rather than compatibility entry points.
 
 ## What This Namespace Is For
 
@@ -197,16 +197,11 @@ Promoted flat `torchsky.map` names:
 - `MapResult`, `CubeResult`, `MultibandResult`, `HealpixResult`, `ApertureUncertainty`
 - `ProductSpec`, `BandpassSpec`, `ProductResult`, `UncertaintyProduct`
 
-The public namespace exposes one name per concept. Lower-level implementation
-functions such as `coadd(...)` remain in
-`torchsky.map.image_plane` for advanced workflows, but they are not root-level
-compatibility aliases. Cube assembly lives in `torchsky.map.cube` and the
-direct-to-HEALPix coadd/resample path in `torchsky.map.healpix_coadd`; both are
-implementation modules that the facade imports lazily.
-
-Advanced planning and implementation helpers live in explicit
-submodules such as `torchsky.map.image_plane`, `torchsky.map.product`,
-`torchsky.map.operators`, and `torchsky.map.field`.
+The public namespace exposes one name per concept. Image, cube, multiband, and
+HEALPix assembly are all called through the promoted facade; deleted historical
+modules are not forwarding or compatibility entry points. Reusable observation
+operators live in `torchsky.map.operators`, while continuous-field workflows
+live in the separate `torchsky.field` facade.
 
 Scientific product evaluation and benchmark reporting run from the sibling
 [torchsky-harness](https://github.com/astroai/torchsky-harness) against products

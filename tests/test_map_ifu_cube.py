@@ -175,7 +175,7 @@ def test_one_plan_propagates_variance_dq_context_covariance_and_queries() -> Non
     )
     query = torch.zeros_like(result.data)
     query[:, 1, 1] = 1.0
-    uncertainty = result.line_uncertainty(
+    uncertainty = result.aperture_uncertainty(
         torch.nn.functional.one_hot(torch.tensor(3), 6).reshape(3, 2),
         torch.ones(3, dtype=torch.float64),
     )

@@ -7,11 +7,13 @@ to their source of truth.
 
 from __future__ import annotations
 
-import ast
+import argparse
 import json
 import re
 import tomllib
 from pathlib import Path
+
+from torchsky.cli import build_parser
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
@@ -64,20 +66,20 @@ def test_documented_extras_exist() -> None:
     assert not unknown, f"docs reference undefined extras: {unknown}"
 
 
-def test_documented_cli_commands_exist() -> None:
-    source = (ROOT / "src" / "torchsky" / "cli" / "__init__.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    commands = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr in {"add_parser", "add_subparsers"} and node.args:
-                argument = node.args[0]
-                if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-                    commands.add(argument.value)
-    documented = set(re.findall(r"torchsky (map|sky|viz|info|cat)\b", _docs_text()))
-    assert {"map", "sky", "viz"} <= commands | documented
-    unknown = sorted(documented - (commands | {"sky", "map", "viz", "info", "cat"}))
-    assert not unknown, f"docs mention unknown CLI commands: {unknown}"
+def _parser_inventory(parser: argparse.ArgumentParser) -> set[str]:
+    inventory = {parser.prog}
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for name, child in action.choices.items():
+                if not name.startswith("_"):
+                    inventory.update(_parser_inventory(child))
+    return inventory
+
+
+def test_generated_cli_reference_matches_parser_inventory() -> None:
+    reference = (DOCS / "reference" / "cli.md").read_text(encoding="utf-8")
+    documented = set(re.findall(r"^## `([^`]+)`$", reference, flags=re.MULTILINE))
+    assert documented == _parser_inventory(build_parser())
 
 
 def test_documented_wheel_python_versions_are_built() -> None:

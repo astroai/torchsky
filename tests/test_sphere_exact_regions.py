@@ -4,7 +4,6 @@ import torch
 
 from torchsky.sphere.geom import (
     NativeApproximateSphericalRegion,
-    NativeExactSphericalRegion,
     SphericalCap,
     SphericalPolygon,
     to_exact_region,
@@ -27,7 +26,7 @@ def test_native_exact_region_basic_area_contains() -> None:
         torch.tensor([-5.0, -5.0, 5.0, 5.0], dtype=torch.float64),
     )
     reg = to_exact_region(poly, backend="native", nsides=(64, 128, 256))
-    assert isinstance(reg, NativeExactSphericalRegion)
+    assert isinstance(reg, NativeApproximateSphericalRegion)
     assert reg.area() > 0.0
     assert bool(reg.contains(0.0, 0.0))
     assert not bool(reg.contains(60.0, 60.0))
@@ -51,7 +50,7 @@ def test_native_exact_region_boolean_area_ordering() -> None:
         u.area()
     with pytest.raises(RuntimeError, match="analytic native area"):
         _ = u.is_empty
-    with pytest.raises(RuntimeError, match="exact native intersection"):
+    with pytest.raises(RuntimeError, match="native intersection"):
         u.intersects(p1)
     u_est = u.area_estimate().area_sr
     i_est = i.area_estimate().area_sr
@@ -82,8 +81,17 @@ def test_native_cap_intersection_is_analytic_below_pixel_scale() -> None:
     assert not left.intersects(disjoint)
 
 
-def test_native_exact_name_is_compatibility_alias() -> None:
-    assert NativeExactSphericalRegion is NativeApproximateSphericalRegion
+def test_native_approximate_region_clean_breaks() -> None:
     region = to_exact_region(SphericalCap(0.0, 0.0, 1.0), backend="native")
-    assert isinstance(region, NativeExactSphericalRegion)
     assert isinstance(region, NativeApproximateSphericalRegion)
+    with pytest.raises(TypeError):
+        region.contains(0.0, 0.0, inclusive=False)
+    with pytest.raises(TypeError):
+        region.intersects(SphericalCap(0.0, 0.0, 1.0), cap_steps=32)
+    with pytest.raises(TypeError):
+        region.union(SphericalCap(0.0, 0.0, 1.0), cap_steps=32)
+
+
+def test_exact_region_backend_auto_is_removed() -> None:
+    with pytest.raises(ValueError, match="spherical-geometry.*native"):
+        to_exact_region(SphericalCap(0.0, 0.0, 1.0), backend="auto")  # type: ignore[arg-type]

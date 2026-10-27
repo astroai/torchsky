@@ -57,7 +57,6 @@ def test_field_domain_rejects_unknown_coordinate_mode() -> None:
         "artifacts",
         "bandpass",
         "forwarding",
-        "foam",
         "hashgrid",
         "inverse",
         "losses",

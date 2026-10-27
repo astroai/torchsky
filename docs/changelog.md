@@ -10,7 +10,7 @@ Historical benchmark tables and comparative performance claims have moved to
 They are not current package status. FITS/table I/O performance evidence is
 owned by `torchfits`.
 
-## [0.4.0] - 2026-10-18
+## [0.4.0] - Unreleased
 
 ### Architecture
 
@@ -27,6 +27,9 @@ owned by `torchfits`.
   imported from `torchfits.data`.
 
 ### Added
+- **Flagship examples:** network-free WCS, sphere/HEALPix, and exact square
+  Drizzle workflows now run in the bounded example gate and report numerical
+  round-trip, harmonic reconstruction, flux, centroid, and support checks.
 - **Slide-ready all-sky figures**: `torchsky.viz.plot_healpix_sky` and
   `plot_sky_grid` draw dense or sparse HEALPix maps and scattered samples on
   Mollweide, Aitoff, Hammer and north-polar projections, with tensor-native
@@ -61,36 +64,73 @@ owned by `torchfits`.
   envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Changed
+- **Self-documenting CLI clean break:** every command and option now has inline
+  help, mode constraints, defaults, and runnable examples; the generated CLI
+  reference is checked against the parser. FITS-owned `torchsky info` and
+  `torchsky cat`, `--sky`, `--inr-model`, `--per-band`, and all public
+  `--inr-*` spellings were removed. Use Torchfits for FITS inspection and the
+  canonical `--field-*` options for field fitting.
+- **Canonical public names:** `SceneRepresentation` is the only scene protocol
+  name, and detector-astrometry inverses accept `atol`/`rtol` without the old
+  `tol` alias.
+- **Map/scene clean break:** `torchsky.map.image_plane`,
+  `torchsky.map.operators.provenance`, `torchsky.map.field.models`, and
+  `torchsky.map.field.foam` were removed without forwarding shims. Use
+  `torchsky.map`, `torchsky.map.provenance`, and the `torchsky.map.field`
+  facade or owning implementation modules. The public finite-aperture entry
+  point is `torchsky.map.aperture_uncertainty`; the old
+  `evaluate_image_plane_aperture_uncertainty` name is removed.
+- `SourceCatalogScene` now accepts only `fixed_templates` and `coefficients` as
+  the template/coefficient spellings. `StrainerSkyEncoderMLPField.output` and
+  `CubeResult.line_uncertainty` were removed; use `decoder_head` and
+  `aperture_uncertainty`. Field forwarding now rejects a supplied
+  `ForwardContext` when the model method cannot consume it.
+- **One sphere compatibility namespace:** `torchsky.sphere.compat` is the only
+  healpy-shaped namespace. The duplicate `torchsky.sphere.healpy`, global
+  strict state, ignored strict/backend controls, and inert compatibility
+  parameters were removed; `query_circle(fact=...)` now controls native
+  inclusive-overlap supersampling.
+- **Sphere clean break:** exact-region backends are now explicitly `native` or
+  `spherical-geometry`; `NativeApproximateSphericalRegion` no longer accepts
+  discarded precision/boundary controls; `MOC.full()` is parameterless; and
+  `TorchHarmonicsBackend` rejects unsupported solver controls. The canonical
+  sparse class is `SparseHealpixMap`; `HealSparseMap`, `SparseMap`, sparse-map
+  method aliases, core HEALPix aliases, short geometry class names, and
+  `NativeExactSphericalRegion` were removed without shims. HealSparse
+  `from_healsparse`/`to_healsparse` and `torchsky.sphere.compat` remain the
+  explicit interchange and peer-compatibility surfaces.
+- **Field-bandpass API rename:** `torchsky.filter_profiles.inr_bandpass` is now
+  `torchsky.filter_profiles.field_bandpass`; the public source type alias was
+  removed, and `resolve_inr_bandpass` is now
+  `resolve_field_bandpass`. The removed names have no compatibility aliases.
+- **Field CLI and map-plan schema clean break:** private parser destinations and
+  field execution-plan keys now use `field_*` names throughout. Field plans
+  written with the earlier `model`, `model_kwargs`, `steps`, `learning_rate`,
+  sampling, or render keys are rejected instead of translated; regenerate them
+  with 0.4.0.
 - **Sphere spectral operations split**: power-spectrum, pixel-window, beam,
   synthesis, and smoothing operations moved from `sphere/spectral.py` to
   `sphere/spectral_ops.py`; the SHT primitives are imported lazily so the
-  module graph stays acyclic, and `spectral` re-exports the historical names.
+  module graph stays acyclic, and `spectral` exposes the public operations.
   spectral.py drops from 4,636 to 4,031 lines.
 - **Solver package split**: the 2,788-line `map/solvers.py` is now a package
   with `_core` (operators, probes, preconditioners), `_state` (state-layout
   operators and component decomposition), `_priors` (harmonic/TEB priors), and
   `_hooks` (survey hooks). `torchsky.map.solvers` re-exports the full historical
   surface.
-- **Image-plane mapmaking split**: the 3,984-line `map/image_plane.py` now
-  re-exports three role modules: `image_plane_common` (device/validation and
-  observation loading), `image_plane_projection` (resampling/projection
-  kernels), and `image_plane_coadd` (coadds, resampling wrappers, aperture
-  uncertainty). Historical imports, including the module-level re-exports used
-  by tests and downstream modules, are unchanged.
-- **Power Foam primitives split**: the 4,071-line `map/field/foam.py` now
-  re-exports role modules: `foam_geometry` (distance/ownership/candidate graphs),
-  `foam_solvers` (basis rendering and least-squares solves), `foam_operators`
-  (bounded pixel operators), and `foam_field` (`SpectralPowerFoam` and
-  adaptation). `torchsky.map.field.foam` imports are unchanged.
-- **Field model classes split**: the 4,666-line `map/field/models.py` now keeps
-  only re-exports; the model zoo lives in `models_foam`, `models_component`,
-  `models_implicit`, `models_encoder`, and `models_skylambda` by representation
-  family. The historical `torchsky.map.field.models` and `torchsky.map.field`
-  imports are unchanged.
+- **Image-plane mapmaking split**: image-plane implementation lives in
+  `image_plane_common`, `image_plane_projection`, and `image_plane_coadd`; the
+  promoted operations are exposed from `torchsky.map`.
+- **Power Foam primitives split**: role modules are `foam_geometry`,
+  `foam_solvers`, `foam_operators`, and `foam_field`; public primitives remain
+  exposed from `torchsky.map.field`.
+- **Field model classes split**: the model zoo lives in `models_foam`,
+  `models_component`, `models_implicit`, `models_encoder`, and
+  `models_skylambda` by representation family, with public classes exposed from
+  `torchsky.map.field` and `torchsky.field`.
 - **Map calibration helpers split**: observation calibration, variance
   accumulation, provenance-context, and area-scaling helpers moved from
-  `map/image_plane.py` to `map/calibration.py`; image_plane re-exports them and
-  drops from 4,180 to 3,987 lines.
+  the former image-plane module to `map/calibration.py`.
 - **Field model classes split**: the 27 neural field-model classes moved from
   `map/field/core.py` to `map/field/models.py`; `core` now holds only the model
   factory/dispatch and public re-exports (502 lines, down from 5,651).
@@ -98,21 +138,17 @@ owned by `torchfits`.
   working, and `_bandpass_bounds` stays re-exported for the spectral budget
   module.
 - **Map target planning split**: the union-footprint planners and public
-  `plan`/`plan_cube` family moved from `map/image_plane.py` to
-  `map/planning.py`; spectral-plan helpers come from `map/spectral_projection.py`
-  and image-plane metadata helpers are imported lazily. `image_plane`
-  re-exports the historical names and `product.py` follows the canonical
-  module. image_plane.py drops from 4,869 to 4,180 lines.
+  `plan`/`plan_cube` family moved to `map/planning.py`; spectral-plan helpers
+  come from `map/spectral_projection.py`, and `torchsky.map` exposes the public
+  planners.
 - **Field helper layer split**: the shared helpers and `_BaseFieldModel` moved
   out of the 5.6k-line `map/field/core.py` into `map/field/_core_helpers.py`
   (feature/atlas helpers, domain estimation, strainer checkpoint helpers);
   `core` re-exports every moved name so imports are unchanged. core.py drops
   from 5,651 to 5,141 lines.
 - **Map sky matching split**: `detect_outliers`, `match_sky`, their private
-  helpers, and the sky-matching tile resolver moved from the 5.3k-line
-  `map/image_plane.py` to `map/sky_matching.py`; the image-plane module now
-  re-exports the public names, so imports and the `torchsky.map` facade are
-  unchanged. `image_plane.py` drops by ~450 lines.
+  helpers, and the sky-matching tile resolver live in `map/sky_matching.py`;
+  `torchsky.map` exposes the public names.
 - **WCS core split**: the 5.2k-line `wcs/core.py` module now keeps the `WCS`
   state machine while rotations/TAN projection live in `wcs/_rotation.py`,
   footprint/geometry/serialization in `wcs/_geometry.py`, and the shared
@@ -133,6 +169,13 @@ owned by `torchfits`.
   names were not changed.
 
 ### Removed
+- **Audited clean-break APIs:** removed the WCS `pix2world`, `world2pix`,
+  `calc_footprint`, `proj_plane_pixel_scales`, and `proj_plane_pixel_area`
+  aliases; the spectral `transform_spectral` wrapper; the
+  `apply_extinction(..., lambda_obs_angstrom=...)` alias; legacy
+  `median_3`/`gaussian_3` mesh-filter strings; calibration evidence's
+  `exposure` fallback; and `zscale` as a low-level image stretch. Use the
+  canonical APIs and explicit policies documented in the migration guide.
 - **Legacy CFITSIO vendoring**: `extern/vendor.sh`, its version pin, the
   generated `extern/cfitsio` tree, the CI vendor steps, and the manifest entry
   are gone. The native extension builds only WCS/HEALPix/geometry kernels from

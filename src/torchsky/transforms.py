@@ -337,7 +337,17 @@ class ToDevice:
 
 
 class Compose:
-    """Apply transforms left to right."""
+    """Apply transforms left to right.
+
+    Args:
+        transforms: Ordered callables, each accepting the previous tensor.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.transforms import Compose
+        >>> Compose([lambda value: value + 1])(torch.tensor(1)).item()
+        2
+    """
 
     def __init__(self, transforms: Sequence[Any]) -> None:
         self.transforms = list(transforms)

@@ -1,3 +1,4 @@
+import inspect
 import math
 import numpy as np
 import torch
@@ -6,7 +7,14 @@ from torchsky.sphere import compat
 from torchsky.sphere import healpix as hp
 from torchsky.sphere.geom import query_ellipse as geom_query_ellipse
 from torchsky.sphere.geom import query_polygon_general
-from torchsky.sphere.spectral import alm_index, alm_size, rotate_alm, synfast
+from torchsky.sphere.spectral import (
+    alm_index,
+    alm_size,
+    rotate_alm,
+    smoothmap,
+    synalm,
+    synfast,
+)
 
 
 def test_compat_alm_index_roundtrip_and_resolution_exports() -> None:
@@ -78,36 +86,43 @@ def test_compat_neighbors_angle_form_matches_healpix() -> None:
     torch.testing.assert_close(got, expected)
 
 
+def test_compat_query_circle_fact_controls_inclusive_overlap() -> None:
+    nside = 8
+    radius = 0.1
+    fact4 = compat.query_circle(
+        nside, 0.0, 0.0, radius, degrees=False, inclusive=True, nest=True, fact=4
+    )
+    fact8 = compat.query_circle(
+        nside, 0.0, 0.0, radius, degrees=False, inclusive=True, nest=True, fact=8
+    )
+    expected = hp.query_disc(
+        nside,
+        torch.tensor([1.0, 0.0, 0.0]),
+        radius,
+        inclusive=True,
+        fact=8,
+        nest=True,
+    )
+    torch.testing.assert_close(fact8, expected)
+    assert not torch.equal(fact4, fact8)
 
 
-
-
-def test_compat_query_circle_strict_mode_matches_non_strict() -> None:
-    """Strict mode uses the same torch-native kernel as the default path."""
-    args = (32, 25.0, -15.0, 5.0)
-    kwargs = dict(degrees=True, inclusive=True, nest=True, fact=4)
-    with compat.strict_mode(True):
-        out_s = compat.query_circle(*args, **kwargs)
-    with compat.strict_mode(False):
-        out_n = compat.query_circle(*args, **kwargs)
-    torch.testing.assert_close(out_s, out_n)
-
-
-def test_compat_query_circle_vec_strict_mode_matches_non_strict() -> None:
-    lon = 25.0
-    lat = -15.0
-    radius = np.deg2rad(5.0)
-    x, y, z = hp.lonlat_to_xyz(torch.tensor(lon), torch.tensor(lat))
-    vec = torch.stack([x, y, z]).to(torch.float64)
-    with compat.strict_mode(True):
-        out_s = compat.query_circle_vec(
-            32, vec, radius, inclusive=True, nest=True, fact=4
-        )
-    with compat.strict_mode(False):
-        out_n = compat.query_circle_vec(
-            32, vec, radius, inclusive=True, nest=True, fact=4
-        )
-    torch.testing.assert_close(out_s, out_n)
+def test_noop_sphere_compatibility_parameters_are_removed() -> None:
+    removed = (
+        (compat.remove_monopole, "verbose"),
+        (compat.remove_dipole, "verbose"),
+        (compat.synalm, "verbose"),
+        (compat.synfast, "verbose"),
+        (compat.smoothmap, "verbose"),
+        (compat.smoothing, "verbose"),
+        (synalm, "verbose"),
+        (synfast, "verbose"),
+        (smoothmap, "verbose"),
+        (hp.query_strip, "chunk_size"),
+        (hp.query_polygon_vec, "fact"),
+    )
+    for function, parameter in removed:
+        assert parameter not in inspect.signature(function).parameters
 
 
 def test_compat_query_ellipse_calls_geometry_implementation() -> None:
@@ -116,32 +131,6 @@ def test_compat_query_ellipse_calls_geometry_implementation() -> None:
     )
     out_geom = geom_query_ellipse(32, 10.0, -20.0, 6.0, 2.5, pa_deg=35.0, nest=False)
     torch.testing.assert_close(out_compat, out_geom)
-
-
-def test_compat_query_ellipse_strict_mode_matches_non_strict() -> None:
-    args = (32, 10.0, -20.0, 6.0, 2.5)
-    with compat.strict_mode(True):
-        out_s = compat.query_ellipse(*args, pa_deg=35.0, nest=False)
-    with compat.strict_mode(False):
-        out_n = compat.query_ellipse(*args, pa_deg=35.0, nest=False)
-    torch.testing.assert_close(out_s, out_n)
-
-
-def test_compat_query_ellipse_auto_backend_matches_torch() -> None:
-    kwargs = dict(
-        nside=32,
-        a=10.0,
-        b=-20.0,
-        semi_major=6.0,
-        semi_minor=2.5,
-        pa_deg=35.0,
-        nest=True,
-        inclusive=True,
-        fact=4,
-    )
-    out_auto = compat.query_ellipse(**kwargs, backend="auto")
-    out_torch = compat.query_ellipse(**kwargs, backend="torch")
-    torch.testing.assert_close(out_auto, out_torch)
 
 
 def test_compat_query_ellipse_return_ranges_and_theta_phi_units() -> None:

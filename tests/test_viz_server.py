@@ -189,7 +189,7 @@ def test_fits_header(client: TestClient):
 
 def test_hips_register(client: TestClient):
     r = client.get(
-        "/api/hips/register?path=test_image.fits&hdu=0&stretch=zscale&cmap=gray"
+        "/api/hips/register?path=test_image.fits&hdu=0&stretch=linear&limit_policy=zscale&cmap=gray"
     )
     assert r.status_code == 200
     j = r.json()
@@ -197,6 +197,14 @@ def test_hips_register(client: TestClient):
     assert "max_order" in j
     assert j["shape"] == [128, 128]
     assert j["max_order"] >= 1
+
+
+def test_hips_register_rejects_zscale_as_stretch(client: TestClient):
+    response = client.get(
+        "/api/hips/register?path=test_image.fits&hdu=0&stretch=zscale&limit_policy=zscale"
+    )
+    assert response.status_code == 422
+    assert "Unknown stretch" in response.json()["detail"]
 
 
 def test_hips_properties(client: TestClient):

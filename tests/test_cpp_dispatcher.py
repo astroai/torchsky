@@ -105,33 +105,8 @@ def _operator_args(
     )
 
 
-def _legacy(
-    direction: str, first: torch.Tensor, second: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    first_contiguous = first.contiguous()
-    second_contiguous = second.contiguous()
-    output1 = torch.empty_like(first_contiguous)
-    output2 = torch.empty_like(first_contiguous)
-    parameters = _parameters(direction)
-    input_names = (
-        ("x_tensor", "y_tensor", "ra_tensor", "dec_tensor")
-        if direction == "pixel_to_world"
-        else ("ra_tensor", "dec_tensor", "x_tensor", "y_tensor")
-    )
-    getattr(cpp, f"wcs_{direction}_fused_cpu")(
-        **{
-            input_names[0]: first_contiguous,
-            input_names[1]: second_contiguous,
-            input_names[2]: output1,
-            input_names[3]: output2,
-            **parameters,
-        }
-    )
-    return output1, output2
-
-
 @pytest.mark.parametrize("direction", ["pixel_to_world", "world_to_pixel"])
-def test_direct_torch_ops_matches_legacy(direction: str) -> None:
+def test_direct_torch_ops_matches_functional_helper(direction: str) -> None:
     first = torch.tensor([-2.0, 0.5, 3.0], dtype=torch.float64)
     second = torch.tensor([1.0, -1.5, 4.0], dtype=torch.float64)
     idx = torch.empty((0, 3), dtype=torch.int64)
@@ -147,7 +122,7 @@ def test_direct_torch_ops_matches_legacy(direction: str) -> None:
         tpv_idx2=idx.clone(),
         tpv_c2=coeff.clone(),
     )
-    expected = _legacy(direction, first, second)
+    expected = _functional(direction, first, second)
     for result, reference in zip(actual, expected, strict=True):
         torch.testing.assert_close(result, reference, equal_nan=True)
 
@@ -167,12 +142,13 @@ def test_direct_torch_ops_matches_legacy(direction: str) -> None:
         ),
     ],
 )
-def test_dispatcher_matches_legacy_for_empty_scalar_and_strided(
+def test_dispatcher_matches_functional_for_empty_scalar_and_strided(
     direction: str, inputs: tuple[torch.Tensor, torch.Tensor]
 ) -> None:
     first, second = inputs
-    actual = _functional(direction, first, second)
-    expected = _legacy(direction, first, second)
+    operator = getattr(torch.ops.torchsky, f"wcs_{direction}")
+    actual = operator(*_operator_args(direction, first, second))
+    expected = _functional(direction, first, second)
     for result, reference in zip(actual, expected, strict=True):
         assert result.shape == first.shape
         assert result.is_contiguous()
@@ -358,13 +334,13 @@ def test_public_wcs_dispatcher_parity_and_gradient_bypass(
     pixel_dispatch = wcs_dispatch.world_to_pixel(*world_dispatch, origin=0)
 
     monkeypatch.setenv("TORCHSKY_CPP_DISPATCHER", "0")
-    wcs_legacy = WCS(header)
-    world_legacy = wcs_legacy.pixel_to_world(pixels, pixels, origin=0)
-    wcs_legacy._disable_cpp_world_to_pixel = True
-    pixel_legacy = wcs_legacy.world_to_pixel(*world_legacy, origin=0)
-    for actual, expected in zip(world_dispatch, world_legacy, strict=True):
+    wcs_python = WCS(header)
+    world_python = wcs_python.pixel_to_world(pixels, pixels, origin=0)
+    wcs_python._disable_cpp_world_to_pixel = True
+    pixel_python = wcs_python.world_to_pixel(*world_python, origin=0)
+    for actual, expected in zip(world_dispatch, world_python, strict=True):
         torch.testing.assert_close(actual, expected, atol=1e-12, rtol=0.0)
-    for actual, expected in zip(pixel_dispatch, pixel_legacy, strict=True):
+    for actual, expected in zip(pixel_dispatch, pixel_python, strict=True):
         torch.testing.assert_close(actual, expected, atol=1e-10, rtol=0.0)
 
     differentiable = pixels.clone().requires_grad_()
@@ -373,28 +349,28 @@ def test_public_wcs_dispatcher_parity_and_gradient_bypass(
     assert differentiable.grad is not None
     assert torch.isfinite(differentiable.grad).all()
 
-    legacy_differentiable = pixels.clone().requires_grad_()
-    legacy_result = wcs_legacy.pixel_to_world(
-        legacy_differentiable, legacy_differentiable, origin=0
+    python_differentiable = pixels.clone().requires_grad_()
+    python_result = wcs_python.pixel_to_world(
+        python_differentiable, python_differentiable, origin=0
     )
-    (legacy_result[0].sum() + legacy_result[1].sum()).backward()
-    assert legacy_differentiable.grad is not None
+    (python_result[0].sum() + python_result[1].sum()).backward()
+    assert python_differentiable.grad is not None
     torch.testing.assert_close(
-        differentiable.grad, legacy_differentiable.grad, atol=1e-10, rtol=1e-10
+        differentiable.grad, python_differentiable.grad, atol=1e-10, rtol=1e-10
     )
 
     dispatch_ra = world_dispatch[0].detach().requires_grad_()
     dispatch_dec = world_dispatch[1].detach().requires_grad_()
     dispatch_pixel = wcs_dispatch.world_to_pixel(dispatch_ra, dispatch_dec, origin=0)
     (dispatch_pixel[0].sum() + dispatch_pixel[1].sum()).backward()
-    legacy_ra = world_dispatch[0].detach().requires_grad_()
-    legacy_dec = world_dispatch[1].detach().requires_grad_()
-    legacy_pixel = wcs_legacy.world_to_pixel(legacy_ra, legacy_dec, origin=0)
-    (legacy_pixel[0].sum() + legacy_pixel[1].sum()).backward()
+    python_ra = world_dispatch[0].detach().requires_grad_()
+    python_dec = world_dispatch[1].detach().requires_grad_()
+    python_pixel = wcs_python.world_to_pixel(python_ra, python_dec, origin=0)
+    (python_pixel[0].sum() + python_pixel[1].sum()).backward()
     assert dispatch_ra.grad is not None and dispatch_dec.grad is not None
-    assert legacy_ra.grad is not None and legacy_dec.grad is not None
-    torch.testing.assert_close(dispatch_ra.grad, legacy_ra.grad, atol=1e-9, rtol=1e-9)
-    torch.testing.assert_close(dispatch_dec.grad, legacy_dec.grad, atol=1e-9, rtol=1e-9)
+    assert python_ra.grad is not None and python_dec.grad is not None
+    torch.testing.assert_close(dispatch_ra.grad, python_ra.grad, atol=1e-9, rtol=1e-9)
+    torch.testing.assert_close(dispatch_dec.grad, python_dec.grad, atol=1e-9, rtol=1e-9)
 
 
 def test_public_wcs_does_not_swallow_dispatcher_kernel_errors(
@@ -424,7 +400,7 @@ def test_public_wcs_does_not_swallow_dispatcher_kernel_errors(
         wcs.pixel_to_world(values, values)
 
 
-def test_public_wcs_dispatcher_rollback_flag_uses_legacy_adapter(
+def test_public_wcs_dispatcher_rollback_flag_uses_python_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TORCHSKY_CPP_DISPATCHER", "0")

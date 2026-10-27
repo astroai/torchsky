@@ -24,6 +24,12 @@ the I/O boundary; scientific campaigns and real-data notebooks live in
 
 API: `WCS`
 
+### [`example_wcs_flagship.py`](published-examples/example_wcs_flagship.py)
+
+**Validate in-memory celestial WCS families, inverses, and derivatives.** This network-free flagship exercises TAN with a CD matrix, TAN-SIP, and TPV headers, checks pixel/world round-trips, and compares a Torch autograd Jacobian with an independent central finite difference. It demonstrates only header terms embedded below and...
+
+API: `WCS`
+
 ### [`example_wcs_transform.py`](published-examples/example_wcs_transform.py)
 
 **Example wcs transform.**
@@ -119,6 +125,12 @@ API: `sphere`
 ### [`example_image_mef.py`](published-examples/example_image_mef.py)
 
 **Read the image and table extensions of a small torchfits MEF file.**
+
+### [`example_map_drizzle_flagship.py`](published-examples/example_map_drizzle_flagship.py)
+
+**Coadd bounded synthetic detector observations with exact square drizzle.** This deterministic, network-free flagship renders two compact detector images onto one declared target WCS, uses the native ``drizzle_square`` kernel with flux semantics, and validates total flux, centroid, and non-empty bounded support without importing...
+
+API: `Observation`, `coadd`
 
 ### [`example_map_harmonic_cl_prior.py`](published-examples/example_map_harmonic_cl_prior.py)
 
@@ -222,6 +234,12 @@ API: `AchromaticPixelResponse`, `GaussianPixelResponse`, `LinearDetectorResponse
 ### [`example_polars.py`](published-examples/example_polars.py)
 
 **Example: Polars Integration for Efficient Data Analysis.** This example demonstrates how to use torchsky with Polars for high-performance tabular data analysis, leveraging Apache Arrow for zero-copy (or near-zero-copy) data transfer.
+
+### [`example_sphere_flagship.py`](published-examples/example_sphere_flagship.py)
+
+**Run a compact native sphere workflow from catalog points to harmonics.** This deterministic, network-free flagship builds a MOC footprint and checks containment, bins a synthetic catalog into matching sparse and dense nested HEALPix maps, degrades hit counts with explicitly sum-preserving semantics, and reconstructs a low-order...
+
+API: `MOC`, `SparseHealpixMap`, `alm2map`, `alm_index`, `alm_size`, `ang2pix`, `map2alm`, `nest2uniq` (+2 more)
 
 ### [`example_table.py`](published-examples/example_table.py)
 

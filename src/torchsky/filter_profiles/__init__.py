@@ -1,11 +1,11 @@
-"""Filter bandpass metadata (SVO, files, Gaussians) for map/INR workflows."""
+"""Filter bandpass metadata (SVO, files, Gaussians) for field workflows."""
 
-from .inr_bandpass import (
+from .field_bandpass import (
     bandpass_from_svo,
     bandpass_from_transmission_file,
     bandpass_gaussian,
     field_observation_spectral_kwargs,
-    resolve_inr_bandpass,
+    resolve_field_bandpass,
 )
 
 __all__ = [
@@ -13,5 +13,5 @@ __all__ = [
     "bandpass_from_transmission_file",
     "bandpass_gaussian",
     "field_observation_spectral_kwargs",
-    "resolve_inr_bandpass",
+    "resolve_field_bandpass",
 ]

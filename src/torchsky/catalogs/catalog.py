@@ -46,6 +46,25 @@ class Catalog:
 
     Required sky columns are ``lon`` / ``lat`` in degrees. Missing kinematics
     stay ``None``. Extra payload lives in ``columns`` (same length, same device).
+
+    Args:
+        lon: Longitude tensor in degrees.
+        lat: Latitude tensor in degrees, with the same row count as ``lon``.
+        frame: Celestial or observed coordinate-frame name.
+        epoch: Scalar or per-row Julian epoch.
+        pm_lon_coslat_mas_yr: Cosine-weighted longitude proper motion in mas/yr.
+        pm_lat_mas_yr: Latitude proper motion in mas/yr.
+        parallax_mas: Parallax in milliarcseconds.
+        radial_velocity_km_s: Radial velocity in km/s.
+        valid: Optional per-row validity mask.
+        columns: Additional tensors whose leading dimension matches the catalog.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.catalogs import Catalog
+        >>> catalog = Catalog(torch.tensor([10.0]), torch.tensor([-2.0]))
+        >>> len(catalog)
+        1
     """
 
     lon: Tensor

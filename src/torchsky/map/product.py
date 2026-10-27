@@ -24,7 +24,7 @@ from .observation import (
     PlannedImagePlaneTarget,
 )
 from .quality import QualityProduct
-from .image_plane import coadd_image_plane, coadd_image_plane_cube
+from .image_plane_coadd import coadd_image_plane, coadd_image_plane_cube
 from .planning import plan_image_plane_cube_target, plan_image_plane_target
 from .field.types import FieldSpatialSampling
 from .operators.config import (
@@ -236,9 +236,7 @@ def _coerce_band(value: BandpassSpec) -> BandpassSpec:
         raise ValueError("BandpassSpec spectral_unit must be explicit")
     if value.passband is not None:
         if value.spectral_unit.strip().lower() not in {"angstrom", "angstroms", "aa"}:
-            raise ValueError(
-                "Passband-backed BandpassSpec uses Angstrom coordinates"
-            )
+            raise ValueError("Passband-backed BandpassSpec uses Angstrom coordinates")
         if (
             value.transmission_center is not None
             or value.transmission_sigma is not None
@@ -247,20 +245,14 @@ def _coerce_band(value: BandpassSpec) -> BandpassSpec:
                 "BandpassSpec passband and Gaussian transmission are mutually exclusive"
             )
     if value.spectral_min is not None and value.spectral_max is None:
-        raise ValueError(
-            "BandpassSpec requires spectral_max when spectral_min is set"
-        )
+        raise ValueError("BandpassSpec requires spectral_max when spectral_min is set")
     if value.spectral_max is not None and value.spectral_min is None:
-        raise ValueError(
-            "BandpassSpec requires spectral_min when spectral_max is set"
-        )
+        raise ValueError("BandpassSpec requires spectral_min when spectral_max is set")
     if value.spectral_min is not None and value.spectral_max is not None:
         lower = float(value.spectral_min)
         upper = float(value.spectral_max)
         if not math.isfinite(lower) or not math.isfinite(upper) or upper < lower:
-            raise ValueError(
-                "BandpassSpec spectral bounds must be finite and ordered"
-            )
+            raise ValueError("BandpassSpec spectral bounds must be finite and ordered")
     if value.transmission_center is not None and not math.isfinite(
         float(value.transmission_center)
     ):
@@ -626,6 +618,7 @@ def stack_product(
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
 ) -> ProductResult:
+    """Resample observations and stack them into a requested map product."""
     if method != "coadd":
         raise ValueError("stack_product currently supports only method='coadd'")
     resampling_kernel = validate_map_resampling_kernel(resampling_kernel)
@@ -891,9 +884,7 @@ def render_field_product(
                         )
                 data[band_index, y0:y1, x0:x1] = tile_pred
                 if detector_variance is not None:
-                    detector_variance[band_index, y0:y1, x0:x1] = torch.exp(
-                        tile_logvar
-                    )
+                    detector_variance[band_index, y0:y1, x0:x1] = torch.exp(tile_logvar)
     uncertainty = (
         None
         if detector_variance is None
@@ -940,7 +931,9 @@ def _streaming_sample_variance(
     mean = torch.zeros_like(reference)
     m2 = torch.zeros_like(reference)
     for count, raw_sample in enumerate(samples, start=1):
-        sample = torch.as_tensor(raw_sample, device=reference.device, dtype=reference.dtype)
+        sample = torch.as_tensor(
+            raw_sample, device=reference.device, dtype=reference.dtype
+        )
         if sample.shape != reference.shape:
             raise ValueError(f"{label} draw shape must match the rendered product")
         if not bool(torch.isfinite(sample).all()):
@@ -1082,8 +1075,6 @@ def _as_cube(tensor: Tensor) -> Tensor:
     if tensor.ndim == 3:
         return tensor
     raise ValueError("Map product evaluation expects 2D or 3D tensors")
-
-
 
 
 def _mean_pool_cube(cube: Tensor, *, kernel_size: int) -> Tensor:

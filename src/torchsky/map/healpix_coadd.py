@@ -10,15 +10,15 @@ from torch import Tensor
 
 from ..sphere.moc import MOC
 from ..wcs import WCS
-from .image_plane import (
-    _apply_observation_astrometric_shifts,
+from .calibration import (
     _apply_observation_calibration,
-    _coerce_target_header,
     _load_observation_weight_map,
+)
+from .image_plane_coadd import _apply_observation_astrometric_shifts
+from .image_plane_common import (
+    _coerce_target_header,
     _resolve_map_device,
-    detect_outliers,
     load_observation_image_and_header,
-    match_sky,
 )
 from .observation import (
     HealpixResult,
@@ -30,6 +30,7 @@ from .observation import (
 )
 from .operators.image_grid import normalized_header_for_shape, target_shape_from_header
 from .operators.resampling import sample_image_plane_batched_channels
+from .sky_matching import detect_outliers, match_sky
 from .windowing import _build_target_world_grid
 
 
@@ -114,9 +115,7 @@ class _SortedContributionAccumulator:
             torch.cat((self.pixels, chunk_pixels)), sorted=True
         )
         old_positions, old_present = _sorted_alignment(self.pixels, merged_pixels)
-        chunk_positions, chunk_present = _sorted_alignment(
-            chunk_pixels, merged_pixels
-        )
+        chunk_positions, chunk_present = _sorted_alignment(chunk_pixels, merged_pixels)
         self.numer = _aligned_values(
             self.numer, old_positions, old_present
         ) + _aligned_values(chunk_numer, chunk_positions, chunk_present)
@@ -149,9 +148,29 @@ def coadd_healpix(
     ``reduction_chunk_size`` bounds sampled contributions retained before each
     incremental reduction. Sparse accumulation retains merged output support;
     dense accumulation writes each chunk directly into the output tensors.
+
+    Args:
+        observations: Image observations to project and combine.
+        nside: Output HEALPix resolution parameter.
+        nest: Use nested rather than ring pixel ordering.
+        sparse: Return sparse coverage rather than a full-sky tensor.
+        nside_coverage: Sparse-map coverage resolution.
+        kernel: Image-plane sampling kernel.
+        sky: Optional background-estimation configuration.
+        outliers: Optional outlier-rejection configuration.
+        device: Optional compute device.
+        reduction_chunk_size: Maximum sampled contributions per reduction.
+
+    Returns:
+        Dense or sparse HEALPix data, weights, coverage, and metadata.
+
+    Examples:
+        >>> from torchsky.map import coadd_healpix
+        >>> callable(coadd_healpix)
+        True
     """
     from ..sphere import healpix as _hp
-    from ..sphere.sparse import HealSparseMap
+    from ..sphere.sparse import SparseHealpixMap
 
     if not observations:
         raise ValueError("At least one Observation is required")
@@ -180,14 +199,10 @@ def coadd_healpix(
         _SortedContributionAccumulator(device=map_device) if sparse else None
     )
     numer_dense = (
-        None
-        if sparse
-        else torch.zeros(npix, dtype=torch.float32, device=map_device)
+        None if sparse else torch.zeros(npix, dtype=torch.float32, device=map_device)
     )
     denom_dense = (
-        None
-        if sparse
-        else torch.zeros(npix, dtype=torch.float32, device=map_device)
+        None if sparse else torch.zeros(npix, dtype=torch.float32, device=map_device)
     )
     overlap_dense = (
         None if sparse else torch.zeros(npix, dtype=torch.int32, device=map_device)
@@ -296,7 +311,7 @@ def coadd_healpix(
     assert sparse_accumulator is not None
     nside_cov = min(int(nside_coverage), nside_i)
     if sparse_accumulator.pixels.numel() == 0:
-        empty_data = HealSparseMap.from_pixels(
+        empty_data = SparseHealpixMap.from_pixels(
             sparse_accumulator.pixels,
             sparse_accumulator.numer,
             nside_sparse=nside_i,
@@ -304,7 +319,7 @@ def coadd_healpix(
             nside_coverage=nside_cov,
             sentinel=0.0,
         )
-        empty_weight = HealSparseMap.from_pixels(
+        empty_weight = SparseHealpixMap.from_pixels(
             sparse_accumulator.pixels,
             sparse_accumulator.denom,
             nside_sparse=nside_i,
@@ -312,7 +327,7 @@ def coadd_healpix(
             nside_coverage=nside_cov,
             sentinel=0.0,
         )
-        empty_overlap = HealSparseMap.from_pixels(
+        empty_overlap = SparseHealpixMap.from_pixels(
             sparse_accumulator.pixels,
             sparse_accumulator.overlap,
             nside_sparse=nside_i,
@@ -332,7 +347,7 @@ def coadd_healpix(
 
     u_data = sparse_accumulator.numer / sparse_accumulator.denom.clamp_min(1e-12)
 
-    data_smap = HealSparseMap.from_pixels(
+    data_smap = SparseHealpixMap.from_pixels(
         sparse_accumulator.pixels,
         u_data,
         nside_sparse=nside_i,
@@ -340,7 +355,7 @@ def coadd_healpix(
         nside_coverage=nside_cov,
         sentinel=0.0,
     )
-    weight_smap = HealSparseMap.from_pixels(
+    weight_smap = SparseHealpixMap.from_pixels(
         sparse_accumulator.pixels,
         sparse_accumulator.denom,
         nside_sparse=nside_i,
@@ -348,7 +363,7 @@ def coadd_healpix(
         nside_coverage=nside_cov,
         sentinel=0.0,
     )
-    ovl_smap = HealSparseMap.from_pixels(
+    ovl_smap = SparseHealpixMap.from_pixels(
         sparse_accumulator.pixels,
         sparse_accumulator.overlap,
         nside_sparse=nside_i,
@@ -379,7 +394,7 @@ def resample_healpix(
     """Project a dense or sparse HEALPix map (or ``HealpixResult``) onto a 2D target WCS."""
     from ..sphere import healpix as _hp
     from ..sphere.core import sample_healpix_map
-    from ..sphere.sparse import HealSparseMap
+    from ..sphere.sparse import SparseHealpixMap
     from .healpix_spectral import sample_healpix_map_on_image_header_harmonic
 
     map_device = _resolve_map_device(device)
@@ -390,7 +405,7 @@ def resample_healpix(
     header_dict = normalized_header_for_shape(dict(raw_hdr), (H, W), overrides=None)
     target_wcs = WCS(header_dict).to(map_device)
 
-    weight_smap: HealSparseMap | None = None
+    weight_smap: SparseHealpixMap | None = None
     weight_dense: Tensor | None = None
     if isinstance(healpix_map, HealpixResult):
         nest = healpix_map.nest
@@ -402,7 +417,7 @@ def resample_healpix(
             weight_dense = healpix_map.weight
             healpix_map = healpix_map.data
 
-    if isinstance(healpix_map, HealSparseMap):
+    if isinstance(healpix_map, SparseHealpixMap):
         ra_g, dec_g = _build_target_world_grid(target_wcs, H, W, device=map_device)
         interp_mode: Literal["bilinear", "nearest"] = (
             "nearest" if method == "nearest" else "bilinear"
@@ -410,9 +425,7 @@ def resample_healpix(
         sampled = healpix_map.interpolate(ra_g, dec_g, method=interp_mode).to(
             device=map_device, dtype=torch.float32
         )
-        valid = torch.isfinite(sampled) & (
-            sampled != float(healpix_map.fill_value)
-        )
+        valid = torch.isfinite(sampled) & (sampled != float(healpix_map.fill_value))
         data_2d = torch.where(valid, sampled, torch.zeros_like(sampled))
         if weight_smap is not None:
             w_2d = weight_smap.interpolate(ra_g, dec_g, method=interp_mode).to(
@@ -424,7 +437,9 @@ def resample_healpix(
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
     map_t = torch.as_tensor(healpix_map, device=map_device, dtype=torch.float32)
-    resolved_nside = int(nside) if nside is not None else _hp.npix2nside(int(map_t.shape[-1]))
+    resolved_nside = (
+        int(nside) if nside is not None else _hp.npix2nside(int(map_t.shape[-1]))
+    )
     if method == "harmonic":
         data_2d = sample_healpix_map_on_image_header_harmonic(
             map_t, header_dict, nest=nest

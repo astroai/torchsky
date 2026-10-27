@@ -4,7 +4,7 @@
 
 **Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
 
-The torch-native HEALPix kernels: indexing, neighbours, interpolation, queries, reordering, and map sampling. These functions accept and return PyTorch tensors.
+The torch-native HEALPix kernels: indexing, neighbors, interpolation, queries, reordering, and map sampling. These functions accept and return PyTorch tensors.
 
 **Guides:** [sphere](../sphere.md)
 

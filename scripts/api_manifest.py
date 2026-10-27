@@ -36,6 +36,7 @@ NAMESPACES = (
     "torchsky.catalogs",
     "torchsky.coords",
     "torchsky.encoders",
+    "torchsky.filter_profiles",
     "torchsky.map.likelihood",
     "torchsky.map.query",
     "torchsky.map.evidence",

@@ -49,6 +49,19 @@ class FLRW:
 
     Fields may be scalar tensors so callers can differentiate with respect to
     cosmological parameters. This container deliberately owns no priors.
+
+    Args:
+        H0: Present-day Hubble parameter in km/s/Mpc.
+        Om0: Present-day matter density parameter.
+        Ok0: Present-day curvature density parameter.
+        w0: Dark-energy equation-of-state value at scale factor one.
+        wa: CPL dark-energy evolution coefficient.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.cosmology import FLRW
+        >>> FLRW().comoving_distance(torch.tensor(0.0)).item()
+        0.0
     """
 
     H0: Tensor | float = PLANCK18_H0
@@ -221,6 +234,24 @@ def comoving_distance(
 
     Integrates ``1/E(z')`` on a shared grid to ``max(z)`` then interpolates.
     ``z`` is clamped at zero; ``D_C(0) = 0``.
+
+    Args:
+        z: Redshift tensor.
+        H0: Present-day Hubble parameter in km/s/Mpc.
+        om0: Present-day matter density parameter.
+        ok0: Present-day curvature density parameter.
+        w0: Dark-energy equation-of-state value at scale factor one.
+        wa: CPL dark-energy evolution coefficient.
+        n_steps: Number of shared trapezoidal integration intervals.
+
+    Returns:
+        Line-of-sight comoving distances in Mpc with the shape of ``z``.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.cosmology import comoving_distance
+        >>> comoving_distance(torch.tensor([0.0])).tolist()
+        [0.0]
     """
     if n_steps < 2:
         raise ValueError("n_steps must be >= 2")

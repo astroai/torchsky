@@ -19,7 +19,9 @@ from typing import Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
 
-REQUIRED_TASKS: Mapping[str, tuple[str, ...]] = {"audit-refactor-cohesion": ("scripts/audit_refactor_cohesion.py",)}
+REQUIRED_TASKS: Mapping[str, tuple[str, ...]] = {
+    "audit-refactor-cohesion": ("scripts/audit_refactor_cohesion.py",)
+}
 
 REQUIRED_FILES = (
     "docs/architecture.md",
@@ -32,7 +34,24 @@ REQUIRED_FILES = (
     "notes/planned.md",
 )
 
-DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {'docs/evaluation/benchmarks.md': ('torchsky-harness', 'Torchsky retains production implementations'), 'docs/map.md': ('ObservationOperatorBundle', 'LearnedInstrumentOperator', 'ConstrainedKernelPSF'), 'docs/field.md': ('field.fit', 'field.render', 'field.sample', 'operator_constrained'), 'docs/architecture.md': ('scene', 'world', 'io')}
+DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
+    "docs/evaluation/benchmarks.md": (
+        "torchsky-harness",
+        "Torchsky retains production implementations",
+    ),
+    "docs/map.md": (
+        "ObservationOperatorBundle",
+        "LearnedInstrumentOperator",
+        "ConstrainedKernelPSF",
+    ),
+    "docs/field.md": (
+        "field.fit",
+        "field.render",
+        "field.sample",
+        "operator_constrained",
+    ),
+    "docs/architecture.md": ("scene", "world", "io"),
+}
 
 REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
     "src/torchsky/field/__init__.py": (
@@ -153,7 +172,7 @@ FORBIDDEN_SOURCE_PHRASES: Mapping[str, tuple[str, ...]] = {
         "def fit_field_model",
         "def fit_field_component_decomposition",
     ),
-    "src/torchsky/map/image_plane.py": (
+    "src/torchsky/map/image_plane_coadd.py": (
         "def _sample_image_plane_batched_channels",
         "def _infer_linear_affine_pixel_map",
         "def _headers_equivalent_for_direct_copy",

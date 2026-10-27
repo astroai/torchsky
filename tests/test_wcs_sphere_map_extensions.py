@@ -14,7 +14,7 @@ from torchsky.map import (
     coadd_healpix,
     resample_healpix,
 )
-from torchsky.sphere import BMOC, MOC, HealSparseMap, sample_randoms
+from torchsky.sphere import BMOC, MOC, SparseHealpixMap, sample_randoms
 from torchsky.wcs import (
     WCS,
     IFUSliceWCS,
@@ -237,7 +237,9 @@ def test_healsparse_wide_columns_and_from_observations() -> None:
         "weight": torch.tensor([10.0, 20.0, 30.0, 40.0], dtype=torch.float32),
         "fracdet": torch.tensor([0.5, 1.0, 0.8, 0.2], dtype=torch.float32),
     }
-    hsp = HealSparseMap.from_columns(pix, cols, nside_sparse=64, nside_coverage=8, nest=True)
+    hsp = SparseHealpixMap.from_columns(
+        pix, cols, nside_sparse=64, nside_coverage=8, nest=True
+    )
     assert hsp.column_names == ("flux", "weight", "fracdet")
 
     w_map = hsp["weight"]
@@ -249,7 +251,7 @@ def test_healsparse_wide_columns_and_from_observations() -> None:
     sub_map = hsp[["flux", "fracdet"]]
     assert sub_map.column_names == ("flux", "fracdet")
 
-    # Weighted randoms from HealSparseMap
+    # Weighted randoms from SparseHealpixMap
     gen = torch.Generator().manual_seed(123)
     ra_r, dec_r = sample_randoms(200, hsp, weights="fracdet", generator=gen)
     assert ra_r.shape == (200,)
@@ -263,7 +265,9 @@ def test_healsparse_wide_columns_and_from_observations() -> None:
         wcs=w,
         weight=torch.full((24, 24), 4.0, dtype=torch.float32),
     )
-    cov_map = HealSparseMap.from_observations([obs], nside_sparse=128, nside_coverage=16)
+    cov_map = SparseHealpixMap.from_observations(
+        [obs], nside_sparse=128, nside_coverage=16
+    )
     assert cov_map.column_names == ("weight", "nexp", "fracdet")
     assert cov_map.valid_pixels.numel() > 0
 
@@ -356,10 +360,18 @@ def test_clean_api_aliases_across_wcs_sphere_catalogs_map() -> None:
     import torchsky.sphere as sphere
 
     w = _make_tan_wcs()
-    ra, dec = w.pix2world(torch.tensor([31.5]), torch.tensor([31.5]))
-    x, y = w.world2pix(ra, dec)
+    ra, dec = w.pixel_to_world(torch.tensor([31.5]), torch.tensor([31.5]))
+    x, y = w.world_to_pixel(ra, dec)
     assert torch.allclose(x, torch.tensor([31.5], dtype=x.dtype), atol=1e-6)
     assert torch.allclose(y, torch.tensor([31.5], dtype=y.dtype), atol=1e-6)
+    for removed in (
+        "pix2world",
+        "world2pix",
+        "calc_footprint",
+        "proj_plane_pixel_scales",
+        "proj_plane_pixel_area",
+    ):
+        assert not hasattr(w, removed)
 
     jac_fwd = w.jacobian(torch.tensor([31.5]), torch.tensor([31.5]))
     jac_inv = w.jacobian(ra, dec, inverse=True)
@@ -369,7 +381,7 @@ def test_clean_api_aliases_across_wcs_sphere_catalogs_map() -> None:
     w_aff = w.with_affine(torch.eye(2, dtype=torch.float64), torch.zeros(2, dtype=torch.float64))
     assert isinstance(w_aff, WCS)
 
-    poly = sphere.Polygon(
+    poly = sphere.SphericalPolygon(
         torch.tensor([10.0, 11.0, 11.0, 10.0]),
         torch.tensor([0.0, 0.0, 1.0, 1.0]),
     )
@@ -380,7 +392,7 @@ def test_clean_api_aliases_across_wcs_sphere_catalogs_map() -> None:
         torch.tensor([0.0, 0.0, 1.0, 1.0]),
     )
     assert pix_poly.numel() > 0
-    pix_cone = sphere.query_cone(64, 10.5, 0.5, 1.0)
+    pix_cone = sphere.query_circle(64, 10.5, 0.5, 1.0)
     assert pix_cone.numel() > 0
 
     hp_map = torch.ones(sphere.nside2npix(16), dtype=torch.float64) * 3.5

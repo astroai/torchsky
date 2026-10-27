@@ -22,6 +22,26 @@ from .quality import DQPolicy, QualityProduct
 
 @dataclass
 class ImageObservation:
+    """Describe one image exposure and its calibration metadata.
+
+    Args:
+        path: Optional input path consumed through the torchfits boundary.
+        data: Optional in-memory image tensor, used instead of ``path``.
+        header: FITS-style header mapping for in-memory data.
+        wcs: Explicit WCS object or header mapping.
+        weight: Scalar exposure weight.
+        photometric_scale: Multiplicative flux calibration.
+        background_offset: Additive background removed before resampling.
+        weight_map: Optional per-pixel weight or inverse-variance tensor.
+        mask: Optional Boolean valid-pixel mask.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.map import Observation
+        >>> observation = Observation(data=torch.ones(2, 2), header={})
+        >>> tuple(observation.data.shape)
+        (2, 2)
+    """
     path: str | None = None
     hdu: int | str | None = None
     weight: float = 1.0
@@ -115,12 +135,16 @@ class IFUObservation:
         for name, value in self.variance_components.items():
             if not isinstance(name, str) or not name:
                 raise ValueError("variance component names must be non-empty")
-            component = torch.as_tensor(value, device=science.device, dtype=science.dtype)
+            component = torch.as_tensor(
+                value, device=science.device, dtype=science.dtype
+            )
             if component.shape != science.shape:
                 raise ValueError("IFU variance components must match the science image")
             components[name] = component
         if self.slice_id is not None:
-            slice_id = torch.as_tensor(self.slice_id, device=science.device, dtype=torch.int64)
+            slice_id = torch.as_tensor(
+                self.slice_id, device=science.device, dtype=torch.int64
+            )
             if slice_id.shape != science.shape:
                 raise ValueError("IFU slice_id must match the science image")
             object.__setattr__(self, "slice_id", slice_id)
@@ -145,7 +169,9 @@ class IFUObservation:
         if self.value_semantics not in {"surface_brightness", "flux"}:
             raise ValueError("IFU value_semantics must be surface_brightness or flux")
         if self.weight is not None:
-            weight = torch.as_tensor(self.weight, device=science.device, dtype=science.dtype)
+            weight = torch.as_tensor(
+                self.weight, device=science.device, dtype=science.dtype
+            )
             if weight.numel() != 1 and weight.shape != science.shape:
                 raise ValueError("IFU weight must be scalar or match the science image")
             object.__setattr__(self, "weight", weight)
@@ -286,9 +312,9 @@ class HealpixResult:
 
     @property
     def sparse_map(self) -> Any | None:
-        from ..sphere.sparse import HealSparseMap
+        from ..sphere.sparse import SparseHealpixMap
 
-        return self.data if isinstance(self.data, HealSparseMap) else None
+        return self.data if isinstance(self.data, SparseHealpixMap) else None
 
 
 @dataclass(frozen=True)
@@ -317,9 +343,7 @@ class ApertureUncertainty:
 
     @property
     def correlation_factor(self) -> Tensor:
-        return torch.as_tensor(self.variance) / torch.as_tensor(
-            self.diagonal_variance
-        )
+        return torch.as_tensor(self.variance) / torch.as_tensor(self.diagonal_variance)
 
 
 @dataclass
@@ -372,7 +396,9 @@ class PlannedImagePlaneTarget:
                 inferred_shape = None
         if shape is None:
             if inferred_shape is None:
-                raise ValueError("shape=(H, W) must be provided when header/wcs lacks NAXIS1/2")
+                raise ValueError(
+                    "shape=(H, W) must be provided when header/wcs lacks NAXIS1/2"
+                )
             shape_hw = (int(inferred_shape[0]), int(inferred_shape[1]))
         else:
             shape_hw = (int(shape[0]), int(shape[1]))
@@ -459,7 +485,9 @@ class CubeTarget:
             wcs = spatial_wcs if isinstance(spatial_wcs, WCS) else WCS(spatial_wcs)
             inferred = wcs.array_shape
             if shape is None and inferred is None:
-                raise ValueError("CubeTarget shape is required when WCS has no array shape")
+                raise ValueError(
+                    "CubeTarget shape is required when WCS has no array shape"
+                )
             target_shape = (
                 (int(shape[0]), int(shape[1]))
                 if shape is not None
@@ -467,15 +495,21 @@ class CubeTarget:
             )
         edges = torch.as_tensor(spectral_bin_edges)
         if edges.ndim != 1 or edges.numel() < 2 or not edges.is_floating_point():
-            raise ValueError("CubeTarget spectral_bin_edges must be a floating 1D vector")
+            raise ValueError(
+                "CubeTarget spectral_bin_edges must be a floating 1D vector"
+            )
         if not bool(torch.isfinite(edges).all()) or not bool(
             torch.all(edges[1:] > edges[:-1])
         ):
-            raise ValueError("CubeTarget spectral_bin_edges must be finite and increasing")
+            raise ValueError(
+                "CubeTarget spectral_bin_edges must be finite and increasing"
+            )
         if not isinstance(spectral_unit, str) or not spectral_unit.strip():
             raise ValueError("CubeTarget spectral_unit must be explicit")
         if value_semantics not in {"surface_brightness", "flux"}:
-            raise ValueError("CubeTarget value_semantics must be surface_brightness or flux")
+            raise ValueError(
+                "CubeTarget value_semantics must be surface_brightness or flux"
+            )
         object.__setattr__(self, "spatial_wcs", wcs)
         object.__setattr__(self, "shape", target_shape)
         object.__setattr__(self, "spectral_bin_edges", edges.detach().clone())
@@ -575,7 +609,9 @@ class CubeResult:
         variance = self.covariance.query_variance(value)
         diagonal = self.covariance.diagonal()
         diagonal_variance = torch.sum(value.square() * diagonal)
-        return ApertureUncertainty(variance=variance, diagonal_variance=diagonal_variance)
+        return ApertureUncertainty(
+            variance=variance, diagonal_variance=diagonal_variance
+        )
 
     def aperture_uncertainty(
         self,
@@ -603,10 +639,3 @@ class CubeResult:
         if spectral.shape != self.data.shape[:1]:
             raise ValueError("spectral weights must match the cube spectral length")
         return self.query_uncertainty(spectral[:, None, None] * spatial[None])
-
-    def line_uncertainty(
-        self,
-        spatial_aperture: Tensor,
-        spectral_weights: Tensor,
-    ) -> ApertureUncertainty:
-        return self.aperture_uncertainty(spatial_aperture, spectral_weights)

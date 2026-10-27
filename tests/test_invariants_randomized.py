@@ -72,7 +72,7 @@ def test_query_disc_membership_and_uniqueness(nside: int) -> None:
     lat0 = float((torch.rand(1, generator=g).item() * 120.0) - 60.0)
     resolution = math.degrees(math.sqrt(float(sphere.nside2pixarea(nside))))
     radius = resolution * (1.5 + 2.0 * float(torch.rand(1, generator=g).item()))
-    pixels = sphere.query_cone(nside, lon0, lat0, radius)
+    pixels = sphere.query_circle(nside, lon0, lat0, radius)
     npix = sphere.nside2npix(nside)
     assert pixels.numel() > 0
     assert int(pixels.min()) >= 0 and int(pixels.max()) < npix

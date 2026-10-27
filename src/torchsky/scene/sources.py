@@ -108,15 +108,12 @@ class SourceCatalogScene(SceneRepresentation):
         morphology: str | Sequence[str] | Tensor = "point",
         gaussian_parameters: Tensor | None = None,
         sersic_parameters: Tensor | None = None,
-        templates: Tensor | None = None,
         fixed_templates: Tensor | None = None,
         template_data: Tensor | None = None,
         template_slices: Tensor | None = None,
         template_shapes: Tensor | None = None,
         template_pixel_scale_arcsec: Tensor | float | None = None,
         coefficients: Tensor | None = None,
-        spectral_coefficients: Tensor | None = None,
-        per_band_coefficients: Tensor | None = None,
         band_labels: Sequence[str] | None = None,
         spectral_basis: Tensor | None = None,
         parameter_slices: Tensor | None = None,
@@ -203,12 +200,6 @@ class SourceCatalogScene(SceneRepresentation):
                 raise ValueError("Sersic index must be in [0.3, 8]")
         self.sersic_parameters = sersic
 
-        if templates is not None:
-            if fixed_templates is not None:
-                raise ValueError(
-                    "templates and fixed_templates are aliases; supply one"
-                )
-            fixed_templates = templates
         if fixed_templates is not None:
             if (
                 template_data is not None
@@ -296,14 +287,6 @@ class SourceCatalogScene(SceneRepresentation):
             if bool((self.template_pixel_scale_arcsec[index] <= 0).any()):
                 raise ValueError("template morphologies require positive pixel scale")
 
-        supplied = [
-            value
-            for value in (coefficients, spectral_coefficients, per_band_coefficients)
-            if value is not None
-        ]
-        if len(supplied) > 1:
-            raise ValueError("coefficient inputs are aliases; supply only one")
-        supplied_coefficients = supplied[0] if supplied else None
         self.band_labels = tuple(str(value) for value in (band_labels or ()))
         if len(set(self.band_labels)) != len(self.band_labels):
             raise ValueError("band_labels must be unique")
@@ -320,7 +303,7 @@ class SourceCatalogScene(SceneRepresentation):
             if not bool(torch.isfinite(basis).all()):
                 raise ValueError("spectral_basis must be finite")
         self.spectral_basis = basis
-        if supplied_coefficients is None:
+        if coefficients is None:
             width = (
                 int(basis.shape[1])
                 if basis is not None
@@ -329,7 +312,7 @@ class SourceCatalogScene(SceneRepresentation):
             coefficient_matrix = self.lon.new_zeros((count, width))
         else:
             coefficient_matrix = torch.as_tensor(
-                supplied_coefficients, dtype=self.lon.dtype, device=device
+                coefficients, dtype=self.lon.dtype, device=device
             )
             if coefficient_matrix.ndim == 1:
                 if count == 0:
@@ -710,7 +693,9 @@ class SourceCatalogScene(SceneRepresentation):
         minor = -tangent[..., 0] * torch.cos(angle) + tangent[..., 1] * torch.sin(angle)
         elliptical_radius = torch.sqrt(major.square() + (minor / axis_ratio).square())
         bn = 2.0 * index_n - 1.0 / 3.0 + 4.0 / (405.0 * index_n)
-        profile = torch.exp(-bn * ((elliptical_radius / radius).clamp_min(0).pow(1.0 / index_n) - 1.0))
+        profile = torch.exp(
+            -bn * ((elliptical_radius / radius).clamp_min(0).pow(1.0 / index_n) - 1.0)
+        )
         return profile / profile.sum().clamp_min(torch.finfo(profile.dtype).tiny)
 
     def render_component(

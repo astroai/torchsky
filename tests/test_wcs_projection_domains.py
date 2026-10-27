@@ -7,9 +7,7 @@ import pytest
 import torch
 from astropy.wcs import WCS as AstropyWCS
 
-from torchsky._native import cpp
 from torchsky.wcs import WCS
-from torchsky.wcs.zenithal import deproject_zenithal, project_zenithal
 
 
 R2D = 180.0 / math.pi
@@ -142,15 +140,11 @@ def test_tan_horizon_and_back_hemisphere_masks() -> None:
 
     ra = torch.from_numpy(angles)
     dec = torch.zeros_like(ra)
-    x = torch.empty_like(ra)
-    y = torch.empty_like(dec)
     empty_idx = torch.empty((0, 3), dtype=torch.int64)
     empty_coeff = torch.empty(0, dtype=torch.float64)
-    cpp.wcs_world_to_pixel_fused_cpu(
+    x, y = torch.ops.torchsky.wcs_world_to_pixel(
         ra,
         dec,
-        x,
-        y,
         1.0,
         1.0,
         1.0,
@@ -196,19 +190,6 @@ def test_zenithal_handedness_matches_wcslib(projection: str, path: str) -> None:
     np.testing.assert_allclose(actual.detach().cpu().numpy(), oracle, atol=2e-11)
 
 
-def test_native_zenithal_helpers_use_package_handedness() -> None:
-    xi = torch.tensor([1.0, 0.0, -1.0], dtype=torch.float64)
-    eta = torch.tensor([0.0, 1.0, 0.0], dtype=torch.float64)
-    phi_cpp, theta_cpp = cpp.wcs_zenithal_project(xi, eta, "TAN")
-    phi_py, theta_py = project_zenithal(xi, eta, "TAN")
-    torch.testing.assert_close(phi_cpp, phi_py)
-    torch.testing.assert_close(theta_cpp, theta_py)
-    xi_cpp, eta_cpp = cpp.wcs_zenithal_deproject(phi_cpp, theta_cpp, "TAN")
-    xi_py, eta_py = deproject_zenithal(phi_py, theta_py, "TAN")
-    torch.testing.assert_close(xi_cpp, xi_py, atol=1e-12, rtol=0.0)
-    torch.testing.assert_close(eta_cpp, eta_py, atol=1e-12, rtol=0.0)
-
-
 @pytest.mark.parametrize("path", ["fused", "nonfused"])
 def test_mollweide_polar_forward_matches_wcslib(path: str) -> None:
     header = _header("MOL")
@@ -231,12 +212,3 @@ def test_cea_rejects_invalid_lambda_like_wcslib(value: float) -> None:
         AstropyWCS(header)
     with pytest.raises(ValueError, match="finite and non-zero"):
         WCS(header)
-
-
-def test_cpp_cea_helpers_reject_invalid_lambda() -> None:
-    values = torch.zeros(1, dtype=torch.float64)
-    for lam in (0.0, math.nan, math.inf):
-        with pytest.raises(RuntimeError, match="finite and non-zero"):
-            cpp.wcs_cylindrical_project(values, values, "CEA", lam)
-        with pytest.raises(RuntimeError, match="finite and non-zero"):
-            cpp.wcs_cylindrical_deproject(values, values, "CEA", lam)

@@ -19,7 +19,8 @@ def residual_panel_pngs(
     truth: Tensor,
     model: Tensor,
     sigma: Tensor | None = None,
-    stretch: str = "zscale",
+    stretch: str = "linear",
+    limit_policy: str = "zscale",
     cmap: str = "gray",
     pull_sigma_range: float = 5.0,
 ) -> dict[str, bytes]:
@@ -33,6 +34,8 @@ def residual_panel_pngs(
     Pixels outside ±3σ appear as near-saturated red/blue,
     making model outliers immediately visible.
     """
+    if limit_policy not in {"zscale", "minmax"}:
+        raise ValueError(f"Unknown limit policy {limit_policy!r}")
     truth_f = truth.float()
     model_f = model.float()
     residual = model_f - truth_f
@@ -41,7 +44,12 @@ def residual_panel_pngs(
     sample = truth_f.flatten()
     sample = sample[torch.isfinite(sample)]
     if sample.numel() > 0:
-        vmin, vmax = zscale_limits(sample)
+        if limit_policy == "zscale":
+            vmin, vmax = zscale_limits(sample)
+        elif limit_policy == "minmax":
+            vmin, vmax = float(sample.min().item()), float(sample.max().item())
+        else:
+            raise ValueError(f"Unknown limit policy {limit_policy!r}")
     else:
         vmin, vmax = 0.0, 1.0
 

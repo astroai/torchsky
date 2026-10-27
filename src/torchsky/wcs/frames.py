@@ -557,6 +557,23 @@ def propagate_proper_motion(
     ``SkyCoord.apply_space_motion`` when distance and radial velocity are not
     supplied. It stays well behaved at the poles, unlike dividing a longitude
     increment by ``cos(latitude)``.
+
+    Args:
+        lon_deg: Initial longitude in degrees.
+        lat_deg: Initial latitude in degrees.
+        pm_lon_coslat_mas_yr: Cosine-weighted longitude proper motion in mas/yr.
+        pm_lat_mas_yr: Latitude proper motion in mas/yr.
+        source_epoch_jyear: Initial Julian epoch.
+        target_epoch_jyear: Destination Julian epoch.
+
+    Returns:
+        Propagated longitude and latitude tensors in degrees.
+
+    Examples:
+        >>> from torchsky.wcs import propagate_proper_motion
+        >>> lon, lat = propagate_proper_motion(10.0, 20.0, 0.0, 0.0, source_epoch_jyear=2000.0, target_epoch_jyear=2010.0)
+        >>> round(float(lon), 6), round(float(lat), 6)
+        (10.0, 20.0)
     """
     lon = _as_tensor(lon_deg)
     device = lon.device
@@ -978,6 +995,22 @@ def propagate_space_motion(
 
     Returns:
         ``(lon, lat, pm_lon_coslat, pm_lat, parallax, radial_velocity)``.
+
+    Args:
+        lon_deg: Initial ICRS longitude in degrees.
+        lat_deg: Initial ICRS latitude in degrees.
+        pm_lon_coslat_mas_yr: Cosine-weighted longitude proper motion in mas/yr.
+        pm_lat_mas_yr: Latitude proper motion in mas/yr.
+        parallax_mas: Parallax in milliarcseconds.
+        radial_velocity_km_s: Radial velocity in km/s.
+        source_epoch_jyear: Initial TCB Julian epoch.
+        target_epoch_jyear: Destination TCB Julian epoch.
+
+    Examples:
+        >>> from torchsky.wcs import propagate_space_motion
+        >>> result = propagate_space_motion(10.0, 20.0, 0.0, 0.0, 10.0, 0.0, source_epoch_jyear=2000.0, target_epoch_jyear=2000.0)
+        >>> len(result)
+        6
     """
     return _propagate_space_motion(
         lon_deg,

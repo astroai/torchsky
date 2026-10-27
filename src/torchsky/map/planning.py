@@ -1,13 +1,6 @@
-"""Target planning for image-plane map products.
-
-Split out of :mod:`torchsky.map.image_plane`; the planners read observation
-metadata and WCS headers, so the image-plane primitives they need are imported
-lazily to avoid a module import cycle.
-"""
+"""Target planning for image-plane map products."""
 
 from __future__ import annotations
-
-from ._lazy import image_plane as _image_plane
 
 import math
 from collections.abc import Sequence
@@ -35,6 +28,14 @@ from .spectral_projection import (
 )
 from .operators.image_grid import normalized_header_for_shape, target_shape_from_header
 from .operators.subdivision import bounded_subdivide_boundary
+from .image_plane_common import (
+    _convert_world_between_wcs,
+    _observation_header_for_footprint,
+    _resolve_map_device,
+    _true_image_shape,
+    load_observation_image_and_header,
+)
+from .image_plane_projection import _angular_separation_deg
 from ..wcs import WCS
 
 
@@ -275,11 +276,9 @@ def _plan_union_footprint_target(
     pixel_scales: list[float] = []
     footprint_records: list[tuple[WCS, int, int]] = []
     for observation in observations:
-        header = _image_plane()._observation_header_for_footprint(
-            observation, device=device
-        )
+        header = _observation_header_for_footprint(observation, device=device)
         wcs = WCS(header)
-        height, width = _image_plane()._true_image_shape(header)
+        height, width = _true_image_shape(header)
         pixel_edges = torch.tensor(
             [
                 [-0.5, -0.5],
@@ -332,7 +331,7 @@ def _plan_union_footprint_target(
         for idx_i, (ra_i, dec_i) in enumerate(obs_centers):
             score = 0.0
             for idx_j, (ra_j, dec_j) in enumerate(obs_centers):
-                sep = _image_plane()._angular_separation_deg(ra_i, dec_i, ra_j, dec_j)
+                sep = _angular_separation_deg(ra_i, dec_i, ra_j, dec_j)
                 score += 1.0 / (
                     1.0 + (sep / max(pixel_scales[idx_j] * 512.0, 1e-3)) ** 2
                 )
@@ -562,10 +561,8 @@ def plan_image_plane_target(
         raise IndexError("reference_index is out of range")
 
     ref = observations[reference_index]
-    read_dev = str(_image_plane()._resolve_map_device(device))
-    image, header = _image_plane().load_observation_image_and_header(
-        ref, device=read_dev
-    )
+    read_dev = str(_resolve_map_device(device))
+    image, header = load_observation_image_and_header(ref, device=read_dev)
     shape_out = tuple(image.shape) if shape is None else (int(shape[0]), int(shape[1]))
     shape_out = target_shape_from_header(header_overrides or {}, fallback=shape_out)
     normalized_header = normalized_header_for_shape(
@@ -780,9 +777,7 @@ def _obs_target_pixel_bbox(
             ]
         )
         ra, dec = source_wcs.pixel_to_world(xs, ys)
-        ra, dec = _image_plane()._convert_world_between_wcs(
-            ra, dec, source_wcs, full_target_wcs
-        )
+        ra, dec = _convert_world_between_wcs(ra, dec, source_wcs, full_target_wcs)
         tx, ty = full_target_wcs.world_to_pixel(ra, dec)
         if not bool((torch.isfinite(tx) & torch.isfinite(ty)).all()):
             return None

@@ -186,15 +186,15 @@ Fit or subtract monopole + dipole from a HEALPix map.
 
 ## Sparse Maps
 
-### `HealSparseMap` / `SparseMap`
+### `SparseHealpixMap`
 
 Sparse HEALPix map storing values only for covered pixels. Compatible with [healsparse](https://healsparse.readthedocs.io/) semantics.
 
 ```python
-from torchsky.sphere import HealSparseMap
+from torchsky.sphere import SparseHealpixMap
 
-sparse = HealSparseMap(nside=64, nest=True, pixels=pix_tensor, values=val_tensor)
-sparse = HealSparseMap.from_dense(dense_map, nside=64, nest=True)
+sparse = SparseHealpixMap(nside=64, nest=True, pixels=pix_tensor, values=val_tensor)
+sparse = SparseHealpixMap.from_dense(dense_map, nside=64, nest=True)
 
 sparse.coverage_mask
 sparse.to_dense()
@@ -202,7 +202,7 @@ sparse.interpolate(lon_deg=lon, lat_deg=lat, method='bilinear')
 sparse.ud_grade(nside_out=32)
 ```
 
-`HealSparseMap.from_pixels(...)` canonicalizes inputs to sorted unique pixels,
+`SparseHealpixMap.from_pixels(...)` canonicalizes inputs to sorted unique pixels,
 keeping the last value supplied for duplicates, so `get_values(...)` and
 interpolation can use indexed lookup reliably. Maps with `nside_coverage` derive
 coverage maps in the NESTED coverage hierarchy even when sparse pixels are stored
@@ -214,7 +214,7 @@ because fill-block cells cannot tell valid `False`/`0` from an uncovered child.
 These are implementation choices; comparative throughput measurements live in
 the harness.
 
-`HealSparseMap.from_moc(moc, nside=...)` realizes MOC coverage directly as sparse
+`SparseHealpixMap.from_moc(moc, nside=...)` realizes MOC coverage directly as sparse
 nested pixels without materializing a full dense HEALPix mask. Maps with
 `nside_coverage` and a 1-D value vector write HealSparse FITS (`EXTNAME=COV`
 int64 coverage plus `EXTNAME=SPARSE` image, `PIXTYPE=HEALSPARSE`). Boolean maps
@@ -251,12 +251,12 @@ json_repr = moc.to_json()
 | Constructor | Description |
 |---|---|
 | `MOC(uniq)` | Build from `UNIQ` cells |
-| `MOC.empty()` / `MOC.full(max_order)` | Empty coverage; full sky (order-0 cells) |
+| `MOC.empty()` / `MOC.full()` | Empty coverage; full sky (order-0 cells) |
 | `MOC.from_lonlat(lon, lat, max_order)` | Coverage of catalog points, compacted to parent UNIQ |
 | `MOC.from_circle(lon_deg, lat_deg, radius_deg, max_order=10)` | Circular cap; hierarchical (interior cells stay coarse) |
 | `MOC.from_polygon(lon_deg, lat_deg, max_order=10)` | Simple polygon footprint, including non-convex polygons; hierarchical |
 | `MOC.from_region(region, max_order=None)` | Pixelize a torchsky spherical region, boolean region, exact-region wrapper, or `PixelizedRegion` into NUNIQ coverage; `PixelizedRegion` inputs preserve their current resolution by default, while other regions default to order 10 |
-| `MOC.from_sparse_map(smap)` | Coverage from `HealSparseMap` / `SparseMap` |
+| `MOC.from_sparse_map(smap)` | Coverage from `SparseHealpixMap` |
 | `MOC.from_threshold(smap, threshold, op='>')` | Threshold sparse-map values |
 | `MOC.from_ascii(text)` | IVOA ASCII roundtrip, including compact pixel ranges like `3/5-7` |
 | `MOC.from_json(text)` | IVOA JSON roundtrip |
@@ -481,7 +481,7 @@ cl = torch.ones(3 * nside)
 m = sphere.synfast(cl, nside=nside)
 ```
 
-### `smoothmap(map_values, *, nside=None, lmax=None, mmax=None, nest=False, fwhm_rad=None, sigma=None, beam=None, beam_window=None, pol=False, iter=0, use_weights=False, use_pixel_weights=False, verbose=True)`
+### `smoothmap(map_values, *, nside=None, lmax=None, mmax=None, nest=False, fwhm_rad=None, sigma=None, beam=None, beam_window=None, pol=False, iter=0, use_weights=False, use_pixel_weights=False)`
 
 Smooth a HEALPix map in harmonic space with a Gaussian beam.
 
@@ -537,7 +537,7 @@ See also **[Ecosystem compatibility](compatibility.md)** for how healpy/hpgeom f
 
 Status: `parity` = upstream-compatible semantics · `extended` = torchsky-native additions · `partial` = known gaps · `planned` = not yet implemented.
 
-Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) mirror the [healpy](https://healpy.readthedocs.io/) and [hpgeom](https://github.com/LSSTDESC/hpgeom) APIs and can be used as drop-in replacements at the tensor boundary.
+Functions in `torchsky.sphere.compat` mirror the [healpy](https://healpy.readthedocs.io/) and [hpgeom](https://github.com/LSSTDESC/hpgeom) APIs and can be used as drop-in replacements at the tensor boundary.
 
 | Function | Status | Notes |
 |---|---|---|
@@ -579,10 +579,17 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `spherical_polygon_contains` | extended | inside-point disambiguation |
 | `spherical_polygons_intersect` | extended | edge crossing + containment |
 | `SphericalBooleanRegion` (union/intersection/difference) | extended | controlled-error boolean algebra; optional exact backend |
-| `NativeExactSphericalRegion` | extended | dependency-free exact-backend scaffold |
-| `HealSparseMap` / `SparseMap` | parity | coverage-aware sparse map; dense-equivalent `ud_grade` |
+| `NativeApproximateSphericalRegion` | extended | dependency-free native region scaffold with explicit center-sampled estimates |
+| `SparseHealpixMap` | extended | torch-native coverage-aware sparse map; dense-equivalent `ud_grade` and optional HealSparse interchange |
 
-Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API compatibility. Geometry queries are always torch-native; they do not dispatch to hpgeom.
+Geometry queries are always torch-native; they do not dispatch to hpgeom.
+
+Version 0.4.0 removes ignored compatibility parameters rather than silently
+accepting them. `verbose` was removed from `synalm`, `synfast`, `smoothmap`,
+`smoothing`, `remove_monopole`, and `remove_dipole`; `chunk_size` was removed
+from the ring-pruned `query_strip`; and `fact` was removed from
+`query_polygon_vec`. `query_circle(fact=...)` remains because inclusive queries
+now forward it to the tested `query_disc` supersampling kernel.
 
 The `parity` labels below describe intended API semantics and compatibility
 scope. They are not an exhaustive parity certificate; current fixture coverage
@@ -609,7 +616,7 @@ and quantitative acceptance evidence live in `torchsky-harness`.
 | HEALPix geometry | yes | yes | yes, looser index gates |
 | Sparse `get_values` / MOC contains | yes | yes if tensors stay on device | yes float32 |
 | Polygons (approximate contains/intersect/`query_polygon`) | yes | yes | yes float32 |
-| Polygons (exact `NativeExactSphericalRegion`) | yes | no (CPU kernel / spherical-geometry) | no |
+| Polygons (`NativeApproximateSphericalRegion`) | yes | no (CPU kernel / spherical-geometry) | no |
 | SHT (Ishioka/Wigner C++) | yes float64 | no (CPU kernel) | no (CPU kernel) |
 | SHT (ATen ring FFT) | yes float64 | yes float64 | yes float32 |
 | rotate_alm / alm2lonlat | yes float64 | yes float64 | yes float32 |

@@ -19,7 +19,7 @@ from torchsky.sphere.moc import (
     _normalize_moc,
     _union_ranges,
 )
-from torchsky.sphere import HealSparseMap
+from torchsky.sphere import SparseHealpixMap
 import torchfits
 
 
@@ -126,7 +126,7 @@ def test_moc_difference_complex():
 
 
 def test_moc_from_sparse_map_empty():
-    smap = HealSparseMap.convert_healpix_map(
+    smap = SparseHealpixMap.convert_healpix_map(
         torch.zeros(12), nside_coverage=1, sentinel=0
     )
     moc = MOC.from_sparse_map(smap)
@@ -137,7 +137,7 @@ def test_moc_from_sparse_map_converts_ring_pixels_to_nested_uniq() -> None:
     nside = 8
     pix_nest = torch.tensor([0, 5, 17], dtype=torch.int64)
     pix_ring = hp.nest2ring(nside, pix_nest)
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pix_ring,
         torch.ones_like(pix_ring, dtype=torch.float32),
         nside_sparse=nside,
@@ -154,7 +154,7 @@ def test_moc_from_sparse_map_converts_ring_pixels_to_nested_uniq() -> None:
 def test_moc_from_threshold():
     pixels = torch.tensor([0, 1, 2])
     values = torch.tensor([10.0, 5.0, 20.0])
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels, nside_sparse=4, nside_coverage=1, values=values
     )
 
@@ -182,7 +182,7 @@ def test_moc_from_threshold():
 def test_moc_from_threshold_uses_sparse_pixel_list_not_coverage_offsets() -> None:
     pixels = torch.tensor([0, 10, 42], dtype=torch.int64)
     values = torch.tensor([1.0, 5.0, 2.0], dtype=torch.float64)
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels,
         values,
         nside_sparse=8,
@@ -199,7 +199,7 @@ def test_moc_from_threshold_converts_ring_sparse_pixels() -> None:
     pixels_nest = torch.tensor([0, 10, 42], dtype=torch.int64)
     pixels_ring = hp.nest2ring(8, pixels_nest)
     values = torch.tensor([1.0, 5.0, 2.0], dtype=torch.float64)
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels_ring,
         values,
         nside_sparse=8,
@@ -216,7 +216,7 @@ def test_moc_from_threshold_converts_ring_sparse_pixels() -> None:
 def test_moc_from_threshold_empty():
     pixels = torch.tensor([0, 1, 2])
     values = torch.tensor([10.0, 5.0, 20.0])
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels, nside_sparse=4, nside_coverage=1, values=values
     )
 
@@ -299,7 +299,7 @@ def test_healsparse_from_moc_uses_sparse_nested_pixels() -> None:
     pix = torch.tensor([0, 3, 7], dtype=torch.int64)
     moc = MOC(nest2uniq(nside, pix))
 
-    smap = HealSparseMap.from_moc(moc, nside=nside, nside_coverage=2)
+    smap = SparseHealpixMap.from_moc(moc, nside=nside, nside_coverage=2)
 
     assert smap.nest
     assert smap.nside_sparse == nside
@@ -427,7 +427,7 @@ def _leaf_circle_moc(
 def test_moc_empty_full_operators_from_lonlat_degrade() -> None:
     empty = MOC.empty()
     assert empty.uniq.numel() == 0
-    full = MOC.full(4)
+    full = MOC.full()
     assert bool(full.contains(0.0, 0.0).item())
     assert bool(full.contains(180.0, -40.0).item())
 

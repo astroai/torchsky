@@ -3,7 +3,6 @@ import pytest
 import torch
 from astropy.wcs import WCS as AstropyWCS
 
-from torchsky._native import cpp
 from torchsky.wcs.core import WCS
 from torchsky.wcs.tpv import TPV
 
@@ -293,7 +292,7 @@ def _force_inverse_path(wcs: WCS, path: str) -> None:
         wcs.tpv._can_use_cpp_invert = lambda *args, **kwargs: False
 
 
-def test_empty_tpv_is_identity_in_python_and_native_paths() -> None:
+def test_empty_tpv_is_identity() -> None:
     tpv = TPV({})
     u = torch.tensor([0.1, -0.2, torch.nan], dtype=torch.float64)
     v = torch.tensor([-0.3, 0.4, 0.5], dtype=torch.float64)
@@ -306,29 +305,6 @@ def test_empty_tpv_is_identity_in_python_and_native_paths() -> None:
     torch.testing.assert_close(dv, expected_v, equal_nan=True)
     torch.testing.assert_close(iu, expected_u, equal_nan=True)
     torch.testing.assert_close(iv, expected_v, equal_nan=True)
-
-    idx = torch.empty((0, 3), dtype=torch.int64)
-    coeff = torch.empty(0, dtype=torch.float64)
-    du, dv = cpp.wcs_tpv_distort(u, v, idx, coeff, idx, coeff)
-    iu, iv = cpp.wcs_tpv_invert(u, v, idx, coeff, idx, coeff, 5, 1e-12)
-    torch.testing.assert_close(du, expected_u, equal_nan=True)
-    torch.testing.assert_close(dv, expected_v, equal_nan=True)
-    torch.testing.assert_close(iu, expected_u, equal_nan=True)
-    torch.testing.assert_close(iv, expected_v, equal_nan=True)
-
-
-def test_constant_zero_native_tpv_inverse_fails_conditioning() -> None:
-    idx = torch.tensor([[0, 0, 0]], dtype=torch.int64)
-    coeff = torch.zeros(1, dtype=torch.float64)
-    target = torch.zeros(3, dtype=torch.float64)
-
-    xi, eta = cpp.wcs_tpv_distort(target, target, idx, coeff, idx, coeff)
-    assert not torch.count_nonzero(xi)
-    assert not torch.count_nonzero(eta)
-    u, v = cpp.wcs_tpv_invert(target, target, idx, coeff, idx, coeff, 5, 1e-12)
-    assert torch.isnan(u).all()
-    assert torch.isnan(v).all()
-
 
 @pytest.mark.parametrize("path", ["fused", "standalone", "python"])
 def test_rank_deficient_affine_returns_nan_in_forced_inverse_paths(path: str) -> None:
@@ -362,39 +338,10 @@ def test_folded_polynomial_at_singular_fold_returns_nan() -> None:
     assert torch.hypot(xi_rt - xi[1:], eta_rt - eta[1:]).item() <= 1e-11
 
 
-@pytest.mark.parametrize("function_name", ["wcs_tpv_distort", "wcs_tpv_invert"])
-@pytest.mark.parametrize(
-    "idx,coeff,match",
-    [
-        (torch.tensor([[8, 0, 0]], dtype=torch.int64), torch.ones(1), "exponents"),
-        (torch.zeros((2, 3), dtype=torch.int64), torch.ones(1), "lengths must match"),
-    ],
-)
-def test_native_tpv_rejects_malformed_metadata(
-    function_name: str, idx: torch.Tensor, coeff: torch.Tensor, match: str
-) -> None:
-    values = torch.zeros(1, dtype=torch.float64)
-    coeff = coeff.to(torch.float64)
-    function = getattr(cpp, function_name)
-    args = (values, values, idx, coeff, idx, coeff)
-    if function_name == "wcs_tpv_invert":
-        args += (5, 1e-11)
-    with pytest.raises(RuntimeError, match=match):
-        function(*args)
-
-
 @pytest.mark.parametrize("bad", [torch.nan, torch.inf, -torch.inf])
 def test_tpv_rejects_nonfinite_coefficients(bad: float) -> None:
     with pytest.raises(ValueError, match="must be finite"):
         TPV({"PV1_1": bad})
-
-    values = torch.zeros(1, dtype=torch.float64)
-    idx = torch.tensor([[1, 0, 0]], dtype=torch.int64)
-    coeff = torch.tensor([bad], dtype=torch.float64)
-    with pytest.raises(RuntimeError, match="must be finite"):
-        cpp.wcs_tpv_distort(values, values, idx, coeff, idx, coeff)
-    with pytest.raises(RuntimeError, match="must be finite"):
-        cpp.wcs_tpv_invert(values, values, idx, coeff, idx, coeff, 5, 1e-11)
 
 
 @pytest.mark.parametrize("use_cpp", [False, True])
@@ -418,10 +365,6 @@ def test_tpv_invert_rejects_invalid_max_iter(max_iter: int) -> None:
     values = torch.zeros(1, dtype=torch.float64)
     with pytest.raises(ValueError, match="positive integer"):
         tpv.invert(values, values, max_iter=max_iter)
-    idx = torch.empty((0, 3), dtype=torch.int64)
-    coeff = torch.empty(0, dtype=torch.float64)
-    with pytest.raises(RuntimeError, match="max_iter must be positive"):
-        cpp.wcs_tpv_invert(values, values, idx, coeff, idx, coeff, max_iter, 1e-11)
 
 
 @pytest.mark.parametrize("tol", [0.0, -1.0, float("nan"), float("inf")])
@@ -430,10 +373,6 @@ def test_tpv_invert_rejects_invalid_tolerance(tol: float) -> None:
     values = torch.zeros(1, dtype=torch.float64)
     with pytest.raises(ValueError, match="finite and positive"):
         tpv.invert(values, values, tol=tol)
-    idx = torch.empty((0, 3), dtype=torch.int64)
-    coeff = torch.empty(0, dtype=torch.float64)
-    with pytest.raises(RuntimeError, match="finite and positive"):
-        cpp.wcs_tpv_invert(values, values, idx, coeff, idx, coeff, 5, tol)
 
 
 @pytest.mark.parametrize("use_cpp", [False, True])

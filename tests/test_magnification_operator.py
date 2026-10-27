@@ -85,7 +85,7 @@ def test_learned_residual_is_identity_at_initialisation():
     operator = ConvergenceMagnification(residual=True)
     kappa = torch.randn(2, 1, 8, 8) * 0.05
     torch.testing.assert_close(operator(kappa), 1.0 + 2.0 * kappa, rtol=0, atol=0)
-    assert float(operator.regularization()) == 0.0
+    assert float(operator.regularization().detach()) == 0.0
 
 
 def test_learned_residual_opens_and_receives_gradients():
@@ -103,7 +103,7 @@ def test_learned_residual_opens_and_receives_gradients():
         residual_gate.add_(0.1)
     moved = operator(kappa)
     assert not torch.allclose(mu.detach(), moved.detach())
-    assert float(operator.regularization()) > 0.0
+    assert float(operator.regularization().detach()) > 0.0
 
 
 def test_residual_rejects_even_kernel():

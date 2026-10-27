@@ -7,7 +7,6 @@ from torchsky.wcs.spectral import (
     convert_spectral,
     frequency_to_spectral,
     spectral_to_frequency,
-    transform_spectral,
     vacuum_wavelength_to_air,
 )
 
@@ -267,11 +266,13 @@ def test_unknown_spectral_algorithm_raises() -> None:
 
 
 
-def test_convert_spectral_and_legacy_transform_spectral() -> None:
+def test_convert_spectral_frequency_to_radio_velocity() -> None:
     rest_hz = 1420.40575177e6
     freq = torch.tensor([rest_hz, 1.419e9], dtype=torch.float64)
     radio_km_s = convert_spectral(
         freq, "FREQ", "VRAD", to_unit="km/s", rest_frequency=rest_hz
     )
-    legacy = transform_spectral(freq, rest_hz, "RADIO")
-    torch.testing.assert_close(radio_km_s, legacy)
+    expected = frequency_to_spectral(
+        freq, "VRAD", unit="km/s", rest_frequency=rest_hz
+    )
+    torch.testing.assert_close(radio_km_s, expected)

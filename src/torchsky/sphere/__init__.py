@@ -1,12 +1,11 @@
 """Torch-native spherical geometry plus healpy-shaped HEALPix compatibility APIs.
 
 Broader astronomy-stack compatibility (Astropy, spherical_geometry, …) is
-documented in ``docs/compatibility.md``; HEALPix/healpy entry points are
-:mod:`torchsky.sphere.compat` and :mod:`torchsky.sphere.healpy`.
+documented in ``docs/compatibility.md``; healpy-shaped entry points live in
+:mod:`torchsky.sphere.compat`.
 """
 
 from . import compat
-from . import healpy
 from .core import (
     chord_radius,
     fit_monopole_dipole,
@@ -45,7 +44,6 @@ from .healpix import (
     pix2vec,
     query_box,
     query_circle,
-    query_cone,
     query_disc,
     query_polygon,
     query_strip,
@@ -57,17 +55,10 @@ from .healpix import (
     vec2pix,
 )
 from .geom import (
-    Box,
-    Cap,
-    Circle,
-    Cone,
-    Ellipse,
     ExactSphericalRegion,
     LonLat,
-    MultiPolygon,
-    NativeExactSphericalRegion,
+    NativeApproximateSphericalRegion,
     PixelizedRegion,
-    Polygon,
     RegionAreaEstimate,
     SphericalBooleanRegion,
     SphericalBox,
@@ -92,10 +83,8 @@ from .randoms import PreparedRandomSampler, sample_randoms
 from .stmoc import STMOC, mjd_to_time_us, time_us_to_mjd
 from .sparse import (
     HealSparseHostProtocol,
-    HealSparseMap,
     SkyMaskPipe,
     SparseHealpixMap,
-    SparseMap,
     WideBitMask,
     sum_intersection,
     sum_union,
@@ -162,13 +151,6 @@ from .pseudocl import (
 
 __all__ = [
     # Region nouns (clean + canonical)
-    "Polygon",
-    "MultiPolygon",
-    "Circle",
-    "Cone",
-    "Cap",
-    "Box",
-    "Ellipse",
     "PixelizedRegion",
     "SphericalPolygon",
     "SphericalMultiPolygon",
@@ -177,7 +159,7 @@ __all__ = [
     "SphericalEllipse",
     "SphericalBooleanRegion",
     "ExactSphericalRegion",
-    "NativeExactSphericalRegion",
+    "NativeApproximateSphericalRegion",
     "RegionAreaEstimate",
     "LonLat",
     "UnitVector3d",
@@ -188,17 +170,14 @@ __all__ = [
     "STMOC",
     "MultiOrderHealpixMap",
     "SparseHealpixMap",
-    "HealSparseMap",
     "HealSparseHostProtocol",
     "UniqValueMapProtocol",
-    "SparseMap",
     "PreparedRandomSampler",
     "WideBitMask",
     "SkyMaskPipe",
     # Submodules
     "compat",
     "healpix",
-    "healpy",
     # HEALPix pixel & grid operations
     "ang2pix",
     "pix2ang",
@@ -229,7 +208,6 @@ __all__ = [
     "mjd_to_time_us",
     "time_us_to_mjd",
     # Spatial queries
-    "query_cone",
     "query_circle",
     "query_disc",
     "query_box",

@@ -9,7 +9,7 @@ image WCS for comparison with cutouts.
 The entry points are [`coadd_healpix`](reference/map.md#torchsky.map.coadd_healpix)
 and [`resample_healpix`](reference/map.md#torchsky.map.resample_healpix).
 Both accept dense tensors; the coadd additionally supports sparse coverage
-through `torchsky.sphere.HealSparseMap`.
+through `torchsky.sphere.SparseHealpixMap`.
 
 ## Dense or sparse?
 
@@ -79,7 +79,7 @@ resampling kernel is explicit (`bilinear`, `nearest`, `bicubic`, `lanczos2`,
 [`HealpixResult`](reference/map.md#torchsky.map.HealpixResult) carries
 `data`, `weight`, `nside`, `nest`, `sparse`, `overlap_count`, and a coverage
 `MOC`. `result.image` is an alias for `data`; `result.sparse_map` returns the
-`HealSparseMap` when `sparse=True` and `None` otherwise.
+`SparseHealpixMap` when `sparse=True` and `None` otherwise.
 
 ## Project a HEALPix map back onto an image
 
@@ -150,7 +150,7 @@ sparse_map = result.sparse_map
 print(sparse_map.nside, sparse_map.nside_coverage)
 ```
 
-In sparse mode `result.data` is a `HealSparseMap`; access pixels through the
+In sparse mode `result.data` is a `SparseHealpixMap`; access pixels through the
 map's own indexing, and use `result.coverage_moc` to describe the covered sky to
 other tools. `reduction_chunk_size` bounds how many sampled contributions are
 retained before each incremental reduction. The default (262,144) is a good

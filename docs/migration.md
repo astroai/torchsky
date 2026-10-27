@@ -42,6 +42,11 @@ The structural differences are small and deliberate:
   part of the same object; no separate `all_pix2world` bookkeeping.
 - **Devices.** Move the WCS and its cached tables with `wcs.to("cuda")`; pass
   tensors on the device you want.
+- **Removed aliases.** Replace `pix2world`/`world2pix` with
+  `pixel_to_world`/`world_to_pixel`. Use `footprint`, `pixel_scales`, and
+  `pixel_area` directly; the `calc_footprint` and `proj_plane_pixel_*` aliases
+  are no longer exposed. Astropy-shaped `pixel_to_world_values`,
+  `world_to_pixel_values`, `all_pix2world`, and `all_world2pix` remain.
 
 <!-- docs: run -->
 ```python
@@ -77,6 +82,39 @@ print(f"round trip max error: {float((x_back - x).abs().max()):.2e} px")
 The [WCS guide](wcs.md) covers `-TAB`, coupled tables, GWCS sampling, and
 astrometric calibration. The full surface is in the
 [WCS reference](reference/wcs.md).
+
+## Clean-break utility names
+
+- Import image mapmaking operations from `torchsky.map`; the historical
+  `torchsky.map.image_plane` forwarding module is removed. Replace
+  `evaluate_image_plane_aperture_uncertainty(...)` with
+  `torchsky.map.aperture_uncertainty(...)` and use `kernel`, `pixfrac`, and
+  `semantics` (or a `ResampleConfig`) instead of the old long keyword names.
+- Import provenance from `torchsky.map.provenance`. The forwarding
+  `torchsky.map.operators.provenance` module is removed.
+- Import field models from `torchsky.field` or `torchsky.map.field`. The
+  forwarding `torchsky.map.field.models` module is removed. Foam primitives
+  remain on `torchsky.map.field`; their historical `.foam` module is removed.
+- Construct `SourceCatalogScene` with `fixed_templates=` and `coefficients=`;
+  the `templates`, `spectral_coefficients`, and `per_band_coefficients` aliases
+  are removed.
+- Use `StrainerSkyEncoderMLPField.decoder_head`, not its removed `output`
+  alias. Use `CubeResult.aperture_uncertainty(...)`, not `line_uncertainty(...)`.
+- A non-`None` `ForwardContext` now fails when the selected field-model method
+  cannot consume it; forwarding helpers no longer silently discard context.
+- Replace `transform_spectral(freq, rest_freq, convention)` with
+  `convert_spectral(freq, "FREQ", target, to_unit="km/s", rest_frequency=...)`,
+  where the target is `VRAD`, `VOPT`, or `VELO`.
+- Pass wavelengths to `apply_extinction` as `wavelength=...` and declare
+  `wavelength_unit`; `lambda_obs_angstrom` is no longer accepted.
+- Use mesh filters `median` or `gaussian` with an explicit
+  `mesh_filter_size` (CLI: `--mesh-filter-size` or
+  `--sky-mesh-filter-size`); `median_3` and `gaussian_3` are removed.
+- Calibration evidence rows must provide `exposure_id`; the `exposure`
+  fallback key is removed.
+- `zscale` selects display limits in high-level renderers through
+  `limit_policy="zscale"`; it is not a `StretchName` or an `apply_stretch`
+  mode. Pair it with a real stretch such as `stretch="linear"`.
 
 ## SkyCoord-style catalog geometry
 
@@ -137,11 +175,46 @@ Differences that matter:
 - `UNSEEN` exists as a constant, but map file reading/writing belongs to
   `torchfits`, not the sphere package.
 - `nest=False` (RING) remains the default everywhere.
-- The healpy-shaped namespace is available as `torchsky.sphere.compat` and as
-  the alias `torchsky.sphere.healpy`; new code can use `torchsky.sphere`
-  directly. See the [compatibility reference](reference/sphere-compat.md).
+- The healpy-shaped namespace is available as `torchsky.sphere.compat`; new
+  code can use `torchsky.sphere` directly. See the
+  [compatibility reference](reference/sphere-compat.md).
 - SHTs, smoothing, and spectra follow torchsky's own backend contract; review
   [sphere.md](sphere.md) before assuming healpy's precision or threading model.
+
+### 0.4.0 sphere compatibility break
+
+Version 0.4.0 intentionally removes the duplicate `torchsky.sphere.healpy`
+re-export. Replace that import with `torchsky.sphere.compat`. It also removes
+the process-global strict-mode setters/context manager and the ignored `strict`
+query keywords. Geometry queries already use only torchsky-native kernels.
+`torchsky.sphere.compat.query_ellipse` no longer accepts `backend="auto"` or
+`backend="torch"` because both selected the same native implementation.
+The same release removes ignored `verbose` keywords from `synalm`, `synfast`,
+`smoothmap`, `smoothing`, `remove_monopole`, and `remove_dipole`; removes
+`chunk_size` from `query_strip`; and removes `fact` from `query_polygon_vec`.
+Delete those keywords at call sites. `query_circle(fact=...)` is retained and
+now changes inclusive-overlap supersampling through the native `query_disc`
+kernel.
+
+Exact-region APIs now accept only `backend="native"` or
+`backend="spherical-geometry"`; replace `backend="auto"` with `"native"`.
+Use `NativeApproximateSphericalRegion` instead of the removed
+`NativeExactSphericalRegion` name. Its `contains`, `intersects`, `union`,
+`intersection`, and `difference` methods no longer accept ignored boundary or
+cap discretization keywords. Call `MOC.full()` without an order argument.
+
+`SparseHealpixMap` is the sole torchsky sparse-map class name. Replace
+`HealSparseMap` and `SparseMap`, while retaining `from_healsparse()` and
+`to_healsparse()` at explicit HealSparse interchange boundaries. Replace
+`get_values_pix` with `get_values`, `lookup_With_valid` with
+`lookup_with_valid`, `generate_healpix_map` with `to_dense`, and `write(...,
+clobber=...)` with `write_fits(..., overwrite=...)`.
+
+Core HEALPix code now uses `max_pixel_radius`, `ring2nest`, `nest2ring`,
+`neighbors`, and `query_circle`; peer spellings such as `max_pixrad` and
+`get_all_neighbours` remain only in `torchsky.sphere.compat`. Geometry classes
+use their full names: `SphericalCap`, `SphericalBox`, `SphericalEllipse`,
+`SphericalPolygon`, and `SphericalMultiPolygon`.
 
 <!-- docs: run -->
 ```python
@@ -164,6 +237,31 @@ assert bool((inside == pix[0]).any())
 
 print(f"pixel indices: {pix.tolist()}")
 ```
+
+### 0.4.0 field-bandpass API rename
+
+Import field-observation bandpass helpers from
+`torchsky.filter_profiles.field_bandpass` instead of
+`torchsky.filter_profiles.inr_bandpass`. Remove source-alias imports and replace
+`resolve_inr_bandpass` with
+`resolve_field_bandpass`. Version 0.4.0 does not provide deprecated aliases.
+
+The field CLI now also uses `field_*` parser destinations and serialized
+execution-plan keys. Earlier field map plans containing `model`,
+`model_kwargs`, `steps`, `learning_rate`, `patch_size`, sampling, or render
+keys are not migrated or accepted. Regenerate those plans with 0.4.0 before
+replay.
+
+### Other 0.4.0 clean breaks
+
+- Replace `torchsky info` and `torchsky cat` with the corresponding Torchfits
+  inspection/table commands; Torchsky no longer forwards FITS-owned CLI work.
+- Replace `--sky`, `--inr-model`, `--per-band`, and `--inr-*` field controls
+  with their documented `--background-mode`, `--field-model`, `--per-filter`,
+  and `--field-*` forms. Removed spellings are rejected rather than translated.
+- Import and annotate `SceneRepresentation` directly; the duplicate `Scene`
+  type alias is gone.
+- Pass `atol=` to detector-astrometry inverse methods; the `tol=` alias is gone.
 
 ## Reprojection and coaddition
 

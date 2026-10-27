@@ -35,7 +35,25 @@ _NAMESPACES: dict[str, str] = {
     "quality": "torchsky.quality",
 }
 
-__all__ = ("WCS", *_NAMESPACES)
+__all__ = (
+    "WCS",
+    "wcs",
+    "sphere",
+    "spectral",
+    "spectrophotometry",
+    "redshift",
+    "log_lambda",
+    "extinction",
+    "cosmology",
+    "map",
+    "scene",
+    "field",
+    "transforms",
+    "encoders",
+    "catalogs",
+    "coords",
+    "quality",
+)
 
 
 def __getattr__(name: str) -> Any:

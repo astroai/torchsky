@@ -270,38 +270,58 @@ def _validate_execution(execution: Mapping[str, Any], method: str) -> None:
         )
 
     if method == "field":
-        _require_string(value.get("model"), "execution.model")
-        _require_mapping(value.get("model_kwargs", {}), "execution.model_kwargs")
+        _require_string(value.get("field_model"), "execution.field_model")
+        _require_mapping(
+            value.get("field_model_kwargs"),
+            "execution.field_model_kwargs",
+        )
+        if "field_preset" not in value:
+            raise ValueError("map plan execution.field_preset is required")
         if value.get("field_preset") is not None:
             _require_choice(
                 value["field_preset"],
                 "execution.field_preset",
                 _PLAN_FIELD_PRESETS,
             )
-        for key in ("steps",):
-            if key in value:
-                _require_integer(value[key], f"execution.{key}", nonnegative=True)
-        if "learning_rate" in value:
-            _require_number(value["learning_rate"], "execution.learning_rate", positive=True)
-        for key in ("patch_size",):
-            if key in value:
-                _require_integer(value[key], f"execution.{key}", nonnegative=True)
+        _require_integer(
+            value.get("field_steps"),
+            "execution.field_steps",
+            nonnegative=True,
+        )
+        _require_number(
+            value.get("field_learning_rate"),
+            "execution.field_learning_rate",
+            positive=True,
+        )
+        _require_integer(
+            value.get("field_patch_size"),
+            "execution.field_patch_size",
+            nonnegative=True,
+        )
         for key in (
-            "patches_per_observation",
-            "observations_per_step",
-            "spectral_samples",
-            "render_tile",
+            "field_patches_per_observation",
+            "field_observations_per_step",
+            "field_spectral_samples",
         ):
-            if key in value and value[key] is not None:
-                _require_integer(value[key], f"execution.{key}", positive=True)
-        if "spatial_sampling" in value:
-            _require_choice(
-                value["spatial_sampling"],
-                "execution.spatial_sampling",
-                _PLAN_FIELD_SAMPLING,
+            _require_integer(value.get(key), f"execution.{key}", positive=True)
+        if "field_render_tile" not in value:
+            raise ValueError("map plan execution.field_render_tile is required")
+        if value["field_render_tile"] is not None:
+            _require_integer(
+                value["field_render_tile"],
+                "execution.field_render_tile",
+                positive=True,
             )
-        if "amp_dtype" in value:
-            _require_choice(value["amp_dtype"], "execution.amp_dtype", _PLAN_AMP_DTYPES)
+        _require_choice(
+            value.get("field_spatial_sampling"),
+            "execution.field_spatial_sampling",
+            _PLAN_FIELD_SAMPLING,
+        )
+        _require_choice(
+            value.get("field_amp_dtype"),
+            "execution.field_amp_dtype",
+            _PLAN_AMP_DTYPES,
+        )
     elif method == "coadd":
         required = (
             "workflow",

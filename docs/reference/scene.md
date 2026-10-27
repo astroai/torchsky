@@ -115,7 +115,6 @@ namespace `torchsky.scene` unless the group text says otherwise.
         - DiscreteTargetImage
         - HarmonicAlmScene
         - HealpixMapScene
-        - Scene
         - SceneRepresentation
         - SpinHarmonicAlmScene
         - as_scene_representation

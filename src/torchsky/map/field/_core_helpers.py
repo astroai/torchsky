@@ -105,6 +105,7 @@ def estimate_field_domain(
     *,
     coord_mode: FieldCoordinateMode = "local_tangent",
 ) -> FieldDomain:
+    """Estimate a normalized spatial-spectral domain covering observations."""
     if not observations:
         raise ValueError("estimate_field_domain requires at least one observation")
     wavelength_lowers: list[float] = []
@@ -609,4 +610,3 @@ def pretrain_strainer_trunk_synthetic(
         "throughput_samples_per_sec": throughput,
         "max_memory_allocated_bytes": max_mem,
     }
-

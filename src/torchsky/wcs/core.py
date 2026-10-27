@@ -236,8 +236,24 @@ def _coerce_distortion_lookup_table(
 
 
 class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
-    """
-    Base class for TorchWCS (PyTorch-native World Coordinate System).
+    """PyTorch-native world coordinate system parsed from FITS-style metadata.
+
+    Args:
+        header: FITS-style header mapping. An empty mapping creates a default WCS.
+        key: Alternate-WCS suffix without the leading keyword letter.
+        tabular_axes: Explicit one-dimensional lookup axes keyed by world axis.
+        coupled_tabular: Optional coupled multi-axis lookup transform.
+        tables: Table resolver used by ``-TAB`` metadata.
+        cpdis1: First prior-distortion lookup table.
+        cpdis2: Second prior-distortion lookup table.
+        det2im1: First detector-to-image lookup table.
+        det2im2: Second detector-to-image lookup table.
+
+    Examples:
+        >>> from torchsky.wcs import WCS
+        >>> wcs = WCS({"NAXIS": 2, "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN"})
+        >>> wcs.pixel_n_dim
+        2
     """
 
     ZENITHAL_CODES = ("TAN", "SIN", "ARC", "ZPN", "STG", "ZEA", "AZP", "SZP", "AIR")
@@ -3954,18 +3970,6 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         return self.pixel_to_world_jacobian(
             stacked, origin=origin, create_graph=create_graph
         )
-
-    def pix2world(
-        self, *args: Any, origin: int = 0
-    ) -> Tensor | tuple[Tensor, ...]:
-        """Concise alias for :meth:`pixel_to_world`."""
-        return self.pixel_to_world(*args, origin=origin)
-
-    def world2pix(
-        self, *args: Any, origin: int = 0
-    ) -> Tensor | tuple[Tensor, ...]:
-        """Concise alias for :meth:`world_to_pixel`."""
-        return self.world_to_pixel(*args, origin=origin)
 
     def pixel_to_world_values(
         self, *pixel_arrays: Any, origin: int = 0

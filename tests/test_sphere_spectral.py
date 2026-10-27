@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from torchsky._native import cpp as _native_cpp
+from torchsky import _ops
 from torchfits import write as write_fits
 from torchsky.sphere import compat
 from torchsky.sphere import healpix as hp
@@ -75,59 +75,27 @@ except Exception:  # pragma: no cover
 
 
 def _has_cpp_ring_fourier() -> bool:
-    return (
-        _native_cpp is not None
-        and hasattr(_native_cpp, "_healpix_ring_fourier_modes_cpu")
-        and hasattr(_native_cpp, "_healpix_ring_fourier_synthesis_cpu")
-    )
+    return _ops.has_spectral_dispatcher()
 
 
 def _has_cpp_spin_concat() -> bool:
-    return (
-        _native_cpp is not None
-        and hasattr(_native_cpp, "_healpix_spin_interpolate_concat_cpu")
-        and hasattr(_native_cpp, "_healpix_spin_integrate_concat_cpu")
-    )
+    return _ops.has_spectral_dispatcher()
 
 
 def _has_cpp_spin_ring_fused() -> bool:
-    return (
-        _native_cpp is not None
-        and hasattr(_native_cpp, "_healpix_spin_map2alm_ring_concat_cpu")
-        and hasattr(_native_cpp, "_healpix_spin_ring_finalize_cpu")
-    )
+    return _ops.has_spectral_dispatcher()
 
 
 def _has_cpp_spin_recurrence() -> bool:
-    return (
-        _native_cpp is not None
-        and hasattr(_native_cpp, "_healpix_spin_interpolate_recurrence_cpu")
-        and hasattr(_native_cpp, "_healpix_spin_integrate_recurrence_cpu")
-    )
+    return _ops.has_spectral_dispatcher()
 
 
 def _has_cpp_scalar_recurrence() -> bool:
-    return (
-        _native_cpp is not None
-        and hasattr(_native_cpp, "_healpix_scalar_interpolate_recurrence_cpu")
-        and hasattr(_native_cpp, "_healpix_scalar_integrate_recurrence_cpu")
-    )
+    return _ops.has_spectral_dispatcher()
 
 
 def _has_cpp_spectral_contracts() -> bool:
-    return (
-        _has_cpp_ring_fourier()
-        and _has_cpp_spin_concat()
-        and _has_cpp_spin_ring_fused()
-        and _has_cpp_spin_recurrence()
-        and _has_cpp_scalar_recurrence()
-        and _native_cpp is not None
-        and hasattr(_native_cpp, "_healpix_ring_fourier_modes_spin_conj_cpu")
-        and hasattr(_native_cpp, "_healpix_spin_map2alm_from_basis_cpu")
-        and hasattr(_native_cpp, "_healpix_spin_alm2map_from_basis_cpu")
-        and hasattr(_native_cpp, "_healpix_spin_map2alm_ring_recurrence_cpu")
-        and hasattr(_native_cpp, "_healpix_spin_alm2map_ring_recurrence_cpu")
-    )
+    return _ops.has_spectral_dispatcher()
 
 
 def _run_spectral_subprocess(
@@ -605,9 +573,7 @@ def test_alm2map_infer_lmax() -> None:
 def test_alm2map_scalar_cpp_direct_parity(
     monkeypatch: pytest.MonkeyPatch, nest: bool
 ) -> None:
-    if _native_cpp is None or not hasattr(
-        _native_cpp, "_healpix_scalar_alm2map_direct_cpu"
-    ):
+    if not _ops.has_spectral_dispatcher():
         pytest.skip("cpp scalar alm2map direct kernel unavailable")
 
     nside = 16
@@ -628,12 +594,10 @@ def _scalar_alm2map_direct_at(
     lmax: int,
     mmax: int | None = None,
 ) -> torch.Tensor:
-    if _native_cpp is None or not hasattr(
-        _native_cpp, "_healpix_scalar_alm2map_direct_cpu"
-    ):
+    if not _ops.has_spectral_dispatcher():
         pytest.skip("cpp scalar alm2map direct kernel unavailable")
     mm = lmax if mmax is None else mmax
-    return _native_cpp._healpix_scalar_alm2map_direct_cpu(
+    return _ops.spectral_scalar_alm2map_direct(
         alm.to(torch.complex128).resolve_conj().contiguous(),
         x.to(torch.float64).contiguous(),
         phi.to(torch.float64).contiguous(),
@@ -1273,12 +1237,11 @@ def test_alm2map_spin_ring_torch_parity_nested(monkeypatch: pytest.MonkeyPatch) 
     not _has_cpp_ring_fourier(), reason="C++ ring Fourier kernels not available"
 )
 def test_ring_fourier_synthesis_cpp_accepts_empty_layout() -> None:
-    assert _native_cpp is not None
     modes = torch.empty((1, 1, 0), dtype=torch.complex128)
     starts = torch.empty((0,), dtype=torch.int64)
     lengths = torch.empty((0,), dtype=torch.int64)
 
-    out = _native_cpp._healpix_ring_fourier_synthesis_cpu(modes, starts, lengths)
+    out = _ops.spectral_ring_fourier_synthesis(modes, starts, lengths, 0)
 
     assert out.shape == (1, 0)
     assert out.dtype == torch.complex128
@@ -1288,7 +1251,6 @@ def test_ring_fourier_synthesis_cpp_accepts_empty_layout() -> None:
     not _has_cpp_spectral_contracts(), reason="C++ spectral kernels not available"
 )
 def test_native_spectral_bindings_reject_malformed_contracts() -> None:
-    assert _native_cpp is not None
     lmax = 3
     mmax = 2
     spin = 2
@@ -1305,52 +1267,52 @@ def test_native_spectral_bindings_reject_malformed_contracts() -> None:
     basis = torch.zeros((nalm, nrings), dtype=torch.complex128)
 
     cases = [
-        lambda: _native_cpp._healpix_spin_integrate_recurrence_cpu(
+        lambda: _ops.spectral_spin_integrate_recurrence(
             modes[:-1], modes, theta, weight, lmax, mmax, spin
         ),
-        lambda: _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+        lambda: _ops.spectral_spin_interpolate_recurrence(
             alms[:, :-1], theta, lmax, mmax, spin
         ),
-        lambda: _native_cpp._healpix_scalar_integrate_recurrence_cpu(
+        lambda: _ops.spectral_scalar_integrate_recurrence(
             modes, theta, weight[:-1], lmax, mmax
         ),
-        lambda: _native_cpp._healpix_scalar_interpolate_recurrence_cpu(
+        lambda: _ops.spectral_scalar_interpolate_recurrence(
             alms[0, :-1], theta, lmax, mmax
         ),
-        lambda: _native_cpp._healpix_ring_fourier_modes_cpu(
+        lambda: _ops.spectral_ring_fourier_modes(
             torch.zeros((1, 5), dtype=torch.complex128), starts, lengths, mmax
         ),
-        lambda: _native_cpp._healpix_ring_fourier_synthesis_cpu(
-            modes, torch.tensor([0, 1, 4]), lengths
+        lambda: _ops.spectral_ring_fourier_synthesis(
+            modes, torch.tensor([0, 1, 4]), lengths, 6
         ),
-        lambda: _native_cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+        lambda: _ops.spectral_spin_map2alm_ring_recurrence(
             maps, starts, lengths, theta, phase[:, :-1], lmax, mmax, spin, 1.0
         ),
-        lambda: _native_cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+        lambda: _ops.spectral_spin_map2alm_ring_recurrence(
             maps, starts, lengths, theta, phase, lmax, mmax, spin, math.inf
         ),
-        lambda: _native_cpp._healpix_spin_alm2map_ring_recurrence_cpu(
-            alms[0, :-1], starts, lengths, theta, phase, lmax, mmax, spin, alms[1]
+        lambda: _ops.spectral_spin_alm2map_ring_recurrence(
+            alms[0, :-1], starts, lengths, theta, phase, lmax, mmax, spin, alms[1], 6
         ),
-        lambda: _native_cpp._healpix_spin_alm2map_ring_recurrence_cpu(
-            alms[0], starts, lengths, theta[:-1], phase, lmax, mmax, spin, alms[1]
+        lambda: _ops.spectral_spin_alm2map_ring_recurrence(
+            alms[0], starts, lengths, theta[:-1], phase, lmax, mmax, spin, alms[1], 6
         ),
-        lambda: _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+        lambda: _ops.spectral_spin_interpolate_recurrence(
             alms.to(torch.complex64), theta, lmax, mmax, spin
         ),
-        lambda: _native_cpp._healpix_spin_integrate_recurrence_cpu(
+        lambda: _ops.spectral_spin_integrate_recurrence(
             modes, modes, theta.reshape(1, -1), weight, lmax, mmax, spin
         ),
-        lambda: _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+        lambda: _ops.spectral_spin_interpolate_recurrence(
             alms, theta, lmax, mmax, lmax + 1
         ),
-        lambda: _native_cpp._healpix_spin_interpolate_concat_cpu(
+        lambda: _ops.spectral_spin_interpolate_concat(
             alms[0, :-1], alms[1], basis, basis, lmax, mmax
         ),
-        lambda: _native_cpp._healpix_spin_integrate_concat_cpu(
+        lambda: _ops.spectral_spin_integrate_concat(
             modes, modes, basis, basis, lmax, mmax, math.nan
         ),
-        lambda: _native_cpp._healpix_spin_map2alm_ring_concat_cpu(
+        lambda: _ops.spectral_spin_map2alm_ring_concat(
             torch.zeros(6, dtype=torch.complex128),
             starts,
             lengths,
@@ -1361,7 +1323,7 @@ def test_native_spectral_bindings_reject_malformed_contracts() -> None:
             mmax,
             1.0,
         ),
-        lambda: _native_cpp._healpix_spin_map2alm_from_basis_cpu(
+        lambda: _ops._spectral_spin_map2alm_from_basis(
             maps[:1], maps[1], torch.zeros((6, nalm), dtype=torch.complex128),
             torch.zeros((6, nalm), dtype=torch.complex128), 1.0
         ),
@@ -1375,7 +1337,6 @@ def test_native_spectral_bindings_reject_malformed_contracts() -> None:
     not _has_cpp_spectral_contracts(), reason="C++ spectral kernels not available"
 )
 def test_native_spectral_bindings_define_empty_contracts() -> None:
-    assert _native_cpp is not None
     lmax = 3
     mmax = 2
     spin = 2
@@ -1387,31 +1348,33 @@ def test_native_spectral_bindings_define_empty_contracts() -> None:
     alms = torch.zeros((2, nalm), dtype=torch.complex128)
     empty_basis = torch.empty((nalm, 0), dtype=torch.complex128)
 
-    fourier = _native_cpp._healpix_ring_fourier_modes_cpu(
+    fourier = _ops.spectral_ring_fourier_modes(
         torch.empty((2, 0), dtype=torch.complex128), empty_i64, empty_i64, mmax
     )
-    spin_fourier = _native_cpp._healpix_ring_fourier_modes_spin_conj_cpu(
-        torch.empty(0, dtype=torch.complex128), empty_i64, empty_i64, mmax
+    spin_fourier = torch.stack(
+        _ops.spectral_ring_fourier_modes_spin_conj(
+            torch.empty(0, dtype=torch.complex128), empty_i64, empty_i64, mmax
+        )
     )
-    synthesis = _native_cpp._healpix_ring_fourier_synthesis_cpu(
-        empty_modes, empty_i64, empty_i64
+    synthesis = _ops.spectral_ring_fourier_synthesis(
+        empty_modes, empty_i64, empty_i64, 0
     )
-    finalized = _native_cpp._healpix_spin_ring_finalize_cpu(
-        empty_modes, empty_modes, empty_i64, empty_i64
+    finalized = _ops.spectral_spin_ring_finalize(
+        empty_modes, empty_modes, empty_i64, empty_i64, 0
     )
-    spin_integrated = _native_cpp._healpix_spin_integrate_recurrence_cpu(
+    spin_integrated = _ops.spectral_spin_integrate_recurrence(
         empty_modes, empty_modes, empty_f64, empty_f64, lmax, mmax, spin
     )
-    spin_interpolated = _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+    spin_interpolated = _ops.spectral_spin_interpolate_recurrence(
         alms, empty_f64, lmax, mmax, spin
     )
-    scalar_integrated = _native_cpp._healpix_scalar_integrate_recurrence_cpu(
+    scalar_integrated = _ops.spectral_scalar_integrate_recurrence(
         empty_modes, empty_f64, empty_f64, lmax, mmax
     )
-    scalar_interpolated = _native_cpp._healpix_scalar_interpolate_recurrence_cpu(
+    scalar_interpolated = _ops.spectral_scalar_interpolate_recurrence(
         alms[0], empty_f64, lmax, mmax
     )
-    fused_integrated = _native_cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+    fused_integrated = _ops.spectral_spin_map2alm_ring_recurrence(
         torch.empty((2, 0), dtype=torch.float64),
         empty_i64,
         empty_i64,
@@ -1422,7 +1385,7 @@ def test_native_spectral_bindings_define_empty_contracts() -> None:
         spin,
         1.0,
     )
-    fused_interpolated = _native_cpp._healpix_spin_alm2map_ring_recurrence_cpu(
+    fused_interpolated = _ops.spectral_spin_alm2map_ring_recurrence(
         alms[0],
         empty_i64,
         empty_i64,
@@ -1432,14 +1395,15 @@ def test_native_spectral_bindings_define_empty_contracts() -> None:
         mmax,
         spin,
         alms[1],
+        0,
     )
-    concat_interpolated = _native_cpp._healpix_spin_interpolate_concat_cpu(
+    concat_interpolated = _ops.spectral_spin_interpolate_concat(
         alms[0], alms[1], empty_basis, empty_basis, lmax, mmax
     )
-    concat_integrated = _native_cpp._healpix_spin_integrate_concat_cpu(
+    concat_integrated = _ops.spectral_spin_integrate_concat(
         empty_modes, empty_modes, empty_basis, empty_basis, lmax, mmax, 1.0
     )
-    ring_concat_integrated = _native_cpp._healpix_spin_map2alm_ring_concat_cpu(
+    ring_concat_integrated = _ops.spectral_spin_map2alm_ring_concat(
         torch.empty(0, dtype=torch.complex128),
         empty_i64,
         empty_i64,
@@ -1450,14 +1414,14 @@ def test_native_spectral_bindings_define_empty_contracts() -> None:
         mmax,
         1.0,
     )
-    basis_integrated = _native_cpp._healpix_spin_map2alm_from_basis_cpu(
+    basis_integrated = _ops._spectral_spin_map2alm_from_basis(
         empty_f64,
         empty_f64,
         torch.empty((0, nalm), dtype=torch.complex128),
         torch.empty((0, nalm), dtype=torch.complex128),
         1.0,
     )
-    basis_interpolated = _native_cpp._healpix_spin_alm2map_from_basis_cpu(
+    basis_interpolated = _ops._spectral_spin_alm2map_from_basis(
         alms[0], alms[1], empty_basis, empty_basis,
         torch.empty((lmax + 1, 0), dtype=torch.complex128),
         torch.empty((lmax + 1, 0), dtype=torch.complex128),
@@ -1493,23 +1457,22 @@ def test_native_spectral_bindings_define_empty_contracts() -> None:
     not _has_cpp_spectral_contracts(), reason="C++ spectral kernels not available"
 )
 def test_native_spectral_degree_zero_uses_empty_recurrence_table_safely() -> None:
-    assert _native_cpp is not None
     theta = torch.tensor([math.pi / 2.0], dtype=torch.float64)
     weight = torch.ones(1, dtype=torch.float64)
     modes = torch.ones((1, 1), dtype=torch.complex128)
     spin_alms = torch.ones((2, 1), dtype=torch.complex128)
     scalar_alm = torch.ones(1, dtype=torch.complex128)
 
-    spin_integrated = _native_cpp._healpix_spin_integrate_recurrence_cpu(
+    spin_integrated = _ops.spectral_spin_integrate_recurrence(
         modes, modes, theta, weight, 0, 0, 0
     )
-    spin_interpolated = _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+    spin_interpolated = _ops.spectral_spin_interpolate_recurrence(
         spin_alms, theta, 0, 0, 0
     )
-    scalar_integrated = _native_cpp._healpix_scalar_integrate_recurrence_cpu(
+    scalar_integrated = _ops.spectral_scalar_integrate_recurrence(
         modes, theta, weight, 0, 0
     )
-    scalar_interpolated = _native_cpp._healpix_scalar_interpolate_recurrence_cpu(
+    scalar_interpolated = _ops.spectral_scalar_interpolate_recurrence(
         scalar_alm, theta, 0, 0
     )
 
@@ -1533,7 +1496,7 @@ def test_native_spectral_dangerous_contract_table_survives_subprocess() -> None:
 
         import torch
 
-        from torchsky._native import cpp
+        from torchsky import _ops
 
         lmax = 3
         mmax = 2
@@ -1550,35 +1513,35 @@ def test_native_spectral_dangerous_contract_table_survives_subprocess() -> None:
         maps = torch.zeros((2, 6), dtype=torch.float64)
 
         cases = {
-            "spin_integrate_short_modes": lambda: cpp._healpix_spin_integrate_recurrence_cpu(
+            "spin_integrate_short_modes": lambda: _ops.spectral_spin_integrate_recurrence(
                 modes[:, :-1], modes, theta, weight, lmax, mmax, spin
             ),
-            "spin_interpolate_short_alms": lambda: cpp._healpix_spin_interpolate_recurrence_cpu(
+            "spin_interpolate_short_alms": lambda: _ops.spectral_spin_interpolate_recurrence(
                 alms[:, :-1], theta, lmax, mmax, spin
             ),
-            "scalar_integrate_short_modes": lambda: cpp._healpix_scalar_integrate_recurrence_cpu(
+            "scalar_integrate_short_modes": lambda: _ops.spectral_scalar_integrate_recurrence(
                 modes[:, :-1], theta, weight, lmax, mmax
             ),
-            "scalar_interpolate_short_alm": lambda: cpp._healpix_scalar_interpolate_recurrence_cpu(
+            "scalar_interpolate_short_alm": lambda: _ops.spectral_scalar_interpolate_recurrence(
                 alms[0, :-1], theta, lmax, mmax
             ),
-            "fourier_extent_overrun": lambda: cpp._healpix_ring_fourier_modes_cpu(
+            "fourier_extent_overrun": lambda: _ops.spectral_ring_fourier_modes(
                 torch.zeros((1, 5), dtype=torch.complex128), starts, lengths, mmax
             ),
-            "fourier_checked_overflow": lambda: cpp._healpix_ring_fourier_modes_cpu(
+            "fourier_checked_overflow": lambda: _ops.spectral_ring_fourier_modes(
                 torch.empty((1, 0), dtype=torch.complex128),
                 torch.tensor([torch.iinfo(torch.int64).max], dtype=torch.int64),
                 torch.tensor([2], dtype=torch.int64),
                 mmax,
             ),
-            "synthesis_overlap": lambda: cpp._healpix_ring_fourier_synthesis_cpu(
-                modes, torch.tensor([0, 1, 4], dtype=torch.int64), lengths
+            "synthesis_overlap": lambda: _ops.spectral_ring_fourier_synthesis(
+                modes, torch.tensor([0, 1, 4], dtype=torch.int64), lengths, 6
             ),
-            "fused_map_short_phase": lambda: cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+            "fused_map_short_phase": lambda: _ops.spectral_spin_map2alm_ring_recurrence(
                 maps, starts, lengths, theta, phase[:, :-1], lmax, mmax, spin, 1.0
             ),
-            "fused_alm_short_storage": lambda: cpp._healpix_spin_alm2map_ring_recurrence_cpu(
-                alms[0, :-1], starts, lengths, theta, phase, lmax, mmax, spin, alms[1]
+            "fused_alm_short_storage": lambda: _ops.spectral_spin_alm2map_ring_recurrence(
+                alms[0, :-1], starts, lengths, theta, phase, lmax, mmax, spin, alms[1], 6
             ),
         }
 
@@ -1835,11 +1798,10 @@ def test_ishioka_spin_interpolate_integrate_adjoint(
     pix_w = (4.0 * np.pi) / float(hp.nside2npix(nside))
     w = torch.tensor([pix_w], dtype=torch.float64)
     monkeypatch.setenv("TORCHSKY_SPIN_ISHIOKA", "1")
-    assert _native_cpp is not None
-    s_modes = _native_cpp._healpix_spin_interpolate_recurrence_cpu(
+    s_modes = _ops.spectral_spin_interpolate_recurrence(
         torch.stack([plus, minus]), theta, lmax, lmax, spin
     )
-    alms = _native_cpp._healpix_spin_integrate_recurrence_cpu(
+    alms = _ops.spectral_spin_integrate_recurrence(
         s_plus, s_minus, theta, w, lmax, lmax, spin
     )
     lhs = pix_w * (
@@ -1883,7 +1845,7 @@ def test_spin_pool_concurrent_mixed_shapes_preserve_parity() -> None:
 
         import torch
 
-        from torchsky._native import cpp
+        from torchsky import _ops
 
         torch.set_num_threads(4)
 
@@ -1915,10 +1877,10 @@ def test_spin_pool_concurrent_mixed_shapes_preserve_parity() -> None:
         def run(kind, case_index):
             lmax, mmax, spin, theta, alms, s_plus, s_minus, weight = cases[case_index]
             if kind == "interpolate":
-                return cpp._healpix_spin_interpolate_recurrence_cpu(
+                return _ops.spectral_spin_interpolate_recurrence(
                     alms, theta, lmax, mmax, spin
                 )
-            return cpp._healpix_spin_integrate_recurrence_cpu(
+            return _ops.spectral_spin_integrate_recurrence(
                 s_plus, s_minus, theta, weight, lmax, mmax, spin
             )
 
@@ -1966,7 +1928,7 @@ def test_native_spectral_cache_snapshots_survive_concurrent_eviction() -> None:
 
         import torch
 
-        from torchsky._native import cpp
+        from torchsky import _ops
 
         torch.set_num_threads(4)
 
@@ -2024,18 +1986,18 @@ def test_native_spectral_cache_snapshots_survive_concurrent_eviction() -> None:
             if family == "spin":
                 lmax, mmax, spin, theta, alms, modes = case
                 if integrate:
-                    return cpp._healpix_spin_integrate_recurrence_cpu(
+                    return _ops.spectral_spin_integrate_recurrence(
                         modes[0], modes[1], theta, weight, lmax, mmax, spin
                     )
-                return cpp._healpix_spin_interpolate_recurrence_cpu(
+                return _ops.spectral_spin_interpolate_recurrence(
                     alms, theta, lmax, mmax, spin
                 )
             lmax, mmax, theta, alm, modes = case
             if integrate:
-                return cpp._healpix_scalar_integrate_recurrence_cpu(
+                return _ops.spectral_scalar_integrate_recurrence(
                     modes, theta, weight, lmax, mmax
                 )
-            return cpp._healpix_scalar_interpolate_recurrence_cpu(
+            return _ops.spectral_scalar_interpolate_recurrence(
                 alm, theta, lmax, mmax
             )
 
@@ -2071,14 +2033,14 @@ def test_spin_pool_thread_limit_honors_aten_cap() -> None:
 
         import torch
 
-        from torchsky._native import cpp
+        from torchsky import _ops
 
         torch.set_num_threads(1)
         lmax = 4
         nalm = (lmax + 1) * (lmax + 2) // 2
         alms = torch.zeros((2, nalm), dtype=torch.complex128)
         theta = torch.linspace(0.1, math.pi - 0.1, 15, dtype=torch.float64)
-        cpp._healpix_spin_interpolate_recurrence_cpu(alms, theta, lmax, lmax, 2)
+        _ops.spectral_spin_interpolate_recurrence(alms, theta, lmax, lmax, 2)
         """,
         {
             "TORCHSKY_SHT_PROFILE": "1",

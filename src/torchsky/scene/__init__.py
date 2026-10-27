@@ -8,7 +8,7 @@ fit/render/sample verbs live in :mod:`torchsky.field`.
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias
+from typing import Any
 
 from torch import Tensor, nn
 
@@ -51,11 +51,23 @@ from .sources import (
     SourceStamp,
 )
 
-Scene: TypeAlias = SceneRepresentation
-
-
 def image_observation(*args: Any, **kwargs: Any) -> ImageObservation:
-    """Construct an image-plane observation for classical map products."""
+    """Construct an image-plane observation for classical map products.
+
+    Args:
+        *args: Positional ``ImageObservation`` constructor arguments.
+        **kwargs: Image data, WCS, calibration, mask, and weight metadata.
+
+    Returns:
+        Validated image-observation metadata.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.scene import image_observation
+        >>> observation = image_observation(data=torch.ones(2, 2), header={})
+        >>> tuple(observation.data.shape)
+        (2, 2)
+    """
     return ImageObservation(*args, **kwargs)
 
 
@@ -113,7 +125,21 @@ def render(
     target: TargetRenderSpec,
     **kwargs: Any,
 ) -> Tensor:
-    """Render any supported scene representation to a target grid."""
+    """Render any supported scene representation to a target grid.
+
+    Args:
+        scene: Scene representation, field module, or target-aligned tensor.
+        target: Output grid and observing metadata.
+        **kwargs: Scene-specific rendering controls.
+
+    Returns:
+        Rendered tensor on the scene's execution device.
+
+    Examples:
+        >>> from torchsky.scene import render
+        >>> callable(render)
+        True
+    """
     return as_scene_representation(scene).render_to_target(target, **kwargs)
 
 
@@ -143,7 +169,6 @@ __all__ = [
     "SERSIC_MORPHOLOGY",
     "PSFSpec",
     "ProductSpec",
-    "Scene",
     "SceneRepresentation",
     "SourceCatalogScene",
     "SourceStamp",

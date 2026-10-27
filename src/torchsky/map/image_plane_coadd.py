@@ -86,7 +86,6 @@ from .windowing import (
 )
 
 
-
 from .calibration import (  # noqa: F401 - re-exported helpers
     _accumulate_variance_weight,
     _apply_observation_calibration,
@@ -295,7 +294,9 @@ def _observations_have_quality(observations: Sequence[ImageObservation]) -> bool
             if isinstance(value, Tensor)
         ]
         if components:
-            total = torch.zeros_like(torch.as_tensor(components[0]), dtype=torch.float32)
+            total = torch.zeros_like(
+                torch.as_tensor(components[0]), dtype=torch.float32
+            )
             valid = torch.ones_like(total, dtype=torch.bool)
             for component in components:
                 component_t = torch.as_tensor(component, dtype=torch.float32)
@@ -356,9 +357,7 @@ def _coadd_image_plane_spatial_tiles(
             )
         )
     mosaic_representative_area_sr = (
-        representative_pixel_area_sr(
-            full_target_wcs, target_shape, device=device
-        )
+        representative_pixel_area_sr(full_target_wcs, target_shape, device=device)
         if mosaic_surface_brightness_area_scaling
         else None
     )
@@ -403,7 +402,9 @@ def _coadd_image_plane_spatial_tiles(
                 )
                 source_wcs = WCS(header_dict_obs)
                 obs_bbox = _obs_target_pixel_bbox(
-                    source_wcs, (int(image.shape[0]), int(image.shape[1])), full_target_wcs
+                    source_wcs,
+                    (int(image.shape[0]), int(image.shape[1])),
+                    full_target_wcs,
                 )
                 for y0 in range(0, H, th):
                     for x0 in range(0, W, tw):
@@ -595,8 +596,8 @@ def _coadd_image_plane_spatial_tiles(
                 if sub.correlation_factor is not None:
                     if full_correlation_factor is None:
                         full_correlation_factor = torch.zeros_like(full_weight)
-                    full_correlation_factor[y0:y1, x0:x1] = (
-                        sub.correlation_factor.to(device=device)
+                    full_correlation_factor[y0:y1, x0:x1] = sub.correlation_factor.to(
+                        device=device
                     )
                 if sub.overlap_count is not None:
                     full_overlap[y0:y1, x0:x1] = sub.overlap_count.to(device=device)
@@ -905,12 +906,8 @@ def _propagate_observation_dq(
                     else:
                         y0, y1, x0, x1 = projected.target_window
                         if rejected:
-                            flagged = flagged & (
-                                output_weight[y0:y1, x0:x1] <= 0.0
-                            )
-                        output[y0:y1, x0:x1].bitwise_or_(
-                            flagged.to(torch.int64) * bit
-                        )
+                            flagged = flagged & (output_weight[y0:y1, x0:x1] <= 0.0)
+                        output[y0:y1, x0:x1].bitwise_or_(flagged.to(torch.int64) * bit)
             bit <<= 1
     return output
 
@@ -1264,7 +1261,9 @@ def coadd_image_plane(
             if value_semantics == "flux":
                 prepared = ensure_prepared_target()
                 if prepared.pixel_area_sr is None:
-                    raise RuntimeError("target pixel area is required for flux semantics")
+                    raise RuntimeError(
+                        "target pixel area is required for flux semantics"
+                    )
                 pixel_area_sr = prepared.pixel_area_sr
                 if projected.target_window is not None:
                     y0, y1, x0, x1 = projected.target_window
@@ -1491,7 +1490,7 @@ def coadd_image_plane(
     return result
 
 
-def evaluate_image_plane_aperture_uncertainty(
+def _propagate_aperture_uncertainty(
     observations: Sequence[ImageObservation],
     result: MapResult,
     aperture_weights: Tensor,
@@ -1560,8 +1559,7 @@ def evaluate_image_plane_aperture_uncertainty(
         )
     recorded_operators = provenance.get("observation_operators")
     expected_operators = [
-        _observation_operator_provenance(observation)
-        for observation in observations
+        _observation_operator_provenance(observation) for observation in observations
     ]
     if recorded_operators != expected_operators:
         raise ValueError(
@@ -1587,9 +1585,7 @@ def evaluate_image_plane_aperture_uncertainty(
     aperture = aperture.to(device=map_device, dtype=torch.float32)
     map_weight = result.weight.to(device=map_device, dtype=torch.float32)
     inverse_variance = inverse_variance.to(device=map_device, dtype=torch.float32)
-    accumulator_dtype = (
-        torch.float32 if map_device.type == "mps" else torch.float64
-    )
+    accumulator_dtype = torch.float32 if map_device.type == "mps" else torch.float64
     requested = aperture != 0.0
     if bool((requested & ((map_weight <= 0.0) | (inverse_variance <= 0.0))).any()):
         raise ValueError(
@@ -1648,9 +1644,7 @@ def evaluate_image_plane_aperture_uncertainty(
             "MapResult area-scaling provenance does not match the aperture operator"
         )
     full_representative_area_sr = (
-        representative_pixel_area_sr(
-            WCS(header_dict), target_shape, device=map_device
-        )
+        representative_pixel_area_sr(WCS(header_dict), target_shape, device=map_device)
         if apply_area_scaling
         else None
     )
@@ -2218,14 +2212,12 @@ def _propagate_observation_variance_components(
                 apply_calibration_fn=_apply_observation_calibration,
                 background_estimator=None,
             )
-            source_term = (
-                torch.square(prepared_observation.source_weight)
-                * torch.where(
-                    torch.isfinite(calibrated_variance)
-                    & (calibrated_variance >= 0.0),
-                    calibrated_variance,
-                    torch.zeros_like(calibrated_variance),
-                )
+            source_term = torch.square(
+                prepared_observation.source_weight
+            ) * torch.where(
+                torch.isfinite(calibrated_variance) & (calibrated_variance >= 0.0),
+                calibrated_variance,
+                torch.zeros_like(calibrated_variance),
             )
             if value_semantics == "flux":
                 src_area = pixel_area_sr_map(
@@ -2341,7 +2333,26 @@ def resample(
     footprint_order: int | None = None,
     device: torch.device | str | None = None,
 ) -> MapResult | list[MapResult]:
-    """Resample one or more observations onto a common target WCS grid without stacking."""
+    """Resample one or more observations onto a common target WCS grid without stacking.
+
+    Args:
+        observation: One observation or a sequence of observations.
+        target: Explicit target geometry, WCS, header, or ``None`` to plan it.
+        config: Structured resampling configuration.
+        kernel: Resampling kernel override.
+        pixfrac: Drizzle footprint fraction.
+        semantics: Pixel-value semantics used for area scaling.
+        footprint_order: Boundary sampling order used while planning a target.
+        device: Optional compute device.
+
+    Returns:
+        One map result, or one result per input observation.
+
+    Examples:
+        >>> from torchsky.map import resample
+        >>> callable(resample)
+        True
+    """
     cfg = config or ResampleConfig()
     resolved_kernel = kernel if kernel is not None else cfg.kernel
     resolved_pixfrac = pixfrac if pixfrac is not None else cfg.pixfrac
@@ -2429,9 +2440,9 @@ def blot(
             raise ValueError(
                 "When passing a raw Tensor to blot(), specify coadd WCS/header as second argument and target=... as keyword"
             )
-        if isinstance(source_or_target, (ImageObservation, Sequence)) and not isinstance(
-            source_or_target, Mapping
-        ):
+        if isinstance(
+            source_or_target, (ImageObservation, Sequence)
+        ) and not isinstance(source_or_target, Mapping):
             raise TypeError(
                 "Second argument must be coadd Target/header/WCS when first argument is a raw Tensor"
             )
@@ -2440,9 +2451,7 @@ def blot(
         coadd_header = coerced
         blot_target = target
 
-    map_device = (
-        coadd_tensor.device if device is None else _resolve_map_device(device)
-    )
+    map_device = coadd_tensor.device if device is None else _resolve_map_device(device)
     coadd_img = coadd_tensor.to(device=map_device, dtype=torch.float32)
     coadd_wcs = WCS(coadd_header)
     coadd_shape = (int(coadd_img.shape[0]), int(coadd_img.shape[1]))
@@ -2509,9 +2518,7 @@ def blot(
         sampled = torch.where(in_bounds, sampled, torch.zeros_like(sampled))
         if semantics == "flux":
             assert dest_prep.pixel_area_sr is not None
-            coadd_area = pixel_area_sr_map(
-                coadd_wcs, coadd_shape, device=map_device
-            )
+            coadd_area = pixel_area_sr_map(coadd_wcs, coadd_shape, device=map_device)
             coadd_area_at_dest = (
                 F.grid_sample(
                     coadd_area.unsqueeze(0).unsqueeze(0),
@@ -2539,9 +2546,11 @@ def blot(
 def _blot_spatial_derivative(blotted: Tensor) -> Tensor:
     """Compute AstroDrizzle / JWST stcal local spatial gradient max(|dI/dx|, |dI/dy|)."""
     H, W = blotted.shape
-    padded = F.pad(
-        blotted.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode="replicate"
-    ).squeeze(0).squeeze(0)
+    padded = (
+        F.pad(blotted.unsqueeze(0).unsqueeze(0), (1, 1, 1, 1), mode="replicate")
+        .squeeze(0)
+        .squeeze(0)
+    )
     dx_left = torch.abs(blotted - padded[1 : H + 1, 0:W])
     dx_right = torch.abs(blotted - padded[1 : H + 1, 2 : W + 2])
     dy_up = torch.abs(blotted - padded[0:H, 1 : W + 1])
@@ -2560,7 +2569,11 @@ def _apply_observation_astrometric_shifts(
 
     needs_shift = any(
         obs.dcr_zenith_deg is not None
-        or (obs.tracking_rate is not None and obs.mjd_obs is not None and obs.reference_mjd is not None)
+        or (
+            obs.tracking_rate is not None
+            and obs.mjd_obs is not None
+            and obs.reference_mjd is not None
+        )
         for obs in observations
     )
     if not needs_shift:
@@ -2647,6 +2660,23 @@ def coadd(
 
     Accepts either structured configuration objects (``resample``, ``sky``, ``outliers``, ``stack``)
     or direct keyword arguments (``kernel``, ``pixfrac``, ``semantics``, ``method``, ``tile_size``).
+
+    Args:
+        observations: Image observations to resample and combine.
+        target: Explicit target geometry, WCS, header, or ``None`` to plan it.
+        resample: Structured resampling configuration.
+        sky: Background-estimation configuration.
+        outliers: Outlier-rejection configuration.
+        stack: Structured stacking configuration.
+        device: Optional compute device.
+
+    Returns:
+        Coadded data, weights, coverage, mask, and target metadata.
+
+    Examples:
+        >>> from torchsky.map import coadd
+        >>> callable(coadd)
+        True
     """
     r_cfg = resample or ResampleConfig()
     s_cfg = stack or StackConfig()
@@ -2683,9 +2713,10 @@ def coadd(
                 mesh_filter_size=sky.smooth_scale,
                 self_mask_sigma=sky.clip_sigma,
             )
-        elif (
-            sky.mode in ("global", "global+match")
-            or resolved_method not in ("weighted_mean", "mean", "median")
+        elif sky.mode in ("global", "global+match") or resolved_method not in (
+            "weighted_mean",
+            "mean",
+            "median",
         ):
             obs_to_stack, _ = match_sky(
                 obs_to_stack,
@@ -2849,9 +2880,9 @@ def aperture_uncertainty(
     surface_brightness_area_scaling: bool | None = None,
     device: torch.device | str | None = None,
 ) -> ApertureUncertainty:
-    """Clean alias for ``evaluate_image_plane_aperture_uncertainty``."""
+    """Propagate independent detector noise through one finite map aperture."""
     r_cfg = resample or ResampleConfig()
-    return evaluate_image_plane_aperture_uncertainty(
+    return _propagate_aperture_uncertainty(
         observations,
         result,
         aperture_weights,

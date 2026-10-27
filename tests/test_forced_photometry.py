@@ -220,7 +220,7 @@ def test_spectral_basis_recovers_flux_and_color_with_missing_band_diagnostic() -
     truth = SourceCatalogScene(
         lon,
         lat,
-        spectral_coefficients=torch.tensor([[5.0, 1.25]], dtype=torch.float64),
+        coefficients=torch.tensor([[5.0, 1.25]], dtype=torch.float64),
         band_labels=("g", "r", "i"),
         spectral_basis=basis,
     )
@@ -234,7 +234,7 @@ def test_spectral_basis_recovers_flux_and_color_with_missing_band_diagnostic() -
     fit_scene = SourceCatalogScene(
         lon,
         lat,
-        spectral_coefficients=torch.zeros((1, 2), dtype=torch.float64),
+        coefficients=torch.zeros((1, 2), dtype=torch.float64),
         band_labels=("g", "r", "i"),
         spectral_basis=basis,
     )

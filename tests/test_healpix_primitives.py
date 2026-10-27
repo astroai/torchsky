@@ -17,7 +17,6 @@ from torchsky.sphere.healpix import (
     get_all_neighbours,
     get_interp_val,
     get_interp_weights,
-    max_pixrad,
     max_pixel_radius,
     pixel_resolution_to_nside,
     query_box,
@@ -173,7 +172,7 @@ def test_nside_scalar_helpers() -> None:
     assert area_deg > 0.0
     assert resol > 0.0
     assert resol_arcmin > 0.0
-    assert max_pixrad(16) == max_pixel_radius(16)
+    assert max_pixel_radius(16) > 0.0
     np.testing.assert_allclose(
         area_deg, area * (180.0 / np.pi) ** 2, rtol=0.0, atol=1e-14
     )

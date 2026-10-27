@@ -13,7 +13,7 @@ from . import healpix as _healpix
 
 if TYPE_CHECKING:
     from .moc import BMOC, MOC
-    from .sparse import HealSparseMap
+    from .sparse import SparseHealpixMap
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,18 +103,18 @@ def _prepare_moc_random_sampler(
 
 
 def _prepare_sparse_random_sampler(
-    footprint: HealSparseMap,
+    footprint: SparseHealpixMap,
     *,
-    weights: HealSparseMap | Tensor | str | None = None,
+    weights: SparseHealpixMap | Tensor | str | None = None,
     device: torch.device | str | None = None,
     snapshot: bool = True,
 ) -> PreparedRandomSampler:
-    from .sparse import HealSparseMap
+    from .sparse import SparseHealpixMap
 
     dev = footprint.pixels.device if device is None else torch.device(device)
     pix = footprint.pixels.to(device=dev)
     if pix.numel() == 0:
-        raise ValueError("cannot sample randoms from an empty HealSparseMap")
+        raise ValueError("cannot sample randoms from an empty SparseHealpixMap")
     pix_nested = pix if footprint.nest else _healpix.ring2nest(footprint.nside, pix)
     if snapshot:
         pix_nested = pix_nested.clone()
@@ -128,7 +128,7 @@ def _prepare_sparse_random_sampler(
             w_raw = footprint[weights].values
         else:
             raise ValueError(f"unknown weights specification: {weights!r}")
-    elif isinstance(weights, HealSparseMap):
+    elif isinstance(weights, SparseHealpixMap):
         w_raw = weights.get_values(footprint.pixels)
     else:
         w_raw = torch.as_tensor(weights, device=dev)
@@ -203,25 +203,25 @@ def _sample_in_nested_cells(
 
 def sample_randoms(
     n: int,
-    footprint: MOC | BMOC | HealSparseMap | None = None,
+    footprint: MOC | BMOC | SparseHealpixMap | None = None,
     *,
-    weights: HealSparseMap | Tensor | str | None = None,
+    weights: SparseHealpixMap | Tensor | str | None = None,
     generator: torch.Generator | None = None,
     device: torch.device | str | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Generate ``n`` random sky coordinates ``(ra_deg, dec_deg)`` uniformly in solid angle.
 
     Supports rejection-free sampling inside a :class:`MOC`, :class:`BMOC`, or
-    :class:`HealSparseMap`, with optional per-pixel depth/completeness weights.
+    :class:`SparseHealpixMap`, with optional per-pixel depth/completeness weights.
     """
     # Imported here: moc imports this module, and moc imports sparse.
     from .moc import BMOC, MOC
-    from .sparse import HealSparseMap
+    from .sparse import SparseHealpixMap
 
     n_i = int(n)
     if n_i < 0:
         raise ValueError("n must be non-negative")
-    if footprint is None and isinstance(weights, HealSparseMap):
+    if footprint is None and isinstance(weights, SparseHealpixMap):
         footprint = weights
         weights = "values"
 
@@ -238,9 +238,11 @@ def sample_randoms(
         lat_deg = torch.rad2deg(torch.asin(torch.clamp(z, -1.0, 1.0)))
         return lon_deg, lat_deg
 
-    if isinstance(footprint, (MOC, BMOC, HealSparseMap)):
+    if isinstance(footprint, (MOC, BMOC, SparseHealpixMap)):
         source = (
-            footprint.pixels if isinstance(footprint, HealSparseMap) else footprint.uniq
+            footprint.pixels
+            if isinstance(footprint, SparseHealpixMap)
+            else footprint.uniq
         )
         dev = source.device if device is None else torch.device(device)
         if n_i == 0:
@@ -248,7 +250,7 @@ def sample_randoms(
                 0, dtype=_healpix._float_dtype_for_device(dev), device=dev
             )
             return empty, empty
-        if isinstance(footprint, HealSparseMap):
+        if isinstance(footprint, SparseHealpixMap):
             prepared = _prepare_sparse_random_sampler(
                 footprint,
                 weights=weights,
@@ -269,7 +271,7 @@ def sample_randoms(
             )
         return prepared.sample_randoms(n_i, generator=generator)
 
-    raise TypeError("footprint must be a MOC, BMOC, HealSparseMap, or None")
+    raise TypeError("footprint must be a MOC, BMOC, SparseHealpixMap, or None")
 
 
 __all__ = ["PreparedRandomSampler", "sample_randoms"]

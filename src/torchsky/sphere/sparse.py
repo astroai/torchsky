@@ -369,7 +369,7 @@ class SparseHealpixMap:
         sentinel: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> "SparseHealpixMap":
-        """Construct a multi-column ``HealSparseMap`` from a dict of ``{name: tensor}``."""
+        """Construct a multi-column ``SparseHealpixMap`` from a dict of ``{name: tensor}``."""
         if not columns:
             raise ValueError("columns dictionary must not be empty")
         names = tuple(str(k) for k in columns.keys())
@@ -506,7 +506,7 @@ class SparseHealpixMap:
         metadata: dict[str, Any] | None = None,
         column_names: tuple[str, ...] | list[str] | None = None,
     ) -> "SparseHealpixMap":
-        """Create an empty HealSparseMap with specified configuration."""
+        """Create an empty SparseHealpixMap with specified configuration."""
         fv = float(sentinel) if sentinel is not None else float(_healpix.UNSEEN)
         dtype = _coerce_torch_dtype(dtype)
         c_names = tuple(column_names) if column_names is not None else None
@@ -553,7 +553,7 @@ class SparseHealpixMap:
         nside_coverage: int | None = None,
         nest: bool = True,
     ) -> "SparseHealpixMap":
-        """Build a ``HealSparseMap`` coverage/weight map from a 2D WCS and optional weight/mask."""
+        """Build a ``SparseHealpixMap`` coverage/weight map from a 2D WCS and optional weight/mask."""
         from .moc import MOC
 
         nside_i = int(nside)
@@ -618,7 +618,7 @@ class SparseHealpixMap:
         nest: bool = True,
         columns: tuple[str, ...] | list[str] | None = ("weight", "nexp", "fracdet"),
     ) -> "SparseHealpixMap":
-        """Build a survey property ``HealSparseMap`` (weight, nexp, fracdet) from observations."""
+        """Build a survey property ``SparseHealpixMap`` (weight, nexp, fracdet) from observations."""
         from .moc import MOC
 
         nside_val = nside if nside is not None else nside_sparse
@@ -1049,23 +1049,11 @@ class SparseHealpixMap:
         gathered = packed[:, safe_bid, safe_off].reshape(fill.shape)
         return torch.where(in_range, gathered, fill)
 
-    def get_values_pix(
-        self, pixels: Tensor, *, valid_mask: bool = False
-    ) -> Tensor | tuple[Tensor, Tensor]:
-        """Alias for get_values per healsparse parity."""
-        vals = self.get_values(pixels)
-        if not valid_mask:
-            return vals
-        _, ok = self._global_to_local(pixels)
-        return vals, ok
-
     def lookup_with_valid(self, pixels: Tensor) -> tuple[Tensor, Tensor]:
         """Return ``(values, valid_mask)`` for queried pixel indices."""
         vals = self.get_values(pixels)
         _, ok = self._global_to_local(pixels)
         return vals, ok
-
-    lookup_With_valid = lookup_with_valid
 
     def get_values_pos(
         self,
@@ -1083,7 +1071,11 @@ class SparseHealpixMap:
             nest=self.nest,
             lonlat=lonlat,
         )
-        return self.get_values_pix(pix, valid_mask=valid_mask)
+        vals = self.get_values(pix)
+        if not valid_mask:
+            return vals
+        _, ok = self._global_to_local(pix)
+        return vals, ok
 
     def lookup_radec(
         self, ra_deg: Tensor | float, dec_deg: Tensor | float
@@ -1225,10 +1217,6 @@ class SparseHealpixMap:
             metadata=metadata,
             nest=nest,
         )
-
-    def generate_healpix_map(self) -> Tensor:
-        """Alias for to_dense per healsparse parity."""
-        return self.to_dense()
 
     def to_dense(self, fill_value: float | None = None) -> Tensor:
         fv = self.fill_value if fill_value is None else float(fill_value)
@@ -1685,10 +1673,6 @@ class SparseHealpixMap:
             metadata=_copy_metadata(self.metadata),
         )
 
-    def write(self, filename: str, clobber: bool = False) -> None:
-        """Alias for write_fits per healsparse parity."""
-        self.write_fits(filename, overwrite=clobber)
-
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
         """Write a HealSparse FITS file via torchfits (COV + SPARSE images).
 
@@ -1953,10 +1937,6 @@ def _resolve_sparse_table_hdu_index(path: str) -> int:
     raise ValueError(f"No FITS extension with EXTNAME 'SPARSE' in {path!r}")
 
 
-HealSparseMap = SparseHealpixMap
-SparseMap = SparseHealpixMap
-
-
 def _validate_sparse_operands(
     maps: list[SparseHealpixMap] | tuple[SparseHealpixMap, ...],
 ) -> tuple[int, bool]:
@@ -2033,6 +2013,7 @@ def sum_intersection(
 
 
 class WideBitMask:
+    """Multiword bit mask for flag sets wider than one integer dtype."""
     def __init__(self, n_bits: int, device: torch.device | None = None):
         self.n_bits = n_bits
         self.n_words = (n_bits + 64 - 1) // 64
@@ -2045,6 +2026,7 @@ class WideBitMask:
 
 
 class SkyMaskPipe:
+    """Composable HEALPix mask pipeline at a fixed resolution and ordering."""
     def __init__(self, nside: int, nest: bool = True):
         self.nside = nside
         self.nest = nest
@@ -2097,8 +2079,6 @@ def _positive_mask_pixels(mask: SparseHealpixMap) -> Tensor:
 __all__ = [
     "HealSparseHostProtocol",
     "SparseHealpixMap",
-    "HealSparseMap",
-    "SparseMap",
     "SkyMaskPipe",
     "WideBitMask",
     "sum_intersection",

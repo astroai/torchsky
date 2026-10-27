@@ -34,6 +34,7 @@ from .types import (
 if TYPE_CHECKING:
     pass
 
+
 class SkyEncoderBandpassField(_BaseFieldModel):
     def __init__(
         self,
@@ -245,9 +246,7 @@ class ConditionedSpectralField(_BaseFieldModel):
         nn.init.constant_(self.output.bias, -3.0)
 
     def _spatial_fourier_features(self, spatial: Tensor) -> Tensor:
-        return _fourier_features_vectorized(
-            spatial, self.num_spatial_frequencies
-        )
+        return _fourier_features_vectorized(spatial, self.num_spatial_frequencies)
 
     def _spectral_features(self, lam: Tensor) -> Tensor:
         if self.num_spectral_frequencies > 0:
@@ -462,8 +461,8 @@ class SkyEncoderMLPField(_BaseFieldModel):
 class StrainerSkyEncoderMLPField(_BaseFieldModel):
     """Sky encoder with explicit trunk (`encoder` + `body`) and `decoder_head` for transfer learning.
 
-    Matches ``SkyEncoderMLPField`` capacity; adds ``reset_decoder_head``, trunk state-dict helpers,
-    and an ``output`` property alias pointing at ``decoder_head`` for noise-pretrain compatibility.
+    Matches ``SkyEncoderMLPField`` capacity and adds ``reset_decoder_head`` plus
+    trunk state-dict helpers for transfer learning.
     """
 
     def __init__(
@@ -487,10 +486,6 @@ class StrainerSkyEncoderMLPField(_BaseFieldModel):
         self.body = silu_mlp_sequential(in_dim, hidden_dim, hidden_layers)
         self.decoder_head = nn.Linear(hidden_dim, 1)
         self._reset_parameters()
-
-    @property
-    def output(self) -> nn.Linear:
-        return self.decoder_head
 
     def _reset_parameters(self) -> None:
         reset_silu_mlp_linears(self.body)

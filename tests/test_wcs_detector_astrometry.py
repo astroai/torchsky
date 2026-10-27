@@ -141,7 +141,7 @@ def test_regular_grid_reflected_nonlinear_map_preserves_values_inverse_and_ad(
     torch.testing.assert_close(
         curvature, expected_curvature, atol=tolerance, rtol=tolerance
     )
-    back = transform.inverse(transform(points), tol=tolerance)
+    back = transform.inverse(transform(points), atol=tolerance)
     torch.testing.assert_close(back, points, atol=tolerance, rtol=tolerance)
     roundtrip_gradient = torch.autograd.grad(back.sum(), points, create_graph=True)[0]
     torch.testing.assert_close(
@@ -228,11 +228,8 @@ def test_grid_inverse_tolerances_are_in_output_units_and_tol_is_alias() -> None:
 
     expected = torch.tensor([[10.0, 20.0]], dtype=torch.float64)
     torch.testing.assert_close(transform.inverse(target, atol=2.0e-6), expected)
-    torch.testing.assert_close(transform.inverse(target, tol=2.0e-6), expected)
     with pytest.raises(ValueError, match="atol"):
         transform.inverse(target, atol=5.0e-7)
-    with pytest.raises(ValueError, match="aliases"):
-        transform.inverse(target, tol=2.0e-6, atol=2.0e-6)
 
 
 @pytest.mark.parametrize("parity", [1.0, -1.0])
@@ -271,7 +268,7 @@ def test_non_affine_residual_and_composite_jacobian_are_consistent(
     assert bool((composite.jacobian_determinant(point) * parity > 0).all())
     assert bool((composite.assert_invertible() * parity > 0).all())
     assert float(residual.bending_energy().detach()) > 0
-    recovered = composite.inverse(output, tol=1e-10)
+    recovered = composite.inverse(output, atol=1e-10)
     torch.testing.assert_close(recovered, point, atol=1e-10, rtol=0)
     roundtrip_gradient = torch.autograd.grad(recovered.sum(), point, create_graph=True)[
         0

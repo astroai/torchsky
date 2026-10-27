@@ -444,27 +444,36 @@ def transmission(
 
 def apply_extinction(
     flux: Tensor,
-    lambda_obs: Tensor | None = None,
+    wavelength: Tensor | None = None,
     ext_params: Tensor | None = None,
     extinction_law_name: str = "ccm89",
     r_v: float = 3.1,
     *,
     wavelength_unit: WavelengthUnit = "angstrom",
-    lambda_obs_angstrom: Tensor | None = None,
 ) -> Tensor:
     """Apply a dust screen: ``ext_params`` is ``E(B-V)`` broadcast against flux.
 
-    ``lambda_obs_angstrom`` is the USPM name for ``lambda_obs`` in Angstrom.
+    Args:
+        flux: Flux-density tensor with wavelength on the trailing axis.
+        wavelength: Wavelength samples in ``wavelength_unit``.
+        ext_params: Color excess ``E(B-V)``, broadcastable against ``flux``.
+        extinction_law_name: Supported extinction-law name.
+        r_v: Total-to-selective extinction ratio ``A(V) / E(B-V)``.
+        wavelength_unit: ``"angstrom"`` or ``"nm"``.
+
+    Returns:
+        Attenuated flux with the same shape, dtype, and device as ``flux``.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.extinction import apply_extinction
+        >>> apply_extinction(torch.ones(1), torch.tensor([5500.0]), torch.tensor(0.0)).tolist()
+        [1.0]
     """
-    if lambda_obs_angstrom is not None:
-        if lambda_obs is not None:
-            raise TypeError("provide only one of lambda_obs and lambda_obs_angstrom")
-        lambda_obs = lambda_obs_angstrom
-        wavelength_unit = "angstrom"
-    if lambda_obs is None or ext_params is None:
+    if wavelength is None or ext_params is None:
         raise TypeError("apply_extinction requires flux, wavelength, and ext_params")
     flux_t = torch.as_tensor(flux)
-    wave = torch.as_tensor(lambda_obs).to(device=flux_t.device, dtype=flux_t.dtype)
+    wave = torch.as_tensor(wavelength).to(device=flux_t.device, dtype=flux_t.dtype)
     ebv = torch.as_tensor(ext_params).to(device=flux_t.device, dtype=flux_t.dtype)
     if ebv.ndim == flux_t.ndim - 1:
         ebv = ebv.unsqueeze(-1)

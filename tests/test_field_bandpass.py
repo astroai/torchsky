@@ -1,4 +1,4 @@
-"""Tests for :mod:`torchsky.filter_profiles.inr_bandpass` (no network by default)."""
+"""Tests for :mod:`torchsky.filter_profiles.field_bandpass` (no network by default)."""
 
 from __future__ import annotations
 
@@ -15,8 +15,16 @@ from torchsky.filter_profiles import (
     bandpass_from_transmission_file,
     bandpass_gaussian,
     field_observation_spectral_kwargs,
-    resolve_inr_bandpass,
+    resolve_field_bandpass,
 )
+
+
+def test_removed_bandpass_names_are_absent() -> None:
+    import torchsky.filter_profiles as filter_profiles
+
+    assert not hasattr(filter_profiles, "FieldSpectralSource")
+    assert not hasattr(filter_profiles, "InrSpectralSource")
+    assert not hasattr(filter_profiles, "resolve_inr_bandpass")
 
 
 def test_bandpass_gaussian() -> None:
@@ -57,7 +65,7 @@ def test_bandpass_from_transmission_file(tmp_path: Path) -> None:
 
 def test_resolve_builtin_table() -> None:
     tab = {"F277W": (24000.0, 32000.0, 27700.0, 1200.0)}
-    spec = resolve_inr_bandpass(
+    spec = resolve_field_bandpass(
         source="builtin",
         band_name="F277W",
         builtin_table=tab,
@@ -77,7 +85,7 @@ def test_resolve_builtin_table() -> None:
 
 
 def test_resolve_gaussian() -> None:
-    spec = resolve_inr_bandpass(
+    spec = resolve_field_bandpass(
         source="gaussian",
         band_name="Z",
         builtin_table={},
@@ -157,7 +165,7 @@ def test_bandpass_from_svo_mock(
 
     _install_fake_astroquery(monkeypatch, fake_table, wl_curve, tr_curve)
 
-    from torchsky.filter_profiles.inr_bandpass import bandpass_from_svo
+    from torchsky.filter_profiles.field_bandpass import bandpass_from_svo
 
     spec = bandpass_from_svo(
         band_name="F277W",
@@ -175,7 +183,7 @@ def test_bandpass_from_svo_mock(
 
 def test_svo_cache_hit_offline(tmp_path: Path) -> None:
     """Verify loading from cache requires zero network and zero astroquery import."""
-    from torchsky.filter_profiles.inr_bandpass import bandpass_from_svo
+    from torchsky.filter_profiles.field_bandpass import bandpass_from_svo
 
     cache_dir = tmp_path / "svo_cache"
     cache_dir.mkdir()
@@ -240,7 +248,7 @@ def test_svo_truncated_cache_entry_is_refetched(
     tr_curve = np.exp(-0.5 * ((wl_curve - 4800.0) / 300.0) ** 2)
     _install_fake_astroquery(monkeypatch, fake_table, wl_curve, tr_curve)
 
-    from torchsky.filter_profiles.inr_bandpass import bandpass_from_svo
+    from torchsky.filter_profiles.field_bandpass import bandpass_from_svo
 
     spec = bandpass_from_svo(
         band_name="g",
@@ -264,7 +272,7 @@ def test_svo_cache_write_and_reload(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     _install_fake_astroquery(monkeypatch, fake_table, wl_curve, tr_curve)
 
-    from torchsky.filter_profiles.inr_bandpass import bandpass_from_svo
+    from torchsky.filter_profiles.field_bandpass import bandpass_from_svo
 
     # First call: writes to cache
     spec1 = bandpass_from_svo(
@@ -298,7 +306,7 @@ def test_svo_cache_write_and_reload(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 def test_svo_cache_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verify TORCHSKY_SVO_CACHE environment variable is honored."""
     import json
-    from torchsky.filter_profiles.inr_bandpass import bandpass_from_svo
+    from torchsky.filter_profiles.field_bandpass import bandpass_from_svo
 
     env_dir = tmp_path / "env_svo_cache"
     env_dir.mkdir()
@@ -331,7 +339,7 @@ def test_svo_cache_bypass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
 
     _install_fake_astroquery(monkeypatch, fake_table, wl_curve, tr_curve)
 
-    from torchsky.filter_profiles.inr_bandpass import bandpass_from_svo
+    from torchsky.filter_profiles.field_bandpass import bandpass_from_svo
 
     spec = bandpass_from_svo(
         band_name="i",
@@ -348,7 +356,7 @@ def test_svo_cache_bypass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
 
 def test_svo_cache_atomic_cleanup(tmp_path: Path) -> None:
     """Verify temporary files are cleaned up if serialization fails."""
-    from torchsky.filter_profiles.inr_bandpass import _atomic_write_json
+    from torchsky.filter_profiles.field_bandpass import _atomic_write_json
 
     target = tmp_path / "corrupt.json"
 
@@ -362,12 +370,12 @@ def test_svo_cache_atomic_cleanup(tmp_path: Path) -> None:
     assert len(list(tmp_path.glob("*.tmp.*"))) == 0
 
 
-def test_resolve_inr_bandpass_svo_cache(tmp_path: Path) -> None:
-    """Verify resolve_inr_bandpass passes svo_cache_dir and hits cached filter."""
+def test_resolve_field_bandpass_svo_cache(tmp_path: Path) -> None:
+    """Verify resolve_field_bandpass passes svo_cache_dir and hits cached filter."""
     import json
-    from torchsky.filter_profiles import resolve_inr_bandpass
+    from torchsky.filter_profiles import resolve_field_bandpass
 
-    cache_dir = tmp_path / "inr_svo_cache"
+    cache_dir = tmp_path / "field_svo_cache"
     cache_dir.mkdir()
     filter_file = cache_dir / "filter_Subaru_HSC.i.json"
     wl = [7000.0, 7600.0, 8200.0]
@@ -375,7 +383,7 @@ def test_resolve_inr_bandpass_svo_cache(tmp_path: Path) -> None:
     with open(filter_file, "w", encoding="utf-8") as f:
         json.dump({"filter_id": "Subaru/HSC.i", "wavelength": wl, "transmission": tr}, f)
 
-    spec = resolve_inr_bandpass(
+    spec = resolve_field_bandpass(
         source="svo",
         band_name="i",
         builtin_table={},
@@ -396,5 +404,3 @@ def test_resolve_inr_bandpass_svo_cache(tmp_path: Path) -> None:
     assert spec["svo_filter_id"] == "Subaru/HSC.i"
     assert spec["band_name"] == "I"
     assert np.isclose(spec["wavelength"], 7600.0)
-
-

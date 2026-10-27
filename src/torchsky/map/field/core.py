@@ -21,35 +21,40 @@ from .rendering import (
     render_field_samples,
 )
 
-from .models import (  # noqa: F401 - model classes re-exported
-    BandpassConditionedField,
+from .models_component import FieldComponentDecomposition
+from .models_encoder import (
     ConditionedSpectralField,
-    DiffuseFoamHybridField,
-    ExplicitSpectralGridField,
-    FieldComponentDecomposition,
-    FoamInitializedINRField,
-    FourierMLPField,
-    GaussianBasisField,
     HashGridConditionedField,
     HashGridMLPField,
     HashGridResMLPField,
     HashGridSpectralField,
-    LearnedSpectralBasisField,
-    OperatorConstrainedFeatureField,
-    SineImplicitField,
     SkyEncoderBandpassField,
     SkyEncoderMLPField,
     SkyEncoderResMLPField,
+    StrainerSkyEncoderMLPField,
+)
+from .models_foam import (
+    DiffuseFoamHybridField,
+    FoamInitializedINRField,
+    SpectralPowerFoamField,
+)
+from .models_implicit import (
+    BandpassConditionedField,
+    ExplicitSpectralGridField,
+    FourierMLPField,
+    GaussianBasisField,
+    LearnedSpectralBasisField,
+    SineImplicitField,
+    SpectralBasisField,
+    WireImplicitField,
+)
+from .models_skylambda import (
+    OperatorConstrainedFeatureField,
     SkyLambdaAtlasField,
     SkyLambdaFeatureAtlasField,
     SkyLambdaFeatureField,
     SkyLambdaKPlanesField,
     SkyLambdaPlanesField,
-    SpectralBasisField,
-    SpectralPowerFoamField,
-    StrainerSkyEncoderMLPField,
-    WireImplicitField,
-    _GaborLayer,
 )
 
 from .types import (
@@ -85,6 +90,7 @@ from ._core_helpers import (  # noqa: F401 - re-exported helper layer
     pretrain_strainer_trunk_synthetic,
     save_strainer_trunk_checkpoint,
 )
+
 
 def _render_field_component_anchor_target(
     term: FieldComponentAnchorTerm,
@@ -153,6 +159,7 @@ def _render_field_component_anchor_target(
         override_weights=term.override_bandpass_weights,
         forward_context=term.forward_context,
     ).to(device=device, dtype=dtype)
+
 
 def field_component_anchor_loss(
     model: nn.Module,
@@ -307,6 +314,7 @@ def field_component_anchor_loss(
         )
     return total
 
+
 def field_component_centroid_anchor_loss(
     model: nn.Module,
     centroid_anchor_terms: Sequence[FieldCentroidAnchorTerm],
@@ -383,6 +391,7 @@ def field_component_centroid_anchor_loss(
         )
     return total
 
+
 def make_field_component_decomposition(
     *,
     component_roles: Sequence[str],
@@ -430,13 +439,32 @@ def make_field_component_decomposition(
         device=device,
     )
 
+
 STRAINER_TRUNK_CHECKPOINT_FORMAT = _STRAINER_TRUNK_FORMAT
+
 
 def make_field_model(
     kind: FieldModelKind,
     domain: FieldDomain,
     **kwargs: object,
 ) -> nn.Module:
+    """Construct a field model of the requested kind on a fixed domain.
+
+    Args:
+        kind: Registered field-model kind.
+        domain: Spatial and spectral normalization domain.
+        **kwargs: Model-specific constructor options.
+
+    Returns:
+        An untrained PyTorch field module.
+
+    Examples:
+        >>> from torchsky.field import Domain, model
+        >>> domain = Domain(0.0, 0.0, 1.0, 5000.0, 1000.0)
+        >>> field = model("sine_implicit", domain)
+        >>> field.domain is domain
+        True
+    """
     if kind == "spectral_power_foam":
         return SpectralPowerFoamField(domain, **kwargs)
     if kind == "foam_initialized_inr":

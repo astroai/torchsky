@@ -7,32 +7,62 @@ from pathlib import Path
 import subprocess
 import sys
 
-import pytest
-import torch
-
 import torchsky._cpp as cpp
 
 
 PACKAGE_ROOT = Path(cpp.__file__).parent
+LEGACY_SYMBOLS = {
+    "MIGRATED_COMPAT_SYMBOLS",
+    "PYTHON_COMPAT_SYMBOLS",
+    "DEFERRED_NATIVE_SYMBOLS",
+    "_".join(("wcs", "pixel_to_world", "fused", "cpu")),
+    "_".join(("wcs", "world_to_pixel", "fused", "cpu")),
+    "wcs_zenithal_project",
+    "wcs_zenithal_deproject",
+    "wcs_cylindrical_project",
+    "wcs_cylindrical_deproject",
+    "wcs_hpx_project",
+    "wcs_hpx_deproject",
+    "wcs_tpv_distort",
+    "wcs_tpv_invert",
+    "healpix_ring2nest_torch_cpu",
+    "healpix_nest2ring_torch_cpu",
+    "healpix_ang2pix_ring_torch_cpu",
+    "healpix_ang2pix_nested_torch_cpu",
+    "healpix_pix2ang_ring_torch_cpu",
+    "healpix_pix2ang_nested_torch_cpu",
+    "healpix_neighbors_ring_torch_cpu",
+    "healpix_neighbors_nested_torch_cpu",
+    "healpix_get_interp_weights_ring_torch_cpu",
+    "healpix_get_interp_weights_nested_torch_cpu",
+    "healpix_get_interp_val_ring_torch_cpu",
+    "healpix_get_interp_val_nested_torch_cpu",
+    "healpix_query_disc_torch_cpu",
+    "_sphere_planar_point_in_polygon_cpu",
+    "_sphere_arc_intersections_matrix_cpu",
+    "_sparse_get_values_blocks_cpu",
+    "_healpix_scalar_alm2map_direct_cpu",
+    "_healpix_ring_fourier_modes_cpu",
+    "_healpix_ring_fourier_modes_spin_conj_cpu",
+    "_healpix_ring_fourier_synthesis_cpu",
+    "_healpix_spin_ring_finalize_cpu",
+    "_healpix_spin_map2alm_ring_concat_cpu",
+    "_healpix_spin_interpolate_concat_cpu",
+    "_healpix_spin_integrate_concat_cpu",
+    "_healpix_spin_integrate_recurrence_cpu",
+    "_healpix_spin_interpolate_recurrence_cpu",
+    "_healpix_spin_map2alm_ring_recurrence_cpu",
+    "_healpix_spin_alm2map_ring_recurrence_cpu",
+    "_healpix_scalar_integrate_recurrence_cpu",
+    "_healpix_scalar_interpolate_recurrence_cpu",
+    "_healpix_spin_map2alm_from_basis_cpu",
+    "_healpix_spin_alm2map_from_basis_cpu",
+}
 
 
-def test_compatibility_symbol_inventory_is_complete_and_disjoint() -> None:
-    migrated = set(cpp.MIGRATED_COMPAT_SYMBOLS)
-    python_compat = set(cpp.PYTHON_COMPAT_SYMBOLS)
-    deferred = set(cpp.DEFERRED_NATIVE_SYMBOLS)
-    assert migrated
-    assert {
-        "healpix_query_disc_torch_cpu",
-        "_healpix_spin_map2alm_from_basis_cpu",
-        "_healpix_spin_alm2map_from_basis_cpu",
-    } <= migrated
-    assert deferred == set()
-    assert migrated.isdisjoint(python_compat | deferred)
-    assert python_compat.isdisjoint(deferred)
-    assert set(cpp.__all__) == migrated | python_compat | deferred | {
-        "selected_cpu_isa"
-    }
-    assert all(hasattr(cpp, name) for name in cpp.__all__)
+def test_removed_symbols_are_not_exposed() -> None:
+    assert cpp.__all__ == ["selected_cpu_isa"]
+    assert not LEGACY_SYMBOLS.intersection(dir(cpp))
 
 
 def test_extension_exports_only_isa_diagnostics() -> None:
@@ -40,111 +70,11 @@ def test_extension_exports_only_isa_diagnostics() -> None:
     assert exported == {"selected_cpu_isa"}
     bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")
     assert bindings.count("m.def(") == 1
-    assert all(f'"{name}"' not in bindings for name in cpp.MIGRATED_COMPAT_SYMBOLS)
-    assert all(f'"{name}"' not in bindings for name in cpp.PYTHON_COMPAT_SYMBOLS)
-
-
-def test_fixed_old_name_warns_and_dispatches_with_parity() -> None:
-    pixels = torch.tensor([0, 1, 2], dtype=torch.int64)
-    expected = torch.ops.torchsky.healpix_ring2nest(1, pixels)
-    with pytest.warns(DeprecationWarning, match="torchsky._ops"):
-        actual = cpp.healpix_ring2nest_torch_cpu(1, pixels)
-    torch.testing.assert_close(actual, expected)
-
-
-def test_spectral_old_name_preserves_historical_shape_and_warns() -> None:
-    starts = torch.tensor([0], dtype=torch.int64)
-    lengths = torch.tensor([1], dtype=torch.int64)
-    row = torch.ones(1, dtype=torch.complex128)
-    expected = torch.stack(
-        torch.ops.torchsky.spectral_ring_fourier_modes_spin_conj(
-            row, starts, lengths, 0
-        )
-    )
-    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
-        actual = cpp._healpix_ring_fourier_modes_spin_conj_cpu(row, starts, lengths, 0)
-    torch.testing.assert_close(actual, expected)
-
-
-def test_remaining_old_names_warn_and_dispatch_with_parity() -> None:
-    vec = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64)
-    expected_disc = torch.ops.torchsky.healpix_query_disc(2, vec, 0.5, False)
-    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
-        actual_disc = cpp.healpix_query_disc_torch_cpu(2, vec, 0.5, False)
-    torch.testing.assert_close(actual_disc, expected_disc)
-
-    q = torch.tensor([0.2, -0.3], dtype=torch.float64)
-    u = torch.tensor([0.4, 0.1], dtype=torch.float64)
-    basis = torch.tensor(
-        [[1.0 + 0.2j, 0.3 - 0.4j], [0.5 + 0.1j, -0.2 + 0.7j]],
-        dtype=torch.complex128,
-    )
-    expected_coeff = torch.ops.torchsky._spectral_spin_map2alm_from_basis(
-        q, u, basis, basis.conj(), 0.25
-    )
-    with pytest.warns(DeprecationWarning, match="torch.ops.torchsky"):
-        actual_coeff = cpp._healpix_spin_map2alm_from_basis_cpu(
-            q, u, basis, basis.conj(), 0.25
-        )
-    torch.testing.assert_close(actual_coeff, expected_coeff)
-
-
-def test_wcs_old_name_preserves_out_parameter_contract_and_warns() -> None:
-    x = torch.tensor([0.0, 1.0], dtype=torch.float64)
-    y = torch.tensor([0.0, -1.0], dtype=torch.float64)
-    ra = torch.empty_like(x)
-    dec = torch.empty_like(y)
-    idx = torch.empty((0, 3), dtype=torch.int64)
-    coeff = torch.empty(0, dtype=torch.float64)
-    args = (
-        x,
-        y,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        1.0,
-        "CAR",
-        1.0,
-        4.0,
-        3.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        1.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        "center",
-        0.0,
-        0.0,
-        False,
-        idx,
-        coeff,
-        idx,
-        coeff,
-    )
-    expected = torch.ops.torchsky.wcs_pixel_to_world(*args)
-    with pytest.warns(DeprecationWarning, match="deprecated"):
-        result = cpp.wcs_pixel_to_world_fused_cpu(
-            x,
-            y,
-            ra,
-            dec,
-            *args[2:],
-        )
-    assert result is None
-    torch.testing.assert_close(ra, expected[0], equal_nan=True)
-    torch.testing.assert_close(dec, expected[1], equal_nan=True)
+    assert all(f'"{name}"' not in bindings for name in LEGACY_SYMBOLS)
 
 
 def test_loader_reload_and_disable_cpp_subprocess_contract() -> None:
-    assert importlib.reload(cpp).DEFERRED_NATIVE_SYMBOLS == ()
+    assert importlib.reload(cpp).__all__ == ["selected_cpu_isa"]
     script = """
 import sys
 import torchsky._native as native
@@ -167,29 +97,16 @@ assert not _ops.has_wcs_dispatcher()
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_production_has_no_direct_cpp_tensor_calls() -> None:
+def test_production_python_has_no_removed_cpp_calls() -> None:
     offenders: list[str] = []
     for path in PACKAGE_ROOT.rglob("*.py"):
-        relative = path.relative_to(PACKAGE_ROOT)
-        if relative in {Path("_cpp.py"), Path("_native.py"), Path("_ops.py")}:
-            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=os.fspath(path))
-        imports_cpp = any(
-            isinstance(node, ast.ImportFrom)
-            and node.module is not None
-            and node.module.endswith("_native")
-            and any(
-                alias.name == "cpp" and alias.asname == "_cpp" for alias in node.names
-            )
-            for node in ast.walk(tree)
-        )
-        direct_names = {
+        legacy_attributes = {
             node.attr
             for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "_cpp"
+            if isinstance(node, ast.Attribute) and node.attr in LEGACY_SYMBOLS
         }
-        if imports_cpp or direct_names:
-            offenders.append(os.fspath(relative))
+        if legacy_attributes:
+            relative = path.relative_to(PACKAGE_ROOT)
+            offenders.append(f"{relative}: {sorted(legacy_attributes)}")
     assert offenders == []

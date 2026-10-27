@@ -39,6 +39,28 @@ def transform(
     ``GCRS``, ``CIRS``, and ``TETE`` require ``obstime_mjd_utc`` and ``eop``.
     ``ECLIPTIC_OF_DATE`` uses TT MJD (``obstime_mjd_utc`` is treated as TT
     unless you pass a TT value through ``CatalogState.to_frame``).
+
+    Args:
+        lon: Longitude values in degrees.
+        lat: Latitude values in degrees.
+        from_frame: Input coordinate-frame name.
+        to_frame: Output coordinate-frame name.
+        obstime_mjd_utc: Observation time in UTC MJD, or TT MJD for ecliptic-of-date.
+        site: Observing site required for altitude-azimuth output.
+        eop: Earth-orientation parameters required for observed frames.
+        pn: Precession-nutation model.
+        aberration: Apply annual aberration for supported observed frames.
+        refraction: Apply atmospheric refraction to altitude-azimuth output.
+
+    Returns:
+        Output longitude and latitude tensors in degrees.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.coords import transform
+        >>> lon, lat = transform(torch.tensor([0.0]), torch.tensor([0.0]), from_frame="ICRS", to_frame="GALACTIC")
+        >>> lon.shape == lat.shape
+        True
     """
     state = CatalogState(lon, lat, frame=from_frame)
     dest = str(to_frame).strip().upper().replace(" ", "")

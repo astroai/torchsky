@@ -510,6 +510,7 @@ def save_field_artifact(
     fit_result: FieldFitResult | None = None,
     overwrite: bool = False,
 ) -> FieldArtifactManifest:
+    """Save a field model, manifest, and optional training state."""
     root = Path(path).expanduser().resolve()
     manifest_path = root / _MANIFEST_NAME
     if manifest_path.exists() and not overwrite:
@@ -564,6 +565,7 @@ def load_field_artifact(
     device: torch.device | str | None = None,
     verify_inputs: bool = True,
 ) -> LoadedFieldArtifact:
+    """Load and validate a saved field model artifact."""
     root = Path(path).expanduser().resolve()
     with (root / _MANIFEST_NAME).open("r", encoding="utf-8") as stream:
         raw = json.load(stream)

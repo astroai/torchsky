@@ -1,7 +1,7 @@
 import torch
 import pytest
 
-from torchsky.sphere import HealSparseMap, MOC
+from torchsky.sphere import MOC, SparseHealpixMap
 from torchsky.sphere import healpix as hp
 from torchsky.sphere.moc import nest2uniq
 
@@ -46,7 +46,7 @@ def test_high_nside_sparse_lookup_moc_contains_and_catalog_filter() -> None:
     nside = 1024
     pixels = torch.tensor([0, 17, 123456, 999999, 7_000_000], dtype=torch.int64)
     values = torch.arange(pixels.numel(), dtype=torch.float64) + 10.0
-    sparse = HealSparseMap.from_pixels(
+    sparse = SparseHealpixMap.from_pixels(
         pixels,
         values,
         nside_sparse=nside,

@@ -358,20 +358,6 @@ def _spectral_derivative_si(
     return (plus - minus) / (2.0 * eps)
 
 
-def transform_spectral(
-    freq: Tensor, rest_freq: float, convention: str = "RADIO"
-) -> Tensor:
-    """Backward-compatible frequency-to-velocity helper returning km/s."""
-    target = {
-        "RADIO": "VRAD",
-        "OPTICAL": "VOPT",
-        "RELATIVISTIC": "VELO",
-    }.get(convention.upper())
-    if target is None:
-        raise ValueError(f"Unknown spectral convention: {convention}")
-    return frequency_to_spectral(freq, target, unit="km/s", rest_frequency=rest_freq)
-
-
 class SpectralTransform:
     """Implement FITS Paper III spectral algorithm transformations.
 

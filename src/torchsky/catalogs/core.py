@@ -609,7 +609,7 @@ def _crossmatch_sky_coarse_indexed(
             raise ValueError("right_index coordinates do not match the right catalog")
         coarse_index = right_index
         coarse_nside = coarse_index.nside
-    pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
+    pixrad = _healpix.max_pixel_radius(coarse_nside, degrees=False)
     match_rad = math.radians(radius_max / 3600.0)
     hops = _covering_hops(match_rad + (2.0 * pixrad), pixrad)
     use_rings = hops <= _BATCHED_RING_HOPS_MAX
@@ -799,6 +799,28 @@ def crossmatch_sky(
     HEALPix covering uses the per-group maximum; the exact GC test uses the
     per-row radius. Pass ``right_index`` to reuse a nested ``HealpixIndex``.
     ``device`` moves inputs onto that device when given.
+
+    Args:
+        left_ra_deg: Left-catalog right ascensions in degrees.
+        left_dec_deg: Left-catalog declinations in degrees.
+        right_ra_deg: Right-catalog right ascensions in degrees.
+        right_dec_deg: Right-catalog declinations in degrees.
+        radius_arcsec: Scalar or per-left-row match radius in arcseconds.
+        left_chunk_size: Maximum left rows processed per outer chunk.
+        right_chunk_size: Maximum candidate right rows processed per chunk.
+        find: ``"best"`` for one nearest match or ``"all"`` for all matches.
+        right_index: Reusable nested HEALPix index for the right catalog.
+        device: Optional compute device.
+
+    Returns:
+        Matching row indices and great-circle separations in arcseconds.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.catalogs import crossmatch_sky
+        >>> result = crossmatch_sky(torch.tensor([0.0]), torch.tensor([0.0]), torch.tensor([0.0]), torch.tensor([0.0]), radius_arcsec=1.0)
+        >>> result.right_index.tolist()
+        [0]
     """
     raw_left_ra = torch.as_tensor(left_ra_deg).reshape(-1)
     work_device = (
@@ -890,7 +912,7 @@ def crossmatch_sky_streamed(
         right_ra, right_dec, nside=coarse_nside, nest=True
     )
     radius_deg = radius_arcsec / 3600.0
-    pixrad = _healpix.max_pixrad(coarse_nside, degrees=False)
+    pixrad = _healpix.max_pixel_radius(coarse_nside, degrees=False)
     match_rad = math.radians(radius_deg)
     candidate_radius_rad = match_rad + (2.0 * pixrad)
     hops = _covering_hops(candidate_radius_rad, pixrad)
@@ -1191,7 +1213,7 @@ def crossmatch_sky_from_arrow(
         right_pixels = set(right_pixel_map)
 
         candidate_radius_rad = math.radians(radius_arcsec / 3600.0) + (
-            2.0 * _healpix.max_pixrad(coarse_nside, degrees=False)
+            2.0 * _healpix.max_pixel_radius(coarse_nside, degrees=False)
         )
 
         left_hits: list[Tensor] = []

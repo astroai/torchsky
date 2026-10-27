@@ -15,7 +15,8 @@ import torch
 
 pytest.importorskip("torchsky._cpp")
 
-from torchsky.map.image_plane import coadd_image_plane, plan_image_plane_target
+from torchsky.map.image_plane_coadd import coadd_image_plane
+from torchsky.map.planning import plan_image_plane_target
 from torchsky.map.observation import ImageObservation
 import torchfits
 

@@ -60,6 +60,22 @@ def build_weight_product(
     and is recorded as ``INVALID_VARIANCE``.  ``producer`` reserves a stable
     artifact field for future learned mask/weight generators without changing
     downstream consumers.
+
+    Args:
+        inverse_variance: Per-pixel inverse variance; nonpositive or nonfinite values are invalid.
+        quality_mask: Optional integer bit mask with the same shape.
+        exclude_detected: Give detected-source pixels zero weight when true.
+        confidence_percentile: Positive-weight percentile mapped to confidence one.
+        producer: Optional provenance mapping stored in the result metadata.
+
+    Returns:
+        Sanitized mask, inverse variance, weight, confidence, and metadata.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.quality import build_weight_product
+        >>> build_weight_product(torch.tensor([1.0])).weight.tolist()
+        [1.0]
     """
     ivar_raw = torch.as_tensor(inverse_variance)
     if ivar_raw.ndim == 0:

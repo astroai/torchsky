@@ -30,7 +30,6 @@ from ..map.field.observation_builders import (
 )
 from ..map.field.presets import (
     FIELD_MODEL_PRESET_NAMES,
-    FIELD_MODEL_PRESETS,
     FieldModelPreset,
     get_field_model_preset,
     make_field_model_preset as _make_field_model_preset,
@@ -130,7 +129,22 @@ def render(
     target: RenderTarget = "observation",
     **kwargs: _Any,
 ) -> _Tensor:
-    """Render a field to an observation, coordinate samples, cube, or HEALPix map."""
+    """Render a field to an observation, coordinate samples, cube, or HEALPix map.
+
+    Args:
+        field_model: Trained or initialized field module.
+        observation: Observation metadata required by observation and sample targets.
+        target: Output geometry selector.
+        **kwargs: Target-specific coordinates, shape, WCS, or HEALPix options.
+
+    Returns:
+        Rendered tensor on the model's execution device.
+
+    Examples:
+        >>> from torchsky.field import render
+        >>> callable(render)
+        True
+    """
     if target == "observation":
         if observation is None:
             raise ValueError(
@@ -186,7 +200,6 @@ def distribution(
 __all__ = [
     "FIELD_MODEL_KINDS",
     "FIELD_MODEL_PRESET_NAMES",
-    "FIELD_MODEL_PRESETS",
     "RECOMMENDED_FIELD_MODEL_KINDS",
     "ArtifactManifest",
     "Domain",

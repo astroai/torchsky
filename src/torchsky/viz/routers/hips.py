@@ -33,6 +33,7 @@ class SurveyInfo:
     path: str
     hdu: int
     stretch: str
+    limit_policy: str
     cmap: str
     vmin: Optional[float]
     vmax: Optional[float]
@@ -46,11 +47,12 @@ def _survey_id(
     path: str,
     hdu: int,
     stretch: str,
+    limit_policy: str,
     cmap: str,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
 ) -> str:
-    key = f"{path}:{hdu}:{stretch}:{cmap}:{vmin}:{vmax}"
+    key = f"{path}:{hdu}:{stretch}:{limit_policy}:{cmap}:{vmin}:{vmax}"
     return hashlib.sha256(key.encode()).hexdigest()[:12]
 
 
@@ -77,6 +79,7 @@ def _register_survey_sync(
     path: str,
     hdu: int,
     stretch: str,
+    limit_policy: str,
     cmap: str,
     vmin: Optional[float],
     vmax: Optional[float],
@@ -91,8 +94,14 @@ def _register_survey_sync(
 
     root: Path = request.app.state.root_dir
     abs_path = str(resolve_under_root(root, path))
+    if stretch not in {"linear", "log", "sqrt", "asinh", "histeq", "power"}:
+        raise HTTPException(status_code=422, detail=f"Unknown stretch {stretch!r}")
+    if limit_policy not in {"zscale", "minmax"}:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown limit policy {limit_policy!r}"
+        )
 
-    sid = _survey_id(abs_path, hdu, stretch, cmap, vmin, vmax)
+    sid = _survey_id(abs_path, hdu, stretch, limit_policy, cmap, vmin, vmax)
     surveys = _get_surveys(request)
 
     if sid in surveys:
@@ -135,7 +144,14 @@ def _register_survey_sync(
         if vmin is None or vmax is None:
             sample = tensor.flatten().float()
             sample = sample[sample.isfinite()]
-            _v1, _v2 = zscale_limits(sample) if sample.numel() > 0 else (0.0, 1.0)
+            if sample.numel() == 0:
+                _v1, _v2 = 0.0, 1.0
+            elif limit_policy == "zscale":
+                _v1, _v2 = zscale_limits(sample)
+            elif limit_policy == "minmax":
+                _v1, _v2 = float(sample.min().item()), float(sample.max().item())
+            else:
+                raise ValueError(f"Unknown limit policy {limit_policy!r}")
             if vmin is None:
                 vmin = _v1
             if vmax is None:
@@ -146,6 +162,7 @@ def _register_survey_sync(
             path=abs_path,
             hdu=hdu,
             stretch=stretch,
+            limit_policy=limit_policy,
             cmap=cmap,
             vmin=vmin,
             vmax=vmax,
@@ -177,7 +194,8 @@ async def register_survey(
     request: Request,
     path: str,
     hdu: int = 0,
-    stretch: str = "zscale",
+    stretch: str = "linear",
+    limit_policy: str = "zscale",
     cmap: str = "gray",
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
@@ -190,6 +208,7 @@ async def register_survey(
         path,
         hdu,
         stretch,
+        limit_policy,
         cmap,
         vmin,
         vmax,
@@ -206,6 +225,7 @@ async def list_surveys(request: Request) -> JSONResponse:
                 "path": s.path,
                 "hdu": s.hdu,
                 "stretch": s.stretch,
+                "limit_policy": s.limit_policy,
                 "cmap": s.cmap,
                 "shape": list(s.image_shape),
                 "max_order": s.max_order,
@@ -251,6 +271,7 @@ def _hips_preview_png_sync(s: SurveyInfo) -> bytes:
         s.image,
         max_pixels=1024,
         stretch=s.stretch,
+        limit_policy=s.limit_policy,
         cmap=s.cmap,
         vmin=s.vmin,
         vmax=s.vmax,
@@ -264,6 +285,7 @@ def _hips_tile_png_sync(s: SurveyInfo, order: int, pix: int) -> bytes | None:
         order=order,
         pix=pix,
         stretch=s.stretch,
+        limit_policy=s.limit_policy,
         cmap=s.cmap,
         vmin=s.vmin,
         vmax=s.vmax,

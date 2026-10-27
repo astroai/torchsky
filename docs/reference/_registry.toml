@@ -4,6 +4,20 @@
 # stability tier, cross-links, and grouping titles.
 version = 1
 
+[public_type_aliases]
+"torchsky.catalogs.BackgroundModel" = "Background model fitted during catalog photometry."
+"torchsky.catalogs.FailurePolicy" = "Policy for raising or returning catalog photometry failures."
+"torchsky.catalogs.PhotometrySolver" = "Linear solver used for catalog photometry amplitudes."
+"torchsky.extinction.ExtinctionLaw" = "Supported dust-extinction law name."
+"torchsky.extinction.WavelengthUnit" = "Wavelength unit accepted by extinction functions."
+"torchsky.field.FieldModelKind" = "Registered continuous-field model architecture name."
+"torchsky.field.PresetName" = "Recommended field-model preset name."
+"torchsky.field.RenderTarget" = "Output geometry selected by field rendering."
+"torchsky.field.SpectralCapacityProfile" = "Observation-derived spectral-capacity regime."
+"torchsky.spectrophotometry.PhotometryOutput" = "Output representation for synthetic photometry."
+"torchsky.spectrophotometry.WavelengthUnit" = "Wavelength unit accepted by spectrophotometry functions."
+"torchsky.wcs.TabularBoundsMode" = "Out-of-bounds behavior for tabular WCS interpolation."
+
 [group_titles]
 affine = "Affine fits and residuals"
 astrometry = "Astrometric calibration"
@@ -82,15 +96,7 @@ name = "torchsky.sphere.healpix"
 slug = "sphere-healpix"
 tier = "core"
 related = ["sphere.md"]
-intro = "The torch-native HEALPix kernels: indexing, neighbours, interpolation, queries, reordering, and map sampling. These functions accept and return PyTorch tensors."
-
-[[module]]
-name = "torchsky.sphere.healpy"
-slug = "sphere-healpy"
-tier = "compatibility"
-alias_of = "torchsky.sphere.compat"
-related = ["sphere.md"]
-intro = "Drop-in name-compatible alias for the healpy-style API. The implementation and full reference live under `torchsky.sphere.compat`."
+intro = "The torch-native HEALPix kernels: indexing, neighbors, interpolation, queries, reordering, and map sampling. These functions accept and return PyTorch tensors."
 
 [[namespace]]
 name = "torchsky.wcs"
@@ -249,6 +255,13 @@ name = "torchsky.encoders"
 slug = "encoders"
 tier = "core"
 related = ["encoders.md", "photometry-encoders.md", "ml.md"]
+
+[[namespace]]
+name = "torchsky.filter_profiles"
+slug = "filter-profiles"
+tier = "experimental"
+related = ["field.md", "map.md"]
+intro = "Field-observation bandpass metadata from SVO, transmission files, built-in tables, or Gaussian profiles."
 
 [[namespace]]
 name = "torchsky.transforms"

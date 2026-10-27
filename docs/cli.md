@@ -12,9 +12,8 @@ Python API when composing tensor-native pipelines inside another application.
 
 ### FITS inspection
 
-FITS inspection and table sampling belong to `torchfits`. The legacy
-`torchsky info` and `torchsky cat` commands are migration-only and must not gain
-new behavior. Use the corresponding `torchfits` API/tooling for new automation.
+FITS inspection and table sampling belong to `torchfits`. Use `torchfits info`
+for HDU inventories and `torchfits table` for bounded table previews.
 
 Torchsky CLI work is limited to sky-domain map, scene, and visualization
 workflows. File decoding should enter through an explicit `torchfits` adapter.
@@ -30,7 +29,7 @@ torchsky viz --root /path/to/data --port 8822
 
 ### `torchsky map`
 
-Runs map-oriented workflows from the CLI. Some INR/spectral-source paths require
+Runs map-oriented workflows from the CLI. Some field spectral-source paths require
 the `map` extra for SVO filter profile access:
 
 ```bash
@@ -51,18 +50,18 @@ torchsky map out.fits img_a.fits img_b.fits \
   --primary-beam-maps img_a_pb.fits img_b_pb.fits
 ```
 
-INR renders use the same scalar weighting, weight-map, mask-map, and
+Field renders use the same scalar weighting, weight-map, mask-map, and
 background-offset flags. Pass `--reference` when the output should be rendered
 on a specific FITS WCS/shape instead of the planned union grid.
 
 For compact or undersampled structure, add
-`--inr-spatial-sampling gauss_legendre_2x2` to integrate the continuous field
+`--field-spatial-sampling gauss_legendre_2x2` to integrate the continuous field
 over each detector pixel with four deterministic samples. The default `center`
 mode remains faster for well-sampled fields.
 
 Use `--dry-run` before large jobs to validate the expanded input list and print
-the planned output shape/tiling decision without writing the map or fitting an
-INR.
+the planned output shape/tiling decision without writing the map or fitting a
+field.
 
 Add `--plan-json mosaic.plan.json` to atomically record the expanded input
 paths/HDUs, calibration inputs, target WCS and shape, tiling decision, method
