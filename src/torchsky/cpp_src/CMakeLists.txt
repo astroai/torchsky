@@ -30,14 +30,14 @@ endif()
 
 
 # Add environment prefix to search path (important for pixi/conda)
-if(DEFINED ENV{PREFIX})
+if(DEFINED ENV{BUILD_PREFIX} AND DEFINED ENV{PREFIX})
     list(APPEND CMAKE_PREFIX_PATH "$ENV{PREFIX}")
     message(STATUS "Added environment prefix to CMAKE_PREFIX_PATH: $ENV{PREFIX}")
 endif()
 
 # Find required packages
 # In pixi/conda packaging builds, ensure Python comes from the host prefix.
-if(DEFINED ENV{PREFIX} AND EXISTS "$ENV{PREFIX}/bin/python")
+if(DEFINED ENV{BUILD_PREFIX} AND DEFINED ENV{PREFIX} AND EXISTS "$ENV{PREFIX}/bin/python")
     set(Python_ROOT_DIR "$ENV{PREFIX}" CACHE PATH "Python root directory" FORCE)
     set(Python_EXECUTABLE "$ENV{PREFIX}/bin/python" CACHE FILEPATH "Python executable" FORCE)
 endif()

@@ -142,6 +142,16 @@ def test_conda_torch_include_root_is_normalized() -> None:
     assert "list(REMOVE_DUPLICATES TORCH_INCLUDE_DIRS_FILTERED)" in cmake
 
 
+def test_pep517_build_does_not_search_outer_conda_prefix() -> None:
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
+
+    assert "if(DEFINED ENV{BUILD_PREFIX} AND DEFINED ENV{PREFIX})" in cmake
+    assert (
+        'if(DEFINED ENV{BUILD_PREFIX} AND DEFINED ENV{PREFIX} AND EXISTS "$ENV{PREFIX}/bin/python")'
+        in cmake
+    )
+
+
 def test_macos_source_wheels_target_the_portable_arm64_baseline() -> None:
     pyproject = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
