@@ -792,6 +792,8 @@ def main() -> int:
         baseline_png = output_dir / "baseline_cube.png"
         _save_image_grid([product.data for product in references], [f"baseline | {band}" for band in baseline_bands], baseline_png, max_panels=max_panels, dpi=dpi, limits=[limits[band] for band in baseline_bands])
         summary.update({"baseline_references": [product.path for product in references], "baseline_png": str(baseline_png), "display_limits": str(scale_path)})
+        if baseline is not None:
+            summary["baseline_shape"] = [int(size) for size in baseline.shape]
     else:
         limits = {}
         summary["baseline_missing"] = str(baseline_path)
