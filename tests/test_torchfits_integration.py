@@ -9,8 +9,8 @@ _FIXTURE = str(Path(__file__).resolve().parent / "data" / "radio_mm_stub.fits")
 
 
 def test_torchsky_reads_fixture_via_torchfits() -> None:
-    """torchsky.io delegation to torchfits works."""
-    from torchsky.io import get_header
+    """torchfits remains the FITS I/O boundary."""
+    from torchfits import read_header as get_header
 
     hdr = get_header(_FIXTURE, 0)
     assert dict(hdr)["SIMPLE"] is True
@@ -18,7 +18,7 @@ def test_torchsky_reads_fixture_via_torchfits() -> None:
 
 def test_torchsky_wcs_from_torchfits_header() -> None:
     """WCS constructed from a torchfits-read header works."""
-    from torchsky.io import get_header
+    from torchfits import read_header as get_header
     from torchsky.wcs import WCS
 
     hdr = get_header(_FIXTURE, 0)

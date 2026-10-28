@@ -1,7 +1,7 @@
 import torch
 import math
 import json
-from torchsky.sphere import MOC, HealSparseMap, nest2uniq
+from torchsky.sphere import MOC, SparseHealpixMap, nest2uniq
 
 
 def test_moc_area():
@@ -66,8 +66,8 @@ def test_moc_geom_construction():
 
 def test_sparse_from_moc():
     moc = MOC.from_circle(0.0, 0.0, 5.0, max_order=6)
-    smap = HealSparseMap.from_moc(moc, nside=64)
-    assert isinstance(smap, HealSparseMap)
+    smap = SparseHealpixMap.from_moc(moc, nside=64)
+    assert isinstance(smap, SparseHealpixMap)
     assert smap.get_covered_pixels().numel() > 0
 
 

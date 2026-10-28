@@ -71,6 +71,8 @@ def psf_support_radius(psf_spec: object | None) -> tuple[int, int]:
         kernel = getattr(psf_spec, "kernel2d", None)
         if kernel is None or kernel.ndim != 2:
             raise ValueError("kernel2d PSF mode requires a 2D kernel")
+        if any(int(size) % 2 == 0 for size in kernel.shape):
+            raise ValueError("kernel2d PSF dimensions must be odd")
         return int(kernel.shape[0]) // 2, int(kernel.shape[1]) // 2
     if mode == "learned_lowrank":
         # Learned chromatic kernels vary per cell; reserve twice the base
@@ -124,31 +126,42 @@ def gaussian_blur_variance(variance: Tensor, sigma_pix: float) -> Tensor:
     return out.squeeze(0).squeeze(0)
 
 
-def apply_kernel2d(image: Tensor, kernel2d: Tensor) -> Tensor:
+def _normalized_kernel2d(reference: Tensor, kernel2d: Tensor) -> Tensor:
     if kernel2d.ndim != 2:
         raise ValueError("kernel2d PSF must be 2D")
-    kernel = kernel2d.to(device=image.device, dtype=image.dtype)
-    kernel = kernel / torch.clamp(kernel.sum(), min=1e-8)
+    if kernel2d.numel() == 0:
+        raise ValueError("kernel2d PSF must be non-empty")
+    if any(int(size) % 2 == 0 for size in kernel2d.shape):
+        raise ValueError("kernel2d PSF dimensions must be odd")
+    kernel = kernel2d.to(device=reference.device, dtype=reference.dtype)
+    if not bool(torch.isfinite(kernel).all()):
+        raise ValueError("kernel2d PSF must contain only finite values")
+    kernel_sum = kernel.sum()
+    tolerance = torch.finfo(kernel.dtype).eps**0.5 * kernel.abs().sum().clamp_min(1.0)
+    if bool(kernel_sum.abs() <= tolerance):
+        raise ValueError("kernel2d PSF sum must not be zero or near zero")
+    return kernel / kernel_sum
+
+
+def apply_kernel2d(image: Tensor, kernel2d: Tensor) -> Tensor:
+    """Convolve with an odd image-shaped response, zero outside the image."""
+    kernel = _normalized_kernel2d(image, kernel2d)
     ky, kx = int(kernel.shape[0]), int(kernel.shape[1])
     out = F.conv2d(
         image.unsqueeze(0).unsqueeze(0),
-        kernel.view(1, 1, ky, kx),
+        kernel.flip(-2, -1).view(1, 1, ky, kx),
         padding=(ky // 2, kx // 2),
     )
     return out.squeeze(0).squeeze(0)
 
 
 def apply_kernel2d_variance(variance: Tensor, kernel2d: Tensor) -> Tensor:
-    """Propagate independent-pixel variance through a normalized 2-D PSF."""
-    if kernel2d.ndim != 2:
-        raise ValueError("kernel2d PSF must be 2D")
-    kernel = kernel2d.to(device=variance.device, dtype=variance.dtype)
-    kernel = kernel / torch.clamp(kernel.sum(), min=1e-8)
-    kernel = torch.square(kernel)
+    """Propagate independent-pixel variance through :func:`apply_kernel2d`."""
+    kernel = torch.square(_normalized_kernel2d(variance, kernel2d))
     ky, kx = int(kernel.shape[0]), int(kernel.shape[1])
     out = F.conv2d(
         variance.unsqueeze(0).unsqueeze(0),
-        kernel.view(1, 1, ky, kx),
+        kernel.flip(-2, -1).view(1, 1, ky, kx),
         padding=(ky // 2, kx // 2),
     )
     return out.squeeze(0).squeeze(0)

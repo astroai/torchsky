@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from .calibration_command import register_calibration_parser
-from .inspect_command import register_inspect_parsers
+from .. import __version__
 from .map_command import register_map_parser
 from .sky_command import register_sky_parsers
 
@@ -21,6 +20,12 @@ def _register_viz_parser(subparsers: argparse.Action) -> None:
             "or behind a reverse proxy. The server can read any file under --root and loads full "
             "images into memory for HiPS/validation (see --max-image-pixels and registration caps)."
         ),
+        epilog=(
+            "Examples:\n"
+            "  torchsky viz\n"
+            "  torchsky viz --root /data/products --host 0.0.0.0 --no-browser"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
         "--root",
@@ -91,7 +96,7 @@ def _register_viz_parser(subparsers: argparse.Action) -> None:
         default=None,
         dest="cors_origins",
         metavar="URL",
-        help="Allowed CORS origin (repeatable). Default: all origins, no credentials.",
+        help="Allowed CORS origin (repeatable). Default: no cross-origin requests.",
     )
     p.add_argument(
         "--cors-credentials",
@@ -102,17 +107,19 @@ def _register_viz_parser(subparsers: argparse.Action) -> None:
 
 
 def _viz_handler(args: argparse.Namespace) -> int:
-    try:
-        from torchsky.viz import serve
-    except ImportError:
-        import sys
+    import sys
 
+    try:
+        import uvicorn  # noqa: F401  (thin probe for the optional extra)
+    except ImportError:
         print(
             "torchsky[viz] extra not installed.\n"
             "Install with: pip install 'torchsky[viz]'",
             file=sys.stderr,
         )
         return 1
+    from torchsky.viz import serve
+
     cors = list(args.cors_origins) if args.cors_origins else None
     serve(
         root=args.root,
@@ -132,10 +139,19 @@ def _viz_handler(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="torchsky")
+    parser = argparse.ArgumentParser(
+        prog="torchsky",
+        description="Torch-native celestial geometry, sphere, and mapmaking workflows.",
+        epilog=(
+            "Examples:\n"
+            "  torchsky --version\n"
+            "  torchsky map --help\n"
+            "  torchsky sky estimate --help"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--version", action="version", version=f"torchsky {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    register_inspect_parsers(subparsers)
-    register_calibration_parser(subparsers)
     register_map_parser(subparsers)
     register_sky_parsers(subparsers)
     _register_viz_parser(subparsers)

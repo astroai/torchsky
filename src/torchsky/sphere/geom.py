@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
-from typing import Literal, TYPE_CHECKING
+from typing import Literal, Protocol, TYPE_CHECKING
 
 import torch
 from torch import Tensor
@@ -18,7 +18,7 @@ try:
 except ImportError:
     vmap = None
 
-from .._native import cpp as _cpp
+from .. import _ops
 
 from . import healpix as _healpix
 from .core import (
@@ -90,6 +90,26 @@ def _as_geom_tensor(
     return tensor.to(dtype=torch.float64)
 
 
+def _validate_nonnegative_finite(value: float, name: str) -> float:
+    value = float(value)
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(f"{name} must be finite and nonnegative")
+    return value
+
+
+def _validate_ellipse_axes(semi_major_deg: float, semi_minor_deg: float) -> None:
+    major = float(semi_major_deg)
+    minor = float(semi_minor_deg)
+    if not math.isfinite(major) or not math.isfinite(minor):
+        raise ValueError("ellipse axes must be finite")
+    if minor <= 0.0 or major <= 0.0:
+        raise ValueError("semi_major_deg and semi_minor_deg must be positive")
+    if minor > major:
+        raise ValueError("semi_minor_deg must be <= semi_major_deg")
+    if major >= 90.0:
+        raise ValueError("focal-form semi_major_deg must be less than 90 degrees")
+
+
 def _normalize_polygon_vertices(
     lon_deg: Tensor | list[float],
     lat_deg: Tensor | list[float],
@@ -127,13 +147,10 @@ def _points_on_any_polygon_edge(
     """(M,) mask: each query point lies on some polygon edge (great-circle arc), within atol."""
     v0 = vertices
     v1 = torch.roll(vertices, shifts=-1, dims=0)
-    d_v0_v1 = torch.acos(torch.clamp((v0 * v1).sum(dim=-1), -1.0, 1.0))
     m = int(points.shape[0])
     out = torch.zeros(m, dtype=torch.bool, device=points.device)
     for j in range(int(vertices.shape[0])):
-        d0 = torch.acos(torch.clamp((points * v0[j]).sum(dim=-1), -1.0, 1.0))
-        d1 = torch.acos(torch.clamp((points * v1[j]).sum(dim=-1), -1.0, 1.0))
-        out |= torch.abs((d0 + d1) - d_v0_v1[j]) <= atol_rad
+        out |= _arc_contains_point(v0[j], v1[j], points, atol_rad)
     return out
 
 
@@ -185,48 +202,33 @@ def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tens
     a,b: [3]
     p: [..., 3]
     """
-    d_ab = torch.acos(torch.clamp((a * b).sum(dim=-1), -1.0, 1.0))
-    d_ap = torch.acos(torch.clamp((p * a).sum(dim=-1), -1.0, 1.0))
-    d_pb = torch.acos(torch.clamp((p * b).sum(dim=-1), -1.0, 1.0))
-    return torch.abs((d_ap + d_pb) - d_ab) <= tol_rad
+    tol_rad = _validate_nonnegative_finite(tol_rad, "tol_rad")
+    a, b, p = torch.broadcast_tensors(a, b, p)
+    cross_ab = torch.linalg.cross(a, b, dim=-1)
+    normal_norm = torch.linalg.norm(cross_ab, dim=-1)
+    dot_ab = torch.clamp((a * b).sum(dim=-1), -1.0, 1.0)
+    proper = normal_norm > 1e-15
+    point_arc = (~proper) & (dot_ab >= 0.0)
 
+    safe_norm = torch.where(proper, normal_norm, torch.ones_like(normal_norm))
+    normal = cross_ab / safe_norm.unsqueeze(-1)
+    arc_length = torch.atan2(normal_norm, dot_ab)
 
-def _great_circle_arcs_intersect_many(
-    a0: Tensor,
-    a1: Tensor,
-    b0: Tensor,
-    b1: Tensor,
-    *,
-    tol_rad: float = 1e-10,
-) -> Tensor:
-    """
-    Vectorized arc-arc intersection for one arc (a0,a1) vs many arcs (b0,b1).
+    cross_ap = torch.linalg.cross(a, p, dim=-1)
+    dot_ap = torch.clamp((a * p).sum(dim=-1), -1.0, 1.0)
+    signed = torch.atan2((normal * cross_ap).sum(dim=-1), dot_ap)
+    signed = torch.remainder(signed, 2.0 * math.pi)
+    plane_slack = 8.0 * torch.finfo(p.dtype).eps
+    plane_tol = math.sin(min(tol_rad, math.pi / 2.0)) + plane_slack
+    on_circle = torch.abs((p * normal).sum(dim=-1)) <= plane_tol
+    on_proper = (
+        proper
+        & on_circle
+        & ((signed <= arc_length + tol_rad) | (signed >= 2.0 * math.pi - tol_rad))
+    )
 
-    Returns boolean tensor of shape [M].
-    """
-    n1 = torch.cross(a0, a1, dim=-1)
-    n1_norm = torch.linalg.norm(n1)
-    if float(n1_norm.item()) < 1e-15:
-        return torch.zeros(b0.shape[0], dtype=torch.bool, device=b0.device)
-
-    n2 = torch.cross(b0, b1, dim=-1)
-    n2_norm = torch.linalg.norm(n2, dim=-1)
-    valid = n2_norm > 1e-15
-
-    p = torch.cross(n1.unsqueeze(0).expand_as(n2), n2, dim=-1)
-    p_norm = torch.linalg.norm(p, dim=-1)
-    valid = valid & (p_norm > 1e-15)
-
-    i1 = p / p_norm.clamp_min(1e-15).unsqueeze(-1)
-    i2 = -i1
-
-    on_a_i1 = _arc_contains_point(a0, a1, i1, tol_rad)
-    on_a_i2 = _arc_contains_point(a0, a1, i2, tol_rad)
-    on_b_i1 = _arc_contains_point(b0, b1, i1, tol_rad)
-    on_b_i2 = _arc_contains_point(b0, b1, i2, tol_rad)
-
-    out = valid & ((on_a_i1 & on_b_i1) | (on_a_i2 & on_b_i2))
-    return out
+    point_distance = torch.atan2(torch.linalg.norm(cross_ap, dim=-1), dot_ap)
+    return on_proper | (point_arc & (point_distance <= tol_rad))
 
 
 def _great_circle_arcs_intersect_matrix(
@@ -243,46 +245,80 @@ def _great_circle_arcs_intersect_matrix(
     a0,a1: [E1,3], b0,b1: [E2,3]
     returns: [E1,E2] bool
     """
+    tol_rad = _validate_nonnegative_finite(tol_rad, "tol_rad")
     if (
-        _cpp is not None
+        _ops.has_fixed_dispatcher()
         and a0.device.type == "cpu"
         and a1.device.type == "cpu"
         and b0.device.type == "cpu"
         and b1.device.type == "cpu"
-        and hasattr(_cpp, "_sphere_arc_intersections_matrix_cpu")
     ):
-        return _cpp._sphere_arc_intersections_matrix_cpu(
-            a0.contiguous(),
-            a1.contiguous(),
-            b0.contiguous(),
-            b1.contiguous(),
+        return _ops.sphere_arc_intersections_matrix(
+            a0.detach().contiguous(),
+            a1.detach().contiguous(),
+            b0.detach().contiguous(),
+            b1.detach().contiguous(),
             float(tol_rad),
         )
 
-    n1 = torch.cross(a0, a1, dim=-1)  # [E1,3]
-    n2 = torch.cross(b0, b1, dim=-1)  # [E2,3]
+    n1 = torch.cross(a0, a1, dim=-1)
+    n2 = torch.cross(b0, b1, dim=-1)
     n1_norm = torch.linalg.norm(n1, dim=-1)
     n2_norm = torch.linalg.norm(n2, dim=-1)
-    valid = (n1_norm > 1e-15).unsqueeze(1) & (n2_norm > 1e-15).unsqueeze(0)
+    dot1 = torch.clamp((a0 * a1).sum(dim=-1), -1.0, 1.0)
+    dot2 = torch.clamp((b0 * b1).sum(dim=-1), -1.0, 1.0)
+    proper1 = n1_norm > 1e-15
+    proper2 = n2_norm > 1e-15
+    point1 = (~proper1) & (dot1 >= 0.0)
+    point2 = (~proper2) & (dot2 >= 0.0)
 
-    p = torch.cross(n1[:, None, :], n2[None, :, :], dim=-1)  # [E1,E2,3]
-    p_norm = torch.linalg.norm(p, dim=-1)
-    valid = valid & (p_norm > 1e-15)
-
-    i1 = p / p_norm.clamp_min(1e-15).unsqueeze(-1)
-    i2 = -i1
+    n1 = n1 / torch.where(proper1, n1_norm, torch.ones_like(n1_norm)).unsqueeze(-1)
+    n2 = n2 / torch.where(proper2, n2_norm, torch.ones_like(n2_norm)).unsqueeze(-1)
 
     a0e = a0[:, None, :]
     a1e = a1[:, None, :]
     b0e = b0[None, :, :]
     b1e = b1[None, :, :]
+    proper_pair = proper1.unsqueeze(1) & proper2.unsqueeze(0)
+
+    point_distance = torch.atan2(
+        torch.linalg.norm(torch.linalg.cross(a0e, b0e, dim=-1), dim=-1),
+        torch.clamp((a0e * b0e).sum(dim=-1), -1.0, 1.0),
+    )
+    hits = point1.unsqueeze(1) & point2.unsqueeze(0) & (point_distance <= tol_rad)
+    hits |= (
+        point1.unsqueeze(1)
+        & proper2.unsqueeze(0)
+        & _arc_contains_point(b0e, b1e, a0e, tol_rad)
+    )
+    hits |= (
+        proper1.unsqueeze(1)
+        & point2.unsqueeze(0)
+        & _arc_contains_point(a0e, a1e, b0e, tol_rad)
+    )
+
+    p = torch.cross(n1[:, None, :], n2[None, :, :], dim=-1)
+    p_norm = torch.linalg.norm(p, dim=-1)
+    distinct_circles = p_norm > 1e-15
+    i1 = p / torch.where(distinct_circles, p_norm, torch.ones_like(p_norm)).unsqueeze(
+        -1
+    )
+    i2 = -i1
 
     on_a_i1 = _arc_contains_point(a0e, a1e, i1, tol_rad)
     on_a_i2 = _arc_contains_point(a0e, a1e, i2, tol_rad)
     on_b_i1 = _arc_contains_point(b0e, b1e, i1, tol_rad)
     on_b_i2 = _arc_contains_point(b0e, b1e, i2, tol_rad)
+    hits |= proper_pair & distinct_circles & ((on_a_i1 & on_b_i1) | (on_a_i2 & on_b_i2))
 
-    return valid & ((on_a_i1 & on_b_i1) | (on_a_i2 & on_b_i2))
+    coincident = proper_pair & ~distinct_circles
+    coincident_overlap = (
+        _arc_contains_point(a0e, a1e, b0e, tol_rad)
+        | _arc_contains_point(a0e, a1e, b1e, tol_rad)
+        | _arc_contains_point(b0e, b1e, a0e, tol_rad)
+        | _arc_contains_point(b0e, b1e, a1e, tol_rad)
+    )
+    return hits | (coincident & coincident_overlap)
 
 
 def _sorted_unique_intersection(left: Tensor, right: Tensor) -> Tensor:
@@ -318,37 +354,33 @@ def _planar_point_in_polygon(
     polygon_xy: [N, 2]
     returns: [M] bool
     """
+    eps = _validate_nonnegative_finite(eps, "eps")
     if (
-        _cpp is not None
+        _ops.has_fixed_dispatcher()
         and points_xy.device.type == "cpu"
         and polygon_xy.device.type == "cpu"
         and (points_xy.shape[0] * polygon_xy.shape[0]) >= _PLANAR_PIP_CPP_MIN_OPS
-        and hasattr(_cpp, "_sphere_planar_point_in_polygon_cpu")
     ):
-        return _cpp._sphere_planar_point_in_polygon_cpu(
-            points_xy.contiguous(),
-            polygon_xy.contiguous(),
+        return _ops.sphere_planar_point_in_polygon(
+            points_xy.detach().contiguous(),
+            polygon_xy.detach().contiguous(),
             float(eps),
         )
 
-    x = points_xy[:, 0].unsqueeze(1)
-    y = points_xy[:, 1].unsqueeze(1)
-
-    xi = polygon_xy[:, 0].unsqueeze(0)
-    yi = polygon_xy[:, 1].unsqueeze(0)
-    xj = torch.roll(xi, shifts=-1, dims=1)
-    yj = torch.roll(yi, shifts=-1, dims=1)
-
-    y_between = (yi > y) != (yj > y)
-    dy = yj - yi
-    dy = torch.where(
-        dy.abs() < eps,
-        torch.where(dy >= 0.0, torch.full_like(dy, eps), torch.full_like(dy, -eps)),
-        dy,
-    )
-    x_inter = (xj - xi) * (y - yi) / dy + xi
-    crossings = y_between & (x < x_inter)
-    return (crossings.to(torch.int64).sum(dim=1) % 2) == 1
+    x = points_xy[:, 0]
+    y = points_xy[:, 1]
+    inside = torch.zeros(points_xy.shape[0], dtype=torch.bool, device=points_xy.device)
+    for i in range(int(polygon_xy.shape[0])):
+        j = (i + 1) % int(polygon_xy.shape[0])
+        xi, yi = polygon_xy[i]
+        xj, yj = polygon_xy[j]
+        crossing = (yi > y) != (yj > y)
+        if not bool(crossing.any()):
+            continue
+        active = torch.nonzero(crossing, as_tuple=True)[0]
+        x_inter = xi + (xj - xi) * (y[active] - yi) / (yj - yi)
+        inside[active] ^= x[active] < x_inter
+    return inside
 
 
 def _destination_lonlat_deg(
@@ -581,6 +613,7 @@ def spherical_polygon_contains(
 
     Uses tangent-plane winding number around each query point.
     """
+    atol_deg = _validate_nonnegative_finite(atol_deg, "atol_deg")
     lon_t = _as_geom_tensor(lon_deg)
     lat_t = _as_geom_tensor(lat_deg, like=lon_t)
     lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
@@ -650,6 +683,7 @@ def convex_polygon_contains(
     atol: float = 1e-12,
 ) -> Tensor:
     """Fast half-space point-in-convex-spherical-polygon predicate."""
+    atol = _validate_nonnegative_finite(atol, "atol")
     v_poly = lonlat_to_unit_xyz(
         torch.as_tensor(poly_lon_deg), torch.as_tensor(poly_lat_deg)
     )
@@ -658,6 +692,10 @@ def convex_polygon_contains(
 
     v_next = torch.roll(v_poly, shifts=-1, dims=0)
     normals = torch.cross(v_poly, v_next, dim=-1)
+    normal_norm = torch.linalg.norm(normals, dim=-1)
+    if bool(torch.any(normal_norm <= 1e-15)):
+        raise ValueError("polygon edges must have distinct, non-antipodal endpoints")
+    normals = normals / normal_norm.unsqueeze(-1)
 
     centroid = v_poly.sum(dim=0)
     centroid = centroid / torch.linalg.norm(centroid).clamp_min(1e-15)
@@ -683,6 +721,7 @@ def query_polygon_general(
     lat_deg: Tensor | list[float],
     *,
     nest: bool = False,
+    inclusive: bool = False,
 ) -> Tensor:
     """
     Query HEALPix pixels inside a simple spherical polygon (convex or non-convex).
@@ -694,7 +733,9 @@ def query_polygon_general(
     vertices_xyz = lonlat_to_unit_xyz(lon_t, lat_t).to(dtype=lon_t.dtype)
 
     if vertices_xyz.shape[0] == 3:
-        return _healpix.query_polygon(nside, vertices_xyz, nest=nest)
+        return _healpix.query_polygon(
+            nside, vertices_xyz, nest=nest, inclusive=inclusive
+        )
 
     center = vertices_xyz.mean(dim=0)
     center = center / torch.linalg.norm(center).clamp_min(1e-15)
@@ -704,7 +745,9 @@ def query_polygon_general(
     chunks: list[Tensor] = []
     for i, j, k in triangles:
         verts = vertices_xyz[[i, j, k]].to(device=query_device)
-        chunks.append(_healpix.query_polygon(nside, verts, nest=nest))
+        chunks.append(
+            _healpix.query_polygon(nside, verts, nest=nest, inclusive=inclusive)
+        )
     if not chunks:
         return torch.empty(0, dtype=torch.int64, device=query_device)
     return torch.unique(torch.cat(chunks)).to(torch.int64)
@@ -727,6 +770,7 @@ def spherical_polygons_intersect(
 
     Returns True if interiors intersect or boundaries cross/touch.
     """
+    atol_deg = _validate_nonnegative_finite(atol_deg, "atol_deg")
     lon1, lat1 = _normalize_polygon_vertices(lon1_deg, lat1_deg)
     lon2, lat2 = _normalize_polygon_vertices(lon2_deg, lat2_deg)
     v1 = lonlat_to_unit_xyz(lon1, lat1)
@@ -786,7 +830,17 @@ class PixelizedRegion:
     pixels: Tensor
 
     def __post_init__(self) -> None:
-        pix = torch.as_tensor(self.pixels, dtype=torch.int64).reshape(-1)
+        if isinstance(self.nside, bool) or not isinstance(self.nside, int):
+            raise TypeError("nside must be an integer")
+        npix = _healpix.nside2npix(self.nside)
+        if not isinstance(self.nest, bool):
+            raise TypeError("nest must be a bool")
+        raw = torch.as_tensor(self.pixels)
+        if raw.dtype == torch.bool or raw.is_floating_point() or raw.is_complex():
+            raise TypeError("pixels must contain integer indices")
+        pix = raw.to(dtype=torch.int64).reshape(-1)
+        if bool(torch.any((pix < 0) | (pix >= npix))):
+            raise ValueError("pixel index out of range for nside")
         pix = torch.unique(pix)
         object.__setattr__(self, "pixels", pix)
 
@@ -972,8 +1026,8 @@ class SphericalPolygon:
         self,
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
         return to_exact_region(self, cap_steps=cap_steps, backend=backend)
 
     def exact_union(
@@ -981,33 +1035,36 @@ class SphericalPolygon:
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).union(
-            other, cap_steps=cap_steps
-        )
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.union(other)
+        return exact.union(other, cap_steps=cap_steps)
 
     def exact_intersection(
         self,
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).intersection(
-            other, cap_steps=cap_steps
-        )
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.intersection(other)
+        return exact.intersection(other, cap_steps=cap_steps)
 
     def exact_difference(
         self,
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).difference(
-            other, cap_steps=cap_steps
-        )
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.difference(other)
+        return exact.difference(other, cap_steps=cap_steps)
 
 
 @dataclass(frozen=True)
@@ -1093,8 +1150,8 @@ class SphericalMultiPolygon:
         self,
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
         return to_exact_region(self, cap_steps=cap_steps, backend=backend)
 
     def exact_union(
@@ -1102,33 +1159,36 @@ class SphericalMultiPolygon:
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).union(
-            other, cap_steps=cap_steps
-        )
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.union(other)
+        return exact.union(other, cap_steps=cap_steps)
 
     def exact_intersection(
         self,
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).intersection(
-            other, cap_steps=cap_steps
-        )
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.intersection(other)
+        return exact.intersection(other, cap_steps=cap_steps)
 
     def exact_difference(
         self,
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).difference(
-            other, cap_steps=cap_steps
-        )
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.difference(other)
+        return exact.difference(other, cap_steps=cap_steps)
 
 
 @dataclass(frozen=True)
@@ -1139,19 +1199,29 @@ class SphericalCap:
     lat_deg: float
     radius_deg: float
 
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.lon_deg):
+            raise ValueError("lon_deg must be finite")
+        if not math.isfinite(self.lat_deg) or not -90.0 <= self.lat_deg <= 90.0:
+            raise ValueError("lat_deg must be finite and in [-90, 90]")
+        if not math.isfinite(self.radius_deg) or not 0.0 < self.radius_deg <= 180.0:
+            raise ValueError("radius_deg must be finite and in (0, 180]")
+
     def contains(
         self,
         lon_deg: Tensor | float,
         lat_deg: Tensor | float,
         *,
         inclusive: bool = True,
+        atol_deg: float = 0.0,
     ) -> Tensor:
+        atol_deg = _validate_nonnegative_finite(atol_deg, "atol_deg")
         dist = great_circle_distance(
             self.lon_deg, self.lat_deg, lon_deg, lat_deg, degrees=True
         )
         if inclusive:
-            return dist <= self.radius_deg
-        return dist < self.radius_deg
+            return dist <= self.radius_deg + atol_deg
+        return dist < self.radius_deg - atol_deg
 
     def query_pixels(self, nside: int, *, nest: bool = False) -> Tensor:
         return _healpix.query_circle(
@@ -1189,8 +1259,8 @@ class SphericalCap:
         self,
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
         return to_exact_region(self, cap_steps=cap_steps, backend=backend)
 
     def exact_union(
@@ -1198,36 +1268,36 @@ class SphericalCap:
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).union(
-            other, cap_steps=cap_steps
-        )
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.union(other)
+        return exact.union(other, cap_steps=cap_steps)
 
     def exact_intersection(
         self,
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).intersection(
-            other, cap_steps=cap_steps
-        )
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.intersection(other)
+        return exact.intersection(other, cap_steps=cap_steps)
 
     def exact_difference(
         self,
         other: "RegionOperand",
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
-        return self.to_exact(cap_steps=cap_steps, backend=backend).difference(
-            other, cap_steps=cap_steps
-        )
-
-
-Circle = SphericalCap
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
+        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
+        if isinstance(exact, NativeApproximateSphericalRegion):
+            return exact.difference(other)
+        return exact.difference(other, cap_steps=cap_steps)
 
 
 @dataclass(frozen=True)
@@ -1240,6 +1310,13 @@ class SphericalBox:
     lat_max: float
 
     def __post_init__(self) -> None:
+        if not all(
+            math.isfinite(value)
+            for value in (self.lon_min, self.lon_max, self.lat_min, self.lat_max)
+        ):
+            raise ValueError("box bounds must be finite")
+        if not -90.0 <= self.lat_min <= 90.0 or not -90.0 <= self.lat_max <= 90.0:
+            raise ValueError("latitude bounds must be in [-90, 90]")
         if self.lat_min > self.lat_max:
             raise ValueError("lat_min must be <= lat_max")
 
@@ -1260,13 +1337,9 @@ class SphericalBox:
             lo = self.lon_min % 360.0
             hi = self.lon_max % 360.0
             if inclusive:
-                lon_mask = (lon_0_360 >= lo - atol_deg) | (
-                    lon_0_360 <= hi + atol_deg
-                )
+                lon_mask = (lon_0_360 >= lo - atol_deg) | (lon_0_360 <= hi + atol_deg)
             else:
-                lon_mask = (lon_0_360 > lo + atol_deg) | (
-                    lon_0_360 < hi - atol_deg
-                )
+                lon_mask = (lon_0_360 > lo + atol_deg) | (lon_0_360 < hi - atol_deg)
         elif self.lon_max - self.lon_min >= 360.0:
             lon_mask = torch.ones_like(lon_t, dtype=torch.bool)
         else:
@@ -1317,9 +1390,6 @@ class SphericalBox:
         return SphericalBooleanRegion(op="difference", left=self, right=other)
 
 
-Box = SphericalBox
-
-
 @dataclass(frozen=True)
 class SphericalEllipse:
     """Spherical ellipse."""
@@ -1329,6 +1399,15 @@ class SphericalEllipse:
     semi_major_deg: float
     semi_minor_deg: float
     pa_deg: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.lon_deg):
+            raise ValueError("lon_deg must be finite")
+        if not math.isfinite(self.lat_deg) or not -90.0 <= self.lat_deg <= 90.0:
+            raise ValueError("lat_deg must be finite and in [-90, 90]")
+        _validate_ellipse_axes(self.semi_major_deg, self.semi_minor_deg)
+        if not math.isfinite(self.pa_deg):
+            raise ValueError("pa_deg must be finite")
 
     def contains(
         self,
@@ -1388,18 +1467,17 @@ class SphericalEllipse:
         return SphericalBooleanRegion(op="difference", left=self, right=other)
 
 
-Ellipse = SphericalEllipse
+class RegionOperand(Protocol):
+    def contains(
+        self,
+        lon_deg: Tensor | float,
+        lat_deg: Tensor | float,
+        *,
+        inclusive: bool = True,
+        atol_deg: float = 1e-10,
+    ) -> Tensor: ...
 
-
-RegionOperand = object
-
-
-def _spherical_geometry_available() -> bool:
-    try:
-        from spherical_geometry.polygon import SphericalPolygon as _  # noqa: F401
-    except Exception:
-        return False
-    return True
+    def pixelize(self, nside: int, *, nest: bool = False) -> PixelizedRegion: ...
 
 
 def _require_spherical_geometry():
@@ -1483,7 +1561,7 @@ def _numpy_sg_contains_lonlat_bulk(
 
 
 def _region_to_sg(region: RegionOperand, *, cap_steps: int = 256):
-    if isinstance(region, NativeExactSphericalRegion):
+    if isinstance(region, NativeApproximateSphericalRegion):
         return _region_to_sg(region._region, cap_steps=cap_steps)
     if isinstance(region, ExactSphericalRegion):
         return region._sg_poly
@@ -1601,8 +1679,8 @@ class SphericalBooleanRegion:
         self,
         *,
         cap_steps: int = 256,
-        backend: Literal["auto", "spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeExactSphericalRegion":
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
         return to_exact_region(self, cap_steps=cap_steps, backend=backend)
 
     def exact_area(self, *, degrees: bool = False, cap_steps: int = 256) -> float:
@@ -1610,12 +1688,13 @@ class SphericalBooleanRegion:
 
 
 @dataclass(frozen=True)
-class NativeExactSphericalRegion:
+class NativeApproximateSphericalRegion:
     """
-    Torch-native exact-region scaffold with controlled-error boolean semantics.
+    Torch-native region wrapper with explicit center-sampled approximations.
 
-    This backend is dependency-free and deterministic. It is the default
-    exact-region path. ``spherical-geometry`` is an opt-in oracle backend.
+    Analytic area and emptiness are used where available. Unsupported exact
+    predicates fail closed; ``area_estimate`` is the explicit HEALPix-center
+    approximation. ``spherical-geometry`` remains the opt-in exact backend.
     """
 
     _region: RegionOperand
@@ -1623,33 +1702,87 @@ class NativeExactSphericalRegion:
 
     @property
     def is_empty(self) -> bool:
-        probe_nside = int(self._nsides[0]) if len(self._nsides) > 0 else 256
-        return int(self.query_pixels(probe_nside, nest=False).numel()) == 0
+        area = self._analytic_area_sr()
+        if area > 0.0:
+            return False
+        raise RuntimeError("native emptiness is unavailable for zero-area regions")
+
+    def _analytic_area_sr(self) -> float:
+        region = self._region
+        if isinstance(region, SphericalCap):
+            radius = math.radians(region.radius_deg)
+            return 4.0 * math.pi * math.sin(0.5 * radius) ** 2
+        if isinstance(region, SphericalPolygon):
+            return float(region.area(degrees=False))
+        if isinstance(region, SphericalBox):
+            if region.lon_max - region.lon_min >= 360.0:
+                width = 2.0 * math.pi
+            else:
+                width = math.radians((region.lon_max - region.lon_min) % 360.0)
+            return width * (
+                math.sin(math.radians(region.lat_max))
+                - math.sin(math.radians(region.lat_min))
+            )
+        raise RuntimeError(
+            "analytic native area is unavailable; use area_estimate() or "
+            "backend='spherical-geometry'"
+        )
 
     def area(self, *, degrees: bool = False) -> float:
-        est = _estimate_area_from_query(
+        area_sr = self._analytic_area_sr()
+        if area_sr <= 0.0:
+            raise RuntimeError("native area is indeterminate for zero-area regions")
+        if degrees:
+            return area_sr * ((180.0 / math.pi) * (180.0 / math.pi))
+        return area_sr
+
+    def area_estimate(self) -> RegionAreaEstimate:
+        return _estimate_area_from_query(
             self.query_pixels, nsides=self._nsides, nest=False
         )
-        return float(est.area_deg2 if degrees else est.area_sr)
 
-    def intersects(self, other: RegionOperand, *, cap_steps: int = 256) -> bool:
-        del cap_steps
-        nside = int(self._nsides[-1]) if len(self._nsides) > 0 else 1024
-        a = self.query_pixels(nside, nest=False)
-        if a.numel() == 0:
-            return False
-        other_native = to_exact_region(
-            other, backend="native", cap_steps=256, nsides=self._nsides
+    def intersects(self, other: RegionOperand) -> bool:
+        other_region = (
+            other._region
+            if isinstance(other, NativeApproximateSphericalRegion)
+            else other
         )
-        b = other_native.query_pixels(nside, nest=False)
-        if b.numel() == 0:
-            return False
-        return bool(torch.isin(a, b).any().item())
+        if isinstance(self._region, SphericalCap) and isinstance(
+            other_region, SphericalCap
+        ):
+            distance = float(
+                great_circle_distance(
+                    self._region.lon_deg,
+                    self._region.lat_deg,
+                    other_region.lon_deg,
+                    other_region.lat_deg,
+                    degrees=True,
+                )
+            )
+            return distance <= self._region.radius_deg + other_region.radius_deg
+        if isinstance(self._region, SphericalPolygon) and isinstance(
+            other_region, SphericalPolygon
+        ):
+            return self._region.intersects(other_region)
+        if isinstance(self._region, SphericalMultiPolygon) and isinstance(
+            other_region, (SphericalPolygon, SphericalMultiPolygon)
+        ):
+            return self._region.intersects(other_region)
+        if isinstance(self._region, SphericalPolygon) and isinstance(
+            other_region, SphericalMultiPolygon
+        ):
+            return other_region.intersects(self._region)
+        raise RuntimeError(
+            "native intersection is unavailable for these region types; "
+            "use backend='spherical-geometry'"
+        )
 
-    def contains(self, lon_deg: Tensor | float, lat_deg: Tensor | float) -> Tensor:
-        return _region_contains(
-            self._region, lon_deg, lat_deg, inclusive=True, atol_deg=1e-10
-        )
+    def contains(
+        self,
+        lon_deg: Tensor | float,
+        lat_deg: Tensor | float,
+    ) -> Tensor:
+        return _region_contains(self._region, lon_deg, lat_deg)
 
     def query_pixels(self, nside: int, *, nest: bool = False) -> Tensor:
         return _region_pixelize(self._region, nside=nside, nest=nest).pixels
@@ -1659,29 +1792,20 @@ class NativeExactSphericalRegion:
             nside=nside, nest=nest, pixels=self.query_pixels(nside, nest=nest)
         )
 
-    def union(
-        self, other: RegionOperand, *, cap_steps: int = 256
-    ) -> "NativeExactSphericalRegion":
-        del cap_steps
-        return NativeExactSphericalRegion(
+    def union(self, other: RegionOperand) -> "NativeApproximateSphericalRegion":
+        return NativeApproximateSphericalRegion(
             SphericalBooleanRegion(op="union", left=self._region, right=other),
             _nsides=self._nsides,
         )
 
-    def intersection(
-        self, other: RegionOperand, *, cap_steps: int = 256
-    ) -> "NativeExactSphericalRegion":
-        del cap_steps
-        return NativeExactSphericalRegion(
+    def intersection(self, other: RegionOperand) -> "NativeApproximateSphericalRegion":
+        return NativeApproximateSphericalRegion(
             SphericalBooleanRegion(op="intersection", left=self._region, right=other),
             _nsides=self._nsides,
         )
 
-    def difference(
-        self, other: RegionOperand, *, cap_steps: int = 256
-    ) -> "NativeExactSphericalRegion":
-        del cap_steps
-        return NativeExactSphericalRegion(
+    def difference(self, other: RegionOperand) -> "NativeApproximateSphericalRegion":
+        return NativeApproximateSphericalRegion(
             SphericalBooleanRegion(op="difference", left=self._region, right=other),
             _nsides=self._nsides,
         )
@@ -1692,7 +1816,7 @@ class NativeExactSphericalRegion:
         if isinstance(self._region, SphericalMultiPolygon):
             return self._region
         raise ValueError(
-            "native exact region cannot be converted to multipolygon for this operand type"
+            "native approximate region cannot be converted to multipolygon for this operand type"
         )
 
 
@@ -1716,7 +1840,15 @@ class ExactSphericalRegion:
         other_sg = _region_to_sg(other, cap_steps=cap_steps)
         return bool(self._sg_poly.intersects_poly(other_sg))
 
-    def contains(self, lon_deg: Tensor | float, lat_deg: Tensor | float) -> Tensor:
+    def contains(
+        self,
+        lon_deg: Tensor | float,
+        lat_deg: Tensor | float,
+        *,
+        inclusive: bool = True,
+        atol_deg: float = 1e-10,
+    ) -> Tensor:
+        del inclusive, atol_deg
         lon_t = torch.as_tensor(lon_deg, dtype=torch.float64)
         lat_t = torch.as_tensor(lat_deg, dtype=torch.float64)
         lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
@@ -1800,21 +1932,20 @@ def to_exact_region(
     region: RegionOperand,
     *,
     cap_steps: int = 256,
-    backend: Literal["auto", "spherical-geometry", "native"] = "native",
+    backend: Literal["spherical-geometry", "native"] = "native",
     nsides: tuple[int, ...] | list[int] = (256, 512, 1024, 2048),
-) -> ExactSphericalRegion | NativeExactSphericalRegion:
+) -> ExactSphericalRegion | NativeApproximateSphericalRegion:
     """
-    Convert a torchsky spherical region into an exact-region backend.
+    Convert a torchsky spherical region into a selected region backend.
 
-    Default ``native`` is torchsky-owned. ``spherical-geometry`` is opt-in for
-    oracle tests and benchmarks. ``auto`` is an alias for ``native``.
+    Default ``native`` is torchsky-owned and exposes analytic results only when
+    available, with explicitly named center-sampled estimates otherwise.
+    ``spherical-geometry`` is the opt-in exact backend.
     """
-    if backend not in {"auto", "spherical-geometry", "native"}:
-        raise ValueError(
-            "backend must be one of {'auto', 'spherical-geometry', 'native'}"
-        )
-    if backend in {"native", "auto"}:
-        return NativeExactSphericalRegion(region, tuple(nsides))
+    if backend not in {"spherical-geometry", "native"}:
+        raise ValueError("backend must be one of {'spherical-geometry', 'native'}")
+    if backend == "native":
+        return NativeApproximateSphericalRegion(region, tuple(nsides))
     return ExactSphericalRegion(_region_to_sg(region, cap_steps=cap_steps))
 
 
@@ -1835,10 +1966,7 @@ def query_ellipse(
     The ellipse is defined in geodesic polar coordinates around the center.
     `pa_deg` is position angle East of North.
     """
-    if semi_major_deg <= 0.0 or semi_minor_deg <= 0.0:
-        raise ValueError("semi_major_deg and semi_minor_deg must be positive")
-    if semi_minor_deg > semi_major_deg:
-        raise ValueError("semi_minor_deg must be <= semi_major_deg")
+    _validate_ellipse_axes(semi_major_deg, semi_minor_deg)
 
     # Spherical ellipse in focal form:
     # d(P, F1) + d(P, F2) <= 2a, where a is the semi-major axis.
@@ -1852,7 +1980,7 @@ def query_ellipse(
     lon_f1, lat_f1 = _destination_lonlat_deg(lon_deg, lat_deg, pa, focal_sep)
     lon_f2, lat_f2 = _destination_lonlat_deg(lon_deg, lat_deg, pa + math.pi, focal_sep)
 
-    pixrad = _healpix.max_pixrad(nside, degrees=False) if inclusive else 0.0
+    pixrad = _healpix.max_pixel_radius(nside, degrees=False) if inclusive else 0.0
     candidates = _healpix.query_circle(
         nside,
         lon_deg,
@@ -1876,12 +2004,9 @@ def query_ellipse(
 
 
 __all__ = [
-    "Box",
-    "Circle",
-    "Ellipse",
     "ExactSphericalRegion",
     "LonLat",
-    "NativeExactSphericalRegion",
+    "NativeApproximateSphericalRegion",
     "PixelizedRegion",
     "RegionAreaEstimate",
     "SphericalBooleanRegion",

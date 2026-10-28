@@ -49,6 +49,19 @@ class FLRW:
 
     Fields may be scalar tensors so callers can differentiate with respect to
     cosmological parameters. This container deliberately owns no priors.
+
+    Args:
+        H0: Present-day Hubble parameter in km/s/Mpc.
+        Om0: Present-day matter density parameter.
+        Ok0: Present-day curvature density parameter.
+        w0: Dark-energy equation-of-state value at scale factor one.
+        wa: CPL dark-energy evolution coefficient.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.cosmology import FLRW
+        >>> FLRW().comoving_distance(torch.tensor(0.0)).item()
+        0.0
     """
 
     H0: Tensor | float = PLANCK18_H0
@@ -221,6 +234,24 @@ def comoving_distance(
 
     Integrates ``1/E(z')`` on a shared grid to ``max(z)`` then interpolates.
     ``z`` is clamped at zero; ``D_C(0) = 0``.
+
+    Args:
+        z: Redshift tensor.
+        H0: Present-day Hubble parameter in km/s/Mpc.
+        om0: Present-day matter density parameter.
+        ok0: Present-day curvature density parameter.
+        w0: Dark-energy equation-of-state value at scale factor one.
+        wa: CPL dark-energy evolution coefficient.
+        n_steps: Number of shared trapezoidal integration intervals.
+
+    Returns:
+        Line-of-sight comoving distances in Mpc with the shape of ``z``.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.cosmology import comoving_distance
+        >>> comoving_distance(torch.tensor([0.0])).tolist()
+        [0.0]
     """
     if n_steps < 2:
         raise ValueError("n_steps must be >= 2")
@@ -229,14 +260,14 @@ def comoving_distance(
         return z_t
     z_nonneg = _nonnegative_redshift(z_t)
     z_limit = z_nonneg.detach().amax() * 1.01 + 1e-5
-    table_size = max(int(n_steps), 2)
+    table_size = int(n_steps)
     z_grid = (
         torch.linspace(0.0, 1.0, table_size, device=z_t.device, dtype=z_t.dtype)
         * z_limit
     )
     integrand = 1.0 / e_of_z(z_grid, om0=om0, ok0=ok0, w0=w0, wa=wa)
-    dz = z_limit / (table_size - 1)
-    areas = (integrand[:-1] + integrand[1:]) * 0.5 * dz
+    step = z_limit / (table_size - 1)
+    areas = (integrand[:-1] + integrand[1:]) * 0.5 * step
     integral = torch.cat(
         (
             torch.zeros(1, device=z_t.device, dtype=z_t.dtype),
@@ -244,7 +275,6 @@ def comoving_distance(
         )
     )
     d_c_grid = _hubble_distance_mpc(H0, device=z_t.device, dtype=z_t.dtype) * integral
-    step = z_limit / (table_size - 1)
     idx_float = z_nonneg / step
     idx_floor = idx_float.floor().to(dtype=torch.long).clamp(0, table_size - 2)
     weight = idx_float - idx_floor.to(dtype=z_t.dtype)
@@ -523,3 +553,24 @@ def distance_modulus(
     """
     d_l = luminosity_distance(z, H0=H0, om0=om0, ok0=ok0, w0=w0, wa=wa, n_steps=n_steps)
     return 5.0 * torch.log10((d_l * 1.0e6 / 10.0).clamp(min=1e-30))
+
+__all__ = [
+    "APScaling",
+    "FLRW",
+    "FlatWCDM",
+    "PLANCK18_H0",
+    "PLANCK18_OM0",
+    "PLANCK18_W0",
+    "SPEED_OF_LIGHT_KM_S",
+    "alcock_paczynski_scaling",
+    "angular_diameter_distance",
+    "comoving_distance",
+    "comoving_position",
+    "comoving_separation",
+    "differential_comoving_volume",
+    "distance_modulus",
+    "e_of_z",
+    "hubble_parameter",
+    "luminosity_distance",
+    "transverse_comoving_distance",
+]

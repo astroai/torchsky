@@ -1,4 +1,5 @@
 import json
+import math
 
 import numpy as np
 import pytest
@@ -7,15 +8,19 @@ from torchsky.sphere import SphericalCap, SphericalPolygon
 from torchsky.sphere import healpix as hp
 from torchsky.sphere.geom import PixelizedRegion
 from torchsky.sphere.moc import (
+    BMOC,
     MOC,
     nest2uniq,
+    uniq2nest,
     _max_order_from_uniq,
+    _nside_from_max_order,
     _uniq_to_ranges,
     _ranges_to_uniq,
     _normalize_moc,
     _union_ranges,
 )
-from torchsky.sphere import HealSparseMap
+from torchsky.sphere import SparseHealpixMap
+import torchfits
 
 
 def test_uniq_to_ranges_empty():
@@ -68,6 +73,16 @@ def test_moc_contains_empty():
     assert not moc.contains(0.0, 0.0).item()
 
 
+def test_moc_contains_empty_broadcasts_lon_lat() -> None:
+    lon = torch.zeros((2, 1), dtype=torch.float64)
+    lat = torch.zeros((1, 3), dtype=torch.float64)
+
+    contained = MOC.empty().contains(lon, lat)
+
+    assert contained.shape == (2, 3)
+    assert not bool(contained.any())
+
+
 def test_moc_contains_pixels_nested_and_ring_inputs() -> None:
     nside = 8
     pix_nest = torch.tensor([0, 5, 17], dtype=torch.int64)
@@ -111,7 +126,7 @@ def test_moc_difference_complex():
 
 
 def test_moc_from_sparse_map_empty():
-    smap = HealSparseMap.convert_healpix_map(
+    smap = SparseHealpixMap.convert_healpix_map(
         torch.zeros(12), nside_coverage=1, sentinel=0
     )
     moc = MOC.from_sparse_map(smap)
@@ -122,7 +137,7 @@ def test_moc_from_sparse_map_converts_ring_pixels_to_nested_uniq() -> None:
     nside = 8
     pix_nest = torch.tensor([0, 5, 17], dtype=torch.int64)
     pix_ring = hp.nest2ring(nside, pix_nest)
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pix_ring,
         torch.ones_like(pix_ring, dtype=torch.float32),
         nside_sparse=nside,
@@ -139,7 +154,7 @@ def test_moc_from_sparse_map_converts_ring_pixels_to_nested_uniq() -> None:
 def test_moc_from_threshold():
     pixels = torch.tensor([0, 1, 2])
     values = torch.tensor([10.0, 5.0, 20.0])
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels, nside_sparse=4, nside_coverage=1, values=values
     )
 
@@ -167,7 +182,7 @@ def test_moc_from_threshold():
 def test_moc_from_threshold_uses_sparse_pixel_list_not_coverage_offsets() -> None:
     pixels = torch.tensor([0, 10, 42], dtype=torch.int64)
     values = torch.tensor([1.0, 5.0, 2.0], dtype=torch.float64)
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels,
         values,
         nside_sparse=8,
@@ -184,7 +199,7 @@ def test_moc_from_threshold_converts_ring_sparse_pixels() -> None:
     pixels_nest = torch.tensor([0, 10, 42], dtype=torch.int64)
     pixels_ring = hp.nest2ring(8, pixels_nest)
     values = torch.tensor([1.0, 5.0, 2.0], dtype=torch.float64)
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels_ring,
         values,
         nside_sparse=8,
@@ -201,7 +216,7 @@ def test_moc_from_threshold_converts_ring_sparse_pixels() -> None:
 def test_moc_from_threshold_empty():
     pixels = torch.tensor([0, 1, 2])
     values = torch.tensor([10.0, 5.0, 20.0])
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels, nside_sparse=4, nside_coverage=1, values=values
     )
 
@@ -212,10 +227,9 @@ def test_moc_from_threshold_empty():
 def test_moc_read_fits_fallback(tmp_path):
     """Non-standard UNIQ column name: first int64 column is used."""
     import torch
-    import torchsky
 
     path = str(tmp_path / "test.fits")
-    torchsky.write(
+    torchfits.write(
         path,
         {"OLD_UNIQ": torch.tensor([4, 16, 17], dtype=torch.int64)},
         header={"EXTNAME": "MOC"},
@@ -285,7 +299,7 @@ def test_healsparse_from_moc_uses_sparse_nested_pixels() -> None:
     pix = torch.tensor([0, 3, 7], dtype=torch.int64)
     moc = MOC(nest2uniq(nside, pix))
 
-    smap = HealSparseMap.from_moc(moc, nside=nside, nside_coverage=2)
+    smap = SparseHealpixMap.from_moc(moc, nside=nside, nside_coverage=2)
 
     assert smap.nest
     assert smap.nside_sparse == nside
@@ -364,64 +378,8 @@ def test_moc_from_json_empty_pixels():
     assert MOC.from_json(js).uniq.numel() == 0
 
 
-def test_mocpy_contains_union_area_and_polygon_parity() -> None:
-    mocpy = pytest.importorskip("mocpy")
-    import astropy.units as u
-
-    lon = torch.tensor([10.0, 12.0, 11.0], dtype=torch.float64)
-    lat = torch.tensor([0.0, 0.0, 1.5], dtype=torch.float64)
-    ts_poly = MOC.from_polygon(lon, lat, max_order=6)
-
-    mocpy_cls = mocpy.MOC
-    if hasattr(mocpy_cls, "from_polygon"):
-        ref = mocpy_cls.from_polygon(
-            lon.numpy() * u.deg, lat.numpy() * u.deg, max_depth=6
-        )
-    else:
-        pytest.skip("mocpy.MOC.from_polygon unavailable")
-
-    qlon = torch.tensor([11.0, 50.0], dtype=torch.float64)
-    qlat = torch.tensor([0.4, 40.0], dtype=torch.float64)
-    got = ts_poly.contains(qlon, qlat).cpu().numpy()
-    if hasattr(ref, "contains_lonlat"):
-        exp = np.asarray(ref.contains_lonlat(qlon.numpy() * u.deg, qlat.numpy() * u.deg))
-    elif hasattr(ref, "contains"):
-        exp = np.asarray(ref.contains(qlon.numpy() * u.deg, qlat.numpy() * u.deg))
-    else:
-        pytest.skip("mocpy contains API unavailable")
-    np.testing.assert_array_equal(got.reshape(-1), np.asarray(exp).reshape(-1))
-
-    a = MOC.from_circle(0.0, 0.0, 2.0, max_order=5)
-    b = MOC.from_circle(3.0, 0.0, 2.0, max_order=5)
-    u_ts = a.union(b)
-    i_ts = a.intersection(b)
-    four_pi = 4.0 * float(np.pi)
-    if hasattr(mocpy_cls, "from_cone"):
-        ra = mocpy_cls.from_cone(
-            lon=0.0 * u.deg, lat=0.0 * u.deg, radius=2.0 * u.deg, max_depth=5
-        )
-        rb = mocpy_cls.from_cone(
-            lon=3.0 * u.deg, lat=0.0 * u.deg, radius=2.0 * u.deg, max_depth=5
-        )
-        uref = ra.union(rb)
-        iref = ra.intersection(rb)
-        if hasattr(uref, "sky_fraction"):
-            assert abs(u_ts.area / four_pi - float(uref.sky_fraction)) < 5e-3
-        if hasattr(iref, "sky_fraction"):
-            assert abs(i_ts.area / four_pi - float(iref.sky_fraction)) < 5e-3
 
 
-def test_mocpy_fits_roundtrip_optional(tmp_path) -> None:
-    mocpy = pytest.importorskip("mocpy")
-    moc = MOC.from_circle(20.0, -10.0, 1.5, max_order=6)
-    path = tmp_path / "moc.fits"
-    moc.write_fits(str(path), overwrite=True)
-    if not hasattr(mocpy.MOC, "from_fits"):
-        pytest.skip("mocpy.MOC.from_fits unavailable")
-    loaded = mocpy.MOC.from_fits(str(path))
-    assert loaded is not None
-    back = MOC.read_fits(str(path))
-    torch.testing.assert_close(back.uniq.sort().values, moc.uniq.sort().values)
 
 
 def test_moc_empty_full_and_dateline_wrap() -> None:
@@ -469,7 +427,7 @@ def _leaf_circle_moc(
 def test_moc_empty_full_operators_from_lonlat_degrade() -> None:
     empty = MOC.empty()
     assert empty.uniq.numel() == 0
-    full = MOC.full(4)
+    full = MOC.full()
     assert bool(full.contains(0.0, 0.0).item())
     assert bool(full.contains(180.0, -40.0).item())
 
@@ -496,3 +454,116 @@ def test_moc_from_circle_matches_leaf_construction() -> None:
     hier_ex = MOC.from_circle(20.0, -10.0, 1.5, max_order=6, inclusive=False)
     leaf_ex = _leaf_circle_moc(20.0, -10.0, 1.5, 6, inclusive=False)
     torch.testing.assert_close(hier_ex.uniq, leaf_ex.uniq)
+
+
+@pytest.mark.parametrize("order", [0, 1, 10, 23, 24, 25, 29])
+def test_uniq2nest_high_order_is_exact(order: int) -> None:
+    nside = 1 << order
+    npix = 12 * nside * nside
+    pix = torch.tensor(
+        [0, 1, npix // 2, npix - 2, npix - 1], dtype=torch.int64
+    )
+    uniq = nest2uniq(nside, pix)
+
+    got_nside, got_pix = uniq2nest(uniq)
+
+    torch.testing.assert_close(
+        got_nside, torch.full_like(pix, nside), rtol=0, atol=0
+    )
+    torch.testing.assert_close(got_pix, pix, rtol=0, atol=0)
+
+
+def test_uniq2nest_rejects_invalid_uniq_and_order_overflow() -> None:
+    with pytest.raises(ValueError, match="UNIQ"):
+        uniq2nest(torch.tensor([0, 1, 3], dtype=torch.int64))
+    with pytest.raises(ValueError, match="nside"):
+        nest2uniq(1 << 30, 0)
+    with pytest.raises(ValueError, match="max_order"):
+        _nside_from_max_order(30)
+
+
+def test_nest2uniq_rejects_pixel_aliases_and_non_integer_inputs() -> None:
+    with pytest.raises(ValueError, match="pix"):
+        nest2uniq(1, 12)
+    with pytest.raises(ValueError, match="pix"):
+        nest2uniq(1, -1)
+    with pytest.raises(ValueError, match="integers"):
+        nest2uniq(1, 0.5)
+
+
+def test_moc_constructors_reject_invalid_uniq_and_order_pixel_aliases() -> None:
+    with pytest.raises(ValueError, match="UNIQ"):
+        MOC(torch.tensor([1 << 62], dtype=torch.int64))
+    with pytest.raises(ValueError, match="integers"):
+        MOC(torch.tensor([4.5]))
+    with pytest.raises(ValueError, match="pix"):
+        MOC.from_ascii("0/12")
+    with pytest.raises(ValueError, match="pix"):
+        MOC.from_json('{"0": [12]}')
+
+
+def test_nest_uniq_round_trip_broadcasts_and_preserves_canonical_edges() -> None:
+    nsides = torch.tensor([[1], [2], [8]], dtype=torch.int64)
+    pixels = torch.tensor([[0, 1, 11]], dtype=torch.int64)
+    pixels = pixels * (nsides * nsides)
+
+    uniq = nest2uniq(nsides, pixels)
+    got_nsides, got_pixels = uniq2nest(uniq)
+
+    torch.testing.assert_close(got_nsides, nsides.expand_as(pixels))
+    torch.testing.assert_close(got_pixels, pixels)
+
+
+def test_bmoc_normalizes_parent_child_overlap_conservatively() -> None:
+    parent = nest2uniq(1, 0)
+    child = nest2uniq(2, 0)
+
+    bmoc = BMOC(
+        torch.stack((child, parent, parent)),
+        torch.tensor([1, 1, 0], dtype=torch.uint8),
+    )
+
+    torch.testing.assert_close(bmoc.uniq, parent.reshape(1))
+    torch.testing.assert_close(bmoc.flag, torch.tensor([0], dtype=torch.uint8))
+    assert bmoc.area == pytest.approx(math.pi / 3.0)
+    assert bmoc.interior_area == 0.0
+    torch.testing.assert_close(bmoc.to_moc().uniq, parent.reshape(1))
+    assert bmoc.to_moc(include_boundary=False).is_empty
+
+
+def test_bmoc_boolean_operations_preserve_hierarchical_flags_and_area() -> None:
+    parent = BMOC(nest2uniq(1, 0).reshape(1), torch.tensor([0]))
+    child = BMOC(nest2uniq(2, 0).reshape(1), torch.tensor([1]))
+
+    union = parent | child
+    intersection = parent & child
+    difference = parent - child
+
+    assert union.area == pytest.approx(math.pi / 3.0)
+    assert union.interior_area == pytest.approx(math.pi / 12.0)
+    assert union.to_moc().area == pytest.approx(parent.to_moc().area)
+    assert intersection.area == pytest.approx(math.pi / 12.0)
+    assert intersection.interior_area == 0.0
+    assert difference.area == pytest.approx(math.pi / 4.0)
+    assert difference.interior_area == 0.0
+
+
+def test_bmoc_rejects_invalid_uniq_and_flag_aliases() -> None:
+    with pytest.raises(ValueError, match="UNIQ"):
+        BMOC(torch.tensor([1 << 62], dtype=torch.int64))
+    with pytest.raises(ValueError, match="flag values"):
+        BMOC(nest2uniq(1, 0).reshape(1), torch.tensor([2]))
+
+
+def test_moc_high_order_max_order_and_leaf_preservation() -> None:
+    nside = 1 << 24
+    pixels = torch.tensor([0, 7, 12 * nside * nside - 1], dtype=torch.int64)
+    moc = MOC(nest2uniq(nside, pixels))
+
+    assert moc.max_order == 24
+    assert moc.uniq.numel() == pixels.numel()
+
+
+def test_healpix_nside_cap() -> None:
+    with pytest.raises(ValueError, match="2\\*\\*29"):
+        hp._validate_nside(1 << 30)

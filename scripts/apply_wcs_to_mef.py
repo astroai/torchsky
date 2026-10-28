@@ -32,48 +32,55 @@ Examples
 
 import argparse
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
-from astropy.io import fits
+import torchfits
+from torchfits.header_parser import FastHeaderParser
 
 from torchsky.wcs import WCS
 
 
-def _read_wcs_file(path: str) -> dict:
-    """Read a .wcs file (astrometry.net text format) into a header dict."""
-    with open(path, encoding="ascii") as f:
-        raw = f.read()
-    # .wcs files may have no newlines; split into 80-char cards
-    cards = [raw[i : i + 80] for i in range(0, len(raw), 80)]
-    cleaned = []
-    for card in cards:
-        if card.strip().startswith("CONTINUE"):
-            continue
-        cleaned.append(card)
-    header = fits.Header.fromstring("".join(cleaned))
-    return dict(header)
+def _read_external_header(path: str) -> dict[str, Any]:
+    """Parse the FITS-card text emitted by astrometry.net or SCAMP."""
+    raw = Path(path).read_text(encoding="ascii")
+    if "\n" in raw or "\r" in raw:
+        cards = [line[:80].ljust(80) for line in raw.splitlines() if line.strip()]
+    else:
+        cards = [raw[i : i + 80].ljust(80) for i in range(0, len(raw), 80)]
+    cleaned = [
+        card
+        for card in cards
+        if card[:8].strip() not in {"", "CONTINUE", "END"}
+    ]
+    return FastHeaderParser.parse_header_string("".join(cleaned))
 
 
-def _read_scamp_header(path: str) -> dict:
-    """Read a SCAMP .head file into a header dict."""
-    hdul = fits.Header.fromtextfile(path)
-    return dict(hdul)
+def _read_wcs_file(path: str) -> dict[str, Any]:
+    """Read an astrometry.net .wcs text header into a plain mapping."""
+    return _read_external_header(path)
+
+
+def _read_scamp_header(path: str) -> dict[str, Any]:
+    """Read a SCAMP .head text header into a plain mapping."""
+    return _read_external_header(path)
 
 
 def _propagate_hdu(
     solved_wcs: WCS,
     solved_header: dict,
-    header: fits.Header,
+    header: Mapping[str, Any],
     hdu_index: int,
     distortion: str = "tpv",
     ref_crpix: tuple[float, float] | None = None,
     max_crpix_offset: float = float("inf"),
-) -> fits.Header:
+) -> dict[str, Any]:
     """Propagate the solved WCS to one HDU, returning updated header."""
-    updated = header.copy()
+    updated = dict(header)
 
-    crpix1 = updated.get("CRPIX1", 1.0)
-    crpix2 = updated.get("CRPIX2", 1.0)
+    crpix1 = float(updated.get("CRPIX1", 1.0))
+    crpix2 = float(updated.get("CRPIX2", 1.0))
 
     wcs_hdr = solved_wcs.to_header()
 
@@ -170,7 +177,7 @@ def cmd_propagate(args: argparse.Namespace) -> None:
         ref_desc = f"file {args.solved_wcs}"
     elif args.ref_hdu is not None:
         print(f"Reading MEF {mef_path}")
-        with fits.open(mef_path) as hdul:
+        with torchfits.open(str(mef_path)) as hdul:
             solved_header = dict(hdul[args.ref_hdu].header)
         solved_wcs = WCS(solved_header)
         ref_desc = f"HDU {args.ref_hdu}"
@@ -198,8 +205,14 @@ def cmd_propagate(args: argparse.Namespace) -> None:
 
     # Open MEF and update each extension
     print(f"Propagating WCS from {ref_desc} to all HDUs in {mef_path}")
-    with fits.open(mef_path) as hdul:
-        image_hdus = [i for i, hdu in enumerate(hdul) if isinstance(hdu, fits.ImageHDU | fits.CompImageHDU) and hdu.data is not None]
+    with torchfits.open(str(mef_path)) as hdul:
+        image_hdus = [
+            i
+            for i, hdu in enumerate(hdul)
+            if isinstance(hdu, torchfits.TensorHDU)
+            and int(hdu.header.get("NAXIS1", 0)) > 0
+            and int(hdu.header.get("NAXIS2", 0)) > 0
+        ]
         print(f"Found {len(image_hdus)} image HDUs: {image_hdus}")
 
         for idx in image_hdus:
@@ -209,12 +222,21 @@ def cmd_propagate(args: argparse.Namespace) -> None:
                 distortion=args.distortion,
                 ref_crpix=ref_crpix, max_crpix_offset=max_crpix_offset,
             )
-            hdu.header = updated_header
-            print(f"  HDU {idx}: CRPIX=({hdu.header.get('CRPIX1', '?'):.2f}, {hdu.header.get('CRPIX2', '?'):.2f}), "
-                  f"CRVAL=({hdu.header.get('CRVAL1', '?'):.8f}, {hdu.header.get('CRVAL2', '?'):.8f})")
+            for key in list(hdu.header):
+                if key not in updated_header:
+                    del hdu.header[key]
+            for key, value in updated_header.items():
+                if hdu.header.get(key) != value:
+                    hdu.header[key] = value
+            print(
+                f"  HDU {idx}: CRPIX=({float(hdu.header['CRPIX1']):.2f}, "
+                f"{float(hdu.header['CRPIX2']):.2f}), "
+                f"CRVAL=({float(hdu.header['CRVAL1']):.8f}, "
+                f"{float(hdu.header['CRVAL2']):.8f})"
+            )
 
         print(f"Writing {output_path}")
-        hdul.writeto(output_path, overwrite=True, output_verify="silentfix")
+        torchfits.write(str(output_path), hdul, overwrite=True)
 
     print("Done.")
 
@@ -225,8 +247,14 @@ def cmd_merge_scamp(args: argparse.Namespace) -> None:
     scamp_prefix = args.scamp_prefix
 
     print(f"Reading MEF {mef_path}")
-    with fits.open(mef_path) as hdul:
-        image_hdus = [i for i, hdu in enumerate(hdul) if isinstance(hdu, fits.ImageHDU | fits.CompImageHDU) and hdu.data is not None]
+    with torchfits.open(str(mef_path)) as hdul:
+        image_hdus = [
+            i
+            for i, hdu in enumerate(hdul)
+            if isinstance(hdu, torchfits.TensorHDU)
+            and int(hdu.header.get("NAXIS1", 0)) > 0
+            and int(hdu.header.get("NAXIS2", 0)) > 0
+        ]
         print(f"Found {len(image_hdus)} image HDUs: {image_hdus}")
 
         for idx in image_hdus:
@@ -241,14 +269,15 @@ def cmd_merge_scamp(args: argparse.Namespace) -> None:
 
             # Apply SCAMP header (overlay onto existing header)
             for key, value in scamp_header.items():
-                hdu.header[key] = value
+                if key not in {"HISTORY", "COMMENT"} and hdu.header.get(key) != value:
+                    hdu.header[key] = value
 
             print(f"  HDU {idx}: applied {head_path}, "
                   f"CRVAL old=({old_crval[0]}, {old_crval[1]}) "
                   f"new=({hdu.header.get('CRVAL1', '?'):.8f}, {hdu.header.get('CRVAL2', '?'):.8f})")
 
         print(f"Writing {output_path}")
-        hdul.writeto(output_path, overwrite=True, output_verify="silentfix")
+        torchfits.write(str(output_path), hdul, overwrite=True)
 
     print("Done.")
 

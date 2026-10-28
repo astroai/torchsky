@@ -58,6 +58,33 @@ class _BandpassSource(_NarrowSource):
         return mean, torch.full_like(mean, -2.0)
 
 
+class _PreciseConstant(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.value = torch.nn.Parameter(torch.tensor(1.0 + 1.0e-10, dtype=torch.float64))
+
+    def forward(self, ra, dec, wavelength):
+        ra, dec, wavelength = torch.broadcast_tensors(ra, dec, wavelength)
+        return torch.zeros_like(ra, dtype=torch.float64) + self.value
+
+
+class _WavelengthDistribution(torch.nn.Module):
+    predictive_distribution_available = True
+
+    def __init__(self):
+        super().__init__()
+        self.offset = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.float64))
+
+    def forward(self, ra, dec, wavelength):
+        ra, dec, wavelength = torch.broadcast_tensors(ra, dec, wavelength)
+        return ra + dec + wavelength * 0.0 + self.offset
+
+    def forward_distribution(self, ra, dec, wavelength):
+        mean = self(ra, dec, wavelength)
+        variance = torch.where(wavelength < 5500.0, 1.0, 9.0)
+        return mean, torch.log(torch.zeros_like(mean) + variance)
+
+
 def _observation():
     return FieldObservation(
         image=torch.zeros(9, 11),
@@ -138,8 +165,107 @@ def test_fine_pixels_preserve_source_and_parameter_gradients(
         samples = render_field_samples(model, obs, **kwargs)
         mean, _ = render_field_samples_distribution(model, obs, **kwargs)
         torch.testing.assert_close(samples, expected.flatten(), rtol=2e-5, atol=2e-6)
-        # The scalar distribution path currently retains a singleton batch axis.
-        assert mean.shape == ((99,) if model_type is _BandpassSource else (1, 99))
+        assert mean.shape == (99,)
         torch.testing.assert_close(
             mean.flatten(), expected.flatten(), rtol=2e-5, atol=2e-6
         )
+
+
+@pytest.mark.parametrize(
+    ("ra", "dec", "shape"),
+    [
+        (torch.tensor(1.0), torch.tensor(2.0), ()),
+        (torch.arange(4.0), torch.tensor(2.0), (4,)),
+        (torch.arange(6.0).reshape(2, 3).T, torch.arange(3.0)[:, None], (3, 2)),
+        (
+            torch.arange(6.0).reshape(2, 1, 3),
+            torch.arange(4.0).reshape(1, 4, 1),
+            (2, 4, 3),
+        ),
+        (torch.empty(0, 2), torch.empty(0, 1), (0, 2)),
+    ],
+)
+def test_sample_rendering_preserves_broadcast_shape(ra, dec, shape) -> None:
+    observation = _observation()
+    model = _WavelengthDistribution()
+    wavelengths = torch.tensor([5000.0, 6000.0], dtype=torch.float64)
+    weights = torch.tensor([0.25, 0.75], dtype=torch.float64)
+    values = render_field_samples(
+        model,
+        observation,
+        ra_deg=ra,
+        dec_deg=dec,
+        override_wavelengths=wavelengths,
+        override_weights=weights,
+    )
+    mean, logvar = render_field_samples_distribution(
+        model,
+        observation,
+        ra_deg=ra,
+        dec_deg=dec,
+        override_wavelengths=wavelengths,
+        override_weights=weights,
+    )
+    assert values.shape == mean.shape == logvar.shape == shape
+    torch.testing.assert_close(values, mean)
+
+
+def test_sample_distribution_defaults_to_coherent_quadrature_variance() -> None:
+    observation = _observation()
+    model = _WavelengthDistribution()
+    kwargs = {
+        "ra_deg": torch.tensor([1.0, 2.0], dtype=torch.float64),
+        "dec_deg": torch.tensor(0.0, dtype=torch.float64),
+        "override_wavelengths": torch.tensor([5000.0, 6000.0]),
+        "override_weights": torch.tensor([0.25, 0.75]),
+    }
+    _, coherent_logvar = render_field_samples_distribution(model, observation, **kwargs)
+    _, independent_logvar = render_field_samples_distribution(
+        model,
+        observation,
+        variance_mode="independent_aleatoric",
+        **kwargs,
+    )
+    torch.testing.assert_close(
+        coherent_logvar.exp(), torch.full((2,), 6.25, dtype=torch.float64)
+    )
+    torch.testing.assert_close(
+        independent_logvar.exp(), torch.full((2,), 5.125, dtype=torch.float64)
+    )
+
+
+def test_float64_sample_rendering_retains_sub_float32_precision_and_gradients() -> None:
+    observation = _observation()
+    observation.image = observation.image.to(dtype=torch.float64)
+    model = _PreciseConstant()
+    ra = torch.arange(6, dtype=torch.float64).reshape(2, 3).T
+    actual = render_field_samples(
+        model,
+        observation,
+        ra_deg=ra,
+        dec_deg=torch.zeros((3, 1), dtype=torch.float64),
+        override_wavelengths=torch.tensor([5000.0, 6000.0]),
+        override_weights=torch.tensor([0.25, 0.75]),
+    )
+    assert actual.dtype == torch.float64
+    torch.testing.assert_close(
+        actual,
+        torch.full((3, 2), 1.0 + 1.0e-10, dtype=torch.float64),
+        rtol=0.0,
+        atol=1.0e-12,
+    )
+    actual.sum().backward()
+    torch.testing.assert_close(model.value.grad, torch.tensor(6.0, dtype=torch.float64))
+    rendered = render_field_observation(
+        model,
+        observation,
+        override_wavelengths=torch.tensor([5000.0, 6000.0]),
+        override_weights=torch.tensor([0.25, 0.75]),
+    )
+    assert rendered.dtype == torch.float64
+    torch.testing.assert_close(
+        rendered,
+        torch.full((9, 11), 1.0 + 1.0e-10, dtype=torch.float64),
+        rtol=0.0,
+        atol=1.0e-12,
+    )

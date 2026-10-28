@@ -136,7 +136,7 @@ provide an automatic scientific training pipeline.
 
 ## Runnable catalogue photo-z pilot
 
-[`examples/catalogue_photoz.py`](../examples/catalogue_photoz.py) is a small CPU
+[`examples/catalogue_photoz.py`](published-examples/catalogue_photoz.py) is a small CPU
 application demonstrating training, prediction and evaluation against a pinned
 `xmatch.observations.release.v1` directory. It requires the existing optional
 Polars/PyArrow dependencies (`pixi run -e test`) and never imports `xmatch`.

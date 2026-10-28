@@ -12,10 +12,7 @@ import math
 
 import torch
 
-from torchsky.map import (
-    build_spherical_harmonic_solver_hooks,
-    build_spherical_spin_harmonic_solver_hooks,
-)
+from torchsky.map.solvers import build_spherical_harmonic_solver_hooks, build_spherical_spin_harmonic_solver_hooks
 from torchsky.map.solvers import (
     build_state_subspace_operator,
     build_teb_cls_prior_operator,
@@ -112,7 +109,6 @@ def main() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(teb_truth),
-        max_entries=64,
         damping=1.0e-4,
     )
     fit = operator_set.solve_normal_equation_cg(

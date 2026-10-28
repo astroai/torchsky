@@ -22,7 +22,8 @@ Use [wcs.md](wcs.md) for FITS-WCS spectral coordinate transforms and
 - `relativistic_doppler_shift(...)` applies signed physical radial velocities
   and optionally rebins batches onto one observed wavelength grid.
 - Sample-wise redshift helpers live in `torchsky.redshift` and are re-exported
-  here: `shift_wavelength`, `dimming_f_lambda` (`F_λ` densities, `1/(1+z)`),
+  here: `apply_redshift` shifts a spectrum by an explicit velocity kind, while
+  `shift_wavelength`, `dimming_f_lambda` (`F_λ` densities, `1/(1+z)`),
   and `dimming_tolman_sb` (surface brightness, `(1+z)^-4`). Do not mix them.
   Rapidity helpers (`zeta_from_redshift`, `compose_rapidities`,
   `shift_ln_wavelength`) and `los_barycentric_beta` live in the same module:

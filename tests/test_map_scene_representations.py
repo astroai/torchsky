@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from torchsky.map import PSFSpec
+from torchsky.map.field import PSFSpec
 from torchsky.map.scenes import (
     ContinuousFieldModel,
     DiscreteTargetImage,
@@ -13,7 +13,7 @@ from torchsky.map.scenes import (
     target_to_field_observation,
 )
 from torchsky.map.target import TargetRenderSpec
-from torchsky.map import FieldObservation
+from torchsky.map.field import FieldObservation
 from torchsky.map.operators import (
     ObservationOperatorBundle,
     spherical_spectral_operator_bundle,
@@ -190,7 +190,7 @@ def test_harmonic_alm_scene_renders_monopole_constant_field() -> None:
 
 
 def test_spin_harmonic_alm_scene_matches_direct_spin_projection() -> None:
-    from torchsky.map import sample_spin_alm_on_image_header_spectral
+    from torchsky.map.healpix_spectral import sample_spin_alm_on_image_header_spectral
     from torchsky.sphere import alm_size
 
     target = TargetRenderSpec.from_header(_simple_header(), band_label="pol")

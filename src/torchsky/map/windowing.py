@@ -14,7 +14,6 @@ from ..wcs import WCS
 from .operators.pixel_area import (
     pixel_area_sr_map,
     representative_pixel_area_sr,
-    wrapped_delta_ra_deg,
 )
 from .operators.execution import source_bbox_on_target, wcs_has_distortion
 from .operators.config import MapValueSemantics
@@ -69,15 +68,46 @@ def _spherical_cap_radius_from_world_grid(
     center_ra_deg: float,
     center_dec_deg: float,
 ) -> float:
-    dra = wrapped_delta_ra_deg(
-        ra_deg, torch.tensor(center_ra_deg, dtype=ra_deg.dtype, device=ra_deg.device)
+    d2r = math.pi / 180.0
+    ra = ra_deg * d2r
+    dec = dec_deg * d2r
+    ra0 = torch.as_tensor(center_ra_deg * d2r, dtype=ra.dtype, device=ra.device)
+    dec0 = torch.as_tensor(center_dec_deg * d2r, dtype=dec.dtype, device=dec.device)
+    delta_ra = ra - ra0
+    dot = torch.sin(dec) * torch.sin(dec0) + torch.cos(dec) * torch.cos(
+        dec0
+    ) * torch.cos(delta_ra)
+    cross_norm = torch.sqrt(torch.clamp(1.0 - torch.square(dot), min=0.0))
+    separation = torch.atan2(cross_norm, dot) / d2r
+    return float(torch.max(separation).item())
+
+
+def _target_cap_radius_deg(
+    target_wcs: WCS,
+    shape: tuple[int, int],
+    *,
+    device: torch.device,
+    center_ra_deg: float,
+    center_dec_deg: float,
+) -> float:
+    if wcs_has_distortion(target_wcs) or not bool(
+        getattr(target_wcs, "_is_tan", False)
+    ):
+        return 180.0
+    height, width = int(shape[0]), int(shape[1])
+    grid_device = torch.device("cpu") if device.type == "mps" else device
+    coord_dtype = torch.float64
+    x_end = float(max(width - 1, 0))
+    y_end = float(max(height - 1, 0))
+    x = torch.tensor([0.0, x_end, x_end, 0.0], dtype=coord_dtype, device=grid_device)
+    y = torch.tensor([0.0, 0.0, y_end, y_end], dtype=coord_dtype, device=grid_device)
+    ra_deg, dec_deg = target_wcs.pixel_to_world(x, y)
+    return _spherical_cap_radius_from_world_grid(
+        ra_deg,
+        dec_deg,
+        center_ra_deg=center_ra_deg,
+        center_dec_deg=center_dec_deg,
     )
-    cos_dec = torch.cos(dec_deg * (math.pi / 180.0))
-    dra_cos = dra * cos_dec
-    dec0 = torch.tensor(center_dec_deg, dtype=dec_deg.dtype, device=dec_deg.device)
-    ddec = dec_deg - dec0
-    chord = torch.sqrt(dra_cos * dra_cos + ddec * ddec)
-    return float(torch.max(chord).item())
 
 
 def _quadrature_target_world_grid(
@@ -157,18 +187,13 @@ def _prepare_target(
     ):
         raise ValueError("target window must lie inside its science canvas")
 
-    cap_subsample = max(1, min(h, w) // 100)
-    if cap_subsample > 1:
-        ra_sample, dec_sample = _build_target_world_grid(
-            target_wcs, h, w, device=device, subsample=cap_subsample,
-        )
-        cap_radius_deg = _spherical_cap_radius_from_world_grid(
-            ra_sample, dec_sample,
-            center_ra_deg=center_ra_deg,
-            center_dec_deg=center_dec_deg,
-        )
-    else:
-        cap_radius_deg = 0.0
+    cap_radius_deg = _target_cap_radius_deg(
+        target_wcs,
+        target_shape,
+        device=device,
+        center_ra_deg=center_ra_deg,
+        center_dec_deg=center_dec_deg,
+    )
 
     if include_world_grid:
         ra_deg, dec_deg = _build_target_world_grid(
@@ -262,10 +287,8 @@ def _slice_prepared_target(
 def _window_large_tan_target(
     *,
     source_wcs: WCS,
-    source_header: dict,
     source_shape: tuple[int, int],
     target: _PreparedImagePlaneTarget,
-    target_header: dict,
     value_semantics: MapValueSemantics,
 ) -> tuple[_PreparedImagePlaneTarget | None, tuple[int, int, int, int] | None]:
     if wcs_has_distortion(target.wcs):

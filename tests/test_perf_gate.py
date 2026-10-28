@@ -5,20 +5,16 @@ from __future__ import annotations
 import os
 import statistics
 import time
-from pathlib import Path
 
 import pytest
 import torch
 
 pytestmark = pytest.mark.performance
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 import torchsky  # noqa: E402
 from torchsky.sphere import healpix  # noqa: E402
-
-_FIXTURE = Path(__file__).resolve().parent / "data" / "radio_mm_stub.fits"
-
 
 def _median_seconds(fn, *, warmup: int = 1, iters: int = 3) -> float:
     for _ in range(warmup):
@@ -42,16 +38,6 @@ def test_gate_healpix_ang2pix_bulk() -> None:
         healpix.ang2pix(nside, lon, lat, nest=True, lonlat=True)
 
     max_s = float(os.environ.get("TORCHSKY_PERF_GATE_ANG2PIX_S", "2.5"))
-    assert _median_seconds(run) < max_s
-
-
-def test_gate_fits_image_read_stub() -> None:
-    assert _FIXTURE.is_file(), f"missing {_FIXTURE}"
-
-    def run() -> None:
-        torchsky.read(str(_FIXTURE), return_header=True)
-
-    max_s = float(os.environ.get("TORCHSKY_PERF_GATE_READ_FITS_S", "3.0"))
     assert _median_seconds(run) < max_s
 
 

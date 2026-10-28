@@ -14,471 +14,74 @@ from . import plan as _plan_module  # noqa: F401 — pre-populate sys.modules["t
 
 
 def plan(*args: Any, **kwargs: Any) -> Any:
-    """Plan a 2D target WCS grid covering a sequence of observations."""
-    from .image_plane import plan as _plan_fn
+    """Plan a 2D target WCS grid covering a sequence of observations.
+
+    Args:
+        *args: Observation sequence accepted by :func:`torchsky.map.planning.plan`.
+        **kwargs: Projection, scale, rotation, footprint, and device controls.
+
+    Returns:
+        Target plan containing the output WCS, shape, and footprint metadata.
+
+    Examples:
+        >>> from torchsky.map import plan
+        >>> callable(plan)
+        True
+    """
+    from .planning import plan as _plan_fn
 
     return _plan_fn(*args, **kwargs)
 
 
 _EXPORTS: dict[str, tuple[str, str]] = {
-    # Clean Public API Facade
-    "Observation": ("torchsky.map.image_plane", "Observation"),
-    "Target": ("torchsky.map.image_plane", "Target"),
-    "CubeTarget": ("torchsky.map.image_plane", "CubeTarget"),
-    "ResampleConfig": ("torchsky.map.image_plane", "ResampleConfig"),
-    "SkyConfig": ("torchsky.map.image_plane", "SkyConfig"),
-    "OutlierConfig": ("torchsky.map.image_plane", "OutlierConfig"),
-    "StackConfig": ("torchsky.map.image_plane", "StackConfig"),
-    "plan": ("torchsky.map.image_plane", "plan"),
-    "plan_cube": ("torchsky.map.image_plane", "plan_cube"),
-    "resample": ("torchsky.map.image_plane", "resample"),
-    "blot": ("torchsky.map.image_plane", "blot"),
-    "detect_outliers": ("torchsky.map.image_plane", "detect_outliers"),
-    "match_sky": ("torchsky.map.image_plane", "match_sky"),
-    "coadd": ("torchsky.map.image_plane", "coadd"),
-    "coadd_multiband": ("torchsky.map.image_plane", "coadd_multiband"),
-    "coadd_cube": ("torchsky.map.image_plane", "coadd_cube"),
-    "aperture_uncertainty": ("torchsky.map.image_plane", "aperture_uncertainty"),
-    # Legacy / Explicit Public API Facade
-    "coadd_image_plane": ("torchsky.map.image_plane", "coadd_image_plane"),
-    "coadd_image_plane_cube": ("torchsky.map.image_plane", "coadd_image_plane_cube"),
-    "coadd_image_plane_multiband": (
-        "torchsky.map.image_plane",
-        "coadd_image_plane_multiband",
+    # Public facade: one entry per name in ``__all__``.
+    "Observation": ("torchsky.map.observation", "Observation"),
+    "IFUObservation": ("torchsky.map.observation", "IFUObservation"),
+    "Target": ("torchsky.map.observation", "Target"),
+    "CubeTarget": ("torchsky.map.observation", "CubeTarget"),
+    "ResampleConfig": ("torchsky.map.observation", "ResampleConfig"),
+    "SkyConfig": ("torchsky.map.observation", "SkyConfig"),
+    "OutlierConfig": ("torchsky.map.observation", "OutlierConfig"),
+    "DQPolicy": ("torchsky.map.quality", "DQPolicy"),
+    "DQRejectionLog": ("torchsky.map.quality", "DQRejectionLog"),
+    "QualityProduct": ("torchsky.map.quality", "QualityProduct"),
+    "StackConfig": ("torchsky.map.observation", "StackConfig"),
+    "MapResult": ("torchsky.map.observation", "MapResult"),
+    "CubeResult": ("torchsky.map.observation", "CubeResult"),
+    "MultibandResult": ("torchsky.map.observation", "MultibandResult"),
+    "HealpixResult": ("torchsky.map.observation", "HealpixResult"),
+    "ApertureUncertainty": ("torchsky.map.observation", "ApertureUncertainty"),
+    "AdaptiveResampleConfig": (
+        "torchsky.map.operators.adaptive",
+        "AdaptiveResampleConfig",
     ),
-    "evaluate_image_plane_aperture_uncertainty": (
-        "torchsky.map.image_plane",
-        "evaluate_image_plane_aperture_uncertainty",
-    ),
-    "stack_map_product": ("torchsky.map.product", "stack_map_product"),
-    "MapProductSpec": ("torchsky.map.product", "MapProductSpec"),
+    "ProductSpec": ("torchsky.map.product", "ProductSpec"),
+    "BandpassSpec": ("torchsky.map.product", "BandpassSpec"),
+    "ProductResult": ("torchsky.map.product", "ProductResult"),
+    "UncertaintyProduct": ("torchsky.map.product", "UncertaintyProduct"),
     "TargetRenderSpec": ("torchsky.map.target", "TargetRenderSpec"),
-    "MapBandpassSpec": ("torchsky.map.product", "MapBandpassSpec"),
-    "MapProductResult": ("torchsky.map.product", "MapProductResult"),
-    "MapUncertaintyProduct": ("torchsky.map.product", "MapUncertaintyProduct"),
-    "MapPlanV2": ("torchsky.map.plan", "MapPlanV2"),
-    "load_map_plan": ("torchsky.map.plan", "load_map_plan"),
-    "MapResult": ("torchsky.map.image_plane", "MapResult"),
-    "MapApertureUncertainty": (
-        "torchsky.map.image_plane",
-        "MapApertureUncertainty",
-    ),
-    "MultiBandMapResult": ("torchsky.map.image_plane", "MultiBandMapResult"),
-    "SpectralCubeMapResult": ("torchsky.map.image_plane", "SpectralCubeMapResult"),
-    "splat_bilinear": ("torchsky.map.splat", "splat_bilinear"),
-    "splat_to_native": ("torchsky.map.splat", "splat_to_native"),
-    "SplatDiagnostics": ("torchsky.map.splat", "SplatDiagnostics"),
-    # Compatibility / Internal / Phase 1 entries resolved lazily
-    "BandMetadataTable": ("torchsky.map.image_plane", "BandMetadataTable"),
-    "ImageObservation": ("torchsky.map.image_plane", "ImageObservation"),
-    "ImagePlaneMapMaker": ("torchsky.map.image_plane", "ImagePlaneMapMaker"),
-    "MapResamplingKernel": ("torchsky.map.image_plane", "MapResamplingKernel"),
-    "MapStackingMethod": ("torchsky.map.image_plane", "MapStackingMethod"),
-    "MapValueSemantics": ("torchsky.map.image_plane", "MapValueSemantics"),
-    "PlannedImagePlaneTarget": ("torchsky.map.image_plane", "PlannedImagePlaneTarget"),
-    "PlannedImagePlaneCubeTarget": (
-        "torchsky.map.image_plane",
-        "PlannedImagePlaneCubeTarget",
-    ),
-    "plan_image_plane_cube_target": (
-        "torchsky.map.image_plane",
-        "plan_image_plane_cube_target",
-    ),
-    "plan_image_plane_cube_target_from_header": (
-        "torchsky.map.image_plane",
-        "plan_image_plane_cube_target_from_header",
-    ),
-    "plan_image_plane_target": ("torchsky.map.image_plane", "plan_image_plane_target"),
-    "CrossExposureSkyCorrector": (
-        "torchsky.map.sky.corrector",
-        "CrossExposureSkyCorrector",
-    ),
-    "MapUncertaintyMode": ("torchsky.map.product", "MapUncertaintyMode"),
-    "build_map_benchmark_markdown": (
-        "torchsky.map.product",
-        "build_map_benchmark_markdown",
-    ),
-    "check_map_benchmark_regressions": (
-        "torchsky.map.product",
-        "check_map_benchmark_regressions",
-    ),
-    "estimate_map_inverse_variance": (
-        "torchsky.map.product",
-        "estimate_map_inverse_variance",
-    ),
-    "evaluate_map_frontier_regions": (
-        "torchsky.map.product",
-        "evaluate_map_frontier_regions",
-    ),
-    "evaluate_map_uncertainty": ("torchsky.map.product", "evaluate_map_uncertainty"),
-    "evaluate_map_product": ("torchsky.map.product", "evaluate_map_product"),
-    "map_benchmark_row_key": ("torchsky.map.product", "map_benchmark_row_key"),
-    "plan_map_product": ("torchsky.map.product", "plan_map_product"),
-    "render_field_product": ("torchsky.map.product", "render_field_product"),
-    "render_field_ensemble_product": (
-        "torchsky.map.product",
-        "render_field_ensemble_product",
-    ),
-    "write_map_benchmark_artifacts": (
-        "torchsky.map.product",
-        "write_map_benchmark_artifacts",
-    ),
-    "ExposurePose": ("torchsky.map.exposure_pose", "ExposurePose"),
-    "create_exposure_poses": ("torchsky.map.exposure_pose", "create_exposure_poses"),
-    "freeze_pose": ("torchsky.map.exposure_pose", "freeze_pose"),
-    "ObservationOperatorBundle": (
-        "torchsky.map.operators",
-        "ObservationOperatorBundle",
-    ),
-    "ComponentDecompositionDiagnostics": (
-        "torchsky.map.solvers",
-        "ComponentDecompositionDiagnostics",
-    ),
-    "build_harmonic_cl_prior_operator": (
-        "torchsky.map.solvers",
-        "build_harmonic_cl_prior_operator",
-    ),
-    "build_harmonic_dense_prior_operator": (
-        "torchsky.map.solvers",
-        "build_harmonic_dense_prior_operator",
-    ),
-    "build_harmonic_degree_prior_operator": (
-        "torchsky.map.solvers",
-        "build_harmonic_degree_prior_operator",
-    ),
-    "build_spin_harmonic_kronecker_prior_operator": (
-        "torchsky.map.solvers",
-        "build_spin_harmonic_kronecker_prior_operator",
-    ),
-    "build_conditioned_component_mixture_operator": (
-        "torchsky.map.solvers",
-        "build_conditioned_component_mixture_operator",
-    ),
-    "build_state_component_mixture_operator": (
-        "torchsky.map.solvers",
-        "build_state_component_mixture_operator",
-    ),
-    "build_state_subspace_operator": (
-        "torchsky.map.solvers",
-        "build_state_subspace_operator",
-    ),
-    "build_state_matrix_operator": (
-        "torchsky.map.solvers",
-        "build_state_matrix_operator",
-    ),
-    "build_state_low_rank_operator": (
-        "torchsky.map.solvers",
-        "build_state_low_rank_operator",
-    ),
-    "build_teb_cls_prior_operator": (
-        "torchsky.map.solvers",
-        "build_teb_cls_prior_operator",
-    ),
-    "build_spherical_harmonic_solver_hooks": (
-        "torchsky.map.solvers",
-        "build_spherical_harmonic_solver_hooks",
-    ),
-    "build_spherical_healpix_solver_hooks": (
-        "torchsky.map.solvers",
-        "build_spherical_healpix_solver_hooks",
-    ),
-    "build_spherical_spin_harmonic_solver_hooks": (
-        "torchsky.map.solvers",
-        "build_spherical_spin_harmonic_solver_hooks",
-    ),
-    "build_state_diagonal_operator": (
-        "torchsky.map.solvers",
-        "build_state_diagonal_operator",
-    ),
-    "build_state_identity_operator": (
-        "torchsky.map.solvers",
-        "build_state_identity_operator",
-    ),
-    "build_state_kronecker_operator": (
-        "torchsky.map.solvers",
-        "build_state_kronecker_operator",
-    ),
-    "compose_bound_operators": ("torchsky.map.solvers", "compose_bound_operators"),
-    "harmonic_cl_diagonal": ("torchsky.map.solvers", "harmonic_cl_diagonal"),
-    "harmonic_dense_covariance": ("torchsky.map.solvers", "harmonic_dense_covariance"),
-    "harmonic_degree_diagonal": ("torchsky.map.solvers", "harmonic_degree_diagonal"),
-    "make_diagonal_preconditioner": (
-        "torchsky.map.solvers",
-        "make_diagonal_preconditioner",
-    ),
-    "HarmonicComponentDecomposition": (
-        "torchsky.map.solvers",
-        "HarmonicComponentDecomposition",
-    ),
-    "SurveyInstrumentComponentMixer": (
-        "torchsky.map.solvers",
-        "SurveyInstrumentComponentMixer",
-    ),
-    "teb_cls_precision_factors": ("torchsky.map.solvers", "teb_cls_precision_factors"),
-    "BandpassConditionedField": ("torchsky.map.field", "BandpassConditionedField"),
-    "FIELD_MODEL_PRESET_NAMES": ("torchsky.map.field", "FIELD_MODEL_PRESET_NAMES"),
-    "FIELD_MODEL_PRESETS": ("torchsky.map.field", "FIELD_MODEL_PRESETS"),
-    "FieldComponentAnchorTerm": ("torchsky.map.field", "FieldComponentAnchorTerm"),
-    "FieldCentroidAnchorTerm": ("torchsky.map.field", "FieldCentroidAnchorTerm"),
-    "FieldComponentDecomposition": (
-        "torchsky.map.field",
-        "FieldComponentDecomposition",
-    ),
-    "FieldCoordinateMode": ("torchsky.map.field", "FieldCoordinateMode"),
-    "FieldDomain": ("torchsky.map.field", "FieldDomain"),
-    "DetectorToSkyTransform": ("torchsky.map.field", "DetectorToSkyTransform"),
-    "FieldFitResult": ("torchsky.map.field", "FieldFitResult"),
-    "FieldAMPDtype": ("torchsky.map.field", "FieldAMPDtype"),
-    "ForwardContext": ("torchsky.map.field", "ForwardContext"),
-    "DetectorLaw": ("torchsky.map.field", "DetectorLaw"),
-    "FourierMLPField": ("torchsky.map.field", "FourierMLPField"),
-    "FoamInitializedINRField": (
-        "torchsky.map.field",
-        "FoamInitializedINRField",
-    ),
-    "HashGridConditionedField": ("torchsky.map.field", "HashGridConditionedField"),
-    "HashGridMLPField": ("torchsky.map.field", "HashGridMLPField"),
-    "HashGridResMLPField": ("torchsky.map.field", "HashGridResMLPField"),
-    "HashGridSpectralField": ("torchsky.map.field", "HashGridSpectralField"),
-    "FieldModelPreset": ("torchsky.map.field", "FieldModelPreset"),
-    "FieldObservation": ("torchsky.map.field", "FieldObservation"),
-    "PSFSpec": ("torchsky.map.field", "PSFSpec"),
-    "TimeScale": ("torchsky.map.field", "TimeScale"),
-    "FieldSpectralQuantity": ("torchsky.map.field", "FieldSpectralQuantity"),
-    "KinematicState": ("torchsky.map.field", "KinematicState"),
-    "GaussianBasisField": ("torchsky.map.field", "GaussianBasisField"),
-    "LearnedSpectralBasisField": ("torchsky.map.field", "LearnedSpectralBasisField"),
-    "OperatorConstrainedFeatureField": (
-        "torchsky.map.field",
-        "OperatorConstrainedFeatureField",
-    ),
-    "SkyEncoderBandpassField": ("torchsky.map.field", "SkyEncoderBandpassField"),
-    "SkyLambdaAtlasField": ("torchsky.map.field", "SkyLambdaAtlasField"),
-    "SkyLambdaFeatureField": ("torchsky.map.field", "SkyLambdaFeatureField"),
-    "SkyLambdaFeatureAtlasField": ("torchsky.map.field", "SkyLambdaFeatureAtlasField"),
-    "SkyLambdaKPlanesField": ("torchsky.map.field", "SkyLambdaKPlanesField"),
-    "SkyLambdaPlanesField": ("torchsky.map.field", "SkyLambdaPlanesField"),
-    "SpectralBasisField": ("torchsky.map.field", "SpectralBasisField"),
-    "SpectralCapacityProfile": ("torchsky.map.field", "SpectralCapacityProfile"),
-    "SpectralDataBudget": ("torchsky.map.field", "SpectralDataBudget"),
-    "SpectralModelCapacityHints": ("torchsky.map.field", "SpectralModelCapacityHints"),
-    "estimate_field_domain": ("torchsky.map.field", "estimate_field_domain"),
-    "field_component_anchor_loss": (
-        "torchsky.map.field",
-        "field_component_anchor_loss",
-    ),
-    "field_component_centroid_anchor_loss": (
-        "torchsky.map.field",
-        "field_component_centroid_anchor_loss",
-    ),
-    "fit_field_component_decomposition": (
-        "torchsky.map.field",
-        "fit_field_component_decomposition",
-    ),
-    "fit_field_model": ("torchsky.map.field", "fit_field_model"),
-    "fit_structured_noise_crossfit": (
-        "torchsky.map.field",
-        "fit_structured_noise_crossfit",
-    ),
-    "STRAINER_TRUNK_CHECKPOINT_FORMAT": (
-        "torchsky.map.field",
-        "STRAINER_TRUNK_CHECKPOINT_FORMAT",
-    ),
-    "load_strainer_trunk_checkpoint": (
-        "torchsky.map.field",
-        "load_strainer_trunk_checkpoint",
-    ),
-    "make_field_component_decomposition": (
-        "torchsky.map.field",
-        "make_field_component_decomposition",
-    ),
-    "make_field_model": ("torchsky.map.field", "make_field_model"),
-    "make_field_model_preset": ("torchsky.map.field", "make_field_model_preset"),
-    "pretrain_strainer_trunk_synthetic": (
-        "torchsky.map.field",
-        "pretrain_strainer_trunk_synthetic",
-    ),
-    "save_strainer_trunk_checkpoint": (
-        "torchsky.map.field",
-        "save_strainer_trunk_checkpoint",
-    ),
-    "evaluate_field_coordinates_vmapped": (
-        "torchsky.map.field",
-        "evaluate_field_coordinates_vmapped",
-    ),
-    "field_observations_from_bin_centers": (
-        "torchsky.map.field",
-        "field_observations_from_bin_centers",
-    ),
-    "field_observations_from_bin_edges": (
-        "torchsky.map.field",
-        "field_observations_from_bin_edges",
-    ),
-    "field_observations_from_ifu_cube": (
-        "torchsky.map.field",
-        "field_observations_from_ifu_cube",
-    ),
-    "ifu_cube_spectral_to_leading": (
-        "torchsky.map.field",
-        "ifu_cube_spectral_to_leading",
-    ),
-    "get_field_model_preset": ("torchsky.map.field", "get_field_model_preset"),
-    "is_recommended_field_model": ("torchsky.map.field", "is_recommended_field_model"),
-    "make_tangent_plane_header": ("torchsky.map.field", "make_tangent_plane_header"),
-    "render_field_cube": ("torchsky.map.field", "render_field_cube"),
-    "render_field_cube_via_healpix": (
-        "torchsky.map.field",
-        "render_field_cube_via_healpix",
-    ),
-    "render_field_healpix": ("torchsky.map.field", "render_field_healpix"),
-    "render_field_observation": ("torchsky.map.field", "render_field_observation"),
-    "render_field_observation_distribution": (
-        "torchsky.map.field",
-        "render_field_observation_distribution",
-    ),
-    "render_spectral_power_foam_observation_exact": (
-        "torchsky.map.field",
-        "render_spectral_power_foam_observation_exact",
-    ),
-    "spectral_data_budget": ("torchsky.map.field", "spectral_data_budget"),
-    "suggest_num_spectral_samples": (
-        "torchsky.map.field",
-        "suggest_num_spectral_samples",
-    ),
-    "suggest_spectral_model_capacity": (
-        "torchsky.map.field",
-        "suggest_spectral_model_capacity",
-    ),
-    "SurveyDataTerm": ("torchsky.map.field", "SurveyDataTerm"),
-    "multi_survey_charbonnier_loss": (
-        "torchsky.map.field",
-        "multi_survey_charbonnier_loss",
-    ),
-    "observation_charbonnier_loss": (
-        "torchsky.map.field",
-        "observation_charbonnier_loss",
-    ),
-    "predict_observation_mean": ("torchsky.map.field", "predict_observation_mean"),
-    "scale_observation_for_rest_frame_scene": (
-        "torchsky.map.field",
-        "scale_observation_for_rest_frame_scene",
-    ),
-    "ObservationSpectralSummary": ("torchsky.map.field", "ObservationSpectralSummary"),
-    "WireImplicitField": ("torchsky.map.field", "WireImplicitField"),
-    "RECOMMENDED_FIELD_MODEL_KINDS": (
-        "torchsky.map.field",
-        "RECOMMENDED_FIELD_MODEL_KINDS",
-    ),
-    "SineImplicitField": ("torchsky.map.field", "SineImplicitField"),
-    "SkyEncoderResMLPField": ("torchsky.map.field", "SkyEncoderResMLPField"),
-    "SkyEncoderMLPField": ("torchsky.map.field", "SkyEncoderMLPField"),
-    "StrainerSkyEncoderMLPField": ("torchsky.map.field", "StrainerSkyEncoderMLPField"),
-    "field_image_quality_metrics": (
-        "torchsky.map.field",
-        "field_image_quality_metrics",
-    ),
-    "ResidualTileBasisField": ("torchsky.map.field", "ResidualTileBasisField"),
-    "ResidualTileBasisSpec": ("torchsky.map.field", "ResidualTileBasisSpec"),
-    "make_residual_tile_basis_field": (
-        "torchsky.map.field",
-        "make_residual_tile_basis_field",
-    ),
-    "residual_tile_basis_spec_from_observation": (
-        "torchsky.map.field",
-        "residual_tile_basis_spec_from_observation",
-    ),
-    "field_image_residual_product": (
-        "torchsky.map.field",
-        "field_image_residual_product",
-    ),
-    "field_quality_scorecard": (
-        "torchsky.map.field",
-        "field_quality_scorecard",
-    ),
-    "field_quality_acceptance_report": (
-        "torchsky.map.field",
-        "field_quality_acceptance_report",
-    ),
-    "FieldResidualProduct": ("torchsky.map.field", "FieldResidualProduct"),
-    "FieldResidualTile": ("torchsky.map.field", "FieldResidualTile"),
-    "render_field_fit_quality": ("torchsky.map.field", "render_field_fit_quality"),
-    "render_field_quality": ("torchsky.map.field", "render_field_quality"),
-    "render_field_residual": ("torchsky.map.field", "render_field_residual"),
-    "render_field_residual_product": (
-        "torchsky.map.field",
-        "render_field_residual_product",
-    ),
-    "select_field_residual_tiles": (
-        "torchsky.map.field",
-        "select_field_residual_tiles",
-    ),
-    "healpix_nside_from_map_len": (
-        "torchsky.map.healpix_image_plane",
-        "healpix_nside_from_map_len",
-    ),
-    "sample_healpix_map_on_image_header": (
-        "torchsky.map.healpix_image_plane",
-        "sample_healpix_map_on_image_header",
-    ),
-    "sample_healpix_map_on_tan_header": (
-        "torchsky.map.healpix_image_plane",
-        "sample_healpix_map_on_tan_header",
-    ),
-    "accumulate_image_on_healpix_map_adjoint": (
-        "torchsky.map.healpix_image_plane",
-        "accumulate_image_on_healpix_map_adjoint",
-    ),
-    "rebandlimit_healpix_map_via_sht": (
-        "torchsky.map.healpix_spectral",
-        "rebandlimit_healpix_map_via_sht",
-    ),
-    "sample_alm_on_image_header_spectral": (
-        "torchsky.map.healpix_spectral",
-        "sample_alm_on_image_header_spectral",
-    ),
-    "sample_alm_on_tan_header_spectral": (
-        "torchsky.map.healpix_spectral",
-        "sample_alm_on_tan_header_spectral",
-    ),
-    "sample_spin_alm_on_image_header_spectral": (
-        "torchsky.map.healpix_spectral",
-        "sample_spin_alm_on_image_header_spectral",
-    ),
-    "sample_spin_alm_on_tan_header_spectral": (
-        "torchsky.map.healpix_spectral",
-        "sample_spin_alm_on_tan_header_spectral",
-    ),
-    "sample_healpix_map_on_image_header_harmonic": (
-        "torchsky.map.healpix_spectral",
-        "sample_healpix_map_on_image_header_harmonic",
-    ),
-    "sample_healpix_map_on_image_header_spectral": (
-        "torchsky.map.healpix_spectral",
-        "sample_healpix_map_on_image_header_spectral",
-    ),
-    "sample_healpix_spin_map_on_image_header_harmonic": (
-        "torchsky.map.healpix_spectral",
-        "sample_healpix_spin_map_on_image_header_harmonic",
-    ),
-    "sample_healpix_map_on_tan_header_harmonic": (
-        "torchsky.map.healpix_spectral",
-        "sample_healpix_map_on_tan_header_harmonic",
-    ),
-    "sample_healpix_map_on_tan_header_spectral": (
-        "torchsky.map.healpix_spectral",
-        "sample_healpix_map_on_tan_header_spectral",
-    ),
-    "sample_healpix_spin_map_on_tan_header_harmonic": (
-        "torchsky.map.healpix_spectral",
-        "sample_healpix_spin_map_on_tan_header_harmonic",
-    ),
-    "accumulate_image_on_alm_adjoint": (
-        "torchsky.map.healpix_spectral",
-        "accumulate_image_on_alm_adjoint",
-    ),
-    "accumulate_image_on_spin_alm_adjoint": (
-        "torchsky.map.healpix_spectral",
-        "accumulate_image_on_spin_alm_adjoint",
+    "plan": ("torchsky.map.planning", "plan"),
+    "plan_cube": ("torchsky.map.planning", "plan_cube"),
+    "plan_product": ("torchsky.map.product", "plan_map_product"),
+    "resample": ("torchsky.map.image_plane_coadd", "resample"),
+    "resample_healpix": ("torchsky.map.healpix_coadd", "resample_healpix"),
+    "blot": ("torchsky.map.image_plane_coadd", "blot"),
+    "detect_outliers": ("torchsky.map.sky_matching", "detect_outliers"),
+    "match_sky": ("torchsky.map.sky_matching", "match_sky"),
+    "coadd": ("torchsky.map.image_plane_coadd", "coadd"),
+    "coadd_multiband": ("torchsky.map.image_plane_coadd", "coadd_multiband"),
+    "coadd_cube": ("torchsky.map.cube", "coadd_cube"),
+    "plan_ifu_cube_response": ("torchsky.map.ifu", "plan_ifu_cube_response"),
+    "build_ifu_cube": ("torchsky.map.ifu", "build_ifu_cube"),
+    "coadd_healpix": ("torchsky.map.healpix_coadd", "coadd_healpix"),
+    "stack_product": ("torchsky.map.product", "stack_product"),
+    "aperture_uncertainty": (
+        "torchsky.map.image_plane_coadd",
+        "aperture_uncertainty",
+    ),
+    "adaptive_reprojection_response": (
+        "torchsky.map.operators.adaptive",
+        "adaptive_reprojection_response",
     ),
 }
 
@@ -487,12 +90,6 @@ def __getattr__(name: str) -> Any:
     if name in _EXPORTS:
         module_name, attr_name = _EXPORTS[name]
         module = import_module(module_name)
-        if module_name == "torchsky.map.plan":
-            # Python binds the submodule `plan` into package globals() on import;
-            # restore the public `plan` function from `torchsky.map.image_plane`.
-            globals()["plan"] = getattr(
-                import_module("torchsky.map.image_plane"), "plan"
-            )
         value = getattr(module, attr_name)
         globals()[name] = value
         return value
@@ -500,7 +97,6 @@ def __getattr__(name: str) -> Any:
     # Keep compatibility with internal module access (e.g. torchsky.map.field)
     if name in {
         "field",
-        "image_plane",
         "product",
         "target",
         "solvers",
@@ -519,78 +115,103 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:
-    from .plan import MapPlanV2 as MapPlanV2, load_map_plan as load_map_plan
-    from .image_plane import (
+    from .cube import (
+        coadd_cube as coadd_cube,
+    )
+    from .healpix_coadd import (
+        coadd_healpix as coadd_healpix,
+        resample_healpix as resample_healpix,
+    )
+    from .ifu import (
+        build_ifu_cube as build_ifu_cube,
+        plan_ifu_cube_response as plan_ifu_cube_response,
+    )
+    from .image_plane_coadd import (
+        aperture_uncertainty as aperture_uncertainty,
+        blot as blot,
+        coadd as coadd,
+        coadd_multiband as coadd_multiband,
+        resample as resample,
+    )
+    from .observation import (
+        ApertureUncertainty as ApertureUncertainty,
+        CubeResult as CubeResult,
         CubeTarget as CubeTarget,
-        MapApertureUncertainty as MapApertureUncertainty,
+        HealpixResult as HealpixResult,
+        IFUObservation as IFUObservation,
         MapResult as MapResult,
-        MultiBandMapResult as MultiBandMapResult,
+        MultibandResult as MultibandResult,
         Observation as Observation,
         OutlierConfig as OutlierConfig,
         ResampleConfig as ResampleConfig,
         SkyConfig as SkyConfig,
-        SpectralCubeMapResult as SpectralCubeMapResult,
         StackConfig as StackConfig,
         Target as Target,
-        aperture_uncertainty as aperture_uncertainty,
-        blot as blot,
-        coadd as coadd,
-        coadd_cube as coadd_cube,
-        coadd_image_plane as coadd_image_plane,
-        coadd_image_plane_cube as coadd_image_plane_cube,
-        coadd_image_plane_multiband as coadd_image_plane_multiband,
-        coadd_multiband as coadd_multiband,
-        detect_outliers as detect_outliers,
-        evaluate_image_plane_aperture_uncertainty as evaluate_image_plane_aperture_uncertainty,
-        match_sky as match_sky,
-        plan as plan,
-        plan_cube as plan_cube,
-        resample as resample,
+    )
+    from .operators.adaptive import (
+        AdaptiveResampleConfig as AdaptiveResampleConfig,
+        adaptive_reprojection_response as adaptive_reprojection_response,
+    )
+    from .quality import (
+        DQPolicy as DQPolicy,
+        DQRejectionLog as DQRejectionLog,
+        QualityProduct as QualityProduct,
     )
     from .product import (
-        MapBandpassSpec as MapBandpassSpec,
-        MapProductResult as MapProductResult,
-        MapProductSpec as MapProductSpec,
-        MapUncertaintyProduct as MapUncertaintyProduct,
-        render_field_ensemble_product as render_field_ensemble_product,
-        stack_map_product as stack_map_product,
+        BandpassSpec as BandpassSpec,
+        ProductResult as ProductResult,
+        ProductSpec as ProductSpec,
+        UncertaintyProduct as UncertaintyProduct,
+        plan_map_product as plan_product,
+        stack_product as stack_product,
     )
-    from .sky.corrector import CrossExposureSkyCorrector as CrossExposureSkyCorrector
-    from .target import TargetRenderSpec as TargetRenderSpec
-
+    from .planning import plan as plan, plan_cube as plan_cube
+    from .sky_matching import (
+        detect_outliers as detect_outliers,
+        match_sky as match_sky,
+    )
+    from .target import (
+        TargetRenderSpec as TargetRenderSpec,
+    )
 
 __all__ = [
     "Observation",
+    "IFUObservation",
     "Target",
     "CubeTarget",
     "ResampleConfig",
     "SkyConfig",
     "OutlierConfig",
+    "DQPolicy",
+    "DQRejectionLog",
+    "QualityProduct",
     "StackConfig",
+    "MapResult",
+    "CubeResult",
+    "MultibandResult",
+    "HealpixResult",
+    "ApertureUncertainty",
+    "AdaptiveResampleConfig",
+    "ProductSpec",
+    "BandpassSpec",
+    "ProductResult",
+    "UncertaintyProduct",
+    "TargetRenderSpec",
     "plan",
     "plan_cube",
+    "plan_product",
     "resample",
+    "resample_healpix",
     "blot",
     "detect_outliers",
     "match_sky",
     "coadd",
     "coadd_multiband",
     "coadd_cube",
+    "plan_ifu_cube_response",
+    "build_ifu_cube",
+    "coadd_healpix",
+    "stack_product",
     "aperture_uncertainty",
-    "coadd_image_plane",
-    "coadd_image_plane_cube",
-    "coadd_image_plane_multiband",
-    "evaluate_image_plane_aperture_uncertainty",
-    "stack_map_product",
-    "MapProductSpec",
-    "TargetRenderSpec",
-    "MapBandpassSpec",
-    "MapProductResult",
-    "MapUncertaintyProduct",
-    "MapPlanV2",
-    "load_map_plan",
-    "MapResult",
-    "MapApertureUncertainty",
-    "MultiBandMapResult",
-    "SpectralCubeMapResult",
+    "adaptive_reprojection_response",
 ]

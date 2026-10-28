@@ -373,6 +373,138 @@ def refraction_arcmin(
 def apply_refraction(
     alt_deg: Tensor, *, pressure_mbar: Tensor | float, temperature_c: Tensor | float
 ) -> Tensor:
+    """Apply atmospheric refraction to altitude in degrees."""
     p = torch.as_tensor(pressure_mbar, dtype=alt_deg.dtype, device=alt_deg.device)
     t = torch.as_tensor(temperature_c, dtype=alt_deg.dtype, device=alt_deg.device)
     return alt_deg + refraction_arcmin(alt_deg, pressure_mbar=p, temperature_c=t) / 60.0
+
+
+def _air_refractive_index_minus_one(
+    wavelength_angstrom: Tensor,
+    *,
+    pressure_mbar: Tensor,
+    temperature_c: Tensor,
+) -> Tensor:
+    """Edlen (1966) / Filippenko (1982) air refractive index (n - 1)."""
+    wave_um = wavelength_angstrom.clamp_min(1000.0) * 1.0e-4
+    sigma2 = (1.0 / wave_um).square()
+    n0_ppm = (
+        64.328
+        + 29498.1 / (146.0 - sigma2).clamp_min(1.0)
+        + 255.4 / (41.0 - sigma2).clamp_min(1.0)
+    )
+    scale = (pressure_mbar / 1013.25) * (288.15 / (273.15 + temperature_c))
+    return n0_ppm * 1.0e-6 * scale
+
+
+def dcr_offset(
+    wavelength_angstrom: Tensor | float,
+    zenith_deg: Tensor | float,
+    parallactic_deg: Tensor | float = 0.0,
+    *,
+    ref_wavelength_angstrom: float = 5000.0,
+    pressure_mbar: float = 780.0,
+    temperature_c: float = 10.0,
+) -> tuple[Tensor, Tensor]:
+    """Compute Differential Chromatic Refraction (DCR) tangent-plane offset ``(d_east_deg, d_north_deg)``.
+
+    Returns the apparent chromatic shift toward zenith at ``wavelength_angstrom``
+    relative to ``ref_wavelength_angstrom`` in degrees along local East and North.
+    """
+    ref_tensor = (
+        wavelength_angstrom
+        if isinstance(wavelength_angstrom, Tensor)
+        else (
+            zenith_deg
+            if isinstance(zenith_deg, Tensor)
+            else torch.as_tensor(wavelength_angstrom, dtype=torch.float64)
+        )
+    )
+    dt = torch.float32 if ref_tensor.device.type == "mps" else torch.float64
+    dev = ref_tensor.device
+    lam = torch.as_tensor(wavelength_angstrom, dtype=dt, device=dev)
+    lam_ref = torch.as_tensor(ref_wavelength_angstrom, dtype=dt, device=dev)
+    zen = torch.as_tensor(zenith_deg, dtype=dt, device=dev).clamp(0.0, 89.0)
+    pa = torch.as_tensor(parallactic_deg, dtype=dt, device=dev)
+    p = torch.as_tensor(pressure_mbar, dtype=dt, device=dev)
+    t = torch.as_tensor(temperature_c, dtype=dt, device=dev)
+
+    dn = _air_refractive_index_minus_one(
+        lam, pressure_mbar=p, temperature_c=t
+    ) - _air_refractive_index_minus_one(
+        lam_ref, pressure_mbar=p, temperature_c=t
+    )
+    dr_deg = torch.rad2deg(dn * torch.tan(torch.deg2rad(zen)))
+    pa_rad = torch.deg2rad(pa)
+    d_east_deg = dr_deg * torch.sin(pa_rad)
+    d_north_deg = dr_deg * torch.cos(pa_rad)
+    return d_east_deg, d_north_deg
+
+
+def apply_dcr(
+    ra_deg: Tensor,
+    dec_deg: Tensor,
+    wavelength_angstrom: Tensor | float,
+    zenith_deg: Tensor | float,
+    parallactic_deg: Tensor | float = 0.0,
+    *,
+    ref_wavelength_angstrom: float = 5000.0,
+    pressure_mbar: float = 780.0,
+    temperature_c: float = 10.0,
+    inverse: bool = False,
+) -> tuple[Tensor, Tensor]:
+    """Apply or remove Differential Chromatic Refraction on ``(ra_deg, dec_deg)``."""
+    d_east, d_north = dcr_offset(
+        wavelength_angstrom,
+        zenith_deg,
+        parallactic_deg,
+        ref_wavelength_angstrom=ref_wavelength_angstrom,
+        pressure_mbar=pressure_mbar,
+        temperature_c=temperature_c,
+    )
+    sign = -1.0 if inverse else 1.0
+    cos_dec = torch.cos(torch.deg2rad(dec_deg)).clamp_min(1e-12)
+    ra_out = torch.remainder(
+        ra_deg + sign * d_east.to(dtype=ra_deg.dtype, device=ra_deg.device) / cos_dec,
+        360.0,
+    )
+    dec_out = (
+        dec_deg + sign * d_north.to(dtype=dec_deg.dtype, device=dec_deg.device)
+    ).clamp(-90.0, 90.0)
+    return ra_out, dec_out
+
+
+def apply_ephemeris_offset(
+    ra_deg: Tensor,
+    dec_deg: Tensor,
+    *,
+    mjd_obs: float,
+    reference_mjd: float,
+    tracking_rate: tuple[float, float] | None = None,
+    dra_cosdec_arcsec_per_hr: float = 0.0,
+    ddec_arcsec_per_hr: float = 0.0,
+    inverse: bool = False,
+) -> tuple[Tensor, Tensor]:
+    """Shift sky coordinates into (or out of) a moving target's comoving frame.
+
+    Parameters
+    ----------
+    tracking_rate
+        ``(dra_cosdec_arcsec_per_hr, ddec_arcsec_per_hr)`` non-sidereal rate.
+    inverse
+        If ``False`` (default), maps sidereal sky coordinates at ``mjd_obs`` into
+        the comoving target frame at ``reference_mjd`` (subtracting target motion).
+        If ``True``, maps comoving coordinates back to sidereal coordinates at ``mjd_obs``.
+    """
+    if tracking_rate is not None:
+        rate_ra, rate_dec = float(tracking_rate[0]), float(tracking_rate[1])
+    else:
+        rate_ra, rate_dec = float(dra_cosdec_arcsec_per_hr), float(ddec_arcsec_per_hr)
+    dt_hours = (float(mjd_obs) - float(reference_mjd)) * 24.0
+    dra_cosdec_deg = rate_ra * dt_hours / 3600.0
+    ddec_deg = rate_dec * dt_hours / 3600.0
+    sign = 1.0 if inverse else -1.0
+    cos_dec = torch.cos(torch.deg2rad(dec_deg)).clamp_min(1e-12)
+    ra_out = torch.remainder(ra_deg + sign * (dra_cosdec_deg / cos_dec), 360.0)
+    dec_out = (dec_deg + sign * ddec_deg).clamp(-90.0, 90.0)
+    return ra_out, dec_out

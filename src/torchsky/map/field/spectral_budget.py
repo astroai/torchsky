@@ -35,6 +35,7 @@ def _variation_scale(
 def spectral_data_budget(
     observations: Sequence[FieldObservation],
 ) -> SpectralDataBudget:
+    """Summarize wavelength coverage and variation scales in observations."""
     if not observations:
         raise ValueError("spectral_data_budget requires at least one observation")
     summaries: list[ObservationSpectralSummary] = []

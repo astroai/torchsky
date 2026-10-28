@@ -38,7 +38,7 @@ def test_refactor_cohesion_audit_checks_structural_boundaries_not_line_counts() 
         for result in results
     )
     assert any(
-        result.name == "cohesion:src/torchsky/map/image_plane.py"
+        result.name == "cohesion:src/torchsky/map/image_plane_coadd.py"
         and result.status == "pass"
         for result in results
     )

@@ -1,13 +1,16 @@
-"""Run CPU-heavy viz work off the asyncio event loop."""
+"""Run blocking torch/IO work off the FastAPI event loop."""
 
 from __future__ import annotations
 
-import asyncio
-from typing import Callable, TypeVar
+from collections.abc import Callable
+from functools import partial
+from typing import Any, TypeVar
 
-T = TypeVar("T")
+from starlette.concurrency import run_in_threadpool
+
+_T = TypeVar("_T")
 
 
-async def run_in_thread(fn: Callable[..., T], *args, **kwargs) -> T:
-    """Execute ``fn`` in a worker thread (``asyncio.to_thread``)."""
-    return await asyncio.to_thread(fn, *args, **kwargs)
+async def run_in_thread(fn: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+    """Await ``fn(*args, **kwargs)`` in Starlette's thread pool."""
+    return await run_in_threadpool(partial(fn, *args, **kwargs))

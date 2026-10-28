@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torchfits
 
-import torchsky
 
 
 def create_test_file(filename):
@@ -28,7 +27,7 @@ def main():
 
     # Read the entire table
     try:
-        table_data, header = torchsky.read(
+        table_data, header = torchfits.read(
             test_file, hdu="MY_TABLE", return_header=True
         )  # Read by name
         print("Table Data:")
@@ -43,7 +42,7 @@ def main():
 
     # Read specific columns
     try:
-        table_subset, _ = torchsky.read(
+        table_subset, _ = torchfits.read(
             test_file, hdu=1, columns=["ra", "id"], return_header=True
         )
         print("\nSubset of Columns (ra, id):")
@@ -57,7 +56,7 @@ def main():
 
     # Read a subset of rows
     try:
-        table_rows, _ = torchsky.read(
+        table_rows, _ = torchfits.read(
             test_file, hdu=1, start_row=1, num_rows=2, return_header=True
         )
         print("\nSubset of Rows (start_row=1, num_rows=2):")
@@ -71,7 +70,7 @@ def main():
 
     # Read specific columns and rows
     try:
-        table_subset, _ = torchsky.read(
+        table_subset, _ = torchfits.read(
             test_file,
             hdu=1,
             columns=["id", "flag"],
@@ -92,7 +91,7 @@ def main():
     print("\n--- Testing with different cache capacities ---")
     for capacity in [0, 2, 10]:
         try:
-            table_data, _ = torchsky.read(
+            table_data, _ = torchfits.read(
                 test_file, hdu=1, cache_capacity=capacity, return_header=True
             )
             print(f"\nCache Capacity: {capacity}")
@@ -109,7 +108,7 @@ def main():
     if torch.cuda.is_available():
         print("\n--- Testing GPU Read ---")
         try:
-            table_data, _ = torchsky.read(
+            table_data, _ = torchfits.read(
                 test_file, hdu=1, device="cuda", return_header=True
             )
             if table_data is not None:

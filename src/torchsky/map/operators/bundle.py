@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from typing import Iterable
+
+from ..provenance import PlanFingerprint, plan_fingerprint
 
 from .background import DetectorBackgroundOp
 from .base import (
@@ -53,6 +55,49 @@ class ObservationOperatorBundle:
     background: BackgroundOp | None = None
     mask_weight: MaskWeightOp | None = None
     noise: NoiseOp | None = None
+
+    @property
+    def fingerprint(self) -> PlanFingerprint:
+        payload: dict[str, object] = {}
+        for slot_name, operator in self.iter_slots():
+            if operator is None:
+                payload[slot_name] = None
+                continue
+            payload[slot_name] = {
+                "type": f"{type(operator).__module__}.{type(operator).__qualname__}",
+                "name": operator.name,
+                "learned": operator.learned,
+                "enabled": operator.enabled,
+                "frozen": operator.frozen,
+                "conditioning": {
+                    "detector_coordinates": operator.conditioning.detector_coordinates,
+                    "wavelength": operator.conditioning.wavelength,
+                    "time": operator.conditioning.time,
+                    "exposure_metadata_keys": operator.conditioning.exposure_metadata_keys,
+                },
+            }
+            details = payload[slot_name]
+            assert isinstance(details, dict)
+            parameters = {}
+            for descriptor in fields(operator):
+                if descriptor.name in {
+                    "name",
+                    "learned",
+                    "enabled",
+                    "frozen",
+                    "conditioning",
+                }:
+                    continue
+                value = getattr(operator, descriptor.name)
+                if isinstance(value, (str, int, float, bool, type(None))):
+                    parameters[descriptor.name] = value
+                elif isinstance(value, tuple) and all(
+                    isinstance(item, (str, int, float, bool, type(None)))
+                    for item in value
+                ):
+                    parameters[descriptor.name] = value
+            details["parameters"] = parameters
+        return plan_fingerprint("observation-operator-bundle", payload)
 
     def iter_slots(self):
         for slot_name in OPERATOR_BUNDLE_SLOT_NAMES:
@@ -184,9 +229,11 @@ def image_observation_operator_bundle(
         for name in (
             "weight_path",
             "mask_path",
+            "dq_path",
             "primary_beam_path",
             "weight_map",
             "mask",
+            "dq",
             "primary_beam",
             "var_poisson",
             "var_rnoise",

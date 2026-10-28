@@ -30,7 +30,7 @@ model = field.model("sky_encoder_mlp", domain)
 ```
 
 `field_observations` should be a sequence of `torchsky.field.Observation`
-objects, not `torchsky.map.ImageObservation` objects from the image-plane coadd
+objects, not `torchsky.map.observation.ImageObservation` objects from the image-plane coadd
 API.
 
 ## Related Guides
@@ -41,6 +41,6 @@ API.
 
 ## Validation
 
-Encoder-heavy field workflows are exercised through map field tests and
-benchmarks such as `benchmarks/bench_map_field_fit.py` and the SMACS field-fit
-benchmarks.
+Core field tests retain bounded model, gradient, and device contracts.
+Scientific model comparisons and real-data field-fit campaigns live in
+[torchsky-harness](https://github.com/astroai/torchsky-harness).

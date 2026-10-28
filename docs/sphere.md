@@ -1,10 +1,14 @@
 # Sphere & HEALPix
 
-`torchsky.sphere` is a PyTorch-native library for spherical geometry and HEALPix maps, with high-performance C++ kernels for Spherical Harmonic Transforms (SHT) and selected polygon geometry hot paths on CPU. Harmonic transforms are available through `torchsky.sphere.harmonics`; the older `torchsky.sphere.spectral` module remains a compatibility alias.
+`torchsky.sphere` is a PyTorch-native library for spherical geometry and HEALPix
+maps, with selected C++ kernels for Spherical Harmonic Transforms (SHT) and
+polygon geometry on CPU. Harmonic transforms are available through
+`torchsky.sphere.spectral`; the former `torchsky.sphere.harmonics` alias was removed
+a compatibility alias.
 
 ## Table of Contents
 
-- [Pixel & Coordinate Utilities](#pixel--coordinate-utilities)
+- [Pixel & Coordinate Utilities](#pixel-coordinate-utilities)
 - [Coordinate Conversions](#coordinate-conversions)
 - [Geometric Queries](#geometric-queries)
 - [Spherical Geometry](#spherical-geometry-classes)
@@ -14,8 +18,8 @@
 - [STMOC](#class-stmoc)
 - [Harmonic Space (SHT)](#harmonic-space-sht)
 - [Power Spectra](#power-spectra)
-- [Beams & Windows](#beams--windows)
-- [Performance Notes](#performance-notes)
+- [Beams & Windows](#beams-windows)
+- [Execution and Tuning](#execution-and-tuning)
 - [Compatibility](#compatibility)
 
 ---
@@ -182,44 +186,43 @@ Fit or subtract monopole + dipole from a HEALPix map.
 
 ## Sparse Maps
 
-### `HealSparseMap` / `SparseMap`
+### `SparseHealpixMap`
 
 Sparse HEALPix map storing values only for covered pixels. Compatible with [healsparse](https://healsparse.readthedocs.io/) semantics.
 
 ```python
-from torchsky.sphere import HealSparseMap
+from torchsky.sphere import SparseHealpixMap
 
-sparse = HealSparseMap(nside=64, nest=True, pixels=pix_tensor, values=val_tensor)
-sparse = HealSparseMap.from_dense(dense_map, nside=64, nest=True)
+sparse = SparseHealpixMap(nside=64, nest=True, pixels=pix_tensor, values=val_tensor)
+sparse = SparseHealpixMap.from_dense(dense_map, nside=64, nest=True)
 
-sparse.coverage_fraction
+sparse.coverage_mask
 sparse.to_dense()
 sparse.interpolate(lon_deg=lon, lat_deg=lat, method='bilinear')
 sparse.ud_grade(nside_out=32)
 ```
 
-`HealSparseMap.from_pixels(...)` canonicalizes inputs to sorted unique pixels,
+`SparseHealpixMap.from_pixels(...)` canonicalizes inputs to sorted unique pixels,
 keeping the last value supplied for duplicates, so `get_values(...)` and
 interpolation can use indexed lookup reliably. Maps with `nside_coverage` derive
 coverage maps in the NESTED coverage hierarchy even when sparse pixels are stored
 in RING ordering, and `ud_grade(...)` preserves the coverage hierarchy when the
-output resolution allows it. With `nside_coverage` set, `get_values` uses a fused
-CPU gather (fill-block layout). On Mac that path matches healsparse at nside=256
-and 50k nest queries (~1.03× interleaved). Linux CANFAR at the same 50k cap is
-behind (0.77× at nside=256, 0.80× at nside=512; not interleaved). Float maps with
-`nside_coverage` also degrade through that layout when coverage nside is
-unchanged; on Mac that matches healsparse at nside=256→128 and 512→256 (10% nest,
-interleaved). Linux dedicated `ud_grade` rows were ahead on that job (2.06× /
-3.31×) with separate medians and are not claimed. Bool/int maps
-keep the pixel-list path because fill-block cells cannot tell valid False/0 from
-an uncovered child.
+output resolution allows it. With `nside_coverage` set, `get_values` can use a
+fused CPU gather (fill-block layout). Float maps may also degrade through that
+layout when coverage nside is unchanged. Bool/int maps keep the pixel-list path
+because fill-block cells cannot tell valid `False`/`0` from an uncovered child.
+These are implementation choices; comparative throughput measurements live in
+the harness.
 
-`HealSparseMap.from_moc(moc, nside=...)` realizes MOC coverage directly as sparse
+`SparseHealpixMap.from_moc(moc, nside=...)` realizes MOC coverage directly as sparse
 nested pixels without materializing a full dense HEALPix mask. Maps with
 `nside_coverage` and a 1-D value vector write HealSparse FITS (`EXTNAME=COV`
 int64 coverage plus `EXTNAME=SPARSE` image, `PIXTYPE=HEALSPARSE`). Boolean maps
 are stored as `uint8` with `BOOLMAP`. Pixel-list maps without coverage still use
 a PIXEL/VALUE table. Sentinel values are not valid pixels on the image path.
+`from_healsparse(...)` and `to_healsparse()` provide optional CPU-host
+interchange when `healsparse` is installed; the production implementation does
+not import or delegate computation to HealSparse.
 
 ### `WideBitMask` / `SkyMaskPipe`
 
@@ -248,16 +251,17 @@ json_repr = moc.to_json()
 | Constructor | Description |
 |---|---|
 | `MOC(uniq)` | Build from `UNIQ` cells |
-| `MOC.empty()` / `MOC.full(max_order)` | Empty coverage; full sky (order-0 cells) |
+| `MOC.empty()` / `MOC.full()` | Empty coverage; full sky (order-0 cells) |
 | `MOC.from_lonlat(lon, lat, max_order)` | Coverage of catalog points, compacted to parent UNIQ |
 | `MOC.from_circle(lon_deg, lat_deg, radius_deg, max_order=10)` | Circular cap; hierarchical (interior cells stay coarse) |
 | `MOC.from_polygon(lon_deg, lat_deg, max_order=10)` | Simple polygon footprint, including non-convex polygons; hierarchical |
 | `MOC.from_region(region, max_order=None)` | Pixelize a torchsky spherical region, boolean region, exact-region wrapper, or `PixelizedRegion` into NUNIQ coverage; `PixelizedRegion` inputs preserve their current resolution by default, while other regions default to order 10 |
-| `MOC.from_sparse_map(smap)` | Coverage from `HealSparseMap` / `SparseMap` |
+| `MOC.from_sparse_map(smap)` | Coverage from `SparseHealpixMap` |
 | `MOC.from_threshold(smap, threshold, op='>')` | Threshold sparse-map values |
 | `MOC.from_ascii(text)` | IVOA ASCII roundtrip, including compact pixel ranges like `3/5-7` |
 | `MOC.from_json(text)` | IVOA JSON roundtrip |
 | `MOC.read_fits(path)` | IVOA FITS roundtrip |
+| `MOC.from_mocpy(moc)` / `moc.to_mocpy()` | Optional host-side mocpy interchange through IVOA JSON |
 
 **Key methods and properties:**
 
@@ -266,8 +270,11 @@ json_repr = moc.to_json()
 | `contains(lon_deg, lat_deg)` | Point-in-MOC predicate |
 | `contains_rows(catalog)` | Same mask from a `Catalog` (or any object with `lon`/`lat`) |
 | `contains_pixels(nside, pixels, nest=True)` | Pixel-in-MOC predicate for HEALPix-indexed catalogs or sparse maps |
+| `overlap_fraction(uniq)` | Exact covered fraction for canonical UNIQ cells without leaf expansion |
+| `intersects_uniq(uniq)` / `contains_uniq(uniq)` | Intersecting or fully covered UNIQ cells |
 | `filter_catalog(lon_deg, lat_deg)` | Filter catalog coordinates by coverage; prefer `Catalog.take(moc.contains(...))` |
 | `contains_moc(other)` | Subset check |
+| `overlaps(other)` | Non-empty intersection predicate for exposure footprints |
 | `union(other)` / `intersection(other)` / `difference(other)` | Boolean operations on sorted NEST ranges; also `\|`, `&`, `-` |
 | `degrade(max_order)` | Drop cells finer than `max_order` onto nested parents |
 | `flatten(nside)` | Dense boolean mask at fixed resolution |
@@ -276,6 +283,7 @@ json_repr = moc.to_json()
 | `boundary()` | Boundary loops at the MOC's maximum order |
 | `write_fits(path)` | Write IVOA MOC FITS |
 | `to_ascii(compact=False)` / `to_json()` | Text serialization; compact ASCII emits contiguous pixel runs as ranges |
+| `is_empty` | Whether the MOC has no covered cells |
 | `area` / `area_sq_deg` | Covered area |
 
 ```python
@@ -287,6 +295,36 @@ moc = MOC.from_circle(10.0, 20.0, 0.5, max_order=8)
 inside = cat.inside(moc)
 subset = cat.take(inside)
 ```
+
+`HealpixIndex.lookup_moc(moc)` prunes source queries with the index's occupied
+fixed-resolution buckets and then applies exact point-in-MOC containment.
+`HealpixIndex.occupied_moc()` exposes those buckets as standard MOC coverage,
+without introducing another sky index.
+
+### Class `MultiOrderHealpixMap`
+
+`MultiOrderHealpixMap` is a value layer over sorted, disjoint IVOA UNIQ cells.
+MOC owns coverage and overlap semantics; this class does not define another
+index. Values may require gradients, while integer UNIQ topology does not.
+
+```python
+from torchsky.sphere import MOC, MultiOrderHealpixMap
+
+probability = MultiOrderHealpixMap(
+    uniq,
+    probdensity,
+    values_are_densities=True,
+)
+mass = probability.integral(footprint_moc)
+values, valid = probability.get_values_pos(lon, lat, return_valid=True)
+```
+
+`from_columns(...)` and `to_columns(...)` exchange standard `UNIQ` plus value
+columns. Fixed-order maps convert to and from `SparseHealpixMap`. Optional
+host-side adapters cover `mhealpy.HealpixMap` and
+`cdshealpix.skymap.SkymapExplicit` when those packages are installed. These
+adapters detach and copy values to CPU; tensor-native computation has no peer
+dependency or backend.
 
 `boundary()` returns one or more closed loops of shape `[N, 2]` in `(lon_deg, lat_deg)` coordinates. The loops are traced from stitched HEALPix cell edges at the MOC's current maximum order.
 
@@ -324,7 +362,7 @@ Time conversion helpers: `mjd_to_time_us`, `time_us_to_mjd`. Polar motion / IERS
 Preferred module import:
 
 ```python
-import torchsky.sphere.harmonics as harmonics
+import torchsky.sphere.spectral as harmonics
 ```
 
 ### `map2alm(map_values, lmax=None, mmax=None, *, nside=None, nest=False, iter=0, pol=False, use_weights=False, use_pixel_weights=False, gal_cut=0.0, datapath=None)`
@@ -340,12 +378,19 @@ Analyze a HEALPix map into spherical harmonic coefficients.
 
 Iterative least-squares map analysis. Returns `(alm, rel_res, n_iter)`.
 
-### SHT oracles and peers
+### SHT references and peers
 
-**healpy** (ducc) is the science oracle for HEALPix scalar and spin SHT parity.
-**s2fft** is an optional independent HEALPix implementation for benches and tests
-only (`pip install -e ".[sht-bench]"` or `pixi run sht-bench-bootstrap`). It is
-not a core dependency and must not appear under `src/torchsky`.
+**healpy** (ducc) and **s2fft** are optional references for HEALPix scalar and
+spin SHT. Comparator setup and parity criteria are maintained in
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness); these packages
+are not core dependencies and must not appear under `src/torchsky`.
+
+`torchsky.sphere.sht` provides immutable geometry, request, capability, and
+result contracts with separate `synthesize`, `adjoint_synthesize`, quadrature
+`analyze`, and least-squares `pseudo_analyze` operations. `CARGeometry` accepts
+only separable, unrotated, full-longitude CAR grids with Clenshaw-Curtis or
+Fejer-1 latitude centers. Unsupported WCS and backend semantics fail explicitly.
+The historical HEALPix `map2alm` and `alm2map` defaults are unchanged.
 
 s2fft conventions that differ from healpy/torchsky:
 
@@ -354,23 +399,27 @@ s2fft conventions that differ from healpy/torchsky:
 - `method="jax_healpy"` is healpy. Do not treat it as a second oracle. Peer
   comparisons use native `sampling="healpix"` (`numpy` / `jax` / `torch`).
 - HEALPix has no sampling theorem, so native s2fft vs healpy residuals are
-  allowed; torchsky vs healpy stays tight.
+  expected to depend on sampling and bandlimit. Acceptance tolerances and
+  measured comparisons are maintained in the harness.
 
 **cuHPX** is a CUDA-only research spike for scalar HEALPix SHT and spectral
 HEALPix↔lat-lon regrid. It is not a core backend, has no spin-2 path, defaults
 to `lmax = 2*nside+1` and float32, and must not be compared blindly to healpy's
 `3*nside-1`. See [Limitations](#limitations).
 
-SFNO / torch-harmonics stay out: they are lat-lon weather architectures, not a
-HEALPix SHT backend.
+**torch-harmonics** remains optional. Its adapter supports scalar synthesis and
+quadrature analysis on compatible equiangular Clenshaw-Curtis CAR grids; it is
+not a HEALPix backend and does not provide adjoint-synthesis or least-squares
+semantics through this adapter.
 
 ### `map2alm_spin(maps, spin, *, nside=None, lmax=None, mmax=None, nest=False, iter=0)`
 
 Spin-weighted map → alm transform. Input `maps` shape must be `(2, npix)`.
 
-### `alm2map_spin(alm_plus, alm_minus, nside, spin, *, lmax=None, mmax=None, nest=False)`
+### `alm2map_spin(alms, nside, spin, *, lmax=None, mmax=None, nest=False)`
 
-Synthesize two spin-component maps from `(alm_plus, alm_minus)` coefficient pairs.
+Synthesize a `(2, npix)` spin-component map pair from an `(alm_plus, alm_minus)`
+tuple of coefficients.
 
 ### Coefficient Utilities
 
@@ -393,6 +442,32 @@ Auto/cross angular power spectrum C_ell.
 
 Power spectrum from alm coefficients.
 
+### CAR pseudo-C_ell estimation
+
+`PseudoClField` binds a CAR map, scalar mask, bandlimit, and optional beam,
+pixel windows, and deprojection templates. `coupled_spectra` uses IAU E/B
+signs and returns scalar spectra, `(TE, TB)` for spin-0 x spin-2, or
+`(EE, EB, BE, BB)` for spin-2 x spin-2. `ModeCouplingWorkspace` provides exact
+scalar and E/B block coupling through blocked correlation-space
+Gauss-Legendre quadrature, binned decoupling, and bandpower windows. Workspace
+construction analyzes masks through `2*lmax` and requires
+`nlat >= 2*lmax + 1` and `nlon >= 4*lmax + 1`. Spin binning must exclude
+multipoles below two.
+
+`BandpowerBinning` carries paired binning and unbinning operators. Decoupling
+uses a direct solve only after explicit rank and condition checks; it never
+selects a ridge or pseudoinverse fallback. `couple_noise` propagates unbinned
+sky noise through mask, beam, pixel, and E/B blocks; `noise_bias` and
+`deprojection_bias` are coupled spectra subtracted before binning.
+`template_deprojection_bias` estimates the additive cleaning bias from an
+explicit ensemble of already beam/pixel-convolved signal realizations.
+
+`ApodizedMask.from_mask` constructs and validates the first and second spin
+derivatives needed for pure E/B integration by parts. The current pure
+estimator intentionally accepts only band-limited masks that vanish with
+their first derivative on the two polar boundary rings and remain positive in
+the interior; masks with holes or other boundary geometries fail closed.
+
 ### `synalm(cls, lmax=None)`
 
 Generate random alm from input C_ell.
@@ -406,7 +481,7 @@ cl = torch.ones(3 * nside)
 m = sphere.synfast(cl, nside=nside)
 ```
 
-### `smoothmap(map_values, *, nside=None, lmax=None, mmax=None, nest=False, fwhm_rad=None, sigma=None, beam=None, beam_window=None, pol=False, iter=0, use_weights=False, use_pixel_weights=False, verbose=True)`
+### `smoothmap(map_values, *, nside=None, lmax=None, mmax=None, nest=False, fwhm_rad=None, sigma=None, beam=None, beam_window=None, pol=False, iter=0, use_weights=False, use_pixel_weights=False)`
 
 Smooth a HEALPix map in harmonic space with a Gaussian beam.
 
@@ -429,16 +504,18 @@ FITS reader runtime dependency.
 
 ---
 
-## Performance Notes
+## Execution and Tuning
 
 The SHT implementation uses:
 
-- Ring FFT + Legendre recurrence blocking for register-efficient throughput.
+- Ring FFT + Legendre recurrence blocking.
 - OpenMP parallelism over rings.
 - PyTorch `torch.fft` for azimuthal transforms.
-- C++ backend (default on CPU) with compiled recurrence kernels. Falls back to pure PyTorch if the extension is unavailable.
+- C++ backend (default on CPU) with compiled recurrence kernels. Falls back to
+  pure PyTorch if the extension is unavailable.
 
-For large $N_\text{side}$ or batch transforms, `torchsky.sphere` substantially outperforms pure-Python HEALPix implementations.
+These details describe execution paths, not comparative performance. See the
+harness for current throughput evidence and comparator policy.
 
 ### Environment Knobs
 
@@ -460,7 +537,7 @@ See also **[Ecosystem compatibility](compatibility.md)** for how healpy/hpgeom f
 
 Status: `parity` = upstream-compatible semantics · `extended` = torchsky-native additions · `partial` = known gaps · `planned` = not yet implemented.
 
-Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) mirror the [healpy](https://healpy.readthedocs.io/) and [hpgeom](https://github.com/LSSTDESC/hpgeom) APIs and can be used as drop-in replacements at the tensor boundary.
+Functions in `torchsky.sphere.compat` mirror the [healpy](https://healpy.readthedocs.io/) and [hpgeom](https://github.com/LSSTDESC/hpgeom) APIs and can be used as drop-in replacements at the tensor boundary.
 
 | Function | Status | Notes |
 |---|---|---|
@@ -502,10 +579,21 @@ Functions in `torchsky.sphere.compat` (and the `torchsky.sphere.healpy` alias) m
 | `spherical_polygon_contains` | extended | inside-point disambiguation |
 | `spherical_polygons_intersect` | extended | edge crossing + containment |
 | `SphericalBooleanRegion` (union/intersection/difference) | extended | controlled-error boolean algebra; optional exact backend |
-| `NativeExactSphericalRegion` | extended | dependency-free exact-backend scaffold |
-| `HealSparseMap` / `SparseMap` | parity | coverage-aware sparse map; dense-equivalent `ud_grade` |
+| `NativeApproximateSphericalRegion` | extended | dependency-free native region scaffold with explicit center-sampled estimates |
+| `SparseHealpixMap` | extended | torch-native coverage-aware sparse map; dense-equivalent `ud_grade` and optional HealSparse interchange |
 
-Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API compatibility. Geometry queries are always torch-native; they do not dispatch to hpgeom.
+Geometry queries are always torch-native; they do not dispatch to hpgeom.
+
+Version 0.4.0 removes ignored compatibility parameters rather than silently
+accepting them. `verbose` was removed from `synalm`, `synfast`, `smoothmap`,
+`smoothing`, `remove_monopole`, and `remove_dipole`; `chunk_size` was removed
+from the ring-pruned `query_strip`; and `fact` was removed from
+`query_polygon_vec`. `query_circle(fact=...)` remains because inclusive queries
+now forward it to the tested `query_disc` supersampling kernel.
+
+The `parity` labels below describe intended API semantics and compatibility
+scope. They are not an exhaustive parity certificate; current fixture coverage
+and quantitative acceptance evidence live in `torchsky-harness`.
 
 ---
 
@@ -513,12 +601,12 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 
 | Area | Limitation |
 |---|---|
-| `map2alm` weights | `use_weights` applies computed RING quadrature (mean 1). `use_pixel_weights` loads HEALPix full-pixel FITS via torchfits from `datapath` (`1+w` corrections). The two flags are mutually exclusive. Missing pixel-weight files raise; nothing is downloaded or vendored. Fetch with `scripts/fetch_healpix_pixel_weights.sh` into `TORCHSKY_HEALPIX_DATAPATH`. |
-| `alm2map_spin` | Fused Ishioka CPU synthesis is ~1.6× healpy on Mac at nside=128. CPU RING FFTs (polar and equatorial) are in-process pocketfft (Accelerate radix-2 on Apple for large pow2). Linux CANFAR SHA `dfd31ecb` pocketfft polar was ~2.2–2.5× healpy at nside=128 / 8 CPU; equatorial ATen ifft was still in that row. Do not claim Linux SHT. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time if Ishioka loses to Wigner. CUDA/MPS keep maps/alms on device via the ATen ring path; fused Ishioka/Wigner C++ stays CPU. Do not claim a fused CUDA Ishioka kernel. |
+| `map2alm` weights | `use_weights` applies computed RING quadrature (mean 1). `use_pixel_weights` loads HEALPix full-pixel FITS via torchfits from `datapath` (`1+w` corrections). The two flags are mutually exclusive. Missing pixel-weight files raise; nothing is downloaded or vendored. Supply the files through `TORCHSKY_HEALPIX_DATAPATH`. |
+| `alm2map_spin` | CPU RING FFTs (polar and equatorial) use in-process pocketfft. Set `TORCHSKY_SPIN_ISHIOKA=0` at call time to select the Wigner recurrence instead of the Ishioka path. CUDA/MPS keep maps/alms on device via the ATen ring path; fused Ishioka/Wigner C++ stays CPU. Comparative throughput and parity evidence are maintained in the harness. |
 | Pixel windows | Packaged tables cover standard HEALPix NSIDE range. Higher NSIDE may require external data. |
 | Device | See the device table below. Fused Ishioka/Wigner is CPU C++. CUDA/MPS SHT uses the ATen ring FFT path on device (no host copy of the map). `rotate_alm` and `alm2lonlat` stay on device (ATen; CUDA float64 / MPS float32). |
 | s2fft | Optional bench/test peer only. Native HEALPix has no sampling theorem; do not use `method="jax_healpy"` as an oracle. |
-| cuHPX | **No-go** as a torchsky backend until a CANFAR CUDA spike (`scripts/run_canfar_cuhpx_sht_spike.sh`) reports `go-scalar-cuda`. Even then: optional env-gated scalar CUDA adapter only, still healpy-tested, never default on CPU/MPS, no spin-2, no core/`pyproject.toml` dependency. Default cuHPX `lmax=2*nside+1` and float32 must not be compared blindly to healpy `3*nside-1`. |
+| cuHPX | Not a production backend. Its scalar CUDA SHT and spectral regrid remain an external research comparison; any future compatibility or performance decision belongs in the harness. Its default `lmax=2*nside+1` and float32 behavior must not be compared blindly to healpy `3*nside-1`. |
 
 ### Device policy
 
@@ -528,23 +616,25 @@ Strict mode (`torchsky.sphere.compat.set_strict_mode(True)`) is retained for API
 | HEALPix geometry | yes | yes | yes, looser index gates |
 | Sparse `get_values` / MOC contains | yes | yes if tensors stay on device | yes float32 |
 | Polygons (approximate contains/intersect/`query_polygon`) | yes | yes | yes float32 |
-| Polygons (exact `NativeExactSphericalRegion`) | yes | no (CPU kernel / spherical-geometry) | no |
+| Polygons (`NativeApproximateSphericalRegion`) | yes | no (CPU kernel / spherical-geometry) | no |
 | SHT (Ishioka/Wigner C++) | yes float64 | no (CPU kernel) | no (CPU kernel) |
 | SHT (ATen ring FFT) | yes float64 | yes float64 | yes float32 |
 | rotate_alm / alm2lonlat | yes float64 | yes float64 | yes float32 |
 | Observed place | yes float64 | yes float64 | yes float32 |
 
-Exact spherical polygons with `backend="spherical-geometry"` match spherical-geometry area to `1e-12` steradians. Default `to_exact` / `to_exact_region` is the native torchsky backend.
+Default `to_exact` / `to_exact_region` is the native torchsky backend.
+Quantitative oracle comparisons for the optional `spherical-geometry` backend
+are recorded in the harness.
 
 ---
 
 ## See Also
 
 - [healpy documentation](https://healpy.readthedocs.io/)
-- [HEALPix home page](https://healpix.jpl.nasa.gov/)
+- [HEALPix home page](https://healpix.sourceforge.io/)
 - [hpgeom](https://github.com/LSSTDESC/hpgeom)
 - [astropy-healpix](https://astropy-healpix.readthedocs.io/)
 - [healsparse](https://healsparse.readthedocs.io/)
 - [spherical-geometry](https://github.com/spacetelescope/spherical_geometry)
-- [API guide](api.md)
-- [Benchmarks](benchmarks.md)
+- [API reference](reference/sphere.md)
+- [Scientific evaluation ownership](evaluation/benchmarks.md)

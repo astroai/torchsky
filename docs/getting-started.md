@@ -4,14 +4,11 @@ This is the shortest path through the main `torchsky` surfaces.
 
 ## Install
 
-```bash
-pip install torchsky
-```
-
-Package metadata supports Python `>=3.12` and PyTorch `>=2.13`; native wheels
-enforce their compiled PyTorch ABI at import. Install `torchfits`
-alongside torchsky for FITS-backed workflows. See [install.md](install.md) for
-source builds, Pixi contributor setup, and optional integrations.
+The 0.4.0 line is not on PyPI yet; [install.md](install.md) covers the release
+wheel, source build, and Pixi paths. Package metadata supports Python `>=3.12`
+and PyTorch `>=2.13,<2.14`; native wheels enforce their compiled PyTorch ABI at
+import. `torchfits>=1.0` is a required runtime dependency for FITS-backed
+workflows and is installed with torchsky.
 
 ## Read FITS Data
 
@@ -68,11 +65,12 @@ For details, see [sphere.md](sphere.md).
 ## Build A Map Product
 
 ```python
-from torchsky import scene
-from torchsky.map import coadd_image_plane
+from torchsky.map import Observation, coadd, plan
 
-# Plan and run an image-plane coadd
-result = coadd_image_plane([scene.image_observation("science.fits")])
+# Plan a target grid from the observation and run an image-plane coadd
+observations = [Observation("science.fits")]
+target = plan(observations, projection="TAN")
+result = coadd(observations, target)
 ```
 
 For details, see [map.md](map.md).
@@ -83,11 +81,13 @@ For high-level modeling, use the `torchsky.scene` facade:
 
 ```python
 import torch
+import torchfits
 from torchsky import scene
 
-# Build observation and target render specification
-obs = scene.image_observation("science.fits")
-target = scene.target_from_header(obs.header)
+# Read the WCS metadata with torchfits; build the observation and target explicitly
+header = dict(torchfits.read_header("science.fits", 0))
+obs = scene.image_observation("science.fits", header=header)
+target = scene.target_from_header(header)
 
 # Render a scene to the target grid
 prediction = scene.render(torch.zeros(target.shape), target)
@@ -99,4 +99,4 @@ For details, see [scene.md](scene.md).
 
 - [examples.md](examples.md) for runnable scripts.
 - [compatibility.md](compatibility.md) for migration from common astronomy libraries.
-- [benchmarks.md](benchmarks.md) for validation and performance surfaces.
+- [benchmarks.md](evaluation/benchmarks.md) for validation and performance surfaces.

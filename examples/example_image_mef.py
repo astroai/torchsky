@@ -1,96 +1,87 @@
-import os
+"""Read the image and table extensions of a small torchfits MEF file."""
 
-import numpy as np
+from __future__ import annotations
+
+import tempfile
+from pathlib import Path
+
 import torch
-from astropy.io import fits
-from astropy.table import Table
-
-import torchsky
+import torchfits
 
 
-def create_test_file(filename):
-    if not os.path.exists(filename):
-        primary_hdu = fits.PrimaryHDU()  # Empty primary
-        ext1 = fits.ImageHDU(
-            np.arange(100, dtype=np.float32).reshape(10, 10), name="SCI"
-        )
-        ext2 = fits.ImageHDU(np.random.rand(20, 20), name="ERR")
-        # Create some sample table data
-        names = ("ra", "dec", "flux")
-        formats = ("f8", "f8", "f4")
-        data = [(150.0, 45.0, 10.0), (151.0, 46.0, 12.0), (152.0, 47.0, 15.0)]
-        table_data = Table(rows=data, names=names, dtype=formats)
-        ext3 = fits.BinTableHDU(table_data, name="CATALOG")
 
-        hdul = fits.HDUList([primary_hdu, ext1, ext2, ext3])
-        hdul.writeto(filename, overwrite=True)
+def create_test_file(filename: str | Path) -> None:
+    science_header = {
+        "EXTNAME": "SCI",
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 5.5,
+        "CRPIX2": 5.5,
+        "CRVAL1": 150.0,
+        "CRVAL2": 45.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
+    hdus = torchfits.HDUList(
+        [
+            torchfits.TensorHDU(data=torch.empty(0)),
+            torchfits.TensorHDU(
+                data=torch.arange(100, dtype=torch.float32).reshape(10, 10),
+                header=science_header,
+            ),
+            torchfits.TensorHDU(
+                data=torch.full((20, 20), 0.5, dtype=torch.float32),
+                header={"EXTNAME": "ERR"},
+            ),
+            torchfits.TableHDU(
+                {
+                    "ra": torch.tensor([150.0, 151.0, 152.0], dtype=torch.float64),
+                    "dec": torch.tensor([45.0, 46.0, 47.0], dtype=torch.float64),
+                    "flux": torch.tensor([10.0, 12.0, 15.0], dtype=torch.float32),
+                },
+                header={"EXTNAME": "CATALOG"},
+            ),
+        ]
+    )
+    torchfits.write(filename, hdus, overwrite=True)
 
 
-def main():
-    test_file = "mef_example.fits"
-    create_test_file(test_file)
+def main() -> None:
+    with tempfile.TemporaryDirectory(prefix="torchsky-mef-example-") as directory:
+        test_file = Path(directory) / "mef_example.fits"
+        create_test_file(test_file)
 
-    # Iterate through HDUs using torchsky.open()
-    try:
-        with torchsky.open(test_file) as hdul:
+        with torchfits.open(str(test_file)) as hdul:
             print(f"Number of HDUs: {len(hdul)}")
-
-            for i, hdu in enumerate(hdul):
-                print(f"\n--- HDU {i} ---")
-                try:
-                    # Check if it's an image or table
-                    if hasattr(hdu, "data") and isinstance(hdu.data, torch.Tensor):
-                        print("  Type: IMAGE")
-                        print(f"  EXTNAME: {hdu.header.get('EXTNAME', 'N/A')}")
-                        print(f"  Data shape: {hdu.data.shape}")
-                    elif hasattr(hdu, "data") and isinstance(hdu.data, dict):
-                        print("  Type: TABLE")
-                        print(f"  EXTNAME: {hdu.header.get('EXTNAME', 'N/A')}")
-                        print(f"  Table columns: {list(hdu.data.keys())}")
+            for index, hdu in enumerate(hdul):
+                name = hdu.header.get("EXTNAME", "PRIMARY")
+                if isinstance(hdu, torchfits.TensorHDU):
+                    data = hdu.to_tensor()
+                    if data.numel() == 0:
+                        kind = "EMPTY"
                     else:
-                        print("  Type: EMPTY/PRIMARY")
-                        print(f"  EXTNAME: {hdu.header.get('EXTNAME', 'N/A')}")
+                        kind = f"IMAGE {tuple(data.shape)}"
+                else:
+                    kind = f"TABLE columns={hdu.columns}"
+                print(f"  HDU {index} {name}: {kind}")
 
-                except Exception as e:
-                    print(f"  Error reading HDU {i}: {e}")
-
-        # Access by name:
-        print("\n--- Accessing HDU by Name ---")
-        data, _ = torchsky.read(test_file, hdu="SCI", return_header=True)  # String name
-        print(f"  SCI data shape: {data.shape}")
-
-        table_data, _ = torchsky.read(
-            test_file, hdu="CATALOG", return_header=True
-        )  # String name
-        print(f"  CATALOG columns: {list(table_data.keys())}")
-
-        # --- Test different cache capacities ---
-        print("\n--- Testing with different cache capacities ---")
-        for capacity in [0, 10]:
             try:
-                data, _ = torchsky.read(
-                    test_file, hdu="SCI", cache_capacity=capacity, return_header=True
-                )
-                print(f"\nCache Capacity: {capacity}")
-                print(f"  Data shape: {data.shape}")
-            except RuntimeError as e:
-                print(f"  Error with cache_capacity={capacity}: {e}")
+                science_hdu = hdul["SCI"]
+                catalog_hdu = hdul["CATALOG"]
+            except KeyError as exc:
+                raise RuntimeError("MEF example is missing a named extension") from exc
+            print(f"SCI CTYPE1: {science_hdu.header['CTYPE1']}")
+            print(f"CATALOG columns: {catalog_hdu.columns}")
 
-        # --- Test GPU read (if available) ---
-        if torch.cuda.is_available():
-            print("\n--- Testing GPU Read ---")
-            try:
-                data, _ = torchsky.read(
-                    test_file, hdu="SCI", device="cuda", return_header=True
-                )
-                print(f"  Data device: {data.device}")
-            except RuntimeError as e:
-                print(f"  Error reading to GPU: {e}")
-        else:
-            print("\n--- CUDA not available, skipping GPU read test ---")
-
-    except RuntimeError as e:
-        print(f"Error: {e}")
+        science, science_header = torchfits.read(
+            str(test_file), hdu="SCI", return_header=True
+        )
+        catalog, _ = torchfits.read(
+            str(test_file), hdu="CATALOG", return_header=True
+        )
+        print(f"SCI image shape: {tuple(science.shape)}")
+        print(f"SCI WCS axes: {science_header['CTYPE1']}, {science_header['CTYPE2']}")
+        print(f"CATALOG columns: {list(catalog.keys())}")
 
 
 if __name__ == "__main__":

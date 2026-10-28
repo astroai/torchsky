@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -16,11 +15,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..._hash import file_sha256 as _file_sha256
 from ...calibration_evidence import load_operator_calibration_split
 from ...wcs import WCS
 
 if TYPE_CHECKING:
-    from ..product import MapProductResult
+    from ..product import ProductResult
 
 from ..operators.background import ConditionedBackgroundField, LearnedBackgroundOp
 from ..operators.bundle import (
@@ -65,14 +65,6 @@ _RAW_COUNT_UNITS = frozenset(
 )
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _validate_spatial_tile_hw(
     spatial_tile_hw: tuple[int, int] | None,
 ) -> tuple[int, int] | None:
@@ -109,6 +101,10 @@ def prepare_linear_band_grid_observation_data(
     calibrated_background: Tensor | float | None = None,
 ) -> Tensor:
     """Subtract fixed additive terms and zero unsupported detector pixels."""
+    if observation.additive_components:
+        raise NotImplementedError(
+            "linear grid inversion does not yet support typed additive components"
+        )
     image = observation.image
     background = torch.full_like(image, float(observation.background_offset))
     for component in (
@@ -152,6 +148,10 @@ def bind_linear_band_grid_observation_operator(
     spatial_tile_hw: tuple[int, int] | None = None,
 ) -> BoundObservationOperator:
     """Bind a signed, band-integrated surface-brightness grid to one exposure."""
+    if observation.additive_components:
+        raise NotImplementedError(
+            "linear grid inversion does not yet support typed additive components"
+        )
     if domain.coord_mode != "local_tangent":
         raise ValueError("linear band grid requires local_tangent coordinates")
     resolution = int(spatial_resolution)
@@ -195,7 +195,10 @@ def bind_linear_band_grid_observation_operator(
         raise ValueError("detector footprint coordinates must be finite on support")
     supported_x = footprint_x[initial_support]
     supported_y = footprint_y[initial_support]
-    tolerance = 1.0e-10
+    # MPS and explicitly float32 fields evaluate footprint coordinates at
+    # reduced precision; keep the bounds check strict in float64 and allow a
+    # sub-arcsecond float32 margin instead of rejecting a valid footprint.
+    tolerance = 1.0e-10 if footprint_x.dtype == torch.float64 else 1.0e-5
     if (
         bool((supported_x < x_min - tolerance).any())
         or bool((supported_x > x_max + tolerance).any())
@@ -259,7 +262,8 @@ def bind_linear_band_grid_observation_operator(
         raw = psf_spec.kernel2d.to(device=device, dtype=dtype)
         normed = raw / torch.clamp(raw.sum(), min=1.0e-8)
         ky, kx = int(normed.shape[0]), int(normed.shape[1])
-        cached = normed.view(1, 1, ky, kx)
+        # PSF payloads are source stamps; conv2d weights are correlations.
+        cached = normed.flip(-2, -1).view(1, 1, ky, kx)
         kernel_cache[key] = cached
         return cached
 
@@ -376,44 +380,45 @@ def bind_linear_band_grid_observation_operator(
                 "adjoint input shape must match the bound field observation"
             )
         dtype = dual.dtype if dual.is_floating_point() else torch.float32
-        if validated_tile_hw is None:
-            with torch.enable_grad():
-                probe = torch.zeros(
-                    (resolution, resolution),
-                    dtype=dtype,
-                    device=dual.device,
-                    requires_grad=True,
-                )
-                prediction = _forward_state(probe)
-                pairing = torch.sum(prediction * dual.to(dtype=prediction.dtype))
-                (gradient,) = torch.autograd.grad(pairing, probe)
-            return gradient
-        tile_h, tile_w = validated_tile_hw
         height, width = obs_shape
+        tile_h, tile_w = validated_tile_hw or obs_shape
         sample_grid = _normalized_sample_grid(dual.device, dtype)
         total_grad = torch.zeros(
-            (resolution, resolution),
-            dtype=dtype,
-            device=dual.device,
+            resolution * resolution, dtype=dtype, device=dual.device
         )
         for y0, y1, x0, x1 in _iter_detector_tiles(height, width, tile_h, tile_w):
-            dual_tile = dual[y0:y1, x0:x1]
-            if not bool(torch.any(dual_tile != 0)):
-                continue
-            with torch.enable_grad():
-                probe = torch.zeros(
-                    (resolution, resolution),
-                    dtype=dtype,
-                    device=dual.device,
-                    requires_grad=True,
-                )
-                tile_pred = _forward_tile(probe, sample_grid, y0, y1, x0, x1)
-                pairing = torch.sum(
-                    tile_pred * dual_tile.to(dtype=tile_pred.dtype)
-                )
-                (tile_grad,) = torch.autograd.grad(pairing, probe)
-            total_grad = total_grad + tile_grad
-        return total_grad
+            hy0, hy1 = max(y0 - halo_y, 0), min(y1 + halo_y, height)
+            hx0, hx1 = max(x0 - halo_x, 0), min(x1 + halo_x, width)
+            native_dual = dual[y0:y1, x0:x1].to(dtype=dtype)
+            if psf_spec is not None and psf_spec.mode != "none":
+                expanded = F.conv_transpose2d(
+                    native_dual[None, None],
+                    _normalized_kernel(dual.device, dtype),
+                    padding=0,
+                )[0, 0]
+                top, left = halo_y - (y0 - hy0), halo_x - (x0 - hx0)
+                native_dual = expanded[top : top + hy1 - hy0, left : left + hx1 - hx0]
+            # Explicit transpose keeps gradients through the dual/calibration;
+            # a detached autograd VJP does not differentiate x^T H(x) correctly.
+            xy = ((sample_grid[hy0:hy1, hx0:hx1] + 1) * ((resolution - 1) / 2)).clamp(
+                0, resolution - 1
+            )
+            lower = torch.floor(xy)
+            fraction = xy - lower
+            for dy in (0, 1):
+                for dx in (0, 1):
+                    index = (lower[..., 0] + dx).long().clamp_max(resolution - 1)
+                    index = (
+                        index
+                        + (lower[..., 1] + dy).long().clamp_max(resolution - 1)
+                        * resolution
+                    )
+                    wx = fraction[..., 0] if dx else 1 - fraction[..., 0]
+                    wy = fraction[..., 1] if dy else 1 - fraction[..., 1]
+                    total_grad.scatter_add_(
+                        0, index.reshape(-1), (native_dual * wx * wy).reshape(-1)
+                    )
+        return total_grad.reshape(resolution, resolution)
 
     weight_cache: dict[tuple[torch.device, torch.dtype], Tensor] = {}
 
@@ -1002,7 +1007,7 @@ class LinearBandGridField(_BaseFieldModel):
 
     def initialize_from_product(
         self,
-        product: MapProductResult,
+        product: ProductResult,
         *,
         band_name: str | None = None,
     ) -> None:
@@ -1028,7 +1033,7 @@ class LinearBandGridField(_BaseFieldModel):
                         break
                 if matched_idx is None:
                     raise ValueError(
-                        f"MapProductResult has no band matching {target_band!r}"
+                        f"ProductResult has no band matching {target_band!r}"
                     )
                 plane = data[matched_idx]
             elif len(product.product.bands) == 1 and int(data.shape[0]) == 1:
@@ -2725,7 +2730,7 @@ def load_stationary_calibrated_band_observations(
         )
     manifest_resolved = Path(manifest_path).resolve()
     report_resolved = Path(fit_report_path).resolve()
-    manifest_sha = _sha256_file(manifest_resolved)
+    manifest_sha = _file_sha256(manifest_resolved)
     report = json.loads(report_resolved.read_text(encoding="utf-8"))
     if report.get("manifest_sha256") != manifest_sha:
         raise ValueError("operator fit report does not match the calibration manifest")
@@ -2777,7 +2782,7 @@ def load_stationary_calibrated_band_observations(
             ckpt_path = Path(group["checkpoint"])
             if not ckpt_path.is_absolute():
                 ckpt_path = (report_resolved.parent / ckpt_path).resolve()
-            ckpt_sha = _sha256_file(ckpt_path)
+            ckpt_sha = _file_sha256(ckpt_path)
             if ckpt_sha != group.get("checkpoint_sha256"):
                 raise ValueError(f"{detector}/{role} checkpoint hash mismatch")
             arrays = load_operator_calibration_split(
@@ -2912,7 +2917,7 @@ def load_stationary_calibrated_band_observations(
                 raise ValueError(
                     "measured passband path and sha256 must both be provided when declared"
                 )
-            actual_pb_sha = _sha256_file(Path(str(passband_path)))
+            actual_pb_sha = _file_sha256(Path(str(passband_path)))
             if actual_pb_sha != str(passband_sha):
                 raise ValueError("measured passband SHA-256 hash mismatch")
         key = _context_key(ctx)

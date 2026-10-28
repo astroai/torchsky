@@ -15,7 +15,7 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_spin_harmonic_solver_hooks
+from torchsky.map.solvers import build_spherical_spin_harmonic_solver_hooks
 from torchsky.map.solvers import (
     build_spin_harmonic_kronecker_prior_operator,
     compose_bound_operators,
@@ -96,7 +96,6 @@ def main() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     fit = operator_set.solve_normal_equation_cg(

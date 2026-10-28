@@ -1,6 +1,6 @@
 """Analytic checks for CCM89 / O'Donnell extinction."""
 
-from __future__ import annotations
+from typing import Any, cast
 
 import pytest
 import torch
@@ -95,11 +95,20 @@ def test_transmission_never_amplifies() -> None:
     assert torch.all(t <= 1.0 + 1e-6)
 
 
-def test_apply_extinction_accepts_uspm_wavelength_name() -> None:
+def test_apply_extinction_accepts_generic_wavelength_argument() -> None:
     flux = torch.ones(3)
     wave = torch.tensor([4000.0, 5500.0, 8000.0])
-    out = apply_extinction(flux, ext_params=torch.tensor(0.0), lambda_obs_angstrom=wave)
+    out = apply_extinction(flux, wavelength=wave, ext_params=torch.tensor(0.0))
     torch.testing.assert_close(out, flux)
+
+
+def test_apply_extinction_rejects_removed_wavelength_alias() -> None:
+    with pytest.raises(TypeError, match="lambda_obs_angstrom"):
+        cast(Any, apply_extinction)(
+            torch.ones(3),
+            ext_params=torch.tensor(0.0),
+            lambda_obs_angstrom=torch.ones(3),
+        )
 
 
 def test_inplace_wavelength_edit_is_not_stale() -> None:

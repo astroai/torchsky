@@ -67,65 +67,61 @@ def convolve_log_lambda(
     batch = int(flux_t.numel() // n_pix)
     flux_flat = flux_t.reshape(batch, n_pix)
 
-    def _broadcast_param(value: Tensor | float) -> Tensor:
+    def _align(value: Tensor | float) -> Tensor:
+        """Broadcast a width/mean parameter to ``(batch, 1)`` or ``(batch, n)``."""
         tensor = torch.as_tensor(value, device=flux_t.device, dtype=flux_t.dtype)
         if tensor.ndim == 0:
-            return tensor.expand(batch, 1)
-        tensor = tensor.to(device=flux_t.device, dtype=flux_t.dtype)
+            return tensor.reshape(1, 1).expand(batch, 1)
+        # A parameter shaped like the batch axes is one value per spectrum.
         if len(leading) >= 1 and tensor.ndim == len(leading):
             try:
-                expanded = tensor.expand(*leading)
-                return expanded.reshape(batch, 1)
+                return torch.broadcast_to(tensor, leading).reshape(batch, 1)
             except RuntimeError:
                 pass
-        if tensor.shape[-1] == 1:
-            prefix = tensor.shape[:-1]
-            while len(prefix) < len(leading):
-                tensor = tensor.unsqueeze(0)
-                prefix = tensor.shape[:-1]
-            return tensor.expand(*leading, 1).reshape(batch, 1)
         if tensor.shape[-1] == n_pix:
-            prefix = tensor.shape[:-1]
-            while len(prefix) < len(leading):
-                tensor = tensor.unsqueeze(0)
-                prefix = tensor.shape[:-1]
-            return tensor.expand(*leading, n_pix).reshape(batch, n_pix)
-        while tensor.ndim < len(leading):
-            tensor = tensor.unsqueeze(0)
-        if tensor.ndim == len(leading):
-            tensor = tensor.unsqueeze(-1)
-        if tensor.shape[: len(leading)] != leading:
-            tensor = tensor.expand(*leading, *tensor.shape[len(leading) :])
-        flat = tensor.reshape(batch, -1)
-        if flat.shape[1] not in (1, n_pix):
-            return flat[:, :1]
-        return flat
+            try:
+                sized = torch.broadcast_to(tensor, leading + (n_pix,))
+            except RuntimeError as exc:
+                raise ValueError(
+                    "per-pixel parameters must broadcast to the flux batch shape"
+                ) from exc
+            return sized.reshape(batch, n_pix)
+        if tensor.shape[-1] == 1:
+            try:
+                sized = torch.broadcast_to(tensor, leading + (1,))
+            except RuntimeError as exc:
+                raise ValueError(
+                    "per-spectrum parameters must broadcast to the flux batch shape"
+                ) from exc
+            return sized.reshape(batch, 1)
+        raise ValueError(
+            "sigma and mean parameters must be scalars, (..., 1), or (..., n_pix)"
+        )
 
-    mean = _broadcast_param(mean_kms)
+    mean = _align(mean_kms)
     if zero_mean and bool((mean.abs() > 0).any()):
         raise ValueError("zero_mean=True requires mean_kms=0")
 
+    dln: Tensor | None = None
+    if dln_lambda is not None:
+        dln = torch.as_tensor(dln_lambda, device=flux_t.device, dtype=flux_t.dtype)
+        if not bool((dln > 0).all()):
+            raise ValueError("dln_lambda must be positive")
     need_dln = sigma_kms is not None or bool((mean.abs() > 0).any())
     if need_dln:
-        if dln_lambda is None:
-            raise ValueError("dln_lambda is required when sigma_kms or nonzero mean_kms is used")
-        dln = torch.as_tensor(dln_lambda, device=flux_t.device, dtype=flux_t.dtype)
-        if bool((dln <= 0).any() if dln.numel() > 1 else float(dln) <= 0.0):
-            raise ValueError("dln_lambda must be positive")
+        if dln is None:
+            raise ValueError(
+                "dln_lambda is required when sigma_kms or nonzero mean_kms is used"
+            )
         mean_px = mean / (C_KM_S * dln)
     else:
-        if dln_lambda is not None:
-            dln = torch.as_tensor(dln_lambda, device=flux_t.device, dtype=flux_t.dtype)
-            if bool((dln <= 0).any() if dln.numel() > 1 else float(dln) <= 0.0):
-                raise ValueError("dln_lambda must be positive")
         mean_px = torch.zeros_like(mean)
 
     if sigma_px is not None:
-        sigma_px_t = _broadcast_param(sigma_px).clamp_min(0.0)
+        sigma_px_t = _align(sigma_px).clamp_min(0.0)
     else:
-        assert sigma_kms is not None
-        sigma = _broadcast_param(sigma_kms).clamp_min(0.0)
-        sigma_px_t = sigma / (C_KM_S * dln)
+        assert sigma_kms is not None and dln is not None
+        sigma_px_t = _align(sigma_kms).clamp_min(0.0) / (C_KM_S * dln)
 
     radius = int(kernel_radius)
     offsets = torch.arange(
@@ -172,3 +168,9 @@ def _unit_gaussian_kernel(
     delta = torch.zeros_like(kernel)
     delta.scatter_(-1, nearest, 1.0)
     return torch.where(tiny, delta, kernel)
+
+__all__ = [
+    "C_KM_S",
+    "convolve_log_lambda",
+    "sigma_R_kms",
+]

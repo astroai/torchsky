@@ -15,7 +15,7 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_harmonic_solver_hooks
+from torchsky.map.solvers import build_spherical_harmonic_solver_hooks
 from torchsky.map.solvers import make_diagonal_preconditioner
 from torchsky.map.target import TargetRenderSpec
 
@@ -74,7 +74,6 @@ def main() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         observed_cutouts,
         initial_probe=torch.zeros_like(truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     fit = operator_set.solve_normal_equation_cg(

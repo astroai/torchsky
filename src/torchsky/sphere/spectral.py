@@ -4,77 +4,163 @@ import os
 import math
 import functools
 import warnings
-from collections import OrderedDict
 from pathlib import Path
 
 import torch
 from torch import Tensor
 
-from .._native import cpp as _cpp
-from ..io import read_image, read_table
+from .. import _ops as _native_ops
+from .._dtype import work_complex_dtype as _preferred_complex_dtype
+from .._dtype import work_dtype as _preferred_real_dtype
+from torchfits import read_tensor as read_image
+from torchfits.table import read_torch as read_table
 
 from . import healpix as _healpix
-from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLES
+from ._spectral_cache import SpectralCacheManager, SpectralCacheNamespace
 
-_HAS_HEALPIX_SPIN_MAP2ALM_RING_REC = hasattr(
-    _cpp, "_healpix_spin_map2alm_ring_recurrence_cpu"
-)
-_HAS_HEALPIX_SPIN_ALM2MAP_RING_REC = hasattr(
-    _cpp, "_healpix_spin_alm2map_ring_recurrence_cpu"
-)
-_HAS_HEALPIX_SPIN_INTERPOLATE_REC = hasattr(
-    _cpp, "_healpix_spin_interpolate_recurrence_cpu"
-)
+_HAS_HEALPIX_SPIN_MAP2ALM_RING_REC = _native_ops.has_spectral_dispatcher()
+_HAS_HEALPIX_SPIN_ALM2MAP_RING_REC = _native_ops.has_spectral_dispatcher()
+_HAS_HEALPIX_SPIN_INTERPOLATE_REC = _native_ops.has_spectral_dispatcher()
 
-_ANGLE_CACHE: dict[tuple[int, bool], tuple[Tensor, Tensor, Tensor, float]] = {}
-_YLM_CACHE: dict[
-    tuple[int, bool, int, int], tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
-] = {}
-_ALM_ELL_CACHE: dict[tuple[int, int], Tensor] = {}
-_ALM_M_CACHE: dict[tuple[int, int], Tensor] = {}
-_SPIN_YLM_CACHE: dict[
-    tuple[int, bool, int, int, int], tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
-] = {}
-_SPIN_MAP2ALM_MAT_CACHE: "OrderedDict[tuple[int, bool, int, int, int], tuple[Tensor, Tensor]]" = OrderedDict()
-_SPIN_ALM2MAP_MAT_CACHE: "OrderedDict[tuple[int, bool, int, int, int], tuple[Tensor, Tensor, Tensor, Tensor]]" = OrderedDict()
-_SCALAR_MAP2ALM_MAT_CACHE: "OrderedDict[tuple[int, bool, int, int], Tensor]" = (
-    OrderedDict()
-)
-_SCALAR_ALM2MAP_MAT_CACHE: "OrderedDict[tuple[int, bool, int, int], Tensor]" = (
-    OrderedDict()
-)
-_RING_LAYOUT_CACHE: dict[int, tuple[Tensor, Tensor, Tensor, Tensor]] = {}
-_RING_SCALAR_BASIS_CACHE: dict[tuple[int, int, int], tuple[Tensor, ...]] = {}
-_RING_PHI0_PHASE_CACHE: dict[tuple[int, int, int], Tensor] = {}
-_RING_AZIMUTH_PHASE_CACHE: dict[tuple[int, int], Tensor] = {}
-_RING_ALIAS_INDEX_CACHE: dict[tuple[int, int], Tensor] = {}
-_RING_SPIN_CONJ_INDEX_CACHE: dict[tuple[int, int], tuple[Tensor, Tensor, Tensor]] = {}
-_RING_PIX2RING_CACHE: dict[int, Tensor] = {}
-_RING2NEST_PERM_CACHE: dict[int, Tensor] = {}
-_NEST2RING_PERM_CACHE: dict[int, Tensor] = {}
-_RING_SPIN_BASIS_CACHE: dict[tuple[int, int, int, int], tuple[Tensor, ...]] = {}
-_RING_SCALAR_BASIS_CONCAT_CACHE: dict[tuple[int, int, int], Tensor] = {}
-_RING_SCALAR_BASIS_CONCAT_CACHE_BYTES: dict[tuple[int, int, int], int] = {}
-_RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES = 0
-_RING_GROUP_CACHE: dict[
-    int,
-    tuple[
-        tuple[int, int, int, int, int] | None, tuple[tuple[int, Tensor, Tensor], ...]
-    ],
-] = {}
-_SPIN_MAP2ALM_MAT_CACHE_ENTRY_BYTES: dict[tuple[int, bool, int, int, int], int] = {}
-_SPIN_ALM2MAP_MAT_CACHE_ENTRY_BYTES: dict[tuple[int, bool, int, int, int], int] = {}
-_SCALAR_MAP2ALM_MAT_CACHE_ENTRY_BYTES: dict[tuple[int, bool, int, int], int] = {}
-_SCALAR_ALM2MAP_MAT_CACHE_ENTRY_BYTES: dict[tuple[int, bool, int, int], int] = {}
-_SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES = 0
-_SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES = 0
-_SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES = 0
-_SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES = 0
 _SPIN_MAX_CACHE_BYTES = int(
     os.environ.get("TORCHSKY_SPIN_MAX_CACHE_BYTES", str(512 * 1024 * 1024))
 )
 _SCALAR_MAX_CACHE_BYTES = int(
     os.environ.get("TORCHSKY_SCALAR_MAX_CACHE_BYTES", str(512 * 1024 * 1024))
+)
+_SPECTRAL_MAX_CACHE_BYTES = int(
+    os.environ.get("TORCHSKY_SPECTRAL_MAX_CACHE_BYTES", str(512 * 1024 * 1024))
+)
+_SPECTRAL_MAX_CACHE_ENTRY_BYTES = int(
+    os.environ.get("TORCHSKY_SPECTRAL_MAX_CACHE_ENTRY_BYTES", str(128 * 1024 * 1024))
+)
+_SPECTRAL_CACHE = SpectralCacheManager(
+    max_bytes=_SPECTRAL_MAX_CACHE_BYTES,
+    max_entry_bytes=_SPECTRAL_MAX_CACHE_ENTRY_BYTES,
+)
+_SPIN_CACHE_ENTRY_LIMIT = min(
+    _SPIN_MAX_CACHE_BYTES,
+    _SPECTRAL_MAX_CACHE_ENTRY_BYTES,
+    _SPECTRAL_MAX_CACHE_BYTES,
+)
+_SCALAR_CACHE_ENTRY_LIMIT = min(
+    _SCALAR_MAX_CACHE_BYTES,
+    _SPECTRAL_MAX_CACHE_ENTRY_BYTES,
+    _SPECTRAL_MAX_CACHE_BYTES,
+)
+_ANGLE_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor, Tensor, float]] = (
+    _SPECTRAL_CACHE.namespace(
+        "angles", device="cpu", dtype=(torch.int64, torch.float64)
+    )
+)
+_YLM_CACHE: SpectralCacheNamespace[
+    tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
+] = _SPECTRAL_CACHE.namespace(
+    "ylm", device="cpu", dtype=torch.complex128, max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT
+)
+_ALM_ELL_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "alm_ell", device="cpu", dtype=torch.int64
+)
+_ALM_M_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "alm_m", device="cpu", dtype=torch.int64
+)
+_SPIN_YLM_CACHE: SpectralCacheNamespace[
+    tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
+] = _SPECTRAL_CACHE.namespace(
+    "spin_ylm", device="cpu", dtype=torch.complex128, max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT
+)
+_SPIN_MAP2ALM_MAT_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor]] = (
+    _SPECTRAL_CACHE.namespace(
+        "spin_map2alm_mat",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT,
+    )
+)
+_SPIN_ALM2MAP_MAT_CACHE: SpectralCacheNamespace[
+    tuple[Tensor, Tensor, Tensor, Tensor]
+] = _SPECTRAL_CACHE.namespace(
+    "spin_alm2map_mat",
+    device="cpu",
+    dtype=torch.complex128,
+    max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT,
+)
+_SCALAR_MAP2ALM_MAT_CACHE: SpectralCacheNamespace[Tensor] = (
+    _SPECTRAL_CACHE.namespace(
+        "scalar_map2alm_mat",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
+    )
+)
+_SCALAR_ALM2MAP_MAT_CACHE: SpectralCacheNamespace[Tensor] = (
+    _SPECTRAL_CACHE.namespace(
+        "scalar_alm2map_mat",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
+    )
+)
+_RING_LAYOUT_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor, Tensor, Tensor]] = (
+    _SPECTRAL_CACHE.namespace(
+        "ring_layout", device="cpu", dtype=(torch.int64, torch.float64)
+    )
+)
+_RING_SCALAR_BASIS_CACHE: SpectralCacheNamespace[tuple[Tensor, ...]] = (
+    _SPECTRAL_CACHE.namespace(
+        "ring_scalar_basis",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
+    )
+)
+_RING_PHI0_PHASE_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "ring_phi0_phase", device="cpu", dtype=torch.complex128
+)
+_RING_AZIMUTH_PHASE_CACHE: SpectralCacheNamespace[Tensor] = (
+    _SPECTRAL_CACHE.namespace(
+        "ring_azimuth_phase", device="cpu", dtype=torch.complex128
+    )
+)
+_RING_ALIAS_INDEX_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "ring_alias_index", device="cpu", dtype=torch.int64
+)
+_RING_SPIN_CONJ_INDEX_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor, Tensor]] = (
+    _SPECTRAL_CACHE.namespace(
+        "ring_spin_conj_index", device="cpu", dtype=torch.int64
+    )
+)
+_RING_PIX2RING_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "ring_pix2ring", device="cpu", dtype=torch.int64
+)
+_RING2NEST_PERM_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "ring2nest_perm", device="cpu", dtype=torch.int64
+)
+_NEST2RING_PERM_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "nest2ring_perm", device="cpu", dtype=torch.int64
+)
+_RING_SPIN_BASIS_CACHE: SpectralCacheNamespace[tuple[Tensor, ...]] = (
+    _SPECTRAL_CACHE.namespace(
+        "ring_spin_basis",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT,
+    )
+)
+_RING_SCALAR_BASIS_CONCAT_CACHE: SpectralCacheNamespace[Tensor] = (
+    _SPECTRAL_CACHE.namespace(
+        "ring_scalar_basis_concat",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
+    )
+)
+_RING_GROUP_CACHE: SpectralCacheNamespace[
+    tuple[
+        tuple[int, int, int, int, int] | None, tuple[tuple[int, Tensor, Tensor], ...]
+    ]
+] = _SPECTRAL_CACHE.namespace(
+    "ring_group", device="cpu", dtype=torch.int64
 )
 _SCALAR_RING_AUTO_MIN_BYTES = int(
     os.environ.get("TORCHSKY_SCALAR_RING_AUTO_MIN_BYTES", "0")
@@ -143,10 +229,10 @@ _RING_FOURIER_MODES_CPP_MAX_M = int(
 _RING_FOURIER_SYNTH_CPP_MAX_M = int(
     os.environ.get("TORCHSKY_RING_FOURIER_SYNTH_CPP_MAX_M", "1024")
 )
-_PIXWIN_TABLE_CACHE: dict[int, tuple[Tensor, Tensor]] = {}
-_PIXWIN_DATA_DIR = Path(__file__).resolve().parent / "data" / "pixel_window_functions"
 
-_LEGENDRE_REC_CACHE: dict[tuple[int, int], tuple[list[float], list[float]]] = {}
+_LEGENDRE_REC_CACHE: SpectralCacheNamespace[
+    tuple[tuple[float, ...], tuple[float, ...]]
+] = _SPECTRAL_CACHE.namespace("legendre_recurrence", device="cpu", dtype=torch.float64)
 
 
 def _smoke_test_torch_compile() -> bool:
@@ -169,21 +255,32 @@ def _smoke_test_torch_compile() -> bool:
         return False
 
 
-_COMPILE_OK: bool = _smoke_test_torch_compile()
+_COMPILE_OK: bool | None = None
+
+
+def _compile_available() -> bool:
+    """Probe torch.compile lazily on first use, never at import time."""
+    global _COMPILE_OK
+    if _COMPILE_OK is None:
+        if os.environ.get("TORCHSKY_SHT_COMPILE", "1") == "0":
+            _COMPILE_OK = False
+        else:
+            _COMPILE_OK = _smoke_test_torch_compile()
+    return bool(_COMPILE_OK)
 
 
 def _maybe_compile(fn):
-    """Compile when available, falling back if a later specialization fails."""
-    if not _COMPILE_OK:
-        return fn
-    compiled = torch.compile(fn)
+    """Compile on first call when available, falling back on specialization errors."""
+    compiled = None
     compile_disabled = False
 
     @functools.wraps(fn)
     def _compiled_or_eager(*args, **kwargs):
-        nonlocal compile_disabled
-        if compile_disabled:
+        nonlocal compiled, compile_disabled
+        if compile_disabled or not _compile_available():
             return fn(*args, **kwargs)
+        if compiled is None:
+            compiled = torch.compile(fn)
         try:
             return compiled(*args, **kwargs)
         except Exception as compile_error:
@@ -200,14 +297,6 @@ def _maybe_compile(fn):
             return result
 
     return _compiled_or_eager
-
-
-def _preferred_real_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
-
-
-def _preferred_complex_dtype(device: torch.device) -> torch.dtype:
-    return torch.complex64 if device.type == "mps" else torch.complex128
 
 
 def _accumulate_add(
@@ -231,8 +320,12 @@ def _accumulate_add(
     return dst
 
 
-_RING_WEIGHT_CACHE: dict[tuple[int, int], Tensor] = {}
-_PIXEL_WEIGHT_CACHE: dict[tuple[int, str], Tensor] = {}
+_RING_WEIGHT_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "ring_weight", device="cpu", dtype=torch.float64
+)
+_PIXEL_WEIGHT_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "pixel_weight", device="cpu", dtype=torch.float64
+)
 _HEALPIX_FULL_WEIGHT_REL = "full_weights/healpix_full_weights_nside_%04d.fits"
 
 
@@ -266,32 +359,30 @@ def _healpix_ring_quadrature_weights(nside: int) -> Tensor:
     nside_i = int(nside)
     n_even = min(nside_i, 128)
     key = (nside_i, n_even)
-    cached = _RING_WEIGHT_CACHE.get(key)
-    if cached is not None:
-        return cached
 
-    npix = _healpix.nside2npix(nside_i)
-    pix = torch.arange(npix, dtype=torch.int64)
-    ring = _ring_pix2ring_index(nside_i)
-    nring = int(ring.max().item()) + 1
-    counts = torch.bincount(ring, minlength=nring).to(torch.float64)
-    theta, _ = _healpix.pix2ang(nside_i, pix, nest=False)
-    z = torch.cos(theta.to(dtype=torch.float64))
-    z_sum = torch.zeros(nring, dtype=torch.float64)
-    z_sum.scatter_add_(0, ring, z)
-    z_ring = z_sum / counts.clamp_min(1.0)
-    design = _even_legendre_p(z_ring, n_even) * counts.unsqueeze(0)
-    target = torch.zeros(n_even, dtype=torch.float64)
-    target[0] = float(npix)
-    ones = torch.ones(nring, dtype=torch.float64)
-    ridge = 1.0e-6 * float(npix)
-    gram = design @ design.T + ridge * torch.eye(n_even, dtype=torch.float64)
-    coeff = torch.linalg.solve(gram, target - design @ ones)
-    ring_w = ones + design.T @ coeff
-    pix_w = ring_w[ring]
-    pix_w = pix_w / pix_w.mean().clamp_min(1.0e-30)
-    _RING_WEIGHT_CACHE[key] = pix_w
-    return pix_w
+    def build() -> Tensor:
+        npix = _healpix.nside2npix(nside_i)
+        pix = torch.arange(npix, dtype=torch.int64)
+        ring = _ring_pix2ring_index(nside_i)
+        nring = int(ring.max().item()) + 1
+        counts = torch.bincount(ring, minlength=nring).to(torch.float64)
+        theta, _ = _healpix.pix2ang(nside_i, pix, nest=False)
+        z = torch.cos(theta.to(dtype=torch.float64))
+        z_sum = torch.zeros(nring, dtype=torch.float64)
+        z_sum.scatter_add_(0, ring, z)
+        z_ring = z_sum / counts.clamp_min(1.0)
+        design = _even_legendre_p(z_ring, n_even) * counts.unsqueeze(0)
+        target = torch.zeros(n_even, dtype=torch.float64)
+        target[0] = float(npix)
+        ones = torch.ones(nring, dtype=torch.float64)
+        ridge = 1.0e-6 * float(npix)
+        gram = design @ design.T + ridge * torch.eye(n_even, dtype=torch.float64)
+        coeff = torch.linalg.solve(gram, target - design @ ones)
+        ring_w = ones + design.T @ coeff
+        pix_w = ring_w[ring]
+        return pix_w / pix_w.mean().clamp_min(1.0e-30)
+
+    return _RING_WEIGHT_CACHE.get_or_build(key, build)
 
 
 def _resolve_healpix_datapath(
@@ -356,19 +447,19 @@ def _healpix_full_pixel_weight_corrections(
         )
     path = _healpix_full_weight_path(nside, root)
     key = (int(nside), str(path.resolve()) if path.exists() else str(path))
-    cached = _PIXEL_WEIGHT_CACHE.get(key)
-    if cached is not None:
-        return cached
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"pixel weights file missing at {path}. "
-            "Set datapath to a local healpy-data checkout or pass use_pixel_weights=False"
-        )
-    w = _read_healpix_full_weight_vector(str(path), int(nside))
-    if not bool(torch.isfinite(w).all().item()):
-        raise ValueError(f"pixel weights in {path} are not finite")
-    _PIXEL_WEIGHT_CACHE[key] = w
-    return w
+
+    def build() -> Tensor:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"pixel weights file missing at {path}. "
+                "Set datapath to a local healpy-data checkout or pass use_pixel_weights=False"
+            )
+        weights = _read_healpix_full_weight_vector(str(path), int(nside))
+        if not bool(torch.isfinite(weights).all().item()):
+            raise ValueError(f"pixel weights in {path} are not finite")
+        return weights
+
+    return _PIXEL_WEIGHT_CACHE.get_or_build(key, build)
 
 
 def _gal_cut_keep_mask(
@@ -475,28 +566,26 @@ def _infer_lmax_for_fixed_mmax(nalm: int, mmax: int) -> int:
 
 def _alm_ell_array(lmax: int, mmax: int) -> Tensor:
     key = (int(lmax), int(mmax))
-    cached = _ALM_ELL_CACHE.get(key)
-    if cached is not None:
-        return cached
-    vals = []
-    for m in range(mmax + 1):
-        vals.extend(range(m, lmax + 1))
-    out = torch.tensor(vals, dtype=torch.int64)
-    _ALM_ELL_CACHE[key] = out
-    return out
+
+    def build() -> Tensor:
+        vals = []
+        for m in range(mmax + 1):
+            vals.extend(range(m, lmax + 1))
+        return torch.tensor(vals, dtype=torch.int64)
+
+    return _ALM_ELL_CACHE.get_or_build(key, build)
 
 
 def _alm_m_array(lmax: int, mmax: int) -> Tensor:
     key = (int(lmax), int(mmax))
-    cached = _ALM_M_CACHE.get(key)
-    if cached is not None:
-        return cached
-    vals = []
-    for m in range(mmax + 1):
-        vals.extend([m] * (lmax - m + 1))
-    out = torch.tensor(vals, dtype=torch.int64)
-    _ALM_M_CACHE[key] = out
-    return out
+
+    def build() -> Tensor:
+        vals = []
+        for m in range(mmax + 1):
+            vals.extend([m] * (lmax - m + 1))
+        return torch.tensor(vals, dtype=torch.int64)
+
+    return _ALM_M_CACHE.get_or_build(key, build)
 
 
 def _require_sht_device(*values: object, what: str = "HEALPix SHT") -> None:
@@ -546,43 +635,46 @@ def _alm_to_rows(
 
 def _angles_for_nside(nside: int, nest: bool) -> tuple[Tensor, Tensor, Tensor, float]:
     key = (int(nside), bool(nest))
-    cached = _ANGLE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    npix = _healpix.nside2npix(nside)
-    pix = torch.arange(npix, dtype=torch.int64)
-    theta, phi = _healpix.pix2ang(nside, pix, nest=nest, lonlat=False)
-    theta = theta.to(dtype=torch.float64, device="cpu")
-    phi = phi.to(dtype=torch.float64, device="cpu")
-    x = torch.cos(theta)
-    w = 4.0 * math.pi / float(npix)
-    cached = (theta, phi, x, w)
-    _ANGLE_CACHE[key] = cached
-    return cached
+
+    def build() -> tuple[Tensor, Tensor, Tensor, float]:
+        npix = _healpix.nside2npix(nside)
+        pix = torch.arange(npix, dtype=torch.int64)
+        theta, phi = _healpix.pix2ang(nside, pix, nest=nest, lonlat=False)
+        theta = theta.to(dtype=torch.float64, device="cpu")
+        phi = phi.to(dtype=torch.float64, device="cpu")
+        return theta, phi, torch.cos(theta), 4.0 * math.pi / float(npix)
+
+    return _ANGLE_CACHE.get_or_build(key, build)
 
 
 def _ring2nest_perm_for_nside(nside: int) -> Tensor:
     ns = int(nside)
-    cached = _RING2NEST_PERM_CACHE.get(ns)
-    if cached is not None:
-        return cached
-    npix = _healpix.nside2npix(ns)
-    idx = torch.arange(npix, dtype=torch.int64)
-    perm = _healpix.ring2nest(ns, idx).to(dtype=torch.int64, device="cpu").contiguous()
-    _RING2NEST_PERM_CACHE[ns] = perm
-    return perm
+
+    def build() -> Tensor:
+        npix = _healpix.nside2npix(ns)
+        idx = torch.arange(npix, dtype=torch.int64)
+        return (
+            _healpix.ring2nest(ns, idx)
+            .to(dtype=torch.int64, device="cpu")
+            .contiguous()
+        )
+
+    return _RING2NEST_PERM_CACHE.get_or_build(ns, build)
 
 
 def _nest2ring_perm_for_nside(nside: int) -> Tensor:
     ns = int(nside)
-    cached = _NEST2RING_PERM_CACHE.get(ns)
-    if cached is not None:
-        return cached
-    npix = _healpix.nside2npix(ns)
-    idx = torch.arange(npix, dtype=torch.int64)
-    perm = _healpix.nest2ring(ns, idx).to(dtype=torch.int64, device="cpu").contiguous()
-    _NEST2RING_PERM_CACHE[ns] = perm
-    return perm
+
+    def build() -> Tensor:
+        npix = _healpix.nside2npix(ns)
+        idx = torch.arange(npix, dtype=torch.int64)
+        return (
+            _healpix.nest2ring(ns, idx)
+            .to(dtype=torch.int64, device="cpu")
+            .contiguous()
+        )
+
+    return _NEST2RING_PERM_CACHE.get_or_build(ns, build)
 
 
 def _reorder_nest_to_ring_rows(rows: Tensor, nside: int) -> Tensor:
@@ -599,51 +691,37 @@ def _reorder_ring_to_nest_rows(rows: Tensor, nside: int) -> Tensor:
     return torch.index_select(rows, rows.ndim - 1, perm)
 
 
-def _pmm_base(m: int, x: Tensor) -> Tensor:
-    if m == 0:
-        return torch.ones_like(x)
-    # (2m-1)!! = (2m)! / (2^m m!)
-    log_coeff = math.lgamma(2 * m + 1) - (m * math.log(2.0)) - math.lgamma(m + 1)
 
-    # base = (1-x^2)^(m/2)
-    # log_base = (m/2) * log(1-x^2)
-    sin2theta = torch.clamp(1.0 - x * x, min=1e-30)
-    log_base = 0.5 * m * torch.log(sin2theta)
-
-    val = torch.exp(log_coeff + log_base)
-    sign = -1.0 if (m % 2) else 1.0
-    return sign * val
-
-
-def _legendre_rec_coeffs(m: int, lmax: int) -> tuple[list[float], list[float]]:
+def _legendre_rec_coeffs(
+    m: int, lmax: int
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
     """Return recurrence coefficients a_lm, b_lm for l=m+2..lmax."""
     key = (m, lmax)
-    if key in _LEGENDRE_REC_CACHE:
-        return _LEGENDRE_REC_CACHE[key]
 
-    a_list = []
-    b_list = []
-    for ell in range(m + 2, lmax + 1):
-        a_lm = math.sqrt((4.0 * ell * ell - 1.0) / (ell * ell - m * m))
-        b_lm = math.sqrt(
-            (2.0 * ell + 1.0)
-            / (2.0 * ell - 3.0)
-            * (((ell - 1.0) * (ell - 1.0)) - m * m)
-            / (ell * ell - m * m)
-        )
-        a_list.append(a_lm)
-        b_list.append(b_lm)
+    def build() -> tuple[tuple[float, ...], tuple[float, ...]]:
+        a_list = []
+        b_list = []
+        for ell in range(m + 2, lmax + 1):
+            a_lm = math.sqrt((4.0 * ell * ell - 1.0) / (ell * ell - m * m))
+            b_lm = math.sqrt(
+                (2.0 * ell + 1.0)
+                / (2.0 * ell - 3.0)
+                * (((ell - 1.0) * (ell - 1.0)) - m * m)
+                / (ell * ell - m * m)
+            )
+            a_list.append(a_lm)
+            b_list.append(b_lm)
+        return tuple(a_list), tuple(b_list)
 
-    _LEGENDRE_REC_CACHE[key] = (a_list, b_list)
-    return a_list, b_list
+    return _LEGENDRE_REC_CACHE.get_or_build(key, build)
 
 
 def _legendre_l_sequence_loop(
     x: Tensor,
     prev2: Tensor,
     prev1: Tensor,
-    a_list: list[float],
-    b_list: list[float],
+    a_list: tuple[float, ...],
+    b_list: tuple[float, ...],
 ) -> list[Tensor]:
     """Inner recurrence loop, potentially compilable."""
     res = []
@@ -701,44 +779,39 @@ def _legendre_l_sequence(m: int, x: Tensor, lmax: int) -> Tensor:
     return torch.stack(seq, dim=0)
 
 
-def _ylm_norm(ell: int, m: int) -> float:
-    return math.sqrt(
-        ((2 * ell + 1) / (4.0 * math.pi))
-        * math.exp(math.lgamma(ell - m + 1) - math.lgamma(ell + m + 1))
-    )
-
 
 def _ylm_basis(
     nside: int, nest: bool, lmax: int, mmax: int
 ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
     """Cached Y_lm basis blocks by m: each block has shape [l_count, npix]."""
     key = (int(nside), bool(nest), int(lmax), int(mmax))
-    cached = _YLM_CACHE.get(key)
-    if cached is not None:
-        return cached
 
-    _, phi, x, _ = _angles_for_nside(nside, nest)
-    y_blocks: list[Tensor] = []
-    y_conj_blocks: list[Tensor] = []
-    # ⚡ Bolt: Vectorized phase multipliers for all m
-    m_range = torch.arange(mmax + 1, device=phi.device, dtype=phi.dtype)
-    # [mmax+1, npix]
-    all_phases = torch.exp(
-        torch.complex(
-            torch.zeros(1, device=phi.device, dtype=phi.dtype),
-            m_range.unsqueeze(1) * phi.unsqueeze(0),
+    def build() -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+        _, phi, x, _ = _angles_for_nside(nside, nest)
+        y_blocks: list[Tensor] = []
+        y_conj_blocks: list[Tensor] = []
+        m_range = torch.arange(mmax + 1, device=phi.device, dtype=phi.dtype)
+        all_phases = torch.exp(
+            torch.complex(
+                torch.zeros(1, device=phi.device, dtype=phi.dtype),
+                m_range.unsqueeze(1) * phi.unsqueeze(0),
+            )
         )
-    )
+        for m in range(mmax + 1):
+            p_seq = _legendre_l_sequence(m, x, lmax)
+            phase = all_phases[m]
+            y = p_seq.to(dtype=torch.complex128) * phase.unsqueeze(0)
+            y_blocks.append(y)
+            y_conj_blocks.append(torch.conj(y))
+        return tuple(y_blocks), tuple(y_conj_blocks)
 
-    for m in range(mmax + 1):
-        p_seq = _legendre_l_sequence(m, x, lmax)
-        phase = all_phases[m]
-        y = p_seq.to(dtype=torch.complex128) * phase.unsqueeze(0)
-        y_blocks.append(y)
-        y_conj_blocks.append(torch.conj(y))
-    out = (tuple(y_blocks), tuple(y_conj_blocks))
-    _YLM_CACHE[key] = out
-    return out
+    estimated_bytes = (
+        2
+        * alm_size(int(lmax), int(mmax))
+        * _healpix.nside2npix(int(nside))
+        * 16
+    )
+    return _YLM_CACHE.get_or_build(key, build, estimated_bytes=estimated_bytes)
 
 
 def _wigner_d_element(ell: int, m: int, mp: int, theta: Tensor) -> Tensor:
@@ -861,23 +934,14 @@ def _wigner_d_l_sequence(
     return torch.stack(seq, dim=0)
 
 
-def _spin_ylm_norm(ell: int) -> float:
-    return math.sqrt((2 * ell + 1) / (4.0 * math.pi))
 
-
-def _spin_ylm_basis(
+def _build_spin_ylm_basis(
     nside: int,
     nest: bool,
     lmax: int,
     mmax: int,
     spin: int,
 ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
-    """Cached spin-weighted basis blocks by m: each block has shape [l_count, npix]."""
-    key = (int(nside), bool(nest), int(lmax), int(mmax), int(spin))
-    cached = _SPIN_YLM_CACHE.get(key)
-    if cached is not None:
-        return cached
-
     theta, phi, _, _ = _angles_for_nside(nside, nest)
     y_blocks: list[Tensor] = []
     y_conj_blocks: list[Tensor] = []
@@ -940,17 +1004,41 @@ def _spin_ylm_basis(
         y_blocks.append(y)
         y_conj_blocks.append(torch.conj(y))
 
-    out = (tuple(y_blocks), tuple(y_conj_blocks))
-    _SPIN_YLM_CACHE[key] = out
-    return out
+    return tuple(y_blocks), tuple(y_conj_blocks)
 
 
-_SPIN_YLM_CONCAT_CACHE = {}
-_SPIN_YLM_CONCAT_CACHE_ENTRY_BYTES = {}
-_SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES = 0
+def _spin_ylm_basis(
+    nside: int,
+    nest: bool,
+    lmax: int,
+    mmax: int,
+    spin: int,
+) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
+    key = (int(nside), bool(nest), int(lmax), int(mmax), int(spin))
+    estimated_bytes = (
+        2
+        * alm_size(int(lmax), int(mmax))
+        * _healpix.nside2npix(int(nside))
+        * 16
+    )
+    return _SPIN_YLM_CACHE.get_or_build(
+        key,
+        lambda: _build_spin_ylm_basis(nside, nest, lmax, mmax, spin),
+        estimated_bytes=estimated_bytes,
+    )
 
 
-def _spin_ylm_basis_concat(
+_SPIN_YLM_CONCAT_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor]] = (
+    _SPECTRAL_CACHE.namespace(
+        "spin_ylm_concat",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT,
+    )
+)
+
+
+def _build_spin_ylm_basis_concat(
     nside: int,
     nest: bool,
     lmax: int,
@@ -961,62 +1049,38 @@ def _spin_ylm_basis_concat(
     Returns concatenated (nalm, npix) matrices for the spin-weighted basis.
     (Y, Y_conj)
     """
-    key = (nside, nest, lmax, mmax, spin)
-    if key in _SPIN_YLM_CONCAT_CACHE:
-        # LRU: move to end
-        val = _SPIN_YLM_CONCAT_CACHE.pop(key)
-        _SPIN_YLM_CONCAT_CACHE[key] = val
-        return val
-
-    # Estimate size before computing to fail fast if too large?
-    # Or just compute and not cache if too large.
     npix = _healpix.nside2npix(int(nside))
-    nalm = alm_size(int(lmax), int(mmax))
-    # Two complex128 matrices: 2 * (nalm * npix * 16 bytes)
-    bytes_needed = 2 * nalm * npix * 16
-
-    # If single entry is too big for cache limit, we can't cache it.
-    # But we still return it (computed on fly).
-    if bytes_needed > _SPIN_MAX_CACHE_BYTES:
-        y_blocks, y_conj_blocks = _spin_ylm_basis(nside, nest, lmax, mmax, spin)
-        if not y_blocks:
-            # handle empty...
-            device = torch.device("cpu")
-            dtype = torch.complex128
-            Y = torch.empty((0, npix), dtype=dtype, device=device)
-            Y_conj = torch.empty((0, npix), dtype=dtype, device=device)
-            return (Y, Y_conj)
-        Y = torch.cat(y_blocks, dim=0)
-        Y_conj = torch.cat(y_conj_blocks, dim=0)
-        return (Y, Y_conj)
-
-    global _SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES
-
-    # Evict to make room
-    while (
-        _SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES + bytes_needed
-    ) > _SPIN_MAX_CACHE_BYTES and _SPIN_YLM_CONCAT_CACHE:
-        old_key = next(iter(_SPIN_YLM_CONCAT_CACHE))
-        _SPIN_YLM_CONCAT_CACHE.pop(old_key)
-        old_bytes = _SPIN_YLM_CONCAT_CACHE_ENTRY_BYTES.pop(old_key, 0)
-        _SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES -= old_bytes
-
     y_blocks, y_conj_blocks = _spin_ylm_basis(nside, nest, lmax, mmax, spin)
 
     if not y_blocks:
-        device = torch.device("cpu")  # distinct from default
+        device = torch.device("cpu")
         dtype = torch.complex128
-        Y = torch.empty((0, 12 * nside**2), dtype=dtype, device=device)
-        Y_conj = torch.empty((0, 12 * nside**2), dtype=dtype, device=device)
-    else:
-        Y = torch.cat(y_blocks, dim=0)
-        Y_conj = torch.cat(y_conj_blocks, dim=0)
+        return (
+            torch.empty((0, npix), dtype=dtype, device=device),
+            torch.empty((0, npix), dtype=dtype, device=device),
+        )
+    return torch.cat(y_blocks, dim=0), torch.cat(y_conj_blocks, dim=0)
 
-    out = (Y, Y_conj)
-    _SPIN_YLM_CONCAT_CACHE[key] = out
-    _SPIN_YLM_CONCAT_CACHE_ENTRY_BYTES[key] = bytes_needed
-    _SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES += bytes_needed
-    return out
+
+def _spin_ylm_basis_concat(
+    nside: int,
+    nest: bool,
+    lmax: int,
+    mmax: int,
+    spin: int,
+) -> tuple[Tensor, Tensor]:
+    key = (int(nside), bool(nest), int(lmax), int(mmax), int(spin))
+    bytes_needed = (
+        2
+        * alm_size(int(lmax), int(mmax))
+        * _healpix.nside2npix(int(nside))
+        * 16
+    )
+    return _SPIN_YLM_CONCAT_CACHE.get_or_build(
+        key,
+        lambda: _build_spin_ylm_basis_concat(nside, nest, lmax, mmax, spin),
+        estimated_bytes=bytes_needed,
+    )
 
 
 def _spin_map2alm_mats(
@@ -1034,36 +1098,26 @@ def _spin_map2alm_mats(
     """
     npix = _healpix.nside2npix(int(nside))
     nalm = alm_size(int(lmax), int(mmax))
-    bytes_needed = int(npix * nalm * 16 * 2)  # two complex128 matrices
-    if bytes_needed > _SPIN_MAX_CACHE_BYTES:
+    bytes_needed = int(npix * nalm * 16 * 2)
+    if bytes_needed > _SPIN_CACHE_ENTRY_LIMIT:
         return None
 
     key = (int(nside), bool(nest), int(lmax), int(mmax), int(spin))
-    cached = _SPIN_MAP2ALM_MAT_CACHE.get(key)
-    if cached is not None:
-        _SPIN_MAP2ALM_MAT_CACHE.move_to_end(key)
-        return cached
 
-    _, y_conj_plus_blocks = _spin_ylm_basis(nside, nest, lmax, mmax, spin)
-    _, y_conj_minus_blocks = _spin_ylm_basis(nside, nest, lmax, mmax, -spin)
-    yc_plus_t = torch.cat(
-        [blk.transpose(0, 1) for blk in y_conj_plus_blocks], dim=1
-    ).contiguous()
-    yc_minus_t = torch.cat(
-        [blk.transpose(0, 1) for blk in y_conj_minus_blocks], dim=1
-    ).contiguous()
-    mats = (yc_plus_t, yc_minus_t)
-    global _SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES
-    while (
-        _SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES + bytes_needed
-    ) > _SPIN_MAX_CACHE_BYTES and _SPIN_MAP2ALM_MAT_CACHE:
-        old_key, _ = _SPIN_MAP2ALM_MAT_CACHE.popitem(last=False)
-        old_bytes = _SPIN_MAP2ALM_MAT_CACHE_ENTRY_BYTES.pop(old_key, 0)
-        _SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES -= old_bytes
-    _SPIN_MAP2ALM_MAT_CACHE[key] = mats
-    _SPIN_MAP2ALM_MAT_CACHE_ENTRY_BYTES[key] = bytes_needed
-    _SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES += bytes_needed
-    return mats
+    def build() -> tuple[Tensor, Tensor]:
+        _, y_conj_plus_blocks = _spin_ylm_basis(nside, nest, lmax, mmax, spin)
+        _, y_conj_minus_blocks = _spin_ylm_basis(nside, nest, lmax, mmax, -spin)
+        yc_plus_t = torch.cat(
+            [blk.transpose(0, 1) for blk in y_conj_plus_blocks], dim=1
+        ).contiguous()
+        yc_minus_t = torch.cat(
+            [blk.transpose(0, 1) for blk in y_conj_minus_blocks], dim=1
+        ).contiguous()
+        return yc_plus_t, yc_minus_t
+
+    return _SPIN_MAP2ALM_MAT_CACHE.get_or_build(
+        key, build, estimated_bytes=bytes_needed
+    )
 
 
 def _spin_alm2map_mats(
@@ -1082,32 +1136,22 @@ def _spin_alm2map_mats(
     """
     npix = _healpix.nside2npix(int(nside))
     nalm = alm_size(int(lmax), int(mmax))
-    bytes_needed = int(npix * nalm * 16 * 2)  # two complex128 matrices
-    if bytes_needed > _SPIN_MAX_CACHE_BYTES:
+    bytes_needed = int(npix * nalm * 16 * 2)
+    if bytes_needed > _SPIN_CACHE_ENTRY_LIMIT:
         return None
 
     key = (int(nside), bool(nest), int(lmax), int(mmax), int(spin))
-    cached = _SPIN_ALM2MAP_MAT_CACHE.get(key)
-    if cached is not None:
-        _SPIN_ALM2MAP_MAT_CACHE.move_to_end(key)
-        return cached
 
-    y_plus_blocks, _ = _spin_ylm_basis(nside, nest, lmax, mmax, spin)
-    y_minus_blocks, _ = _spin_ylm_basis(nside, nest, lmax, mmax, -spin)
-    y_plus = torch.cat([blk for blk in y_plus_blocks], dim=0).contiguous()
-    y_minus = torch.cat([blk for blk in y_minus_blocks], dim=0).contiguous()
-    mats = (y_plus, y_minus, y_plus_blocks[0], y_minus_blocks[0])
-    global _SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES
-    while (
-        _SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES + bytes_needed
-    ) > _SPIN_MAX_CACHE_BYTES and _SPIN_ALM2MAP_MAT_CACHE:
-        old_key, _ = _SPIN_ALM2MAP_MAT_CACHE.popitem(last=False)
-        old_bytes = _SPIN_ALM2MAP_MAT_CACHE_ENTRY_BYTES.pop(old_key, 0)
-        _SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES -= old_bytes
-    _SPIN_ALM2MAP_MAT_CACHE[key] = mats
-    _SPIN_ALM2MAP_MAT_CACHE_ENTRY_BYTES[key] = bytes_needed
-    _SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES += bytes_needed
-    return mats
+    def build() -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        y_plus_blocks, _ = _spin_ylm_basis(nside, nest, lmax, mmax, spin)
+        y_minus_blocks, _ = _spin_ylm_basis(nside, nest, lmax, mmax, -spin)
+        y_plus = torch.cat(y_plus_blocks, dim=0).contiguous()
+        y_minus = torch.cat(y_minus_blocks, dim=0).contiguous()
+        return y_plus, y_minus, y_plus_blocks[0], y_minus_blocks[0]
+
+    return _SPIN_ALM2MAP_MAT_CACHE.get_or_build(
+        key, build, estimated_bytes=bytes_needed
+    )
 
 
 def _scalar_map2alm_mat(
@@ -1119,26 +1163,19 @@ def _scalar_map2alm_mat(
     npix = _healpix.nside2npix(int(nside))
     nalm = alm_size(int(lmax), int(mmax))
     bytes_needed = int(npix * nalm * 16)
-    if bytes_needed > _SCALAR_MAX_CACHE_BYTES:
+    if bytes_needed > _SCALAR_CACHE_ENTRY_LIMIT:
         return None
     key = (int(nside), bool(nest), int(lmax), int(mmax))
-    cached = _SCALAR_MAP2ALM_MAT_CACHE.get(key)
-    if cached is not None:
-        _SCALAR_MAP2ALM_MAT_CACHE.move_to_end(key)
-        return cached
-    _, y_conj_blocks = _ylm_basis(nside, nest, lmax, mmax)
-    mat = torch.cat([blk.transpose(0, 1) for blk in y_conj_blocks], dim=1).contiguous()
-    global _SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES
-    while (
-        _SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES + bytes_needed
-    ) > _SCALAR_MAX_CACHE_BYTES and _SCALAR_MAP2ALM_MAT_CACHE:
-        old_key, _ = _SCALAR_MAP2ALM_MAT_CACHE.popitem(last=False)
-        old_bytes = _SCALAR_MAP2ALM_MAT_CACHE_ENTRY_BYTES.pop(old_key, 0)
-        _SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES -= old_bytes
-    _SCALAR_MAP2ALM_MAT_CACHE[key] = mat
-    _SCALAR_MAP2ALM_MAT_CACHE_ENTRY_BYTES[key] = bytes_needed
-    _SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES += bytes_needed
-    return mat
+
+    def build() -> Tensor:
+        _, y_conj_blocks = _ylm_basis(nside, nest, lmax, mmax)
+        return torch.cat(
+            [blk.transpose(0, 1) for blk in y_conj_blocks], dim=1
+        ).contiguous()
+
+    return _SCALAR_MAP2ALM_MAT_CACHE.get_or_build(
+        key, build, estimated_bytes=bytes_needed
+    )
 
 
 def _scalar_alm2map_mat(
@@ -1150,34 +1187,24 @@ def _scalar_alm2map_mat(
     npix = _healpix.nside2npix(int(nside))
     nalm = alm_size(int(lmax), int(mmax))
     bytes_needed = int(npix * nalm * 16)
-    if bytes_needed > _SCALAR_MAX_CACHE_BYTES:
+    if bytes_needed > _SCALAR_CACHE_ENTRY_LIMIT:
         return None
     key = (int(nside), bool(nest), int(lmax), int(mmax))
-    cached = _SCALAR_ALM2MAP_MAT_CACHE.get(key)
-    if cached is not None:
-        _SCALAR_ALM2MAP_MAT_CACHE.move_to_end(key)
-        return cached
-    y_blocks, _ = _ylm_basis(nside, nest, lmax, mmax)
-    mat = torch.cat([blk for blk in y_blocks], dim=0).contiguous()
-    global _SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES
-    while (
-        _SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES + bytes_needed
-    ) > _SCALAR_MAX_CACHE_BYTES and _SCALAR_ALM2MAP_MAT_CACHE:
-        old_key, _ = _SCALAR_ALM2MAP_MAT_CACHE.popitem(last=False)
-        old_bytes = _SCALAR_ALM2MAP_MAT_CACHE_ENTRY_BYTES.pop(old_key, 0)
-        _SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES -= old_bytes
-    _SCALAR_ALM2MAP_MAT_CACHE[key] = mat
-    _SCALAR_ALM2MAP_MAT_CACHE_ENTRY_BYTES[key] = bytes_needed
-    _SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES += bytes_needed
-    return mat
 
 
-def _ring_layout_for_nside(nside: int) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    def build() -> Tensor:
+        y_blocks, _ = _ylm_basis(nside, nest, lmax, mmax)
+        return torch.cat(y_blocks, dim=0).contiguous()
+
+    return _SCALAR_ALM2MAP_MAT_CACHE.get_or_build(
+        key, build, estimated_bytes=bytes_needed
+    )
+
+
+def _build_ring_layout_for_nside(
+    nside: int,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     ns = int(nside)
-    cached = _RING_LAYOUT_CACHE.get(ns)
-    if cached is not None:
-        return cached
-
     npix = _healpix.nside2npix(ns)
     nrings = (4 * ns) - 1
     theta, phi, _, _ = _angles_for_nside(ns, False)
@@ -1202,14 +1229,19 @@ def _ring_layout_for_nside(nside: int) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     if cursor != npix:
         raise RuntimeError(f"ring layout mismatch for nside={ns}: {cursor} != {npix}")
 
-    out = (
+    return (
         torch.tensor(starts, dtype=torch.int64),
         torch.tensor(lengths, dtype=torch.int64),
         torch.tensor(theta_ring, dtype=torch.float64),
         torch.tensor(phi0_ring, dtype=torch.float64),
     )
-    _RING_LAYOUT_CACHE[ns] = out
-    return out
+
+
+def _ring_layout_for_nside(nside: int) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    ns = int(nside)
+    return _RING_LAYOUT_CACHE.get_or_build(
+        ns, lambda: _build_ring_layout_for_nside(ns)
+    )
 
 
 def _build_ring_grouping(
@@ -1263,31 +1295,41 @@ def _ring_grouping_for_nside(
     tuple[int, int, int, int, int] | None, tuple[tuple[int, Tensor, Tensor], ...]
 ]:
     key = int(nside)
-    cached = _RING_GROUP_CACHE.get(key)
-    if cached is not None:
-        return cached
-    starts_cpu, lengths_cpu, _, _ = _ring_layout_for_nside(key)
-    out = _build_ring_grouping(starts_cpu, lengths_cpu)
-    _RING_GROUP_CACHE[key] = out
-    return out
+
+    def build() -> tuple[
+        tuple[int, int, int, int, int] | None,
+        tuple[tuple[int, Tensor, Tensor], ...],
+    ]:
+        starts_cpu, lengths_cpu, _, _ = _ring_layout_for_nside(key)
+        return _build_ring_grouping(starts_cpu, lengths_cpu)
+
+    return _RING_GROUP_CACHE.get_or_build(key, build)
 
 
-def _ring_scalar_bases_for_nside(
+def _build_ring_scalar_bases_for_nside(
     nside: int, lmax: int, mmax: int
 ) -> tuple[Tensor, ...]:
-    key = (int(nside), int(lmax), int(mmax))
-    cached = _RING_SCALAR_BASIS_CACHE.get(key)
-    if cached is not None:
-        return cached
     _, _, theta_ring_cpu, _ = _ring_layout_for_nside(int(nside))
     x_ring = torch.cos(theta_ring_cpu)
     blocks: list[Tensor] = []
     for m in range(int(mmax) + 1):
         p_seq = _legendre_l_sequence(m, x_ring, int(lmax))
         blocks.append(p_seq.to(torch.complex128))
-    out = tuple(blocks)
-    _RING_SCALAR_BASIS_CACHE[key] = out
-    return out
+    return tuple(blocks)
+
+
+def _ring_scalar_bases_for_nside(
+    nside: int, lmax: int, mmax: int
+) -> tuple[Tensor, ...]:
+    key = (int(nside), int(lmax), int(mmax))
+    estimated_bytes = (
+        alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
+    )
+    return _RING_SCALAR_BASIS_CACHE.get_or_build(
+        key,
+        lambda: _build_ring_scalar_bases_for_nside(nside, lmax, mmax),
+        estimated_bytes=estimated_bytes,
+    )
 
 
 def _ring_scalar_basis_concat(nside: int, lmax: int, mmax: int) -> Tensor:
@@ -1296,33 +1338,19 @@ def _ring_scalar_basis_concat(nside: int, lmax: int, mmax: int) -> Tensor:
     Uses LRU cache with size limit.
     """
     key = (int(nside), int(lmax), int(mmax))
-    if key in _RING_SCALAR_BASIS_CONCAT_CACHE:
-        val = _RING_SCALAR_BASIS_CONCAT_CACHE.pop(key)
-        _RING_SCALAR_BASIS_CONCAT_CACHE[key] = val
-        return val
+    bytes_needed = alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
 
-    blocks = _ring_scalar_bases_for_nside(nside, lmax, mmax)
-    if not blocks:
-        return torch.empty((0, 0), dtype=torch.complex128, device=torch.device("cpu"))
+    def build() -> Tensor:
+        blocks = _ring_scalar_bases_for_nside(nside, lmax, mmax)
+        if not blocks:
+            return torch.empty(
+                (0, 0), dtype=torch.complex128, device=torch.device("cpu")
+            )
+        return torch.cat(blocks, dim=0)
 
-    Y = torch.cat(blocks, dim=0)
-
-    bytes_needed = Y.numel() * 16
-    if bytes_needed <= _SCALAR_MAX_CACHE_BYTES:
-        global _RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES
-        while (
-            _RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES + bytes_needed
-        ) > _SCALAR_MAX_CACHE_BYTES and _RING_SCALAR_BASIS_CONCAT_CACHE:
-            old_key = next(iter(_RING_SCALAR_BASIS_CONCAT_CACHE))
-            _RING_SCALAR_BASIS_CONCAT_CACHE.pop(old_key)
-            old_bytes = _RING_SCALAR_BASIS_CONCAT_CACHE_BYTES.pop(old_key, 0)
-            _RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES -= old_bytes
-
-        _RING_SCALAR_BASIS_CONCAT_CACHE[key] = Y
-        _RING_SCALAR_BASIS_CONCAT_CACHE_BYTES[key] = bytes_needed
-        _RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES += bytes_needed
-
-    return Y
+    return _RING_SCALAR_BASIS_CONCAT_CACHE.get_or_build(
+        key, build, estimated_bytes=bytes_needed
+    )
 
 
 class ScalarSHTIntegrate(torch.autograd.Function):
@@ -1341,8 +1369,8 @@ class ScalarSHTIntegrate(torch.autograd.Function):
 
         s_modes_cpu = s_modes.detach().to(dtype=torch.complex128, device="cpu")
 
-        if hasattr(_cpp, "_healpix_scalar_integrate_recurrence_cpu"):
-            out = _cpp._healpix_scalar_integrate_recurrence_cpu(
+        if _native_ops.has_spectral_dispatcher():
+            out = _native_ops.spectral_scalar_integrate_recurrence(
                 s_modes_cpu.contiguous(),
                 theta_ring_cpu.contiguous(),
                 weight.contiguous(),
@@ -1351,7 +1379,7 @@ class ScalarSHTIntegrate(torch.autograd.Function):
             )
         else:
             s_minus = s_modes_cpu.clone()
-            alms_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+            alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
                 s_modes_cpu.contiguous(),
                 s_minus.contiguous(),
                 theta_ring_cpu.contiguous(),
@@ -1369,8 +1397,8 @@ class ScalarSHTIntegrate(torch.autograd.Function):
         grad_alm_cpu = grad_alm.detach().to(device="cpu", dtype=torch.complex128)
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(ctx.nside)
 
-        if hasattr(_cpp, "_healpix_scalar_interpolate_recurrence_cpu"):
-            grad_s = _cpp._healpix_scalar_interpolate_recurrence_cpu(
+        if _native_ops.has_spectral_dispatcher():
+            grad_s = _native_ops.spectral_scalar_interpolate_recurrence(
                 grad_alm_cpu.contiguous(),
                 theta_ring_cpu.contiguous(),
                 int(ctx.lmax),
@@ -1378,7 +1406,7 @@ class ScalarSHTIntegrate(torch.autograd.Function):
             )
         else:
             alm_stack = torch.stack([grad_alm_cpu, grad_alm_cpu], dim=0)
-            s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+            s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
                 alm_stack.contiguous(),
                 theta_ring_cpu.contiguous(),
                 int(ctx.lmax),
@@ -1401,8 +1429,8 @@ class ScalarSHTInterpolate(torch.autograd.Function):
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(nside)
         alm_cpu = alm.detach().to(dtype=torch.complex128, device="cpu")
 
-        if hasattr(_cpp, "_healpix_scalar_interpolate_recurrence_cpu"):
-            out = _cpp._healpix_scalar_interpolate_recurrence_cpu(
+        if _native_ops.has_spectral_dispatcher():
+            out = _native_ops.spectral_scalar_interpolate_recurrence(
                 alm_cpu.contiguous(),
                 theta_ring_cpu.contiguous(),
                 int(lmax),
@@ -1410,7 +1438,7 @@ class ScalarSHTInterpolate(torch.autograd.Function):
             )
         else:
             alm_stack = torch.stack([alm_cpu, alm_cpu], dim=0)
-            s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+            s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
                 alm_stack.contiguous(),
                 theta_ring_cpu.contiguous(),
                 int(lmax),
@@ -1429,8 +1457,8 @@ class ScalarSHTInterpolate(torch.autograd.Function):
         nrings = int(theta_ring_cpu.numel())
         weight = torch.ones((nrings,), dtype=torch.float64, device="cpu")
 
-        if hasattr(_cpp, "_healpix_scalar_integrate_recurrence_cpu"):
-            grad_alm = _cpp._healpix_scalar_integrate_recurrence_cpu(
+        if _native_ops.has_spectral_dispatcher():
+            grad_alm = _native_ops.spectral_scalar_integrate_recurrence(
                 grad_s_cpu.contiguous(),
                 theta_ring_cpu.contiguous(),
                 weight.contiguous(),
@@ -1439,7 +1467,7 @@ class ScalarSHTInterpolate(torch.autograd.Function):
             )
         else:
             s_minus = grad_s_cpu.clone()
-            alms_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+            alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
                 grad_s_cpu.contiguous(),
                 s_minus.contiguous(),
                 theta_ring_cpu.contiguous(),
@@ -1478,7 +1506,7 @@ class SpinSHTIntegrate(torch.autograd.Function):
         sp = s_plus.detach().to(dtype=torch.complex128, device="cpu")
         sm = s_minus.detach().to(dtype=torch.complex128, device="cpu")
 
-        alms_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+        alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
             sp.contiguous(),
             sm.contiguous(),
             theta_ring_cpu.contiguous(),
@@ -1499,7 +1527,7 @@ class SpinSHTIntegrate(torch.autograd.Function):
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(int(ctx.nside))
         alm_stack = torch.stack([gap, gam], dim=0)
 
-        s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+        s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
             alm_stack.contiguous(),
             theta_ring_cpu.contiguous(),
             int(ctx.lmax),
@@ -1543,7 +1571,7 @@ class SpinSHTInterpolate(torch.autograd.Function):
         am = a_minus.detach().to(dtype=torch.complex128, device="cpu")
         alm_stack = torch.stack([ap, am], dim=0)
 
-        s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+        s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
             alm_stack.contiguous(),
             theta_ring_cpu.contiguous(),
             int(lmax),
@@ -1563,7 +1591,7 @@ class SpinSHTInterpolate(torch.autograd.Function):
         nrings = int(theta_ring_cpu.numel())
         w_vec = torch.ones((nrings,), dtype=torch.float64, device="cpu")
 
-        alms_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+        alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
             gsp.contiguous(),
             gsm.contiguous(),
             theta_ring_cpu.contiguous(),
@@ -1621,39 +1649,41 @@ def _scalar_ring_interpolate_recurrence_cpu(
 def _ring_phi0_phase_for_nside(nside: int, mmax: int, *, sign: int) -> Tensor:
     s = 1 if int(sign) >= 0 else -1
     key = (int(nside), int(mmax), int(s))
-    cached = _RING_PHI0_PHASE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    _, _, _, phi0_ring_cpu = _ring_layout_for_nside(int(nside))
-    m_vals = torch.arange(int(mmax) + 1, dtype=torch.float64)
-    ang = (float(s) * m_vals.unsqueeze(1)) * phi0_ring_cpu.unsqueeze(0)
-    out = torch.exp(torch.complex(torch.zeros_like(ang), ang)).to(torch.complex128)
-    _RING_PHI0_PHASE_CACHE[key] = out
-    return out
+
+    def build() -> Tensor:
+        _, _, _, phi0_ring_cpu = _ring_layout_for_nside(int(nside))
+        m_vals = torch.arange(int(mmax) + 1, dtype=torch.float64)
+        ang = (float(s) * m_vals.unsqueeze(1)) * phi0_ring_cpu.unsqueeze(0)
+        return torch.exp(torch.complex(torch.zeros_like(ang), ang)).to(
+            torch.complex128
+        )
+
+    return _RING_PHI0_PHASE_CACHE.get_or_build(key, build)
 
 
 def _ring_azimuth_phase(nph: int, mmax: int) -> Tensor:
     key = (int(nph), int(mmax))
-    cached = _RING_AZIMUTH_PHASE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    n = int(nph)
-    m_vals = torch.arange(int(mmax) + 1, dtype=torch.float64).unsqueeze(1)
-    j = torch.arange(n, dtype=torch.float64).unsqueeze(0)
-    ang = m_vals * (2.0 * math.pi / float(n)) * j
-    out = torch.exp(torch.complex(torch.zeros_like(ang), ang)).to(torch.complex128)
-    _RING_AZIMUTH_PHASE_CACHE[key] = out
-    return out
+
+    def build() -> Tensor:
+        n = int(nph)
+        m_vals = torch.arange(int(mmax) + 1, dtype=torch.float64).unsqueeze(1)
+        j = torch.arange(n, dtype=torch.float64).unsqueeze(0)
+        ang = m_vals * (2.0 * math.pi / float(n)) * j
+        return torch.exp(torch.complex(torch.zeros_like(ang), ang)).to(
+            torch.complex128
+        )
+
+    return _RING_AZIMUTH_PHASE_CACHE.get_or_build(key, build)
 
 
 def _ring_alias_indices(nph: int, mmax: int) -> Tensor:
     key = (int(nph), int(mmax))
-    cached = _RING_ALIAS_INDEX_CACHE.get(key)
-    if cached is not None:
-        return cached
-    out = torch.remainder(torch.arange(int(mmax) + 1, dtype=torch.int64), int(nph))
-    _RING_ALIAS_INDEX_CACHE[key] = out
-    return out
+    return _RING_ALIAS_INDEX_CACHE.get_or_build(
+        key,
+        lambda: torch.remainder(
+            torch.arange(int(mmax) + 1, dtype=torch.int64), int(nph)
+        ),
+    )
 
 
 def _ring_spin_conj_indices(nph: int, mmax: int) -> tuple[Tensor, Tensor, Tensor]:
@@ -1662,29 +1692,23 @@ def _ring_spin_conj_indices(nph: int, mmax: int) -> tuple[Tensor, Tensor, Tensor
       +m indices, -m indices, and concatenated (+m|-m) indices.
     """
     key = (int(nph), int(mmax))
-    cached = _RING_SPIN_CONJ_INDEX_CACHE.get(key)
-    if cached is not None:
-        return cached
-    n = int(nph)
-    mm = int(mmax)
-    if n > mm:
-        idx_plus = torch.arange(mm + 1, dtype=torch.int64)
-    else:
-        idx_plus = _ring_alias_indices(n, mm)
-    idx_minus = torch.remainder(-idx_plus, n)
-    idx_both = torch.cat([idx_plus, idx_minus], dim=0)
-    out = (idx_plus, idx_minus, idx_both)
-    _RING_SPIN_CONJ_INDEX_CACHE[key] = out
-    return out
+
+    def build() -> tuple[Tensor, Tensor, Tensor]:
+        n = int(nph)
+        mm = int(mmax)
+        if n > mm:
+            idx_plus = torch.arange(mm + 1, dtype=torch.int64)
+        else:
+            idx_plus = _ring_alias_indices(n, mm)
+        idx_minus = torch.remainder(-idx_plus, n)
+        return idx_plus, idx_minus, torch.cat([idx_plus, idx_minus], dim=0)
+
+    return _RING_SPIN_CONJ_INDEX_CACHE.get_or_build(key, build)
 
 
-def _ring_spin_bases_for_nside(
+def _build_ring_spin_bases_for_nside(
     nside: int, lmax: int, mmax: int, spin: int
 ) -> tuple[Tensor, ...]:
-    key = (int(nside), int(lmax), int(mmax), int(spin))
-    cached = _RING_SPIN_BASIS_CACHE.get(key)
-    if cached is not None:
-        return cached
     _, _, theta_ring_cpu, _ = _ring_layout_for_nside(int(nside))
     sp = int(spin)
     spin_phase = -1.0 if (sp & 1) else 1.0
@@ -1717,14 +1741,31 @@ def _ring_spin_bases_for_nside(
             block = torch.cat([pre_zeros, block], dim=0)
 
         blocks.append(block)
-    out = tuple(blocks)
-    _RING_SPIN_BASIS_CACHE[key] = out
-    return out
+    return tuple(blocks)
 
 
-_RING_SPIN_CONCAT_CACHE = {}
-_RING_SPIN_CONCAT_CACHE_ENTRY_BYTES = {}
-_RING_SPIN_CONCAT_CACHE_TOTAL_BYTES = 0
+def _ring_spin_bases_for_nside(
+    nside: int, lmax: int, mmax: int, spin: int
+) -> tuple[Tensor, ...]:
+    key = (int(nside), int(lmax), int(mmax), int(spin))
+    estimated_bytes = (
+        alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
+    )
+    return _RING_SPIN_BASIS_CACHE.get_or_build(
+        key,
+        lambda: _build_ring_spin_bases_for_nside(nside, lmax, mmax, spin),
+        estimated_bytes=estimated_bytes,
+    )
+
+
+_RING_SPIN_CONCAT_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor]] = (
+    _SPECTRAL_CACHE.namespace(
+        "ring_spin_concat",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT,
+    )
+)
 
 
 def _ring_spin_basis_concat(
@@ -1733,44 +1774,26 @@ def _ring_spin_basis_concat(
     """
     Returns concatenated (N_alm, N_rings) basis matrices for +spin and -spin.
     """
-    key = (nside, lmax, mmax, spin)
-    if key in _RING_SPIN_CONCAT_CACHE:
-        val = _RING_SPIN_CONCAT_CACHE.pop(key)
-        _RING_SPIN_CONCAT_CACHE[key] = val
-        return val
+    key = (int(nside), int(lmax), int(mmax), int(spin))
+    bytes_needed = (
+        2 * alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
+    )
 
-    # Fetch blocks (this uses its own cache)
-    y_plus_blocks = _ring_spin_bases_for_nside(nside, lmax, mmax, spin)
-    y_minus_blocks = _ring_spin_bases_for_nside(nside, lmax, mmax, -spin)
+    def build() -> tuple[Tensor, Tensor]:
+        y_plus_blocks = _ring_spin_bases_for_nside(nside, lmax, mmax, spin)
+        y_minus_blocks = _ring_spin_bases_for_nside(nside, lmax, mmax, -spin)
+        if not y_plus_blocks:
+            device = torch.device("cpu")
+            dtype = torch.complex128
+            return (
+                torch.empty((0, 0), dtype=dtype, device=device),
+                torch.empty((0, 0), dtype=dtype, device=device),
+            )
+        return torch.cat(y_plus_blocks, dim=0), torch.cat(y_minus_blocks, dim=0)
 
-    if not y_plus_blocks:
-        device = torch.device("cpu")
-        dtype = torch.complex128
-        Yp = torch.empty((0, 0), dtype=dtype, device=device)
-        Ym = torch.empty((0, 0), dtype=dtype, device=device)
-        return Yp, Ym
-
-    # Concatenate
-    Y_plus = torch.cat(y_plus_blocks, dim=0)
-    Y_minus = torch.cat(y_minus_blocks, dim=0)
-
-    # Cache Logic
-    bytes_needed = Y_plus.numel() * 16 * 2
-    if bytes_needed <= _SPIN_MAX_CACHE_BYTES:
-        global _RING_SPIN_CONCAT_CACHE_TOTAL_BYTES
-        while (
-            _RING_SPIN_CONCAT_CACHE_TOTAL_BYTES + bytes_needed
-        ) > _SPIN_MAX_CACHE_BYTES and _RING_SPIN_CONCAT_CACHE:
-            old_key = next(iter(_RING_SPIN_CONCAT_CACHE))
-            _RING_SPIN_CONCAT_CACHE.pop(old_key)
-            old_bytes = _RING_SPIN_CONCAT_CACHE_ENTRY_BYTES.pop(old_key, 0)
-            _RING_SPIN_CONCAT_CACHE_TOTAL_BYTES -= old_bytes
-
-        _RING_SPIN_CONCAT_CACHE[key] = (Y_plus, Y_minus)
-        _RING_SPIN_CONCAT_CACHE_ENTRY_BYTES[key] = bytes_needed
-        _RING_SPIN_CONCAT_CACHE_TOTAL_BYTES += bytes_needed
-
-    return Y_plus, Y_minus
+    return _RING_SPIN_CONCAT_CACHE.get_or_build(
+        key, build, estimated_bytes=bytes_needed
+    )
 
 
 def _ring_fourier_modes(
@@ -1788,14 +1811,13 @@ def _ring_fourier_modes(
 
     use_cpp = (
         (_RING_FOURIER_MODES_CPP_ENABLE or _RING_FOURIER_CPP_ENABLE)
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_ring_fourier_modes_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
         and int(mmax) <= _RING_FOURIER_MODES_CPP_MAX_M
         and (not rows.requires_grad)
     )
     if use_cpp:
-        return _cpp._healpix_ring_fourier_modes_cpu(
+        return _native_ops.spectral_ring_fourier_modes(
             rows.contiguous(),
             starts_cpu.contiguous(),
             lengths_cpu.contiguous(),
@@ -1903,20 +1925,19 @@ def _ring_fourier_modes_spin_conj(
 
     use_cpp = (
         (_RING_FOURIER_MODES_CPP_ENABLE or _RING_FOURIER_CPP_ENABLE)
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_ring_fourier_modes_spin_conj_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
         and int(mmax) <= _RING_FOURIER_MODES_CPP_MAX_M
         and (not p_plus.requires_grad)
     )
     if use_cpp:
-        out_cpp = _cpp._healpix_ring_fourier_modes_spin_conj_cpu(
+        out_cpp = _native_ops.spectral_ring_fourier_modes_spin_conj(
             p_plus.contiguous(),
             starts_cpu.contiguous(),
             lengths_cpu.contiguous(),
             int(mmax),
         )
-        return out_cpp[0], out_cpp[1]
+        return out_cpp
 
     if nside is not None:
         common_block, groups = _ring_grouping_for_nside(int(nside))
@@ -2017,19 +2038,23 @@ def _ring_fourier_modes_spin_conj(
     return s_plus, s_minus
 
 
-_M_PER_ALM_CACHE: dict[tuple[int, int], Tensor] = {}
+_M_PER_ALM_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "m_per_alm", device="cpu", dtype=torch.int64
+)
 
 
 def _m_per_alm_cached(lmax: int, mmax: int) -> Tensor:
     """Return (nalm,) int64 tensor where entry j holds the m-index for alm j."""
     key = (int(lmax), int(mmax))
-    cached = _M_PER_ALM_CACHE.get(key)
-    if cached is not None:
-        return cached
-    parts = [torch.full((lmax - m + 1,), m, dtype=torch.int64) for m in range(mmax + 1)]
-    out = torch.cat(parts)
-    _M_PER_ALM_CACHE[key] = out
-    return out
+
+    def build() -> Tensor:
+        parts = [
+            torch.full((lmax - m + 1,), m, dtype=torch.int64)
+            for m in range(mmax + 1)
+        ]
+        return torch.cat(parts)
+
+    return _M_PER_ALM_CACHE.get_or_build(key, build)
 
 
 def _scalar_alm2map_ring_torch(
@@ -2049,8 +2074,7 @@ def _scalar_alm2map_ring_torch(
 
     use_cpp_recurrence = (
         _SCALAR_INTERP_CPP_ENABLE
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_scalar_interpolate_recurrence_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
     )
 
@@ -2145,8 +2169,7 @@ def _scalar_map2alm_ring_torch(
 
     use_cpp_recurrence = (
         _SCALAR_RECURRENCE_CPP_ENABLE
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_scalar_integrate_recurrence_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
     )
 
@@ -2210,17 +2233,17 @@ def _ring_fourier_synthesis(
 
     use_cpp = (
         (_RING_FOURIER_SYNTH_CPP_ENABLE or _RING_FOURIER_CPP_ENABLE)
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_ring_fourier_synthesis_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and device.type == "cpu"
         and int(mmax) <= _RING_FOURIER_SYNTH_CPP_MAX_M
         and (not s_m_batched.requires_grad)
     )
     if use_cpp:
-        out_cpp = _cpp._healpix_ring_fourier_synthesis_cpu(
+        out_cpp = _native_ops.spectral_ring_fourier_synthesis(
             s_m_batched.contiguous(),
             starts_cpu.contiguous(),
             lengths_cpu.contiguous(),
+            npix,
         )
         if squeeze_out:
             return out_cpp[0]
@@ -2301,15 +2324,14 @@ def _ring_fourier_synthesis(
 
 def _ring_pix2ring_index(nside: int) -> Tensor:
     key = int(nside)
-    cached = _RING_PIX2RING_CACHE.get(key)
-    if cached is not None:
-        return cached
-    _, lengths_cpu, _, _ = _ring_layout_for_nside(key)
-    nrings = int(lengths_cpu.numel())
-    ring_ids = torch.arange(nrings, dtype=torch.int64)
-    out = torch.repeat_interleave(ring_ids, lengths_cpu)
-    _RING_PIX2RING_CACHE[key] = out
-    return out
+
+    def build() -> Tensor:
+        _, lengths_cpu, _, _ = _ring_layout_for_nside(key)
+        nrings = int(lengths_cpu.numel())
+        ring_ids = torch.arange(nrings, dtype=torch.int64)
+        return torch.repeat_interleave(ring_ids, lengths_cpu)
+
+    return _RING_PIX2RING_CACHE.get_or_build(key, build)
 
 
 def _ring_expand_m0(s0: Tensor, *, nside: int) -> Tensor:
@@ -2356,15 +2378,14 @@ def _ring_spin_interpolate_blocks(
         y_minus = y_minus.to(device=device, dtype=dtype)
         use_cpp = (
             os.environ.get("TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP", "1") != "0"
-            and _cpp is not None
-            and hasattr(_cpp, "_healpix_spin_interpolate_concat_cpu")
+            and _native_ops.has_spectral_dispatcher()
             and device.type == "cpu"
             and dtype == torch.complex128
             and (not coeff_plus.requires_grad)
             and (not coeff_minus.requires_grad)
         )
         if use_cpp:
-            s_plus_cpp, s_minus_cpp = _cpp._healpix_spin_interpolate_concat_cpu(
+            s_plus_cpp, s_minus_cpp = _native_ops.spectral_spin_interpolate_concat(
                 coeff_plus.contiguous(),
                 coeff_minus.contiguous(),
                 y_plus.contiguous(),
@@ -2439,15 +2460,14 @@ def _ring_spin_integrate_blocks(
         y_minus = y_minus.to(device=device, dtype=dtype)
         use_cpp = (
             os.environ.get("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "1") != "0"
-            and _cpp is not None
-            and hasattr(_cpp, "_healpix_spin_integrate_concat_cpu")
+            and _native_ops.has_spectral_dispatcher()
             and device.type == "cpu"
             and dtype == torch.complex128
             and (not s_plus.requires_grad)
             and (not s_minus.requires_grad)
         )
         if use_cpp:
-            c_plus_cpp, c_minus_cpp = _cpp._healpix_spin_integrate_concat_cpu(
+            c_plus_cpp, c_minus_cpp = _native_ops.spectral_spin_integrate_concat(
                 s_plus.contiguous(),
                 s_minus.contiguous(),
                 y_plus.contiguous(),
@@ -2526,7 +2546,7 @@ def _spin_alm2map_ring_torch(
                 else coeff_minus.to(dtype=torch.complex128)
             )
             phase0_pos = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1)
-            return _cpp._healpix_spin_alm2map_ring_recurrence_cpu(
+            return _native_ops.spectral_spin_alm2map_ring_recurrence(
                 cp_cpu,
                 starts_cpu,
                 lengths_cpu,
@@ -2536,6 +2556,7 @@ def _spin_alm2map_ring_torch(
                 int(mmax),
                 int(spin),
                 cm_cpu,
+                _healpix.nside2npix(int(nside)),
             )
         if coeff_plus.requires_grad or coeff_minus.requires_grad:
             s_plus, s_minus = SpinSHTInterpolate.apply(
@@ -2549,7 +2570,7 @@ def _spin_alm2map_ring_torch(
             cm_cpu = coeff_minus.to(dtype=torch.complex128, device="cpu").contiguous()
             alm_stack = torch.stack([cp_cpu, cm_cpu], dim=0)
 
-            s_modes_stacked = _cpp._healpix_spin_interpolate_recurrence_cpu(
+            s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
                 alm_stack,
                 theta_ring_cpu.contiguous(),
                 int(lmax),
@@ -2579,18 +2600,18 @@ def _spin_alm2map_ring_torch(
     start_pix, lengths, _, _ = _ring_layout_for_nside(int(nside))
     use_cpp_finalize = (
         os.environ.get("TORCHSKY_SPIN_RING_FINALIZE_CPP", "1") != "0"
-        and _cpp is not None
-        and hasattr(_cpp, "_healpix_spin_ring_finalize_cpu")
+        and _native_ops.has_spectral_dispatcher()
         and s_plus.device.type == "cpu"
         and (not s_plus.requires_grad)
         and (not s_minus.requires_grad)
     )
     if use_cpp_finalize:
-        return _cpp._healpix_spin_ring_finalize_cpu(
+        return _native_ops.spectral_spin_ring_finalize(
             s_plus.contiguous(),
             s_minus.contiguous(),
             start_pix.contiguous(),
             lengths.contiguous(),
+            _healpix.nside2npix(int(nside)),
         )
 
     p_pm_pos = _ring_fourier_synthesis(
@@ -2681,7 +2702,7 @@ def map2alm(
         rows = _reorder_nest_to_ring_rows(rows, ns)
         nest = False
 
-    rows = _apply_map2alm_weights(
+    analysis_rows = _apply_map2alm_weights(
         rows,
         nside=ns,
         gal_cut=gal_cut,
@@ -2692,13 +2713,26 @@ def map2alm(
 
     # Iterative solver (Matches healpy behavior)
     alm = _map2alm_single_pass(
-        rows, nside=ns, lmax=ll, mmax=mm, pol=pol, use_pixel_weights=False
+        analysis_rows, nside=ns, lmax=ll, mmax=mm, pol=pol, use_pixel_weights=False
     )
     for _ in range(iter):
         map_rec = alm2map(alm, nside=ns, lmax=ll, mmax=mm, nest=False, pol=pol)
         res = rows - _map_to_rows(map_rec)[0]
+        analysis_res = _apply_map2alm_weights(
+            res,
+            nside=ns,
+            gal_cut=gal_cut,
+            use_weights=use_weights,
+            use_pixel_weights=use_pixel_weights,
+            datapath=datapath,
+        )
         alm = alm + _map2alm_single_pass(
-            res, nside=ns, lmax=ll, mmax=mm, pol=pol, use_pixel_weights=False
+            analysis_res,
+            nside=ns,
+            lmax=ll,
+            mmax=mm,
+            pol=pol,
+            use_pixel_weights=False,
         )
 
     if single and not pol:
@@ -3178,15 +3212,14 @@ def alm2map(
             )
 
     use_cpp_direct = (
-        _cpp is not None
-        and hasattr(_cpp, "_healpix_scalar_alm2map_direct_cpu")
+        _native_ops.has_spectral_dispatcher()
         and rows_eff.device.type == "cpu"
         and (not rows_eff.requires_grad)
         and os.environ.get("TORCHSKY_SCALAR_ALM2MAP_CPP", "0") != "0"
     )
     if use_cpp_direct:
         _, phi, x, _ = _angles_for_nside(int(nside), bool(nest))
-        out_cpp = _cpp._healpix_scalar_alm2map_direct_cpu(
+        out_cpp = _native_ops.spectral_scalar_alm2map_direct(
             rows_eff.contiguous(),
             x.contiguous(),
             phi.contiguous(),
@@ -3391,663 +3424,6 @@ def alm2map_batched(
     )
 
 
-def anafast(
-    map1: Tensor | list[float],
-    map2: Tensor | list[float] | None = None,
-    *,
-    nside: int | None = None,
-    lmax: int | None = None,
-    mmax: int | None = None,
-    nest: bool = False,
-    nspec: int | None = None,
-    iter: int = 0,
-    alm: bool = False,
-    pol: bool = True,
-    use_weights: bool = False,
-    use_pixel_weights: bool = False,
-    gal_cut: float = 0.0,
-    datapath: str | os.PathLike[str] | None = None,
-) -> Tensor | tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
-    """Compute auto/cross angular power spectrum C_l from scalar or polarized maps."""
-    m1 = torch.as_tensor(map1)
-    if m1.ndim not in (1, 2):
-        raise ValueError("map1 must be 1D or 2D")
-    if map2 is None:
-        m2 = m1
-    else:
-        m2 = torch.as_tensor(map2)
-        if m2.ndim != m1.ndim or m2.shape != m1.shape:
-            raise ValueError("map2 must match map1 shape")
-
-    npix = int(m1.shape[-1])
-    ns = _healpix.npix2nside(npix) if nside is None else int(nside)
-    ll = int(3 * ns - 1 if lmax is None else lmax)
-    mm = ll if mmax is None else int(mmax)
-    if mm < 0 or mm > ll:
-        raise ValueError("invalid mmax")
-
-    if m1.ndim == 2 and bool(pol):
-        if m1.shape[0] != 3:
-            raise ValueError("pol=True expects map shape (3, npix)")
-        a1 = map2alm(
-            m1,
-            nside=ns,
-            lmax=ll,
-            mmax=mm,
-            nest=nest,
-            iter=iter,
-            pol=True,
-            use_weights=use_weights,
-            use_pixel_weights=use_pixel_weights,
-            gal_cut=gal_cut,
-            datapath=datapath,
-        )
-        a2 = (
-            a1
-            if map2 is None
-            else map2alm(
-                m2,
-                nside=ns,
-                lmax=ll,
-                mmax=mm,
-                nest=nest,
-                iter=iter,
-                pol=True,
-                use_weights=use_weights,
-                use_pixel_weights=use_pixel_weights,
-                gal_cut=gal_cut,
-                datapath=datapath,
-            )
-        )
-        cls = alm2cl(a1, a2, lmax=ll, mmax=mm, nspec=nspec)
-        if alm:
-            return (cls, a1) if map2 is None else (cls, a1, a2)
-        return cls
-
-    if m1.ndim != 1:
-        raise ValueError("pol=False torch backend currently supports only 1D maps")
-
-    a1 = map2alm(
-        m1,
-        nside=ns,
-        lmax=ll,
-        mmax=mm,
-        nest=nest,
-        iter=iter,
-        pol=False,
-        use_weights=use_weights,
-        use_pixel_weights=use_pixel_weights,
-        gal_cut=gal_cut,
-        datapath=datapath,
-    )
-    a2 = map2alm(
-        m2,
-        nside=ns,
-        lmax=ll,
-        mmax=mm,
-        nest=nest,
-        iter=iter,
-        pol=False,
-        use_weights=use_weights,
-        use_pixel_weights=use_pixel_weights,
-        gal_cut=gal_cut,
-        datapath=datapath,
-    )
-    cl = alm2cl(a1, a2, lmax=ll, mmax=mm, nspec=nspec)
-    if alm:
-        return (cl, a1) if map2 is None else (cl, a1, a2)
-    return cl
-
-
-def gaussian_beam(fwhm_rad: float, lmax: int, *, pol: bool = False) -> Tensor:
-    """Return Gaussian beam transfer function(s) B_l."""
-    if fwhm_rad < 0.0:
-        raise ValueError("fwhm_rad must be >= 0")
-    if lmax < 0:
-        raise ValueError("lmax must be non-negative")
-    sigma = float(fwhm_rad) / math.sqrt(8.0 * math.log(2.0))
-    ell = torch.arange(lmax + 1, dtype=torch.float64)
-    base = torch.exp(-0.5 * ell * (ell + 1.0) * (sigma * sigma))
-    if not pol:
-        return base
-    fac_p = math.exp(2.0 * sigma * sigma)
-    fac_tp = math.exp(sigma * sigma)
-    return torch.stack([base, base * fac_p, base * fac_p, base * fac_tp], dim=1)
-
-
-def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
-    ns = int(nside)
-    cached = _PIXWIN_TABLE_CACHE.get(ns)
-    if cached is not None:
-        return cached
-    path = _PIXWIN_DATA_DIR / f"pixel_window_n{ns:04d}.fits"
-    if not path.is_file():
-        ref = _REFERENCE_PIXWIN_TABLES.get(ns)
-        if ref is not None:
-            out = (ref[0].clone(), ref[1].clone())
-            _PIXWIN_TABLE_CACHE[ns] = out
-            return out
-        supported = ", ".join(str(k) for k in sorted(_REFERENCE_PIXWIN_TABLES))
-        raise ValueError(
-            f"pixel window data not available for nside={ns}: missing {_PIXWIN_DATA_DIR / f'pixel_window_n{ns:04d}.fits'} "
-            f"and no embedded table (embedded nsides: {supported}). "
-            "Add the HEALPix pixel-window FITS for this nside (or use an embedded-table nside). "
-            "Install the HEALPix pixel-window FITS for this nside or use an embedded-table nside."
-        )
-
-    data = None
-    import torchfits.cpp as _tf_cpp
-
-    if hasattr(_tf_cpp, "read_fits_table"):
-        try:
-            data = _tf_cpp.read_fits_table(str(path), 1)
-        except Exception:
-            data = None
-    if data is None:
-        try:
-            from .. import (
-                read_table,
-            )  # Local import to avoid import cycles at module load.
-        except Exception as exc:
-            raise RuntimeError(
-                "pixwin requires torchsky table reader when C++ table API is unavailable"
-            ) from exc
-        data = read_table(str(path), hdu=1)
-
-    def _get_col(name: str) -> Tensor:
-        candidates = (name, name.upper(), name.lower())
-        for c in candidates:
-            if c in data:
-                return torch.as_tensor(
-                    data[c], dtype=torch.float64, device="cpu"
-                ).reshape(-1)
-        raise RuntimeError(f"missing '{name}' column in pixel window table: {path}")
-
-    pw_t = _get_col("TEMPERATURE")
-    pw_p = _get_col("POLARIZATION")
-    out = (pw_t, pw_p)
-    _PIXWIN_TABLE_CACHE[ns] = out
-    return out
-
-
-def pixwin(
-    nside: int,
-    *,
-    pol: bool = False,
-    lmax: int | None = None,
-) -> Tensor | tuple[Tensor, Tensor]:
-    """
-    Return HEALPix pixel window function(s).
-
-    Data come from packaged FITS under ``sphere/data/pixel_window_functions/`` when
-    present, otherwise from a small set of embedded reference rows (same numeric
-    values as the standard HEALPix/healpy tables) for offline tests and dev
-    checkouts where ``*.fits`` are not in the tree. Other ``nside`` values require
-    the corresponding FITS file.
-    """
-    ns = int(nside)
-    if not bool(_healpix.isnsideok(ns)):
-        raise ValueError("Wrong nside value (must be a power of two).")
-    ll = int((3 * ns - 1) if lmax is None else lmax)
-    if ll < 0:
-        raise ValueError("lmax must be non-negative")
-    pw_t_all, pw_p_all = _load_pixwin_table(ns)
-    max_l = int(pw_t_all.numel()) - 1
-    if ll > max_l:
-        if lmax is not None:
-            raise ValueError(
-                f"lmax={lmax} exceeds tabulated multipoles (0..{max_l}) for nside={ns}"
-            )
-        ll = max_l
-    if bool(pol):
-        return pw_t_all[: ll + 1].clone(), pw_p_all[: ll + 1].clone()
-    return pw_t_all[: ll + 1].clone()
-
-
-def bl2beam(bl: Tensor | list[float], theta: Tensor | list[float]) -> Tensor:
-    """Compute circular beam profile b(theta) from harmonic window b_l."""
-    bl_t = torch.as_tensor(bl, dtype=torch.float64)
-    theta_t = torch.as_tensor(theta, dtype=torch.float64)
-    if bl_t.ndim != 1:
-        raise ValueError("bl must be 1D")
-    if bl_t.numel() == 0:
-        raise ValueError("bl must be non-empty")
-    x = torch.cos(theta_t.reshape(-1))
-    lmax = int(bl_t.numel() - 1)
-    # p contains Y_l0 = sqrt((2l+1)/4pi) * P_l
-    p = _legendre_l_sequence(0, x, lmax)
-    # b(theta) = sum_l [ (2l+1)/4pi * bl * P_l ]
-    #          = sum_l [ sqrt((2l+1)/4pi) * bl * Y_l0 ]
-    ell = torch.arange(lmax + 1, dtype=torch.float64)
-    coeff = bl_t * torch.sqrt((2.0 * ell + 1.0) / (4.0 * math.pi))
-    out = coeff @ p
-    return out.reshape(theta_t.shape)
-
-
-def beam2bl(
-    beam: Tensor | list[float], theta: Tensor | list[float], lmax: int
-) -> Tensor:
-    """Compute harmonic window b_l from circular beam profile b(theta)."""
-    b_t = torch.as_tensor(beam, dtype=torch.float64).reshape(-1)
-    th_t = torch.as_tensor(theta, dtype=torch.float64).reshape(-1)
-    if b_t.numel() != th_t.numel():
-        raise ValueError("beam and theta must have matching size")
-    if b_t.numel() < 2:
-        raise ValueError("beam/theta must contain at least 2 samples")
-    ll = int(lmax)
-    if ll < 0:
-        raise ValueError("lmax must be non-negative")
-
-    order = torch.argsort(th_t)
-    th_s = th_t.index_select(0, order)
-    b_s = b_t.index_select(0, order)
-    x = torch.cos(th_s)
-    # p contains Y_l0 = sqrt((2l+1)/4pi) * P_l
-    p = _legendre_l_sequence(0, x, ll)
-    # bl = 2pi * integral [ b(theta) * P_l(theta) * sin(theta) dtheta ]
-    #    = 2pi * sqrt(4pi/(2l+1)) * integral [ b(theta) * Y_l0(theta) * sin(theta) dtheta ]
-    integrand = p * (b_s * torch.sin(th_s)).unsqueeze(0)
-    dth = th_s[1:] - th_s[:-1]
-    trap = 0.5 * (integrand[:, 1:] + integrand[:, :-1]) * dth.unsqueeze(0)
-    ell = torch.arange(ll + 1, dtype=torch.float64)
-    norm = 2.0 * math.pi * torch.sqrt((4.0 * math.pi) / (2.0 * ell + 1.0))
-    return norm * torch.sum(trap, dim=1)
-
-
-def _cls_order_pairs(n_fields: int, *, new: bool) -> list[tuple[int, int]]:
-    if int(n_fields) <= 0:
-        raise ValueError("n_fields must be positive")
-    n = int(n_fields)
-    pairs: list[tuple[int, int]] = []
-    if bool(new):
-        for d in range(n):
-            for i in range(0, n - d):
-                pairs.append((i, i + d))
-    else:
-        for i in range(n):
-            for j in range(i, n):
-                pairs.append((i, j))
-    return pairs
-
-
-def _infer_field_count_from_ncls(n_cls: int) -> int:
-    if n_cls <= 0:
-        raise ValueError("number of spectra must be positive")
-    disc = 1 + (8 * n_cls)
-    root = int(math.isqrt(disc))
-    if root * root != disc:
-        raise ValueError("cannot infer number of fields from number of spectra")
-    n = (root - 1) // 2
-    if n * (n + 1) // 2 != n_cls:
-        raise ValueError("cannot infer number of fields from number of spectra")
-    return int(n)
-
-
-def _normalize_cls_input(
-    cls: Tensor
-    | list[Tensor | list[float] | None]
-    | tuple[Tensor | list[float] | None, ...],
-    *,
-    new: bool,
-) -> tuple[list[Tensor | None], list[tuple[int, int]], int]:
-    if isinstance(cls, Tensor):
-        if cls.ndim == 1:
-            return [cls.to(torch.float64)], [(0, 0)], 1
-        if cls.ndim == 2:
-            seq: list[Tensor | None] = [
-                cls[i].to(torch.float64) for i in range(int(cls.shape[0]))
-            ]
-        else:
-            raise ValueError("cls tensor must be 1D or 2D")
-    elif isinstance(cls, (list, tuple)):
-        seq = [
-            None if c is None else torch.as_tensor(c, dtype=torch.float64) for c in cls
-        ]
-    else:
-        arr = torch.as_tensor(cls, dtype=torch.float64)
-        if arr.ndim != 1:
-            raise ValueError("cls must be a 1D spectrum or a sequence of spectra")
-        return [arr], [(0, 0)], 1
-
-    if len(seq) == 1:
-        if seq[0] is None:
-            raise ValueError("single cls spectrum cannot be None")
-        return [seq[0]], [(0, 0)], 1
-
-    if len(seq) == 4:
-        pairs = (
-            [(0, 0), (1, 1), (2, 2), (0, 1)]
-            if bool(new)
-            else [(0, 0), (0, 1), (1, 1), (2, 2)]
-        )
-        return seq, pairs, 3
-
-    n_fields = _infer_field_count_from_ncls(len(seq))
-    return seq, _cls_order_pairs(n_fields, new=bool(new)), n_fields
-
-
-def synalm(
-    cls: Tensor
-    | list[Tensor | list[float] | None]
-    | tuple[Tensor | list[float] | None, ...],
-    lmax: int | None = None,
-    mmax: int | None = None,
-    *,
-    new: bool = False,
-    verbose: bool = True,  # noqa: ARG001 - compatibility signature
-) -> Tensor:
-    """Generate alm coefficient vector(s) from power spectra."""
-    seq, pairs, n_fields = _normalize_cls_input(cls, new=bool(new))
-    ll_data = -1
-    for c in seq:
-        if c is not None:
-            if c.ndim != 1:
-                raise ValueError("each cls spectrum must be 1D")
-            ll_data = max(ll_data, int(c.numel()) - 1)
-    ll = int(ll_data if (lmax is None or int(lmax) < 0) else lmax)
-    if ll < 0:
-        raise ValueError("cannot infer lmax from empty cls input")
-    mm_in = ll if mmax is None else int(mmax)
-    mm = ll if mm_in < 0 else min(mm_in, ll)
-
-    # Build batched covariance matrices [ll+1, n_fields, n_fields]
-    cov = torch.zeros((ll + 1, n_fields, n_fields), dtype=torch.float64)
-    for spec, (i, j) in zip(seq, pairs, strict=False):
-        if spec is None:
-            continue
-        take = min(ll + 1, int(spec.numel()))
-        if take <= 0:
-            continue
-        cov[:take, i, j] = spec[:take]
-        cov[:take, j, i] = spec[:take]
-
-    # Ensure positive semi-definite and compute batched Cholesky
-    # Symmetric matrices are 0.5 * (A + A^T) to ensure symmetry
-    cov = 0.5 * (cov + cov.transpose(-1, -2))
-
-    # Batch Cholesky decomposition
-    # Default torch.linalg.cholesky might fail on slightly non-PSD matrices
-    # We use eigh to be robust for theoretical spectra with zeros
-    eigvals, eigvecs = torch.linalg.eigh(cov)
-    eigvals = torch.clamp(eigvals, min=0.0)
-    fac = eigvecs @ (
-        torch.sqrt(eigvals).unsqueeze(-1)
-        * torch.eye(n_fields, device=cov.device, dtype=cov.dtype)
-    )
-    # fac shape: [ll+1, n_fields, n_fields]
-
-    nalm = alm_size(ll, mm)
-    # Generate all (l, m) indices in HEALPix order
-    # m=0: (0,0), (1,0), ..., (ll,0)
-    # m=1: (1,1), (2,1), ..., (ll,1)
-    # ...
-    ell_indices = []
-    m_indices = []
-    for m in range(mm + 1):
-        ell_indices.append(torch.arange(m, ll + 1, dtype=torch.int64))
-        m_indices.append(torch.full((ll - m + 1,), m, dtype=torch.int64))
-
-    ell_idx = torch.cat(ell_indices)
-    m_idx = torch.cat(m_indices)
-    # ell_idx.shape == (nalm,)
-
-    # fac shape: [ll+1, n_fields, n_fields]
-    # We need fac[ell_idx] -> [nalm, n_fields, n_fields]
-    fac_all = fac.index_select(0, ell_idx.to(fac.device))
-
-    # Random vectors:
-    # m=0 (m_idx == 0): Purely real
-    # m > 0 (m_idx > 0): Complex
-    z_real = torch.randn((nalm, n_fields), dtype=fac.dtype, device=fac.device)
-    z_imag = torch.randn((nalm, n_fields), dtype=fac.dtype, device=fac.device)
-
-    # For m=0, we only use z_real and no sqrt(2) factor
-    # For m>0, we use (z_real + i*z_imag)/sqrt(2)
-    # We can handle this with a scale factor per alm
-    inv_sqrt2 = 1.0 / math.sqrt(2.0)
-    scale = torch.where(
-        m_idx > 0,
-        torch.tensor(inv_sqrt2, device=fac.device),
-        torch.tensor(1.0, device=fac.device),
-    )
-
-    # V = fac @ Z
-    # v_real = fac_all @ (z_real * scale)
-    # v_imag = fac_all @ (z_imag * scale)
-    # Note: zipper matmul is [nalm, n_fields, n_fields] @ [nalm, n_fields, 1]
-    v_real = torch.matmul(
-        fac_all, (z_real * scale.unsqueeze(-1)).unsqueeze(-1)
-    ).squeeze(-1)
-    v_imag = torch.matmul(
-        fac_all, (z_imag * scale.unsqueeze(-1)).unsqueeze(-1)
-    ).squeeze(-1)
-
-    # Set imaginary part to 0 for m=0
-    v_imag = torch.where((m_idx > 0).unsqueeze(-1), v_imag, torch.zeros_like(v_imag))
-
-    # Construct complex output [n_fields, nalm]
-    out = torch.complex(v_real.transpose(0, 1), v_imag.transpose(0, 1))
-
-    if n_fields == 1:
-        return out[0]
-    return out
-
-
-def synfast(
-    cls: Tensor
-    | list[Tensor | list[float] | None]
-    | tuple[Tensor | list[float] | None, ...],
-    nside: int,
-    lmax: int | None = None,
-    mmax: int | None = None,
-    *,
-    alm: bool = False,
-    pol: bool = True,
-    pixwin: bool = False,
-    fwhm: float = 0.0,
-    sigma: float | None = None,
-    new: bool = False,
-    verbose: bool = True,  # noqa: ARG001 - compatibility signature
-) -> Tensor | tuple[Tensor, Tensor]:
-    """Synthesize map(s) from input C_l spectrum/spectra."""
-    alms = synalm(cls, lmax=lmax, mmax=mmax, new=new, verbose=verbose)
-    rows, single = _alm_to_rows(alms)
-    ll, mm = _infer_lmax_mmax_from_nalm(int(rows.shape[1]), lmax, mmax)
-
-    if sigma is not None and float(fwhm) != 0.0:
-        raise ValueError("provide only one of fwhm or sigma")
-    fwhm_use = float(fwhm)
-    if sigma is not None:
-        fwhm_use = float(sigma) * math.sqrt(8.0 * math.log(2.0))
-
-    pol_eff = bool(pol) and rows.shape[0] == 3
-    rows_eff: Tensor = rows
-    if pixwin:
-        pixwin_loader = globals()["pixwin"]
-        if pol_eff:
-            pw_t, pw_p = pixwin_loader(int(nside), pol=True, lmax=ll)
-            pw_beam = torch.stack([pw_t, pw_p, pw_p], dim=1)
-            rows_eff = smoothalm(rows_eff, lmax=ll, mmax=mm, beam=pw_beam, pol=True)
-        else:
-            pw = pixwin_loader(int(nside), pol=False, lmax=ll)
-            rows_eff = smoothalm(
-                rows_eff,
-                lmax=ll,
-                mmax=mm,
-                beam=torch.as_tensor(pw, dtype=torch.float64),
-                pol=False,
-            )
-        rows_eff, _ = _alm_to_rows(rows_eff)
-
-    if fwhm_use != 0.0:
-        rows_eff = smoothalm(rows_eff, lmax=ll, mmax=mm, fwhm_rad=fwhm_use, pol=pol_eff)
-        rows_eff, _ = _alm_to_rows(rows_eff)
-
-    map_out = alm2map(
-        rows_eff[0] if single else rows_eff,
-        nside=int(nside),
-        lmax=ll,
-        mmax=mm,
-        nest=False,
-        pol=pol_eff,
-        pixwin=False,
-    )
-    if alm:
-        alm_out = rows_eff[0] if single else rows_eff
-        return map_out, alm_out
-    return map_out
-
-
-def smoothalm(
-    alm_values: Tensor | list[complex] | list[list[complex]],
-    *,
-    lmax: int | None = None,
-    mmax: int | None = None,
-    fwhm_rad: float | None = None,
-    beam: Tensor | None = None,
-    pol: bool = False,
-) -> Tensor:
-    """Apply scalar/polarized beam smoothing to alm coefficients."""
-    rows, single = _alm_to_rows(alm_values)
-    ll, mm = _infer_lmax_mmax_from_nalm(int(rows.shape[1]), lmax, mmax)
-
-    if pol:
-        if rows.shape[0] != 3:
-            raise ValueError("pol=True requires alm_values shape (3, nalm)")
-        if beam is None:
-            if fwhm_rad is None:
-                raise ValueError("provide either beam or fwhm_rad")
-            beam_t = gaussian_beam(float(fwhm_rad), ll, pol=True)
-        else:
-            beam_t = torch.as_tensor(beam, dtype=torch.float64)
-        if beam_t.ndim == 1:
-            bt = be = bb = beam_t
-        elif beam_t.ndim == 2:
-            if beam_t.shape[0] >= ll + 1:
-                bt = beam_t[:, 0]
-                be = beam_t[:, 1] if beam_t.shape[1] > 1 else beam_t[:, 0]
-                bb = beam_t[:, 2] if beam_t.shape[1] > 2 else be
-            elif beam_t.shape[1] >= ll + 1:
-                bt = beam_t[0]
-                be = beam_t[1] if beam_t.shape[0] > 1 else beam_t[0]
-                bb = beam_t[2] if beam_t.shape[0] > 2 else be
-            else:
-                raise ValueError("beam must contain length >= lmax+1")
-        else:
-            raise ValueError("beam must be 1D or 2D")
-        if bt.shape[0] < ll + 1 or be.shape[0] < ll + 1 or bb.shape[0] < ll + 1:
-            raise ValueError("beam must contain length >= lmax+1")
-        ell = _alm_ell_array(ll, mm)
-        st = bt.index_select(0, ell).to(torch.complex128)
-        se = be.index_select(0, ell).to(torch.complex128)
-        sb = bb.index_select(0, ell).to(torch.complex128)
-        return torch.stack([rows[0] * st, rows[1] * se, rows[2] * sb], dim=0)
-
-    if beam is None:
-        if fwhm_rad is None:
-            raise ValueError("provide either beam or fwhm_rad")
-        beam_t = gaussian_beam(float(fwhm_rad), ll)
-    else:
-        beam_t = torch.as_tensor(beam, dtype=torch.float64)
-        if beam_t.ndim != 1 or beam_t.shape[0] < ll + 1:
-            raise ValueError("beam must be 1D with length >= lmax+1")
-    ell = _alm_ell_array(ll, mm)
-    scale = beam_t.index_select(0, ell).to(dtype=torch.complex128)
-    out = rows * scale.unsqueeze(0)
-    return out[0] if single else out
-
-
-def smoothmap(
-    map_values: Tensor | list[float] | list[list[float]],
-    *,
-    nside: int | None = None,
-    lmax: int | None = None,
-    mmax: int | None = None,
-    nest: bool = False,
-    fwhm_rad: float | None = None,
-    sigma: float | None = None,
-    beam: Tensor | None = None,
-    beam_window: Tensor | None = None,
-    pol: bool = False,
-    iter: int = 0,
-    use_weights: bool = False,
-    use_pixel_weights: bool = False,
-    gal_cut: float = 0.0,
-    verbose: bool = True,
-    datapath: str | os.PathLike[str] | None = None,
-) -> Tensor:
-    """Smooth HEALPix map(s) with scalar or polarized beam."""
-    rows, single = _map_to_rows(map_values)
-    npix = int(rows.shape[1])
-    ns = _healpix.npix2nside(npix) if nside is None else int(nside)
-    ll = int(3 * ns - 1 if lmax is None else lmax)
-    mm = ll if mmax is None else int(mmax)
-    if mm < 0 or mm > ll:
-        raise ValueError("invalid mmax")
-    if sigma is not None and fwhm_rad is not None:
-        raise ValueError("provide only one of fwhm_rad/sigma")
-    if beam is not None and beam_window is not None:
-        raise ValueError("provide only one of beam/beam_window")
-    beam_use = beam if beam_window is None else beam_window
-    fwhm_use = fwhm_rad
-    if sigma is not None:
-        fwhm_use = float(sigma) * math.sqrt(8.0 * math.log(2.0))
-
-    if pol:
-        if rows.shape[0] != 3:
-            raise ValueError("pol=True requires map_values shape (3, npix)")
-        alm = map2alm(
-            rows,
-            nside=ns,
-            lmax=ll,
-            mmax=mm,
-            nest=nest,
-            iter=iter,
-            pol=True,
-            use_weights=use_weights,
-            use_pixel_weights=use_pixel_weights,
-            gal_cut=gal_cut,
-            datapath=datapath,
-        )
-        alm_sm = smoothalm(
-            alm, lmax=ll, mmax=mm, fwhm_rad=fwhm_use, beam=beam_use, pol=True
-        )
-        return alm2map(
-            alm_sm,
-            nside=ns,
-            lmax=ll,
-            mmax=mm,
-            nest=nest,
-            pol=True,
-            pixwin=False,
-        )
-
-    alm = map2alm(
-        rows,
-        nside=ns,
-        lmax=ll,
-        mmax=mm,
-        nest=nest,
-        iter=iter,
-        pol=False,
-        use_weights=use_weights,
-        use_pixel_weights=use_pixel_weights,
-        gal_cut=gal_cut,
-        datapath=datapath,
-    )
-    alm_sm = smoothalm(
-        alm, lmax=ll, mmax=mm, fwhm_rad=fwhm_use, beam=beam_use, pol=False
-    )
-    sm = alm2map(
-        alm_sm,
-        nside=ns,
-        lmax=ll,
-        mmax=mm,
-        nest=nest,
-        pol=False,
-        pixwin=False,
-    )
-    return sm[0] if single else sm
 
 
 def map2alm_spin(
@@ -4077,10 +3453,12 @@ def map2alm_spin(
     raw_spin = float(torch.as_tensor(spin).item())
     npix = int(maps_t.shape[1])
     ns = _healpix.npix2nside(npix) if nside is None else int(nside)
+    if _healpix.nside2npix(ns) != npix:
+        raise ValueError("map length does not match nside")
     ll = int(3 * ns - 1 if lmax is None else lmax)
     mm = ll if mmax is None else int(mmax)
-    if mm < 0 or mm > ll:
-        raise ValueError("invalid mmax")
+    if ll < 0 or mm < 0 or mm > ll:
+        raise ValueError("invalid lmax/mmax")
     try:
         spin_i = int(spin)
     except Exception as exc:
@@ -4097,7 +3475,7 @@ def map2alm_spin(
         maps_t = torch.stack([m0, m1], dim=0)
         nest = False
 
-    maps_t = _apply_map2alm_weights(
+    analysis_maps = _apply_map2alm_weights(
         maps_t,
         nside=ns,
         gal_cut=gal_cut,
@@ -4107,13 +3485,23 @@ def map2alm_spin(
     )
 
     # Iterative solver
-    alm1, alm2 = _map2alm_spin_single_pass(maps_t, spin_i, nside=ns, lmax=ll, mmax=mm)
+    alm1, alm2 = _map2alm_spin_single_pass(
+        analysis_maps, spin_i, nside=ns, lmax=ll, mmax=mm
+    )
     for _ in range(iter):
         m_rec_0, m_rec_1 = alm2map_spin((alm1, alm2), ns, spin_i, lmax=ll, mmax=mm)
         res0 = maps_t[0] - m_rec_0
         res1 = maps_t[1] - m_rec_1
+        analysis_res = _apply_map2alm_weights(
+            torch.stack([res0, res1], dim=0),
+            nside=ns,
+            gal_cut=gal_cut,
+            use_weights=use_weights,
+            use_pixel_weights=use_pixel_weights,
+            datapath=datapath,
+        )
         res_alm1, res_alm2 = _map2alm_spin_single_pass(
-            torch.stack([res0, res1], dim=0), spin_i, nside=ns, lmax=ll, mmax=mm
+            analysis_res, spin_i, nside=ns, lmax=ll, mmax=mm
         )
         alm1 = alm1 + res_alm1
         alm2 = alm2 + res_alm2
@@ -4167,7 +3555,7 @@ def _map2alm_spin_single_pass(
                 else rows_ring.to(dtype=torch.float64)
             )
             phase0_neg = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=-1)
-            c_stacked = _cpp._healpix_spin_map2alm_ring_recurrence_cpu(
+            c_stacked = _native_ops.spectral_spin_map2alm_ring_recurrence(
                 maps_f64,
                 starts_cpu,
                 lengths_cpu,
@@ -4194,8 +3582,7 @@ def _map2alm_spin_single_pass(
                     phase0_neg = phase0_neg.to(dtype=torch.complex128)
                 use_fused_cpp = (
                     os.environ.get("TORCHSKY_SPIN_MAP2ALM_RING_CONCAT_CPP", "1") != "0"
-                    and _cpp is not None
-                    and hasattr(_cpp, "_healpix_spin_map2alm_ring_concat_cpu")
+                    and _native_ops.has_spectral_dispatcher()
                     and p_plus.device.type == "cpu"
                     and p_plus.dtype == torch.complex128
                     and (not p_plus.requires_grad)
@@ -4207,7 +3594,7 @@ def _map2alm_spin_single_pass(
                     if y_plus.device.type != "cpu":
                         use_fused_cpp = False
                     else:
-                        c_plus, c_minus = _cpp._healpix_spin_map2alm_ring_concat_cpu(
+                        c_plus, c_minus = _native_ops.spectral_spin_map2alm_ring_concat(
                             p_plus.contiguous(),
                             starts_cpu.contiguous(),
                             lengths_cpu.contiguous(),
@@ -4258,8 +3645,7 @@ def _map2alm_spin_single_pass(
                 s_minus = s_minus * phase0_neg
 
                 if (
-                    getattr(_cpp, "_healpix_spin_integrate_recurrence_cpu", None)
-                    is not None
+                    _native_ops.has_spectral_dispatcher()
                     and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1")
                     != "0"
                     and s_plus.device.type == "cpu"
@@ -4282,7 +3668,7 @@ def _map2alm_spin_single_pass(
                         )
                         sp_cpu = _cpu_c128(s_plus)
                         sm_cpu = _cpu_c128(s_minus)
-                        c_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+                        c_stacked = _native_ops.spectral_spin_integrate_recurrence(
                             sp_cpu,
                             sm_cpu,
                             theta_ring_cpu.contiguous(),
@@ -4322,8 +3708,7 @@ def _map2alm_spin_single_pass(
             s_plus = s_plus * phase0_neg
             s_minus = s_minus * phase0_neg
             if (
-                getattr(_cpp, "_healpix_spin_integrate_recurrence_cpu", None)
-                is not None
+                _native_ops.has_spectral_dispatcher()
                 and os.environ.get("TORCHSKY_SPIN_MAP2ALM_RECURRENCE_CPP", "1") != "0"
                 and s_plus.device.type == "cpu"
             ):
@@ -4345,7 +3730,7 @@ def _map2alm_spin_single_pass(
                     )
                     sp_cpu = _cpu_c128(s_plus)
                     sm_cpu = _cpu_c128(s_minus)
-                    c_stacked = _cpp._healpix_spin_integrate_recurrence_cpu(
+                    c_stacked = _native_ops.spectral_spin_integrate_recurrence(
                         sp_cpu,
                         sm_cpu,
                         theta_ring_cpu.contiguous(),
@@ -4369,15 +3754,13 @@ def _map2alm_spin_single_pass(
         else:
             ycp_t, ycm_t = mats
             use_cpp = (
-                _cpp is not None
-                and hasattr(_cpp, "_healpix_spin_map2alm_from_basis_cpu")
+                _native_ops.has_spectral_dispatcher()
                 and rows.device.type == "cpu"
-                and (not maps_t.requires_grad)
                 # Torch matmul path is currently faster on Apple CPU; keep C++ path opt-in.
                 and os.environ.get("TORCHSKY_SPIN_MAP2ALM_CPP", "0") != "0"
             )
             if use_cpp:
-                c_plus, c_minus = _cpp._healpix_spin_map2alm_from_basis_cpu(
+                c_plus, c_minus = _native_ops._spectral_spin_map2alm_from_basis(
                     rows[0].contiguous(),
                     rows[1].contiguous(),
                     ycp_t,
@@ -4470,16 +3853,13 @@ def alm2map_spin(
     if mats is not None:
         y_plus, y_minus, y_plus_m0, y_minus_m0 = mats
         use_cpp = (
-            _cpp is not None
-            and hasattr(_cpp, "_healpix_spin_alm2map_from_basis_cpu")
+            _native_ops.has_spectral_dispatcher()
             and alm1.device.type == "cpu"
-            and (not alm1.requires_grad)
-            and (not alm2.requires_grad)
             # Torch matmul path is currently faster on Apple CPU; keep C++ path opt-in.
             and os.environ.get("TORCHSKY_SPIN_ALM2MAP_CPP", "0") != "0"
         )
         if use_cpp:
-            return _cpp._healpix_spin_alm2map_from_basis_cpu(
+            return _native_ops._spectral_spin_alm2map_from_basis(
                 coeff_plus.contiguous(),
                 coeff_minus.contiguous(),
                 y_plus,
@@ -4487,6 +3867,10 @@ def alm2map_spin(
                 y_plus_m0,
                 y_minus_m0,
             )
+        y_plus = y_plus.to(device=alm1.device, dtype=cdt)
+        y_minus = y_minus.to(device=alm1.device, dtype=cdt)
+        y_plus_m0 = y_plus_m0.to(device=alm1.device, dtype=cdt)
+        y_minus_m0 = y_minus_m0.to(device=alm1.device, dtype=cdt)
         p_plus_pos = coeff_plus @ y_plus
         p_minus_pos = coeff_minus @ y_minus
         if mm == 0:
@@ -4500,6 +3884,8 @@ def alm2map_spin(
     else:
         Y_plus, _ = _spin_ylm_basis_concat(int(nside), nest, ll, mm, spin_i)
         Y_minus, _ = _spin_ylm_basis_concat(int(nside), nest, ll, mm, -spin_i)
+        Y_plus = Y_plus.to(device=alm1.device, dtype=cdt)
+        Y_minus = Y_minus.to(device=alm1.device, dtype=cdt)
 
         # P = C @ Y
         # C: (Nalm,), Y: (Nalm, Npix)
@@ -4565,9 +3951,8 @@ def alm2map_spin(
     q = 0.5 * (p_plus + p_minus)
     u = -0.5j * (p_plus - p_minus)
     # Align sign convention with healpy Q/U synthesis.
-    return torch.stack(
-        [(-q).real.to(torch.float64), (-u).real.to(torch.float64)], dim=0
-    )
+    real_dtype = _preferred_real_dtype(q.device)
+    return torch.stack([(-q).real.to(real_dtype), (-u).real.to(real_dtype)], dim=0)
 
 
 def alm2map_der1(
@@ -4603,59 +3988,7 @@ def alm2map_der1(
 
 def clear_spectral_caches() -> None:
     """Clear internal spectral/SHT lookup caches."""
-
-    global _RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES
-    global _RING_SPIN_CONCAT_CACHE_TOTAL_BYTES
-    global _SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES
-    global _SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES
-    global _SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES
-    global _SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES
-    global _SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES
-
-    for cache in (
-        _ANGLE_CACHE,
-        _YLM_CACHE,
-        _ALM_ELL_CACHE,
-        _ALM_M_CACHE,
-        _SPIN_YLM_CACHE,
-        _SPIN_MAP2ALM_MAT_CACHE,
-        _SPIN_ALM2MAP_MAT_CACHE,
-        _SCALAR_MAP2ALM_MAT_CACHE,
-        _SCALAR_ALM2MAP_MAT_CACHE,
-        _RING_LAYOUT_CACHE,
-        _RING_SCALAR_BASIS_CACHE,
-        _RING_PHI0_PHASE_CACHE,
-        _RING_AZIMUTH_PHASE_CACHE,
-        _RING_ALIAS_INDEX_CACHE,
-        _RING_SPIN_CONJ_INDEX_CACHE,
-        _RING_PIX2RING_CACHE,
-        _RING2NEST_PERM_CACHE,
-        _NEST2RING_PERM_CACHE,
-        _RING_SPIN_BASIS_CACHE,
-        _RING_SCALAR_BASIS_CONCAT_CACHE,
-        _RING_SCALAR_BASIS_CONCAT_CACHE_BYTES,
-        _RING_GROUP_CACHE,
-        _SPIN_MAP2ALM_MAT_CACHE_ENTRY_BYTES,
-        _SPIN_ALM2MAP_MAT_CACHE_ENTRY_BYTES,
-        _SCALAR_MAP2ALM_MAT_CACHE_ENTRY_BYTES,
-        _SCALAR_ALM2MAP_MAT_CACHE_ENTRY_BYTES,
-        _PIXWIN_TABLE_CACHE,
-        _LEGENDRE_REC_CACHE,
-        _SPIN_YLM_CONCAT_CACHE,
-        _SPIN_YLM_CONCAT_CACHE_ENTRY_BYTES,
-        _RING_SPIN_CONCAT_CACHE,
-        _RING_SPIN_CONCAT_CACHE_ENTRY_BYTES,
-        _M_PER_ALM_CACHE,
-    ):
-        cache.clear()
-
-    _SPIN_MAP2ALM_MAT_CACHE_TOTAL_BYTES = 0
-    _SPIN_ALM2MAP_MAT_CACHE_TOTAL_BYTES = 0
-    _SCALAR_MAP2ALM_MAT_CACHE_TOTAL_BYTES = 0
-    _SCALAR_ALM2MAP_MAT_CACHE_TOTAL_BYTES = 0
-    _SPIN_YLM_CONCAT_CACHE_TOTAL_BYTES = 0
-    _RING_SCALAR_BASIS_CONCAT_CACHE_TOTAL_BYTES = 0
-    _RING_SPIN_CONCAT_CACHE_TOTAL_BYTES = 0
+    _SPECTRAL_CACHE.clear()
 
 
 __all__ = [
@@ -4687,3 +4020,18 @@ __all__ = [
 ]
 
 # End of file
+
+
+# Spectra/beam/smoothing operations live in torchsky.sphere.spectral_ops;
+# re-export the historical spectral names.
+from .spectral_ops import (  # noqa: E402, F401
+    anafast,
+    beam2bl,
+    bl2beam,
+    gaussian_beam,
+    pixwin,
+    smoothalm,
+    smoothmap,
+    synalm,
+    synfast,
+)

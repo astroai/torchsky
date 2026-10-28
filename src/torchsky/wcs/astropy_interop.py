@@ -12,6 +12,7 @@ import torch
 
 from .catalog_state import CatalogState
 from .frames import canonical_celestial_frame
+from .semantics import Epoch, TimeSpec
 
 if TYPE_CHECKING:
     from astropy.coordinates import SkyCoord
@@ -28,6 +29,12 @@ def catalog_state_from_astropy(coord: SkyCoord) -> CatalogState:
         "lat": torch.as_tensor(icrs.dec.deg, dtype=torch.float64),
         "frame": "ICRS",
     }
+    obstime = getattr(coord, "obstime", None)
+    if obstime is not None:
+        kwargs["epoch"] = Epoch(
+            torch.as_tensor(obstime.tcb.jyear, dtype=torch.float64),
+            TimeSpec(format="jyear", scale="tcb", reference_position="BARYCENTER"),
+        )
     try:
         kwargs["pm_lon_coslat_mas_yr"] = torch.as_tensor(
             icrs.pm_ra_cosdec.to_value(u.mas / u.yr), dtype=torch.float64
@@ -56,16 +63,26 @@ def catalog_state_to_astropy(state: CatalogState) -> SkyCoord:
     """Build a SkyCoord from ICRS ``CatalogState`` (converts frames first)."""
     import astropy.units as u
     from astropy.coordinates import SkyCoord
+    from astropy.time import Time
 
     icrs = (
         state
         if canonical_celestial_frame(state.frame) == "ICRS"
         else state.to_frame("ICRS")
     )
+    if icrs.epoch_format is None or icrs.epoch_scale is None:
+        raise RuntimeError("catalog epoch metadata was not initialized")
+    if icrs.epoch_scale == "gps":
+        raise ValueError("Astropy Time does not define GPS as a time scale")
     kwargs: dict[str, object] = {
         "ra": icrs.lon.detach().cpu().numpy() * u.deg,
         "dec": icrs.lat.detach().cpu().numpy() * u.deg,
         "frame": "icrs",
+        "obstime": Time(
+            icrs.epoch.detach().cpu().numpy(),
+            format=icrs.epoch_format,
+            scale=icrs.epoch_scale,
+        ),
     }
     if icrs.pm_lon_coslat_mas_yr is not None and icrs.pm_lat_mas_yr is not None:
         kwargs["pm_ra_cosdec"] = (

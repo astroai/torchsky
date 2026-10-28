@@ -5,15 +5,21 @@ Implementation of ``nn.Module`` subclasses and training live in :mod:`torchsky.m
 
 from __future__ import annotations
 
+import copy
+import math
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-import math
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from ...spectrophotometry import Passband
+from ..operators.background import (
+    AdditiveComponent,
+    AdditiveProcessingState,
+    validate_additive_components,
+)
 
 if TYPE_CHECKING:
     from ..exposure_pose import ExposurePose
@@ -30,6 +36,7 @@ FieldModelKind = Literal[
     "sine_implicit",
     "wire_implicit",
     "sasnet",
+    "bacon",
     "flair_bla",
     "explicit_spectral_grid_field",
     "gaussian_basis",
@@ -169,6 +176,11 @@ FieldPSFMode = Literal["none", "gaussian_sigma_pix", "kernel2d", "learned_lowran
 class PSFSpec:
     """Public PSF description for field observations and target products.
 
+    ``kernel2d`` is an odd-sized, image-shaped unit-source response: its center
+    indexes zero displacement and increasing columns/rows are positive detector
+    x/y offsets. Rendering normalizes its sum and retains zero-padding losses
+    at detector boundaries. It is not a PyTorch cross-correlation weight array.
+
     Learned PSFs are calibration products and are frozen while rendering a sky
     scene.  ``frozen=False`` is reserved for a future calibration-only execution
     path; the scene renderer rejects it instead of silently dropping gradients.
@@ -262,7 +274,7 @@ class PSFSpec:
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
     ) -> "PSFSpec":
-        """Move tensor payloads while retaining the declared PSF contract."""
+        """Return an independently moved PSF without mutating the source model."""
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("PSFSpec dtype must be floating point")
         move_kwargs: dict[str, object] = {}
@@ -272,16 +284,17 @@ class PSFSpec:
             move_kwargs["dtype"] = dtype
         kernel = self.kernel2d
         cells = self.cell_u_pix
+        model = copy.deepcopy(self.model)
         if move_kwargs:
             kernel = None if kernel is None else kernel.to(**move_kwargs)
             cells = None if cells is None else cells.to(**move_kwargs)
-            if self.model is not None:
-                self.model.to(**move_kwargs)
+            if model is not None:
+                model.to(**move_kwargs)
         return PSFSpec(
             mode=self.mode,
             sigma_pix=float(self.sigma_pix),
             kernel2d=kernel,
-            model=self.model,
+            model=model,
             cell_u_pix=cells,
             cell_lam_norm=float(self.cell_lam_norm),
             frozen=bool(self.frozen),
@@ -304,6 +317,19 @@ class FieldDomain:
     wavelength_center: float
     wavelength_scale: float
     coord_mode: FieldCoordinateMode = "local_tangent"
+
+    def __post_init__(self) -> None:
+        for name in ("center_ra_deg", "center_dec_deg", "wavelength_center"):
+            if not math.isfinite(float(getattr(self, name))):
+                raise ValueError(f"FieldDomain {name} must be finite")
+        if not -90.0 <= float(self.center_dec_deg) <= 90.0:
+            raise ValueError("FieldDomain center_dec_deg must be in [-90, 90]")
+        for name in ("spatial_scale_deg", "wavelength_scale"):
+            value = float(getattr(self, name))
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"FieldDomain {name} must be finite and positive")
+        if self.coord_mode not in ("local_tangent", "sphere_xyz"):
+            raise ValueError(f"unsupported FieldDomain coord_mode {self.coord_mode!r}")
 
 
 @dataclass(frozen=True)
@@ -400,6 +426,8 @@ class FieldObservation:
     gain_provenance_id: str | None = None
     exposure_time_s: float | None = None
     collecting_area_m2: float | None = None
+    additive_components: tuple[AdditiveComponent, ...] = ()
+    processing_state: AdditiveProcessingState | None = None
 
     _cached_ra_deg: Tensor | None = field(default=None, init=False, repr=False)
     _cached_dec_deg: Tensor | None = field(default=None, init=False, repr=False)
@@ -427,6 +455,17 @@ class FieldObservation:
             raise TypeError("FieldObservation image must be floating point")
         if not isinstance(self.header, dict):
             raise TypeError("FieldObservation header must be a dict")
+        if self.processing_state is not None:
+            self.processing_state = AdditiveProcessingState(self.processing_state)
+        if not isinstance(self.additive_components, tuple):
+            raise TypeError("FieldObservation additive_components must be a tuple")
+        validate_additive_components(
+            self.additive_components,
+            shape=(int(self.image.shape[0]), int(self.image.shape[1])),
+            value_unit=self.value_unit,
+            value_semantics=self.value_semantics,
+            processing_state=self.processing_state,
+        )
         if self.psf_spec is None:
             if float(self.psf_sigma_pix) > 0.0:
                 self.psf_spec = PSFSpec.gaussian(float(self.psf_sigma_pix))
@@ -568,15 +607,20 @@ class FieldObservation:
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
     ) -> "FieldObservation":
-        """Return a moved observation with mask/index dtypes preserved.
+        """Return an independently moved observation with semantic dtypes preserved.
 
         Floating detector planes follow ``dtype``. Boolean masks and integer
-        amplifier indices retain their semantic dtype. Coordinate caches are
-        intentionally dropped by :func:`dataclasses.replace`.
+        amplifier indices retain their semantic dtype. Nested modules are copied
+        before moving, so the source observation is not mutated. Coordinate caches
+        are intentionally dropped by :func:`dataclasses.replace`.
         """
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("FieldObservation dtype must be floating point")
-        kwargs: dict[str, object] = {}
+        kwargs: dict[str, object] = {"header": dict(self.header)}
+        kwargs["additive_components"] = tuple(
+            component.to(device=device, dtype=dtype)
+            for component in self.additive_components
+        )
         floating_fields = (
             "image",
             "weight",
@@ -608,6 +652,7 @@ class FieldObservation:
             kwargs["passband"] = self.passband.to(device)
         transform = self.detector_to_sky
         if isinstance(transform, nn.Module):
+            transform = copy.deepcopy(transform)
             move_kwargs: dict[str, object] = {}
             if device is not None:
                 move_kwargs["device"] = device

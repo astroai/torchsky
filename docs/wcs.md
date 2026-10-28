@@ -87,7 +87,7 @@ Celestial projections include Paper II zenithal, cylindrical, conic, polyconic
 `NCP` (implemented as slant `SIN`). Fused C++ covers `PCO`, `XPH`, `TSC`,
 `CSC`, and `QSC`. `WCS.to("cuda")` moves cached PV and rotation tensors with
 the pixels. `WCS.to("mps")` casts cached parameters to float32 (MPS has no
-float64; expect arcsecond-class TAN error versus CPU float64). CUDA WCS is
+float64, so precision is lower than CPU float64). CUDA WCS is
 float64. CPU fused WCS is float64. Public `pixel_to_world` /
 `world_to_pixel` stay on the pixel device; fused C++ runs only when both
 pixels and cached parameters are on CPU.
@@ -95,12 +95,20 @@ pixels and cached parameters are on CPU.
 Identity TPV uses `PV1_1=1` and `PV2_1=1` (axis 2 is swapped: `PV2_1` is the
 linear `v` term). A header with `PV2_2=1` and no `PV2_1` is rank-deficient;
 inverse is then a particular solution, not a unique preimage.
+Low-level callers can invoke the fused kernels directly through
+`torchsky.wcs.pixel_to_world_fused` and `torchsky.wcs.world_to_pixel_fused`.
+They take the cached projection/rotation scalars plus optional TPV coefficient
+tensors, run through the same dispatcher contracts as `WCS.pixel_to_world` /
+`WCS.world_to_pixel`, and return NaNs for invalid projection domains or
+singular inverses instead of raising. Most users should keep to the `WCS`
+methods; these functions exist for compiled and batched call sites.
+
 
 Air wavelengths (`AWAV`, `FREQ-GRA`) use the WCSLIB Edlén form so spectral
 WCS matches astropy.wcs / WCSLIB.
 
-Small-N overhead versus Astropy (sub-3 ms) is acceptable; large-N must stay
-first on CPU and CUDA. Observed place is ATen on the catalog device (CUDA
+Small- and large-input performance is evaluated in the harness. Observed place
+is ATen on the catalog device (CUDA
 float64, MPS float32); there is no fused C++ observed kernel.
 
 Catalog geometry is `CatalogState`, not `SkyCoord`. See [coordinates.md](coordinates.md).
@@ -109,16 +117,17 @@ never imports `gwcs`. `FrozenDetectorEpochTables.evaluate` / `.inverse` are
 device-native table ops with a Newton residual bound. Optional
 `torchsky.wcs.gwcs_live.freeze_live_gwcs` (the `gwcs` extra) evaluates a live
 graph then freezes; it is not a core import.
+Frozen tables preserve either consistent sampled Jacobian sign, including
+reflected detector frames; exposure/residual corrections preserve that parity.
+The determinant floor bounds absolute magnitude, and sampled checks do not
+prove global injectivity between validation points.
 
 CSC CPU uses the WCSLIB float32 Chan–O'Neill polynomial (scalar C Horner).
-Linux mixed-grid max is still 8.4 mas vs astropy (median ~1e-12″); do not
-claim the WCSLIB floor on Linux CPU. CUDA/MPS CSC without autograd host-copies
-to that CPU kernel (CANFAR `world-cuda` ATen disagreed with CPU at 8.3e-7° on
-5/49 interior samples). Ceiling: CUDA CSC is CPU plus a host copy until a fused
-CUDA Chan–O'Neill kernel exists; do not claim CUDA CSC throughput. Autograd
-stays on ATen.
-Coupled `-TAB` inverse is 53 ms CPU / 9 ms CUDA at N=10k on SHA `d8d706f6`
-(5e-11 px). `FREQ-GRA` is gated on relative error (0.625 Hz on ~1e14 Hz).
+CUDA/MPS CSC without autograd host-copies to that CPU kernel until a fused CUDA
+Chan–O'Neill kernel exists. Autograd stays on ATen. Comparative throughput and
+quantitative parity evidence are maintained in the harness. `FREQ-GRA` is
+validated against a relative-error criterion; numerical acceptance evidence
+is recorded with the corresponding harness evaluation.
 
 ### Spectral And Temporal Axes
 
@@ -137,7 +146,7 @@ still outside the runtime contract.
 from torchsky.wcs import fit_affine_2d
 
 fit = fit_affine_2d(source_pixels, target_pixels, geometry="rscale")
-corrected = wcs.with_affine_fit_correction(fit)
+corrected = wcs.with_affine(fit)
 ```
 
 ## API Surface
@@ -145,45 +154,41 @@ corrected = wcs.with_affine_fit_correction(fit)
 Main class:
 
 - `WCS(header, key="", tabular_axes=None, tables=None)`
-- `pixel_to_world(...)`, `world_to_pixel(...)`
+- `pixel_to_world(...)` / `pix2world(...)`, `world_to_pixel(...)` / `world2pix(...)`
 - `all_pix2world(...)`, `all_world2pix(...)`
 - `mixed_pixel_world(...)`
 - `slice(...)`, `dropaxis(...)`, `sub(...)`, `celestial` — `slice` accepts
   negative steps (Python `range` length / CRPIX-CD update). Dropped coupled
   axes bake at CRPIX.
-- `to_header()`, `footprint()`, `in_image(...)`
+- `to_header(relax=True, include_naxis=...)`, `to_head_string(relax=True)`
+- `footprint(shape=None, center=True, origin=0)`, `calc_footprint(...)`, `in_image(...)`
+- `pixel_scales()`, `pixel_area()`, `position_angle()`, `pixel_area_map(shape=None, unit="deg2")`
+- `with_affine(matrix_or_fit, offset=None)`
 
 Differentiable geometry:
 
-- `pixel_to_world_differentiable(...)`
-- `world_to_pixel_differentiable(...)`
-- `pixel_to_world_jacobian(...)`
-- `world_to_pixel_jacobian(...)`
+- `jacobian(coords, y=None, *, inverse=False, origin=0, create_graph=False)`
+- `pixel_to_world_differentiable(...)`, `world_to_pixel_differentiable(...)`
+- `pixel_to_world_jacobian(...)`, `world_to_pixel_jacobian(...)`
 
-Spectral/temporal WCS:
+Spectral, IFU, GWCS, and temporal WCS:
 
 - `spectral_to_frequency(...)`, `frequency_to_spectral(...)`
-- `WCS.temporal_wcs(...)`
-- `TemporalWCS` from `torchsky.wcs` or `torchsky.wcs.temporal`
-- `convert_time_scale(...)`, `iso_to_mjd(...)` from `torchsky.wcs.temporal`
-- `TabularAxis`, `TabularLookupWCS`, `CoupledTabularLookupWCS`
-- `tabular_axes_from_fits(...)`, `coupled_tabular_wcs_from_fits(...)`
+- `WCS.temporal_wcs(...)`, `TemporalWCS`
+- `IFUSliceWCS.from_slices(...)`, `IFUSliceWCS.from_callable(...)`
+- `sample_gwcs(...)`, `sample_gwcs_epochs(...)`, `FrozenDetectorEpochTables`
+- `from_tabular(...)`, `from_coupled_tabular(...)`, `TabularAxis`, `TabularLookupWCS`, `CoupledTabularLookupWCS`
 
-Frames and alignment:
+Frames, DCR, ephemeris, and alignment:
 
+- `transform(...)`, `convert_celestial(...)`
 - `icrs_to_galactic(...)`, `galactic_to_icrs(...)`, `icrs_to_ecliptic(...)`, `ecliptic_to_icrs(...)`, `precess_fk5(...)`
 - `CatalogState` batched tensors; see [coordinates.md](coordinates.md)
-- `EarthOrientation`, `Site`, `observed_altaz(...)` (explicit DUT1; optional polar motion, `pn='iau2006'` IAU 2000A, opt-in aberration/refraction)
-- `transform(...)` tensor façade (`ALTAZ` / `ITRS` / `GCRS` / `CIRS` / `TETE` / geometric frames); not a SkyCoord
-- `icrs_to_itrs_xyz(...)`, `itrs_xyz_to_lonlat_deg(...)`
-- `propagate_proper_motion(...)` for tensor-native angular space motion
-- `propagate_proper_motion_with_jacobian(...)` for local uncertainty transport
-  when distance/RV are unavailable
-- `propagate_space_motion(...)` for complete parallax/RV-aware ICRS motion
-- `propagate_space_motion_with_jacobian(...)` for batched local uncertainty
-  transport
-- `TangentPlaneFrame`
-- `fit_affine_2d(...)`, `fit_sky_affine(...)`
+- `EarthOrientation`, `Site`, `observed_altaz(...)`
+- `dcr_offset(...)`, `apply_dcr(...)`, `apply_ephemeris_offset(...)`, `apply_refraction(...)`, `apply_stellar_aberration(...)`
+- `propagate_proper_motion(...)`, `propagate_proper_motion_with_jacobian(...)`
+- `propagate_space_motion(...)`, `propagate_space_motion_with_jacobian(...)`
+- `TangentPlaneFrame`, `fit_affine_2d(...)`, `fit_sky_affine(...)`
 
 `propagate_space_motion(...)` propagates all six ICRS observables with the
 ERFA/SOFA changing-light-time and special-relativistic model. It requires a
@@ -210,14 +215,14 @@ imputed, and perspective acceleration is therefore outside its contract.
 
 ## Examples
 
-- [WCS transform example](../examples/example_wcs_transform.py)
+- [WCS transform example](published-examples/example_wcs_transform.py)
 
 ## Compatibility And Validation
 
-WCS parity is covered against Astropy/WCSLIB fixture behavior in the WCS test
-suite and in focused benchmarks such as `benchmarks/bench_wcs.py`,
-`benchmarks/bench_wcs_suite.py`, `benchmarks/bench_wcs_small_n_paths.py`, and
-`benchmarks/bench_wcs_spectral_temporal.py`.
+Core tests retain bounded transform, round-trip, gradient, and device
+contracts. Exhaustive Astropy/WCSLIB parity, broad fixture replay, and WCS
+performance measurements are maintained in
+[torchsky-harness](https://github.com/astroai/torchsky-harness).
 
-See [compatibility.md](compatibility.md) for validation policy and
-[benchmarks.md](benchmarks.md) for commands.
+See [compatibility.md](compatibility.md) for the ownership boundary and
+[benchmarks.md](evaluation/benchmarks.md) for the harness workflow.

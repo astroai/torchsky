@@ -6,6 +6,8 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from .._dtype import as_work_tensor as _as_tensor
+
 SPEED_OF_LIGHT = 299792458.0  # m / s
 PLANCK = 6.62607015e-34  # J s
 ELECTRON_VOLT = 1.602176634e-19  # J
@@ -131,16 +133,6 @@ def spectral_unit_scale(spectral_type: str, unit: str | None = None) -> float:
             f"unsupported spectral unit {unit!r} for type {kind}"
         ) from exc
     return 1.0
-
-
-def _work_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
-
-
-def _as_tensor(value: Any) -> Tensor:
-    if isinstance(value, Tensor):
-        return value.to(dtype=_work_dtype(value.device))
-    return torch.as_tensor(value, dtype=torch.float64)
 
 
 def _rest_frequency(
@@ -366,20 +358,6 @@ def _spectral_derivative_si(
     return (plus - minus) / (2.0 * eps)
 
 
-def transform_spectral(
-    freq: Tensor, rest_freq: float, convention: str = "RADIO"
-) -> Tensor:
-    """Backward-compatible frequency-to-velocity helper returning km/s."""
-    target = {
-        "RADIO": "VRAD",
-        "OPTICAL": "VOPT",
-        "RELATIVISTIC": "VELO",
-    }.get(convention.upper())
-    if target is None:
-        raise ValueError(f"Unknown spectral convention: {convention}")
-    return frequency_to_spectral(freq, target, unit="km/s", rest_frequency=rest_freq)
-
-
 class SpectralTransform:
     """Implement FITS Paper III spectral algorithm transformations.
 
@@ -390,7 +368,6 @@ class SpectralTransform:
         self,
         ctype: str,
         crval: float,
-        cdelt: float,
         cunit: str | None = None,
         restfrq: float | None = None,
         restwav: float | None = None,

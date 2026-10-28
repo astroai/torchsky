@@ -1,88 +1,43 @@
-# Release Checklist
+# Release checklist
 
-Maintainer runbook for cutting a release.
+This runbook covers the torchsky package. Scientific benchmarks, exhaustive
+parity campaigns, large/real-data validation, and scorecards are maintained in
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness); FITS I/O
+correctness and throughput belong to
+[`torchfits`](https://github.com/astroai/torchfits).
 
-## 1. Version sync
+## Package validation
 
-Confirm the version triplet matches in:
+Before a release:
 
-- `pyproject.toml` (`version = "X.Y.Z"`)
+1. Run `pixi run preflight-push` and targeted tests for changed behavior.
+2. Run `pixi run typecheck` when Python types or public signatures changed.
+3. Confirm GitHub package CI is green. Full local test runs remain opt-in as
+   described in [AGENTS.md](https://github.com/astroai/torchsky/blob/main/AGENTS.md).
+4. For performance claims, cite a scoped harness run with its subject and
+   harness revisions and the resulting scorecard. Do not treat a completed
+   process as scientific acceptance without the documented criteria.
+
+## Version and artifacts
+
+Confirm the version matches in:
+
+- `pyproject.toml`
 - `pixi.toml`
 - `src/torchsky/__init__.py`
 
-## 2. Changelog
+Finalize [the changelog](changelog.md). If a local artifact check is useful,
+build and inspect the wheel from the Pixi environment, then smoke-test it in a
+fresh environment with the supported `torchfits` baseline (`>=1.0.0`).
 
-Finalize the entry in `docs/changelog.md`. Follow [Keep a Changelog](https://keepachangelog.com/) format.
+## Publish
 
-## 3. Tests
+Follow the repository's release workflow to tag and publish the reviewed
+version. Publishing triggers `.github/workflows/build_wheels.yml`, which builds
+Linux and macOS wheels plus an sdist and uploads them to
+[PyPI](https://pypi.org/project/torchsky/) through trusted publishing.
 
-```bash
-pixi run test
-```
-
-All tests must pass.
-
-## 4. Correctness gates
-
-Run the supported local parity and benchmark gates:
-
-```bash
-pixi run ci-local
-pixi run bench-wcs
-pixi run bench-wcs-tpv-inverse
-pixi run sphere-bench-geometry-gate
-pixi run sphere-bench-healpix-advanced-gate
-pixi run sphere-upstream-spin-matrix-gate
-pixi run sphere-bench-geom-exact-contains-gate
-pixi run bench-map-acceptance-smoke
-```
-
-All gates must pass. If upstream replay scripts are reintroduced, add their
-tasks and documentation in the same change before making them release blockers.
-
-## 5. Benchmark evidence
-
-Run the WCS/sphere benchmark suite on CANFAR:
-
-```bash
-pixi run bench-all
-```
-
-Update `docs/benchmarks.md` with the run ID, date, and snapshot tables.
-
-## 6. Local artifact check (optional)
-
-```bash
-pip wheel . --no-deps --no-build-isolation -w dist
-twine check dist/*
-```
-
-Smoke-test the wheel in a fresh virtualenv.
-
-## 7. Tag and push
-
-```bash
-git add -A
-git commit -m "release: vX.Y.Z"
-git tag vX.Y.Z
-git push origin main --tags
-```
-
-## 8. Publish
-
-Create a GitHub release for `vX.Y.Z`.
-
-Publishing triggers `.github/workflows/build_wheels.yml`, which:
-
-1. Runs tests.
-2. Builds wheels on Linux and macOS plus sdist.
-3. Uploads to [PyPI](https://pypi.org/project/torchsky/) via trusted publishing.
-
-## 9. Post-release verification
-
-- [ ] `pip install torchsky==X.Y.Z` works in a fresh environment.
-- [ ] `import torchsky; print(torchsky.__version__)` shows correct version.
-- [ ] Core WCS and sphere imports run without `torchfits` or CFITSIO.
-- [ ] The documented optional integration works with the supported `torchfits`
-      0.5.x release.
-- [ ] Changelog and release notes links resolve.
+After publication, verify installation of the released version, check the
+package import and version, and confirm that the documented `torchfits`
+integration works with the supported baseline. Keep the release notes and
+package links current.

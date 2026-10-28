@@ -526,7 +526,7 @@ class TemporalWCS:
 
     def to_mjd(self, time_val: Tensor) -> Tensor:
         """Convert relative time to absolute MJD in the header ``TIMESYS``."""
-        return self.mjd_ref + time_val * self.to_days
+        return self.mjd_ref + (time_val + self.timeoffs) * self.to_days
 
     def to_mjd_scale(self, time_val: Tensor, scale: str) -> Tensor:
         """Convert relative time to absolute MJD in another supported scale."""
@@ -534,18 +534,12 @@ class TemporalWCS:
 
     def from_mjd(self, mjd: Tensor) -> Tensor:
         """Convert absolute MJD in the header ``TIMESYS`` to relative time."""
-        return (mjd - self.mjd_ref) / self.to_days
+        return (mjd - self.mjd_ref) / self.to_days - self.timeoffs
 
     def from_mjd_scale(self, mjd: Tensor, scale: str) -> Tensor:
         """Convert absolute MJD in ``scale`` to relative header time values."""
         local = convert_time_scale(mjd, scale, self.timesys)
         return self.from_mjd(local)
-
-    def convert_scale(
-        self, mjd: Tensor, to_scale: str, from_scale: str | None = None
-    ) -> Tensor:
-        """Convert MJD values from ``from_scale`` or header ``TIMESYS`` to ``to_scale``."""
-        return convert_time_scale(mjd, from_scale or self.timesys, to_scale)
 
     @staticmethod
     def mjd_to_jd(mjd: float | Tensor) -> float | Tensor:
@@ -557,20 +551,23 @@ class TemporalWCS:
         """JD to MJD: MJD = JD - 2400000.5"""
         return jd - 2400000.5
 
-    def to_iso8601(self, mjd: Tensor) -> list[str]:
+    def to_iso8601(self, mjd: Tensor) -> str | list[Any]:
         """
         Convert MJD to ISO-8601 strings (UTC).
         Note: This is not vectorized as strings are involved,
         but useful for parity.
         """
-        mjds = mjd.cpu().numpy()
-        isos = []
-        for m in mjds:
-            # JD = MJD + 2400000.5
-            # Simplified MJD to datetime
-            dt = datetime.datetime(1858, 11, 17) + datetime.timedelta(days=float(m))
-            isos.append(dt.isoformat())
-        return isos
+        utc = convert_time_scale(mjd, self.timesys, "UTC").detach().cpu()
+
+        def format_values(values: Tensor) -> str | list[Any]:
+            if values.ndim == 0:
+                dt = datetime.datetime(1858, 11, 17) + datetime.timedelta(
+                    days=float(values.item())
+                )
+                return dt.isoformat()
+            return [format_values(item) for item in values]
+
+        return format_values(utc)
 
     def apply_corrections(self, mjd: Tensor, ra: Tensor, dec: Tensor) -> Tensor:
         """Apply Roemer light-time to the header ``TREFPOS``.

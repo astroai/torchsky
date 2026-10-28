@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from ._safe_path import resolve_under_root
@@ -41,7 +41,7 @@ def _catalog_load_sync(
     hdu: int,
     max_rows: int,
 ) -> JSONResponse:
-    from ...io import read_table
+    from torchfits.table import read_torch as read_table
 
     root: Path = request.app.state.root_dir
     abs_path = str(_resolve(root, path))
@@ -61,8 +61,9 @@ def _catalog_load_sync(
     dec_t = torch.as_tensor(data[dec_key])
 
     n = ra_t.shape[0]
-    if n > max_rows:
-        step = max(1, n // max_rows)
+    if max_rows > 0 and n > max_rows:
+        # Ceil division: floor would keep up to ~2x the advertised cap.
+        step = -(-n // max_rows)
         ra_t = ra_t[::step]
         dec_t = dec_t[::step]
 
@@ -89,7 +90,7 @@ async def catalog_load(
     ra_col: str = "RA",
     dec_col: str = "DEC",
     hdu: int = 1,
-    max_rows: int = 50_000,
+    max_rows: int = Query(50_000, ge=1, le=2_000_000),
 ) -> JSONResponse:
     """
     Load a FITS catalog table and return (ra, dec) arrays.
@@ -117,7 +118,7 @@ def _catalog_filter_moc_sync(
     dec_col: str,
     hdu: int,
 ) -> JSONResponse:
-    from ...io import read_table
+    from torchfits.table import read_torch as read_table
     from ...sphere.moc import MOC
 
     root: Path = request.app.state.root_dir

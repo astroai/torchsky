@@ -16,39 +16,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 
-from .log_lambda import (
-    convolve_log_lambda as convolve_log_lambda,
-    sigma_R_kms as sigma_R_kms,
-)
-from .redshift import (
-    C_KM_S as C_KM_S,
-    V_KIND_BETA as V_KIND_BETA,
-    V_KIND_KMS as V_KIND_KMS,
-    V_KIND_REDSHIFT as V_KIND_REDSHIFT,
-    apply_redshift as apply_redshift,
-    apply_redshift_f_lambda as apply_redshift_f_lambda,
-    beta_from_redshift as beta_from_redshift,
-    compose_rapidities as compose_rapidities,
-    convert_velocity_kind as convert_velocity_kind,
-    dimming_f_lambda as dimming_f_lambda,
-    dimming_tolman_sb as dimming_tolman_sb,
-    los_barycentric_beta as los_barycentric_beta,
-    normalize_v_kind as normalize_v_kind,
-    one_plus_z_from_beta as one_plus_z_from_beta,
-    one_plus_z_from_codes as one_plus_z_from_codes,
-    one_plus_z_from_kind as one_plus_z_from_kind,
-    one_plus_z_from_redshift as one_plus_z_from_redshift,
-    one_plus_z_from_velocity_kms as one_plus_z_from_velocity_kms,
-    one_plus_z_from_zeta as one_plus_z_from_zeta,
-    redshift_from_velocity_kms as redshift_from_velocity_kms,
-    require_one_plus_z as require_one_plus_z,
-    shift_ln_wavelength as shift_ln_wavelength,
-    shift_wavelength as shift_wavelength,
-    velocity_kms_from_redshift as velocity_kms_from_redshift,
-    zeta_from_beta as zeta_from_beta,
-    zeta_from_redshift as zeta_from_redshift,
-    zeta_from_velocity_kms as zeta_from_velocity_kms,
-)
+from ._dtype import work_dtype as _work_dtype
 from .wcs import WCS
 from .wcs.spectral import (
     air_wavelength_to_vacuum,
@@ -75,15 +43,22 @@ class SpectralRebinResult:
     mask: Optional[torch.Tensor] = None
 
 
-def _validate_spectral_edges(
-    edges: torch.Tensor, expected_bins: int, name: str
-) -> None:
-    if edges.ndim != 1 or edges.numel() != expected_bins + 1:
-        raise ValueError(f"{name} must be 1D with {expected_bins + 1} elements")
+def _validate_monotone_edges(edges: torch.Tensor, name: str) -> None:
+    """Require a 1-D, finite, strictly increasing edge vector."""
+    if edges.ndim != 1 or edges.numel() < 2:
+        raise ValueError(f"{name} must be 1D with at least two elements")
     if not edges.is_floating_point() or not bool(torch.isfinite(edges).all()):
         raise ValueError(f"{name} must contain finite floating-point coordinates")
     if not bool(torch.all(edges[1:] > edges[:-1])):
         raise ValueError(f"{name} must be strictly increasing")
+
+
+def _validate_spectral_edges(
+    edges: torch.Tensor, expected_bins: int, name: str
+) -> None:
+    if edges.numel() != expected_bins + 1:
+        raise ValueError(f"{name} must be 1D with {expected_bins + 1} elements")
+    _validate_monotone_edges(edges, name)
 
 
 def _broadcast_spectral_inputs(
@@ -183,23 +158,27 @@ def _rebin_piecewise_constant(
 
     safe_flux = torch.where(valid, flux, torch.zeros_like(flux))
     integral = _piecewise_constant_integral(safe_flux, input_edges, query_edges)
-    integrated_flux = integral[..., 1:] - integral[..., :-1]
     widths = normalization_widths.to(device=flux.device, dtype=flux.dtype)
-    output_flux = integrated_flux / widths
+    output_flux = (integral[..., 1:] - integral[..., :-1]) / widths
 
-    coord_dtype = input_edges.dtype
-    invalid = (~valid).to(dtype=coord_dtype)
-    invalid_integral = _piecewise_constant_integral(invalid, input_edges, query_edges)
-    invalid_overlap = invalid_integral[..., 1:] - invalid_integral[..., :-1]
     inside = (query_edges[..., :-1] >= input_edges[0]) & (
         query_edges[..., 1:] <= input_edges[-1]
     )
-    scale = torch.maximum(
-        normalization_widths.to(device=flux.device, dtype=coord_dtype).abs(),
-        torch.ones((), device=flux.device, dtype=coord_dtype),
-    )
-    tolerance = 8 * torch.finfo(coord_dtype).eps * scale
-    output_mask = inside & (invalid_overlap.abs() <= tolerance)
+    if bool(valid.all()):
+        output_mask = inside
+    else:
+        coord_dtype = input_edges.dtype
+        invalid = (~valid).to(dtype=coord_dtype)
+        invalid_integral = _piecewise_constant_integral(
+            invalid, input_edges, query_edges
+        )
+        overlap = invalid_integral[..., 1:] - invalid_integral[..., :-1]
+        scale = torch.maximum(
+            normalization_widths.to(device=flux.device, dtype=coord_dtype).abs(),
+            torch.ones((), device=flux.device, dtype=coord_dtype),
+        )
+        tolerance = 8 * torch.finfo(coord_dtype).eps * scale
+        output_mask = inside & (overlap.abs() <= tolerance)
 
     output_ivar = None
     if ivar is not None:
@@ -230,13 +209,30 @@ def flux_conserving_rebin(
     dimensions are batches; all tensors remain on the input device. Output bins
     that extend beyond the input range or overlap invalid input samples are
     marked false without renormalising away missing flux.
+
+    Args:
+        flux: Flux density with spectral bins on the trailing axis.
+        input_edges: Monotonic edges of the input bins.
+        output_edges: Monotonic edges of the requested output bins.
+        ivar: Optional inverse variance matching ``flux``.
+        mask: Optional valid-sample mask matching ``flux``.
+
+    Returns:
+        Rebinned flux, optional inverse variance, and output validity mask.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.spectral import flux_conserving_rebin
+        >>> result = flux_conserving_rebin(torch.tensor([1.0]), torch.tensor([0.0, 1.0]), torch.tensor([0.0, 1.0]))
+        >>> result.flux.tolist()
+        [1.0]
     """
     if flux.ndim < 1 or not flux.is_floating_point():
         raise ValueError("flux must be a floating-point tensor with a spectral axis")
     input_edges = torch.as_tensor(input_edges, device=flux.device)
     output_edges = torch.as_tensor(output_edges, device=flux.device)
     _validate_spectral_edges(input_edges, flux.shape[-1], "input_edges")
-    _validate_spectral_edges(output_edges, output_edges.numel() - 1, "output_edges")
+    _validate_monotone_edges(output_edges, "output_edges")
     if input_edges.dtype != output_edges.dtype:
         output_edges = output_edges.to(dtype=input_edges.dtype)
 
@@ -315,7 +311,7 @@ def relativistic_doppler_shift(
         )
 
     output_edges = torch.as_tensor(output_edges, device=flux.device)
-    _validate_spectral_edges(output_edges, output_edges.numel() - 1, "output_edges")
+    _validate_monotone_edges(output_edges, "output_edges")
     output_edges = output_edges.to(dtype=input_edges.dtype)
     query_edges = output_edges / factor.unsqueeze(-1)
     widths = output_edges[1:] - output_edges[:-1]
@@ -427,29 +423,25 @@ def spectral_axis_from_header(
 
 def _strip_axis3_and_naxis_keys(header: Dict[str, Any]) -> Dict[str, Any]:
     """Remove NAXIS* and axis-3 WCS keys so a 2D spatial header can become cube axis 1–2."""
-    out: Dict[str, Any] = {}
-    for key, value in header.items():
-        ku = key.upper()
-        if ku == "NAXIS" or ku.startswith("NAXIS"):
-            continue
-        if ku.startswith("CTYPE3"):
-            continue
-        if ku.startswith("CUNIT3"):
-            continue
-        if ku.startswith("CRVAL3"):
-            continue
-        if ku.startswith("CRPIX3"):
-            continue
-        if ku.startswith("CDELT3"):
-            continue
-        if ku.startswith("CROTA3"):
-            continue
-        if ku.startswith("PC03") or ku.startswith("PC3_") or ku.startswith("PC_3"):
-            continue
-        if ku.startswith("CD3_") or ku.startswith("CD_3"):
-            continue
-        out[key] = value
-    return out
+    axis3_prefixes = (
+        "NAXIS",
+        "CTYPE3",
+        "CUNIT3",
+        "CRVAL3",
+        "CRPIX3",
+        "CDELT3",
+        "CROTA3",
+        "PC03",
+        "PC3_",
+        "PC_3",
+        "CD3_",
+        "CD_3",
+    )
+    return {
+        key: value
+        for key, value in header.items()
+        if not key.upper().startswith(axis3_prefixes)
+    }
 
 
 def write_cube_fits(
@@ -480,8 +472,8 @@ def write_cube_fits(
         spectral_axis: Spectral coordinates for axis 3; ``values`` length
             must match the spectral dimension of ``cube``.
         spectral_axis_index: Which dimension of ``cube`` is spectral (default ``0``).
-        overwrite: Passed to :func:`torchsky.write`.
-        compress: Passed to :func:`torchsky.write`.
+        overwrite: Passed to :func:`torchfits.write`.
+        compress: Passed to :func:`torchfits.write`.
         allow_nonuniform: If True, allows non-uniform spacing of spectral axis coordinates.
         nonuniform_fallback: Method to handle non-uniform coordinates: "custom_cards"
             (writes each wavelength into custom WAVE0, WAVE1... cards) or "table"
@@ -544,7 +536,7 @@ def write_cube_fits(
     header["CDELT3"] = float(cdelt3)
 
     if not is_uniform and allow_nonuniform:
-        from .io import write
+        from torchfits import write
 
         if nonuniform_fallback == "custom_cards":
             header["CTYPE3"] = str(spectral_axis.type)
@@ -559,7 +551,7 @@ def write_cube_fits(
                 compress=compress,
             )
         elif nonuniform_fallback == "table":
-            from .hdu import HDUList, Header, TableHDU, TensorHDU
+            from torchfits.hdu import HDUList, Header, TableHDU, TensorHDU
 
             header["CTYPE3"] = f"{spectral_axis.type}-TAB"
             header["PS3_0"] = "WCS-TAB"
@@ -574,7 +566,7 @@ def write_cube_fits(
         else:
             raise ValueError(f"Unknown nonuniform_fallback: {nonuniform_fallback}")
     else:
-        from .io import write
+        from torchfits import write
 
         header["CTYPE3"] = str(spectral_axis.type)
         write(
@@ -593,37 +585,44 @@ def spectral_bin_edges_from_header(
     data_shape: Optional[Tuple[int, ...]] = None,
     tables: Optional[Any] = None,
 ) -> Tuple[torch.Tensor, int]:
-    """Build linear or non-linear spectral bin edges from FITS WCS header metadata."""
+    """Build linear or non-linear spectral bin edges from FITS WCS header metadata.
+
+    Interior edges sit at channel midpoints; the outer edges extend by half the
+    adjacent spacing, so uniform and non-uniform grids share one rule.
+    """
     axis, tensor_axis_index = spectral_axis_from_header(
         header, data_shape=data_shape, tables=tables
     )
     values = axis.values.to(dtype=torch.float64)
     if values.numel() == 1:
-        return torch.tensor(
-            [values[0], values[0]], dtype=torch.float64
-        ), tensor_axis_index
-    diffs = values[1:] - values[:-1]
-    if not bool(
-        torch.allclose(diffs, torch.full_like(diffs, diffs[0]), rtol=1e-5, atol=1e-8)
-    ):
-        mid = 0.5 * (values[1:] + values[:-1])
-        edges = torch.empty((values.numel() + 1,), dtype=torch.float64)
-        edges[1:-1] = mid
-        edges[0] = values[0] - 0.5 * diffs[0]
-        edges[-1] = values[-1] + 0.5 * diffs[-1]
+        edges = values.repeat(2)
         return edges, tensor_axis_index
-    step = diffs[0]
-    mid = 0.5 * (values[1:] + values[:-1])
+    diffs = values[1:] - values[:-1]
     edges = torch.empty((values.numel() + 1,), dtype=torch.float64)
-    edges[1:-1] = mid
-    edges[0] = values[0] - 0.5 * step
-    edges[-1] = values[-1] + 0.5 * step
+    edges[1:-1] = 0.5 * (values[1:] + values[:-1])
+    edges[0] = values[0] - 0.5 * diffs[0]
+    edges[-1] = values[-1] + 0.5 * diffs[-1]
     return edges, tensor_axis_index
 
 
 @dataclass
 class SpectralAxis:
-    """Represents a spectral axis with wavelength/frequency information."""
+    """Represent sampled wavelength, frequency, energy, or velocity coordinates.
+
+    Args:
+        values: One-dimensional coordinate samples.
+        unit: Physical unit label such as ``"Angstrom"`` or ``"Hz"``.
+        type: FITS-style spectral coordinate type.
+        rest_frequency: Optional rest frequency required by velocity conversions.
+        redshift: Optional reference redshift.
+        bin_edges: Optional coordinate-bin edges with one more element than values.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.spectral import SpectralAxis
+        >>> SpectralAxis(torch.tensor([5000.0]), "Angstrom", "WAVE").quantity
+        'wavelength'
+    """
 
     values: torch.Tensor  # Wavelength/frequency values
     unit: str  # Units (e.g., 'Angstrom', 'Hz', 'keV')
@@ -795,12 +794,6 @@ class SpectralAxis:
             )
         return self.values
 
-    def _positive_values(self) -> torch.Tensor:
-        values = self._validated_values()
-        if bool(torch.any(values <= 0)):
-            raise ValueError("spectral conversion coordinates must be positive")
-        return values
-
     def to_wavelength(self) -> torch.Tensor:
         """Convert to vacuum wavelength in Angstroms.
 
@@ -929,10 +922,12 @@ class Spectrum1D:
         )
 
     def resample(self, new_wavelength: torch.Tensor) -> "Spectrum1D":
-        """Resample spectrum to new wavelength grid."""
-        work_dtype = (
-            torch.float32 if self.flux.device.type == "mps" else torch.float64
-        )
+        """Linearly resample onto ``new_wavelength`` (Angstrom).
+
+        Inverse variance is propagated through the interpolation weights;
+        masking is dropped because interpolated channels mix masked samples.
+        """
+        work_dtype = _work_dtype(self.flux.device)
         current_wave = self.wavelength.to(device=self.flux.device, dtype=work_dtype)
         target_wave = new_wavelength.to(device=self.flux.device, dtype=work_dtype)
         if current_wave.ndim != 1 or target_wave.ndim != 1:
@@ -951,18 +946,19 @@ class Spectrum1D:
             / (current_wave[idx_hi] - current_wave[idx_lo])
         ).clamp(0.0, 1.0)
 
-        flux_dtype = self.flux.dtype if self.flux.is_floating_point() else torch.float32
-        flux = self.flux.to(device=self.flux.device, dtype=flux_dtype)
-        alpha = alpha64.to(dtype=flux_dtype)
-        flux_lo = flux.index_select(0, idx_lo.to(flux.device))
-        flux_hi = flux.index_select(0, idx_hi.to(flux.device))
+        flux = self.flux
+        if not flux.is_floating_point():
+            flux = flux.to(work_dtype)
+        alpha = alpha64.to(dtype=flux.dtype)
+        flux_lo = flux.index_select(0, idx_lo)
+        flux_hi = flux.index_select(0, idx_hi)
         flux_interp = flux_lo + (flux_hi - flux_lo) * alpha
 
         ivar_interp = None
         if self.ivar is not None:
             ivar = self.ivar.to(device=self.flux.device)
-            ivar_lo = ivar.index_select(0, idx_lo.to(ivar.device))
-            ivar_hi = ivar.index_select(0, idx_hi.to(ivar.device))
+            ivar_lo = ivar.index_select(0, idx_lo)
+            ivar_hi = ivar.index_select(0, idx_hi)
             inf = torch.full_like(ivar_lo, float("inf"))
             var_lo = torch.where(ivar_lo > 0, 1.0 / ivar_lo, inf)
             var_hi = torch.where(ivar_hi > 0, 1.0 / ivar_hi, inf)
@@ -1031,9 +1027,10 @@ class DataCube:
     @property
     def spatial_shape(self) -> Tuple[int, int]:
         """Get spatial dimensions (y, x)."""
-        shape = list(self.data.shape)
-        shape.pop(self.spectral_axis_index)
-        return tuple(shape)
+        shape = self.data.shape
+        return tuple(
+            shape[index] for index in range(3) if index != self.spectral_axis_index
+        )
 
     def extract_spectrum(self, y: int, x: int) -> "Spectrum1D":
         """Extract 1D spectrum at spatial position (y, x)."""
@@ -1155,7 +1152,7 @@ class SpectralReader:
         mask_col: Optional[str] = "MASK",
     ) -> "Spectrum1D":
         """Read 1D spectrum from FITS table."""
-        from .io import open as open_fits
+        from torchfits import open as open_fits
 
         with open_fits(filepath) as hdul:
             table_hdu = hdul[hdu]
@@ -1194,7 +1191,7 @@ class SpectralReader:
     @staticmethod
     def read_data_cube(filepath: str, hdu: int = 0) -> "DataCube":
         """Read 3D data cube from FITS image."""
-        from .io import open as open_fits
+        from torchfits import open as open_fits
 
         with open_fits(filepath) as hdul:
             image_hdu = hdul[hdu]
@@ -1221,3 +1218,22 @@ class SpectralReader:
                 header=header,
                 spectral_axis_index=spectral_axis_index,
             )
+
+__all__ = [
+    # Data containers and readers (I/O delegates to torchfits).
+    "DataCube",
+    "SpectralAxis",
+    "SpectralReader",
+    "SpectralRebinResult",
+    "Spectrum1D",
+    # Spectral axis, units, and resampling.
+    "air_wavelength_to_vacuum",
+    "canonical_spectral_type",
+    "flux_conserving_rebin",
+    "frequency_to_spectral",
+    "relativistic_doppler_shift",
+    "spectral_axis_from_header",
+    "spectral_bin_edges_from_header",
+    "spectral_unit_scale",
+    "write_cube_fits",
+]

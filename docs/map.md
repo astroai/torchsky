@@ -2,9 +2,9 @@
 
 `torchsky.map` is the promoted mapmaking facade: image-plane coadds, spectral
 cube coadds, multiband coadds, and declared map-product specs/results.
-Implementation modules such as `torchsky.map.field`, `torchsky.map.product`,
-and `torchsky.map.image_plane` remain available for advanced workflows, but the
-flat `torchsky.map` namespace is intentionally lean.
+Use the flat `torchsky.map` namespace for supported mapmaking workflows and
+`torchsky.field` for continuous fields. Implementation modules are private
+organization details rather than compatibility entry points.
 
 ## What This Namespace Is For
 
@@ -14,51 +14,55 @@ onto a target product with declared WCS, bandpass, value semantics, masks, and
 weights. External tools such as SWarp, Montage, drizzle, and `reproject` are
 comparators and parity baselines, not runtime dependencies of the core map path.
 
-Stable promoted surfaces include `coadd_image_plane(...)`,
-`coadd_image_plane_cube(...)`, `coadd_image_plane_multiband(...)`,
-`stack_map_product(...)`, `MapProductSpec`, and the map result/spec objects.
+Stable promoted surfaces include:
+- **Nouns:** `Observation`, `Target`, `CubeTarget`, `ResampleConfig`, `SkyConfig`, `OutlierConfig`, `StackConfig`, `MapResult`, `CubeResult`, `MultibandResult`, `HealpixResult`, `ApertureUncertainty`, `ProductSpec`, `BandpassSpec`, `ProductResult`
+- **Verbs:** `plan`, `plan_cube`, `resample`, `resample_healpix`, `blot`, `detect_outliers`, `match_sky`, `coadd`, `coadd_multiband`, `coadd_cube`, `coadd_healpix`, `aperture_uncertainty`, `stack_product`
+
 Field/INR modelling is exposed through the shorter `torchsky.field` namespace;
 the implementation still lives under `torchsky.map.field`.
 
 ## Core Concepts
 
-- **Observation:** `ImageObservation` describes one calibrated input image plus
-  optional weight map, mask map, photometric scale, background offset, spectral
-  metadata, and band label.
+- **Observation:** `Observation` describes one calibrated input image (or path) plus
+  optional weight/variance maps (`weight`, `var_poisson`, `var_rnoise`, `var_flat`),
+  DQ mask (`mask`, `good_bits`), photometric scale, background offset, IFU
+  `wavelength_map` / `ifu_wcs`, DCR parameters, or moving-target `tracking_rate`.
 - **Noise evidence:** `weight` always controls the coadd denominator. It is
   treated as detector inverse variance only when
   `weight_is_inverse_variance=True`; `weight_path` is explicit inverse variance.
   Default/support/mask-only weights produce no `IVAR` or uncertainty object.
-- **Product:** `MapProductSpec` describes the final requested grid and bands.
-  This is the common contract for direct stacks and rendered continuous fields.
+  When you propagate quality masks yourself, `torchsky.quality.build_weight_product`
+  attaches the inverse-variance, confidence, and mask-polarity semantics instead
+  of leaving a bare array.
+- **Target & Product:** `Target` / `CubeTarget` / `ProductSpec` describe the
+  final requested grid and bands.
 - **Value semantics:** `surface_brightness` and `flux` products use different
   area-scaling rules. Pick the semantics before comparing against legacy stacks.
 - **Resampling kernel:** kernels are explicit (`bilinear`, `lanczos3`,
-  `drizzle_point`, `conservative_polygon`, etc.) and have different support,
+  `point`, `square`, `exact`, `exact_spherical`, etc.) and have different support,
   interpolation, and flux behavior.
-- **Truth evaluation:** methods are compared after producing the same final
-  target-grid product, not by inspecting internal warps.
+- **Scientific comparison:** truth-based metrics, method comparisons, and
+  benchmark reports live in the
+  [torchsky-harness](https://github.com/astroai/torchsky-harness). Core map
+  APIs return the declared target-grid products and their runtime metadata.
 
 ## Recipes
 
 ### Coadd Images Onto A Shared Grid
 
 ```python
-from torchsky import scene
-from torchsky.map import coadd_image_plane
+from torchsky.map import Observation, ResampleConfig, StackConfig, coadd, plan
 
-result = coadd_image_plane(
-    [
-        scene.image_observation(
-            "img_a.fits",
-            weight=1.0,
-            weight_is_inverse_variance=True,
-        ),
-        scene.image_observation("img_b.fits", weight_path="img_b_wht.fits"),
-    ],
-    resampling_kernel="bilinear",
-    value_semantics="surface_brightness",
-    footprint_order=8,
+obs = [
+    Observation("img_a.fits", weight=1.0, weight_is_inverse_variance=True),
+    Observation("img_b.fits", weight_path="img_b_wht.fits"),
+]
+target = plan(obs, projection="TAN")
+result = coadd(
+    obs,
+    target,
+    resample=ResampleConfig(kernel="bilinear", semantics="surface_brightness"),
+    stack=StackConfig(method="weighted", tile_size=1024),
 )
 ```
 
@@ -94,12 +98,11 @@ the same observation operator and completed weighted-mean map:
 ```python
 aperture = torch.zeros_like(result.data)
 aperture[100:110, 120:130] = 1.0
-noise = torchsky.map.evaluate_image_plane_aperture_uncertainty(
-    observations,
+noise = torchsky.map.aperture_uncertainty(
+    obs,
     result,
     aperture,
-    resampling_kernel="drizzle_square",
-    drizzle_pixfrac=0.8,
+    resample=ResampleConfig(kernel="square", pixfrac=0.8),
     spatial_tile_hw=(512, 512),
 )
 print(noise.variance, noise.diagonal_variance, noise.correlation_factor)
@@ -140,71 +143,70 @@ tests establish identifiability.
 ### Plan A Product Once, Stack Many Times
 
 ```python
-from torchsky import scene
-from torchsky.map import MapBandpassSpec, MapProductSpec, stack_map_product
+from torchsky.map import BandpassSpec, Observation, ProductSpec, stack_product
 
-observations = [scene.image_observation("g_1.fits"), scene.image_observation("g_2.fits")]
-product = MapProductSpec(
+observations = [Observation("g_1.fits"), Observation("g_2.fits")]
+product = ProductSpec(
     target_header=target_header,
-    bands=(MapBandpassSpec(label="g"),),
+    bands=(BandpassSpec(label="g"),),
     value_semantics="surface_brightness",
 )
-stacked = stack_map_product(observations, product, resampling_kernel="bilinear")
+stacked = stack_product(observations, product, resampling_kernel="bilinear")
 ```
 
-### Assemble A Spectral Cube
+### Assemble A Spectral Cube (Pre-Rectified or 2D IFU Slices)
 
 ```python
 import torch
-from torchsky.map import coadd_image_plane_cube
+from torchsky.map import Observation, ResampleConfig, coadd_cube
 from torchsky.spectral import SpectralAxis
 
 wavelengths = torch.tensor([4800.0, 6500.0], dtype=torch.float64)
 edges = torch.tensor([4700.0, 4900.0, 6600.0], dtype=torch.float64)
 
-cube = coadd_image_plane_cube(
+cube = coadd_cube(
     observations,
     spectral_axis=SpectralAxis(values=wavelengths, unit="Angstrom", type="WAVE"),
     spectral_bin_edges=edges,
+    resample=ResampleConfig(spectral_kernel="drizzle"),
 )
 ```
 
-### Compare A Stack To Truth
-
-```python
-from torchsky.map.product import evaluate_map_product
-
-metrics = evaluate_map_product(
-    prediction=stacked.data,
-    truth=truth_image,
-    header=stacked.header,
-    value_semantics="surface_brightness",
-)
-print(metrics["reconstruction_rmse"])
-```
+Target spectral axes are honoured as given. A non-uniform (irregular) axis is
+mapped to the correct target bins, but the spectral kernel interpolates in
+*index* space: within a bin the position is linear in wavelength, while the
+kernel support spans the adjacent bins. On an irregular axis that produces an
+interpolation bias of order `(width_right - width_left) * dF/dlambda` in
+addition to the edge-bin bias; it is small for near-regular or log-spaced axes
+and can reach several percent for strongly irregular bin widths. Use an aligned
+or regular axis, or `spectral_kernel="nearest"` for exact bin assignment, when
+that bias matters. Non-increasing axes are rejected.
 
 ## API Surface
 
 Promoted flat `torchsky.map` names:
 
-- `coadd_image_plane(...)`
-- `coadd_image_plane_cube(...)`
-- `coadd_image_plane_multiband(...)`
-- `evaluate_image_plane_aperture_uncertainty(...)`
-- `stack_map_product(...)`
-- `MapProductSpec(...)`
-- `TargetRenderSpec(...)`
-- `MapBandpassSpec(...)`
-- `MapProductResult`
-- `MapUncertaintyProduct`
-- `MapApertureUncertainty`
-- `MapResult`
-- `MultiBandMapResult`
-- `SpectralCubeMapResult`
+- `Observation`, `Target`, `CubeTarget`
+- `ResampleConfig`, `SkyConfig`, `OutlierConfig`, `StackConfig`
+- `plan(...)`, `plan_cube(...)`, `plan_product(...)`
+- `resample(...)`, `resample_healpix(...)`, `blot(...)`
+- `detect_outliers(...)`, `match_sky(...)`
+- `coadd(...)`, `coadd_multiband(...)`, `coadd_cube(...)`, `coadd_healpix(...)`
+- `aperture_uncertainty(...)`
+- `stack_product(...)`
+- `MapResult`, `CubeResult`, `MultibandResult`, `HealpixResult`, `ApertureUncertainty`
+- `ProductSpec`, `BandpassSpec`, `ProductResult`, `UncertaintyProduct`
 
-Advanced planning, evaluation, and implementation helpers live in explicit
-submodules such as `torchsky.map.image_plane`, `torchsky.map.product`,
-`torchsky.map.operators`, and `torchsky.map.field`.
+The public namespace exposes one name per concept. Image, cube, multiband, and
+HEALPix assembly are all called through the promoted facade; deleted historical
+modules are not forwarding or compatibility entry points. Reusable observation
+operators live in `torchsky.map.operators`, while continuous-field workflows
+live in the separate `torchsky.field` facade.
+
+Scientific product evaluation and benchmark reporting run from the sibling
+[torchsky-harness](https://github.com/astroai/torchsky-harness) against products
+created by the installed core package; those evaluator metrics are not part of
+the `torchsky.map` runtime API.
 
 Experimental continuous-field layer (tutorial: [field.md](field.md), losses/context:
 [implicit_forward.md](implicit_forward.md)):
@@ -234,57 +236,32 @@ Experimental continuous-field layer (tutorial: [field.md](field.md), losses/cont
 Mismatch with SWarp/Montage-style products usually traces to value semantics,
 pixel-area treatment, mask policy, or weight maps rather than FITS I/O.
 
-## Truth Evaluation Flow
+## Scientific evaluation
 
-```mermaid
-flowchart TD
-    latentSky["Latent sky field"] --> targetProduct["Target product: bandpass, WCS, union grid"]
-    latentSky --> exposures["Simulated exposures"]
-    exposures --> sourceSampling["Sample through source WCS"]
-    sourceSampling --> psfNoise["Apply PSF, exposure, transmission, noise, masks"]
-    psfNoise --> methods["Reconstruction methods"]
-    targetProduct --> methods
-    methods --> torchskyStack["Torchsky stack"]
-    methods --> legacyStackers["Legacy stackers"]
-    methods --> fieldModel["Torchsky field model"]
-    targetProduct --> truthProduct["Noiseless target truth"]
-    torchskyStack --> metrics["Product metrics"]
-    legacyStackers --> metrics
-    fieldModel --> metrics
-    truthProduct --> metrics
-```
-
-Metrics include RMSE, MAE, p95/max error, flux error, SNR, coverage, and
-zero-support diagnostics.
+Truth metrics, frontier-region diagnostics, uncertainty scoring, comparator
+protocols, and campaign reports are owned by
+[torchsky-harness](https://github.com/astroai/torchsky-harness). Keep bounded
+product, gradient, adjoint, and device-contract tests with the core operators.
 
 ## Examples
 
-- [HEALPix inverse solve](../examples/example_map_healpix_inverse.py)
-- [Harmonic inverse solve](../examples/example_map_harmonic_inverse.py)
-- [Shared-vs-survey-private harmonic decomposition](../examples/example_map_harmonic_survey_split.py)
-- [Field survey split](../examples/example_map_field_survey_split.py)
-- [Spin harmonic inverse solve](../examples/example_map_spin_harmonic_inverse.py)
+- [HEALPix inverse solve](published-examples/example_map_healpix_inverse.py)
+- [Harmonic inverse solve](published-examples/example_map_harmonic_inverse.py)
+- [Shared-vs-survey-private harmonic decomposition](published-examples/example_map_harmonic_survey_split.py)
+- [Field survey split](published-examples/example_map_field_survey_split.py)
+- [Spin harmonic inverse solve](published-examples/example_map_spin_harmonic_inverse.py)
 
-See [examples.md](examples.md#map) for the full map example index.
+See [examples.md](examples.md) for the full example index.
 
 ## Compatibility And Validation
 
-Key tests:
+Bounded package contracts:
 
 - `tests/test_map_image_plane.py`
 - `tests/test_map_product.py`
-- `tests/test_map_ground_truth.py`
-- `tests/test_map_multifield_truth.py`
-- `tests/test_map_compat_bench.py`
+- `tests/test_map_cube_spectral_axis.py`
 
-Key benchmarks:
-
-- `benchmarks/bench_map_image_plane.py`
-- `benchmarks/bench_map_ground_truth.py`
-- `benchmarks/bench_map_multifield_truth.py`
-- `benchmarks/bench_map_field_fit.py`
-- `benchmarks/bench_map_compat.py`
-- `benchmarks/bench_map_smacs0723_*`
-
-See [benchmarks.md](benchmarks.md) for command lines, comparator environments,
-SMACS/UPdec real-data runs, and baseline policy.
+Scientific parity and performance evaluation live in the harness. See
+[benchmarks.md](evaluation/benchmarks.md) for the ownership boundary and the
+[harness methodology](https://github.com/astroai/torchsky-harness/blob/main/docs/evaluation/benchmarks.md)
+for run instructions and evidence policy.

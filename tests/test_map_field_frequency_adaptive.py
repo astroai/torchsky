@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from torchsky.field.frequency_adaptive import BaconField, FlairField, SASNetField
+from torchsky.map.field.frequency_adaptive import BaconField, FlairField, SASNetField
 from torchsky.map.field.frequency_adaptive import _bla_features
 from torchsky.map.field.artifacts import load_field_artifact, save_field_artifact
 from torchsky.map.field.core import make_field_model
@@ -369,3 +369,13 @@ def test_frequency_adaptive_models_accelerator_contract(
         for parameter in model.parameters()
         if parameter.requires_grad
     )
+
+
+def test_bacon_kind_is_reachable_from_the_factory() -> None:
+    from torchsky.map.field.registry import FIELD_MODEL_KINDS
+
+    assert "bacon" in FIELD_MODEL_KINDS
+    model = make_field_model(
+        "bacon", _domain(), hidden_dim=8, bandwidths=(1.0, 2.0)
+    )
+    assert isinstance(model, BaconField)

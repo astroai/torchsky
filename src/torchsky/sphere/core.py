@@ -5,13 +5,11 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
+
+from .._dtype import work_dtype as _float_dtype
 from torch import Tensor
 
 from . import healpix as _healpix
-
-
-def _float_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
 
 
 def _as_float_tensor(x: Tensor | float) -> Tensor:
@@ -113,9 +111,10 @@ def pairwise_angular_distance(
     cross_sq = cross_sq + cross_y.square()
     cross_z = x[:, None] * y[None, :] - y[:, None] * x[None, :]
     cross_sq = cross_sq + cross_z.square()
-    cross = torch.sqrt(torch.clamp(cross_sq, min=0.0))
+    diagonal = torch.eye(v.shape[0], dtype=torch.bool, device=v.device)
+    cross = torch.sqrt(torch.where(diagonal, torch.ones_like(cross_sq), cross_sq))
     dist_rad = torch.atan2(cross, dot)
-    dist_rad.fill_diagonal_(0.0)
+    dist_rad = torch.where(diagonal, torch.zeros_like(dist_rad), dist_rad)
     if degrees:
         return torch.rad2deg(dist_rad)
     return dist_rad
@@ -200,6 +199,8 @@ def sample_healpix_map(
         pix = _healpix.ang2pix(nside, lon_flat, lat_flat, nest=nest, lonlat=True)
         out = vals[:, pix]
     else:
+        if not vals.is_floating_point():
+            vals = vals.to(dtype=_float_dtype(vals.device))
         pix4, w4 = _healpix.get_interp_weights(
             nside, lon_flat, lat_flat, nest=nest, lonlat=True
         )
@@ -209,7 +210,7 @@ def sample_healpix_map(
         weights = w4.to(device=gathered.device, dtype=gathered.dtype)
         out = (gathered * weights.unsqueeze(0)).sum(dim=1)
 
-    return out.reshape(*values.shape[:-1], *coord_shape)
+    return out.reshape(values.shape[:-1] + coord_shape)
 
 
 def sample_multiband_healpix(
@@ -393,6 +394,57 @@ def remove_monopole_dipole(
     return vals.to(dtype=model.dtype) - model
 
 
+def sample_map(
+    values: Tensor,
+    nside_or_lon: int | Tensor | float,
+    lon_or_lat: Tensor | float,
+    lat_deg: Tensor | float | None = None,
+    *,
+    nside: int | None = None,
+    nest: bool = False,
+    interpolation: Literal["nearest", "bilinear"] = "bilinear",
+    source_wavelength: Tensor | list[float] | None = None,
+    target_wavelength: Tensor | list[float] | None = None,
+) -> Tensor:
+    """Unified HEALPix map / multiband / multiwavelength sampler.
+
+    Supports both ``sample_map(values, lon_deg, lat_deg, ...)`` (inferring
+    ``nside`` from ``values.shape[-1]``) and ``sample_map(values, nside, lon_deg, lat_deg, ...)``.
+    """
+    if lat_deg is None:
+        lon_val = nside_or_lon
+        lat_val = lon_or_lat
+        resolved_nside = (
+            int(nside) if nside is not None else _healpix.npix2nside(int(values.shape[-1]))
+        )
+    else:
+        if not isinstance(nside_or_lon, int):
+            raise TypeError("nside must be an int when 4 positional arguments are passed")
+        resolved_nside = int(nside_or_lon)
+        lon_val = lon_or_lat
+        lat_val = lat_deg
+
+    if target_wavelength is not None:
+        return sample_multiwavelength_healpix(
+            values,
+            resolved_nside,
+            lon_val,
+            lat_val,
+            source_wavelength=source_wavelength,
+            target_wavelength=target_wavelength,
+            nest=nest,
+            interpolation=interpolation,
+        )
+    return sample_healpix_map(
+        values,
+        resolved_nside,
+        lon_val,
+        lat_val,
+        nest=nest,
+        interpolation=interpolation,
+    )
+
+
 __all__ = [
     "chord_radius",
     "fit_monopole_dipole",
@@ -402,6 +454,7 @@ __all__ = [
     "pairwise_angular_distance",
     "remove_monopole_dipole",
     "sample_healpix_map",
+    "sample_map",
     "sample_multiband_healpix",
     "sample_multiwavelength_healpix",
     "slerp_lonlat",

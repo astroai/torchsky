@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import torchfits
 
 # Skip entire module if viz extras not available
 fastapi = pytest.importorskip("fastapi")
@@ -124,8 +125,8 @@ def test_create_app_defaults_to_no_cors_origins(tmp_fits_dir: Path):
     app = create_app(root_dir=str(tmp_fits_dir))
     cors = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
 
-    assert cors.options["allow_origins"] == []
-    assert cors.options["allow_credentials"] is False
+    assert cors.kwargs["allow_origins"] == []
+    assert cors.kwargs["allow_credentials"] is False
 
 
 def test_static_viz_html_escapes_metadata_and_tracks_aria_state():
@@ -188,7 +189,7 @@ def test_fits_header(client: TestClient):
 
 def test_hips_register(client: TestClient):
     r = client.get(
-        "/api/hips/register?path=test_image.fits&hdu=0&stretch=zscale&cmap=gray"
+        "/api/hips/register?path=test_image.fits&hdu=0&stretch=linear&limit_policy=zscale&cmap=gray"
     )
     assert r.status_code == 200
     j = r.json()
@@ -196,6 +197,14 @@ def test_hips_register(client: TestClient):
     assert "max_order" in j
     assert j["shape"] == [128, 128]
     assert j["max_order"] >= 1
+
+
+def test_hips_register_rejects_zscale_as_stretch(client: TestClient):
+    response = client.get(
+        "/api/hips/register?path=test_image.fits&hdu=0&stretch=zscale&limit_policy=zscale"
+    )
+    assert response.status_code == 422
+    assert "Unknown stretch" in response.json()["detail"]
 
 
 def test_hips_properties(client: TestClient):
@@ -336,14 +345,13 @@ def test_catalog_filter_moc_column_discovery(tmp_path: Path):
     """filter_moc must resolve RAJ2000/DEJ2000 like /load (no KeyError → 500)."""
     import math
 
-    import torchsky
     from torchsky.sphere.core import lonlat_to_unit_xyz
     from torchsky.sphere.moc import MOC
     from torchsky.viz.server import create_app
     from torchsky.sphere.healpix import query_disc
 
     root = tmp_path
-    torchsky.write(
+    torchfits.write(
         str(root / "cat.fits"),
         {
             "RAJ2000": torch.tensor([150.0, 150.1], dtype=torch.float64),
@@ -372,3 +380,116 @@ def test_catalog_filter_moc_column_discovery(tmp_path: Path):
     assert r_f.status_code == 200, r_f.text
     body = r_f.json()
     assert body["n_in_moc"] >= 1
+
+
+def test_catalog_load_caps_rows_exactly(tmp_path: Path):
+    """`max_rows` is a hard cap: floor-division decimation used to overshoot it."""
+    from torchsky.viz.server import create_app
+
+    n = 1000
+    torchfits.write(
+        str(tmp_path / "cat.fits"),
+        {
+            "RA": torch.linspace(0.0, 10.0, n, dtype=torch.float64),
+            "DEC": torch.zeros(n, dtype=torch.float64),
+        },
+        header={"EXTNAME": "CAT"},  # type: ignore
+        overwrite=True,
+    )
+    c = TestClient(create_app(root_dir=str(tmp_path), cache_mb=8))
+    hdu = 1 if c.get("/api/catalog/load?path=cat.fits&hdu=1").status_code == 200 else 0
+    r = c.get(f"/api/catalog/load?path=cat.fits&hdu={hdu}&max_rows=300")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["n_total"] == n
+    assert body["n_returned"] <= 300
+    assert len(body["ra"]) == body["n_returned"]
+
+
+def _write_header_only_image(path: Path, shape: tuple[int, int]) -> None:
+    """Write a FITS header advertising ``shape`` with no pixel data at all."""
+    h, w = shape
+    cards = [
+        f"{'SIMPLE':<8}= {'T':>20}",
+        f"{'BITPIX':<8}= {-32:>20}",
+        f"{'NAXIS':<8}= {2:>20}",
+        f"{'NAXIS1':<8}= {w:>20}",
+        f"{'NAXIS2':<8}= {h:>20}",
+    ]
+    header = b"".join(line.ljust(80).encode() for line in cards)
+    header += b"END".ljust(80)
+    header += b" " * ((2880 - len(header) % 2880) % 2880)
+    path.write_bytes(header)
+
+
+def test_hips_register_rejects_oversize_image_before_loading(tmp_path: Path):
+    """The pixel budget must be enforced from header metadata, not after decode.
+
+    The fixture has no pixel data, so decoding it would fail with 422; a 413
+    proves the guard ran before the read.
+    """
+    from torchsky.viz.server import create_app
+
+    _write_header_only_image(tmp_path / "huge.fits", (100_000, 100_000))
+    c = TestClient(create_app(root_dir=str(tmp_path), max_image_pixels=1024))
+    r = c.get("/api/hips/register?path=huge.fits&hdu=0")
+    assert r.status_code == 413, r.text
+    assert "max allowed" in r.json()["detail"]
+
+
+def test_validate_register_rejects_oversize_image(tmp_path: Path):
+    from torchsky.viz.server import create_app
+
+    _write_minimal_fits(tmp_path / "a.fits", shape=(64, 64))
+    _write_minimal_fits(tmp_path / "b.fits", shape=(64, 64))
+    c = TestClient(create_app(root_dir=str(tmp_path), max_image_pixels=1024))
+    r = c.post(
+        "/api/validate/register",
+        json={"truth_path": "a.fits", "model_path": "b.fits"},
+    )
+    assert r.status_code == 413
+
+
+def test_viz_router_modules_import() -> None:
+    import importlib
+
+    for name in ("fits", "hips", "moc", "validate", "catalog"):
+        importlib.import_module(f"torchsky.viz.routers.{name}")
+
+
+def test_moc_geojson_and_fits(client: TestClient, tmp_fits_dir: Path):
+    """Exercise the MOC GeoJSON/FITS endpoints (not used by the bundled UI)."""
+    import math
+
+    from torchsky.sphere.core import lonlat_to_unit_xyz
+    from torchsky.sphere.healpix import query_disc
+    from torchsky.sphere.moc import MOC
+
+    vec = lonlat_to_unit_xyz(150.0, 2.0)
+    pix = query_disc(8, vec, math.radians(5.0), nest=True)
+    uniq = (4 * 8 * 8 + pix).to(torch.int64)
+    MOC(uniq).write_fits(str(tmp_fits_dir / "overlay.moc"), overwrite=True)
+
+    r = client.get("/api/moc/geojson?path=overlay.moc")
+    assert r.status_code == 200, r.text
+    assert r.json()["type"] == "FeatureCollection"
+
+    r = client.get("/api/moc/fits?path=overlay.moc")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("application/fits")
+
+
+def test_validate_chi2_requires_sigma(client: TestClient, tmp_fits_dir: Path):
+    """The chi2 endpoints must reject a pair registered without a sigma image."""
+    _write_minimal_fits(tmp_fits_dir / "chi2_model.fits", shape=(128, 128))
+    body = {
+        "truth_path": "test_image.fits",
+        "model_path": "chi2_model.fits",
+        "truth_hdu": 0,
+        "model_hdu": 0,
+    }
+    r = client.post("/api/validate/register", json=body)
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+    assert client.get(f"/api/validate/{pid}/chi2_stats").status_code == 422
+    assert client.get(f"/api/validate/{pid}/chi2_map").status_code == 422

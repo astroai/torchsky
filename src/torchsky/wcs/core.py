@@ -2,12 +2,25 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 import math
 import os
 import numpy as np
 
-from torchsky._native import cpp as _cpp
+from torchsky import _ops
+from ._geometry import _GeometryMixin, _HeaderIOMixin
+from ._math import _sincos, _wrap_lon180, _wrap_lon360
+from ._rotation import _RotationMixin
 
 from .tpv import TPV, PV1_KEYS, PV2_KEYS, PV1_KEYS_SET, PV2_KEYS_SET
 from .sip import SIP
@@ -36,6 +49,10 @@ from .frames import (
     convert_celestial as _convert_celestial,
     precess_fk5 as _precess_fk5,
 )
+from .functional import pixel_to_world_fused, world_to_pixel_fused
+
+if TYPE_CHECKING:
+    from .mapping import WCSMapping
 
 _HAS_TORCH_SINCOS = hasattr(torch, "sincos")
 
@@ -66,32 +83,13 @@ _CENTER_CPP_W2P_THRESHOLDS = {
 _ZENITHAL_FUSED_P2W_MAX = 1536
 
 
-def _sincos(x: Tensor) -> Tuple[Tensor, Tensor]:
-    """Return sin(x), cos(x) with a torch.sincos fast path when available."""
-    if _HAS_TORCH_SINCOS:
-        return torch.sincos(x)
-    return torch.sin(x), torch.cos(x)
 
 
-def _wrap_lon360(angle: Tensor) -> Tensor:
-    """Wrap longitudes to [0, 360)."""
-    # Avoid torch.amin/amax bounds checks: they force GPU-CPU sync on large tensors.
-    return torch.remainder(angle, 360.0)
 
 
-def _wrap_lon360_checked(angle: Tensor) -> Tensor:
-    """Compatibility alias; direct wrap is faster than range-check reductions."""
-    return _wrap_lon360(angle)
 
 
-def _wrap_lon180(angle: Tensor) -> Tensor:
-    """Wrap longitudes to [-180, 180)."""
-    return torch.remainder(angle + 180.0, 360.0) - 180.0
 
-
-def _wrap_lon180_checked(angle: Tensor) -> Tensor:
-    """Compatibility alias; direct wrap is faster than range-check reductions."""
-    return _wrap_lon180(angle)
 
 
 def _ctype_without_projection(ctype: str) -> str:
@@ -104,6 +102,26 @@ def _ctype_without_projection(ctype: str) -> str:
     if len(upper) >= 5 and upper[-4] == "-":
         return text[:-4].rstrip("-")
     return text
+
+
+_CELESTIAL_LONGITUDE_PREFIXES = ("RA--", "GLON", "ELON", "HLON", "SLON")
+_CELESTIAL_LATITUDE_PREFIXES = ("DEC-", "GLAT", "ELAT", "HLAT", "SLAT")
+
+
+def _celestial_axis_role(ctype: str) -> str | None:
+    upper = str(ctype).strip().upper()
+    if upper.startswith(_CELESTIAL_LONGITUDE_PREFIXES):
+        return "longitude"
+    if upper.startswith(_CELESTIAL_LATITUDE_PREFIXES):
+        return "latitude"
+    return None
+
+
+def _ctype_projection_code(ctype: str) -> str:
+    upper = str(ctype).strip().upper()
+    if upper.endswith("-SIP"):
+        upper = upper[:-4]
+    return upper[-3:] if len(upper) >= 3 else ""
 
 
 class DistortionLookupTable:
@@ -174,21 +192,28 @@ class DistortionLookupTable:
             + v11 * fx * fy
         )
 
-    def get_offset(self, x: Any, y: Any) -> Any:
-        """Astropy-compatible offset lookup at 1-based FITS pixel coordinates `(x, y)`."""
-        if isinstance(x, Tensor) or isinstance(y, Tensor):
-            ref = x if isinstance(x, Tensor) else y
-            assert isinstance(ref, Tensor)
-            dt = torch.float32 if ref.device.type == "mps" else torch.float64
-            xt = torch.as_tensor(x, dtype=dt, device=ref.device)
-            yt = torch.as_tensor(y, dtype=dt, device=ref.device)
-            return self.eval_tensor(xt, yt)
-        xt = torch.as_tensor(x, dtype=torch.float64)
-        yt = torch.as_tensor(y, dtype=torch.float64)
-        out = self.eval_tensor(xt, yt)
-        if out.ndim == 0:
-            return float(out.item())
-        return out.detach().cpu().numpy()
+    def rebased_for_diagonal_pixel_map(
+        self,
+        starts: tuple[int, int],
+        steps: tuple[int, int],
+        *,
+        component_axis: int,
+    ) -> "DistortionLookupTable":
+        if component_axis not in (0, 1):
+            raise ValueError("component_axis must be 0 or 1")
+        rebased_crval = tuple(
+            1.0 + (self.crval[axis] - 1.0 - starts[axis]) / steps[axis]
+            for axis in range(2)
+        )
+        rebased_cdelt = tuple(
+            self.cdelt[axis] / steps[axis] for axis in range(2)
+        )
+        return DistortionLookupTable(
+            self.data / steps[component_axis],
+            self.crpix,
+            rebased_crval,
+            rebased_cdelt,
+        )
 
 
 def _coerce_distortion_lookup_table(
@@ -210,9 +235,25 @@ def _coerce_distortion_lookup_table(
     )
 
 
-class WCS:
-    """
-    Base class for TorchWCS (PyTorch-native World Coordinate System).
+class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
+    """PyTorch-native world coordinate system parsed from FITS-style metadata.
+
+    Args:
+        header: FITS-style header mapping. An empty mapping creates a default WCS.
+        key: Alternate-WCS suffix without the leading keyword letter.
+        tabular_axes: Explicit one-dimensional lookup axes keyed by world axis.
+        coupled_tabular: Optional coupled multi-axis lookup transform.
+        tables: Table resolver used by ``-TAB`` metadata.
+        cpdis1: First prior-distortion lookup table.
+        cpdis2: Second prior-distortion lookup table.
+        det2im1: First detector-to-image lookup table.
+        det2im2: Second detector-to-image lookup table.
+
+    Examples:
+        >>> from torchsky.wcs import WCS
+        >>> wcs = WCS({"NAXIS": 2, "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN"})
+        >>> wcs.pixel_n_dim
+        2
     """
 
     ZENITHAL_CODES = ("TAN", "SIN", "ARC", "ZPN", "STG", "ZEA", "AZP", "SZP", "AIR")
@@ -238,7 +279,7 @@ class WCS:
         cpdis2: DistortionLookupTable | Any | None = None,
         det2im1: DistortionLookupTable | Any | None = None,
         det2im2: DistortionLookupTable | Any | None = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         """
         Initialize WCS object.
@@ -310,12 +351,48 @@ class WCS:
             else:
                 self.wcs_params[k_upper] = v
 
+        self._identify_celestial_axes()
+        self._setup_projection_params()
+        if self._has_celestial:
+            lon_ctype = str(
+                self.wcs_params.get(f"CTYPE{self._celestial_lon_axis + 1}", "")
+            ).strip().upper()
+            has_pv = any(
+                key.startswith(("PV1_", "PV2_"))
+                for key in self._projection_params
+            )
+            if lon_ctype.endswith("TPV") or (lon_ctype.endswith("TAN") and has_pv):
+                self.tpv = TPV(self._projection_params)
+            else:
+                self.tpv = None
+
+        if self.tpv is not None and (
+            self._celestial_lon_axis != 0 or self._celestial_lat_axis != 1
+        ):
+            raise ValueError(
+                "TPV distortion requires longitude/latitude to be FITS axes 1/2 in that order"
+            )
+
+        if self.naxis != 2 and (
+            self.sip is not None
+            or self.cpdis1 is not None
+            or self.cpdis2 is not None
+            or self.det2im1 is not None
+            or self.det2im2 is not None
+        ):
+            raise ValueError(
+                "FITS SIP, CPDIS, and DET2IM distortions require a two-dimensional WCS"
+            )
+
         # Default device
         self.device = torch.device("cpu")
 
         # Environment-controlled fused C++ path. Default is ON ("1").
         # Vectorized PyTorch can win at some sizes; set TORCHSKY_WCS_FUSED=0 to compare.
         self._enable_fused_wcs = os.environ.get("TORCHSKY_WCS_FUSED", "1") == "1"
+        self._enable_cpp_dispatcher = (
+            os.environ.get("TORCHSKY_CPP_DISPATCHER", "1") == "1"
+        )
 
         # Move parameters to appropriate buffers/tensors
         self._setup_tensors()
@@ -365,7 +442,6 @@ class WCS:
 
             if is_spectral:
                 crval = float(self.wcs_params.get(f"CRVAL{axis_number}", 0.0))
-                cdelt = float(self.wcs_params.get(f"CDELT{axis_number}", 1.0))
                 cunit = self.wcs_params.get(f"CUNIT{axis_number}")
 
                 # Extract PV keywords for this axis
@@ -399,7 +475,6 @@ class WCS:
                 self.spectral_transforms[axis_idx] = SpectralTransform(
                     ctype=ctype,
                     crval=crval,
-                    cdelt=cdelt,
                     cunit=cunit,
                     restfrq=restfrq,
                     restwav=restwav,
@@ -507,6 +582,78 @@ class WCS:
                     self._header_get(header, f"CUNIT{i}", "")
                 )
 
+    def _identify_celestial_axes(self) -> None:
+        longitude = []
+        latitude = []
+        for axis in range(self.naxis):
+            ctype = str(self.wcs_params.get(f"CTYPE{axis + 1}", ""))
+            role = _celestial_axis_role(ctype)
+            if role == "longitude":
+                longitude.append(axis)
+            elif role == "latitude":
+                latitude.append(axis)
+        if not longitude and not latitude:
+            self._has_celestial = False
+            self._celestial_lon_axis = 0
+            self._celestial_lat_axis = 1 if self.naxis >= 2 else 0
+            self._celestial_axes = ()
+            return
+        if len(longitude) != 1 or len(latitude) != 1:
+            raise ValueError(
+                "celestial WCS requires exactly one longitude axis and one latitude axis"
+            )
+        lon_axis = longitude[0]
+        lat_axis = latitude[0]
+        lon_code = _ctype_projection_code(
+            str(self.wcs_params.get(f"CTYPE{lon_axis + 1}", ""))
+        )
+        lat_code = _ctype_projection_code(
+            str(self.wcs_params.get(f"CTYPE{lat_axis + 1}", ""))
+        )
+        if lon_code != lat_code:
+            raise ValueError(
+                "celestial longitude and latitude axes must use the same projection code"
+            )
+        self._has_celestial = True
+        self._celestial_lon_axis = lon_axis
+        self._celestial_lat_axis = lat_axis
+        self._celestial_axes = tuple(sorted((lon_axis, lat_axis)))
+
+    def _setup_projection_params(self) -> None:
+        params = dict(self.wcs_params)
+        if self._has_celestial:
+            for prefix in ("PV1_", "PV2_"):
+                for key in [key for key in params if str(key).startswith(prefix)]:
+                    params.pop(key, None)
+            lon_number = self._celestial_lon_axis + 1
+            lat_number = self._celestial_lat_axis + 1
+            for index in range(40):
+                lon_key = f"PV{lon_number}_{index}"
+                lat_key = f"PV{lat_number}_{index}"
+                if lon_key in self.wcs_params:
+                    params[f"PV1_{index}"] = self.wcs_params[lon_key]
+                if lat_key in self.wcs_params:
+                    params[f"PV2_{index}"] = self.wcs_params[lat_key]
+        self._projection_params = params
+
+    def _celestial_unit_factor(self, axis: int) -> float:
+        ctype = str(self.wcs_params.get(f"CTYPE{axis + 1}", "")).strip().upper()
+        celestial = ctype.startswith(
+            ("RA--", "DEC-", "GLON", "GLAT", "ELON", "ELAT", "HLON", "HLAT")
+        )
+        if not celestial:
+            return 1.0
+        unit = str(self.wcs_params.get(f"CUNIT{axis + 1}", "deg")).strip().lower()
+        if unit in {"", "deg", "degree", "degrees"}:
+            return 1.0
+        if unit in {"rad", "radian", "radians"}:
+            return 180.0 / math.pi
+        if unit in {"arcmin", "arcminute", "arcminutes"}:
+            return 1.0 / 60.0
+        if unit in {"arcsec", "arcsecond", "arcseconds"}:
+            return 1.0 / 3600.0
+        raise ValueError(f"unsupported celestial CUNIT{axis + 1}: {unit!r}")
+
     def _parse_cd_pc(self, header: Dict[str, Any]) -> None:
         """Parse CD and PC matrix keywords."""
         for i in range(1, self.naxis + 1):
@@ -527,14 +674,16 @@ class WCS:
 
     def _parse_pv(self, header: Dict[str, Any]) -> None:
         """Parse PV distortion keywords."""
-        # Capture PV keywords (PVi_j)
-        # SCAMP/PV distortions can have many terms (0..39 typically)
-        for key in PV1_KEYS:
-            if self._header_has(header, key):
-                self.wcs_params[key] = float(self._header_get(header, key))
-        for key in PV2_KEYS:
-            if self._header_has(header, key):
-                self.wcs_params[key] = float(self._header_get(header, key))
+        axes = (
+            (self._celestial_lon_axis, self._celestial_lat_axis)
+            if self._has_celestial
+            else tuple(range(min(self.naxis, 2)))
+        )
+        for axis in axes:
+            for index in range(40):
+                key = f"PV{axis + 1}_{index}"
+                if self._header_has(header, key):
+                    self.wcs_params[key] = float(self._header_get(header, key))
 
     def _parse_wat(self, header: Dict[str, Any]) -> None:
         """Parse WAT keywords for TNX/ZPX projections."""
@@ -543,9 +692,12 @@ class WCS:
         if has_wat:
             from .legacy import parse_wat_keywords
 
-            self.wat_data[1] = parse_wat_keywords(header, prefix="WAT1")
-            self.wat_data[2] = parse_wat_keywords(header, prefix="WAT2")
-            if self.wcs_params.get("CTYPE1", "").strip().upper().endswith("ZPX"):
+            lon_number = self._celestial_lon_axis + 1 if self._has_celestial else 1
+            lat_number = self._celestial_lat_axis + 1 if self._has_celestial else 2
+            self.wat_data[1] = parse_wat_keywords(header, prefix=f"WAT{lon_number}")
+            self.wat_data[2] = parse_wat_keywords(header, prefix=f"WAT{lat_number}")
+            lon_ctype = str(self.wcs_params.get(f"CTYPE{lon_number}", ""))
+            if lon_ctype.strip().upper().endswith("ZPX"):
                 for k, v in extract_zpx_params(self.wat_data).items():
                     self.wcs_params.setdefault(k, v)
 
@@ -571,6 +723,7 @@ class WCS:
         self.wcs_params["NAXIS"] = self.naxis
 
         self._parse_core(header)
+        self._identify_celestial_axes()
         self._parse_cd_pc(header)
         self._parse_pole(header)
         self._parse_pv(header)
@@ -580,6 +733,17 @@ class WCS:
         self._parse_spectral_metadata(header)
         self._parse_temporal_metadata(header)
         self._parse_celestial_metadata(header)
+        for key in (
+            "TSKYAF0",
+            "TSKYAFA11",
+            "TSKYAFA12",
+            "TSKYAFA21",
+            "TSKYAFA22",
+            "TSKYAFB1",
+            "TSKYAFB2",
+        ):
+            if key in header:
+                self.wcs_params[key] = header[key]
 
     def _parse_spectral_metadata(self, header: Dict[str, Any]) -> None:
         for key in (
@@ -796,6 +960,7 @@ class WCS:
             and not self._is_tpv
             and not self._is_tnx
             and not self._is_zpx
+            and not self._has_paper4_lut()
         ):
             return
         try:
@@ -1074,6 +1239,12 @@ class WCS:
 
     def _setup_tensors(self):
         """Convert scalar params to PyTorch tensors for computation."""
+        unit_factors = torch.tensor(
+            [self._celestial_unit_factor(i) for i in range(self.naxis)],
+            dtype=torch.float64,
+            device=self.device,
+        )
+        self._celestial_unit_factors = unit_factors
         self.crpix = torch.tensor(
             [self.wcs_params.get(f"CRPIX{i}", 0.0) for i in range(1, self.naxis + 1)],
             dtype=torch.float64,
@@ -1084,13 +1255,13 @@ class WCS:
             [self.wcs_params.get(f"CRVAL{i}", 0.0) for i in range(1, self.naxis + 1)],
             dtype=torch.float64,
             device=self.device,
-        )
+        ) * unit_factors
 
         self.cdelt = torch.tensor(
             [self.wcs_params.get(f"CDELT{i}", 1.0) for i in range(1, self.naxis + 1)],
             dtype=torch.float64,
             device=self.device,
-        )
+        ) * unit_factors
 
         # 1b. CD matrix initialization (Paper I)
         # Check if CD keywords exist
@@ -1099,6 +1270,7 @@ class WCS:
             for i in range(1, self.naxis + 1)
             for j in range(1, self.naxis + 1)
         )
+        self._has_cd_matrix = has_cd
 
         if has_cd:
             # Construct CD matrix
@@ -1113,21 +1285,40 @@ class WCS:
             self.cd_full = torch.tensor(
                 cd_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
             )
+            self.cd_full = self.cd_full * unit_factors[:, None]
         else:
             # Construct from PC and CDELT: CDi_j = CDELTi * PCi_j
             cd_data = []
+            pc_data = []
             for i in range(1, self.naxis + 1):
                 row = []
+                pc_row = []
                 for j in range(1, self.naxis + 1):
                     pc_val = self.wcs_params.get(f"PC{i}_{j}", 1.0 if i == j else 0.0)
                     row.append(self.cdelt[i - 1].item() * pc_val)
+                    pc_row.append(pc_val)
                 cd_data.append(row)
+                pc_data.append(pc_row)
             self.cd_full = torch.tensor(
                 cd_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
             )
+            self.pc_full = torch.tensor(
+                pc_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
+            )
 
-        # Spatial shortcut for old code paths (2x2)
-        if self.naxis >= 2:
+        if has_cd:
+            self.pc_full = self.cd_full / self.cdelt[:, None]
+
+        # Canonical projection-plane rows are always longitude, latitude while
+        # pixel columns retain FITS axis order.
+        if self.naxis >= 2 and self._has_celestial:
+            celestial_rows = torch.as_tensor(
+                [self._celestial_lon_axis, self._celestial_lat_axis],
+                dtype=torch.long,
+                device=self.device,
+            )
+            self.cd = self.cd_full.index_select(0, celestial_rows)[:, :2]
+        elif self.naxis >= 2:
             self.cd = self.cd_full[:2, :2]
         else:
             # 1x1 padded to 2x2 for safety in spatial paths
@@ -1136,7 +1327,10 @@ class WCS:
 
         # Precompute inverse CD matrix for world->pixel
         self.cd_inv_full = torch.inverse(self.cd_full)
-        self.cd_inv = torch.inverse(self.cd)
+        if self.naxis == 2:
+            self.cd_inv = torch.inverse(self.cd)
+        else:
+            self.cd_inv = torch.linalg.pinv(self.cd)
         self._crpix0 = float(self.crpix[0].item()) if self.crpix.numel() >= 1 else 0.0
         self._crpix1 = float(self.crpix[1].item()) if self.crpix.numel() >= 2 else 0.0
         self._cd00 = float(self.cd[0, 0].item())
@@ -1150,16 +1344,24 @@ class WCS:
         self._cdi11 = float(self.cd_inv[1, 1].item())
 
         # 2. Rotation Metadata (Calabretta & Greisen 2002)
-        self.alpha0 = float(self.wcs_params.get("CRVAL1", 0.0))
-        self.delta0 = float(self.wcs_params.get("CRVAL2", 0.0))
+        self.alpha0 = float(self.crval[self._celestial_lon_axis].item())
+        self.delta0 = (
+            float(self.crval[self._celestial_lat_axis].item())
+            if self.naxis >= 2
+            else 0.0
+        )
 
         # Precompute Projection Meta
-        ctype1 = str(self.wcs_params.get("CTYPE1", "RA---TAN")).strip().upper()
+        projection_axis = self._celestial_lon_axis + 1 if self._has_celestial else 1
+        ctype1 = str(
+            self.wcs_params.get(f"CTYPE{projection_axis}", "RA---TAN")
+        ).strip().upper()
         ctype1_base = ctype1[:-4] if ctype1.endswith("-SIP") else ctype1
         self._proj_code = ctype1_base[-3:]
         self._is_tnx = self._proj_code == "TNX"
         self._is_zpx = self._proj_code == "ZPX"
         self._is_tpv = self.tpv is not None or self._proj_code == "TPV"
+        self._tpv_uses_pixel_intermediate = self._is_tpv and not self._has_cd_matrix
         self._load_pixel_affine_from_params()
 
         self._theta0 = 90.0  # Zenithal
@@ -1184,7 +1386,7 @@ class WCS:
             or self._proj_code == "BON"
         ):
             # Conic and Bonne use PV2_1 (standard parallel) as theta_0.
-            self._theta0 = float(self.wcs_params.get("PV2_1", 0.0))
+            self._theta0 = float(self._projection_params.get("PV2_1", 0.0))
             # Bonne with theta_1=0 degenerates to Sanson-Flamsteed (equatorial)
             if self._proj_code == "BON" and abs(self._theta0) < 1e-12:
                 self._theta0 = 0.0
@@ -1300,12 +1502,16 @@ class WCS:
         # Precompute center-native fast path
         self._use_center_fast = (
             self._native_type == "center"
-            and abs(self.crval[0].item()) < 1e-9
-            and abs(self.crval[1].item()) < 1e-9
+            and abs(self.crval[self._celestial_lon_axis].item()) < 1e-9
+            and abs(self.crval[self._celestial_lat_axis].item()) < 1e-9
         )
 
         # Precompute CEA/MER constants
-        pv2_1 = self.wcs_params.get("PV2_1", 1.0)
+        pv2_1 = self._projection_params.get("PV2_1", 1.0)
+        if self._proj_code == "CEA" and (
+            not math.isfinite(float(pv2_1)) or float(pv2_1) == 0.0
+        ):
+            raise ValueError("CEA PV2_1 (lambda) must be finite and non-zero")
         if pv2_1 == 0.0:
             pv2_1 = 1.0
         self._cea_eta_scale = 57.29577951308232 / pv2_1
@@ -1316,30 +1522,43 @@ class WCS:
         # clobber the HPX H/K defaults.
         if self._proj_code == "HPX":
             self._hpx_h = float(
-                self.wcs_params.get("PV1_1", self.wcs_params.get("PV2_1", 4.0))
+                self._projection_params.get(
+                    "PV2_1", self._projection_params.get("PV1_1", 4.0)
+                )
             )
             self._hpx_k = float(
-                self.wcs_params.get("PV1_2", self.wcs_params.get("PV2_2", 3.0))
+                self._projection_params.get(
+                    "PV2_2", self._projection_params.get("PV1_2", 3.0)
+                )
             )
         else:
             self._hpx_h = 4.0
             self._hpx_k = 3.0
-        if abs(self._hpx_h) < 1e-12:
-            self._hpx_h = 4.0
-        if abs(self._hpx_k) < 1e-12:
-            self._hpx_k = 3.0
+        if (
+            not math.isfinite(self._hpx_h)
+            or self._hpx_h <= 0.0
+            or not self._hpx_h.is_integer()
+        ):
+            raise ValueError("HPX H must be a finite positive integer")
+        if (
+            not math.isfinite(self._hpx_k)
+            or self._hpx_k <= 0.0
+            or not self._hpx_k.is_integer()
+        ):
+            raise ValueError("HPX K must be a finite positive integer")
+        self._hpx_transition_sin = (self._hpx_k - 1.0) / self._hpx_k
         self._hpx_eta_scale = 90.0 * (self._hpx_k / self._hpx_h)
-        if abs(self._hpx_eta_scale) < 1e-12:
-            self._hpx_eta_scale = 67.5
         self._hpx_inv_eta_scale = 1.0 / self._hpx_eta_scale
-        self._hpx_eta_boundary = self._hpx_eta_scale * (2.0 / 3.0)
-        self._hpx_eta_pole = 90.0
-        self._hpx_polar_denom = self._hpx_eta_pole - self._hpx_eta_boundary
+        self._hpx_eta_boundary = 90.0 * (self._hpx_k - 1.0) / self._hpx_h
+        self._hpx_eta_pole = 90.0 * (self._hpx_k + 1.0) / self._hpx_h
+        self._hpx_facet_spacing = 360.0 / self._hpx_h
+        self._hpx_facet_half_width = 0.5 * self._hpx_facet_spacing
+        self._hpx_polar_denom = self._hpx_facet_half_width
         self._hpx_inv_polar_denom = 1.0 / self._hpx_polar_denom
 
         # Precompute fused arguments to avoid overhead
         self._fused_proj_code = "TAN" if self._is_tpv else self._proj_code
-        self._fused_pv2_1 = self.wcs_params.get("PV2_1", 1.0)
+        self._fused_pv2_1 = self._projection_params.get("PV2_1", 1.0)
         self._fused_tpv_idx1 = (
             self.tpv.idx1
             if self._is_tpv
@@ -1364,8 +1583,8 @@ class WCS:
         # Apply projection-specific PV defaults before tensorization.
         # The pre-tensorized PV arrays fill missing keys with 0.0, but some
         # projections have non-zero defaults (e.g. SZP theta_c = 90°).
-        if self._proj_code == "SZP" and "PV2_3" not in self.wcs_params:
-            self.wcs_params["PV2_3"] = 90.0
+        if self._proj_code == "SZP" and "PV2_3" not in self._projection_params:
+            self._projection_params["PV2_3"] = 90.0
 
         # NCP (obsolete AIPS) ≡ slant SIN with PV2_1=0, PV2_2=cot(δ₀)
         # (Paper II §6.1.2). Must set PV before project; δ₀ = CRVAL2.
@@ -1378,16 +1597,16 @@ class WCS:
                     "NCP requires non-zero CRVAL2 (δ₀); cot(δ₀) is undefined at the equator"
                 )
             # Paper II: PV2_1 = 0, PV2_2 = cot(δ₀) = cos/sin
-            if "PV2_1" not in self.wcs_params:
-                self.wcs_params["PV2_1"] = 0.0
-            if "PV2_2" not in self.wcs_params:
-                self.wcs_params["PV2_2"] = cos_d0 / sin_d0
+            if "PV2_1" not in self._projection_params:
+                self._projection_params["PV2_1"] = 0.0
+            if "PV2_2" not in self._projection_params:
+                self._projection_params["PV2_2"] = cos_d0 / sin_d0
             self._proj_code = "SIN"
             self._fused_proj_code = "SIN"
 
         # Pre-tensorize PV parameters to avoid dict lookups in compiled hot paths.
-        pv1_data = [self.wcs_params.get(k, 0.0) for k in PV1_KEYS]
-        pv2_data = [self.wcs_params.get(k, 0.0) for k in PV2_KEYS]
+        pv1_data = [self._projection_params.get(k, 0.0) for k in PV1_KEYS]
+        pv2_data = [self._projection_params.get(k, 0.0) for k in PV2_KEYS]
         self._pv1_tensor = torch.tensor(
             pv1_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
@@ -1436,12 +1655,13 @@ class WCS:
         self._is_sfl = self._proj_code == "SFL"
         self._is_gls = self._proj_code == "GLS" or (
             self._proj_code == "SFL"
-            and abs(float(self.wcs_params.get("PV1_0", 0.0)) - 1.0) <= 1e-12
-            and "PV1_2" in self.wcs_params
+            and abs(float(self._projection_params.get("PV1_0", 0.0)) - 1.0)
+            <= 1e-12
+            and "PV1_2" in self._projection_params
         )
         self._gls_delta0 = (
-            float(self.wcs_params["PV1_2"])
-            if (self._proj_code == "SFL" and "PV1_2" in self.wcs_params)
+            float(self._projection_params["PV1_2"])
+            if (self._proj_code == "SFL" and "PV1_2" in self._projection_params)
             else self.delta0
         )
 
@@ -1456,7 +1676,7 @@ class WCS:
             and self.alpha0 == self.alpha_p
             and self.delta0 == self.delta_p
         )
-        self._is_spatial = self._proj_code in (
+        self._is_spatial = self._has_celestial and self._proj_code in (
             self.ZENITHAL_CODES
             + self.CYLINDRICAL_CODES
             + self.ALLSKY_CODES
@@ -1473,68 +1693,25 @@ class WCS:
             and abs(self.delta0) < 1e-12
             and abs((self.phi_p % 360.0)) < 1e-12
         )
-        self._cpp_zenithal_project = (
-            getattr(_cpp, "wcs_zenithal_project", None) if _cpp is not None else None
-        )
-        self._cpp_zpn_project = (
-            getattr(_cpp, "wcs_zpn_project", None) if _cpp is not None else None
-        )
-        self._cpp_zenithal_deproject = (
-            getattr(_cpp, "wcs_zenithal_deproject", None) if _cpp is not None else None
-        )
-        self._cpp_cylindrical_project = (
-            getattr(_cpp, "wcs_cylindrical_project", None) if _cpp is not None else None
-        )
-        self._cpp_cylindrical_deproject = (
-            getattr(_cpp, "wcs_cylindrical_deproject", None)
-            if _cpp is not None
-            else None
-        )
-        self._cpp_center_pixel_to_world = (
-            getattr(_cpp, "wcs_center_pixel_to_world", None)
-            if _cpp is not None
-            else None
-        )
-        self._cpp_center_world_to_pixel = (
-            getattr(_cpp, "wcs_center_world_to_pixel", None)
-            if _cpp is not None
-            else None
-        )
-        self._cpp_ait_project = (
-            getattr(_cpp, "wcs_ait_project", None) if _cpp is not None else None
-        )
-        self._cpp_ait_deproject = (
-            getattr(_cpp, "wcs_ait_deproject", None) if _cpp is not None else None
-        )
-        self._cpp_mol_project = (
-            getattr(_cpp, "wcs_mol_project", None) if _cpp is not None else None
-        )
-        self._cpp_mol_deproject = (
-            getattr(_cpp, "wcs_mol_deproject", None) if _cpp is not None else None
-        )
-        self._cpp_hpx_project = (
-            getattr(_cpp, "wcs_hpx_project", None) if _cpp is not None else None
-        )
-        self._cpp_hpx_deproject = (
-            getattr(_cpp, "wcs_hpx_deproject", None) if _cpp is not None else None
-        )
-        self._cpp_inverse_spherical_rotation_pole = (
-            getattr(_cpp, "wcs_inverse_spherical_rotation_pole", None)
-            if _cpp is not None
-            else None
-        )
-        self._cpp_spherical_rotation_pole = (
-            getattr(_cpp, "wcs_spherical_rotation_pole", None)
-            if _cpp is not None
-            else None
-        )
-        self._cpp_tan_intermediate_from_radec = (
-            getattr(_cpp, "wcs_tan_intermediate_from_radec", None)
-            if _cpp is not None
-            else None
-        )
+        self._cpp_zenithal_project = None
+        self._cpp_zpn_project = None
+        self._cpp_zenithal_deproject = None
+        self._cpp_cylindrical_project = None
+        self._cpp_cylindrical_deproject = None
+        self._cpp_center_pixel_to_world = None
+        self._cpp_center_world_to_pixel = None
+        self._cpp_ait_project = None
+        self._cpp_ait_deproject = None
+        self._cpp_mol_project = None
+        self._cpp_mol_deproject = None
+        self._cpp_hpx_project = None
+        self._cpp_hpx_deproject = None
+        self._cpp_inverse_spherical_rotation_pole = None
+        self._cpp_spherical_rotation_pole = None
+        self._cpp_tan_intermediate_from_radec = None
         self._cpp_direct_static_ok = (
             self.sip is None
+            and not self._tpv_uses_pixel_intermediate
             and not self._is_tpv
             and not self._is_tnx
             and not self._is_zpx
@@ -1592,9 +1769,10 @@ class WCS:
         self._has_cpp_direct_w2p = bool(self._cpp_w2p_direct_kind)
         self._can_use_fused_p2w_static = (
             self._enable_fused_wcs
-            and _cpp is not None
-            and hasattr(_cpp, "wcs_pixel_to_world_fused_cpu")
+            and self._enable_cpp_dispatcher
+            and _ops.has_wcs_dispatcher()
             and self.sip is None
+            and not self._tpv_uses_pixel_intermediate
             and not self._is_tnx
             and not self._is_zpx
             and not self._is_gls
@@ -1624,9 +1802,10 @@ class WCS:
         )
         self._can_use_fused_w2p_static = (
             self._enable_fused_wcs
-            and _cpp is not None
-            and hasattr(_cpp, "wcs_world_to_pixel_fused_cpu")
+            and self._enable_cpp_dispatcher
+            and _ops.has_wcs_dispatcher()
             and self.sip is None
+            and not self._tpv_uses_pixel_intermediate
             and not self._is_tnx
             and not self._is_zpx
             and not self._is_gls
@@ -1721,9 +1900,11 @@ class WCS:
         """Projection dispatch hot path with pre-bound family metadata."""
         kind = self._project_native_kind
         if kind == "zpx":
-            return project_zpx(xi, eta, self.wcs_params, self.wat_data)
+            return project_zpx(xi, eta, self._projection_params, self.wat_data)
         if kind == "tnx":
-            xi_t, eta_t = project_tnx(xi, eta, self.wcs_params, self.wat_data)
+            xi_t, eta_t = project_tnx(
+                xi, eta, self._projection_params, self.wat_data
+            )
             return project_zenithal(xi_t, eta_t, "TAN")
         if kind == "tpv_tan":
             return project_zenithal(xi, eta, "TAN")
@@ -1739,15 +1920,126 @@ class WCS:
         """Apply cached 2x2 CD transform with diagonal fast path."""
         if self._cd_is_diag:
             return self._cd00 * rel_x, self._cd11 * rel_y
-        xi = self._cd00 * rel_x + self._cd01 * rel_y
-        eta = self._cd10 * rel_x + self._cd11 * rel_y
+        xi = self._scaled_axis(self._cd00, rel_x) + self._scaled_axis(
+            self._cd01, rel_y
+        )
+        eta = self._scaled_axis(self._cd10, rel_x) + self._scaled_axis(
+            self._cd11, rel_y
+        )
         return xi, eta
+
+    @staticmethod
+    def _scaled_axis(coefficient: float, value: Tensor) -> Tensor:
+        if coefficient == 0.0:
+            return torch.zeros_like(value)
+        return coefficient * value
+
+    def _apply_cd_inv_rel_2d(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
+        rel0 = self._scaled_axis(self._cdi00, xi) + self._scaled_axis(
+            self._cdi01, eta
+        )
+        rel1 = self._scaled_axis(self._cdi10, xi) + self._scaled_axis(
+            self._cdi11, eta
+        )
+        return rel0, rel1
 
     def _apply_cd_inv_2d(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         """Apply cached 2x2 inverse CD transform using scalar coefficients."""
-        rel0 = self._cdi00 * xi + self._cdi01 * eta
-        rel1 = self._cdi10 * xi + self._cdi11 * eta
+        rel0, rel1 = self._apply_cd_inv_rel_2d(xi, eta)
         return rel0 + self._crpix0, rel1 + self._crpix1
+
+    def _is_center_cylindrical_shortcut(self) -> bool:
+        return self._use_center_equator_fast and (
+            self._is_car or self._is_sfl or self._is_cea or self._is_mer or self._is_cyp
+        )
+
+    def _cylindrical_native_to_intermediate(
+        self, phi: Tensor, theta: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        """Native spherical degrees to intermediate degrees for CAR/SFL/CEA/MER/CYP."""
+        if self._is_car:
+            return _wrap_lon180(phi), theta
+        if self._is_sfl:
+            return _wrap_lon180(phi) * torch.cos(theta * self._d2r), theta
+        if self._is_cea:
+            return (
+                _wrap_lon180(phi),
+                self._cea_eta_scale * torch.sin(theta * self._d2r),
+            )
+        if self._is_cyp:
+            return deproject_cylindrical(
+                phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
+            )
+        return deproject_cylindrical(phi, theta, "MER")
+
+    def _center_equator_deproject(
+        self, ra: Tensor, dec: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        phi = _wrap_lon180(ra - self.alpha0)
+        return self._cylindrical_native_to_intermediate(phi, dec)
+
+    def _center_equator_project(
+        self, xi: Tensor, eta: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        """Inverse of :meth:`_center_equator_deproject` for the same projections."""
+        if self._is_car:
+            return _wrap_lon360(xi + self.alpha0), eta
+        if self._is_sfl:
+            dec = eta
+            cos_dec = torch.cos(dec * self._d2r)
+            cos_safe = torch.sign(cos_dec) * torch.clamp(
+                torch.abs(cos_dec), min=1e-12
+            )
+            return _wrap_lon360((xi / cos_safe) + self.alpha0), dec
+        if self._is_cea:
+            value = eta / self._cea_eta_scale
+            valid = torch.isfinite(value) & (value.abs() <= 1.0 + 1e-12)
+            theta = torch.asin(torch.clamp(value, -1.0, 1.0)) * self._r2d
+            ra = _wrap_lon360(xi + self.alpha0)
+            nan = torch.full_like(theta, float("nan"))
+            return torch.where(valid, ra, nan), torch.where(valid, theta, nan)
+        if self._is_mer:
+            arg = torch.clamp(eta * self._d2r, -20.0, 20.0)
+            theta = 2.0 * (torch.atan(torch.exp(arg)) * self._r2d - 45.0)
+            return _wrap_lon360(xi + self.alpha0), theta
+        phi, theta = project_cylindrical(
+            xi, eta, "CYP", self._pv1_tensor, self._pv2_tensor
+        )
+        return _wrap_lon360(phi + self.alpha0), theta
+
+    def _detector_relative_pixels(
+        self, x: Tensor, y: Tensor, origin: float
+    ) -> Tuple[Tensor, Tensor]:
+        """Corrected pixels to CD-input offsets, including SIP and lookup distortions."""
+        x, y = self._corrected_pixels_to_source(x, y, origin)
+        x1 = x + (1.0 - origin)
+        y1 = y + (1.0 - origin)
+        if self.det2im1 is not None or self.det2im2 is not None:
+            x1, y1 = self._apply_det2im_forward(x1, y1)
+        rel_x = x1 - self._crpix0
+        rel_y = y1 - self._crpix1
+        if self.sip is not None:
+            rel_x, rel_y = self.sip.distort(rel_x, rel_y)
+        if self.cpdis1 is not None or self.cpdis2 is not None:
+            rel_x, rel_y = self._apply_cpdis_forward(rel_x, rel_y)
+        return rel_x, rel_y
+
+    def _pixels_from_intermediate(
+        self, xi: Tensor, eta: Tensor, origin: float
+    ) -> Tuple[Tensor, Tensor]:
+        """CD inverse, SIP, lookup distortions, CRPIX, and pixel-affine correction."""
+        rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
+        if self.cpdis1 is not None or self.cpdis2 is not None:
+            rel_x, rel_y = self._apply_cpdis_inverse(rel_x, rel_y)
+        if self.sip is not None:
+            rel_x, rel_y = self.sip.invert_distortion(rel_x, rel_y)
+        x1 = rel_x + self._crpix0
+        y1 = rel_y + self._crpix1
+        if self.det2im1 is not None or self.det2im2 is not None:
+            x1, y1 = self._apply_det2im_inverse(x1, y1)
+        px = x1 - (1.0 - origin)
+        py = y1 - (1.0 - origin)
+        return self._source_pixels_to_corrected(px, py, origin)
 
     def _alloc_pix_internal_like(self, world: Tensor) -> Tensor:
         """Allocate output for analytic world->pixel without zeroing 2D hot path."""
@@ -1767,6 +2059,7 @@ class WCS:
         """Use the center-equator C++ helper only where it is a measured win."""
         if (
             not self._use_center_equator_fast
+            or self.sip is not None
             or self._cpp_center_pixel_to_world is None
             or not device_ok
             or not dtype_ok
@@ -1783,6 +2076,7 @@ class WCS:
         """Use the center-equator C++ helper only where it is a measured win."""
         if (
             not self._use_center_equator_fast
+            or self.sip is not None
             or self._cpp_center_world_to_pixel is None
             or not device_ok
             or not dtype_ok
@@ -1804,8 +2098,7 @@ class WCS:
         if cpp_kind == "hpx":
             return self._cpp_hpx_project(xi, eta, self._hpx_h, self._hpx_k)
         if cpp_kind == "zenithal":
-            phi, theta = self._cpp_zenithal_project(xi, eta, self._proj_code)
-            return -phi, theta
+            return self._cpp_zenithal_project(xi, eta, self._proj_code)
         if cpp_kind == "zpn":
             return self._cpp_zpn_project(xi, eta, self._zpn_coeffs_cpu)
         raise RuntimeError("unsupported_cpp_direct_projection")
@@ -1819,7 +2112,7 @@ class WCS:
         if cpp_kind == "hpx":
             return self._cpp_hpx_deproject(phi_w, theta, self._hpx_h, self._hpx_k)
         if cpp_kind == "zenithal":
-            return self._cpp_zenithal_deproject(-phi_w, theta, self._proj_code)
+            return self._cpp_zenithal_deproject(phi_w, theta, self._proj_code)
         raise RuntimeError("unsupported_cpp_direct_projection")
 
     def _local_uvw_from_radec(
@@ -1868,27 +2161,11 @@ class WCS:
                 self._radial_z,
             )
         u, v, w = self._local_uvw_from_radec(ra, dec)
-        scale = self._r2d / torch.clamp(w, min=1e-12)
-        return u * scale, v * scale
-
-    def _spherical_rotation_finite_only(
-        self, phi: Tensor, theta: Tensor
-    ) -> Tuple[Tensor, Tensor]:
-        """Rotate only finite native coordinates; keep NaNs from projection domain masks."""
-        valid = torch.isfinite(phi) & torch.isfinite(theta)
-        if bool(valid.all()):
-            return self._spherical_rotation_optimized(phi, theta, self._native_type)
-        if not bool(valid.any()):
-            nan = torch.full_like(phi, float("nan"))
-            return nan, nan.clone()
-        ra = torch.full_like(phi, float("nan"))
-        dec = torch.full_like(theta, float("nan"))
-        ra_v, dec_v = self._spherical_rotation_optimized(
-            phi[valid], theta[valid], self._native_type
-        )
-        ra[valid] = ra_v
-        dec[valid] = dec_v
-        return ra, dec
+        valid = torch.isfinite(w) & (w > 64.0 * torch.finfo(w.dtype).eps)
+        w_safe = torch.where(valid, w, torch.ones_like(w))
+        scale = self._r2d / w_safe
+        nan = torch.full_like(w, float("nan"))
+        return torch.where(valid, u * scale, nan), torch.where(valid, v * scale, nan)
 
     def _pixel_to_world_2d_core(
         self, x: Tensor, y: Tensor, origin: float
@@ -1896,64 +2173,35 @@ class WCS:
         """
         Unified 2D spatial pixel-to-world core.
         """
-        x, y = self._corrected_pixels_to_source(x, y, origin)
-        x1 = x + (1.0 - origin)
-        y1 = y + (1.0 - origin)
-        if self.det2im1 is not None or self.det2im2 is not None:
-            x1, y1 = self._apply_det2im_forward(x1, y1)
-        # 1. Coordinate frame relative to CRPIX
-        rel_x = x1 - self._crpix0
-        rel_y = y1 - self._crpix1
-
-        # 2. Distortion & Linear
-        if self.sip is not None:
-            rel_x, rel_y = self.sip.distort(rel_x, rel_y)
-        if self.cpdis1 is not None or self.cpdis2 is not None:
-            rel_x, rel_y = self._apply_cpdis_forward(rel_x, rel_y)
-
-        # Apply CD matrix
+        rel_x, rel_y = self._detector_relative_pixels(x, y, origin)
         xi, eta = self._apply_cd_2d(rel_x, rel_y)
 
         if self._is_gls:
             return self._gls_forward(xi, eta)
 
-        # Common center-equator specializations avoid full spherical rotation.
-        if self._use_center_equator_fast and self._is_car:
-            ra = _wrap_lon360(xi + self.alpha0)
-            return ra, eta
-        if self._use_center_equator_fast and self._is_sfl:
-            dec = eta
-            cos_dec = torch.cos(dec * self._d2r)
-            cos_safe = torch.sign(cos_dec) * torch.clamp(torch.abs(cos_dec), min=1e-12)
-            ra = _wrap_lon360((xi / cos_safe) + self.alpha0)
-            return ra, dec
-        if self._use_center_equator_fast and self._is_cea:
-            theta = (
-                torch.asin(torch.clamp(eta / self._cea_eta_scale, -1.0, 1.0))
-                * self._r2d
-            )
-            ra = _wrap_lon360(xi + self.alpha0)
-            return ra, theta
-        if self._use_center_equator_fast and self._is_mer:
-            arg = torch.clamp(eta * self._d2r, -20.0, 20.0)
-            theta = 2.0 * (torch.atan(torch.exp(arg)) * self._r2d - 45.0)
-            ra = _wrap_lon360(xi + self.alpha0)
-            return ra, theta
-        if self._use_center_equator_fast and self._is_cyp:
-            phi, theta = project_cylindrical(
-                xi, eta, "CYP", self._pv1_tensor, self._pv2_tensor
-            )
-            return _wrap_lon360(phi + self.alpha0), theta
+        # Center-equator cylindrical projections skip spherical rotation.
+        if self._is_center_cylindrical_shortcut():
+            return self._center_equator_project(xi, eta)
 
         # 3. TPV / Special distortions
         zpx_native = False
         if self._is_tpv:
-            xi, eta = self.tpv.distort(xi, eta)
+            if self._tpv_uses_pixel_intermediate:
+                lon_scale = self.cdelt[self._celestial_lon_axis]
+                lat_scale = self.cdelt[self._celestial_lat_axis]
+                xi, eta = self.tpv.distort(xi / lon_scale, eta / lat_scale)
+                xi, eta = xi * lon_scale, eta * lat_scale
+            else:
+                xi, eta = self.tpv.distort(xi, eta)
         elif self._is_tnx:
-            xi, eta = project_tnx(xi, eta, self.wcs_params, self.wat_data)
+            xi, eta = project_tnx(
+                xi, eta, self._projection_params, self.wat_data
+            )
         elif self._is_zpx:
             # project_zpx returns native (phi, theta), not intermediate (xi, eta).
-            phi, theta = project_zpx(xi, eta, self.wcs_params, self.wat_data)
+            phi, theta = project_zpx(
+                xi, eta, self._projection_params, self.wat_data
+            )
             zpx_native = True
 
         # 4. Projection
@@ -1972,7 +2220,13 @@ class WCS:
             if self._is_tan or self._is_tpv or self._is_tnx:
                 theta = torch.atan2(torch.ones_like(r), r * self._d2r) * self._r2d
             elif self._is_arc:
-                theta = 90.0 - r
+                valid_arc = torch.isfinite(r) & (
+                    r <= math.nextafter(180.0, math.inf)
+                )
+                theta = 90.0 - torch.clamp(r, max=180.0)
+                nan = torch.full_like(theta, float("nan"))
+                phi = torch.where(valid_arc, phi, nan)
+                theta = torch.where(valid_arc, theta, nan)
             elif self._is_zea:
                 invalid_zea = (r * self._d2r) > 2.0
                 theta = (
@@ -1994,7 +2248,9 @@ class WCS:
             phi, theta = project_allsky(xi, eta, "MOL")
         elif self._is_hpx:
             abs_eta = torch.abs(eta)
-            invalid = abs_eta > self._hpx_eta_pole
+            invalid = (~torch.isfinite(xi)) | (~torch.isfinite(eta)) | (
+                abs_eta > self._hpx_eta_pole
+            )
             mask_eq = (~invalid) & (abs_eta <= self._hpx_eta_boundary)
             sigma = torch.clamp(
                 (self._hpx_eta_pole - abs_eta) * self._hpx_inv_polar_denom, min=0.0
@@ -2002,25 +2258,47 @@ class WCS:
             s_theta = torch.where(
                 mask_eq,
                 eta * self._hpx_inv_eta_scale,
-                torch.sign(eta) * (1.0 - (sigma * sigma) * (1.0 / 3.0)),
+                torch.sign(eta) * (1.0 - (sigma * sigma) / self._hpx_k),
             )
             theta = torch.asin(torch.clamp(s_theta, -1.0, 1.0)) * self._r2d
-            xc = torch.round((xi - 45.0) / 90.0) * 90.0 + 45.0
+            facet_offset = torch.full_like(xi, self._hpx_facet_half_width)
+            if self._hpx_k % 2.0 == 0.0:
+                facet_offset = torch.where(
+                    eta < 0.0, torch.zeros_like(xi), facet_offset
+                )
+            xc = (
+                torch.floor(
+                    (
+                        xi
+                        + 180.0
+                        - facet_offset
+                        + self._hpx_facet_half_width
+                    )
+                    / self._hpx_facet_spacing
+                )
+                * self._hpx_facet_spacing
+                - 180.0
+                + facet_offset
+            )
             phi = torch.where(
                 mask_eq, xi, xc + (xi - xc) / torch.clamp(sigma, min=1e-9)
             )
             invalid = invalid | (
-                (~mask_eq) & (~invalid) & (torch.abs(xi - xc) > (45.0 * sigma + 1e-8))
+                (~mask_eq)
+                & (~invalid)
+                & (torch.abs(xi - xc) > (self._hpx_facet_half_width * sigma + 1e-8))
             )
             nan = torch.full_like(phi, float("nan"))
             phi = torch.where(invalid, nan, phi)
             theta = torch.where(invalid, nan, theta)
         elif self._is_cea:
             phi = xi
-            theta = (
-                torch.asin(torch.clamp(eta / self._cea_eta_scale, -1.0, 1.0))
-                * self._r2d
-            )
+            value = eta / self._cea_eta_scale
+            valid = torch.isfinite(value) & (value.abs() <= 1.0 + 1e-12)
+            theta = torch.asin(torch.clamp(value, -1.0, 1.0)) * self._r2d
+            nan = torch.full_like(theta, float("nan"))
+            phi = torch.where(valid, phi, nan)
+            theta = torch.where(valid, theta, nan)
         elif self._is_mer:
             phi = xi
             arg = torch.clamp(eta * self._d2r, -20.0, 20.0)
@@ -2094,7 +2372,8 @@ class WCS:
         device_ok = x.device.type == "cpu" and y.device.type == "cpu"
         dtype_ok = x.dtype == torch.float64 and y.dtype == torch.float64
 
-        if self._use_cpp_center_pixel_to_world_small_n(
+        finite_center_input = bool(torch.isfinite(x).all() and torch.isfinite(y).all())
+        if finite_center_input and self._use_cpp_center_pixel_to_world_small_n(
             x, y, device_ok=device_ok, dtype_ok=dtype_ok
         ):
             return self._cpp_center_pixel_to_world(
@@ -2114,30 +2393,10 @@ class WCS:
                 self._hpx_k,
             )
 
-        if self._use_center_equator_fast and (
-            self._is_car or self._is_sfl or self._is_cea or self._is_mer
-        ):
-            rel_x = x + (1.0 - origin) - self._crpix0
-            rel_y = y + (1.0 - origin) - self._crpix1
+        if self._is_center_cylindrical_shortcut():
+            rel_x, rel_y = self._detector_relative_pixels(x, y, float(origin))
             xi, eta = self._apply_cd_2d(rel_x, rel_y)
-            if self._is_car:
-                return _wrap_lon360(xi + self.alpha0), eta
-            if self._is_sfl:
-                dec = eta
-                cos_dec = torch.cos(dec * self._d2r)
-                cos_safe = torch.sign(cos_dec) * torch.clamp(
-                    torch.abs(cos_dec), min=1e-12
-                )
-                return _wrap_lon360((xi / cos_safe) + self.alpha0), dec
-            if self._is_cea:
-                theta = (
-                    torch.asin(torch.clamp(eta / self._cea_eta_scale, -1.0, 1.0))
-                    * self._r2d
-                )
-                return _wrap_lon360(xi + self.alpha0), theta
-            arg = torch.clamp(eta * self._d2r, -20.0, 20.0)
-            theta = 2.0 * (torch.atan(torch.exp(arg)) * self._r2d - 45.0)
-            return _wrap_lon360(xi + self.alpha0), theta
+            return self._center_equator_project(xi, eta)
 
         cpp_kind = self._cpp_p2w_direct_kind
         prefer_small_zenithal_fused = (
@@ -2204,14 +2463,14 @@ class WCS:
             and not self._disable_fused_pixel_to_world
             and device_ok
             and dtype_ok
-            and not x.requires_grad
-            and not y.requires_grad
+            and (
+                (not x.requires_grad and not y.requires_grad)
+                or (self._enable_cpp_dispatcher and _ops.has_wcs_dispatcher())
+            )
         )
         if use_fused:
             x_flat = x.reshape(-1)
             y_flat = y.reshape(-1)
-            ra = torch.empty_like(x_flat)
-            dec = torch.empty_like(y_flat)
             if self._native_type == "pole":
                 ex, ey = self._pole_east_x, self._pole_east_y
                 nx, ny, nz = self._pole_north_x, self._pole_north_y, self._pole_north_z
@@ -2225,47 +2484,41 @@ class WCS:
                 nx, ny, nz = self._north_x, self._north_y, self._north_z
                 rx, ry, rz = self._radial_x, self._radial_y, self._radial_z
 
-            try:
-                _cpp.wcs_pixel_to_world_fused_cpu(
-                    (x_flat + (1.0 - origin)).contiguous(),
-                    (y_flat + (1.0 - origin)).contiguous(),
-                    ra,
-                    dec,
-                    self._crpix0,
-                    self._crpix1,
-                    self._cd00,
-                    self._cd01,
-                    self._cd10,
-                    self._cd11,
-                    self._fused_proj_code,
-                    self._fused_pv2_1,
-                    self._hpx_h,
-                    self._hpx_k,
-                    ex,
-                    ey,
-                    nx,
-                    ny,
-                    nz,
-                    rx,
-                    ry,
-                    rz,
-                    self._ra_p_rad,
-                    self._dec_p_rad,
-                    self._phi_p_rad,
-                    self._native_type,
-                    self.alpha0,
-                    self.delta0,
-                    self._is_tpv,
-                    self._fused_tpv_idx1,
-                    self._fused_tpv_c1,
-                    self._fused_tpv_idx2,
-                    self._fused_tpv_c2,
-                )
-            except TypeError:
-                # C++ extension can be stale relative to Python bindings in editable
-                # workflows. Disable this fused path and fall back safely.
-                self._disable_fused_pixel_to_world = True
-                return self._pixel_to_world_2d_core(x, y, float(origin))
+            x_native = (x_flat + (1.0 - origin)).contiguous()
+            y_native = (y_flat + (1.0 - origin)).contiguous()
+            ra, dec = pixel_to_world_fused(
+                x_native,
+                y_native,
+                crpix0=self._crpix0,
+                crpix1=self._crpix1,
+                cd00=self._cd00,
+                cd01=self._cd01,
+                cd10=self._cd10,
+                cd11=self._cd11,
+                proj_code=self._fused_proj_code,
+                lambda_param=self._fused_pv2_1,
+                hpx_H=self._hpx_h,
+                hpx_K=self._hpx_k,
+                east_x=ex,
+                east_y=ey,
+                north_x=nx,
+                north_y=ny,
+                north_z=nz,
+                radial_x=rx,
+                radial_y=ry,
+                radial_z=rz,
+                ra_p_rad=self._ra_p_rad,
+                dec_p_rad=self._dec_p_rad,
+                phi_p_rad=self._phi_p_rad,
+                native_type=self._native_type,
+                alpha0=self.alpha0,
+                delta0=self.delta0,
+                is_tpv=self._is_tpv,
+                tpv_idx1=self._fused_tpv_idx1,
+                tpv_c1=self._fused_tpv_c1,
+                tpv_idx2=self._fused_tpv_idx2,
+                tpv_c2=self._fused_tpv_c2,
+            )
             return ra.reshape(x.shape), dec.reshape(x.shape)
 
         core_fn = self._compiled_pixel_to_world_2d_fn or self._pixel_to_world_2d_core
@@ -2301,64 +2554,19 @@ class WCS:
         origin: float,
         *,
         allow_cpp_inverse_sphere: bool = True,
+        intermediate_only: bool = False,
     ) -> Tuple[Tensor, Tensor]:
         """
         Unified 2D spatial world-to-pixel core.
         Designed to be graph-break free for torch.compile.
         """
-        # Common center-equator specializations avoid full spherical rotation.
-        if self._use_center_equator_fast and self.sip is None:
-            if self._is_car:
-                xi = _wrap_lon180(ra - self.alpha0)
-                eta = dec
-                rel_x = self._cdi00 * xi + self._cdi01 * eta
-                rel_y = self._cdi10 * xi + self._cdi11 * eta
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
-            if self._is_sfl:
-                phi = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-                xi = phi * torch.cos(theta * self._d2r)
-                eta = theta
-                rel_x = self._cdi00 * xi + self._cdi01 * eta
-                rel_y = self._cdi10 * xi + self._cdi11 * eta
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
-            if self._is_cea:
-                phi = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-                xi = phi
-                eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
-                rel_x = self._cdi00 * xi + self._cdi01 * eta
-                rel_y = self._cdi10 * xi + self._cdi11 * eta
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
-            if self._is_mer:
-                phi = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-                xi = phi
-                tan_arg = torch.tan((45.0 + theta * 0.5) * self._d2r)
-                tan_arg = torch.clamp(tan_arg, min=1e-12)
-                eta = self._r2d * torch.log(tan_arg)
-                rel_x = self._cdi00 * xi + self._cdi01 * eta
-                rel_y = self._cdi10 * xi + self._cdi11 * eta
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
-            if self._is_cyp:
-                phi = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-                xi, eta = deproject_cylindrical(
-                    phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
-                )
-                rel_x = self._cdi00 * xi + self._cdi01 * eta
-                rel_y = self._cdi10 * xi + self._cdi11 * eta
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return self._source_pixels_to_corrected(px, py, origin)
+        # Center-equator cylindrical projections skip spherical rotation.
+        # SIP and lookup distortions are applied by the shared pixel tail.
+        if self._is_center_cylindrical_shortcut():
+            xi, eta = self._center_equator_deproject(ra, dec)
+            if intermediate_only:
+                return xi, eta
+            return self._pixels_from_intermediate(xi, eta, origin)
 
         # 1. Inverse Spherical Rotation (Celestial -> Native)
         if self._is_gls:
@@ -2406,6 +2614,19 @@ class WCS:
                     r = 2.0 * self._r2d * torch.tan(0.5 * w)
                 xi = -r * sin_phi
                 eta = -r * cos_phi
+                if self._is_tan or self._is_tpv or self._is_tnx:
+                    valid = (
+                        torch.isfinite(theta)
+                        & (theta > 64.0 * torch.finfo(theta.dtype).eps * self._r2d)
+                        & (theta <= 90.0 + 1e-12)
+                    )
+                elif self._is_arc:
+                    valid = torch.isfinite(theta) & (theta >= -90.0) & (theta <= 90.0)
+                else:
+                    valid = torch.ones_like(theta, dtype=torch.bool)
+                nan = torch.full_like(theta, float("nan"))
+                xi = torch.where(valid, xi, nan)
+                eta = torch.where(valid, eta, nan)
             elif self._is_sin:
                 xi, eta = deproject_zenithal(phi, theta, "SIN", None, self._pv2_tensor)
             elif self._is_ait:
@@ -2413,37 +2634,46 @@ class WCS:
             elif self._is_mol:
                 xi, eta = deproject_allsky(phi, theta, "MOL")
             elif self._is_hpx:
-                phi_w = _wrap_lon180_checked(phi)
+                phi_w = _wrap_lon180(phi)
                 s_theta = torch.sin(theta * self._d2r)
                 abs_s = torch.abs(s_theta)
-                mask_eq = abs_s <= (2.0 / 3.0)
-                sigma = torch.sqrt(torch.clamp(3.0 * (1.0 - abs_s), min=0.0))
+                mask_eq = abs_s <= self._hpx_transition_sin
+                sigma = torch.sqrt(
+                    torch.clamp(self._hpx_k * (1.0 - abs_s), min=0.0)
+                )
                 eta_pol = torch.sign(s_theta) * (
                     self._hpx_eta_pole
-                    - (self._hpx_eta_pole - self._hpx_eta_boundary) * sigma
+                    - self._hpx_facet_half_width * sigma
                 )
-                xc = torch.round((phi_w - 45.0) / 90.0) * 90.0 + 45.0
+                facet_offset = torch.full_like(phi_w, self._hpx_facet_half_width)
+                if self._hpx_k % 2.0 == 0.0:
+                    facet_offset = torch.where(
+                        s_theta < 0.0, torch.zeros_like(phi_w), facet_offset
+                    )
+                xc = (
+                    torch.floor(
+                        (
+                            phi_w
+                            + 180.0
+                            - facet_offset
+                            + self._hpx_facet_half_width
+                        )
+                        / self._hpx_facet_spacing
+                    )
+                    * self._hpx_facet_spacing
+                    - 180.0
+                    + facet_offset
+                )
                 xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
                 eta = torch.where(mask_eq, self._hpx_eta_scale * s_theta, eta_pol)
-            elif self._is_cea:
-                xi = _wrap_lon180_checked(phi)
-                eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
-            elif self._is_mer:
-                xi = _wrap_lon180_checked(phi)
-                tan_arg = torch.tan((45.0 + theta * 0.5) * self._d2r)
-                tan_arg = torch.clamp(tan_arg, min=1e-12)
-                eta = self._r2d * torch.log(tan_arg)
-            elif self._is_cyp:
-                xi, eta = deproject_cylindrical(
-                    phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
-                )
-            elif self._is_car:
-                # Inline trivial CAR projection: native RA -> intermediate xi, native Dec -> intermediate eta
-                xi = _wrap_lon180_checked(phi)
-                eta = theta
-            elif self._is_sfl:
-                xi = _wrap_lon180_checked(phi) * torch.cos(theta * self._d2r)
-                eta = theta
+            elif (
+                self._is_cea
+                or self._is_mer
+                or self._is_cyp
+                or self._is_car
+                or self._is_sfl
+            ):
+                xi, eta = self._cylindrical_native_to_intermediate(phi, theta)
             elif self._is_zpn:
                 if self._is_zpn_linear:
                     phi_w = _wrap_lon180(phi)
@@ -2476,7 +2706,9 @@ class WCS:
                     phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
                 )
             elif self._is_zpx:
-                xi, eta = deproject_zpx(phi, theta, self.wcs_params, self.wat_data)
+                xi, eta = deproject_zpx(
+                    phi, theta, self._projection_params, self.wat_data
+                )
             else:
                 # Fallback: dispatch to the appropriate deproject function.
                 if self._project_native_kind == "zenithal":
@@ -2504,31 +2736,22 @@ class WCS:
 
         # 3. Inverse TPV / Special distortions
         if self._is_tpv:
+            lon_scale = self.cdelt[self._celestial_lon_axis]
+            lat_scale = self.cdelt[self._celestial_lat_axis]
+            if self._tpv_uses_pixel_intermediate:
+                xi, eta = xi / lon_scale, eta / lat_scale
             if self.tpv._affine_only:
                 xi, eta = self.tpv.invert_affine_exact(xi, eta)
             else:
                 xi, eta = self.tpv.invert(xi, eta)
+            if self._tpv_uses_pixel_intermediate:
+                xi, eta = xi * lon_scale, eta * lat_scale
         if self._is_tnx:
             xi, eta = invert_tnx_plane(xi, eta, self.wat_data)
 
-        # 4. Inverse Linear (CD matrix)
-        rel_x = self._cdi00 * xi + self._cdi01 * eta
-        rel_y = self._cdi10 * xi + self._cdi11 * eta
-
-        # 5. Inverse CPDIS / SIP / DET2IM (if any)
-        if self.cpdis1 is not None or self.cpdis2 is not None:
-            rel_x, rel_y = self._apply_cpdis_inverse(rel_x, rel_y)
-        if self.sip is not None:
-            rel_x, rel_y = self.sip.invert_distortion(rel_x, rel_y)
-
-        # 6. Origin adjustment
-        x1 = rel_x + self._crpix0
-        y1 = rel_y + self._crpix1
-        if self.det2im1 is not None or self.det2im2 is not None:
-            x1, y1 = self._apply_det2im_inverse(x1, y1)
-        px = x1 - (1.0 - origin)
-        py = y1 - (1.0 - origin)
-        return self._source_pixels_to_corrected(px, py, origin)
+        if intermediate_only:
+            return xi, eta
+        return self._pixels_from_intermediate(xi, eta, origin)
 
     def _stacked_world_to_pixel_flat(
         self,
@@ -2538,8 +2761,8 @@ class WCS:
         allow_cpp_inverse_sphere: bool = True,
     ) -> Tensor:
         """Fused ``world -> (px, py)`` for stacked 2D spatial + ``torch.compile``."""
-        ra = world_flat[:, 0]
-        dec = world_flat[:, 1]
+        ra = world_flat[:, self._celestial_lon_axis]
+        dec = world_flat[:, self._celestial_lat_axis]
         px, py = self._world_to_pixel_2d_core(
             ra, dec, origin, allow_cpp_inverse_sphere=allow_cpp_inverse_sphere
         )
@@ -2569,8 +2792,7 @@ class WCS:
             if self.sip is None:
                 px, py = self._apply_cd_inv_2d(xi, eta)
             else:
-                rel_x = self._cdi00 * xi + self._cdi01 * eta
-                rel_y = self._cdi10 * xi + self._cdi11 * eta
+                rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
                 rel_x, rel_y = self.sip.invert_distortion(rel_x, rel_y)
                 px = rel_x + self._crpix0
                 py = rel_y + self._crpix1
@@ -2581,7 +2803,10 @@ class WCS:
             off = float(origin - 1)
             return px.add(off), py.add(off)
 
-        if self._use_cpp_center_world_to_pixel_small_n(
+        valid_center_input = bool(torch.isfinite(ra).all() and torch.isfinite(dec).all())
+        if self._is_mer:
+            valid_center_input = valid_center_input and bool((dec.abs() < 90.0).all())
+        if valid_center_input and self._use_cpp_center_world_to_pixel_small_n(
             ra, dec, device_ok=device_ok, dtype_ok=dtype_ok
         ):
             try:
@@ -2604,30 +2829,9 @@ class WCS:
             except (TypeError, RuntimeError):
                 pass
 
-        if self._use_center_equator_fast and (
-            self._is_car or self._is_sfl or self._is_cea or self._is_mer
-        ):
-            phi = _wrap_lon180(ra - self.alpha0)
-            theta = dec
-            if self._is_car:
-                xi = phi
-                eta = theta
-            elif self._is_sfl:
-                xi = phi * torch.cos(theta * self._d2r)
-                eta = theta
-            elif self._is_cea:
-                xi = phi
-                eta = self._cea_eta_scale * torch.sin(theta * self._d2r)
-            else:
-                xi = phi
-                tan_arg = torch.tan((45.0 + theta * 0.5) * self._d2r)
-                tan_arg = torch.clamp(tan_arg, min=1e-12)
-                eta = self._r2d * torch.log(tan_arg)
-            rel_x = self._cdi00 * xi + self._cdi01 * eta
-            rel_y = self._cdi10 * xi + self._cdi11 * eta
-            px = rel_x + self._crpix0 - (1.0 - origin)
-            py = rel_y + self._crpix1 - (1.0 - origin)
-            return px, py
+        if self._is_center_cylindrical_shortcut():
+            xi, eta = self._center_equator_deproject(ra, dec)
+            return self._pixels_from_intermediate(xi, eta, float(origin))
 
         cpp_kind = self._cpp_w2p_direct_kind
         use_cpp_direct = (
@@ -2674,8 +2878,7 @@ class WCS:
                 except (TypeError, RuntimeError):
                     self._disable_cpp_world_to_pixel = True
             if not self._disable_cpp_world_to_pixel:
-                rel_x = self._cdi00 * xi + self._cdi01 * eta
-                rel_y = self._cdi10 * xi + self._cdi11 * eta
+                rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
                 px = rel_x + self._crpix0 - (1.0 - origin)
                 py = rel_y + self._crpix1 - (1.0 - origin)
                 return px, py
@@ -2685,15 +2888,15 @@ class WCS:
             and not self._disable_fused_world_to_pixel
             and device_ok
             and dtype_ok
-            and not ra.requires_grad
-            and not dec.requires_grad
+            and (
+                (not ra.requires_grad and not dec.requires_grad)
+                or (self._enable_cpp_dispatcher and _ops.has_wcs_dispatcher())
+            )
             and (not self._is_tpv or not self.tpv._invert_trace_enabled)
         )
         if use_fused:
             ra_flat = ra.reshape(-1)
             dec_flat = dec.reshape(-1)
-            px = torch.empty_like(ra_flat)
-            py = torch.empty_like(dec_flat)
 
             if self._native_type == "pole":
                 ex, ey = self._pole_east_x, self._pole_east_y
@@ -2708,47 +2911,41 @@ class WCS:
                 nx, ny, nz = self._north_x, self._north_y, self._north_z
                 rx, ry, rz = self._radial_x, self._radial_y, self._radial_z
 
-            try:
-                _cpp.wcs_world_to_pixel_fused_cpu(
-                    ra_flat.contiguous(),
-                    dec_flat.contiguous(),
-                    px,
-                    py,
-                    self._crpix0,
-                    self._crpix1,
-                    self._cdi00,
-                    self._cdi01,
-                    self._cdi10,
-                    self._cdi11,
-                    self._fused_proj_code,
-                    self._fused_pv2_1,
-                    self._hpx_h,
-                    self._hpx_k,
-                    ex,
-                    ey,
-                    nx,
-                    ny,
-                    nz,
-                    rx,
-                    ry,
-                    rz,
-                    self._ra_p_rad,
-                    self._dec_p_rad,
-                    self._phi_p_rad,
-                    self._native_type,
-                    self.alpha0,
-                    self.delta0,
-                    self._is_tpv,
-                    self._fused_tpv_idx1,
-                    self._fused_tpv_c1,
-                    self._fused_tpv_idx2,
-                    self._fused_tpv_c2,
-                )
-            except TypeError:
-                # C++ extension can be stale relative to Python bindings in editable
-                # workflows. Disable this fused path and fall back safely.
-                self._disable_fused_world_to_pixel = True
-                return self._world_to_pixel_2d_core(ra, dec, float(origin))
+            ra_native = ra_flat.contiguous()
+            dec_native = dec_flat.contiguous()
+            px, py = world_to_pixel_fused(
+                ra_native,
+                dec_native,
+                crpix0=self._crpix0,
+                crpix1=self._crpix1,
+                cdi00=self._cdi00,
+                cdi01=self._cdi01,
+                cdi10=self._cdi10,
+                cdi11=self._cdi11,
+                proj_code=self._fused_proj_code,
+                lambda_param=self._fused_pv2_1,
+                hpx_H=self._hpx_h,
+                hpx_K=self._hpx_k,
+                east_x=ex,
+                east_y=ey,
+                north_x=nx,
+                north_y=ny,
+                north_z=nz,
+                radial_x=rx,
+                radial_y=ry,
+                radial_z=rz,
+                ra_p_rad=self._ra_p_rad,
+                dec_p_rad=self._dec_p_rad,
+                phi_p_rad=self._phi_p_rad,
+                native_type=self._native_type,
+                alpha0=self.alpha0,
+                delta0=self.delta0,
+                is_tpv=self._is_tpv,
+                tpv_idx1=self._fused_tpv_idx1,
+                tpv_c1=self._fused_tpv_c1,
+                tpv_idx2=self._fused_tpv_idx2,
+                tpv_c2=self._fused_tpv_c2,
+            )
             px = px.reshape(shape)
             py = py.reshape(shape)
             if origin == 1:
@@ -2762,7 +2959,7 @@ class WCS:
         core_fn = self._compiled_world_to_pixel_2d_fn or self._world_to_pixel_2d_core
         return core_fn(ra, dec, float(origin))
 
-    def compile(self, **kwargs):
+    def compile(self, **kwargs: Any) -> "WCS":
         """
         Wrap the pure-Python 2D spatial cores in ``torch.compile``.
 
@@ -2777,7 +2974,8 @@ class WCS:
         ``_compiled_transform_fn`` / the general inverse path on intermediate coords.
 
         The two-argument ``pixel_to_world(x, y)`` shortcut may still use native C++
-        fast paths. Run ``benchmarks/bench_wcs_small_n_paths.py`` for timings vs Astropy.
+        fast paths. Run ``benchmarks/bench_wcs_small_n_paths.py`` from the
+        torchsky-harness checkout for timings against Astropy.
 
         Args:
             **kwargs: Arguments passed to torch.compile (e.g., mode, options).
@@ -2890,10 +3088,11 @@ class WCS:
         """Number of world axes."""
         return self.naxis
 
-    @property
-    def pixel_axis_names(self) -> tuple[str, ...]:
-        """Pixel axis names, using FITS 1-based axis labels."""
-        return tuple(f"PIXEL{i}" for i in range(1, self.naxis + 1))
+    def as_mapping(self) -> WCSMapping:
+        """Return a typed tensor mapping backed by this optimized WCS."""
+        from .mapping import WCSMapping
+
+        return WCSMapping(self)
 
     @property
     def world_axis_names(self) -> tuple[str, ...]:
@@ -2917,14 +3116,22 @@ class WCS:
         result: list[str | None] = []
         for i in range(1, self.naxis + 1):
             ctype = str(self.wcs_params.get(f"CTYPE{i}", "")).strip().upper()
-            if i == 1 and ctype.startswith(("RA", "GLON", "ELON", "HLON", "SLON")):
-                result.append(
-                    "pos.eq.ra" if ctype.startswith("RA") else "pos.galactic.lon"
-                )
-            elif i == 2 and ctype.startswith(("DEC", "GLAT", "ELAT", "HLAT", "SLAT")):
-                result.append(
-                    "pos.eq.dec" if ctype.startswith("DEC") else "pos.galactic.lat"
-                )
+            if ctype.startswith("RA"):
+                result.append("pos.eq.ra")
+            elif ctype.startswith("DEC"):
+                result.append("pos.eq.dec")
+            elif ctype.startswith("GLON"):
+                result.append("pos.galactic.lon")
+            elif ctype.startswith("GLAT"):
+                result.append("pos.galactic.lat")
+            elif ctype.startswith("ELON"):
+                result.append("pos.ecliptic.lon")
+            elif ctype.startswith("ELAT"):
+                result.append("pos.ecliptic.lat")
+            elif ctype.startswith(("HLON", "SLON")):
+                result.append("pos.bodyrc.lon")
+            elif ctype.startswith(("HLAT", "SLAT")):
+                result.append("pos.bodyrc.lat")
             elif ctype.startswith(
                 ("FREQ", "ENER", "WAVN", "WAVE", "AWAV", "VELO", "VRAD", "VOPT", "ZOPT")
             ):
@@ -3040,14 +3247,33 @@ class WCS:
     @property
     def celestial_frame(self) -> str:
         """Celestial reference frame from FITS metadata."""
-        ctype1 = str(self.wcs_params.get("CTYPE1", "")).strip().upper()
-        ctype2 = str(self.wcs_params.get("CTYPE2", "")).strip().upper()
+        ctype1 = str(
+            self.wcs_params.get(f"CTYPE{self._celestial_lon_axis + 1}", "")
+        ).strip().upper()
+        ctype2 = str(
+            self.wcs_params.get(f"CTYPE{self._celestial_lat_axis + 1}", "")
+        ).strip().upper()
         if ctype1.startswith("GLON") or ctype2.startswith("GLAT"):
             return "GALACTIC"
         if ctype1.startswith("ELON") or ctype2.startswith("ELAT"):
             return "ECLIPTIC"
         frame = self.wcs_params.get("RADESYS", self.wcs_params.get("RADECSYS", "ICRS"))
         return canonical_celestial_frame(str(frame))
+
+    def _world_from_celestial_pair(self, lon: Tensor, lat: Tensor) -> Tensor:
+        values = [lon if axis == self._celestial_lon_axis else lat for axis in range(2)]
+        return torch.stack(values, dim=-1)
+
+    def _pixel_affine_axes(self) -> tuple[int, int]:
+        if len(self._celestial_axes) == 2:
+            return self._celestial_axes
+        return (0, 1)
+
+    def _celestial_pair_from_world(self, world: Tensor) -> tuple[Tensor, Tensor]:
+        return (
+            world[..., self._celestial_lon_axis],
+            world[..., self._celestial_lat_axis],
+        )
 
     @property
     def celestial_equinox(self) -> float | None:
@@ -3109,89 +3335,8 @@ class WCS:
             to_equinox=to_equinox,
         )
 
-    @property
-    def pixel_shape(self) -> tuple[int, ...] | None:
-        """Pixel shape in FITS pixel-axis order, when available from ``NAXISi``."""
-        return self._pixel_shape
 
-    @property
-    def array_shape(self) -> tuple[int, ...] | None:
-        """Array shape in NumPy order, when available from ``NAXISi``."""
-        if self._pixel_shape is None:
-            return None
-        return tuple(reversed(self._pixel_shape))
 
-    @property
-    def pixel_bounds(self) -> list[tuple[float, float]] | None:
-        """Inclusive 0-based pixel bounds from ``NAXISi`` keywords."""
-        if self._pixel_shape is None:
-            return None
-        return [(0.0, float(n - 1)) for n in self._pixel_shape]
-
-    @property
-    def axis_correlation_matrix(self) -> np.ndarray:
-        """Boolean matrix showing which world axes depend on which pixel axes."""
-        matrix = np.zeros((self.world_n_dim, self.pixel_n_dim), dtype=bool)
-        cd_deps = torch.abs(self.cd_full).detach().cpu().numpy() > 1.0e-15
-        if self._is_spatial and self.naxis >= 2:
-            matrix[:2, :2] = True
-            for i in range(2, self.naxis):
-                matrix[i, :] = cd_deps[i, :]
-        else:
-            matrix[:, :] = cd_deps
-        for axis in self.tabular_axes:
-            if 0 <= axis < self.naxis:
-                matrix[axis, axis] = True
-        for axis in self.coupled_tabular_axes:
-            matrix[axis, :] = False
-            matrix[axis, list(self.coupled_tabular_pixel_axes)] = True
-        return matrix
-
-    def footprint(self, *, origin: int = 0) -> Tensor:
-        """Return the celestial footprint corners for a 2D image WCS."""
-        if self._pixel_shape is None or self.naxis < 2:
-            raise ValueError("footprint requires NAXIS1/NAXIS2 image bounds")
-        nx, ny = self._pixel_shape[0], self._pixel_shape[1]
-        corners_2d = torch.tensor(
-            [
-                [0.0, 0.0],
-                [float(nx - 1), 0.0],
-                [float(nx - 1), float(ny - 1)],
-                [0.0, float(ny - 1)],
-            ],
-            dtype=self._wcs_coord_dtype(self.device),
-            device=self.device,
-        )
-        if self.naxis == 2:
-            corners = corners_2d
-        else:
-            corners = torch.empty(
-                (4, self.naxis), dtype=self._wcs_coord_dtype(self.device), device=self.device
-            )
-            corners[:, 0:2] = corners_2d
-            for axis in range(2, self.naxis):
-                corners[:, axis] = self.crpix[axis] - (1.0 - origin)
-        world = self.pixel_to_world(corners, origin=origin)
-        if isinstance(world, tuple):
-            return torch.stack(world[:2], dim=-1)
-        return world[..., :2]
-
-    def in_image(self, pixels: Any, *, origin: int = 0) -> Tensor:
-        """Return a boolean mask for pixels inside ``pixel_bounds``."""
-        if self._pixel_shape is None:
-            raise ValueError("in_image requires NAXISi image bounds")
-        pix = torch.as_tensor(pixels, dtype=self._wcs_coord_dtype(self.device), device=self.device)
-        if pix.shape[-1] != self.naxis:
-            raise ValueError(f"pixels must have trailing dimension {self.naxis}")
-        lower = torch.full(
-            (self.naxis,), float(origin), dtype=self._wcs_coord_dtype(self.device), device=self.device
-        )
-        upper = torch.tensor(
-            [float(n - 1 + origin) for n in self._pixel_shape[: self.naxis]],
-            dtype=self._wcs_coord_dtype(self.device),
-            device=self.device,
-        )
-        return torch.all((pix >= lower) & (pix <= upper), dim=-1)
 
     def mixed_pixel_world(
         self,
@@ -3726,17 +3871,9 @@ class WCS:
                 world_flat, float(origin), allow_cpp_inverse_sphere=False
             )
         elif self._is_spatial:
-            pix_flat = torch.empty_like(world_flat)
-            spatial_pix = self._stacked_world_to_pixel_flat(
-                world_flat[:, :2], float(origin), allow_cpp_inverse_sphere=False
-            )
-            pix_flat[:, :2] = spatial_pix
-            if self.naxis >= 3:
-                pix_internal_spatial = spatial_pix + (1.0 - float(origin))
-                pix_internal_extra = self._invert_extra_axes(
-                    world_flat, pix_internal_spatial
-                )
-                pix_flat[:, 2:] = pix_internal_extra + (float(origin) - 1.0)
+            pix_result = self.world_to_pixel(world_flat, origin=origin)
+            assert isinstance(pix_result, Tensor)
+            pix_flat = pix_result
         else:
             # Non-spatial (including nonlinear -TAB): same inverse as world_to_pixel.
             linear_world = world_flat.clone()
@@ -3803,6 +3940,36 @@ class WCS:
             )[0]
             grads.append(grad)
         return torch.stack(grads, dim=-2)
+
+    def jacobian(
+        self,
+        coords: Any,
+        y: Any | None = None,
+        *,
+        inverse: bool = False,
+        origin: int = 0,
+        create_graph: bool = False,
+    ) -> Tensor:
+        """Return local ``d(world)/d(pixel)`` (or ``d(pixel)/d(world)`` when ``inverse=True``) Jacobians.
+
+        Accepts either a stacked coordinate tensor ``(..., naxis)`` or separate
+        ``(x, y)`` tensors for 2D WCS.
+        """
+        if y is not None:
+            dt = self._wcs_coord_dtype(self.device)
+            x_t = torch.as_tensor(coords, dtype=dt, device=self.device)
+            y_t = torch.as_tensor(y, dtype=dt, device=self.device)
+            x_t, y_t = torch.broadcast_tensors(x_t, y_t)
+            stacked = torch.stack([x_t, y_t], dim=-1)
+        else:
+            stacked = coords
+        if inverse:
+            return self.world_to_pixel_jacobian(
+                stacked, origin=origin, create_graph=create_graph
+            )
+        return self.pixel_to_world_jacobian(
+            stacked, origin=origin, create_graph=create_graph
+        )
 
     def pixel_to_world_values(
         self, *pixel_arrays: Any, origin: int = 0
@@ -3883,12 +4050,6 @@ class WCS:
         ]
         return self.pixel_to_world_values(*pixels, origin=origin)
 
-    def array_index_to_world(
-        self, *index_arrays: Any, origin: int = 0
-    ) -> tuple[Tensor, ...]:
-        """Alias for ``array_index_to_world_values``."""
-        return self.array_index_to_world_values(*index_arrays, origin=origin)
-
     def world_to_array_index_values(
         self, *world_arrays: Any, origin: int = 0
     ) -> tuple[Tensor, ...]:
@@ -3898,12 +4059,6 @@ class WCS:
             torch.round(pixels[self.pixel_n_dim - 1 - i]).to(dtype=torch.long)
             for i in range(self.pixel_n_dim)
         )
-
-    def world_to_array_index(
-        self, *world_arrays: Any, origin: int = 0
-    ) -> tuple[Tensor, ...]:
-        """Alias for ``world_to_array_index_values``."""
-        return self.world_to_array_index_values(*world_arrays, origin=origin)
 
     def slice(
         self,
@@ -3938,14 +4093,94 @@ class WCS:
             sliced = sliced._dropaxis_fixed_at_zero(axis)
         return sliced
 
+    def to_header(
+        self, *, relax: bool = True, include_naxis: bool = False
+    ) -> dict[str, Any]:
+        header = super().to_header(relax=relax, include_naxis=include_naxis)
+        suffix = self.wcs_key
+        for axis, factor_t in enumerate(self._celestial_unit_factors, start=1):
+            factor = float(factor_t.detach().cpu().item())
+            if factor == 1.0:
+                continue
+            crval_key = f"CRVAL{axis}{suffix}"
+            if crval_key in header:
+                header[crval_key] = float(header[crval_key]) / factor
+            cdelt_key = f"CDELT{axis}{suffix}"
+            if cdelt_key in header:
+                header[cdelt_key] = float(header[cdelt_key]) / factor
+            for pixel_axis in range(1, self.naxis + 1):
+                cd_key = f"CD{axis}_{pixel_axis}{suffix}"
+                if cd_key in header:
+                    header[cd_key] = float(header[cd_key]) / factor
+        return header
+
+    def _clone_preserving_wcs_state(self) -> "WCS":
+        tabular_axes = {
+            axis + 1: tabular for axis, tabular in self.tabular_axes.items()
+        }
+        clone = WCS(
+            self.to_header(relax=True, include_naxis=True),
+            key=self.wcs_key,
+            tabular_axes=tabular_axes,
+            coupled_tabular=self.coupled_tabular,
+            coupled_tabular_axes=tuple(axis + 1 for axis in self.coupled_tabular_axes),
+            coupled_tabular_pixel_axes=tuple(
+                axis + 1 for axis in self.coupled_tabular_pixel_axes
+            ),
+            cpdis1=self.cpdis1,
+            cpdis2=self.cpdis2,
+            det2im1=self.det2im1,
+            det2im2=self.det2im2,
+        ).to(self.device)
+        if self._pixel_affine_matrix is not None:
+            assert self._pixel_affine_offset is not None
+            clone._set_pixel_affine(
+                self._pixel_affine_matrix, self._pixel_affine_offset
+            )
+        return clone
+
+    def _rebase_sip_header_for_diagonal_pixel_map(
+        self, header: dict[str, Any], steps: tuple[int, int]
+    ) -> None:
+        if self.sip is None:
+            return
+        sx, sy = steps
+        coefficient_sets = (
+            ("A", self.sip.a_coeffs, sx),
+            ("B", self.sip.b_coeffs, sy),
+            ("AP", self.sip.ap_coeffs, sx),
+            ("BP", self.sip.bp_coeffs, sy),
+        )
+        for prefix, coefficients, output_scale in coefficient_sets:
+            for (p, q), coefficient in coefficients.items():
+                header[f"{prefix}_{p}_{q}"] = float(
+                    coefficient * (sx**p) * (sy**q) / output_scale
+                )
+
+    def _wcs_state_constructor_kwargs(self) -> dict[str, Any]:
+        return {
+            "tabular_axes": {
+                axis + 1: tabular for axis, tabular in self.tabular_axes.items()
+            },
+            "coupled_tabular": self.coupled_tabular,
+            "coupled_tabular_axes": tuple(
+                axis + 1 for axis in self.coupled_tabular_axes
+            ),
+            "coupled_tabular_pixel_axes": tuple(
+                axis + 1 for axis in self.coupled_tabular_pixel_axes
+            ),
+        }
+
     def _slice_preserve_axes(self, pixel_slices: tuple[slice, ...]) -> "WCS":
         starts: list[int] = []
+        stops: list[int | None] = []
         steps: list[int] = []
         new_shape: list[int] | None = [] if self._pixel_shape is not None else None
         for axis, axis_slice in enumerate(pixel_slices):
             axis_len = None if self._pixel_shape is None else self._pixel_shape[axis]
             start, stop, step = self._normalize_axis_slice(axis_slice, axis_len)
             starts.append(start)
+            stops.append(stop)
             steps.append(step)
             if new_shape is not None:
                 if stop is None:
@@ -3953,28 +4188,150 @@ class WCS:
                 assert stop is not None
                 new_shape.append(len(range(start, stop, step)))
 
+        identity = all(
+            start == 0
+            and step == 1
+            and (
+                stop is None
+                or (
+                    self._pixel_shape is not None
+                    and stop == self._pixel_shape[axis]
+                )
+            )
+            for axis, (start, stop, step) in enumerate(
+                zip(starts, stops, steps)
+            )
+        )
+        if identity:
+            return self._clone_preserving_wcs_state()
+
         step_t = torch.as_tensor(steps, dtype=self._wcs_coord_dtype(self.device), device=self.device)
         start_t = torch.as_tensor(starts, dtype=self._wcs_coord_dtype(self.device), device=self.device)
+
+        if self._pixel_affine_matrix is not None:
+            if self.naxis < 2:
+                raise ValueError("pixel-affine WCS must have at least two axes")
+            header = self._copy_wcs_header()
+            header["WCSAXES"] = self.naxis
+            header["NAXIS"] = self.naxis
+            new_crpix = self.crpix.clone()
+            new_cd = self.cd_full.clone()
+            new_pc = self.pc_full.clone()
+            affine_axes = list(self._pixel_affine_axes())
+            other_axes = [
+                axis for axis in range(self.naxis) if axis not in affine_axes
+            ]
+            if other_axes:
+                new_crpix[other_axes] = 1.0 - (
+                    start_t[other_axes] + 1.0 - self.crpix[other_axes]
+                ) / step_t[other_axes]
+                new_cd[:, other_axes] = (
+                    new_cd[:, other_axes] * step_t[other_axes]
+                )
+                new_pc[:, other_axes] = (
+                    new_pc[:, other_axes] * step_t[other_axes]
+                )
+            for i in range(1, self.naxis + 1):
+                header[f"CRPIX{i}"] = float(new_crpix[i - 1].detach().cpu().item())
+                unit_factor = float(self._celestial_unit_factors[i - 1].item())
+                if self._is_tpv and self._tpv_uses_pixel_intermediate:
+                    header[f"CDELT{i}"] = (
+                        float(self.cdelt[i - 1].item()) / unit_factor
+                    )
+                    for j in range(1, self.naxis + 1):
+                        header[f"PC{i}_{j}"] = float(
+                            new_pc[i - 1, j - 1].detach().cpu().item()
+                        )
+                        header.pop(f"CD{i}_{j}", None)
+                else:
+                    for j in range(1, self.naxis + 1):
+                        header[f"CD{i}_{j}"] = float(
+                            new_cd[i - 1, j - 1].detach().cpu().item()
+                        ) / unit_factor
+                    header.pop(f"CDELT{i}", None)
+                    for j in range(1, self.naxis + 1):
+                        header.pop(f"PC{i}_{j}", None)
+                if new_shape is not None:
+                    header[f"NAXIS{i}"] = int(new_shape[i - 1])
+            sliced = WCS(
+                header,
+                key=self.wcs_key,
+                cpdis1=self.cpdis1,
+                cpdis2=self.cpdis2,
+                det2im1=self.det2im1,
+                det2im2=self.det2im2,
+                **self._wcs_state_constructor_kwargs(),
+            ).to(self.device)
+            spatial_start = start_t[affine_axes]
+            assert self._pixel_affine_offset is not None
+            step_inv = torch.diag(1.0 / step_t[affine_axes])
+            sliced._set_pixel_affine(
+                step_inv @ self._pixel_affine_matrix,
+                step_inv @ (self._pixel_affine_offset - spatial_start),
+            )
+            return sliced
+
         new_crpix = 1.0 - (start_t + 1.0 - self.crpix) / step_t
         new_cd = self.cd_full @ torch.diag(step_t)
+        new_pc = self.pc_full @ torch.diag(step_t)
 
         header = self._copy_wcs_header()
         header["WCSAXES"] = self.naxis
         header["NAXIS"] = self.naxis
         for i in range(1, self.naxis + 1):
             header[f"CRPIX{i}"] = float(new_crpix[i - 1].detach().cpu().item())
-            for j in range(1, self.naxis + 1):
-                header[f"CD{i}_{j}"] = float(new_cd[i - 1, j - 1].detach().cpu().item())
-            header.pop(f"CDELT{i}", None)
-            for j in range(1, self.naxis + 1):
-                header.pop(f"PC{i}_{j}", None)
+            unit_factor = float(self._celestial_unit_factors[i - 1].item())
+            if self._is_tpv and self._tpv_uses_pixel_intermediate:
+                header[f"CDELT{i}"] = float(self.cdelt[i - 1].item()) / unit_factor
+                for j in range(1, self.naxis + 1):
+                    header[f"PC{i}_{j}"] = float(
+                        new_pc[i - 1, j - 1].detach().cpu().item()
+                    )
+                    header.pop(f"CD{i}_{j}", None)
+            else:
+                for j in range(1, self.naxis + 1):
+                    header[f"CD{i}_{j}"] = float(
+                        new_cd[i - 1, j - 1].detach().cpu().item()
+                    ) / unit_factor
+                header.pop(f"CDELT{i}", None)
+                for j in range(1, self.naxis + 1):
+                    header.pop(f"PC{i}_{j}", None)
             if new_shape is not None:
                 header[f"NAXIS{i}"] = int(new_shape[i - 1])
 
-        tabular_axes = {
-            axis + 1: tabular for axis, tabular in self.tabular_axes.items()
-        }
-        return WCS(header, key=self.wcs_key, tabular_axes=tabular_axes)
+        cpdis1 = self.cpdis1
+        cpdis2 = self.cpdis2
+        det2im1 = self.det2im1
+        det2im2 = self.det2im2
+        if self.naxis >= 2:
+            spatial_starts = (starts[0], starts[1])
+            spatial_steps = (steps[0], steps[1])
+            self._rebase_sip_header_for_diagonal_pixel_map(header, spatial_steps)
+            if cpdis1 is not None:
+                cpdis1 = cpdis1.rebased_for_diagonal_pixel_map(
+                    spatial_starts, spatial_steps, component_axis=0
+                )
+            if cpdis2 is not None:
+                cpdis2 = cpdis2.rebased_for_diagonal_pixel_map(
+                    spatial_starts, spatial_steps, component_axis=1
+                )
+            if det2im1 is not None:
+                det2im1 = det2im1.rebased_for_diagonal_pixel_map(
+                    spatial_starts, spatial_steps, component_axis=0
+                )
+            if det2im2 is not None:
+                det2im2 = det2im2.rebased_for_diagonal_pixel_map(
+                    spatial_starts, spatial_steps, component_axis=1
+                )
+        return WCS(
+            header,
+            key=self.wcs_key,
+            cpdis1=cpdis1,
+            cpdis2=cpdis2,
+            det2im1=det2im1,
+            det2im2=det2im2,
+            **self._wcs_state_constructor_kwargs(),
+        ).to(self.device)
 
     def _copy_wcs_header(self) -> dict[str, Any]:
         header: dict[str, Any] = {}
@@ -3985,11 +4342,19 @@ class WCS:
             header["NAXIS"] = self.naxis
             for i, size in enumerate(self._pixel_shape, start=1):
                 header[f"NAXIS{i}"] = int(size)
+        if self.sip is not None:
+            coefficient_sets = (
+                ("A", self.sip.a_order, self.sip.a_coeffs),
+                ("B", self.sip.b_order, self.sip.b_coeffs),
+                ("AP", self.sip.ap_order, self.sip.ap_coeffs),
+                ("BP", self.sip.bp_order, self.sip.bp_coeffs),
+            )
+            for prefix, order, coefficients in coefficient_sets:
+                if order > 0 or coefficients:
+                    header[f"{prefix}_ORDER"] = int(order)
+                for (p, q), coefficient in coefficients.items():
+                    header[f"{prefix}_{p}_{q}"] = float(coefficient)
         return header
-
-    def to_header(self) -> dict[str, Any]:
-        """Return a plain FITS-WCS header dictionary for this WCS."""
-        return self._copy_wcs_header()
 
     def with_pixel_affine_correction(
         self,
@@ -4005,9 +4370,9 @@ class WCS:
         offset``. The returned WCS maps corrected pixels to the same world
         coordinates as the original WCS at the corresponding source pixels.
 
-        The update is exact for distortion-free WCS with uncoupled axes beyond
-        the first two pixel axes. Distorted WCS store the affine and apply it in
-        pixel space before SIP/TPV/TNX/ZPX distortion.
+        The transform acts on the two pixel axes associated with the celestial
+        CTYPE pair. Distorted WCS store the affine and apply it in pixel space
+        before SIP/TPV/TNX/ZPX distortion.
         """
         if self.naxis < 2:
             raise ValueError("pixel affine correction requires at least two WCS axes")
@@ -4017,46 +4382,53 @@ class WCS:
             raise ValueError("matrix must have shape (2, 2)")
         if shift.shape != (2,):
             raise ValueError("offset must have shape (2,)")
-        affine_inv = torch.linalg.inv(affine)
-        extra_coupled = False
-        for axis in range(2, self.naxis):
-            row = self.cd_full[axis, :2]
-            col = self.cd_full[:2, axis]
-            extra_coupled = extra_coupled or bool(
-                torch.any(torch.abs(row) > 1e-15)
-                or torch.any(torch.abs(col) > 1e-15)
+        if torch.equal(affine, torch.eye(2, dtype=affine.dtype, device=affine.device)) and not bool(
+            torch.count_nonzero(shift)
+        ):
+            return self._clone_preserving_wcs_state()
+        if self._pixel_affine_matrix is not None:
+            assert self._pixel_affine_offset is not None
+            corrected = self._clone_preserving_wcs_state()
+            corrected._set_pixel_affine(
+                affine @ self._pixel_affine_matrix,
+                affine @ self._pixel_affine_offset + shift,
             )
+            return corrected
+        affine_inv = torch.linalg.inv(affine)
         distorted = (
-            self.sip is not None or self._is_tpv or self._is_tnx or self._is_zpx
+            self.sip is not None
+            or self._is_tpv
+            or self._is_tnx
+            or self._is_zpx
+            or self._has_paper4_lut()
         )
 
         header = self._copy_wcs_header()
-        for i in range(1, self.naxis + 1):
-            for j in range(1, self.naxis + 1):
-                header[f"CD{i}_{j}"] = float(
-                    self.cd_full[i - 1, j - 1].detach().cpu().item()
+        if not distorted:
+            for i in range(1, self.naxis + 1):
+                unit_factor = float(self._celestial_unit_factors[i - 1].item())
+                for j in range(1, self.naxis + 1):
+                    header[f"CD{i}_{j}"] = float(
+                        self.cd_full[i - 1, j - 1].detach().cpu().item()
+                    ) / unit_factor
+                header.pop(f"CDELT{i}", None)
+                for j in range(1, self.naxis + 1):
+                    header.pop(f"PC{i}_{j}", None)
+            affine_axes = list(self._pixel_affine_axes())
+            old_crpix = self.crpix[affine_axes]
+            new_crpix = 1.0 + shift + affine @ (old_crpix - 1.0)
+            new_cd_columns = self.cd_full[:, affine_axes] @ affine_inv
+            for pair_index, pixel_axis in enumerate(affine_axes):
+                header[f"CRPIX{pixel_axis + 1}"] = float(
+                    new_crpix[pair_index].detach().cpu().item()
                 )
-            header.pop(f"CDELT{i}", None)
-            for j in range(1, self.naxis + 1):
-                header.pop(f"PC{i}_{j}", None)
-
-            if not distorted:
-                old_crpix = self.crpix[:2]
-                new_crpix = 1.0 + shift + affine @ (old_crpix - 1.0)
-                new_cd_2d = self.cd_full[:2, :2] @ affine_inv
-                for i in range(2):
-                    header[f"CRPIX{i + 1}"] = float(new_crpix[i].detach().cpu().item())
-                    for j in range(2):
-                        header[f"CD{i + 1}_{j + 1}"] = float(
-                            new_cd_2d[i, j].detach().cpu().item()
-                        )
-            if extra_coupled:
-                extra_spatial = self.cd_full[2:, :2] @ affine_inv
-                for i in range(2, self.naxis):
-                    for j in range(2):
-                        header[f"CD{i + 1}_{j + 1}"] = float(
-                            extra_spatial[i - 2, j].detach().cpu().item()
-                        )
+                for world_axis in range(self.naxis):
+                    header[f"CD{world_axis + 1}_{pixel_axis + 1}"] = float(
+                        new_cd_columns[world_axis, pair_index]
+                        .detach()
+                        .cpu()
+                        .item()
+                    ) / float(self._celestial_unit_factors[world_axis].item())
 
         prefix = str(metadata_prefix).strip().upper()
         if prefix:
@@ -4067,10 +4439,15 @@ class WCS:
                     header[f"{prefix}A{i + 1}{j + 1}"] = float(
                         affine[i, j].detach().cpu().item()
                     )
-        tabular_axes = {
-            axis + 1: tabular for axis, tabular in self.tabular_axes.items()
-        }
-        corrected = WCS(header, key=self.wcs_key, tabular_axes=tabular_axes)
+        corrected = WCS(
+            header,
+            key=self.wcs_key,
+            cpdis1=self.cpdis1,
+            cpdis2=self.cpdis2,
+            det2im1=self.det2im1,
+            det2im2=self.det2im2,
+            **self._wcs_state_constructor_kwargs(),
+        )
         if prefix:
             for key, value in header.items():
                 if str(key).startswith(prefix):
@@ -4087,6 +4464,26 @@ class WCS:
             fit.matrix,
             fit.offset,
             metadata_prefix=metadata_prefix,
+        )
+
+    def with_affine(
+        self,
+        matrix_or_fit: Any,
+        offset: Any | None = None,
+        *,
+        metadata_prefix: str = "TSKYAF",
+    ) -> "WCS":
+        """Return a WCS corrected by an ``AffineFitResult`` or ``(matrix, offset)``."""
+        if offset is None and hasattr(matrix_or_fit, "matrix") and hasattr(matrix_or_fit, "offset"):
+            return self.with_affine_fit_correction(
+                matrix_or_fit, metadata_prefix=metadata_prefix
+            )
+        if offset is None:
+            raise ValueError(
+                "offset must be provided when matrix_or_fit is not an AffineFitResult"
+            )
+        return self.with_pixel_affine_correction(
+            matrix_or_fit, offset, metadata_prefix=metadata_prefix
         )
 
     def _normalize_wcs_slice(
@@ -4172,9 +4569,8 @@ class WCS:
         """Return a WCS containing selected pixel/world axes in the requested order.
 
         Axes are 0-based in FITS pixel-axis order. Dropped axes must be linearly
-        uncoupled from retained axes. Spatial WCS instances keep the celestial
-        projection axes as the leading pair; extra uncoupled axes may be dropped
-        or reordered after them.
+        uncoupled from retained axes. Spatial WCS instances keep both celestial
+        projection axes; retained axes may be reordered in FITS/API order.
         """
         keep: list[int] = []
         for axis in axes:
@@ -4191,9 +4587,12 @@ class WCS:
         """Return the 2D celestial component of a spatial WCS."""
         if not self._is_spatial or self.naxis < 2:
             raise ValueError("celestial WCS requires spatial axes")
-        for axis in range(2, self.naxis):
+        celestial_axes = list(self._celestial_axes)
+        for axis in range(self.naxis):
+            if axis in celestial_axes:
+                continue
             self._validate_axis_uncoupled_for_drop(axis)
-        return self._sub_wcs([0, 1])
+        return self._sub_wcs(celestial_axes)
 
     def _validate_axis_uncoupled_for_drop(self, axis: int) -> None:
         row = self.cd_full[axis, :].clone()
@@ -4229,17 +4628,13 @@ class WCS:
             raise ValueError("kept axes must be unique")
         fixed_rel_by_axis = {} if fixed_rel_by_axis is None else fixed_rel_by_axis
         if self._is_spatial:
-            celestial = [a for a in (0, 1) if a < self.naxis]
+            celestial = list(self._celestial_axes)
             dropped_celestial = [a for a in celestial if a not in keep_axes]
             if dropped_celestial:
                 if any(a not in fixed_rel_by_axis for a in dropped_celestial):
                     raise NotImplementedError(
-                        "spatial WCS subsetting must keep the first two celestial axes"
+                        "spatial WCS subsetting must keep both celestial axes"
                     )
-            elif len(keep_axes) >= 2 and keep_axes[:2] != [0, 1]:
-                raise NotImplementedError(
-                    "spatial WCS subsetting must keep the first two celestial axes"
-                )
         dropped_axes = [axis for axis in range(self.naxis) if axis not in keep_axes]
         for axis in dropped_axes:
             if axis not in fixed_rel_by_axis:
@@ -4266,9 +4661,7 @@ class WCS:
                 header[key] = self.wcs_params[key]
 
         cd_sub = self.cd_full[keep_axes, :][:, keep_axes]
-        dropped_celestial = [
-            a for a in (0, 1) if a < self.naxis and a not in keep_axes
-        ]
+        dropped_celestial = [a for a in self._celestial_axes if a not in keep_axes]
         world_ref: Tensor | None = None
         if self._is_spatial and dropped_celestial:
             # Bake celestial drops at the fixed pixel via a real forward sample so
@@ -4304,7 +4697,11 @@ class WCS:
         for new_axis, old_axis in enumerate(keep_axes, start=1):
             old_num = old_axis + 1
             ctype = str(self.wcs_params.get(f"CTYPE{old_num}", ""))
-            if self._is_spatial and dropped_celestial and old_axis < 2:
+            if (
+                self._is_spatial
+                and dropped_celestial
+                and old_axis in self._celestial_axes
+            ):
                 ctype = _ctype_without_projection(ctype)
             header[f"CTYPE{new_axis}"] = ctype
             header[f"CRPIX{new_axis}"] = float(
@@ -4316,7 +4713,10 @@ class WCS:
                 crval = self.crval[old_axis]
                 for fixed_axis, fixed_rel in fixed_rel_by_axis.items():
                     crval = crval + self.cd_full[old_axis, fixed_axis] * fixed_rel
-            header[f"CRVAL{new_axis}"] = float(crval.detach().cpu().item())
+            unit_factor = float(self._celestial_unit_factors[old_axis].item())
+            header[f"CRVAL{new_axis}"] = (
+                float(crval.detach().cpu().item()) / unit_factor
+            )
             if f"CUNIT{old_num}" in self.wcs_params:
                 header[f"CUNIT{new_axis}"] = self.wcs_params[f"CUNIT{old_num}"]
             if self._pixel_shape is not None:
@@ -4324,20 +4724,45 @@ class WCS:
             for out_axis, _old_out in enumerate(keep_axes, start=1):
                 header[f"CD{new_axis}_{out_axis}"] = float(
                     cd_sub[new_axis - 1, out_axis - 1].detach().cpu().item()
-                )
+                ) / unit_factor
 
-        if self._is_spatial and keep_axes[:2] == [0, 1] and not dropped_celestial:
+        if self._is_spatial and not dropped_celestial:
+            old_to_new = {
+                old_axis + 1: new_axis
+                for new_axis, old_axis in enumerate(keep_axes, start=1)
+            }
             for key, value in self.wcs_params.items():
                 key_s = str(key)
-                if key_s.startswith(("PV1_", "PV2_")):
-                    header[key_s] = value
+                if not key_s.startswith("PV") or "_" not in key_s:
+                    continue
+                axis_text, suffix = key_s[2:].split("_", 1)
+                if axis_text.isdigit() and int(axis_text) in old_to_new:
+                    header[f"PV{old_to_new[int(axis_text)]}_{suffix}"] = value
 
         tabular_axes = {
             keep_axes.index(axis) + 1: tabular
             for axis, tabular in self.tabular_axes.items()
             if axis in keep_axes
         }
-        return WCS(header, key=self.wcs_key, tabular_axes=tabular_axes)
+        has_pixel_distortion = self.sip is not None or self._has_paper4_lut()
+        identity_axes = keep_axes == list(range(self.naxis))
+        if has_pixel_distortion and not identity_axes:
+            raise NotImplementedError(
+                "SIP/CPDIS/DET2IM WCS axis reordering is not supported"
+            )
+        if identity_axes and self.sip is not None:
+            for key, value in self._copy_wcs_header().items():
+                if str(key).startswith(("A_", "B_", "AP_", "BP_")):
+                    header[str(key)] = value
+        return WCS(
+            header,
+            key=self.wcs_key,
+            tabular_axes=tabular_axes,
+            cpdis1=self.cpdis1 if identity_axes else None,
+            cpdis2=self.cpdis2 if identity_axes else None,
+            det2im1=self.det2im1 if identity_axes else None,
+            det2im2=self.det2im2 if identity_axes else None,
+        )
 
     def _coerce_stacked_coord(self, value: Any, name: str) -> Tensor:
         tensor = self._as_wcs_coord(value)
@@ -4357,14 +4782,19 @@ class WCS:
         if len(args) == 2 and self.naxis == 2:
             x_t = self._as_wcs_coord(args[0])
             y_t = self._as_wcs_coord(args[1])
+            x_t, y_t = torch.broadcast_tensors(x_t, y_t)
             ra, dec = self._pixel_to_world_2d_fast(x_t, y_t, origin)
-            return ra, dec
+            world = self._world_from_celestial_pair(ra, dec)
+            return world[..., 0], world[..., 1]
 
         if len(args) == 1:
             pixels = self._as_wcs_coord(args[0])
         else:
+            coordinates = torch.broadcast_tensors(
+                *(self._as_wcs_coord(a) for a in args)
+            )
             pixels = torch.stack(
-                [self._as_wcs_coord(a) for a in args],
+                coordinates,
                 dim=-1,
             )
 
@@ -4404,23 +4834,19 @@ class WCS:
         When ``allow_cpp_sphere`` is False, pole spherical rotation stays in Torch so
         ``torch.compile`` can fuse the full forward graph (stacked pixel API).
         """
-        # 1. Linear Transform (CD @ rel) for first 2 axes
+        # Pixel-space distortions operate on FITS pixel axes 1/2. Celestial
+        # projection rows are gathered independently below.
+        if self._pixel_affine_matrix is not None and self.naxis >= 2:
+            axis0, axis1 = self._pixel_affine_axes()
+            p0 = rel[:, axis0] + self.crpix[axis0] - 1.0
+            p1 = rel[:, axis1] + self.crpix[axis1] - 1.0
+            src_x, src_y = self._corrected_pixels_to_source(p0, p1, origin=0.0)
+            rel = rel.clone()
+            rel[:, axis0] = src_x - (self.crpix[axis0] - 1.0)
+            rel[:, axis1] = src_y - (self.crpix[axis1] - 1.0)
+
         rel_x = rel[:, 0]
         rel_y = rel[:, 1] if self.naxis >= 2 else torch.zeros_like(rel_x)
-
-        if self._pixel_affine_matrix is not None and self.naxis >= 2:
-            # Affine is on 0-based pixels; rel = pix_internal - crpix, pix_0 = pix_internal - 1.
-            p0 = rel_x + self.crpix[0] - 1.0
-            p1 = rel_y + self.crpix[1] - 1.0
-            src_x, src_y = self._corrected_pixels_to_source(p0, p1, origin=0.0)
-            rel_x = src_x - (self.crpix[0] - 1.0)
-            rel_y = src_y - (self.crpix[1] - 1.0)
-            if self.naxis == 2:
-                rel = torch.stack((rel_x, rel_y), dim=-1)
-            else:
-                rel = rel.clone()
-                rel[:, 0] = rel_x
-                rel[:, 1] = rel_y
 
         if (self.det2im1 is not None or self.det2im2 is not None) and self.naxis >= 2:
             x1 = rel_x + self.crpix[0]
@@ -4441,52 +4867,73 @@ class WCS:
             ):
                 return self.coupled_tabular.pixel_to_world(linear_world)
             coupled_world = self._apply_coupled_tabular_pixel_to_world(linear_world)
-            results = [
-                coupled_world.get(
-                    i, self._apply_tabular_pixel_to_world(linear_world[:, i], i)
-                )
-                for i in range(self.naxis)
-            ]
+            results = []
+            for axis in range(self.naxis):
+                if axis in coupled_world:
+                    results.append(coupled_world[axis])
+                else:
+                    results.append(
+                        self._apply_tabular_pixel_to_world(
+                            linear_world[:, axis], axis
+                        )
+                    )
         else:
-            # Distortion & Linear
+            if self.sip is not None:
+                rel_x, rel_y = self.sip.distort(rel_x, rel_y)
+            if self.cpdis1 is not None or self.cpdis2 is not None:
+                rel_x, rel_y = self._apply_cpdis_forward(rel_x, rel_y)
+            if self.sip is not None or self._has_paper4_lut():
+                rel = rel.clone()
+                rel[:, 0] = rel_x
+                rel[:, 1] = rel_y
+
+            intermediate = torch.matmul(rel, self.cd_full.T)
+            xi = intermediate[:, self._celestial_lon_axis]
+            eta = intermediate[:, self._celestial_lat_axis]
             if self._is_tpv:
-                u = self.cd[0, 0] * rel_x + self.cd[0, 1] * rel_y
-                v = self.cd[1, 0] * rel_x + self.cd[1, 1] * rel_y
-                xi, eta = self.tpv.distort(u, v)
-            else:
-                if self.sip is not None:
-                    rel_x, rel_y = self.sip.distort(rel_x, rel_y)
-                if self.cpdis1 is not None or self.cpdis2 is not None:
-                    rel_x, rel_y = self._apply_cpdis_forward(rel_x, rel_y)
-
-                # Linear Transform (CD @ coords)
-                xi = self.cd[0, 0] * rel_x + self.cd[0, 1] * rel_y
-                eta = self.cd[1, 0] * rel_x + self.cd[1, 1] * rel_y
-
+                if self._tpv_uses_pixel_intermediate:
+                    pc_intermediate = torch.matmul(rel, self.pc_full.T)
+                    xi, eta = self.tpv.distort(
+                        pc_intermediate[:, self._celestial_lon_axis],
+                        pc_intermediate[:, self._celestial_lat_axis],
+                    )
+                    xi = xi * self.cdelt[self._celestial_lon_axis]
+                    eta = eta * self.cdelt[self._celestial_lat_axis]
+                else:
+                    xi, eta = self.tpv.distort(xi, eta)
             if self._is_gls:
-                ra, dec = self._gls_forward(xi, eta)
+                lon, lat = self._gls_forward(xi, eta)
+            elif (
+                (self._is_tan or self._is_tpv)
+                and not self._is_tnx
+                and self.alpha0 == self.alpha_p
+                and self.delta0 == self.delta_p
+            ):
+                lon, lat = self._project_tan(xi, eta)
             else:
-                # Projection
                 phi, theta = self._project_native_coords(xi, eta)
-
-                # Spherical Rotation (result is in degrees)
-                ra, dec = self._spherical_rotation_optimized(
+                lon, lat = self._spherical_rotation_optimized(
                     phi, theta, self._native_type, allow_cpp_sphere=allow_cpp_sphere
                 )
-            results = [ra, dec]
 
-        # Handle NAXIS > 2 (e.g. Spectral axis 3)
-        if self.naxis >= 3:
-            linear_extra = self.crval + torch.matmul(rel, self.cd_full.T)
-            coupled_world = self._apply_coupled_tabular_pixel_to_world(linear_extra)
-            for i in range(2, self.naxis):
-                # Basic linear transformation for non-spatial axes
-                val = linear_extra[:, i]
-                results.append(
-                    coupled_world.get(i, self._apply_tabular_pixel_to_world(val, i))
-                )
+            linear_world = self.crval + intermediate
+            coupled_world = self._apply_coupled_tabular_pixel_to_world(linear_world)
+            results = []
+            for axis in range(self.naxis):
+                if axis == self._celestial_lon_axis:
+                    results.append(lon)
+                elif axis == self._celestial_lat_axis:
+                    results.append(lat)
+                elif axis in coupled_world:
+                    results.append(coupled_world[axis])
+                else:
+                    results.append(
+                        self._apply_tabular_pixel_to_world(
+                            linear_world[:, axis], axis
+                        )
+                    )
 
-        return torch.stack(results[: self.naxis], dim=-1)
+        return torch.stack(results, dim=-1)
 
     def _stacked_pixels_to_world_flat(
         self,
@@ -4508,367 +4955,12 @@ class WCS:
         ):
             xi, eta = self._apply_cd_2d(rel[:, 0], rel[:, 1])
             ra, dec = self._project_tan(xi, eta)
-            return torch.stack((ra, dec), dim=-1)
+            return self._world_from_celestial_pair(ra, dec)
         return self._transform_optimized(rel, allow_cpp_sphere=allow_cpp_sphere)
 
-    def _spherical_rotation_optimized(
-        self,
-        phi: Tensor,
-        theta: Tensor,
-        native_type: str = "pole",
-        *,
-        allow_cpp_sphere: bool = True,
-    ) -> Tuple[Tensor, Tensor]:
-        """
-        Optimized rotation using vector rotation matrix.
-        """
-        if native_type != "pole":
-            if self._use_center_equator_fast:
-                ra = _wrap_lon360(phi + self.alpha0)
-                return ra, theta
-            return self._spherical_rotation(phi, theta, native_type)
 
-        if (
-            allow_cpp_sphere
-            and self._cpp_spherical_rotation_pole is not None
-            and phi.device.type == "cpu"
-            and theta.device.type == "cpu"
-            and phi.dtype == torch.float64
-            and theta.dtype == torch.float64
-            and not phi.requires_grad
-            and not theta.requires_grad
-        ):
-            return self._cpp_spherical_rotation_pole(
-                phi,
-                theta,
-                self._phi_p_rad,
-                self._pole_east_x,
-                self._pole_east_y,
-                self._pole_north_x,
-                self._pole_north_y,
-                self._pole_north_z,
-                self._pole_radial_x,
-                self._pole_radial_y,
-                self._pole_radial_z,
-            )
 
-        d2r = 0.017453292519943295
-        r2d = 57.29577951308232
 
-        phi_rad = (phi - self.phi_p) * d2r
-        theta_rad = theta * d2r
-
-        sin_theta, cos_theta = _sincos(theta_rad)
-        sin_phi, cos_phi = _sincos(phi_rad)
-
-        # Native Cartesian (u, v, w) relative to local basis (East, North, Radial)
-        u = cos_theta * sin_phi
-        v = cos_theta * cos_phi
-        w = sin_theta
-
-        # v_cel = R @ v_nat using precomputed scalar basis at (alpha_p, delta_p).
-        x = u * self._pole_east_x + v * self._pole_north_x + w * self._pole_radial_x
-        y = u * self._pole_east_y + v * self._pole_north_y + w * self._pole_radial_y
-        z = v * self._pole_north_z + w * self._pole_radial_z
-
-        ra = torch.remainder(torch.atan2(y, x) * r2d, 360.0)
-        dec = torch.asin(torch.clamp(z, -1.0, 1.0)) * r2d
-
-        return ra, dec
-
-    def _spherical_rotation(
-        self, phi: Tensor, theta: Tensor, native_type: str = "pole"
-    ) -> Tuple[Tensor, Tensor]:
-        """
-        Rotate native spherical coordinates (phi, theta) to celestial (alpha, delta)
-        using vector rotation (robust at pole).
-        native_type: 'pole' (Ref is 0,90) or 'center' (Ref is 0,0).
-        """
-        # Constants
-        d2r = math.pi / 180.0
-        r2d = 180.0 / math.pi
-
-        # Convert to radians
-        phi_rad = phi * d2r
-        theta_rad = theta * d2r
-
-        # 1. Convert Native (phi, theta) to Cartesian (u, v, w)
-        # u = cos(theta) * sin(phi)
-        # v = -cos(theta) * cos(phi)
-        # w = sin(theta)
-
-        sin_theta = torch.sin(theta_rad)
-        cos_theta = torch.cos(theta_rad)
-        sin_phi = torch.sin(phi_rad)
-        cos_phi = torch.cos(phi_rad)
-
-        u = cos_theta * sin_phi
-        v = -cos_theta * cos_phi
-        w = sin_theta
-
-        # 2. Construct Basis Vectors for Celestial Frame at CRVAL
-        a0 = self.crval[0] * d2r
-        d0 = self.crval[1] * d2r
-
-        sin_a0, cos_a0 = torch.sin(a0), torch.cos(a0)
-        sin_d0, cos_d0 = torch.sin(d0), torch.cos(d0)
-
-        # Basis vectors definition:
-        # r (radial, pointing to CRVAL) = [cos d0 cos a0, cos d0 sin a0, sin d0]
-        # n (north) = [-sin d0 cos a0, -sin d0 sin a0, cos d0]
-        # e (east)  = [-sin a0, cos a0, 0]
-
-        # r components
-        rx = cos_d0 * cos_a0
-        ry = cos_d0 * sin_a0
-        rz = sin_d0
-
-        # n components
-        nx = -sin_d0 * cos_a0
-        ny = -sin_d0 * sin_a0
-        nz = cos_d0
-
-        # e components
-        ex = -sin_a0
-        ey = cos_a0
-        ez = torch.zeros_like(a0)
-
-        # 3. Rotate Vector
-        if native_type == "pole":
-            # Ref is (0, 90) -> w=1
-            # Map w -> r (Pole to CRVAL)
-            # Map v -> n (North-ish to North)
-            # Map u -> e (East to East)
-            X = u * ex + v * nx + w * rx
-            Y = u * ey + v * ny + w * ry
-            Z = u * ez + v * nz + w * rz
-        else:  # 'center'
-            # Ref is (0, 0) -> intersection of Eq/Meridian
-            # At (0,0), w=0, u=0, v=-1 (cos(0)=1, v=-1).
-            # We want Ref (v=-1) to map to CRVAL (r).
-            # So map -v -> r => v -> -r.
-            # We want North Pole (w=1) to map to North (n).
-            # Map w -> n.
-            # Map u -> e (East).
-            # Check u x v = e x -r?
-            # e x -r = n. Matched.
-
-            X = u * ex + v * (-rx) + w * nx
-            Y = u * ey + v * (-ry) + w * ny
-            Z = u * ez + v * (-rz) + w * nz
-
-        # 4. Convert Cartesian to RA/Dec
-        # Dec = asin(Z)
-        Z = torch.clamp(Z, -1.0, 1.0)
-        dec_rad = torch.asin(Z)
-
-        # alpha - alpha_p = atan2(y, x) -> NO.
-        # X, Y, Z are absolute celestial coordinates.
-        # alpha = atan2(Y, X) directly.
-        alpha_rad = torch.atan2(Y, X)
-
-        # Convert to degrees
-        alpha = alpha_rad * r2d
-        delta = dec_rad * r2d
-
-        # Normalize Alpha
-        alpha = torch.remainder(alpha, 360.0)
-
-        return alpha, delta
-
-    def _inverse_spherical_rotation(
-        self,
-        ra: Tensor,
-        dec: Tensor,
-        native_type: str = "pole",
-        *,
-        allow_cpp_inverse_sphere: bool = True,
-    ) -> Tuple[Tensor, Tensor]:
-        """
-        Inverse spherical rotation: celestial (ra, dec) -> native (phi, theta).
-        """
-        if native_type != "pole":
-            if self._use_center_equator_fast:
-                phi = _wrap_lon180_checked(ra - self.alpha0)
-                return phi, dec
-            d2r = 0.017453292519943295
-            r2d = 57.29577951308232
-            ra_rad = ra * d2r
-            dec_rad = dec * d2r
-            sin_dec, cos_dec = _sincos(dec_rad)
-            sin_ra, cos_ra = _sincos(ra_rad)
-            x_cel = cos_dec * cos_ra
-            y_cel = cos_dec * sin_ra
-            z_cel = sin_dec
-            u = x_cel * self._pole_east_x + y_cel * self._pole_east_y
-            w = (
-                x_cel * self._pole_north_x
-                + y_cel * self._pole_north_y
-                + z_cel * self._pole_north_z
-            )
-            v = -(
-                x_cel * self._pole_radial_x
-                + y_cel * self._pole_radial_y
-                + z_cel * self._pole_radial_z
-            )
-            theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
-            phi = torch.remainder(torch.atan2(u, -v) * r2d + self.phi_p, 360.0)
-            return phi, theta
-
-        if (
-            allow_cpp_inverse_sphere
-            and self._cpp_inverse_spherical_rotation_pole is not None
-            and ra.device.type == "cpu"
-            and dec.device.type == "cpu"
-            and ra.dtype == torch.float64
-            and dec.dtype == torch.float64
-            and not ra.requires_grad
-            and not dec.requires_grad
-        ):
-            return self._cpp_inverse_spherical_rotation_pole(
-                ra,
-                dec,
-                self._phi_p_rad,
-                self._pole_east_x,
-                self._pole_east_y,
-                self._pole_north_x,
-                self._pole_north_y,
-                self._pole_north_z,
-                self._pole_radial_x,
-                self._pole_radial_y,
-                self._pole_radial_z,
-            )
-
-        d2r = 0.017453292519943295
-        r2d = 57.29577951308232
-
-        ra_rad = ra * d2r
-        dec_rad = dec * d2r
-
-        sin_dec, cos_dec = _sincos(dec_rad)
-        sin_ra, cos_ra = _sincos(ra_rad)
-
-        # Celestial Cartesian (X, Y, Z)
-        x_cel = cos_dec * cos_ra
-        y_cel = cos_dec * sin_ra
-        z_cel = sin_dec
-
-        # v_nat = R^T @ v_cel using precomputed scalar basis at (alpha_p, delta_p).
-        u = x_cel * self._pole_east_x + y_cel * self._pole_east_y
-        v = (
-            x_cel * self._pole_north_x
-            + y_cel * self._pole_north_y
-            + z_cel * self._pole_north_z
-        )
-        w = (
-            x_cel * self._pole_radial_x
-            + y_cel * self._pole_radial_y
-            + z_cel * self._pole_radial_z
-        )
-
-        theta = torch.asin(torch.clamp(w, -1.0, 1.0)) * r2d
-        phi = torch.remainder(torch.atan2(u, v) * r2d + self.phi_p, 360.0)
-
-        return phi, theta
-
-    def _project_tan(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-        """
-        Gnomonic (TAN) projection: intermediate (deg) -> spherical (deg).
-
-        xi, eta: Standard coordinates in degrees.
-        Returns: ra, dec in degrees.
-        """
-        # Convert degress to radians
-        rad = math.pi / 180.0
-        deg = 180.0 / math.pi
-
-        xi_rad = xi * rad
-        eta_rad = eta * rad
-        crval1_rad = self.crval[0] * rad
-        crval2_rad = self.crval[1] * rad
-
-        # Use the explicit rotation matrix method which is vectorizable.
-        # 1. Construct vector in tangent plane (3D).
-        #    Plane is z=1 (tangent at North Pole of unit sphere).
-        #    V = [xi, eta, 1] is the correct direction.
-        #    Normalize to get unit vector on sphere.
-
-        x = xi_rad
-        y = eta_rad
-
-        # 2. Rotate this vector from North Pole (0, 90) to (CRVAL1, CRVAL2).
-        # Vector in u,v,w space where w points to CRVAL.
-        # u = x (East)
-        # v = y (North)
-        # w = 1.0
-
-        u = x
-        v = y
-        w = torch.ones_like(x)
-
-        # Normalize
-        norm = torch.sqrt(u * u + v * v + w * w)
-        u = u / norm
-        v = v / norm
-        w = w / norm
-
-        # This vector (u,v,w) is in a frame where Z-axis points to (CRVAL1, CRVAL2).
-        # Y-axis points North (towards NCP).
-        # X-axis points East.
-
-        # We want to rotate this frame to the celestial frame (X, Y, Z).
-        # Rotation depends on (alpha0, delta0).
-
-        a0 = crval1_rad
-        d0 = crval2_rad
-
-        # Construct the rotation matrix explicitly.
-
-        # Local basis at (a0, d0):
-        # r (radial) = [cos(d0)cos(a0), cos(d0)sin(a0), sin(d0)]
-        # n (north)  = [-sin(d0)cos(a0), -sin(d0)sin(a0), cos(d0)] (partial d/delta)
-        # e (east)   = [-sin(a0), cos(a0), 0] (partial d/alpha / cos(delta))
-
-        # Our vector is V = u*e + v*n + w*r
-
-        sin_a0, cos_a0 = torch.sin(a0), torch.cos(a0)
-        sin_d0, cos_d0 = torch.sin(d0), torch.cos(d0)
-
-        # e vector components
-        ex = -sin_a0
-        ey = cos_a0
-        ez = torch.zeros_like(a0)
-
-        # n vector components
-        nx = -sin_d0 * cos_a0
-        ny = -sin_d0 * sin_a0
-        nz = cos_d0
-
-        # r vector components
-        rx = cos_d0 * cos_a0
-        ry = cos_d0 * sin_a0
-        rz = sin_d0
-
-        # Final vector components in Celestial Frame
-        X = u * ex + v * nx + w * rx
-        Y = u * ey + v * ny + w * ry
-        Z = u * ez + v * nz + w * rz
-
-        # Convert X,Y,Z back to RA, Dec
-        # Dec = asin(Z)
-        dec_out_rad = torch.asin(Z)
-
-        # RA = atan2(Y, X)
-        ra_out_rad = torch.atan2(Y, X)
-
-        # Convert to degrees
-        ra_out = ra_out_rad * deg
-        dec_out = dec_out_rad * deg
-
-        # Normalize RA to [0, 360]
-        ra_out = torch.remainder(ra_out, 360.0)
-
-        return ra_out, dec_out
 
     def world_to_pixel(self, *args, **kwargs) -> Union[Tensor, Tuple[Tensor, ...]]:
         """
@@ -4878,8 +4970,10 @@ class WCS:
         origin = float(kwargs.get("origin", 0))
 
         if len(args) == 2 and self.naxis == 2:
-            ra_t = self._as_wcs_coord(args[0])
-            dec_t = self._as_wcs_coord(args[1])
+            world_args = [self._as_wcs_coord(args[0]), self._as_wcs_coord(args[1])]
+            ra_t = world_args[self._celestial_lon_axis]
+            dec_t = world_args[self._celestial_lat_axis]
+            ra_t, dec_t = torch.broadcast_tensors(ra_t, dec_t)
             return self._world_to_pixel_2d_fast(
                 ra_t, dec_t, iterative=iterative, origin=origin
             )
@@ -4896,17 +4990,23 @@ class WCS:
                     pix_flat = stack_inv[origin](wf)
                     return pix_flat.view(world.shape)
                 px, py = self._world_to_pixel_2d_fast(
-                    world[..., 0], world[..., 1], iterative=iterative, origin=origin
+                    world[..., self._celestial_lon_axis],
+                    world[..., self._celestial_lat_axis],
+                    iterative=iterative,
+                    origin=origin,
                 )
                 return torch.stack([px, py], dim=-1)
         else:
+            coordinates = torch.broadcast_tensors(
+                *(self._as_wcs_coord(a) for a in args)
+            )
             world = torch.stack(
-                [self._as_wcs_coord(a) for a in args],
+                coordinates,
                 dim=-1,
             )
 
         original_shape = world.shape
-        world_flat = world.view(-1, self.naxis)
+        world_flat = world.reshape(-1, self.naxis)
 
         # 1. Check if first 2 axes are spatial
         is_spatial = self._is_spatial
@@ -4923,41 +5023,67 @@ class WCS:
             rel_flat = torch.matmul(self.cd_inv_full, (linear_world - self.crval).T).T
             pix_internal_flat = rel_flat + self.crpix
         else:
-            pix_internal_flat = self._alloc_pix_internal_like(world_flat)
-            px_1, py_1 = self._world_to_pixel_2d_fast(
-                world_flat[:, 0],
-                world_flat[:, 1],
-                iterative=iterative,
-                origin=1.0,
+            lon = world_flat[:, self._celestial_lon_axis]
+            lat = world_flat[:, self._celestial_lat_axis]
+            xi, eta = self._world_to_pixel_2d_core(
+                lon,
+                lat,
+                1.0,
+                intermediate_only=True,
             )
-            if self._pixel_affine_matrix is not None:
-                src_x, src_y = self._corrected_pixels_to_source(px_1, py_1, origin=1.0)
-            else:
-                src_x, src_y = px_1, py_1
-            pix_internal_flat[:, 0] = src_x
-            pix_internal_flat[:, 1] = src_y
+            linear_world = world_flat.clone()
+            coupled_pixel = self._apply_coupled_tabular_world_to_pixel(world_flat)
+            for axis in range(self.naxis):
+                if axis not in self._celestial_axes:
+                    linear_world[:, axis] = self._coupled_or_tabular_linear_world(
+                        coupled_pixel, world_flat, axis
+                    )
+            intermediate = linear_world - self.crval
+            intermediate[:, self._celestial_lon_axis] = xi
+            intermediate[:, self._celestial_lat_axis] = eta
+            rel_flat = torch.matmul(intermediate, self.cd_inv_full.T)
+            if self.cpdis1 is not None or self.cpdis2 is not None:
+                rel0, rel1 = self._apply_cpdis_inverse(
+                    rel_flat[:, 0], rel_flat[:, 1]
+                )
+                rel_flat = rel_flat.clone()
+                rel_flat[:, 0] = rel0
+                rel_flat[:, 1] = rel1
+            if self.sip is not None:
+                rel0, rel1 = self.sip.invert_distortion(
+                    rel_flat[:, 0], rel_flat[:, 1]
+                )
+                rel_flat = rel_flat.clone()
+                rel_flat[:, 0] = rel0
+                rel_flat[:, 1] = rel1
+            pix_internal_flat = rel_flat + self.crpix
+            if self.det2im1 is not None or self.det2im2 is not None:
+                p0, p1 = self._apply_det2im_inverse(
+                    pix_internal_flat[:, 0], pix_internal_flat[:, 1]
+                )
+                pix_internal_flat = pix_internal_flat.clone()
+                pix_internal_flat[:, 0] = p0
+                pix_internal_flat[:, 1] = p1
 
         # 3. Handle extra axes (NAXIS > 2) for non-spatial WCS
         if not is_spatial and self.naxis >= 3:
             # Already handled by cd_inv_full above
             pass
         elif is_spatial and self.naxis >= 3:
-            pix_internal_flat[:, 2:] = self._invert_extra_axes(
-                world_flat, pix_internal_flat[:, :2]
-            )
+            pass
 
         # Adjust for origin: pix = pix_internal + (origin - 1)
         pix_flat = pix_internal_flat + (origin - 1)
         if self._pixel_affine_matrix is not None and is_spatial and self.naxis >= 2:
+            axis0, axis1 = self._pixel_affine_axes()
             cx, cy = self._source_pixels_to_corrected(
-                pix_flat[:, 0], pix_flat[:, 1], origin
+                pix_flat[:, axis0], pix_flat[:, axis1], origin
             )
             pix_flat = pix_flat.clone()
-            pix_flat[:, 0] = cx
-            pix_flat[:, 1] = cy
+            pix_flat[:, axis0] = cx
+            pix_flat[:, axis1] = cy
 
         pix = pix_flat.view(original_shape)
         if len(args) > 1:
             return tuple(pix[..., i] for i in range(self.naxis))
         return pix
-

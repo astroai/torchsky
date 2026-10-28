@@ -8,7 +8,9 @@ import math
 import torch
 from torch import Tensor
 
-from ...io import read
+from torchfits import read
+from ...quality import QualityBit
+from ..quality import DQPolicy
 from .base import MaskWeightOp
 from .image_grid import validate_image_plane_2d
 from .noise import sanitize_inverse_variance
@@ -43,6 +45,58 @@ def _load_or_validate_aux_plane(
     if preserve_integer and not plane.is_floating_point():
         return plane.to(device=device)
     return plane.to(device=device, dtype=torch.float32)
+
+
+def load_image_observation_dq(
+    obs: object,
+    image: Tensor,
+    *,
+    device: torch.device,
+) -> Tensor | None:
+    image_shape = (int(image.shape[0]), int(image.shape[1]))
+    dq = _load_or_validate_aux_plane(
+        getattr(obs, "dq", None),
+        getattr(obs, "dq_path", None),
+        getattr(obs, "dq_hdu", "DQ"),
+        image_shape=image_shape,
+        device=device,
+        label="DQ",
+        preserve_integer=True,
+    )
+    effective = (
+        torch.zeros(image_shape, dtype=torch.int64, device=device)
+        if dq is None
+        else DQPolicy._coerce(dq).to(device=device)
+    )
+    has_quality = dq is not None
+    variance_components = []
+    for name in ("var_poisson", "var_rnoise", "var_flat"):
+        component = getattr(obs, name, None)
+        if isinstance(component, Tensor):
+            component_t = validate_image_plane_2d(component).to(
+                device=device,
+                dtype=torch.float32,
+            )
+            if tuple(component_t.shape) != image_shape:
+                raise ValueError(
+                    "Variance component shape must match the observation image shape"
+                )
+            variance_components.append(component_t)
+    if variance_components:
+        has_quality = True
+        total = torch.zeros(image_shape, dtype=torch.float32, device=device)
+        valid = torch.ones(image_shape, dtype=torch.bool, device=device)
+        for component in variance_components:
+            component_valid = torch.isfinite(component) & (component >= 0.0)
+            valid = valid & component_valid
+            total = total + torch.where(component_valid, component, 0.0)
+        valid = valid & (total > 0.0)
+        effective = torch.where(
+            valid,
+            effective,
+            effective | int(QualityBit.INVALID_VARIANCE),
+        )
+    return effective if has_quality else None
 
 
 def load_image_observation_weight_map(
@@ -186,6 +240,11 @@ def load_image_observation_weight_map(
                 torch.zeros_like(mask_f),
             )
             weight_map = weight_map * mask_f
+
+    dq = load_image_observation_dq(obs, image, device=device)
+    if dq is not None:
+        policy = getattr(obs, "dq_policy", None) or DQPolicy()
+        weight_map = weight_map * policy.usability_mask(dq).to(dtype=torch.float32)
 
     pb = _load_or_validate_aux_plane(
         getattr(obs, "primary_beam", None),

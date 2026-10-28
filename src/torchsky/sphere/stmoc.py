@@ -7,12 +7,13 @@ torchsky ``MOC`` UNIQ coverage. This is not a mocpy wrapper.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 from torch import Tensor
 
-from ..io import get_header, read_table, write
+from torchfits import read_header as get_header, write
+from torchfits.table import read_torch as read_table
 from . import healpix as _healpix
 from .moc import MOC, _resolve_moc_table_hdu_index, nest2uniq
 
@@ -20,11 +21,17 @@ TIME_MAX_ORDER = 61
 _US_PER_DAY = 86_400_000_000
 _JD_MJD_OFFSET_INT = 2_400_000  # JD = MJD + 2400000.5
 _TIME_FLAG = torch.tensor(-9223372036854775808, dtype=torch.int64)  # 1<<63 signed
+_CONTAINS_CHUNK_SIZE = 262_144
+_SERIAL_CONTAINS_PRODUCT = 64
 
 
 def mjd_to_time_us(mjd: Tensor | float) -> Tensor:
     """Convert MJD to integer microseconds since JD=0 (TMOC order-61 index)."""
-    t = torch.as_tensor(mjd)
+    t = (
+        mjd
+        if isinstance(mjd, Tensor)
+        else torch.as_tensor(mjd, dtype=torch.float64)
+    )
     device = t.device
     # ponytail: float32 MJD cannot encode µs near MJD 5e4; host float64 on MPS.
     if device.type == "mps":
@@ -75,6 +82,10 @@ class STMOC:
     space: tuple[MOC, ...]
     time_depth: int
     spatial_depth: int
+    _time_order: Tensor = field(init=False, repr=False, compare=False)
+    _time_start_sorted: Tensor = field(init=False, repr=False, compare=False)
+    _time_end_sorted: Tensor = field(init=False, repr=False, compare=False)
+    _time_non_overlapping: bool = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         start = torch.as_tensor(self.time_start_us, dtype=torch.int64).reshape(-1)
@@ -89,10 +100,22 @@ class STMOC:
             raise ValueError("spatial_depth must be non-negative")
         if bool((end <= start).any().item()) if start.numel() else False:
             raise ValueError("each time range must satisfy start < end")
+        order = torch.argsort(start, stable=True)
+        start_sorted = start.index_select(0, order)
+        end_sorted = end.index_select(0, order)
+        non_overlapping = not (
+            bool((start_sorted[1:] < end_sorted[:-1]).any().item())
+            if start_sorted.numel() > 1
+            else False
+        )
         object.__setattr__(self, "time_start_us", start)
         object.__setattr__(self, "time_end_us", end)
         object.__setattr__(self, "time_depth", int(self.time_depth))
         object.__setattr__(self, "spatial_depth", int(self.spatial_depth))
+        object.__setattr__(self, "_time_order", order)
+        object.__setattr__(self, "_time_start_sorted", start_sorted)
+        object.__setattr__(self, "_time_end_sorted", end_sorted)
+        object.__setattr__(self, "_time_non_overlapping", non_overlapping)
 
     @classmethod
     def empty(cls, *, time_depth: int = 0, spatial_depth: int = 0) -> "STMOC":
@@ -130,18 +153,32 @@ class STMOC:
         t_us = mjd_to_time_us(t.reshape(-1))
         lon_f = lon.reshape(-1)
         lat_f = lat.reshape(-1)
-        flat = torch.zeros(t_us.shape[0], dtype=torch.bool, device=t.device)
-        for i in range(self.n_segments):
-            start = int(self.time_start_us[i].item())
-            end = int(self.time_end_us[i].item())
-            hit = (t_us >= start) & (t_us < end)
-            if not bool(hit.any().item()):
-                continue
-            idx = torch.nonzero(hit, as_tuple=False).reshape(-1)
-            inside = self.space[i].contains(
-                lon_f.index_select(0, idx), lat_f.index_select(0, idx)
+        if (
+            t.device.type == "cpu"
+            and t_us.numel() * self.n_segments <= _SERIAL_CONTAINS_PRODUCT
+        ):
+            flat = _contains_serial(self, t_us, lon_f, lat_f)
+        elif self._time_non_overlapping:
+            flat = _contains_sorted(
+                self._time_start_sorted,
+                self._time_end_sorted,
+                self._time_order,
+                self.space,
+                t_us,
+                lon_f,
+                lat_f,
             )
-            flat[idx] = flat.index_select(0, idx) | inside
+        else:
+            starts, ends, space = _canonical_temporal_segments(self)
+            flat = _contains_sorted(
+                starts,
+                ends,
+                torch.arange(starts.numel(), dtype=torch.int64),
+                space,
+                t_us,
+                lon_f,
+                lat_f,
+            )
         return flat.reshape(t.shape)
 
     def filter_catalog(
@@ -159,14 +196,35 @@ class STMOC:
         t1 = int(mjd_to_time_us(float(t_end_mjd)).item())
         if t1 <= t0:
             raise ValueError("query time range must be positive")
-        acc = MOC(torch.empty((0,), dtype=torch.int64))
-        for i in range(self.n_segments):
-            s = int(self.time_start_us[i].item())
-            e = int(self.time_end_us[i].item())
-            if e <= t0 or s >= t1:
+        if self.n_segments == 0:
+            return MOC(torch.empty((0,), dtype=torch.int64))
+        starts = self._time_start_sorted
+        ends = self._time_end_sorted
+        device = starts.device
+        query = torch.tensor([t0, t1], dtype=torch.int64, device=device)
+        if self._time_non_overlapping:
+            lo = torch.searchsorted(ends, query[:1], right=True)
+            hi = torch.searchsorted(starts, query[1:], right=False)
+            lo_i, hi_i = torch.cat([lo, hi]).detach().cpu().tolist()
+            selected = self._time_order[lo_i:hi_i]
+        else:
+            stop = int(
+                torch.searchsorted(starts, query[1:], right=False)
+                .detach()
+                .cpu()[0]
+            )
+            selected = self._time_order[:stop][ends[:stop] > query[0]]
+        indices = selected.detach().cpu().tolist()
+        acc: MOC | None = None
+        seen: set[int] = set()
+        for index in indices:
+            moc = self.space[index]
+            key = id(moc)
+            if key in seen:
                 continue
-            acc = acc.union(self.space[i])
-        return acc
+            seen.add(key)
+            acc = moc if acc is None else acc.union(moc)
+        return acc if acc is not None else MOC(torch.empty((0,), dtype=torch.int64))
 
     def to_ascii(self) -> str:
         """IVOA-like STMOC ASCII: ``t<depth>/<c0>-<c1>`` plus spatial MOC ASCII."""
@@ -387,6 +445,173 @@ class STMOC:
         return _from_segments(segs, time_depth=time_depth, spatial_depth=spatial_depth)
 
 
+def _contains_serial(
+    stmoc: STMOC, t_us: Tensor, lon: Tensor, lat: Tensor
+) -> Tensor:
+    out = torch.zeros(t_us.numel(), dtype=torch.bool, device=t_us.device)
+    starts = stmoc.time_start_us.to(device=t_us.device)
+    ends = stmoc.time_end_us.to(device=t_us.device)
+    for index, moc in enumerate(stmoc.space):
+        hit = (t_us >= starts[index]) & (t_us < ends[index])
+        point_indices = torch.nonzero(hit, as_tuple=False).reshape(-1)
+        if point_indices.numel() == 0:
+            continue
+        inside = moc.contains(
+            lon.index_select(0, point_indices), lat.index_select(0, point_indices)
+        )
+        out[point_indices] = out.index_select(0, point_indices) | inside
+    return out
+
+
+def _contains_sorted(
+    starts: Tensor,
+    ends: Tensor,
+    segment_order: Tensor,
+    space: tuple[MOC, ...],
+    t_us: Tensor,
+    lon: Tensor,
+    lat: Tensor,
+) -> Tensor:
+    if starts.numel() == 0:
+        return torch.zeros(t_us.numel(), dtype=torch.bool, device=t_us.device)
+    starts_d = starts.to(device=t_us.device)
+    ends_d = ends.to(device=t_us.device)
+    order_d = segment_order.to(device=t_us.device)
+    out = torch.zeros(t_us.numel(), dtype=torch.bool, device=t_us.device)
+    for offset in range(0, t_us.numel(), _CONTAINS_CHUNK_SIZE):
+        stop = min(offset + _CONTAINS_CHUNK_SIZE, t_us.numel())
+        times = t_us[offset:stop]
+        positions = torch.searchsorted(starts_d, times, right=True) - 1
+        safe_positions = positions.clamp(min=0)
+        valid = (positions >= 0) & (times < ends_d[safe_positions])
+        candidates = order_d[safe_positions]
+        active_segments = torch.unique(candidates[valid]).detach().cpu().tolist()
+        groups: dict[int, tuple[MOC, list[int]]] = {}
+        for segment in active_segments:
+            moc = space[segment]
+            group = groups.get(id(moc))
+            if group is None:
+                groups[id(moc)] = (moc, [segment])
+            else:
+                group[1].append(segment)
+        chunk_out = out[offset:stop]
+        for moc, segments in groups.values():
+            if len(groups) == 1:
+                group_hit = valid
+            elif len(segments) == 1:
+                group_hit = valid & (candidates == segments[0])
+            else:
+                segment_tensor = torch.tensor(
+                    segments, dtype=torch.int64, device=t_us.device
+                )
+                group_hit = valid & torch.isin(candidates, segment_tensor)
+            point_indices = torch.nonzero(group_hit, as_tuple=False).reshape(-1)
+            inside = moc.contains(
+                lon[offset:stop].index_select(0, point_indices),
+                lat[offset:stop].index_select(0, point_indices),
+            )
+            chunk_out[point_indices] = inside
+    return out
+
+
+def _merge_optional_moc(left: MOC | None, right: MOC | None) -> MOC | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    if left is right:
+        return left
+    return left.union(right)
+
+
+def _time_bounds(stmoc: STMOC) -> Tensor:
+    if stmoc.n_segments == 0:
+        return torch.empty(0, dtype=torch.int64)
+    return torch.unique(
+        torch.cat(
+            [
+                stmoc.time_start_us.detach().cpu(),
+                stmoc.time_end_us.detach().cpu(),
+            ]
+        ),
+        sorted=True,
+    )
+
+
+def _mocs_over_bounds(stmoc: STMOC, bounds: Tensor) -> list[MOC | None]:
+    n_intervals = max(int(bounds.numel()) - 1, 0)
+    if n_intervals == 0 or stmoc.n_segments == 0:
+        return [None] * n_intervals
+    starts = stmoc._time_start_sorted.detach().cpu()
+    ends = stmoc._time_end_sorted.detach().cpu()
+    order = stmoc._time_order.detach().cpu()
+    if stmoc._time_non_overlapping:
+        positions = torch.searchsorted(starts, bounds[:-1], right=True) - 1
+        safe_positions = positions.clamp(min=0)
+        valid = (positions >= 0) & (ends[safe_positions] >= bounds[1:])
+        segment_indices = torch.where(valid, order[safe_positions], -1).tolist()
+        return [None if index < 0 else stmoc.space[index] for index in segment_indices]
+
+    start_positions = torch.searchsorted(bounds, starts).tolist()
+    end_positions = torch.searchsorted(bounds, ends).tolist()
+    segment_indices = order.tolist()
+    tree_size = 1 << max(n_intervals - 1, 0).bit_length()
+    tree: list[MOC | None] = [None] * (2 * tree_size)
+    for start, end, segment in zip(
+        start_positions, end_positions, segment_indices, strict=True
+    ):
+        left = start + tree_size
+        right = end + tree_size
+        moc = stmoc.space[segment]
+        while left < right:
+            if left & 1:
+                tree[left] = _merge_optional_moc(tree[left], moc)
+                left += 1
+            if right & 1:
+                right -= 1
+                tree[right] = _merge_optional_moc(tree[right], moc)
+            left >>= 1
+            right >>= 1
+
+    result: list[MOC | None] = [None] * n_intervals
+    stack: list[tuple[int, MOC | None]] = [(1, None)]
+    while stack:
+        node, inherited = stack.pop()
+        combined = _merge_optional_moc(inherited, tree[node])
+        if node >= tree_size:
+            interval = node - tree_size
+            if interval < n_intervals:
+                result[interval] = combined
+            continue
+        stack.append((2 * node + 1, combined))
+        stack.append((2 * node, combined))
+    return result
+
+
+def _canonical_temporal_segments(
+    stmoc: STMOC,
+) -> tuple[Tensor, Tensor, tuple[MOC, ...]]:
+    bounds = _time_bounds(stmoc)
+    interval_mocs = _mocs_over_bounds(stmoc, bounds)
+    bounds_list = bounds.tolist()
+    starts: list[int] = []
+    ends: list[int] = []
+    space: list[MOC] = []
+    for start, end, moc in zip(
+        bounds_list[:-1], bounds_list[1:], interval_mocs, strict=True
+    ):
+        if moc is None or moc.uniq.numel() == 0:
+            continue
+        starts.append(start)
+        ends.append(end)
+        space.append(moc)
+    return (
+        torch.tensor(starts, dtype=torch.int64),
+        torch.tensor(ends, dtype=torch.int64),
+        tuple(space),
+    )
+
+
 def _moc_key(moc: MOC) -> tuple[int, ...]:
     return tuple(int(v) for v in moc.uniq.detach().cpu().tolist())
 
@@ -407,7 +632,10 @@ def _from_segments(
         if (
             merged
             and merged[-1][1] == start
-            and _moc_key(merged[-1][2]) == _moc_key(moc)
+            and (
+                merged[-1][2] is moc
+                or _moc_key(merged[-1][2]) == _moc_key(moc)
+            )
         ):
             prev_s, _, prev_m = merged[-1]
             merged[-1] = (prev_s, end, prev_m)
@@ -441,44 +669,45 @@ def _from_segments(
 
 
 def _sweep_boolean(a: STMOC, b: STMOC, *, op: str) -> list[tuple[int, int, MOC]]:
-    bounds = sorted(
-        {
-            int(v.item())
-            for v in torch.cat(
-                [a.time_start_us, a.time_end_us, b.time_start_us, b.time_end_us]
-            )
-        }
-    )
-    if len(bounds) < 2:
+    parts = [
+        tensor.detach().cpu()
+        for tensor in (
+            a.time_start_us,
+            a.time_end_us,
+            b.time_start_us,
+            b.time_end_us,
+        )
+        if tensor.numel() > 0
+    ]
+    if not parts:
         return []
+    bounds = torch.unique(torch.cat(parts), sorted=True)
+    if bounds.numel() < 2:
+        return []
+    a_mocs = _mocs_over_bounds(a, bounds)
+    b_mocs = _mocs_over_bounds(b, bounds)
+    bounds_list = bounds.tolist()
     out: list[tuple[int, int, MOC]] = []
-    for i in range(len(bounds) - 1):
-        lo, hi = bounds[i], bounds[i + 1]
-        if hi <= lo:
-            continue
-        acc_a = MOC(torch.empty((0,), dtype=torch.int64))
-        acc_b = MOC(torch.empty((0,), dtype=torch.int64))
-        for k in range(a.n_segments):
-            if (
-                int(a.time_start_us[k].item()) <= lo
-                and int(a.time_end_us[k].item()) >= hi
-            ):
-                acc_a = acc_a.union(a.space[k])
-        for k in range(b.n_segments):
-            if (
-                int(b.time_start_us[k].item()) <= lo
-                and int(b.time_end_us[k].item()) >= hi
-            ):
-                acc_b = acc_b.union(b.space[k])
+    for lo, hi, acc_a, acc_b in zip(
+        bounds_list[:-1], bounds_list[1:], a_mocs, b_mocs, strict=True
+    ):
         if op == "union":
-            moc = acc_a.union(acc_b)
+            moc = _merge_optional_moc(acc_a, acc_b)
         elif op == "intersection":
-            moc = acc_a.intersection(acc_b)
+            moc = (
+                None
+                if acc_a is None or acc_b is None
+                else acc_a.intersection(acc_b)
+            )
         elif op == "difference":
-            moc = acc_a.difference(acc_b)
+            moc = (
+                None
+                if acc_a is None
+                else acc_a if acc_b is None else acc_a.difference(acc_b)
+            )
         else:
             raise ValueError(f"unknown STMOC boolean op: {op!r}")
-        if moc.uniq.numel() == 0:
+        if moc is None or moc.uniq.numel() == 0:
             continue
         out.append((lo, hi, moc))
     return out

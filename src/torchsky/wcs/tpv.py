@@ -1,15 +1,8 @@
+import math
+from typing import Any, Dict, Tuple
+
 import torch
 from torch import Tensor
-from typing import Dict, Any, Tuple
-
-try:
-    from torch.func import vmap, jacrev
-except ImportError:
-    vmap = None
-    jacrev = None
-
-from torchsky._native import cpp as _cpp
-
 
 PV1_KEYS = tuple(f"PV1_{i}" for i in range(40))
 PV2_KEYS = tuple(f"PV2_{i}" for i in range(40))
@@ -22,13 +15,15 @@ class TPV:
     Tangent PV (TPV) distortion correction.
     """
 
-    # Experimental CPU ATen TPV inverse path.
     _CPP_INVERT_MAX_POINTS = 65536
+    _CONDITION_EPS = 64.0 * torch.finfo(torch.float64).eps
 
     def __init__(self, header: Dict[str, Any]):
         self.power_map = self._build_power_map()
         self.idx1, self.c1 = self._parse_pv(header, 1)
         self.idx2, self.c2 = self._parse_pv(header, 2)
+        self._validate_metadata(self.idx1, self.c1, "PV1")
+        self._validate_metadata(self.idx2, self.c2, "PV2")
         self.terms1 = self._build_terms(self.idx1, self.c1)
         self.terms2 = self._build_terms(self.idx2, self.c2)
 
@@ -94,6 +89,8 @@ class TPV:
         for j, key in enumerate(keys):
             if key in present_keys:
                 val = float(header[key])
+                if not math.isfinite(val):
+                    raise ValueError(f"{key} must be finite")
                 if val != 0 and j in self.power_map:
                     indices.append(self.power_map[j])
                     coeffs.append(val)
@@ -104,6 +101,17 @@ class TPV:
         return torch.tensor(indices, dtype=torch.long), torch.tensor(
             coeffs, dtype=torch.float64
         )
+
+    @staticmethod
+    def _validate_metadata(idx: Tensor, coeffs: Tensor, name: str) -> None:
+        if idx.ndim != 2 or idx.shape[1] != 3:
+            raise ValueError(f"{name} exponents must have shape [N, 3]")
+        if coeffs.ndim != 1 or idx.shape[0] != coeffs.shape[0]:
+            raise ValueError(f"{name} exponent and coefficient lengths must match")
+        if idx.numel() and bool(((idx < 0) | (idx > 7)).any().item()):
+            raise ValueError(f"{name} exponents must be in [0, 7]")
+        if not bool(torch.isfinite(coeffs).all().item()):
+            raise ValueError(f"{name} coefficients must be finite")
 
     def _build_terms(
         self, idx: Tensor, coeffs: Tensor
@@ -157,7 +165,13 @@ class TPV:
             else:
                 affine_only = False
         det = a11 * a22 - a12 * a21
-        if abs(det) < 1e-15:
+        scale = max(abs(a11), abs(a12), abs(a21), abs(a22))
+        if (
+            not math.isfinite(det)
+            or not math.isfinite(scale)
+            or scale == 0.0
+            or abs(det) <= TPV._CONDITION_EPS * scale * scale
+        ):
             return b1, b2, 1.0, 0.0, 0.0, 1.0, False, True, affine_only
         is_id = (
             abs(b1) < 1e-15
@@ -186,61 +200,19 @@ class TPV:
         self.c2 = self.c2.to(device=device, dtype=coeff_dtype)
         return self
 
-    def _distort_scalar(self, uv: Tensor) -> Tensor:
-        """
-        Distort a single (u, v) point. uv shape [2].
-        Returns [2].
-        """
-        u, v = uv[0], uv[1]
-        r = torch.hypot(u, v)
-
-        # Polynomial powers [0..7]
-        up = torch.pow(u, torch.arange(8, device=uv.device, dtype=uv.dtype))
-        vp = torch.pow(v, torch.arange(8, device=uv.device, dtype=uv.dtype))
-        rp = torch.pow(r, torch.arange(8, device=uv.device, dtype=uv.dtype))
-
-        def eval_axis(idx, c):
-            if c.numel() == 0:
-                return torch.tensor(0.0, device=uv.device, dtype=uv.dtype)
-            # idx is [N, 3] (px, py, pr)
-            basis = up[idx[:, 0]] * vp[idx[:, 1]] * rp[idx[:, 2]]
-            return torch.dot(c.to(uv.dtype), basis)
-
-        xi = eval_axis(self.idx1, self.c1)
-        # Note: TPV axis 2 swaps U and V in the standard polynomial expansion logic
-        # but self.idx2/c2 already account for this or it's handled in eval_axis.
-        # Original code used yp[px] * xp[py] for axis 2.
-        # Let's match the original _distort_impl exactly.
-
-        def eval_axis2(idx, c):
-            if c.numel() == 0:
-                return torch.tensor(0.0, device=uv.device, dtype=uv.dtype)
-            # Original: yp[px] * xp[py] * rp[pr]
-            basis = vp[idx[:, 0]] * up[idx[:, 1]] * rp[idx[:, 2]]
-            return torch.dot(c.to(uv.dtype), basis)
-
-        eta = eval_axis2(self.idx2, self.c2)
-        return torch.stack([xi, eta])
-
-    def distort_vmap(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
-        """Apply distortion using torch.func.vmap."""
-        uv = torch.stack([u.reshape(-1), v.reshape(-1)], dim=1)
-        out = vmap(self._distort_scalar)(uv)
-        return out[:, 0].reshape(u.shape), out[:, 1].reshape(v.shape)
-
     def distort(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
+        if u.shape != v.shape:
+            raise ValueError("TPV distortion inputs must have identical shapes")
         if u.numel() == 0:
             return u, v
-        if self._can_use_cpp_distort(u, v):
-            return _cpp.wcs_tpv_distort(
-                u.contiguous(),
-                v.contiguous(),
-                self.idx1,
-                self.c1,
-                self.idx2,
-                self.c2,
-            )
-        return self._distort_impl(u, v)
+        if not self.terms1 and not self.terms2:
+            valid = torch.isfinite(u) & torch.isfinite(v)
+            nan = torch.full_like(u, torch.nan)
+            return torch.where(valid, u, nan), torch.where(valid, v, nan)
+        xi, eta = self._distort_impl(u, v)
+        valid = torch.isfinite(u) & torch.isfinite(v) & torch.isfinite(xi) & torch.isfinite(eta)
+        nan = torch.full_like(xi, torch.nan)
+        return torch.where(valid, xi, nan), torch.where(valid, eta, nan)
 
     def _distort_impl(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
         r = torch.hypot(u, v)
@@ -263,6 +235,15 @@ class TPV:
     def _distort_and_jacobian_impl(
         self, u: Tensor, v: Tensor
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+        if not self.terms1 and not self.terms2:
+            return (
+                u,
+                v,
+                torch.ones_like(u),
+                torch.zeros_like(u),
+                torch.zeros_like(u),
+                torch.ones_like(u),
+            )
         r = torch.hypot(u, v)
         xp, yp, rp = (
             [torch.ones_like(u), u],
@@ -321,86 +302,79 @@ class TPV:
     def invert(
         self, xi_t: Tensor, eta_t: Tensor, max_iter: int = 20, tol: float = 1e-11
     ) -> Tuple[Tensor, Tensor]:
+        if xi_t.shape != eta_t.shape:
+            raise ValueError("TPV inverse inputs must have identical shapes")
+        if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter <= 0:
+            raise ValueError("TPV max_iter must be a positive integer")
+        if not math.isfinite(tol) or tol <= 0.0:
+            raise ValueError("TPV tolerance must be finite and positive")
         if xi_t.numel() == 0:
             return xi_t, eta_t
 
         shape = xi_t.shape
-
-        # Use C++ path if requested and available
-        if self._can_use_cpp_invert(xi_t, eta_t) and not self._invert_trace_enabled:
-            u_out, v_out = _cpp.wcs_tpv_invert(
-                xi_t.reshape(-1).contiguous(),
-                eta_t.reshape(-1).contiguous(),
-                self.idx1,
-                self.c1,
-                self.idx2,
-                self.c2,
-                int(max_iter),
-                float(tol),
+        finite_target = torch.isfinite(xi_t) & torch.isfinite(eta_t)
+        if not self.terms1 and not self.terms2:
+            nan = torch.full_like(xi_t, torch.nan)
+            return torch.where(finite_target, xi_t, nan), torch.where(
+                finite_target, eta_t, nan
             )
-            return u_out.reshape(shape), v_out.reshape(shape)
 
         xi_f = xi_t.reshape(-1)
         eta_f = eta_t.reshape(-1)
 
         u_curr, v_curr = self._initial_guess_affine(xi_f, eta_f)
         active_counts = []
-        if u_curr.requires_grad or v_curr.requires_grad:
-            u = u_curr
-            v = v_curr
-            for _ in range(max_iter):
-                xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = (
-                    self._distort_and_jacobian_impl(u, v)
-                )
-                fx0 = xi - xi_f
-                fx1 = eta - eta_f
-                res_norm = torch.sqrt(fx0 * fx0 + fx1 * fx1)
-                if self._invert_trace_enabled:
-                    active_counts.append(int((res_norm > tol).sum().item()))
-                det = dxi_du * deta_dv - dxi_dv * deta_du
-                det_sign = torch.where(
-                    det < 0.0, -torch.ones_like(det), torch.ones_like(det)
-                )
-                det = torch.where(det.abs() < 1e-18, det_sign * 1e-18, det)
-                du = (deta_dv * fx0 - dxi_dv * fx1) / det
-                dv = (-deta_du * fx0 + dxi_du * fx1) / det
-                u = u - du.clamp(-1.0, 1.0)
-                v = v - dv.clamp(-1.0, 1.0)
-            u_out = u
-            v_out = v
-            final_active = active_counts[-1] if active_counts else int(xi_t.numel())
-        else:
-            u = u_curr.clone()
-            v = v_curr.clone()
-            active = torch.ones_like(u, dtype=torch.bool)
-            for _ in range(max_iter):
-                active_idx = torch.nonzero(active, as_tuple=False).squeeze(1)
-                if active_idx.numel() == 0:
-                    break
-                xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = (
-                    self._distort_and_jacobian_impl(u[active_idx], v[active_idx])
-                )
-                fx0 = xi - xi_f[active_idx]
-                fx1 = eta - eta_f[active_idx]
-                res_norm = torch.sqrt(fx0 * fx0 + fx1 * fx1)
-                still_active = res_norm > tol
-                if self._invert_trace_enabled:
-                    active_counts.append(int(still_active.sum().item()))
-                det = dxi_du * deta_dv - dxi_dv * deta_du
-                det_sign = torch.where(
-                    det < 0.0, -torch.ones_like(det), torch.ones_like(det)
-                )
-                det = torch.where(det.abs() < 1e-18, det_sign * 1e-18, det)
-                du = (deta_dv * fx0 - dxi_dv * fx1) / det
-                dv = (-deta_du * fx0 + dxi_du * fx1) / det
-                u[active_idx] = u[active_idx] - du.clamp(-1.0, 1.0)
-                v[active_idx] = v[active_idx] - dv.clamp(-1.0, 1.0)
-                next_active = torch.zeros_like(active)
-                next_active[active_idx[still_active]] = True
-                active = next_active
-            u_out = u
-            v_out = v
-            final_active = int(active.sum().item())
+        u, v = u_curr, v_curr
+        viable = (
+            torch.isfinite(xi_f)
+            & torch.isfinite(eta_f)
+            & torch.isfinite(u)
+            & torch.isfinite(v)
+        )
+        active = viable
+        for _ in range(max_iter):
+            xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = (
+                self._distort_and_jacobian_impl(u, v)
+            )
+            fx0 = xi - xi_f
+            fx1 = eta - eta_f
+            res_norm = torch.hypot(fx0, fx1)
+            det = dxi_du * deta_dv - dxi_dv * deta_du
+            conditioned = self._well_conditioned(
+                dxi_du, dxi_dv, deta_du, deta_dv
+            )
+            good = (
+                torch.isfinite(res_norm)
+                & torch.isfinite(u)
+                & torch.isfinite(v)
+                & conditioned
+            )
+            viable = viable & (~active | good)
+            update = active & good & (res_norm > tol)
+            if self._invert_trace_enabled:
+                active_counts.append(int(update.sum().item()))
+            det_safe = torch.where(update, det, torch.ones_like(det))
+            du = (deta_dv * fx0 - dxi_dv * fx1) / det_safe
+            dv = (-deta_du * fx0 + dxi_du * fx1) / det_safe
+            u = torch.where(update, u - du.clamp(-1.0, 1.0), u)
+            v = torch.where(update, v - dv.clamp(-1.0, 1.0), v)
+            active = update & torch.isfinite(u) & torch.isfinite(v)
+            viable = viable & (~update | active)
+
+        xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = (
+            self._distort_and_jacobian_impl(u, v)
+        )
+        final_residual = torch.hypot(xi - xi_f, eta - eta_f)
+        valid = (
+            viable
+            & torch.isfinite(final_residual)
+            & (final_residual <= tol)
+            & self._well_conditioned(dxi_du, dxi_dv, deta_du, deta_dv)
+        )
+        nan = torch.full_like(u, torch.nan)
+        u_out = torch.where(valid, u, nan)
+        v_out = torch.where(valid, v, nan)
+        final_active = int((~valid).sum().item())
 
         if self._invert_trace_enabled:
             n_points = xi_t.numel()
@@ -420,6 +394,22 @@ class TPV:
 
         return u_out.reshape(shape), v_out.reshape(shape)
 
+    @classmethod
+    def _well_conditioned(
+        cls, j11: Tensor, j12: Tensor, j21: Tensor, j22: Tensor
+    ) -> Tensor:
+        scale = torch.maximum(
+            torch.maximum(j11.abs(), j12.abs()),
+            torch.maximum(j21.abs(), j22.abs()),
+        )
+        det = j11 * j22 - j12 * j21
+        return (
+            torch.isfinite(scale)
+            & torch.isfinite(det)
+            & (scale > 0.0)
+            & (det.abs() > cls._CONDITION_EPS * scale * scale)
+        )
+
     def _initial_guess_affine(self, xi_t, eta_t):
         if not self._has_affine_seed_inverse:
             return xi_t.clone(), eta_t.clone()
@@ -431,13 +421,30 @@ class TPV:
     def invert_affine_exact(self, xi_t: Tensor, eta_t: Tensor) -> Tuple[Tensor, Tensor]:
         if not self._affine_only:
             raise RuntimeError("invert_affine_exact requires affine-only TPV")
-        u, v = self._initial_guess_affine(xi_t, eta_t)
+        if xi_t.shape != eta_t.shape:
+            raise ValueError("TPV inverse inputs must have identical shapes")
+        finite = torch.isfinite(xi_t) & torch.isfinite(eta_t)
+        if not self.terms1 and not self.terms2:
+            valid = finite
+            u, v = xi_t, eta_t
+        elif not self._has_affine_seed_inverse:
+            valid = torch.zeros_like(finite)
+            u, v = xi_t, eta_t
+        else:
+            u, v = self._initial_guess_affine(xi_t, eta_t)
+            xi, eta = self._distort_impl(u, v)
+            valid = finite & torch.isfinite(u) & torch.isfinite(v) & (
+                torch.hypot(xi - xi_t, eta - eta_t) <= 1e-11
+            )
+        nan = torch.full_like(u, torch.nan)
+        u, v = torch.where(valid, u, nan), torch.where(valid, v, nan)
         if self._invert_trace_enabled:
             n_points = int(xi_t.numel())
+            converged = int(valid.sum().item())
             self._last_invert_trace = {
                 "n_points": n_points,
-                "converged": n_points,
-                "final_active": 0,
+                "converged": converged,
+                "final_active": n_points - converged,
                 "active_counts": [],
                 "active_counts_sum": 0,
                 "iterations": 0,
@@ -446,33 +453,3 @@ class TPV:
                 "backend": "affine_exact",
             }
         return u, v
-
-    def _can_use_cpp_invert(self, xi_t, eta_t):
-        return bool(
-            _cpp is not None
-            and hasattr(_cpp, "wcs_tpv_invert")
-            and xi_t.device.type == "cpu"
-            and eta_t.device.type == "cpu"
-            and xi_t.dtype == torch.float64
-            and eta_t.dtype == torch.float64
-            and self.idx1.device.type == "cpu"
-            and self.idx2.device.type == "cpu"
-            and self.c1.device.type == "cpu"
-            and self.c2.device.type == "cpu"
-        )
-
-    def _can_use_cpp_distort(self, u_t, v_t):
-        return bool(
-            _cpp is not None
-            and hasattr(_cpp, "wcs_tpv_distort")
-            and u_t.device.type == "cpu"
-            and v_t.device.type == "cpu"
-            and u_t.dtype == torch.float64
-            and v_t.dtype == torch.float64
-            and not u_t.requires_grad
-            and not v_t.requires_grad
-            and self.idx1.device.type == "cpu"
-            and self.idx2.device.type == "cpu"
-            and self.c1.device.type == "cpu"
-            and self.c2.device.type == "cpu"
-        )

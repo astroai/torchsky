@@ -133,7 +133,7 @@ class TestMeshSkyEstimator:
 
     def test_mesh_filter_options(self):
         image = torch.randn(64, 64, dtype=torch.float32) + 5.0
-        for mf in ("median_3", "gaussian_3", None):
+        for mf in ("median", "gaussian", None):
             est = MeshSkyEstimator(block_size=16, statistic="median", mesh_filter=mf)
             sky = est(image)
             assert sky.shape == (64, 64)
@@ -210,17 +210,15 @@ class TestMeshFilterNewApi:
         sky = est(image)
         assert sky.shape == (64, 64)
 
-    def test_legacy_median_3_still_works(self):
-        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
-        est = MeshSkyEstimator(block_size=16, mesh_filter="median_3")
-        sky = est(image)
-        assert sky.shape == (64, 64)
+    @pytest.mark.parametrize("legacy", ["median_3", "gaussian_3"])
+    def test_legacy_filter_strings_are_rejected(self, legacy):
+        with pytest.raises(ValueError, match="unknown mesh_filter"):
+            MeshSkyEstimator(block_size=16, mesh_filter=legacy)
 
-    def test_legacy_gaussian_3_still_works(self):
-        image = torch.randn(64, 64, dtype=torch.float32) + 5.0
-        est = MeshSkyEstimator(block_size=16, mesh_filter="gaussian_3")
-        sky = est(image)
-        assert sky.shape == (64, 64)
+    @pytest.mark.parametrize("size", [0, 2])
+    def test_filter_size_must_be_positive_and_odd(self, size):
+        with pytest.raises(ValueError, match="positive odd"):
+            MeshSkyEstimator(mesh_filter="median", mesh_filter_size=size)
 
     def test_larger_filter_gives_smoother(self):
         torch.manual_seed(42)

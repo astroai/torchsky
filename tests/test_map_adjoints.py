@@ -20,16 +20,15 @@ from torchsky.map.operators import (
     polynomial_background,
     project_image_observation_geometry,
     pixel_area_sr_map,
-    representative_pixel_area_sr,
 )
 from torchsky.map.operators.radiometry import apply_image_observation_calibration
 from torchsky.map.windowing import _prepare_target
-from torchsky.map.image_plane import (
+from torchsky.map.image_plane_projection import (
     _resample_weighted_to_target,
     _forward_project_weighted_to_target,
 )
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 _DEVICES = ["cpu"]
 if torch.cuda.is_available():
@@ -95,7 +94,6 @@ def test_interpolation_resampler_adjoint(
         value_semantics=value_semantics,
         drizzle_pixfrac=1.0,
         pixel_area_sr_map_fn=pixel_area_sr_map,
-        representative_pixel_area_fn=representative_pixel_area_sr,
         chunk_pixels=256,
         resample_weighted_to_target_fn=_resample_weighted_to_target,
         forward_project_weighted_to_target_fn=_forward_project_weighted_to_target,
@@ -159,7 +157,6 @@ def test_conservative_polygon_remapper_adjoint(
         value_semantics=value_semantics,
         drizzle_pixfrac=1.0,
         pixel_area_sr_map_fn=pixel_area_sr_map,
-        representative_pixel_area_fn=representative_pixel_area_sr,
         chunk_pixels=256,
         resample_weighted_to_target_fn=_resample_weighted_to_target,
         forward_project_weighted_to_target_fn=_forward_project_weighted_to_target,
@@ -217,7 +214,6 @@ def _project_and_assert_adjoint(
         value_semantics=value_semantics,
         drizzle_pixfrac=1.0,
         pixel_area_sr_map_fn=pixel_area_sr_map,
-        representative_pixel_area_fn=representative_pixel_area_sr,
         chunk_pixels=256,
         resample_weighted_to_target_fn=_resample_weighted_to_target,
         forward_project_weighted_to_target_fn=_forward_project_weighted_to_target,

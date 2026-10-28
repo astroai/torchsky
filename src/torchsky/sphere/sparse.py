@@ -1,23 +1,33 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Literal, Any, TYPE_CHECKING
+from typing import Literal, Any, Protocol, TYPE_CHECKING, runtime_checkable
 
 import torch
 from torch import Tensor
 
-from torchsky._native import cpp as _cpp
+from torchsky import _ops
 
 from . import healpix as _healpix
 
 if TYPE_CHECKING:
     from .geom import PixelizedRegion
     from .moc import MOC
+    from .randoms import PreparedRandomSampler
 
-_GET_VALUES_BLOCKS_CPU = (
-    None
-    if _cpp is None
-    else getattr(_cpp, "_sparse_get_values_blocks_cpu", None)
-)
+
+@runtime_checkable
+class HealSparseHostProtocol(Protocol):
+    nside_sparse: int
+    nside_coverage: int
+    sentinel: Any
+    metadata: Any
+
+    @property
+    def valid_pixels(self) -> Any: ...
+
+    def get_values_pix(self, pixels: Any, **kwargs: Any) -> Any: ...
+
+
 _CPP_BLOCK_DTYPES = frozenset(
     {
         torch.float64,
@@ -66,6 +76,42 @@ def _canonicalize_pixels_values(
     return pixels_sorted.index_select(0, keep_idx), values_sorted.index_select(
         -1, keep_idx.to(values.device)
     )
+
+
+def _validate_sparse_map_inputs(
+    nside: int,
+    pixels: Tensor,
+    values: Tensor,
+    column_names: tuple[str, ...] | None,
+) -> None:
+    npix = _healpix.nside2npix(nside)
+    if pixels.dtype != torch.int64:
+        raise ValueError("pixels must be int64")
+    if pixels.ndim != 1:
+        raise ValueError("pixels must be 1D")
+    if values.ndim == 0:
+        raise ValueError("values must have at least one dimension")
+    if values.shape[-1] != pixels.shape[0]:
+        raise ValueError("Size of last dimension of values must match pixels")
+    if pixels.numel() > 0 and bool(torch.any((pixels < 0) | (pixels >= npix))):
+        raise ValueError(f"pixels must be in [0, {npix}) for nside={nside}")
+    if column_names is not None:
+        if not column_names or any(not name for name in column_names):
+            raise ValueError("column_names must contain non-empty names")
+        if len(set(column_names)) != len(column_names):
+            raise ValueError("column_names must be unique")
+        if values.ndim == 1:
+            if len(column_names) != 1:
+                raise ValueError(
+                    f"1D values require a single column name, got {column_names}"
+                )
+        elif values.ndim == 2:
+            if values.shape[0] != len(column_names):
+                raise ValueError(
+                    f"column_names length ({len(column_names)}) must match leading dimension of values ({values.shape})"
+                )
+        else:
+            raise ValueError("column_names are only supported for 1D or 2D values")
 
 
 def _validate_nside_coverage(nside: int, nside_coverage: int) -> None:
@@ -177,6 +223,7 @@ class SparseHealpixMap:
     values: Tensor  # [..., n_sparse_pixels]
     fill_value: float = float(_healpix.UNSEEN)
     metadata: dict[str, Any] | None = None
+    column_names: tuple[str, ...] | None = None
 
     # Hierarchical extensions (optional)
     nside_coverage: int | None = None
@@ -186,13 +233,11 @@ class SparseHealpixMap:
     _fill_tensor: Tensor | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        _healpix.nside2npix(self.nside)
-        if self.pixels.dtype != torch.int64:
-            raise ValueError("pixels must be int64")
-        if self.pixels.ndim != 1:
-            raise ValueError("pixels must be 1D")
-        if self.values.shape[-1] != self.pixels.shape[0]:
-            raise ValueError("Size of last dimension of values must match pixels")
+        if self.column_names is not None:
+            self.column_names = tuple(str(c) for c in self.column_names)
+        _validate_sparse_map_inputs(
+            self.nside, self.pixels, self.values, self.column_names
+        )
         if self.pixels.device != self.values.device:
             self.pixels = self.pixels.to(device=self.values.device)
         self.pixels, self.values = _canonicalize_pixels_values(self.pixels, self.values)
@@ -223,11 +268,130 @@ class SparseHealpixMap:
         return self.fill_value
 
     @property
+    def columns(self) -> tuple[str, ...] | None:
+        return self.column_names
+
+    @property
+    def dtype_names(self) -> tuple[str, ...] | None:
+        return self.column_names
+
+    @property
     def pixels_per_cov(self) -> int:
         if self.nside_coverage is None:
             return 1
         ratio = self.nside // self.nside_coverage
         return ratio * ratio
+
+    def get_column(self, name: str | int) -> "SparseHealpixMap":
+        """Extract a single named or indexed column as a 1D ``SparseHealpixMap``."""
+        if isinstance(name, str):
+            if self.column_names is None or name not in self.column_names:
+                raise KeyError(
+                    f"Unknown column {name!r}; available: {self.column_names}"
+                )
+            idx = self.column_names.index(name)
+            col_names: tuple[str, ...] | None = (name,)
+        else:
+            idx = int(name)
+            if self.values.ndim < 2 or idx < 0 or idx >= self.values.shape[0]:
+                raise IndexError(
+                    f"Column index {idx} out of range for shape {self.values.shape}"
+                )
+            col_names = (
+                (self.column_names[idx],)
+                if self.column_names is not None and idx < len(self.column_names)
+                else None
+            )
+        sub_blocks = (
+            self._block_values[idx]
+            if self._block_values is not None and self._block_values.ndim >= 3
+            else self._block_values
+            if self.values.ndim == 1
+            else None
+        )
+        return SparseHealpixMap(
+            nside=self.nside,
+            nest=self.nest,
+            pixels=self.pixels,
+            values=self.values if self.values.ndim == 1 else self.values[idx],
+            fill_value=self.fill_value,
+            metadata=_copy_metadata(self.metadata),
+            column_names=col_names,
+            nside_coverage=self.nside_coverage,
+            coverage_map=self.coverage_map,
+            _block_index=self._block_index,
+            _block_values=sub_blocks,
+            _fill_tensor=self._fill_tensor,
+        )
+
+    def __getitem__(
+        self, key: str | int | Tensor | list[str] | tuple[str, ...]
+    ) -> "SparseHealpixMap" | Tensor:
+        if isinstance(key, str):
+            return self.get_column(key)
+        if isinstance(key, (list, tuple)) and all(isinstance(k, str) for k in key):
+            if self.column_names is None:
+                raise KeyError("SparseHealpixMap has no column_names")
+            indices = [self.column_names.index(k) for k in key]
+            idx_t = torch.tensor(indices, dtype=torch.int64, device=self.values.device)
+            sub_blocks = (
+                self._block_values.index_select(0, idx_t)
+                if self._block_values is not None and self._block_values.ndim >= 3
+                else None
+            )
+            return SparseHealpixMap(
+                nside=self.nside,
+                nest=self.nest,
+                pixels=self.pixels,
+                values=self.values.index_select(0, idx_t),
+                fill_value=self.fill_value,
+                metadata=_copy_metadata(self.metadata),
+                column_names=tuple(key),
+                nside_coverage=self.nside_coverage,
+                coverage_map=self.coverage_map,
+                _block_index=self._block_index,
+                _block_values=sub_blocks,
+                _fill_tensor=self._fill_tensor,
+            )
+        return self.get_values(
+            torch.as_tensor(key, dtype=torch.int64, device=self.pixels.device)
+        )
+
+    @classmethod
+    def from_columns(
+        cls,
+        pixels: Tensor,
+        columns: dict[str, Tensor],
+        nside_sparse: int,
+        *,
+        nest: bool = True,
+        nside_coverage: int | None = None,
+        sentinel: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> "SparseHealpixMap":
+        """Construct a multi-column ``SparseHealpixMap`` from a dict of ``{name: tensor}``."""
+        if not columns:
+            raise ValueError("columns dictionary must not be empty")
+        names = tuple(str(k) for k in columns.keys())
+        pix = torch.as_tensor(pixels, dtype=torch.int64).reshape(-1)
+        col_tensors = [
+            torch.as_tensor(v, device=pix.device).reshape(-1) for v in columns.values()
+        ]
+        out_dtype = col_tensors[0].dtype
+        for ct in col_tensors[1:]:
+            out_dtype = torch.promote_types(out_dtype, ct.dtype)
+        stacked = torch.stack([t.to(dtype=out_dtype) for t in col_tensors], dim=0)
+        fv = float(sentinel) if sentinel is not None else float(_healpix.UNSEEN)
+        return cls(
+            nside=int(nside_sparse),
+            nest=nest,
+            pixels=pix,
+            values=stacked,
+            fill_value=fv,
+            metadata=metadata,
+            column_names=names,
+            nside_coverage=nside_coverage,
+        )
 
     @classmethod
     def from_dense(
@@ -240,8 +404,11 @@ class SparseHealpixMap:
         coverage_mode: str = "any",
         nside_coverage: int | None = None,
         metadata: dict[str, Any] | None = None,
+        column_names: tuple[str, ...] | list[str] | None = None,
     ) -> "SparseHealpixMap":
         vals = torch.as_tensor(dense)
+        if vals.ndim == 0:
+            raise ValueError("dense must have at least one dimension")
         if nside is None:
             npix = vals.shape[-1]
             ns = _healpix.npix2nside(npix)
@@ -251,6 +418,8 @@ class SparseHealpixMap:
 
         if valid_mask is not None:
             valid = torch.as_tensor(valid_mask, dtype=torch.bool, device=vals.device)
+            if valid.shape != (npix,):
+                raise ValueError("valid_mask must have shape (npix,)")
         else:
             if fill_value is None:
                 fill_value = float(_healpix.UNSEEN)
@@ -281,12 +450,6 @@ class SparseHealpixMap:
                     )
                 )
 
-        if valid.shape[-1] != npix:
-            if valid.numel() == 1 and bool(valid.item()):
-                valid = torch.ones((npix,), dtype=torch.bool, device=vals.device)
-            else:
-                raise ValueError("valid_mask must have shape (npix,)")
-
         pixels = torch.nonzero(valid, as_tuple=False).reshape(-1).to(torch.int64)
         sparse_vals = (
             vals.index_select(-1, pixels) if pixels.numel() > 0 else vals[..., :0]
@@ -301,6 +464,7 @@ class SparseHealpixMap:
             else float(_healpix.UNSEEN),
             nside_coverage=nside_coverage,
             metadata=metadata,
+            column_names=tuple(column_names) if column_names is not None else None,
         )
         return obj
 
@@ -314,6 +478,7 @@ class SparseHealpixMap:
         nside_coverage: int | None = None,
         sentinel: float | None = None,
         metadata: dict[str, Any] | None = None,
+        column_names: tuple[str, ...] | list[str] | None = None,
     ) -> "SparseHealpixMap":
         fv = float(sentinel) if sentinel is not None else float(_healpix.UNSEEN)
         pix = torch.as_tensor(pixels, dtype=torch.int64)
@@ -327,6 +492,7 @@ class SparseHealpixMap:
             fill_value=fv,
             nside_coverage=nside_coverage,
             metadata=metadata,
+            column_names=tuple(column_names) if column_names is not None else None,
         )
         return obj
 
@@ -338,19 +504,23 @@ class SparseHealpixMap:
         dtype: Any = torch.float64,
         sentinel: float | None = None,
         metadata: dict[str, Any] | None = None,
+        column_names: tuple[str, ...] | list[str] | None = None,
     ) -> "SparseHealpixMap":
-        """Create an empty HealSparseMap with specified configuration."""
+        """Create an empty SparseHealpixMap with specified configuration."""
         fv = float(sentinel) if sentinel is not None else float(_healpix.UNSEEN)
         dtype = _coerce_torch_dtype(dtype)
+        c_names = tuple(column_names) if column_names is not None else None
+        val_shape = (len(c_names), 0) if c_names is not None else (0,)
 
         return cls(
             nside=nside_map,
             nest=True,  # HealSparse always uses nesting internally
             pixels=torch.empty((0,), dtype=torch.int64),
-            values=torch.empty((0,), dtype=dtype),
+            values=torch.empty(val_shape, dtype=dtype),
             fill_value=fv,
             nside_coverage=nside_coverage,
             metadata=metadata,
+            column_names=c_names,
         )
 
     @classmethod
@@ -370,6 +540,241 @@ class SparseHealpixMap:
             nside_coverage=nside_coverage,
             metadata=metadata,
         )
+
+    @classmethod
+    def from_wcs(
+        cls,
+        wcs: Any,
+        nside: int,
+        *,
+        shape: tuple[int, int] | None = None,
+        weight: Tensor | None = None,
+        mask: Tensor | None = None,
+        nside_coverage: int | None = None,
+        nest: bool = True,
+    ) -> "SparseHealpixMap":
+        """Build a ``SparseHealpixMap`` coverage/weight map from a 2D WCS and optional weight/mask."""
+        from .moc import MOC
+
+        nside_i = int(nside)
+        order = nside_i.bit_length() - 1
+        if nside_coverage is None:
+            nside_coverage = min(32, nside_i)
+        valid_mask = None
+        if mask is not None:
+            valid_mask = ~torch.as_tensor(mask, dtype=torch.bool)
+        if weight is not None:
+            w_t = torch.as_tensor(weight)
+            if shape is None and w_t.ndim >= 2:
+                shape = (int(w_t.shape[-2]), int(w_t.shape[-1]))
+            w_ok = w_t > 0
+            valid_mask = w_ok if valid_mask is None else (valid_mask & w_ok)
+
+        moc = MOC.from_wcs(wcs, shape=shape, max_order=order, mask=valid_mask)
+        if weight is None:
+            return cls.from_moc(
+                moc,
+                nside=nside_i,
+                nside_coverage=nside_coverage,
+                value=1.0,
+                sentinel=0.0,
+                dtype=torch.float32,
+                nest=nest,
+            )
+        reg = moc.to_pixelized_region(nside_i, nest=nest)
+        pix = reg.pixels.to(dtype=torch.int64)
+        if pix.numel() == 0:
+            return cls.make_empty(
+                nside_coverage, nside_i, dtype=torch.float32, sentinel=0.0
+            )
+        lon_p, lat_p = _healpix.pix2ang(nside_i, pix, nest=nest, lonlat=True)
+        w_t = torch.as_tensor(weight)
+        H, W = int(w_t.shape[-2]), int(w_t.shape[-1])
+        x_p, y_p = wcs.world_to_pixel(lon_p, lat_p)
+        ix = torch.round(x_p).to(torch.int64)
+        iy = torch.round(y_p).to(torch.int64)
+        in_b = (ix >= 0) & (ix < W) & (iy >= 0) & (iy < H)
+        vals = torch.zeros(pix.numel(), dtype=w_t.dtype, device=w_t.device)
+        if bool(in_b.any()):
+            vals[in_b] = w_t[iy[in_b], ix[in_b]]
+        keep = vals > 0
+        return cls.from_pixels(
+            pix[keep],
+            vals[keep],
+            nside_sparse=nside_i,
+            nest=nest,
+            nside_coverage=nside_coverage,
+            sentinel=0.0,
+        )
+
+    @classmethod
+    def from_observations(
+        cls,
+        observations: Any,
+        nside: int | None = None,
+        *,
+        nside_sparse: int | None = None,
+        nside_coverage: int | None = None,
+        nest: bool = True,
+        columns: tuple[str, ...] | list[str] | None = ("weight", "nexp", "fracdet"),
+    ) -> "SparseHealpixMap":
+        """Build a survey property ``SparseHealpixMap`` (weight, nexp, fracdet) from observations."""
+        from .moc import MOC
+
+        nside_val = nside if nside is not None else nside_sparse
+        if nside_val is None:
+            raise ValueError("Either nside or nside_sparse must be provided")
+        nside_i = int(nside_val)
+        order = nside_i.bit_length() - 1
+        if nside_coverage is None:
+            nside_coverage = min(32, nside_i)
+        moc = MOC.from_observations(observations, max_order=order)
+        reg = moc.to_pixelized_region(nside_i, nest=nest)
+        pix = reg.pixels.to(dtype=torch.int64)
+        if pix.numel() == 0:
+            return cls.make_empty(
+                nside_coverage,
+                nside_i,
+                dtype=torch.float32,
+                sentinel=0.0,
+                column_names=columns,
+            )
+        # Sub-pixel 2x2 oversampling for fracdet
+        pix_nest = pix if nest else _healpix.ring2nest(nside_i, pix)
+        children = _healpix.nest_children(pix_nest, levels=1)  # (N, 4)
+        lon_c, lat_c = _healpix.pix2ang(
+            nside_i * 2, children.reshape(-1), nest=True, lonlat=True
+        )
+        lon_c = lon_c.reshape(pix.numel(), 4)
+        lat_c = lat_c.reshape(pix.numel(), 4)
+        lon_p, lat_p = _healpix.pix2ang(nside_i, pix, nest=nest, lonlat=True)
+
+        w_sum = torch.zeros(pix.numel(), dtype=torch.float32, device=pix.device)
+        nexp_sum = torch.zeros(pix.numel(), dtype=torch.float32, device=pix.device)
+        sub_covered = torch.zeros((pix.numel(), 4), dtype=torch.bool, device=pix.device)
+
+        for obs in observations:
+            wcs = obs.wcs if hasattr(obs, "wcs") else obs
+            if hasattr(obs, "data"):
+                H, W = int(obs.data.shape[-2]), int(obs.data.shape[-1])
+            else:
+                arr_s = getattr(wcs, "array_shape", None)
+                if arr_s is None:
+                    raise ValueError("Observation or WCS must define image shape")
+                H, W = int(arr_s[-2]), int(arr_s[-1])
+            x_p, y_p = wcs.world_to_pixel(lon_p, lat_p)
+            ix = torch.round(x_p).to(torch.int64)
+            iy = torch.round(y_p).to(torch.int64)
+            in_b = (
+                torch.isfinite(x_p)
+                & torch.isfinite(y_p)
+                & (x_p >= -0.5)
+                & (x_p < W - 0.5)
+                & (y_p >= -0.5)
+                & (y_p < H - 0.5)
+            )
+            if getattr(obs, "mask", None) is not None and bool(in_b.any()):
+                m_t = torch.as_tensor(obs.mask, dtype=torch.bool, device=pix.device)
+                in_b_idx = torch.nonzero(in_b, as_tuple=False).flatten()
+                bad = m_t[iy[in_b_idx].clamp(0, H - 1), ix[in_b_idx].clamp(0, W - 1)]
+                in_b[in_b_idx] = ~bad
+            w_plane = getattr(obs, "weight_map", None)
+            w_scalar = 1.0
+            raw_w = getattr(obs, "weight", None)
+            if isinstance(raw_w, Tensor) and raw_w.ndim >= 2:
+                w_plane = raw_w
+            elif raw_w is not None:
+                w_scalar = float(raw_w)
+            if w_plane is not None and bool(in_b.any()):
+                w_t = (
+                    torch.as_tensor(w_plane, dtype=torch.float32, device=pix.device)
+                    * w_scalar
+                )
+                in_b_idx = torch.nonzero(in_b, as_tuple=False).flatten()
+                w_val = w_t[iy[in_b_idx].clamp(0, H - 1), ix[in_b_idx].clamp(0, W - 1)]
+                pos = w_val > 0
+                w_sum[in_b_idx[pos]] += w_val[pos]
+                nexp_sum[in_b_idx[pos]] += 1.0
+            elif bool(in_b.any()):
+                w_sum[in_b] += float(w_scalar)
+                nexp_sum[in_b] += 1.0
+
+            xc, yc = wcs.world_to_pixel(lon_c.reshape(-1), lat_c.reshape(-1))
+            in_c = (
+                torch.isfinite(xc)
+                & torch.isfinite(yc)
+                & (xc >= -0.5)
+                & (xc < W - 0.5)
+                & (yc >= -0.5)
+                & (yc < H - 0.5)
+            ).reshape(pix.numel(), 4)
+            sub_covered |= in_c
+
+        fracdet = sub_covered.to(torch.float32).mean(dim=-1)
+        keep = (w_sum > 0) | (fracdet > 0)
+        pix_k = pix[keep]
+        if columns is None:
+            return cls.from_pixels(
+                pix_k,
+                w_sum[keep],
+                nside_sparse=nside_i,
+                nest=nest,
+                nside_coverage=nside_coverage,
+                sentinel=0.0,
+            )
+        col_map: dict[str, Tensor] = {}
+        for c in columns:
+            if c == "weight":
+                col_map[c] = w_sum[keep]
+            elif c == "nexp":
+                col_map[c] = nexp_sum[keep]
+            elif c == "fracdet":
+                col_map[c] = fracdet[keep]
+            else:
+                raise ValueError(f"Unsupported observation property column {c!r}")
+        return cls.from_columns(
+            pix_k,
+            col_map,
+            nside_sparse=nside_i,
+            nest=nest,
+            nside_coverage=nside_coverage,
+            sentinel=0.0,
+        )
+
+    def sample_randoms(
+        self,
+        n: int,
+        *,
+        weights: Tensor | str | None = None,
+        generator: torch.Generator | None = None,
+        device: torch.device | str | None = None,
+    ) -> tuple[Tensor, Tensor]:
+        """Draw ``n`` points uniformly in solid angle (or weighted) inside this sparse map."""
+        from .randoms import sample_randoms
+
+        return sample_randoms(
+            n,
+            self,
+            weights=weights,
+            generator=generator,
+            device=device,
+        )
+
+    def prepare_random_sampler(
+        self,
+        *,
+        weights: SparseHealpixMap | Tensor | str | None = None,
+        device: torch.device | str | None = None,
+    ) -> PreparedRandomSampler:
+        """Snapshot immutable, device-bound state for repeated random draws.
+
+        Pixels, ordering conversion, and resolved weights are captured during
+        preparation. Later mutation of this map or weight tensors does not
+        update the sampler; call this method again to observe changes.
+        """
+        from .randoms import _prepare_sparse_random_sampler
+
+        return _prepare_sparse_random_sampler(self, weights=weights, device=device)
 
     def _coverage_pixels(self) -> Tensor:
         if self.nside_coverage is None:
@@ -444,9 +849,7 @@ class SparseHealpixMap:
             )
             return
         nest_pix = (
-            self.pixels
-            if self.nest
-            else _healpix.ring2nest(self.nside, self.pixels)
+            self.pixels if self.nest else _healpix.ring2nest(self.nside, self.pixels)
         )
         cov = torch.div(nest_pix, ratio2, rounding_mode="floor")
         off = nest_pix - cov * ratio2
@@ -474,6 +877,59 @@ class SparseHealpixMap:
         from .moc import MOC
 
         return MOC.from_sparse_map(self)
+
+    @classmethod
+    def from_healsparse(cls, map_obj: HealSparseHostProtocol) -> "SparseHealpixMap":
+        """Import a host-side ``healsparse.HealSparseMap`` without dense expansion."""
+        import numpy as np
+
+        valid_pixels = map_obj.valid_pixels
+        if callable(valid_pixels):
+            valid_pixels = valid_pixels()
+        pixels_np = np.asarray(valid_pixels, dtype=np.int64)
+        values_np = np.asarray(map_obj.get_values_pix(pixels_np, nest=True))
+        if values_np.dtype.fields is not None:
+            raise ValueError("structured HealSparse maps require selecting a field")
+        return cls.from_pixels(
+            torch.as_tensor(pixels_np, dtype=torch.int64),
+            torch.as_tensor(values_np),
+            int(map_obj.nside_sparse),
+            nest=True,
+            nside_coverage=int(map_obj.nside_coverage),
+            sentinel=map_obj.sentinel,
+            metadata=dict(map_obj.metadata) if map_obj.metadata is not None else None,
+        )
+
+    def to_healsparse(self) -> Any:
+        """Export to ``healsparse.HealSparseMap`` when healsparse is installed."""
+        try:
+            import healsparse
+        except ImportError as exc:
+            raise ImportError("healsparse is required for to_healsparse()") from exc
+
+        if self.values.ndim != 1:
+            raise ValueError("HealSparse interchange requires one-dimensional values")
+        nside_coverage = self.nside_coverage
+        if nside_coverage is None:
+            nside_coverage = max(1, int(self.nside) // 16)
+        metadata = (
+            {str(key).upper(): value for key, value in self.metadata.items()}
+            if self.metadata is not None
+            else None
+        )
+        result = healsparse.HealSparseMap.make_empty(
+            int(nside_coverage),
+            int(self.nside),
+            self.values.detach().cpu().numpy().dtype,
+            sentinel=self.fill_value,
+            metadata=metadata,
+        )
+        result.update_values_pix(
+            self.pixels.detach().cpu().numpy(),
+            self.values.detach().cpu().numpy(),
+            nest=bool(self.nest),
+        )
+        return result
 
     def to_pixelized_region(
         self,
@@ -503,10 +959,11 @@ class SparseHealpixMap:
 
     @property
     def valid_pixels(self) -> Tensor:
-        """Returns the list of valid pixel indices."""
+        """Valid pixel indices. External HealSparse hosts may still expose a method."""
         return self.pixels
 
     def get_values(self, pixels: Tensor) -> Tensor:
+        query_shape = tuple(torch.as_tensor(pixels).shape)
         if (
             isinstance(pixels, Tensor)
             and pixels.dtype == torch.int64
@@ -517,7 +974,8 @@ class SparseHealpixMap:
             pix_flat = torch.as_tensor(
                 pixels, dtype=torch.int64, device=self.pixels.device
             ).reshape(-1)
-        out_shape = tuple(self.values.shape[:-1]) + (pix_flat.numel(),)
+        flat_shape = tuple(self.values.shape[:-1]) + (pix_flat.numel(),)
+        out_shape = tuple(self.values.shape[:-1]) + query_shape
         if self.pixels.numel() == 0:
             return torch.full(
                 out_shape,
@@ -530,9 +988,9 @@ class SparseHealpixMap:
             and self._block_index is not None
             and self._block_values is not None
         ):
-            return self._get_values_blocks(pix_flat)
+            return self._get_values_blocks(pix_flat).reshape(out_shape)
         fill = torch.full(
-            out_shape,
+            flat_shape,
             self.fill_value,
             dtype=self.values.dtype,
             device=self.values.device,
@@ -540,7 +998,7 @@ class SparseHealpixMap:
         idx, ok = self._global_to_local(pix_flat)
         safe_idx = torch.where(ok, idx, torch.zeros_like(idx))
         gathered = self.values.index_select(-1, safe_idx)
-        return torch.where(ok, gathered, fill)
+        return torch.where(ok, gathered, fill).reshape(out_shape)
 
     def _get_values_blocks(self, pix_flat: Tensor) -> Tensor:
         query = pix_flat
@@ -548,15 +1006,12 @@ class SparseHealpixMap:
             npix = int(_healpix.nside2npix(self.nside))
             in_pix = (pix_flat >= 0) & (pix_flat < npix)
             safe = torch.where(in_pix, pix_flat, torch.zeros_like(pix_flat))
-            query = torch.where(
-                in_pix, _healpix.ring2nest(self.nside, safe), pix_flat
-            )
-        fn = _GET_VALUES_BLOCKS_CPU
+            query = torch.where(in_pix, _healpix.ring2nest(self.nside, safe), pix_flat)
         blocks = self._block_values
         index = self._block_index
         fill_t = self._fill_tensor
         if (
-            fn is not None
+            _ops.has_fixed_dispatcher()
             and blocks is not None
             and index is not None
             and fill_t is not None
@@ -565,8 +1020,9 @@ class SparseHealpixMap:
             and blocks.is_cpu
             and fill_t.is_cpu
             and blocks.dtype in _CPP_BLOCK_DTYPES
+            and not blocks.requires_grad
         ):
-            return fn(query, index, blocks, fill_t)
+            return _ops.sparse_get_values_blocks(query, index, blocks, fill_t)
         ratio2 = int(self.pixels_per_cov)
         out_shape = tuple(self.values.shape[:-1]) + (pix_flat.numel(),)
         fill = torch.full(
@@ -579,12 +1035,7 @@ class SparseHealpixMap:
             return fill
         cov = torch.div(query, ratio2, rounding_mode="floor")
         off = query - cov * ratio2
-        in_range = (
-            (cov >= 0)
-            & (cov < index.numel())
-            & (off >= 0)
-            & (off < ratio2)
-        )
+        in_range = (cov >= 0) & (cov < index.numel()) & (off >= 0) & (off < ratio2)
         safe_cov = torch.where(in_range, cov, torch.zeros_like(cov))
         bid = index.index_select(0, safe_cov)
         if int(blocks.shape[-2]) == 0:
@@ -598,9 +1049,41 @@ class SparseHealpixMap:
         gathered = packed[:, safe_bid, safe_off].reshape(fill.shape)
         return torch.where(in_range, gathered, fill)
 
-    def get_values_pix(self, pixels: Tensor) -> Tensor:
-        """Alias for get_values per healsparse parity."""
-        return self.get_values(pixels)
+    def lookup_with_valid(self, pixels: Tensor) -> tuple[Tensor, Tensor]:
+        """Return ``(values, valid_mask)`` for queried pixel indices."""
+        vals = self.get_values(pixels)
+        _, ok = self._global_to_local(pixels)
+        return vals, ok
+
+    def get_values_pos(
+        self,
+        lon_or_theta: Tensor | float,
+        lat_or_phi: Tensor | float,
+        *,
+        lonlat: bool = True,
+        valid_mask: bool = False,
+    ) -> Tensor | tuple[Tensor, Tensor]:
+        """Look up sparse map values at sky coordinates."""
+        pix = _healpix.ang2pix(
+            self.nside,
+            lon_or_theta,
+            lat_or_phi,
+            nest=self.nest,
+            lonlat=lonlat,
+        )
+        vals = self.get_values(pix)
+        if not valid_mask:
+            return vals
+        _, ok = self._global_to_local(pix)
+        return vals, ok
+
+    def lookup_radec(
+        self, ra_deg: Tensor | float, dec_deg: Tensor | float
+    ) -> tuple[Tensor, Tensor]:
+        """Return ``(values, valid_mask)`` at ``(ra_deg, dec_deg)``."""
+        res = self.get_values_pos(ra_deg, dec_deg, lonlat=True, valid_mask=True)
+        assert isinstance(res, tuple)
+        return res
 
     def update_values_pix(self, pixels: Tensor, values: Tensor) -> None:
         """Update existing or add new pixels to the sparse map."""
@@ -735,10 +1218,6 @@ class SparseHealpixMap:
             nest=nest,
         )
 
-    def generate_healpix_map(self) -> Tensor:
-        """Alias for to_dense per healsparse parity."""
-        return self.to_dense()
-
     def to_dense(self, fill_value: float | None = None) -> Tensor:
         fv = self.fill_value if fill_value is None else float(fill_value)
         npix = _healpix.nside2npix(self.nside)
@@ -796,12 +1275,8 @@ class SparseHealpixMap:
         work_dtype = (
             torch.float32 if self.values.device.type == "mps" else torch.float64
         )
-        lon_t = torch.as_tensor(
-            lon_deg, dtype=work_dtype, device=self.values.device
-        )
-        lat_t = torch.as_tensor(
-            lat_deg, dtype=work_dtype, device=self.values.device
-        )
+        lon_t = torch.as_tensor(lon_deg, dtype=work_dtype, device=self.values.device)
+        lat_t = torch.as_tensor(lat_deg, dtype=work_dtype, device=self.values.device)
         lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
         shape = lon_t.shape
         lon_f = lon_t.reshape(-1)
@@ -831,9 +1306,7 @@ class SparseHealpixMap:
         accum = torch.zeros(
             out_shape, dtype=self.values.dtype, device=self.values.device
         )
-        wsum = torch.zeros(
-            out_shape, dtype=w4.dtype, device=self.values.device
-        )
+        wsum = torch.zeros(out_shape, dtype=w4.dtype, device=self.values.device)
 
         if self.pixels.numel() > 0:
             stored_fill = (
@@ -854,18 +1327,10 @@ class SparseHealpixMap:
                 wk_b = wk.reshape(wshape).expand_as(vals)
                 valid_val = ok.reshape(wshape).expand_as(vals)
                 if stored_fill is not None:
-                    valid_val = (
-                        valid_val
-                        & torch.isfinite(vals)
-                        & (vals != stored_fill)
-                    )
-                safe_vals = torch.where(
-                    valid_val, vals, torch.zeros_like(vals)
-                )
+                    valid_val = valid_val & torch.isfinite(vals) & (vals != stored_fill)
+                safe_vals = torch.where(valid_val, vals, torch.zeros_like(vals))
                 accum = accum + safe_vals * wk_b
-                wsum = wsum + torch.where(
-                    valid_val, wk_b, torch.zeros_like(wk_b)
-                )
+                wsum = wsum + torch.where(valid_val, wk_b, torch.zeros_like(wk_b))
 
         out = torch.full(
             out_shape,
@@ -963,9 +1428,7 @@ class SparseHealpixMap:
             )
         out_pix_n = parent_nest[keep]
         out_sel = data[..., keep]
-        out_pix = (
-            out_pix_n if self.nest else _healpix.nest2ring(nside_out, out_pix_n)
-        )
+        out_pix = out_pix_n if self.nest else _healpix.nest2ring(nside_out, out_pix_n)
         cell_alive = keep.any(dim=-1)
         data_alive = data[..., cell_alive, :]
         cov_alive = cov_ids[cell_alive]
@@ -982,9 +1445,7 @@ class SparseHealpixMap:
             device=data.device,
         )
         new_blocks = torch.cat((fill_row, data_alive), dim=-2)
-        cov_map = torch.full(
-            (npix_cov,), -1, dtype=torch.int64, device=index.device
-        )
+        cov_map = torch.full((npix_cov,), -1, dtype=torch.int64, device=index.device)
         cov_map[cov_alive] = 0
         return SparseHealpixMap(
             nside=nside_out,
@@ -997,9 +1458,7 @@ class SparseHealpixMap:
             coverage_map=cov_map,
             _block_index=new_index,
             _block_values=new_blocks,
-            _fill_tensor=torch.as_tensor(
-                fv, dtype=data.dtype, device=data.device
-            ),
+            _fill_tensor=torch.as_tensor(fv, dtype=data.dtype, device=data.device),
         )
 
     def ud_grade(
@@ -1214,83 +1673,26 @@ class SparseHealpixMap:
             metadata=_copy_metadata(self.metadata),
         )
 
-    def write(self, filename: str, clobber: bool = False) -> None:
-        """Alias for write_fits per healsparse parity."""
-        self.write_fits(filename, overwrite=clobber)
-
     def write_fits(self, filename: str, overwrite: bool = False) -> None:
         """Write a HealSparse FITS file via torchfits (COV + SPARSE images).
 
         Maps with a 1-D value vector write ``PIXTYPE=HEALSPARSE`` COV+SPARSE
         images. Coverage nside is taken from ``nside_coverage`` when set,
-        otherwise ``max(1, nside // 16)`` (pixel-list maps). Extra value
-        dimensions keep the PIXEL/VALUE binary table.
+        otherwise ``max(1, nside // 16)`` (pixel-list maps). Multidimensional
+        values are rejected because HealSparse image layout is one-dimensional.
         """
-        from ..io import write
+        if self.values.ndim != 1:
+            raise ValueError("FITS output only supports 1D sparse-map values")
 
-        if (
-            self.nside_coverage is not None
-            and self.values.ndim == 1
-        ):
+        if self.nside_coverage is not None:
             self._write_healsparse_fits(filename, overwrite=overwrite)
             return
-        if self.values.ndim == 1:
-            nside_cov = max(1, int(self.nside) // 16)
-            while nside_cov > 1 and (int(self.nside) % nside_cov) != 0:
-                nside_cov //= 2
-            _validate_nside_coverage(int(self.nside), nside_cov)
-            self._write_healsparse_fits(
-                filename, overwrite=overwrite, nside_coverage=nside_cov
-            )
-            return
-
-        header = {
-            "NSIDE": self.nside,
-            "ORDERING": "NEST" if self.nest else "RING",
-            "SENTINEL": self.fill_value,
-            "EXTNAME": "SPARSE",
-        }
-        if self.nside_coverage:
-            # NSIDECOV is the eight-character HEALPix convention; longer FITS
-            # keywords require HIERARCH parsing that not every reader preserves.
-            header["NSIDECOV"] = self.nside_coverage
-
-        reserved_keys = {
-            "NSIDE",
-            "ORDERING",
-            "SENTINEL",
-            "EXTNAME",
-            "NSIDE_COV",
-            "NSIDECOV",
-            "SIMPLE",
-            "BITPIX",
-            "NAXIS",
-            "NAXIS1",
-            "NAXIS2",
-            "PCOUNT",
-            "GCOUNT",
-            "TFIELDS",
-            "XTENSION",
-            "TFORM1",
-            "TFORM2",
-            "TTYPE1",
-            "TTYPE2",
-            "TUNIT1",
-            "TUNIT2",
-        }
-        if self.metadata:
-            for k, v in self.metadata.items():
-                k_upper = str(k).upper()
-                if k_upper not in reserved_keys:
-                    header[k_upper] = v
-
-        pix = self.pixels.detach().cpu().reshape(-1).to(torch.int64)
-        val = self.values.detach().cpu().reshape(-1)
-        write(
-            filename,
-            {"PIXEL": pix, "VALUE": val},
-            header=header,
-            overwrite=overwrite,
+        nside_cov = max(1, int(self.nside) // 16)
+        while nside_cov > 1 and (int(self.nside) % nside_cov) != 0:
+            nside_cov //= 2
+        _validate_nside_coverage(int(self.nside), nside_cov)
+        self._write_healsparse_fits(
+            filename, overwrite=overwrite, nside_coverage=nside_cov
         )
 
     def _write_healsparse_fits(
@@ -1299,7 +1701,7 @@ class SparseHealpixMap:
         overwrite: bool = False,
         nside_coverage: int | None = None,
     ) -> None:
-        from ..io import insert_hdu, write
+        from torchfits import insert_hdu, write
 
         nside_cov = int(
             self.nside_coverage if nside_coverage is None else nside_coverage
@@ -1358,7 +1760,7 @@ class SparseHealpixMap:
 
     @classmethod
     def _read_healsparse_fits(cls, filename: str) -> "SparseHealpixMap":
-        from ..io import get_header, read_image
+        from torchfits import read_header as get_header, read_tensor as read_image
 
         hdr_cov = get_header(filename, hdu=0)
         hdr = get_header(filename, hdu=1)
@@ -1378,9 +1780,7 @@ class SparseHealpixMap:
         if str(hdr.get("BOOLMAP", "")).strip().upper() in {"T", "TRUE", "1"}:
             sparse = sparse.to(torch.bool)
             fv = 0.0
-        pixels, values = _decode_healsparse_images(
-            cov, sparse, nside, nside_cov, fv
-        )
+        pixels, values = _decode_healsparse_images(cov, sparse, nside, nside_cov, fv)
         reserved = {
             "SIMPLE",
             "BITPIX",
@@ -1421,7 +1821,8 @@ class SparseHealpixMap:
     @classmethod
     def read_fits(cls, filename: str) -> "SparseHealpixMap":
         """Read HealSparse COV+SPARSE images or a PIXEL/VALUE table."""
-        from ..io import get_header, read_table
+        from torchfits import read_header as get_header
+        from torchfits.table import read_torch as read_table
 
         hdr0 = get_header(filename, hdu=0)
         pixtype = str(hdr0.get("PIXTYPE", "")).strip().upper()
@@ -1536,10 +1937,6 @@ def _resolve_sparse_table_hdu_index(path: str) -> int:
     raise ValueError(f"No FITS extension with EXTNAME 'SPARSE' in {path!r}")
 
 
-HealSparseMap = SparseHealpixMap
-SparseMap = SparseHealpixMap
-
-
 def _validate_sparse_operands(
     maps: list[SparseHealpixMap] | tuple[SparseHealpixMap, ...],
 ) -> tuple[int, bool]:
@@ -1553,6 +1950,15 @@ def _validate_sparse_operands(
     return nside, nest
 
 
+def _promote_sparse_value_dtypes(
+    maps: list[SparseHealpixMap] | tuple[SparseHealpixMap, ...],
+) -> torch.dtype:
+    out_dtype = maps[0].values.dtype
+    for smap in maps[1:]:
+        out_dtype = torch.promote_types(out_dtype, smap.values.dtype)
+    return out_dtype
+
+
 def sum_union(
     maps: list[SparseHealpixMap] | tuple[SparseHealpixMap, ...],
 ) -> SparseHealpixMap:
@@ -1564,7 +1970,7 @@ def sum_union(
     nside, nest = _validate_sparse_operands(maps)
     device = maps[0].pixels.device
     all_pixels = torch.unique(torch.cat([m.pixels.to(device) for m in maps]))
-    out_dtype = torch.result_type(*[m.values for m in maps])
+    out_dtype = _promote_sparse_value_dtypes(maps)
     values = torch.zeros((all_pixels.numel(),), dtype=out_dtype, device=device)
     for smap in maps:
         vals = smap.get_values(all_pixels).to(dtype=out_dtype, device=device)
@@ -1592,7 +1998,7 @@ def sum_intersection(
     for smap in maps[1:]:
         common = common[torch.isin(common, smap.pixels.to(device), assume_unique=False)]
     common = torch.unique(common)
-    out_dtype = torch.result_type(*[m.values for m in maps])
+    out_dtype = _promote_sparse_value_dtypes(maps)
     values = torch.zeros((common.numel(),), dtype=out_dtype, device=device)
     for smap in maps:
         values = values + smap.get_values(common).to(dtype=out_dtype, device=device)
@@ -1607,6 +2013,7 @@ def sum_intersection(
 
 
 class WideBitMask:
+    """Multiword bit mask for flag sets wider than one integer dtype."""
     def __init__(self, n_bits: int, device: torch.device | None = None):
         self.n_bits = n_bits
         self.n_words = (n_bits + 64 - 1) // 64
@@ -1619,6 +2026,7 @@ class WideBitMask:
 
 
 class SkyMaskPipe:
+    """Composable HEALPix mask pipeline at a fixed resolution and ordering."""
     def __init__(self, nside: int, nest: bool = True):
         self.nside = nside
         self.nest = nest
@@ -1669,9 +2077,8 @@ def _positive_mask_pixels(mask: SparseHealpixMap) -> Tensor:
 
 
 __all__ = [
+    "HealSparseHostProtocol",
     "SparseHealpixMap",
-    "HealSparseMap",
-    "SparseMap",
     "SkyMaskPipe",
     "WideBitMask",
     "sum_intersection",

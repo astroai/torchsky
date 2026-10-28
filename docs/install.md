@@ -1,28 +1,30 @@
 # Installation
 
-`torchsky` can be installed via pip or built from source.
+`torchsky` can be installed from a release wheel, built from source, or used
+through the repository's Pixi environment.
 
-## Standard Installation (Pip)
+## Release status
 
-The easiest way to install `torchsky` is using `pip`:
+!!! warning "0.4.0 is not on PyPI yet"
+    The current development line is **0.4.0**, and no public PyPI project exists
+    yet. Build a 0.4.0 wheel from this repository (see below) or use Pixi. This
+    note is updated in the same change that publishes 0.4.0.
+
+`torchsky` does not own or bundle CFITSIO. [`torchfits`](https://github.com/astroai/torchfits)
+is a required runtime dependency for FITS file and table I/O and is installed
+together with torchsky:
 
 ```bash
-pip install torchsky
+pip install "torchsky @ file:///path/to/torchsky-0.4.0-*.whl"
 ```
 
-Pre-built wheels are available for Linux (x86_64, aarch64) and macOS (x86_64,
-arm64). Torchsky does not own or bundle CFITSIO. Install
-[`torchfits`](https://github.com/astroai/torchfits) for FITS file and table I/O:
-
-```bash
-pip install torchsky torchfits
-```
-
-The supported integration baseline is `torchfits 1.0.0` or newer. Torchsky
-keeps thin compatibility import paths for one migration release.
+Release wheels are built for Linux x86_64 and macOS arm64 on CPython 3.12 and
+3.13; building from source is supported
+on the platforms in `pyproject.toml`. The supported integration baseline is
+`torchfits 1.0.0` or newer.
 
 Package metadata requires Python **>=3.12** and
-[PyTorch](https://pytorch.org/) **>=2.13**, with no upper dependency caps.
+[PyTorch](https://pytorch.org/) **>=2.13,<2.14**.
 The reproducible contributor lane pins Python 3.13.14, PyTorch 2.13.0, and
 torchfits 1.0.0. Native extensions still enforce their compiled PyTorch ABI.
 
@@ -33,7 +35,7 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 ### Prerequisites
 
 - Python **3.12+** (matches `requires-python` in `pyproject.toml`)
-- C++17 compatible compiler (GCC, Clang, MSVC)
+- C++20 compatible compiler (GCC or Clang on the supported release platforms)
 - CMake 3.15+ for the native project, with 3.21+ recommended for the packaged build environment and current PyTorch/CUDA toolchains
 - Ninja (recommended)
 - **Python build backend** (see below): `scikit-build-core`, `nanobind`, plus runtime deps `torch` and `numpy` (versions in `pyproject.toml`)
@@ -45,23 +47,20 @@ The package uses **scikit-build-core** as the build backend. With default `pip i
 If you install **without** build isolation (`--no-build-isolation`), you must have the backend and build-time deps available in the **same** environment as the interpreter:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.13" "numpy>=1.20.0"
+python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.13,<2.14" "numpy>=1.20.0"
 ```
 
 Exact pins match `[build-system].requires` in `pyproject.toml`.
 
 Optional extras (from `pyproject.toml`):
 
-- **`map`**: `astropy` and `astroquery` for ``torchsky map --method inr`` with the default
-  ``--inr-spectral-source=svo`` (SVO filter profiles). Install with
-  `pip install 'torchsky[map]'` when using PyPI wheels, or install those packages in your env.
+- **`map`**: `astropy` and `astroquery` for SVO filter profiles used by
+  ``torchsky map --method field --field-spectral-source=svo`` (the default source).
+  Install with `pip install 'torchsky[map]'` when using PyPI wheels, or install
+  those packages in your env.
 
 `torchfits` is an integration package, not a hidden backend. In-memory
 tensor/header workflows do not require it.
-
-The current development tree may temporarily retain legacy CFITSIO build files
-while the P0 extraction cleanup in [roadmap/status.md](roadmap/status.md) is
-completed. They are not part of the forward public contract.
 
 On macOS, install Xcode Command Line Tools if not present:
 
@@ -72,7 +71,7 @@ xcode-select --install
 Clone the repository and build:
 
 ```bash
-git clone https://github.com/sfabbro/torchsky.git
+git clone https://github.com/astroai/torchsky.git
 cd torchsky
 pip install -e .        # editable install
 ```

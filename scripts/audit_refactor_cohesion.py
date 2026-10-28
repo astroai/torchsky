@@ -20,47 +20,24 @@ from typing import Mapping
 ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_TASKS: Mapping[str, tuple[str, ...]] = {
-    "bench-map-acceptance-smoke": (
-        "bench-map-ground-truth-gate",
-        "bench-map-multifield-gate",
-        "bench-map-field-fit-gate",
-        "bench-map-compat-gate",
-    ),
-    "bench-map-ground-truth-gate": ("bench_map_ground_truth.py",),
-    "bench-map-multifield-gate": ("bench_map_multifield_truth.py",),
-    "bench-map-field-fit-gate": ("bench_map_field_fit.py",),
-    "bench-map-compat-gate": ("bench_map_compat.py",),
-    "bench-wcs-tpv-inverse": ("bench_wcs_tpv_inverse.py",),
-    "sphere-bench-geom-exact-contains-gate": ("bench_sphere_geom_exact_contains.py",),
-    "audit-refactor-cohesion": ("scripts/audit_refactor_cohesion.py",),
+    "audit-refactor-cohesion": ("scripts/audit_refactor_cohesion.py",)
 }
 
 REQUIRED_FILES = (
     "docs/architecture.md",
-    "docs/benchmarks.md",
+    "docs/evaluation/benchmarks.md",
     "docs/map.md",
     "docs/field.md",
     "docs/scene.md",
-    "docs/reviews/autonomous_refactor_log.md",
-    "docs/roadmap/history.md",
-    "docs/roadmap/status.md",
-    "benchmarks/bench_map_ground_truth.py",
-    "benchmarks/bench_map_multifield_truth.py",
-    "benchmarks/bench_map_field_fit.py",
-    "benchmarks/bench_map_compat.py",
-    "benchmarks/baselines/map_ground_truth_smoke.json",
-    "benchmarks/baselines/map_multifield_truth_smoke.json",
-    "benchmarks/baselines/map_field_fit_smoke.json",
-    "benchmarks/baselines/map_compat_real_smoke.json",
+    "docs/native-likelihood.md",
+    "docs/field-formulation.md",
+    "notes/planned.md",
 )
 
 DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
-    "docs/benchmarks.md": (
-        "pixi run audit-refactor-cohesion",
-        "pixi run bench-map-acceptance-smoke",
-        "bench_map_ground_truth.py",
-        "bench_map_multifield_truth.py",
-        "bench_map_field_fit.py",
+    "docs/evaluation/benchmarks.md": (
+        "torchsky-harness",
+        "Torchsky retains production implementations",
     ),
     "docs/map.md": (
         "ObservationOperatorBundle",
@@ -73,11 +50,7 @@ DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
         "field.sample",
         "operator_constrained",
     ),
-    "docs/architecture.md": (
-        "scene",
-        "world",
-        "io",
-    ),
+    "docs/architecture.md": ("scene", "world", "io"),
 }
 
 REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
@@ -133,9 +106,13 @@ REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {
         "_noise_pretrain_field_model",
     ),
     "src/torchsky/map/__init__.py": (
-        "make_field_model_preset",
-        "ObservationOperatorBundle",
-        "coadd_image_plane",
+        "Observation",
+        "Target",
+        "ProductSpec",
+        "coadd",
+        "coadd_cube",
+        "coadd_healpix",
+        "aperture_uncertainty",
     ),
     "src/torchsky/map/operators/__init__.py": (
         "MAP_RESAMPLING_KERNELS",
@@ -195,7 +172,7 @@ FORBIDDEN_SOURCE_PHRASES: Mapping[str, tuple[str, ...]] = {
         "def fit_field_model",
         "def fit_field_component_decomposition",
     ),
-    "src/torchsky/map/image_plane.py": (
+    "src/torchsky/map/image_plane_coadd.py": (
         "def _sample_image_plane_batched_channels",
         "def _infer_linear_affine_pixel_map",
         "def _headers_equivalent_for_direct_copy",

@@ -8,6 +8,7 @@ MOC GeoJSON, and validation diagnostics — all without a running HTTP server.
 from __future__ import annotations
 
 import math
+from typing import Any, cast
 
 import pytest
 import torch
@@ -81,6 +82,12 @@ class TestApplyStretch:
         out = apply_stretch(t, 0.0, 1000.0, "linear")
         assert float(out[0].item()) == pytest.approx(0.0)
         assert float(out[2].item()) == pytest.approx(1.0)
+
+    def test_zscale_is_not_a_low_level_stretch(self):
+        from torchsky.viz.renderers.image import apply_stretch
+
+        with pytest.raises(ValueError, match="Unknown stretch"):
+            cast(Any, apply_stretch)(torch.arange(3), 0.0, 2.0, "zscale")
 
 
 class TestColormaps:
@@ -196,11 +203,83 @@ class TestHipsTile:
         }
         return WCS(header)
 
+    def test_tile_rows_are_north_up(self):
+        """HiPS PNG tiles store scanlines top-down, so row 0 must be north."""
+        from torchsky.sphere import healpix
+        from torchsky.viz.renderers.hips_tile import _tile_lon_lat
+
+        pix = int(
+            healpix.ang2pix(
+                8, torch.tensor([150.0]), torch.tensor([2.0]), nest=True, lonlat=True
+            ).item()
+        )
+        _, lat = _tile_lon_lat(3, pix, tile_size=64)
+        assert float(lat[0].mean()) > float(lat[-1].mean())
+
+    def test_png_tile_is_north_up(self):
+        """A north-bright image must render bright rows at the top of the tile."""
+        import io
+
+        import numpy as np
+        from PIL import Image
+
+        from torchsky.sphere import healpix
+        from torchsky.viz.renderers.hips_tile import TILE_SIZE, render_hips_tile
+        from torchsky.wcs import WCS
+
+        h = w = 256
+        # FITS y=0 is the southern row, so values increase northward.
+        image = (
+            torch.arange(h, dtype=torch.float32)
+            .reshape(h, 1)
+            .expand(h, w)
+            .contiguous()
+        )
+        header = {
+            "NAXIS1": w,
+            "NAXIS2": h,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": w // 2,
+            "CRPIX2": h // 2,
+            "CRVAL1": 150.0,
+            "CRVAL2": 2.0,
+            "CD1_1": -1.0e-2,
+            "CD1_2": 0.0,
+            "CD2_1": 0.0,
+            "CD2_2": 1.0e-2,
+        }
+        # Order 6 (~0.9 deg) fits entirely inside the 2.56 deg image.
+        order = 6
+        pix = int(
+            healpix.ang2pix(
+                1 << order,
+                torch.tensor([150.0]),
+                torch.tensor([2.0]),
+                nest=True,
+                lonlat=True,
+            ).item()
+        )
+        png = render_hips_tile(
+            image, WCS(header), order=order, pix=pix, vmin=0.0, vmax=h - 1
+        )
+        assert png is not None
+        arr = np.asarray(Image.open(io.BytesIO(png)).convert("L"), dtype=float)
+        top = arr[: TILE_SIZE // 4].mean()
+        bottom = arr[-TILE_SIZE // 4 :].mean()
+        assert top > bottom + 10.0
+
     def test_render_preview(self):
         from torchsky.viz.renderers.hips_tile import render_preview
 
         image = torch.rand(128, 128) * 1000
-        png = render_preview(image, max_pixels=64, stretch="linear", cmap="gray")
+        png = render_preview(
+            image,
+            max_pixels=64,
+            stretch="linear",
+            limit_policy="zscale",
+            cmap="gray",
+        )
         assert png[:4] == b"\x89PNG"
 
     def test_compute_hips_order(self):

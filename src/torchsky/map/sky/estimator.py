@@ -92,8 +92,7 @@ class MeshSkyEstimator:
         differentiable.
     mesh_filter
         Post-filter applied to the coarse mesh: ``"median"``,
-        ``"gaussian"``, or ``None`` (no filter).  Legacy strings
-        ``"median_3"`` and ``"gaussian_3"`` are also accepted.
+        ``"gaussian"``, or ``None`` (no filter).
     mesh_filter_size
         Kernel size for the post-filter (default 3).  Ignored when
         *mesh_filter* is ``None``.
@@ -128,23 +127,26 @@ class MeshSkyEstimator:
                 f"unknown statistic '{statistic}'; "
                 f"choose from {set(_STATISTIC_REGISTRY)}"
             )
+        if mesh_filter is not None and (
+            mesh_filter_size < 1 or mesh_filter_size % 2 == 0
+        ):
+            raise ValueError("mesh_filter_size must be a positive odd integer")
 
         self._filter_type: str | None
         self._filter_kernel: int | None
-        if mesh_filter in ("median", "median_3"):
+        if mesh_filter == "median":
             self._filter_type = "median"
-            self._filter_kernel = mesh_filter_size if mesh_filter == "median" else 3
-        elif mesh_filter in ("gaussian", "gaussian_3"):
+            self._filter_kernel = mesh_filter_size
+        elif mesh_filter == "gaussian":
             self._filter_type = "gaussian"
-            self._filter_kernel = mesh_filter_size if mesh_filter == "gaussian" else 3
+            self._filter_kernel = mesh_filter_size
         elif mesh_filter is None:
             self._filter_type = None
             self._filter_kernel = None
         else:
             raise ValueError(
                 f"unknown mesh_filter '{mesh_filter}'; "
-                f"choose from 'median', 'gaussian', 'median_3', "
-                f"'gaussian_3', None"
+                f"choose from 'median', 'gaussian', None"
             )
 
         if interpolate not in ("bilinear", "bicubic"):

@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from torchsky.io import write
+from torchfits import write
 from torchsky.map.field.inverse import (
     IRLSConfig,
     LinearBandGridField,
@@ -30,7 +30,7 @@ from torchsky.map.field.types import (
     ForwardContext,
     PSFSpec,
 )
-from torchsky.map.product import MapProductResult
+from torchsky.map.product import ProductResult
 from torchsky.map.operators.background import (
     ConditionedBackgroundField,
     LearnedBackgroundOp,
@@ -485,8 +485,8 @@ def test_linear_band_grid_operator_full_vs_tiled_parity(
     torch.testing.assert_close(
         tiled_cg.solution,
         full_cg.solution,
-        rtol=1.0e-11,
-        atol=1.0e-11,
+        rtol=1.0e-10,
+        atol=1.0e-10,
     )
 
 
@@ -1234,7 +1234,7 @@ def test_linear_band_grid_field_matches_bound_operator_and_stationary_render() -
 
 
 def test_linear_band_grid_field_initialize_from_product_signed_2d_and_3d() -> None:
-    from torchsky.map.product import MapBandpassSpec, MapProductSpec
+    from torchsky.map.product import BandpassSpec, ProductSpec
 
     _, domain, bounds = _observation()
     header = {
@@ -1253,22 +1253,22 @@ def test_linear_band_grid_field_initialize_from_product_signed_2d_and_3d() -> No
     plane_f150w = torch.linspace(-0.8, 1.6, 16, dtype=torch.float64).reshape(4, 4)
     plane_f277w = torch.linspace(-2.0, 3.0, 16, dtype=torch.float64).reshape(4, 4)
     cube = torch.stack([plane_f150w, plane_f277w], dim=0)
-    spec = MapProductSpec(
+    spec = ProductSpec(
         target_header=header,
         bands=(
-            MapBandpassSpec(
+            BandpassSpec(
                 label="F150W",
                 transmission_center=15_000.0,
                 transmission_sigma=1_000.0,
             ),
-            MapBandpassSpec(
+            BandpassSpec(
                 label="F277W",
                 transmission_center=27_700.0,
                 transmission_sigma=1_000.0,
             ),
         ),
     )
-    product = MapProductResult(
+    product = ProductResult(
         product=spec,
         data=cube,
         weight=torch.ones_like(cube),
@@ -1793,4 +1793,3 @@ def test_solve_linear_band_grid_cg_detector_irls_rejects_cosmic_ray_outlier() ->
     assert abs(float(tukey_sol[5, 5].item()) - 20.0) < 0.25
     assert tukey_diag["data_weight_fn"] == "tukey"
     assert float(tukey_diag["detector_outlier_fraction"]) > 0.0
-

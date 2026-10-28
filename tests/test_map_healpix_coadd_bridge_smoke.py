@@ -9,11 +9,13 @@ import pytest
 from astropy.wcs import WCS
 import torch
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 pytest.importorskip("reproject")
 
-import torchsky  # noqa: E402
-from torchsky.map import ImageObservation, coadd_image_plane, plan_image_plane_target  # noqa: E402
+from torchsky.map.image_plane_coadd import coadd_image_plane
+from torchsky.map.planning import plan_image_plane_target
+from torchsky.map.observation import ImageObservation
+import torchfits
 
 
 def test_torchsky_coadd_after_healpix_roundtrip_matches_baseline(
@@ -45,10 +47,15 @@ def test_torchsky_coadd_after_healpix_roundtrip_matches_baseline(
         nside=256,
         order="bilinear",
     )
-    arr, fp = reproject_from_healpix((hp_map, "icrs"), WCS(hdr), nested=False, shape_out=(hdr['NAXIS2'], hdr['NAXIS1']))
+    arr, fp = reproject_from_healpix(
+        (hp_map, "icrs"),
+        WCS(hdr),
+        nested=False,
+        shape_out=(hdr["NAXIS2"], hdr["NAXIS1"]),
+    )
     assert float(fp.max()) > 0.5
     path = tmp_path / "from_hp.fits"
-    torchsky.write(
+    torchfits.write(
         str(path), torch.from_numpy(arr.astype(np.float32)), header=hdr, overwrite=True
     )
     obs = [ImageObservation(str(path))]

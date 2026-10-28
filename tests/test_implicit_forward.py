@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from torchsky.map import (
+from torchsky.map.field import (
     FieldDomain,
     FieldObservation,
     ForwardContext,

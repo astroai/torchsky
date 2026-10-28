@@ -30,13 +30,8 @@ def pytest_configure(config) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _clear_torchsky_native_io_handles_after_test():
+def _clear_torchfits_handles_after_test():
     yield
-    table_mod = sys.modules.get("torchsky.table")
-    clear_cache = getattr(table_mod, "clear_cache", None)
-    if clear_cache is not None:
-        clear_cache()
-
     try:
         import torchfits
         torchfits.clear_file_cache()

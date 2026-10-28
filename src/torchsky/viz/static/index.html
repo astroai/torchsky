@@ -6,10 +6,8 @@
   <title>torchsky viz</title>
 
   <!--
-    PRODUCTION BUILD: replace links below with Vite-built bundle.
-    Run: cd frontend && npm install && npm run build
-
-    CDN version (works with internet access, for quick start / development):
+    Self-contained viewer: Aladin Lite and fonts load from their CDNs.
+    There is no npm/Vite build step; edit this file directly.
   -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -615,8 +613,7 @@
       <div class="sidebar-section">
         <div class="section-title">Stretch</div>
         <div class="pill-group" id="stretch-group" role="group" aria-label="Image stretch">
-          <button type="button" class="pill active" data-v="zscale" aria-pressed="true">ZScale</button>
-          <button type="button" class="pill" data-v="linear" aria-pressed="false">Linear</button>
+          <button type="button" class="pill active" data-v="linear" aria-pressed="true">Linear</button>
           <button type="button" class="pill" data-v="log" aria-pressed="false">Log</button>
           <button type="button" class="pill" data-v="sqrt" aria-pressed="false">√</button>
           <button type="button" class="pill" data-v="asinh" aria-pressed="false">Asinh</button>
@@ -667,23 +664,6 @@
         </div>
       </div>
 
-      <!-- Catalog load -->
-      <div class="sidebar-section">
-        <label class="section-title" for="catalog-select" style="display:block;">Catalog Overlay</label>
-        <select id="catalog-select" style="margin-bottom:var(--sp2)">
-          <option value="">— select FITS catalog —</option>
-        </select>
-        <div style="display:flex;gap:var(--sp2)">
-          <input type="text" id="ra-col-input" placeholder="RA col" value="RA" aria-label="Right Ascension column"
-            style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
-                   border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
-                   font-size:11px;padding:4px var(--sp2);" />
-          <input type="text" id="dec-col-input" placeholder="Dec col" value="DEC" aria-label="Declination column"
-            style="flex:1;background:var(--bg-input);border:1px solid var(--bg-border);
-                   border-radius:var(--r-sm);color:var(--text-primary);font-family:var(--font-mono);
-                   font-size:11px;padding:4px var(--sp2);" />
-        </div>
-      </div>
     </div>
   </aside>
 
@@ -713,7 +693,7 @@
           <img id="val-pull-img" src="" alt="" />
         </div>
       </div>
-      <div class="validate-footer" id="val-hist-container">
+      <div class="validate-footer">
         <div class="section-title">Pull Distribution</div>
         <div id="val-histogram" style="height:90px;"></div>
       </div>
@@ -757,12 +737,6 @@
         <div id="wcs-info" class="stat-grid"></div>
       </div>
 
-      <!-- Validation stats (hidden by default) -->
-      <div class="info-card" id="val-stats-card" style="display:none">
-        <div class="info-card-title">Validation</div>
-        <div class="stat-grid" id="val-chi2-stats"></div>
-      </div>
-
     </div>
   </aside>
 
@@ -775,14 +749,6 @@
     <div class="footer-item">
       <span class="label">Dec</span>
       <span class="value text-mono" id="coord-dec">—</span>
-    </div>
-    <div class="footer-item">
-      <span class="label">Pixel</span>
-      <span class="value text-mono" id="coord-pix">—</span>
-    </div>
-    <div class="footer-item">
-      <span class="label">Value</span>
-      <span class="value text-mono" id="coord-val">—</span>
     </div>
     <div style="margin-left:auto" class="footer-item">
       <div id="status-spinner" class="spinner hidden" aria-hidden="true"></div>
@@ -811,7 +777,8 @@ const htmlEscape = (str) => String(str).replace(/[&<>'"]/g, tag => ({
 const state = {
   activePanel: 'fits',   // 'fits' | 'sky' | 'validate'
   currentFile: null,     // { path, hdu, surveyId, shape, vmin, vmax, wcs }
-  stretch:  'zscale',
+  stretch:  'linear',
+  limitPolicy: 'zscale',
   cmap:     'gray',
   gridOn:   true,
   symScale: false,
@@ -832,9 +799,19 @@ async function api(path, opts = {}) {
   const r = await fetch(`${API}/api${path}`, opts);
   if (!r.ok) {
     const err = await r.json().catch(() => ({detail: r.statusText}));
-    throw new Error(err.detail || r.statusText);
+    throw new Error(errorText(err.detail, r.statusText));
   }
   return r.json();
+}
+
+// FastAPI returns a string for raised errors and an array of objects for
+// request-validation failures; stringify both into something readable.
+function errorText(detail, fallback) {
+  if (Array.isArray(detail)) {
+    const parts = detail.map(d => d?.msg || JSON.stringify(d)).filter(Boolean);
+    return parts.length ? parts.join('; ') : fallback;
+  }
+  return detail || fallback;
 }
 
 function status(msg) {
@@ -943,7 +920,7 @@ async function openFile(path, hdu = 0) {
     populateHDUSelect(info.hdu_list, hdu);
     updateWCSInfo(info.wcs);
 
-    // 2. Register HiPS survey
+    // 2. Histogram + display statistics
     const reg = await api(`/fits/histogram?path=${encodeURIComponent(path)}&hdu=${hdu}`);
     state.histData = reg;
     drawHistogram(reg);
@@ -952,7 +929,7 @@ async function openFile(path, hdu = 0) {
 
     // 3. Register HiPS
     const survey = await api(
-      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&cmap=${state.cmap}`
+      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&limit_policy=${state.limitPolicy}&cmap=${state.cmap}`
     );
     state.currentFile = { path, hdu, surveyId: survey.id, shape: survey.shape,
                           vmin: survey.vmin, vmax: survey.vmax, wcs: info.wcs };
@@ -1193,7 +1170,7 @@ async function rerenderSurvey() {
   const { path, hdu } = state.currentFile;
   try {
     const survey = await api(
-      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&cmap=${state.cmap}&vmin=${vmin}&vmax=${vmax}`
+      `/hips/register?path=${encodeURIComponent(path)}&hdu=${hdu}&stretch=${state.stretch}&limit_policy=${state.limitPolicy}&cmap=${state.cmap}&vmin=${vmin}&vmax=${vmax}`
     );
     await A.init;
     const hipsUrl = `${window.location.origin}/api/hips/${survey.id}`;
@@ -1271,7 +1248,6 @@ function drawPullHistogram(data) {
 
   // Gaussian overlay
   if (data.gaussian_counts) {
-    const gmax = Math.max(...data.gaussian_counts, 1);
     ctx.strokeStyle = 'oklch(80% 0.05 260)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();

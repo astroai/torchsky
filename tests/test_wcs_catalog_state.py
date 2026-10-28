@@ -6,7 +6,9 @@ import torch
 from torchsky.wcs import (
     CatalogState,
     EarthOrientation,
+    Epoch,
     Site,
+    TimeSpec,
     icrs_to_itrs_xyz,
     observed_altaz,
     transform,
@@ -103,6 +105,58 @@ def test_catalog_state_refuses_incomplete_space_motion() -> None:
     )
     with pytest.raises(ValueError, match="not imputed"):
         state.propagate_physical(2010.0)
+
+
+def test_catalog_state_epoch_semantics_are_explicit_and_compatible() -> None:
+    legacy = CatalogState(
+        lon=10.0,
+        lat=20.0,
+        epoch=2015.5,
+        pm_lon_coslat_mas_yr=1.0,
+        pm_lat_mas_yr=2.0,
+    )
+    assert legacy.epoch_scale == "tcb"
+    assert legacy.epoch_format == "jyear"
+    torch.testing.assert_close(legacy.epoch, torch.tensor(2015.5, dtype=torch.float64))
+
+    tt = CatalogState(
+        lon=10.0,
+        lat=20.0,
+        epoch=Epoch(2015.5, TimeSpec(format="jyear", scale="tt")),
+        pm_lon_coslat_mas_yr=1.0,
+        pm_lat_mas_yr=2.0,
+        parallax_mas=1.0,
+        radial_velocity_km_s=10.0,
+    )
+    assert tt.epoch_scale == "tt"
+    with pytest.raises(ValueError, match="TCB jyear"):
+        tt.propagate_physical(2020.0)
+    with pytest.raises(ValueError, match="unsupported time-scale"):
+        legacy.propagate_angular(
+            Epoch(2020.0, TimeSpec(format="jyear", scale="tt"))
+        )
+
+
+def test_catalog_state_astropy_epoch_roundtrip_preserves_tcb_scale() -> None:
+    astropy_time = pytest.importorskip("astropy.time")
+    coordinates = pytest.importorskip("astropy.coordinates")
+    units = pytest.importorskip("astropy.units")
+    from torchsky.wcs.astropy_interop import (
+        catalog_state_from_astropy,
+        catalog_state_to_astropy,
+    )
+
+    coord = coordinates.SkyCoord(
+        ra=10.0 * units.deg,
+        dec=20.0 * units.deg,
+        obstime=astropy_time.Time(2016.0, format="jyear", scale="tt"),
+    )
+    state = catalog_state_from_astropy(coord)
+    assert state.epoch_scale == "tcb"
+    assert state.epoch_format == "jyear"
+    restored = catalog_state_to_astropy(state)
+    assert restored.obstime.scale == "tcb"
+    assert restored.obstime.tcb.jyear == pytest.approx(coord.obstime.tcb.jyear)
 
 
 def test_observed_altaz_requires_eop_and_zenith() -> None:

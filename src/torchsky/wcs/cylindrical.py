@@ -39,13 +39,21 @@ def project_cylindrical(
     """
     Project intermediate (xi, eta) to spherical (phi, theta) for Cylindrical projections.
     """
+    if projection_code == "CEA" and pv2 is not None and int(pv2.numel()) > 1:
+        lam = pv2[1].to(dtype=xi.dtype, device=xi.device)
+        if not bool(torch.isfinite(lam)) or bool(lam == 0.0):
+            raise ValueError("CEA PV2_1 (lambda) must be finite and non-zero")
     pv2_1 = _pv_param(pv2, 1, 1.0, like=xi)
     pv2_2 = _pv_param(pv2, 2, 1.0, like=xi)
 
     if projection_code == "CEA":
         phi = xi
-        val = torch.clamp(eta * (pv2_1 * D2R), -1.0, 1.0)
-        theta = torch.asin(val) * R2D
+        val = eta * (pv2_1 * D2R)
+        valid = torch.isfinite(val) & (val.abs() <= 1.0 + 1e-12)
+        theta = torch.asin(torch.clamp(val, -1.0, 1.0)) * R2D
+        nan = torch.full_like(theta, float("nan"))
+        phi = torch.where(valid, phi, nan)
+        theta = torch.where(valid, theta, nan)
 
     elif projection_code == "CAR":
         phi = xi
@@ -53,10 +61,14 @@ def project_cylindrical(
 
     elif projection_code == "MER":
         phi = xi
+        valid = torch.isfinite(xi) & torch.isfinite(eta)
         arg = eta * D2R
         arg = torch.clamp(arg, -20.0, 20.0)
         exp_val = torch.exp(arg)
         theta = 2.0 * (torch.atan(exp_val) * R2D - 45.0)
+        nan = torch.full_like(theta, float("nan"))
+        phi = torch.where(valid, phi, nan)
+        theta = torch.where(valid, theta, nan)
 
     elif projection_code == "CYP":
         mu = pv2_1
@@ -103,6 +115,10 @@ def deproject_cylindrical(
                 where phi is in [0, 360) and needs to be wrapped to [-180, 180] for xi.
     Returns: xi, eta in degrees.
     """
+    if projection_code == "CEA" and pv2 is not None and int(pv2.numel()) > 1:
+        lam = pv2[1].to(dtype=phi.dtype, device=phi.device)
+        if not bool(torch.isfinite(lam)) or bool(lam == 0.0):
+            raise ValueError("CEA PV2_1 (lambda) must be finite and non-zero")
     pv2_1 = _pv_param(pv2, 1, 1.0, like=phi)
     pv2_2 = _pv_param(pv2, 2, 1.0, like=phi)
 
@@ -120,11 +136,13 @@ def deproject_cylindrical(
         return xi, eta
 
     elif projection_code == "MER":
-        xi = phi_wrapped
+        valid = torch.isfinite(phi) & torch.isfinite(theta) & (theta.abs() < 90.0)
         half_theta = theta / 2.0
         tan_arg = torch.tan((45.0 + half_theta) * D2R)
-        tan_arg = torch.clamp(tan_arg, min=1e-12)
         eta = R2D * torch.log(tan_arg)
+        nan = torch.full_like(eta, float("nan"))
+        xi = torch.where(valid, phi_wrapped, nan)
+        eta = torch.where(valid, eta, nan)
         return xi, eta
 
     elif projection_code == "CYP":

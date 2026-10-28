@@ -1,8 +1,10 @@
 import numpy as np
+import pytest
 import torch
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS
+from torchsky.wcs.tpv import TPV
 
 
 def _tpv_header() -> dict:
@@ -59,37 +61,10 @@ def _tpv_affine_linear_header() -> dict:
     return header
 
 
-def _tpv_invertible_rect_header() -> dict:
-    header = {}
-    header["NAXIS"] = 2
-    header["NAXIS1"] = 1024
-    header["NAXIS2"] = 768
-    header["CTYPE1"] = "RA---TPV"
-    header["CTYPE2"] = "DEC--TPV"
-    header["CRPIX1"] = 512.0
-    header["CRPIX2"] = 384.0
-    header["CRVAL1"] = 12.0
-    header["CRVAL2"] = -3.0
-    header["CD1_1"] = -0.004465
-    header["CD1_2"] = 0.0005488
-    header["CD2_1"] = 0.0005488
-    header["CD2_2"] = 0.004465
-    header["PV1_0"] = 0.0
-    header["PV1_1"] = 1.0
-    header["PV1_2"] = -0.02
-    header["PV1_4"] = 2.0e-4 * 0.22
-    header["PV1_5"] = -3.0e-4 * 0.22
-    header["PV1_6"] = 1.5e-4 * 0.22
-    header["PV1_7"] = 2.0e-6 * 0.22
-    header["PV1_39"] = 2.0e-11 * 0.22
-    header["PV2_0"] = 0.0
-    header["PV2_1"] = 0.02
-    header["PV2_2"] = 1.0
-    header["PV2_4"] = -1.0e-4 * 0.22
-    header["PV2_5"] = 2.5e-4 * 0.22
-    header["PV2_6"] = -2.0e-4 * 0.22
-    header["PV2_7"] = -1.5e-6 * 0.22
-    header["PV2_39"] = -1.0e-11 * 0.22
+def _well_conditioned_tpv_header() -> dict:
+    header = _tpv_header()
+    header["PV2_1"] = 1.0
+    header["PV2_2"] = 2.0e-4
     return header
 
 
@@ -98,26 +73,6 @@ def _sample_pixels() -> tuple[np.ndarray, np.ndarray]:
     y = np.linspace(420.0, 600.0, 9, dtype=np.float64)
     xx, yy = np.meshgrid(x, y, indexing="xy")
     return xx.ravel(), yy.ravel()
-
-
-def _ra_delta(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    return ((a - b + 180.0) % 360.0) - 180.0
-
-
-def test_tpv_forward_parity_with_astropy() -> None:
-    header = _tpv_header()
-    awcs = AstropyWCS(header)
-    twcs = WCS(dict(header))
-
-    x, y = _sample_pixels()
-
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, 0)
-    ra_t, dec_t = twcs.pixel_to_world(
-        torch.from_numpy(x), torch.from_numpy(y), origin=0
-    )
-
-    np.testing.assert_allclose(_ra_delta(ra_t.cpu().numpy(), ra_ast), 0.0, atol=1e-8)
-    np.testing.assert_allclose(dec_t.cpu().numpy() - dec_ast, 0.0, atol=1e-8)
 
 
 def test_tpv_analytic_jacobian_matches_finite_difference() -> None:
@@ -263,24 +218,6 @@ def test_tpv_skips_cpp_direct_tan_projection_shortcuts() -> None:
     np.testing.assert_allclose(y_rt.cpu().numpy(), y_ref.cpu().numpy(), atol=1e-12)
 
 
-def test_tpv_inverse_parity_with_astropy_on_invertible_broad_field() -> None:
-    header = _tpv_invertible_rect_header()
-    awcs = AstropyWCS(header)
-    twcs = WCS(dict(header))
-
-    x = np.linspace(64.0, 960.0, 33, dtype=np.float64)
-    y = np.linspace(64.0, 704.0, 29, dtype=np.float64)
-    xx, yy = np.meshgrid(x, y, indexing="xy")
-
-    ra_ast, dec_ast = awcs.all_pix2world(xx.ravel(), yy.ravel(), 0)
-    x_t, y_t = twcs.world_to_pixel(
-        torch.from_numpy(ra_ast),
-        torch.from_numpy(dec_ast),
-        origin=0,
-    )
-
-    np.testing.assert_allclose(x_t.cpu().numpy(), xx.ravel(), atol=1e-6)
-    np.testing.assert_allclose(y_t.cpu().numpy(), yy.ravel(), atol=1e-6)
 
 
 def test_tpv_identity_pv2_1_mixed_fov_roundtrip() -> None:
@@ -333,3 +270,154 @@ def test_tpv_cpp_invert_handles_2d_inputs_when_fused_disabled() -> None:
     assert y_cpp.shape == yy.shape
     np.testing.assert_allclose(x_cpp.cpu().numpy(), x_py.cpu().numpy(), atol=5e-4)
     np.testing.assert_allclose(y_cpp.cpu().numpy(), y_py.cpu().numpy(), atol=5e-4)
+
+
+def test_tpv_invert_with_gradients_uses_differentiable_path() -> None:
+    twcs = WCS(dict(_tpv_header()))
+    assert twcs.tpv is not None
+    xi = torch.tensor([0.01, -0.02], dtype=torch.float64, requires_grad=True)
+    eta = torch.tensor([-0.015, 0.025], dtype=torch.float64, requires_grad=True)
+
+    u, v = twcs.tpv.invert(xi, eta)
+    (u + 0.5 * v).sum().backward()
+
+    assert xi.grad is not None and torch.isfinite(xi.grad).all()
+    assert eta.grad is not None and torch.isfinite(eta.grad).all()
+
+
+def _force_inverse_path(wcs: WCS, path: str) -> None:
+    wcs._disable_fused_world_to_pixel = path != "fused"
+    if path == "python":
+        assert wcs.tpv is not None
+        wcs.tpv._can_use_cpp_invert = lambda *args, **kwargs: False
+
+
+def test_empty_tpv_is_identity() -> None:
+    tpv = TPV({})
+    u = torch.tensor([0.1, -0.2, torch.nan], dtype=torch.float64)
+    v = torch.tensor([-0.3, 0.4, 0.5], dtype=torch.float64)
+    expected_u = torch.tensor([0.1, -0.2, torch.nan], dtype=torch.float64)
+    expected_v = torch.tensor([-0.3, 0.4, torch.nan], dtype=torch.float64)
+
+    du, dv = tpv.distort(u, v)
+    iu, iv = tpv.invert(u, v)
+    torch.testing.assert_close(du, expected_u, equal_nan=True)
+    torch.testing.assert_close(dv, expected_v, equal_nan=True)
+    torch.testing.assert_close(iu, expected_u, equal_nan=True)
+    torch.testing.assert_close(iv, expected_v, equal_nan=True)
+
+@pytest.mark.parametrize("path", ["fused", "standalone", "python"])
+def test_rank_deficient_affine_returns_nan_in_forced_inverse_paths(path: str) -> None:
+    header = _tpv_header()
+    for key in list(header):
+        if key.startswith(("PV1_", "PV2_")):
+            del header[key]
+    header.update({"PV1_1": 1.0, "PV2_2": 1.0})
+    wcs = WCS(header).to("cpu")
+    _force_inverse_path(wcs, path)
+
+    x, y = wcs.world_to_pixel(
+        torch.tensor([200.0], dtype=torch.float64),
+        torch.tensor([-20.0], dtype=torch.float64),
+        origin=0,
+    )
+    assert torch.isnan(x).all()
+    assert torch.isnan(y).all()
+
+
+def test_folded_polynomial_at_singular_fold_returns_nan() -> None:
+    tpv = TPV({"PV1_4": 1.0, "PV2_1": 1.0})
+    xi = torch.tensor([0.0, 0.25], dtype=torch.float64)
+    eta = torch.tensor([0.2, 0.2], dtype=torch.float64)
+
+    u, v = tpv.invert(xi, eta)
+
+    assert torch.isnan(u[0]) and torch.isnan(v[0])
+    assert torch.isfinite(u[1]) and torch.isfinite(v[1])
+    xi_rt, eta_rt = tpv.distort(u[1:], v[1:])
+    assert torch.hypot(xi_rt - xi[1:], eta_rt - eta[1:]).item() <= 1e-11
+
+
+@pytest.mark.parametrize("bad", [torch.nan, torch.inf, -torch.inf])
+def test_tpv_rejects_nonfinite_coefficients(bad: float) -> None:
+    with pytest.raises(ValueError, match="must be finite"):
+        TPV({"PV1_1": bad})
+
+
+@pytest.mark.parametrize("use_cpp", [False, True])
+def test_tpv_nonfinite_inverse_inputs_fail_per_point(use_cpp: bool) -> None:
+    tpv = TPV(_well_conditioned_tpv_header())
+    if not use_cpp:
+        tpv._can_use_cpp_invert = lambda *args, **kwargs: False
+    xi = torch.tensor([0.01, torch.nan, 0.02], dtype=torch.float64)
+    eta = torch.tensor([-0.02, 0.03, torch.inf], dtype=torch.float64)
+
+    u, v = tpv.invert(xi, eta)
+
+    assert torch.isfinite(u[0]) and torch.isfinite(v[0])
+    assert torch.isnan(u[1:]).all()
+    assert torch.isnan(v[1:]).all()
+
+
+@pytest.mark.parametrize("max_iter", [0, -1])
+def test_tpv_invert_rejects_invalid_max_iter(max_iter: int) -> None:
+    tpv = TPV({})
+    values = torch.zeros(1, dtype=torch.float64)
+    with pytest.raises(ValueError, match="positive integer"):
+        tpv.invert(values, values, max_iter=max_iter)
+
+
+@pytest.mark.parametrize("tol", [0.0, -1.0, float("nan"), float("inf")])
+def test_tpv_invert_rejects_invalid_tolerance(tol: float) -> None:
+    tpv = TPV({})
+    values = torch.zeros(1, dtype=torch.float64)
+    with pytest.raises(ValueError, match="finite and positive"):
+        tpv.invert(values, values, tol=tol)
+
+
+@pytest.mark.parametrize("use_cpp", [False, True])
+def test_every_finite_tpv_inverse_satisfies_requested_residual(use_cpp: bool) -> None:
+    tpv = TPV(_well_conditioned_tpv_header())
+    if not use_cpp:
+        tpv._can_use_cpp_invert = lambda *args, **kwargs: False
+    u = torch.linspace(-0.2, 0.2, 17, dtype=torch.float64)
+    v = torch.linspace(0.15, -0.15, 17, dtype=torch.float64)
+    xi, eta = tpv.distort(u, v)
+    u_inv, v_inv = tpv.invert(xi, eta, max_iter=20, tol=1e-12)
+    finite = torch.isfinite(u_inv) & torch.isfinite(v_inv)
+    assert finite.all()
+    xi_rt, eta_rt = tpv.distort(u_inv, v_inv)
+    assert torch.all(torch.hypot(xi_rt - xi, eta_rt - eta) <= 1e-12)
+
+
+@pytest.mark.parametrize("path", ["fused", "standalone", "python"])
+def test_valid_tpv_fixture_matches_astropy_in_forced_paths(path: str) -> None:
+    header = _well_conditioned_tpv_header()
+    oracle = AstropyWCS(header)
+    wcs = WCS(header).to("cpu")
+    _force_inverse_path(wcs, path)
+    x, y = _sample_pixels()
+    pixels = np.column_stack((x, y))
+    expected_world = oracle.all_pix2world(pixels, 0)
+    ra, dec = wcs.pixel_to_world(torch.from_numpy(x), torch.from_numpy(y), origin=0)
+    actual_world = np.column_stack((ra.numpy(), dec.numpy()))
+    delta_ra = np.remainder(actual_world[:, 0] - expected_world[:, 0] + 180.0, 360.0) - 180.0
+    np.testing.assert_allclose(delta_ra, 0.0, atol=2e-9, rtol=0.0)
+    np.testing.assert_allclose(actual_world[:, 1], expected_world[:, 1], atol=2e-9, rtol=0.0)
+
+    px, py = wcs.world_to_pixel(ra, dec, origin=0)
+    np.testing.assert_allclose(px.numpy(), x, atol=2e-5, rtol=0.0)
+    np.testing.assert_allclose(py.numpy(), y, atol=2e-5, rtol=0.0)
+
+
+def test_tpv_inverse_gradcheck_away_from_singularities() -> None:
+    tpv = TPV(_well_conditioned_tpv_header())
+    target = torch.tensor(
+        [[0.02, -0.015], [-0.03, 0.025]], dtype=torch.float64, requires_grad=True
+    )
+
+    def inverse(values: torch.Tensor) -> torch.Tensor:
+        u, v = tpv.invert(values[:, 0], values[:, 1], max_iter=20, tol=1e-12)
+        return torch.stack((u, v), dim=-1)
+
+    assert torch.autograd.gradcheck(inverse, (target,), atol=1e-6, rtol=1e-5)

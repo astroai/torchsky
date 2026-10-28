@@ -1,0 +1,198 @@
+[project]
+site_name = "torchsky"
+site_description = "Tensor-native astronomy: coordinates, HEALPix, mapmaking, and differentiable sky models for PyTorch."
+site_url = "https://astroai.github.io/torchsky/"
+repo_url = "https://github.com/astroai/torchsky"
+repo_name = "astroai/torchsky"
+edit_uri = "edit/main/docs/"
+copyright = "Copyright &copy; 2026 torchsky contributors"
+
+# Authoring inputs that live beside the pages but are not published.
+exclude_docs = """
+reference/_registry.toml
+evaluation/_benchmarks_template.md
+tier1.txt
+"""
+
+extra_css = [
+  "stylesheets/extra.css",
+]
+
+extra_javascript = [
+  "javascripts/mathjax.js",
+  "https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js",
+]
+
+nav = [
+  {"Home" = "index.md"},
+  {"Getting Started" = [
+    "install.md",
+    "quickstart.md",
+    "getting-started.md",
+    "migration.md",
+    "compatibility.md",
+  ]},
+  {"User Guide" = [
+    {"Coordinates and WCS" = ["wcs.md", "coordinates.md", "astrometry.md"]},
+    {"Sphere and HEALPix" = ["sphere.md", "sht.md", "moc-and-sparse.md"]},
+    {"Catalogs" = ["catalogs.md", "crossmatch.md", "catalogue-foundations.md"]},
+    {"Mapmaking" = ["map.md", "cubes.md", "healpix-maps.md"]},
+    {"Scenes and operators" = [
+      "scene.md",
+      "psf-response-conventions.md",
+      "native-likelihood.md",
+      "implicit_forward.md",
+    ]},
+    {"Fields and models" = [
+      "field.md",
+      "field-formulation.md",
+      "encoders.md",
+      "photometry-encoders.md",
+      "ml.md",
+    ]},
+    {"Spectral and photometry" = [
+      "spectral.md",
+      "spectrophotometry.md",
+      "extinction.md",
+      "cosmology.md",
+    ]},
+    {"I/O boundary" = ["io.md", "table.md"]},
+    {"CLI and visualization" = ["cli.md", "cli-recipes.md", "viz.md"]},
+    {"Gallery and examples" = ["gallery.md", "examples.md"]},
+  ]},
+  {"Reference" = [
+    "reference/index.md",
+    "reference/cli.md",
+    "reference/torchsky.md",
+    {"Core namespaces" = [
+      "reference/wcs.md",
+      "reference/coords.md",
+      "reference/sphere.md",
+      "reference/sphere-healpix.md",
+      "reference/catalogs.md",
+      "reference/map.md",
+      "reference/spectral.md",
+      "reference/spectrophotometry.md",
+      "reference/extinction.md",
+      "reference/cosmology.md",
+      "reference/redshift.md",
+      "reference/log-lambda.md",
+      "reference/transforms.md",
+      "reference/encoders.md",
+      "reference/quality.md",
+    ]},
+    {"Experimental namespaces" = [
+      "reference/scene.md",
+      "reference/field.md",
+      "reference/filter-profiles.md",
+      "reference/map-likelihood.md",
+      "reference/map-query.md",
+      "reference/map-evidence.md",
+      "reference/map-operators-continuous-response.md",
+      "reference/map-operators-detector-response.md",
+      "reference/map-operators-epsf.md",
+      "reference/map-operators-nuisance.md",
+      "reference/map-operators-pixel-calibration.md",
+      "reference/map-field-gaussian.md",
+      "reference/map-field-joint-native-likelihood.md",
+      "reference/map-field-native-integrated-read.md",
+      "reference/map-field-native-response.md",
+      "reference/viz.md",
+    ]},
+    {"Compatibility modules" = [
+      "reference/sphere-compat.md",
+    ]},
+    "reference/exceptions.md",
+    "reference/runtime-contract.md",
+    "architecture.md",
+  ]},
+  {"Evaluation" = [
+    "evaluation/benchmarks.md",
+    "evaluation/parity.md",
+    "evaluation/performance.md",
+  ]},
+  {"Project" = [
+    "changelog.md",
+    "roadmap.md",
+    "release.md",
+    "contributing.md",
+    "authoring.md",
+  ]},
+]
+
+[project.theme]
+name = "material"
+custom_dir = "overrides"
+logo = "assets/torchsky-logo.svg"
+favicon = "assets/torchsky-logo.svg"
+features = [
+  "navigation.path",
+  "navigation.top",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.tracking",
+  "search.highlight",
+  "search.suggest",
+  "content.action.edit",
+  "content.action.view",
+  "content.code.copy",
+  "content.tabs.link",
+  "toc.follow",
+]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+# ── Markdown extensions ──────────────────────────────────────
+
+[project.markdown_extensions.admonition]
+
+[project.markdown_extensions.pymdownx.details]
+
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }
+]
+
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+
+[project.markdown_extensions.pymdownx.emoji]
+emoji_index = "zensical.extensions.emoji.twemoji"
+emoji_generator = "zensical.extensions.emoji.to_svg"
+
+[project.markdown_extensions.attr_list]
+
+[project.markdown_extensions.md_in_html]
+
+[project.markdown_extensions.def_list]
+
+[project.markdown_extensions.tables]
+
+[project.markdown_extensions.toc]
+permalink = true
+
+[project.markdown_extensions.pymdownx.arithmatex]
+generic = true
+
+# ── Plugins ─────────────────────────────────────────────────
+
+[project.plugins.mkdocstrings]
+default_handler = "python"
+enable_inventory = false
+
+[project.plugins.mkdocstrings.handlers.python]
+options = { allow_inspection = true, docstring_options = { ignore_init_summary = true }, docstring_section_style = "table", filters = ["!^_"], inherited_members = false, merge_init_into_class = true, separate_signature = true, show_if_no_docstring = true, show_root_heading = true, show_signature_annotations = true, show_source = false, signature_crossrefs = true, summary = { modules = false } }
+paths = ["src"]
+
+[project.plugins.autorefs]

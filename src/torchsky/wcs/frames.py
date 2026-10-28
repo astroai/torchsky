@@ -6,6 +6,9 @@ from typing import Any
 import torch
 from torch import Tensor
 
+from .._dtype import as_work_tensor as _as_tensor
+from .._dtype import work_dtype as _work_dtype
+
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 ARCSEC_TO_RAD = D2R / 3600.0
@@ -19,11 +22,26 @@ JD_B1900 = 2415020.31352
 JD_B1950 = 2433282.42345905
 TROPICAL_YEAR_DAYS = 365.242198781
 
+# FK5 J2000 -> Galactic rotation from the IAU Galactic pole and node
+# (Astropy's Galactic frame constants). ICRS inputs must first receive
+# ``_ICRS_TO_FK5_J2000``.
 _ICRS_TO_GAL = torch.tensor(
     [
-        [-0.0548755604162154, -0.8734370902348850, -0.4838350155487132],
-        [0.4941094278755837, -0.4448296299600112, 0.7469822444972189],
-        [-0.8676661490190047, -0.1980763734312015, 0.4559837761750669],
+        [-0.05487553939571455, -0.8734371047274331, -0.4838349917703224],
+        [0.4941094536233634, -0.4448295942988166, 0.7469822487020499],
+        [-0.8676661356858694, -0.1980763896109499, 0.4559837945175692],
+    ],
+    dtype=torch.float64,
+)
+
+# ICRS -> FK5 (J2000) frame-bias matrix, USNO Circular 179 / Astropy's
+# _icrs_to_fk5_matrix(). The matrix maps column vectors; use ``vec @ B.T`` for
+# ICRS -> FK5 and ``vec @ B`` for FK5 -> ICRS when vectors are rows.
+_ICRS_TO_FK5_J2000 = torch.tensor(
+    [
+        [1.0, -1.11022333e-07, -4.41180450e-08],
+        [1.11022337e-07, 1.0, 9.64779225e-08],
+        [4.41180343e-08, -9.64779274e-08, 1.0],
     ],
     dtype=torch.float64,
 )
@@ -45,16 +63,6 @@ _FK4_CORR = torch.tensor(
     ],
     dtype=torch.float64,
 ) * 1.0e-6
-
-
-def _work_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
-
-
-def _as_tensor(value: Any) -> Tensor:
-    if isinstance(value, Tensor):
-        return value.to(dtype=_work_dtype(value.device))
-    return torch.as_tensor(value, dtype=torch.float64)
 
 
 def _to_device(value: Tensor, device: torch.device) -> Tensor:
@@ -299,52 +307,53 @@ def precess_fk5(
 def icrs_to_galactic(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
     """Convert ICRS equatorial coordinates to Galactic lon/lat."""
     vec = radec_to_unit(ra_deg, dec_deg)
+    # Astropy/ERFA define the Galactic frame through FK5 J2000; apply the ICRS
+    # frame bias before the FK5 -> Galactic rotation.
+    bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
     mat = _ICRS_TO_GAL.to(device=vec.device, dtype=vec.dtype)
-    gal_vec = torch.matmul(vec, mat.T)
+    gal_vec = torch.matmul(torch.matmul(vec, bias.T), mat.T)
     return unit_to_radec(gal_vec)
 
 
 def galactic_to_icrs(l_deg: Any, b_deg: Any) -> tuple[Tensor, Tensor]:
     """Convert Galactic lon/lat to ICRS equatorial coordinates."""
     vec = radec_to_unit(l_deg, b_deg)
+    bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
     mat = _ICRS_TO_GAL.to(device=vec.device, dtype=vec.dtype)
-    icrs_vec = torch.matmul(vec, mat)
+    icrs_vec = torch.matmul(torch.matmul(vec, mat), bias)
     return unit_to_radec(icrs_vec)
 
 
 # IAU 2006 mean obliquity of the ecliptic at J2000, 84381.406 arcsec.
-_ECLIPTIC_OBLIQUITY_J2000_RAD = 84381.406 * ARCSEC_TO_RAD
+# ICRS -> mean ecliptic and equinox of J2000, from ERFA ``ecm06`` at
+# JD 2451545.0 TT. This includes the frame bias and IAU 2006 precession, which
+# the plain obliquity-only rotation misses by ~0.04 arcsec.
+_ICRS_TO_ECLIPTIC_J2000 = torch.tensor(
+    [
+        [9.9999999999999412e-01, -7.0783689609715588e-08, 8.0562139776131861e-08],
+        [3.2897004077419660e-08, 9.1748212991495837e-01, 3.9777699944404799e-01],
+        [-1.0207044725484357e-07, -3.9777699944404304e-01, 9.1748212991495548e-01],
+    ],
+    dtype=torch.float64,
+)
 
 
 def _ecliptic_from_icrs_matrix(device: torch.device, dtype: torch.dtype) -> Tensor:
-    eps = torch.as_tensor(
-        _ECLIPTIC_OBLIQUITY_J2000_RAD, dtype=dtype, device=device
-    )
-    c = torch.cos(eps)
-    s = torch.sin(eps)
-    z = torch.zeros((), dtype=dtype, device=device)
-    o = torch.ones((), dtype=dtype, device=device)
-    return torch.stack(
-        (
-            torch.stack((o, z, z)),
-            torch.stack((z, c, -s)),
-            torch.stack((z, s, c)),
-        )
-    )
+    return _ICRS_TO_ECLIPTIC_J2000.to(device=device, dtype=dtype)
 
 
 def icrs_to_ecliptic(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
     """Rotate ICRS equatorial coordinates to mean ecliptic of J2000."""
     vec = radec_to_unit(ra_deg, dec_deg)
     mat = _ecliptic_from_icrs_matrix(vec.device, vec.dtype)
-    return unit_to_radec(torch.matmul(vec, mat))
+    return unit_to_radec(torch.matmul(vec, mat.T))
 
 
 def ecliptic_to_icrs(lon_deg: Any, lat_deg: Any) -> tuple[Tensor, Tensor]:
     """Rotate mean ecliptic of J2000 coordinates to ICRS equatorial."""
     vec = radec_to_unit(lon_deg, lat_deg)
     mat = _ecliptic_from_icrs_matrix(vec.device, vec.dtype)
-    return unit_to_radec(torch.matmul(vec, mat.T))
+    return unit_to_radec(torch.matmul(vec, mat))
 
 
 def icrs_to_ecliptic_of_date(
@@ -548,6 +557,23 @@ def propagate_proper_motion(
     ``SkyCoord.apply_space_motion`` when distance and radial velocity are not
     supplied. It stays well behaved at the poles, unlike dividing a longitude
     increment by ``cos(latitude)``.
+
+    Args:
+        lon_deg: Initial longitude in degrees.
+        lat_deg: Initial latitude in degrees.
+        pm_lon_coslat_mas_yr: Cosine-weighted longitude proper motion in mas/yr.
+        pm_lat_mas_yr: Latitude proper motion in mas/yr.
+        source_epoch_jyear: Initial Julian epoch.
+        target_epoch_jyear: Destination Julian epoch.
+
+    Returns:
+        Propagated longitude and latitude tensors in degrees.
+
+    Examples:
+        >>> from torchsky.wcs import propagate_proper_motion
+        >>> lon, lat = propagate_proper_motion(10.0, 20.0, 0.0, 0.0, source_epoch_jyear=2000.0, target_epoch_jyear=2010.0)
+        >>> round(float(lon), 6), round(float(lat), 6)
+        (10.0, 20.0)
     """
     lon = _as_tensor(lon_deg)
     device = lon.device
@@ -969,6 +995,22 @@ def propagate_space_motion(
 
     Returns:
         ``(lon, lat, pm_lon_coslat, pm_lat, parallax, radial_velocity)``.
+
+    Args:
+        lon_deg: Initial ICRS longitude in degrees.
+        lat_deg: Initial ICRS latitude in degrees.
+        pm_lon_coslat_mas_yr: Cosine-weighted longitude proper motion in mas/yr.
+        pm_lat_mas_yr: Latitude proper motion in mas/yr.
+        parallax_mas: Parallax in milliarcseconds.
+        radial_velocity_km_s: Radial velocity in km/s.
+        source_epoch_jyear: Initial TCB Julian epoch.
+        target_epoch_jyear: Destination TCB Julian epoch.
+
+    Examples:
+        >>> from torchsky.wcs import propagate_space_motion
+        >>> result = propagate_space_motion(10.0, 20.0, 0.0, 0.0, 10.0, 0.0, source_epoch_jyear=2000.0, target_epoch_jyear=2000.0)
+        >>> len(result)
+        6
     """
     return _propagate_space_motion(
         lon_deg,
@@ -1130,6 +1172,20 @@ def propagate_space_motion_with_jacobian(
     return propagated, jacobian.reshape(batch_shape + (6, 6))
 
 
+def _icrs_to_fk5_radec(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
+    """Apply the ICRS -> FK5 J2000 frame bias to equatorial coordinates."""
+    vec = radec_to_unit(ra_deg, dec_deg)
+    bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
+    return unit_to_radec(torch.matmul(vec, bias.T))
+
+
+def _fk5_to_icrs_radec(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
+    """Apply the FK5 J2000 -> ICRS frame bias (inverse of the above)."""
+    vec = radec_to_unit(ra_deg, dec_deg)
+    bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
+    return unit_to_radec(torch.matmul(vec, bias))
+
+
 def canonical_celestial_frame(frame: str | None) -> str:
     """Normalize common FITS/AST celestial frame names."""
     if frame is None or str(frame).strip() == "":
@@ -1192,7 +1248,7 @@ def convert_celestial(
             to_equinox=2000.0,
             obstime=source_equinox,
         )
-        lon, lat = unit_to_radec(vec)
+        lon, lat = _fk5_to_icrs_radec(*unit_to_radec(vec))
         src = "ICRS"
     elif src == "GALACTIC":
         lon, lat = galactic_to_icrs(lon, lat)
@@ -1212,6 +1268,7 @@ def convert_celestial(
             from_equinox=2000.0 if from_equinox is None else float(from_equinox),
             to_equinox=2000.0,
         )
+        lon, lat = _fk5_to_icrs_radec(lon, lat)
         src = "ICRS"
 
     if dst == "ICRS":
@@ -1226,6 +1283,7 @@ def convert_celestial(
         )
     if dst == "FK4":
         target_equinox = 1950.0 if to_equinox is None else float(to_equinox)
+        lon, lat = _icrs_to_fk5_radec(lon, lat)
         vec = radec_to_unit(lon, lat)
         vec = _fk5_to_fk4_no_e_vec(
             vec,
@@ -1244,6 +1302,7 @@ def convert_celestial(
             raise ValueError("ecliptic of date requires tt_mjd")
         return icrs_to_ecliptic_of_date(lon, lat, tt_mjd)
     if dst == "FK5":
+        lon, lat = _icrs_to_fk5_radec(lon, lat)
         return precess_fk5(
             lon,
             lat,

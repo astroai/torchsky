@@ -61,7 +61,11 @@ class StructuredNoiseOp(NoiseOp):
 
 
 def sanitize_inverse_variance(weight: Tensor) -> Tensor:
-    return weight.where(weight > 0.0, weight.new_zeros(()).expand_as(weight))
+    return torch.where(
+        torch.isfinite(weight) & (weight > 0.0),
+        weight,
+        torch.zeros((), dtype=weight.dtype, device=weight.device),
+    )
 
 
 def _reference_tensor(*values: object) -> Tensor | None:
@@ -99,13 +103,24 @@ def _validate_positive(value: Tensor, *, name: str) -> None:
 def _broadcast_parameter(value: Tensor, shape: tuple[int, ...], *, name: str) -> Tensor:
     """Broadcast a scalar/map or a leading exposure parameter to ``shape``.
 
-    Standard PyTorch broadcasting handles detector maps (``H x W`` against
-    ``E x H x W``). A one-dimensional calibration vector conventionally
-    indexes the leading exposure/amp axis, so the fallback appends singleton
-    dimensions for that case.
+    Standard PyTorch broadcasting handles explicit detector maps (``H x W``
+    against ``E x H x W``). A one-dimensional calibration vector always
+    indexes the leading exposure/amp axis, even when its length also equals a
+    trailing dimension. Trailing-axis calibration maps must therefore include
+    explicit singleton dimensions, such as ``(1, W)``.
     """
     if value.ndim > len(shape):
         raise ValueError(f"{name} has too many dimensions for target shape {shape}")
+    if value.ndim == 1 and len(shape) > 1:
+        leading = value.reshape(value.shape + (1,) * (len(shape) - 1))
+        try:
+            torch.broadcast_shapes(tuple(leading.shape), shape)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"{name} leading-axis shape {tuple(value.shape)} is not "
+                f"broadcastable to {shape}; use an explicit shape for a trailing map"
+            ) from exc
+        return leading
     try:
         torch.broadcast_shapes(tuple(value.shape), shape)
     except RuntimeError:
@@ -233,6 +248,10 @@ def pipeline_variance(
     _validate_nonnegative(err_tensor, name="ERR")
     scale = _coerce(err_scale, reference)
     _validate_positive(scale, name="ERR scale")
+    scale = _broadcast_parameter(scale, tuple(err_tensor.shape), name="ERR scale")
+    floor_tensor = _broadcast_parameter(
+        floor_tensor, tuple(err_tensor.shape), name="variance_floor"
+    )
     try:
         shape = torch.broadcast_shapes(
             tuple(err_tensor.shape), tuple(scale.shape), tuple(floor_tensor.shape)
@@ -241,11 +260,7 @@ def pipeline_variance(
         raise ValueError(
             "ERR, ERR scale, and variance_floor are not broadcastable"
         ) from exc
-    return _broadcast_parameter(
-        scale, shape, name="ERR scale"
-    ).square() * err_tensor.square() + _broadcast_parameter(
-        floor_tensor, shape, name="variance_floor"
-    )
+    return scale.square() * err_tensor.square() + floor_tensor
 
 
 calibrated_pipeline_variance = pipeline_variance
@@ -848,6 +863,58 @@ def student_t_nll(
     return _reduce_nll(-log_prob, reduction)
 
 
+def _integer_probability_powers(base: Tensor, degree: Tensor) -> Tensor:
+    power = degree.abs()
+    nonlinear_base = torch.where(power >= 2, base, 1.0)
+    return torch.where(
+        power == 0,
+        1.0,
+        torch.where(power == 1, base, nonlinear_base.pow(power.clamp_min(2.0))),
+    )
+
+
+def _poisson_mode_probability_terms(
+    rate: Tensor, counts: Tensor, included: Tensor
+) -> Tensor:
+    """Mode-scaled finite probabilities without log-rate differentiation."""
+    mode = rate.detach().floor().unsqueeze(-1)
+    degree = counts.to(rate.dtype) - mode
+    below_mode = degree < 0
+    # Integer reference modes bound both coefficients and power bases by one.
+    # The zero-rate value is frozen here; its right derivative is supplied by
+    # the same analytic boundary jet used by the logarithmic density path.
+    positive_rate = torch.where(rate == 0, 1.0, rate).unsqueeze(-1)
+    left_scale = mode.clamp_min(1.0)
+    right_scale = mode + 1.0
+    # These recurrences depend only on the detached mode. Keeping rate
+    # dependence in explicit powers avoids cumprod's division-based Hessian;
+    # ratios also avoid subtracting large, nearly equal log-factorials.
+    right_coefficient = torch.cumprod(
+        torch.where(degree > 0, right_scale / counts.clamp_min(1), 1.0), dim=-1
+    )
+    left_coefficient = torch.cumprod(
+        torch.where(below_mode, (counts + 1) / left_scale, 1.0).flip(-1), dim=-1
+    ).flip(-1)
+    coefficient = torch.where(below_mode, left_coefficient, right_coefficient)
+    left_rate = torch.where(mode > 0, positive_rate, 1.0)
+    base = torch.where(below_mode, left_scale / left_rate, positive_rate / right_scale)
+    # Isolate degrees zero/one: the generic tensor-power Hessian otherwise
+    # evaluates zero times an overflowing inverse power at tiny positive rates.
+    powers = _integer_probability_powers(base, degree)
+    weights = (coefficient * powers).masked_fill(~included, 0.0)
+    weights = torch.where(
+        (rate == 0).unsqueeze(-1), (counts == 0).to(rate.dtype), weights
+    )
+    return weights
+
+
+def _normalized_poisson_probability_weights(
+    rate: Tensor, counts: Tensor, included: Tensor
+) -> Tensor:
+    weights = _poisson_mode_probability_terms(rate, counts, included)
+    return weights / weights.sum(dim=-1, keepdim=True)
+
+
 def _poisson_gaussian_components(
     value: Tensor,
     expected_electrons: Tensor,
@@ -857,13 +924,18 @@ def _poisson_gaussian_components(
     background: Tensor | float = 0.0,
     tail_sigma: float = 12.0,
     max_terms: int = 4096,
-) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    logarithmic_weights: bool = True,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
     if not math.isfinite(float(tail_sigma)) or tail_sigma <= 0.0:
         raise ValueError("tail_sigma must be finite and positive")
     if int(max_terms) < 2:
         raise ValueError("max_terms must be at least 2")
 
     value = torch.as_tensor(value)
+    if value.dtype not in (torch.float32, torch.float64):
+        raise TypeError("value must have real float32 or float64 dtype")
+    if float(tail_sigma) > math.sqrt(torch.finfo(value.dtype).max):
+        raise ValueError("Poisson--Gaussian support radius exceeds the dtype range")
     rate = torch.as_tensor(expected_electrons, device=value.device, dtype=value.dtype)
     read_var = torch.as_tensor(
         read_noise_variance, device=value.device, dtype=value.dtype
@@ -889,9 +961,19 @@ def _poisson_gaussian_components(
     radius = (
         float(tail_sigma) * torch.sqrt(detached_rate + 1.0) + float(tail_sigma) ** 2
     )
-    lower = torch.floor((detached_rate - radius).clamp_min(0.0)).to(torch.int64)
-    upper = torch.ceil(detached_rate + radius).to(torch.int64)
-    width = int((upper - lower + 1).max().item()) if upper.numel() else 0
+    lower_float = torch.floor((detached_rate - radius).clamp_min(0.0))
+    upper_float = torch.ceil(detached_rate + radius)
+    if (
+        not bool(torch.isfinite(upper_float).all())
+        or bool((upper_float >= 2**63).any())
+        or bool((upper_float > 2.0 / torch.finfo(value.dtype).eps).any())
+    ):
+        raise ValueError(
+            "Poisson--Gaussian support exceeds the dtype's exact count range"
+        )
+    width = (
+        int((upper_float - lower_float + 1).max().item()) if upper_float.numel() else 0
+    )
     if width > int(max_terms):
         raise ValueError(
             f"Poisson--Gaussian support requires {width} terms, exceeding "
@@ -900,26 +982,253 @@ def _poisson_gaussian_components(
         )
     if width == 0:
         empty = torch.empty_like(value).unsqueeze(-1)
-        return value, read_var, empty, empty
+        return value, read_var, empty, empty, empty.to(torch.int64)
+
+    lower, upper = lower_float.to(torch.int64), upper_float.to(torch.int64)
 
     offset = torch.arange(width, device=value.device, dtype=torch.int64)
     counts_i = lower.unsqueeze(-1) + offset
     included = counts_i <= upper.unsqueeze(-1)
     counts = counts_i.to(dtype=value.dtype)
-    safe_rate = rate.clamp_min(torch.finfo(rate.dtype).tiny).unsqueeze(-1)
-    poisson_log = (
-        counts * safe_rate.log() - rate.unsqueeze(-1) - torch.lgamma(counts + 1.0)
-    )
-    log_weights = torch.where(
-        (rate == 0).unsqueeze(-1),
-        torch.where(counts_i == 0, torch.zeros_like(poisson_log), -torch.inf),
-        poisson_log,
-    )
-    log_weights = log_weights.masked_fill(~included, -torch.inf)
-    log_weights = log_weights - torch.logsumexp(log_weights, dim=-1, keepdim=True)
+    if logarithmic_weights:
+        safe_rate = torch.where(rate == 0, 1.0, rate).unsqueeze(-1)
+        poisson_log = (
+            counts * safe_rate.log() - rate.unsqueeze(-1) - torch.lgamma(counts + 1.0)
+        )
+        weights = torch.where(
+            (rate == 0).unsqueeze(-1),
+            torch.where(counts_i == 0, torch.zeros_like(poisson_log), -torch.inf),
+            poisson_log,
+        )
+        weights = weights.masked_fill(~included, -torch.inf)
+        weights = weights - torch.logsumexp(weights, dim=-1, keepdim=True)
+    else:
+        weights = _normalized_poisson_probability_weights(rate, counts_i, included)
 
     conditional_mean = gain_t.unsqueeze(-1) * counts + background_t.unsqueeze(-1)
-    return value, read_var, log_weights, conditional_mean
+    return value, read_var, weights, conditional_mean, counts_i
+
+
+def _standard_normal_interval_mass(lower: Tensor, upper: Tensor) -> Tensor:
+    """Stable Phi(upper)-Phi(lower) for ordered standardized endpoints."""
+    root_two = math.sqrt(2.0)
+    lower_tail = 0.5 * (torch.erfc(-upper / root_two) - torch.erfc(-lower / root_two))
+    upper_tail = 0.5 * (torch.erfc(lower / root_two) - torch.erfc(upper / root_two))
+    across_zero = 0.5 * (torch.erf(upper / root_two) - torch.erf(lower / root_two))
+    return torch.where(
+        upper <= 0, lower_tail, torch.where(lower >= 0, upper_tail, across_zero)
+    )
+
+
+def _poisson_gaussian_zero_rate_jet(
+    result: Tensor,
+    value: Tensor,
+    expected_electrons: Tensor,
+    read_var: Tensor,
+    *,
+    gain: Tensor | float,
+    background: Tensor | float,
+    tail_sigma: float,
+    cdf: bool,
+) -> Tensor:
+    """Restore exact right-hand first/second derivatives at zero Poisson rate.
+
+    Log weights cannot represent the derivative of a zero probability. Their
+    zero-rate branch already gives the exact value and read/location gradients;
+    this adds its rate Taylor jet through second order. Higher rate derivatives
+    at zero are not supplied. No positive rate uses a Taylor approximation.
+    """
+    rate = torch.broadcast_to(_coerce(expected_electrons, value), value.shape)
+    zero = rate == 0
+    forward_tangent = torch.autograd.forward_ad.unpack_dual(rate).tangent
+    reverse_grad = torch.is_grad_enabled() and rate.requires_grad
+    if not (reverse_grad or forward_tangent is not None) or not bool(zero.any()):
+        return result
+    gain_t = torch.broadcast_to(_coerce(gain, value), value.shape)
+    background_t = torch.broadcast_to(_coerce(background, value), value.shape)
+    # Mask before exponentiation: a positive-rate observation can have an
+    # enormous f_1/f_0 ratio that is irrelevant to this boundary correction.
+    residual = torch.where(zero, value - background_t, 0.0)
+    boundary_gain = torch.where(zero, gain_t, 1.0)
+    variance = torch.where(zero, read_var, 1.0)
+    # At an integer cutoff, immediately positive rates add the next count.
+    # In particular a zero radius of one includes count two in the right jet.
+    # Use the same tensor operations/dtype as the represented radius. Even a
+    # radius underflowing to zero adds count one immediately to the right.
+    zero_radius = float(tail_sigma) * value.new_tensor(1.0) + float(tail_sigma) ** 2
+    includes_two = bool(zero_radius >= 1)
+    if cdf:
+        sigma = variance.sqrt()
+        z0 = residual / sigma
+        z1 = (residual - boundary_gain) / sigma
+        interval01 = _standard_normal_interval_mass(z1, z0)
+        score = -interval01
+        curvature = (
+            interval01
+            - _standard_normal_interval_mass((residual - 2 * boundary_gain) / sigma, z1)
+            if includes_two
+            else 2 * interval01
+        )
+    else:
+        log_ratio = boundary_gain * (residual - 0.5 * boundary_gain) / variance
+        score = -torch.expm1(log_ratio)
+        if includes_two:
+            # f_1^2/f_0^2 - f_2/f_0 in log form avoids cancellation and
+            # avoids overflowing the individual squared ratio unnecessarily.
+            squared_spacing = boundary_gain.square() / variance
+            underflow = squared_spacing == 0
+            safe_spacing = torch.where(underflow, 1.0, squared_spacing)
+            log_factor = torch.where(
+                underflow,
+                2 * boundary_gain.log() - variance.log(),
+                (-torch.expm1(-safe_spacing)).log(),
+            )
+            curvature = torch.exp(2 * log_ratio + log_factor)
+        else:
+            curvature = torch.expm1(2 * log_ratio)
+    if not bool(torch.isfinite(score[zero]).all()) or not bool(
+        torch.isfinite(curvature[zero]).all()
+    ):
+        raise ValueError(
+            "zero-rate first/second derivatives exceed the dtype range; "
+            "the zero-rate density/CDF value remains available without rate gradients"
+        )
+    boundary_rate = torch.where(zero, rate, 0.0)
+    return result + boundary_rate * score + 0.5 * boundary_rate.square() * curvature
+
+
+def _poisson_gaussian_modal_nll(
+    observed: Tensor,
+    rate: Tensor,
+    read_var: Tensor,
+    gain: Tensor,
+    background: Tensor,
+    counts_i: Tensor,
+    poisson_log: Tensor,
+    gaussian_log: Tensor,
+) -> Tensor:
+    """Ratio of modal polynomial sums with a frozen Gaussian reference."""
+    included = torch.isfinite(poisson_log)
+    counts = counts_i.to(observed.dtype)
+    mode = rate.detach().floor().unsqueeze(-1)
+    prior_terms = _poisson_mode_probability_terms(rate, counts_i, included)
+    joint_index = (poisson_log + gaussian_log).detach().argmax(dim=-1, keepdim=True)
+    joint_mode = counts.gather(-1, joint_index)
+    degree = counts - joint_mode
+    below = (degree < 0) & included
+    above = (degree > 0) & included
+    has_left = below.any(dim=-1, keepdim=True)
+    has_right = above.any(dim=-1, keepdim=True)
+    # Zero-rate rows retain the exact Gaussian value and the separate right jet.
+    positive = (rate != 0).unsqueeze(-1)
+    reference_gain = torch.where(positive, gain.detach().unsqueeze(-1), 1.0)
+    reference_var = torch.where(positive, read_var.detach().unsqueeze(-1), 1.0)
+    residual = torch.where(
+        positive, (observed - background).detach().unsqueeze(-1), 0.0
+    )
+    reference_sigma = reference_var.sqrt()
+    standardized_gain = reference_gain / reference_sigma
+    standardized_residual = residual / reference_sigma
+    spacing = standardized_gain.square()
+    left_log_scale = joint_mode.clamp_min(1.0).log() + standardized_gain * (
+        standardized_gain * (joint_mode - 0.5) - standardized_residual
+    )
+    right_log_scale = (joint_mode + 1.0).log() + standardized_gain * (
+        standardized_gain * (joint_mode + 0.5) - standardized_residual
+    )
+    left_scale = torch.where(has_left, left_log_scale, 0.0).exp()
+    right_inverse_scale = torch.where(has_right, -right_log_scale, 0.0).exp()
+    bad_scaling = (
+        (has_left & ((left_scale == 0) | ~torch.isfinite(left_scale)))
+        | (
+            has_right
+            & ((right_inverse_scale == 0) | ~torch.isfinite(right_inverse_scale))
+        )
+    ).squeeze(-1)
+    safe_rate = torch.where(rate == 0, 1.0, rate)
+    # Degree multipliers can overflow before cancellation to a finite Hessian.
+    left_order = torch.where(below, -degree + 1.0, 0.0).amax(dim=-1)
+    right_order = torch.where(above, degree, 0.0).amax(dim=-1)
+    bad_curvature_range = ~torch.isfinite((left_order / safe_rate.detach()).square())
+    bad_curvature_range |= ~torch.isfinite(
+        (right_order * right_inverse_scale.squeeze(-1)).square()
+    )
+    bad = bad_scaling | bad_curvature_range
+    if bool(bad.any()):
+        parameters = (observed, rate, read_var, gain, background)
+        reverse_grad = torch.is_grad_enabled() and any(
+            p.requires_grad for p in parameters
+        )
+        forward_grad = any(
+            torch.autograd.forward_ad.unpack_dual(p).tangent is not None
+            for p in parameters
+        )
+        if reverse_grad or forward_grad:
+            raise ValueError(
+                "Poisson--Gaussian modal derivative intermediates exceed the dtype "
+                "range; evaluate without gradients or use a wider dtype"
+            )
+    # Mask ill-conditioned reference scalings before arithmetic; inference-only
+    # rows fall back to the same retained law's logarithmic value evaluation.
+    bad_row = bad.unsqueeze(-1)
+    left_scale = torch.where(bad_row, 1.0, left_scale)
+    right_inverse_scale = torch.where(bad_row, 1.0, right_inverse_scale)
+    left_rate = torch.where(has_left & ~bad_row, safe_rate.unsqueeze(-1), 1.0)
+    live_rate = torch.where(bad, 1.0, safe_rate).unsqueeze(-1)
+    base = torch.where(below, left_scale / left_rate, live_rate * right_inverse_scale)
+    left_coefficient = torch.cumprod(
+        torch.where(
+            below,
+            (counts + 1.0)
+            / joint_mode.clamp_min(1.0)
+            * torch.exp(-(-degree - 1.0).clamp_min(0.0) * spacing),
+            1.0,
+        ).flip(-1),
+        dim=-1,
+    ).flip(-1)
+    right_coefficient = torch.cumprod(
+        torch.where(
+            above,
+            (joint_mode + 1.0)
+            / counts.clamp_min(1.0)
+            * torch.exp(-(degree - 1.0).clamp_min(0.0) * spacing),
+            1.0,
+        ),
+        dim=-1,
+    )
+    coefficient = torch.where(below, left_coefficient, right_coefficient)
+    finite_gaussian = torch.where(torch.isfinite(gaussian_log), gaussian_log, 0.0)
+    conditional_change = (finite_gaussian - finite_gaussian.detach()).exp()
+    joint_terms = coefficient * _integer_probability_powers(base, degree)
+    joint_terms = (joint_terms * conditional_change).masked_fill(~included, 0.0)
+
+    # Sum short adjacent factorial ratios, avoiding cancellation of large lgamma
+    # values in the prior-to-joint anchor, including supports starting above zero.
+    right_ratio = (mode + 1.0) / counts.clamp_min(1.0)
+    left_ratio = (counts + 1.0) / mode.clamp_min(1.0)
+    log_coefficient = torch.where(
+        (counts > mode) & (counts <= joint_mode), right_ratio.log(), 0.0
+    ).sum(dim=-1)
+    log_coefficient = log_coefficient + torch.where(
+        (counts >= joint_mode) & (counts < mode), left_ratio.log(), 0.0
+    ).sum(dim=-1)
+    anchor_degree = (joint_mode - mode).squeeze(-1)
+    left_anchor_rate = torch.where(mode.squeeze(-1) > 0, safe_rate, 1.0)
+    anchor_base = torch.where(
+        anchor_degree < 0,
+        mode.clamp_min(1.0).squeeze(-1) / left_anchor_rate,
+        safe_rate / (mode.squeeze(-1) + 1.0),
+    )
+    anchor_base = torch.where((anchor_degree == 0) | bad, 1.0, anchor_base)
+    log_prior_anchor = log_coefficient + anchor_degree.abs() * anchor_base.log()
+    result = (
+        prior_terms.sum(dim=-1).log()
+        - joint_terms.sum(dim=-1).log()
+        - log_prior_anchor
+        - gaussian_log.detach().gather(-1, joint_index).squeeze(-1)
+    )
+    fallback = -torch.logsumexp((poisson_log + gaussian_log).detach(), dim=-1)
+    return torch.where(bad, fallback, result)
 
 
 def poisson_gaussian_nll(
@@ -939,26 +1248,75 @@ def poisson_gaussian_nll(
     that count is Gaussian. A per-pixel Poisson support containing at least
     ``tail_sigma`` standard deviations is retained and explicitly renormalized,
     so the returned finite mixture is a normalized density. Support selection is
-    detached from autograd; probabilities and Gaussian terms remain
-    differentiable.
+    detached from autograd. Positive-rate derivatives are local to the retained
+    support; changing support can change the finite-mixture law discontinuously.
+    At exactly zero rate, first/second rate and mixed derivatives are the exact
+    right-hand continuation, including a cutoff that increases immediately to
+    the right of zero. Third/higher rate derivatives at
+    zero are unsupported. A requested zero-rate derivative outside the dtype
+    range rejects, while inference-only zero-rate values remain available.
+    Positive-rate autograd uses modal polynomial sums, with separate prior and
+    observation-conditioned pivots, avoiding tiny-rate logarithmic curvature
+    cancellation and density underflow. Derivatives exceeding the modal
+    intermediate range reject; inference-only values use the same retained
+    law's log-sum evaluation in that domain. This is a numeric range contract,
+    not an intensity cutoff or change of physical model. It can conservatively
+    reject a finite final derivative when reference scales underflow or larger
+    intermediate curvature terms are not representable.
+
+    ``gain`` is output units per electron, ``background`` is a signed
+    deterministic output-unit offset, and ``read_noise_variance`` is in output
+    units squared. Expected electrons are a physical nonnegative integrated
+    Poisson mean, including all independent photon/dark contributions. This
+    normalized finite mixture is not the full untruncated physical law, nor a
+    joint likelihood for correlated charge mixing or read noise.
+    Observations require real float32/float64 tensors; integer and low-precision
+    observations are unsupported. Other tensor parameters follow observation
+    dtype/device by the existing explicit coercion convention.
     """
-    observed, read_var, poisson_log, conditional_mean = _poisson_gaussian_components(
-        observed,
-        expected_electrons,
-        read_noise_variance,
-        gain=gain,
-        background=background,
-        tail_sigma=tail_sigma,
-        max_terms=max_terms,
+    observed, read_var, poisson_log, conditional_mean, counts = (
+        _poisson_gaussian_components(
+            observed,
+            expected_electrons,
+            read_noise_variance,
+            gain=gain,
+            background=background,
+            tail_sigma=tail_sigma,
+            max_terms=max_terms,
+        )
     )
     if poisson_log.shape[-1] == 0:
         return _reduce_nll(torch.empty_like(observed), reduction)
     gaussian_log = -0.5 * (
         read_var.unsqueeze(-1).log()
         + observed.new_tensor(math.log(2.0 * math.pi))
-        + (observed.unsqueeze(-1) - conditional_mean).square() / read_var.unsqueeze(-1)
+        + (
+            (observed.unsqueeze(-1) - conditional_mean) / read_var.sqrt().unsqueeze(-1)
+        ).square()
     )
-    nll = -torch.logsumexp(poisson_log + gaussian_log, dim=-1)
+    rate = torch.broadcast_to(_coerce(expected_electrons, observed), observed.shape)
+    gain_t = torch.broadcast_to(_coerce(gain, observed), observed.shape)
+    background_t = torch.broadcast_to(_coerce(background, observed), observed.shape)
+    nll = _poisson_gaussian_modal_nll(
+        observed,
+        rate,
+        read_var,
+        gain_t,
+        background_t,
+        counts,
+        poisson_log,
+        gaussian_log,
+    )
+    nll = _poisson_gaussian_zero_rate_jet(
+        nll,
+        observed,
+        expected_electrons,
+        read_var,
+        gain=gain,
+        background=background,
+        tail_sigma=tail_sigma,
+        cdf=False,
+    )
     return _reduce_nll(nll, reduction)
 
 
@@ -972,8 +1330,17 @@ def poisson_gaussian_cdf(
     tail_sigma: float = 12.0,
     max_terms: int = 4096,
 ) -> Tensor:
-    """CDF of the normalized finite Poisson--Gaussian detector mixture."""
-    value, read_var, poisson_log, conditional_mean = _poisson_gaussian_components(
+    """CDF of the normalized finite Poisson--Gaussian detector mixture.
+
+    Units, detached-support locality and zero-rate derivative-order/range
+    contracts are the same as :func:`poisson_gaussian_nll`.
+    Gaussian CDF/survival sums use erfc; the lower half uses the CDF sum and
+    the upper half one minus survival. This is numerical tail conditioning of
+    the same retained law, with no intensity cutoff or Gaussian approximation.
+    Mode-scaled probability powers avoid logarithmic-weight curvature
+    cancellation at tiny positive rates. This does not change the NLL path.
+    """
+    value, read_var, weights, conditional_mean, _counts = _poisson_gaussian_components(
         value,
         expected_electrons,
         read_noise_variance,
@@ -981,14 +1348,31 @@ def poisson_gaussian_cdf(
         background=background,
         tail_sigma=tail_sigma,
         max_terms=max_terms,
+        logarithmic_weights=False,
     )
-    if poisson_log.shape[-1] == 0:
+    if weights.shape[-1] == 0:
         return torch.empty_like(value)
     standardized = (value.unsqueeze(-1) - conditional_mean) / read_var.sqrt().unsqueeze(
         -1
     )
-    conditional_cdf = torch.special.ndtr(standardized)
-    return torch.sum(poisson_log.exp() * conditional_cdf, dim=-1).clamp(0.0, 1.0)
+    # erfc retains representable lower-tail mass where ndtr/erf rounds to zero.
+    conditional_cdf = 0.5 * torch.erfc(-standardized / math.sqrt(2.0))
+    conditional_survival = 0.5 * torch.erfc(standardized / math.sqrt(2.0))
+    cdf_sum = torch.sum(weights * conditional_cdf, dim=-1)
+    survival_sum = torch.sum(weights * conditional_survival, dim=-1)
+    # These are the same normalized law. The probability-half crossover only
+    # selects the better-conditioned tail calculation, never a physical model.
+    result = torch.where(cdf_sum <= 0.5, cdf_sum, 1 - survival_sum).clamp(0.0, 1.0)
+    return _poisson_gaussian_zero_rate_jet(
+        result,
+        value,
+        expected_electrons,
+        read_var,
+        gain=gain,
+        background=background,
+        tail_sigma=tail_sigma,
+        cdf=True,
+    )
 
 
 def gaussian_student_t_mixture_responsibilities(

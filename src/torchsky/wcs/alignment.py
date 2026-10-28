@@ -262,6 +262,24 @@ def fit_affine_2d(
     ``shift`` (translation), ``rshift`` (rotation + translation),
     ``rscale`` (uniform scale + rotation + translation), and ``general``
     (full affine + translation).
+
+    Args:
+        source: Input points with shape ``(N, 2)``.
+        target: Corresponding target points with shape ``(N, 2)``.
+        weights: Optional nonnegative per-point weights.
+        geometry: Constrained affine transformation family.
+        sigma_clip: Optional residual clipping threshold in robust sigmas.
+        max_iter: Maximum clipping-and-refit iterations.
+
+    Returns:
+        Fitted matrix, offset, residuals, mask, and fit diagnostics.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.wcs import fit_affine_2d
+        >>> fit = fit_affine_2d(torch.tensor([[0.0, 0.0]]), torch.tensor([[1.0, 2.0]]), geometry="shift")
+        >>> fit.offset.tolist()
+        [1.0, 2.0]
     """
     src = _as_points(source, "source")
     tgt = _as_points(target, "target").to(device=src.device)

@@ -19,7 +19,7 @@ import math
 
 import torch
 
-from torchsky.map import build_spherical_harmonic_solver_hooks
+from torchsky.map.solvers import build_spherical_harmonic_solver_hooks
 from torchsky.map.solvers import (
     build_harmonic_degree_prior_operator,
     build_state_component_mixture_operator,
@@ -141,7 +141,6 @@ def main() -> None:
     split_diagonal = split_operator_set.estimate_normal_operator_diagonal(
         split_data,
         initial_probe=torch.zeros_like(joint_truth),
-        max_entries=64,
         damping=1.0e-4,
     )
     split_fit = split_operator_set.solve_normal_equation_cg(
@@ -157,7 +156,6 @@ def main() -> None:
     shared_only_diagonal = shared_only_block.estimate_normal_operator_diagonal(
         shared_only_data,
         initial_probe=torch.zeros_like(shared_truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     shared_only_fit = shared_only_block.solve_normal_equation_cg(

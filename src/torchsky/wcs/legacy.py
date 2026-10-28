@@ -36,17 +36,6 @@ def parse_wat_keywords(header: Dict[str, Any], prefix: str = "WAT") -> str:
     return full_str
 
 
-def _looks_numeric_iraf_poly(s: str) -> bool:
-    s = s.strip()
-    if not s or "=" in s:
-        return False
-    parts = s.split()
-    try:
-        int(float(parts[0]))
-    except (ValueError, IndexError):
-        return False
-    return True
-
 
 class LegacyPolynomial:
     """

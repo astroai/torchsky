@@ -631,7 +631,7 @@ class TestSpectralReader:
 
     @unittest.mock.patch("torchsky.spectral.WCS")
     @unittest.mock.patch("torchsky.spectral.spectral_axis_from_header")
-    @unittest.mock.patch("torchsky.io.open")
+    @unittest.mock.patch("torchfits.open")
     def test_read_data_cube_wcs_error(
         self, mock_open, mock_spectral_axis, mock_wcs_class
     ):

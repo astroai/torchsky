@@ -11,6 +11,7 @@ import torchsky
 
 from torchsky.cli import build_parser
 from torchsky.cli.map_command import _dispatch_map
+import torchfits
 
 
 def _simple_header(shape: tuple[int, int] = (8, 8)) -> dict:
@@ -55,9 +56,62 @@ def test_map_parser_defaults():
     assert args.weight_maps is None
     assert args.mask_maps is None
     assert args.primary_beam_maps is None
-    assert args.inr_spectral_source == "svo"
-    assert args.inr_spatial_sampling == "center"
+    assert args.field_spectral_source == "svo"
+    assert args.field_spatial_sampling == "center"
     assert args.field_amp == "none"
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--sky",
+        "--inr-model",
+        "--inr-band",
+        "--inr-spectral-source",
+        "--inr-transmission",
+        "--inr-transmission-dir",
+        "--inr-transmission-unit",
+        "--inr-gaussian-lambda-eff",
+        "--inr-gaussian-lambda-min",
+        "--inr-gaussian-lambda-max",
+        "--inr-gaussian-sigma",
+        "--inr-quiet-svo",
+        "--inr-steps",
+        "--inr-lr",
+        "--inr-patch-size",
+        "--inr-patches-per-obs",
+        "--inr-obs-per-step",
+        "--inr-spectral-samples",
+        "--inr-spatial-sampling",
+        "--inr-render-tile",
+        "--inr-max-pixels",
+        "--per-band",
+    ],
+)
+def test_map_parser_rejects_removed_option_spellings(option: str) -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["map", "out.fits", "in.fits", option])
+    assert exc_info.value.code == 2
+
+
+def test_map_field_options_use_field_destinations() -> None:
+    args = build_parser().parse_args(
+        [
+            "map",
+            "out.fits",
+            "in.fits",
+            "--field-model",
+            "sine_implicit",
+            "--field-band",
+            "F277W",
+            "--field-steps",
+            "12",
+        ]
+    )
+    assert args.field_model == "sine_implicit"
+    assert args.field_band == "F277W"
+    assert args.field_steps == 12
 
 
 @pytest.mark.parametrize(
@@ -81,7 +135,6 @@ def test_map_workflow_presets_expand_to_explicit_controls(
         kernel=None,
         stack=None,
         background_mode=None,
-        sky=False,
     )
 
     _resolve_map_workflow(args)
@@ -99,7 +152,6 @@ def test_map_workflow_explicit_controls_override_preset() -> None:
         kernel="bilinear",
         stack="median",
         background_mode="none",
-        sky=False,
     )
 
     _resolve_map_workflow(args)
@@ -130,21 +182,6 @@ def test_map_parser_accepts_sigma_clipped_stack() -> None:
     assert args.clip_iterations == 5
 
 
-def test_map_sky_alias_rejects_conflicting_background_mode() -> None:
-    from torchsky.cli.map_command import _resolve_map_workflow
-
-    args = SimpleNamespace(
-        workflow="native",
-        kernel=None,
-        stack=None,
-        background_mode="overlap",
-        sky=True,
-    )
-
-    with pytest.raises(SystemExit, match="--sky conflicts with --background-mode"):
-        _resolve_map_workflow(args)
-
-
 def test_map_parser_help_is_renderable(capsys) -> None:
     parser = build_parser()
     with pytest.raises(SystemExit) as exc_info:
@@ -153,7 +190,7 @@ def test_map_parser_help_is_renderable(capsys) -> None:
     assert exc_info.value.code == 0
     help_text = capsys.readouterr().out
     assert "--union-footprint" in help_text
-    assert "1.05 = 5%" in help_text
+    assert "1.0 = exact" in help_text.replace("\n", " ")
 
 
 @mock.patch("torchsky.cli.map_command._expand_inputs")
@@ -183,7 +220,7 @@ def test_dispatch_map_weight_map_count_mismatch(mock_expand):
 
 
 @mock.patch("torchsky.cli.map_command._expand_inputs")
-def test_dispatch_map_rejects_invalid_inr_tile(mock_expand):
+def test_dispatch_map_rejects_invalid_field_tile(mock_expand):
     mock_expand.return_value = ["in1.fits"]
     args = argparse.Namespace(
         inputs=["in1.fits"],
@@ -191,10 +228,10 @@ def test_dispatch_map_rejects_invalid_inr_tile(mock_expand):
         weight_maps=None,
         mask_maps=None,
         primary_beam_maps=None,
-        method="inr",
-        inr_render_tile=0,
+        method="field",
+        field_render_tile=0,
     )
-    with pytest.raises(SystemExit, match="--inr-render-tile must be positive"):
+    with pytest.raises(SystemExit, match="--field-render-tile must be positive"):
         _dispatch_map(args)
 
 
@@ -242,21 +279,6 @@ def test_dispatch_map_coadd(mock_run_coadd, mock_expand):
     assert args.inputs == ["in1.fits", "in2.fits"]
     assert args.weights == [1.0, 1.0]
     mock_run_coadd.assert_called_once_with(args)
-
-
-@mock.patch("torchsky.cli.map_command._expand_inputs")
-@mock.patch("torchsky.cli.map_command._run_inr")
-def test_dispatch_map_inr(mock_run_inr, mock_expand):
-    mock_expand.return_value = ["in1.fits"]
-    mock_run_inr.return_value = 0
-
-    args = argparse.Namespace(inputs=["in1.fits"], weights=None, method="inr")
-
-    rc = _dispatch_map(args)
-    assert rc == 0
-    assert args.inputs == ["in1.fits"]
-    assert args.weights == [1.0]
-    mock_run_inr.assert_called_once_with(args)
 
 
 def test_safe_name():
@@ -308,14 +330,14 @@ def test_run_coadd_accepts_cli_weight_and_mask_maps(tmp_path) -> None:
     mask_b = tmp_path / "b_mask.fits"
     output = tmp_path / "out.fits"
     header = _simple_header()
-    torchsky.write(str(path_a), torch.full((8, 8), 2.0), header=header, overwrite=True)
-    torchsky.write(str(path_b), torch.full((8, 8), 10.0), header=header, overwrite=True)
+    torchfits.write(str(path_a), torch.full((8, 8), 2.0), header=header, overwrite=True)
+    torchfits.write(str(path_b), torch.full((8, 8), 10.0), header=header, overwrite=True)
     wmap = torch.ones((8, 8), dtype=torch.float32)
     wmap[:, :4] = 3.0
     mask = torch.ones((8, 8), dtype=torch.float32)
     mask[:, 4:] = 0.0
-    torchsky.write(str(weight_a), wmap, header=header, overwrite=True)
-    torchsky.write(str(mask_b), mask, header=header, overwrite=True)
+    torchfits.write(str(weight_a), wmap, header=header, overwrite=True)
+    torchfits.write(str(mask_b), mask, header=header, overwrite=True)
 
     args = argparse.Namespace(
         inputs=[str(path_a), str(path_b)],
@@ -344,7 +366,7 @@ def test_run_coadd_accepts_cli_weight_and_mask_maps(tmp_path) -> None:
     )
 
     assert _run_coadd(args) == 0
-    data = torchsky.read(str(output), device="cpu")
+    data = torchfits.read(str(output), device="cpu")
     expected_left = (2.0 * 3.0 + 10.0) / 4.0
     # Interior rows (1-6) should match; edge pixels may be 0 from bilinear resampling
     torch.testing.assert_close(
@@ -368,10 +390,10 @@ def test_run_coadd_accepts_cli_photometric_scale_and_background(tmp_path) -> Non
     path_raw = tmp_path / "raw.fits"
     output = tmp_path / "out.fits"
     header = _simple_header()
-    torchsky.write(
+    torchfits.write(
         str(path_ref), torch.full((8, 8), 2.0), header=header, overwrite=True
     )
-    torchsky.write(
+    torchfits.write(
         str(path_raw), torch.full((8, 8), 6.0), header=header, overwrite=True
     )
 
@@ -402,7 +424,7 @@ def test_run_coadd_accepts_cli_photometric_scale_and_background(tmp_path) -> Non
     )
 
     assert _run_coadd(args) == 0
-    data = torchsky.read(str(output), device="cpu")
+    data = torchfits.read(str(output), device="cpu")
     torch.testing.assert_close(
         data[1:7, 1:7],
         torch.full((6, 6), 2.0, dtype=torch.float32),
@@ -416,12 +438,12 @@ def test_run_coadd_dry_run_does_not_execute_mapmaker(monkeypatch, tmp_path) -> N
 
     path = tmp_path / "input.fits"
     header = _simple_header()
-    torchsky.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
+    torchfits.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
 
     def fail_run(*args, **kwargs):
         raise AssertionError("ImagePlaneMapMaker should not run during dry-run")
 
-    monkeypatch.setattr(map_command, "stack_map_product", fail_run)
+    monkeypatch.setattr(map_command, "stack_product", fail_run)
 
     args = argparse.Namespace(
         inputs=[str(path)],
@@ -459,7 +481,7 @@ def test_cli_map_dry_run_writes_resolved_plan_json(monkeypatch, tmp_path) -> Non
     input_path = tmp_path / "input.fits"
     output_path = tmp_path / "output.fits"
     plan_path = tmp_path / "plans" / "output.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -491,7 +513,7 @@ def test_cli_map_dry_run_writes_resolved_plan_json(monkeypatch, tmp_path) -> Non
     assert plan["inputs"][0]["weight_is_inverse_variance"] is False
     assert plan["inputs"][0]["identity"]["path"] == str(input_path.resolve())
     assert "sha256" in plan["inputs"][0]["identity"]
-    assert plan["target"]["shape"] == [9, 9]
+    assert plan["target"]["shape"] == [8, 8]
     assert plan["execution"]["workflow"] == "native"
     assert plan["execution"]["kernel"] == "bilinear"
     assert plan["execution"]["stack"] == "weighted_mean"
@@ -499,7 +521,7 @@ def test_cli_map_dry_run_writes_resolved_plan_json(monkeypatch, tmp_path) -> Non
     assert plan["execution"]["clip_iterations"] == 3
     assert plan["execution"]["scratch_required_bytes"] == 0
     assert plan["execution"]["resolved_device"] == "cpu"
-    assert plan["requested_products"] == ["SCI", "WHT", "IVAR", "CTX", "MASK", "NEXP"]
+    assert plan["requested_products"] == ["SCI", "WHT", "IVAR", "MASK", "NEXP"]
     assert plan["software"]["torchsky"] == torchsky.__version__
     assert plan["runtime"]["dtype"] == "float32"
     assert not list(plan_path.parent.glob("*.tmp"))
@@ -514,7 +536,7 @@ def test_cli_explicit_unit_weight_round_trips_as_inverse_variance(
     first_output = tmp_path / "unused.fits"
     replay_output = tmp_path / "unit-weight-replay.fits"
     plan_path = tmp_path / "unit-weight.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -553,7 +575,7 @@ def test_cli_explicit_unit_weight_round_trips_as_inverse_variance(
         ],
     )
     assert main() == 0
-    with torchsky.HDUList.fromfile(str(replay_output)) as hdul:
+    with torchfits.hdu.HDUList.fromfile(str(replay_output)) as hdul:
         by_name = {str(hdu.header.get("EXTNAME", "")): hdu for hdu in hdul}
         torch.testing.assert_close(
             by_name["IVAR"].to_tensor("cpu"),
@@ -568,7 +590,7 @@ def test_cli_sigma_clipped_plan_records_exact_scratch_requirement(
 
     input_path = tmp_path / "clip-input.fits"
     plan_path = tmp_path / "clip.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -615,7 +637,7 @@ def test_cli_montage_plan_records_global_overlap_scratch_requirement(
     input_b = tmp_path / "montage-plan-b.fits"
     plan_path = tmp_path / "montage.plan.json"
     for path in (input_a, input_b):
-        torchsky.write(
+        torchfits.write(
             str(path),
             torch.ones((8, 8)),
             header=_simple_header(),
@@ -661,7 +683,7 @@ def test_cli_map_from_plan_verifies_identity_and_allows_output_override(
     first_output = tmp_path / "first.fits"
     replay_output = tmp_path / "replay.fits"
     plan_path = tmp_path / "map.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.ones((8, 8)), header=_simple_header(), overwrite=True
     )
     monkeypatch.setattr(
@@ -693,7 +715,7 @@ def test_cli_map_from_plan_verifies_identity_and_allows_output_override(
     )
     assert main() == 0
 
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.zeros((8, 8)), header=_simple_header(), overwrite=True
     )
     with pytest.raises(SystemExit, match="content changed|size changed|checksum"):
@@ -705,7 +727,7 @@ def test_cli_map_writes_standard_mef_products(monkeypatch, tmp_path) -> None:
 
     input_path = tmp_path / "input.fits"
     output_path = tmp_path / "map.fits"
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.ones((8, 8)), header=_simple_header(), overwrite=True
     )
     monkeypatch.setattr(
@@ -718,6 +740,13 @@ def test_cli_map_writes_standard_mef_products(monkeypatch, tmp_path) -> None:
             "--weights",
             "4.0",
             "--no-union-footprint",
+            "--output-planes",
+            "SCI",
+            "WHT",
+            "IVAR",
+            "CTX",
+            "MASK",
+            "NEXP",
             "--device",
             "cpu",
         ],
@@ -725,7 +754,7 @@ def test_cli_map_writes_standard_mef_products(monkeypatch, tmp_path) -> None:
 
     assert main() == 0
 
-    with torchsky.HDUList.fromfile(str(output_path)) as hdul:
+    with torchfits.hdu.HDUList.fromfile(str(output_path)) as hdul:
         names = [str(hdu.header.get("EXTNAME", "")) for hdu in hdul]
         assert names == [
             "SCI",
@@ -747,7 +776,7 @@ def test_cli_map_writes_requested_noise_correlation_plane(
 
     input_path = tmp_path / "correlation-input.fits"
     output_path = tmp_path / "correlation-map.fits"
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.ones((8, 8)), header=_simple_header(), overwrite=True
     )
     monkeypatch.setattr(
@@ -772,7 +801,7 @@ def test_cli_map_writes_requested_noise_correlation_plane(
 
     assert main() == 0
 
-    with torchsky.HDUList.fromfile(str(output_path)) as hdul:
+    with torchfits.hdu.HDUList.fromfile(str(output_path)) as hdul:
         by_name = {str(hdu.header.get("EXTNAME", "")): hdu for hdu in hdul}
         assert list(by_name) == ["SCI", "WHT", "IVAR", "NCORR", "VAR_DETECTOR"]
         assert by_name["NCORR"].header["NCORTYPE"] == "LOCAL_ENBW"
@@ -781,13 +810,13 @@ def test_cli_map_writes_requested_noise_correlation_plane(
         )
 
 
-def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
+def test_cli_map_field_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
     from torchsky.cli import main
 
     input_path = tmp_path / "input.fits"
     output_path = tmp_path / "output.fits"
-    plan_path = tmp_path / "output.inr.plan.json"
-    torchsky.write(
+    plan_path = tmp_path / "output.field.plan.json"
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -801,12 +830,12 @@ def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
             str(output_path),
             str(input_path),
             "--method",
-            "inr",
-            "--inr-band",
+            "field",
+            "--field-band",
             "F277W",
-            "--inr-spectral-source",
+            "--field-spectral-source",
             "builtin",
-            "--inr-spatial-sampling",
+            "--field-spatial-sampling",
             "gauss_legendre_2x2",
             "--dry-run",
             "--plan-json",
@@ -824,8 +853,25 @@ def test_cli_map_inr_dry_run_writes_plan_json(monkeypatch, tmp_path) -> None:
     assert plan["spectral"]["band"] == "F277W"
     assert plan["spectral"]["source"] == "builtin"
     assert plan["execution"]["field_preset"] == "balanced"
-    assert plan["execution"]["model"] == "sky_lambda_feature_field"
-    assert plan["execution"]["spatial_sampling"] == "gauss_legendre_2x2"
+    assert plan["execution"]["field_model"] == "sky_lambda_feature_field"
+    assert plan["execution"]["field_spatial_sampling"] == "gauss_legendre_2x2"
+
+    legacy_plan = json.loads(json.dumps(plan))
+    legacy_plan["execution"]["model"] = legacy_plan["execution"].pop("field_model")
+    legacy_path = tmp_path / "legacy-field-plan.json"
+    legacy_path.write_text(json.dumps(legacy_plan), encoding="utf-8")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            "--from-plan",
+            str(legacy_path),
+        ],
+    )
+    with pytest.raises(SystemExit, match=r"execution\.field_model"):
+        main()
 
 
 def test_cli_map_field_defaults_to_joint_header_derived_bands(
@@ -838,7 +884,7 @@ def test_cli_map_field_defaults_to_joint_header_derived_bands(
     for path, band in zip(input_paths, ("F277W", "F356W")):
         header = _simple_header()
         header["FILTER"] = band
-        torchsky.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
+        torchfits.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
     plan_path = tmp_path / "joint.plan.json"
     monkeypatch.setattr(
         "sys.argv",
@@ -849,7 +895,7 @@ def test_cli_map_field_defaults_to_joint_header_derived_bands(
             *(str(path) for path in input_paths),
             "--method",
             "field",
-            "--inr-spectral-source",
+            "--field-spectral-source",
             "builtin",
             "--dry-run",
             "--plan-json",
@@ -879,7 +925,7 @@ def test_cli_map_field_artifact_resumes_training(monkeypatch, tmp_path) -> None:
     replay_output_path = tmp_path / "field-replayed.fits"
     artifact_path = tmp_path / "field.artifact"
     plan_path = tmp_path / "field.plan.json"
-    torchsky.write(
+    torchfits.write(
         str(input_path),
         torch.ones((8, 8)),
         header=_simple_header(),
@@ -891,19 +937,19 @@ def test_cli_map_field_artifact_resumes_training(monkeypatch, tmp_path) -> None:
         "field",
         "--field-model",
         "sine_implicit",
-        "--inr-band",
+        "--field-band",
         "F277W",
-        "--inr-spectral-source",
+        "--field-spectral-source",
         "builtin",
-        "--inr-steps",
+        "--field-steps",
         "1",
-        "--inr-patch-size",
+        "--field-patch-size",
         "4",
-        "--inr-patches-per-obs",
+        "--field-patches-per-obs",
         "1",
-        "--inr-obs-per-step",
+        "--field-obs-per-step",
         "1",
-        "--inr-spectral-samples",
+        "--field-spectral-samples",
         "3",
         "--no-union-footprint",
         "--device",
@@ -981,7 +1027,7 @@ def test_cli_map_field_artifact_resumes_training(monkeypatch, tmp_path) -> None:
         main()
 
 
-def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:
+def test_run_field_single_uses_reference_header(monkeypatch, tmp_path) -> None:
     import torch.nn as nn
     from torchsky.cli import map_command
 
@@ -1008,7 +1054,7 @@ def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:
     written: dict[str, object] = {}
 
     monkeypatch.setattr(map_command, "read", fake_read)
-    monkeypatch.setattr("torchsky.map.image_plane.read", fake_read)
+    monkeypatch.setattr("torchsky.map.image_plane_common.read", fake_read)
     monkeypatch.setattr(
         map_command,
         "_paths_to_field_observations",
@@ -1016,7 +1062,7 @@ def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         map_command,
-        "_inr_spectral_field_kwargs",
+        "_field_spectral_kwargs",
         lambda args, band: {
             "spectral_min": 1.0,
             "spectral_max": 2.0,
@@ -1070,30 +1116,30 @@ def test_run_inr_single_uses_reference_header(monkeypatch, tmp_path) -> None:
         reference=reference_path,
         reference_hdu=0,
         plan_reference=0,
-        inr_band="F277W",
-        inr_spectral_source="builtin",
-        inr_model="sine_implicit",
-        inr_patch_size=0,
-        inr_steps=0,
-        inr_lr=1e-3,
-        inr_patches_per_obs=1,
-        inr_obs_per_step=1,
-        inr_spectral_samples=1,
-        inr_render_tile=512,
-        inr_max_pixels=100,
+        field_band="F277W",
+        field_spectral_source="builtin",
+        field_model="sine_implicit",
+        field_patch_size=0,
+        field_steps=0,
+        field_lr=1e-3,
+        field_patches_per_obs=1,
+        field_obs_per_step=1,
+        field_spectral_samples=1,
+        field_render_tile=512,
+        field_max_pixels=100,
         output=str(output_path),
         device="cpu",
         dry_run=False,
     )
 
-    assert map_command._run_inr_single(args) == 0
+    assert map_command._run_field_single(args) == 0
     assert written["path"] == str(output_path)
     assert tuple(written["data"].shape) == (5, 7)
     assert written["header"]["NAXIS1"] == 7
     assert written["header"]["NAXIS2"] == 5
 
 
-def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
+def test_run_field_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
     from torchsky.cli import map_command
 
     reference_header = _simple_header((6, 7))
@@ -1105,7 +1151,7 @@ def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
         return image
 
     monkeypatch.setattr(map_command, "read", fake_read)
-    monkeypatch.setattr("torchsky.map.image_plane.read", fake_read)
+    monkeypatch.setattr("torchsky.map.image_plane_common.read", fake_read)
     monkeypatch.setattr(
         map_command,
         "_paths_to_field_observations",
@@ -1115,7 +1161,7 @@ def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         map_command,
-        "_inr_spectral_field_kwargs",
+        "_field_spectral_kwargs",
         lambda args, band: {
             "spectral_min": 1.0,
             "spectral_max": 2.0,
@@ -1135,17 +1181,17 @@ def test_run_inr_single_dry_run_skips_fit(monkeypatch, tmp_path) -> None:
         reference=tmp_path / "reference.fits",
         reference_hdu=0,
         plan_reference=0,
-        inr_band="F277W",
-        inr_spectral_source="builtin",
-        inr_model="sine_implicit",
-        inr_render_tile=512,
-        inr_max_pixels=100,
+        field_band="F277W",
+        field_spectral_source="builtin",
+        field_model="sine_implicit",
+        field_render_tile=512,
+        field_max_pixels=100,
         output=str(tmp_path / "out.fits"),
         device="cpu",
         dry_run=True,
     )
 
-    assert map_command._run_inr_single(args) == 0
+    assert map_command._run_field_single(args) == 0
 
 
 def test_paths_to_field_observations_keeps_background_offsets(monkeypatch) -> None:
@@ -1221,7 +1267,7 @@ def test_paths_to_field_observations_keep_each_passband(monkeypatch) -> None:
     ]
 
 
-def test_run_inr_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) -> None:
+def test_run_field_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) -> None:
     from torchsky.cli import map_command
 
     paths = [str(tmp_path / name) for name in ("a.fits", "b.fits", "c.fits")]
@@ -1240,8 +1286,14 @@ def test_run_inr_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) 
         captured.append(ns)
         return 0
 
+    def fake_read_header(path, hdu=0):
+        header = _simple_header()
+        header["FILTER"] = filters[Path(path).name]
+        return header
+
     monkeypatch.setattr(map_command, "read", fake_read)
-    monkeypatch.setattr(map_command, "_run_inr_single", fake_run_single)
+    monkeypatch.setattr(map_command, "read_header", fake_read_header)
+    monkeypatch.setattr(map_command, "_run_field_single", fake_run_single)
 
     args = argparse.Namespace(
         inputs=paths,
@@ -1253,12 +1305,13 @@ def test_run_inr_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) 
         hdu=0,
         output=str(tmp_path / "out"),
         per_filter=True,
-        inr_band=None,
+        field_band=None,
         device="cpu",
     )
 
-    assert map_command._run_inr(args) == 0
-    by_band = {ns.inr_band: ns for ns in captured}
+    assert map_command._run_field(args) == 0
+    by_band = {ns.field_band: ns for ns in captured}
+    assert set(by_band) == {"F277W", "F356W"}
     assert by_band["F277W"].inputs == [paths[0], paths[2]]
     assert by_band["F277W"].weights == [1.0, 3.0]
     assert by_band["F277W"].background_offsets == [0.1, 0.3]
@@ -1266,3 +1319,280 @@ def test_run_inr_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) 
     assert by_band["F277W"].mask_maps == ["a_mask.fits", "c_mask.fits"]
     assert by_band["F356W"].inputs == [paths[1]]
     assert by_band["F356W"].weights == [2.0]
+
+
+def test_run_field_per_filter_keeps_running_after_a_group_fails(
+    monkeypatch, tmp_path
+) -> None:
+    from torchsky.cli import map_command
+
+    paths = [str(tmp_path / name) for name in ("a.fits", "b.fits")]
+    filters = {"a.fits": "F277W", "b.fits": "F356W"}
+    calls: list[str] = []
+
+    def fake_read(path, *, hdu=0, return_header=False, device=None):
+        header = _simple_header()
+        header["FILTER"] = filters[Path(path).name]
+        image = torch.zeros((8, 8), dtype=torch.float32)
+        if return_header:
+            return image, header
+        return image
+
+    def fake_run_single(ns):
+        calls.append(ns.field_band)
+        return 1 if ns.field_band == "F277W" else 0
+
+    def fake_read_header(path, hdu=0):
+        header = _simple_header()
+        header["FILTER"] = filters[Path(path).name]
+        return header
+
+    monkeypatch.setattr(map_command, "read", fake_read)
+    monkeypatch.setattr(map_command, "read_header", fake_read_header)
+    monkeypatch.setattr(map_command, "_run_field_single", fake_run_single)
+
+    args = argparse.Namespace(
+        inputs=paths,
+        weights=[1.0, 1.0],
+        background_offsets=[0.0, 0.0],
+        weight_maps=[None, None],
+        mask_maps=[None, None],
+        primary_beam_maps=[None, None],
+        hdu=0,
+        output=str(tmp_path / "out"),
+        per_filter=True,
+        field_band=None,
+        device="cpu",
+    )
+
+    # A failing band must not short-circuit the remaining bands, and its status
+    # is what the command reports.
+    assert map_command._run_field(args) == 1
+    assert calls == ["F277W", "F356W"]
+
+
+def test_cli_map_per_filter_coadd_writes_one_product_per_filter(
+    monkeypatch, tmp_path
+) -> None:
+    from torchsky.cli import main
+
+    paths = []
+    for name, band, value in (("a", "F277W", 1.0), ("b", "F356W", 3.0)):
+        header = _simple_header()
+        header["FILTER"] = band
+        path = tmp_path / f"{name}.fits"
+        torchfits.write(str(path), torch.full((8, 8), value), header=header, overwrite=True)
+        paths.append(str(path))
+    output = tmp_path / "coadd.fits"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output),
+            *paths,
+            "--per-filter",
+            "--no-union-footprint",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    assert not output.exists()
+    for band, value in (("F277W", 1.0), ("F356W", 3.0)):
+        product = tmp_path / f"coadd_{band}.fits"
+        assert product.is_file()
+        data = torchfits.read(str(product), device="cpu")
+        assert tuple(data.shape) == (8, 8)
+        torch.testing.assert_close(
+            data[2:6, 2:6],
+            torch.full((4, 4), value, dtype=torch.float32),
+            atol=1e-5,
+            rtol=0.0,
+        )
+
+
+def test_cli_map_rejects_mixed_filters_without_per_filter(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    paths = []
+    for name, band in (("a", "F277W"), ("b", "F356W")):
+        header = _simple_header()
+        header["FILTER"] = band
+        path = tmp_path / f"{name}.fits"
+        torchfits.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
+        paths.append(str(path))
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(tmp_path / "coadd.fits"),
+            *paths,
+            "--no-union-footprint",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="multiple filters"):
+        main()
+
+
+def test_cli_map_no_overwrite_preserves_existing_product(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    output_path = tmp_path / "coadd.fits"
+    header = _simple_header()
+    torchfits.write(
+        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
+    )
+    argv = [
+        "torchsky",
+        "map",
+        str(output_path),
+        str(input_path),
+        "--no-union-footprint",
+        "--output-planes",
+        "SCI",
+        "--device",
+        "cpu",
+        "--no-overwrite",
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    assert main() == 0
+    first = torchfits.read(str(output_path), device="cpu").clone()
+
+    torchfits.write(
+        str(input_path), torch.full((8, 8), 9.0), header=header, overwrite=True
+    )
+    with pytest.raises(SystemExit, match="no-overwrite"):
+        main()
+
+    torch.testing.assert_close(
+        torchfits.read(str(output_path), device="cpu"), first
+    )
+
+
+def test_cli_map_ivar_header_scales_science_bunit(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    second_path = tmp_path / "input2.fits"
+    output_path = tmp_path / "coadd.fits"
+    header = _simple_header()
+    header["BUNIT"] = "nJy"
+    for path in (input_path, second_path):
+        torchfits.write(
+            str(path), torch.ones((8, 8)), header=header, overwrite=True
+        )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            str(input_path),
+            str(second_path),
+            "--weights",
+            "4.0",
+            "4.0",
+            "--no-union-footprint",
+            "--output-planes",
+            "SCI",
+            "IVAR",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    ivar_header = dict(torchfits.read_header(str(output_path), 1))
+    assert ivar_header["EXTNAME"] == "IVAR"
+    assert ivar_header["BUNIT"] == "(nJy)**-2"
+
+
+def test_cli_map_dq_map_zeroes_rejected_pixels(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    dq_path = tmp_path / "dq.fits"
+    output_path = tmp_path / "coadd.fits"
+    header = _simple_header()
+    torchfits.write(
+        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
+    )
+    dq = torch.zeros((8, 8), dtype=torch.int16)
+    dq[0, 0] = 1
+    torchfits.write(str(dq_path), dq, header=header, overwrite=True)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            str(input_path),
+            "--dq-maps",
+            str(dq_path),
+            "--dq-hdu",
+            "0",
+            "--no-union-footprint",
+            "--output-planes",
+            "SCI",
+            "WHT",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    weight = torchfits.read(str(output_path), hdu=1, device="cpu")
+    assert float(weight[0, 0]) == 0.0
+    assert float(weight[1, 1]) == 1.0
+
+
+def test_cli_map_good_bits_reads_mask_map_as_bitmask(monkeypatch, tmp_path) -> None:
+    from torchsky.cli import main
+
+    input_path = tmp_path / "input.fits"
+    mask_path = tmp_path / "mask.fits"
+    output_path = tmp_path / "coadd.fits"
+    header = _simple_header()
+    torchfits.write(
+        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
+    )
+    torchfits.write(
+        str(mask_path),
+        torch.full((8, 8), 2.0),
+        header=header,
+        overwrite=True,
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "torchsky",
+            "map",
+            str(output_path),
+            str(input_path),
+            "--mask-maps",
+            str(mask_path),
+            "--good-bits",
+            "1",
+            "--no-union-footprint",
+            "--output-planes",
+            "SCI",
+            "WHT",
+            "--device",
+            "cpu",
+        ],
+    )
+
+    assert main() == 0
+    weight = torchfits.read(str(output_path), hdu=1, device="cpu")
+    assert float(weight.abs().sum()) == 0.0
