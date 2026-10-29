@@ -6,7 +6,7 @@ This is the shortest path through the main `torchsky` surfaces.
 
 The 0.4.0 line is not on PyPI yet; [install.md](install.md) covers the release
 wheel, source build, and Pixi paths. Package metadata supports Python `>=3.12`
-and PyTorch `>=2.13,<2.14`; native wheels enforce their compiled PyTorch ABI at
+and PyTorch `>=2.14,<2.15`; native wheels enforce their compiled PyTorch ABI at
 import. `torchfits>=1.0` is a required runtime dependency for FITS-backed
 workflows and is installed with torchsky.
 

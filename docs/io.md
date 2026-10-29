@@ -18,7 +18,7 @@ or come from another storage system.
 
 ## Version Contract
 
-The supported integration baseline is `torchfits 1.0.0` or newer. Dataset
+The supported integration baseline is `torchfits 1.3.1` or newer. Dataset
 classes live under `torchfits.data`; use `FitsImageDataset`,
 `FitsImageIterableDataset`, `FitsTableDataset`, or
 `FitsTableIterableDataset` rather than removed root-level legacy aliases.
@@ -91,7 +91,7 @@ not restore the removed aliases.
 ## Validation And Performance
 
 - FITS image/table correctness and throughput are validated in `torchfits`.
-- `torchsky` keeps one integration gate covering the supported `torchfits 1.0.0+`
+- `torchsky` keeps one integration gate covering the supported `torchfits 1.3.1+`
   output passed into WCS/map/catalog computation; 0.8 adds optimized helpers.
 - End-to-end torchsky benchmarks start after data is decoded, but must still
   report transfer volume and device movement when those affect the workflow.

@@ -74,7 +74,7 @@ def test_cuda_hosted_job_provisions_toolkit_and_reports_runner_scope() -> None:
     assert "Standard GitHub-hosted runners have no NVIDIA GPU" in workflow
     assert 'cuda-nvcc = "13.0.*"' in pixi
     assert 'cuda-nvrtc-dev = "13.0.*"' in pixi
-    assert 'torch = "==2.13.0"' in pixi
+    assert 'torch = "==2.14.0"' in pixi
 
 
 def test_runtime_parity_comparison_rejects_numerical_drift() -> None:

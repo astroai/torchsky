@@ -21,12 +21,12 @@ pip install "torchsky @ file:///path/to/torchsky-0.4.0-*.whl"
 Release wheels are built for Linux x86_64 and macOS arm64 on CPython 3.12 and
 3.13; building from source is supported
 on the platforms in `pyproject.toml`. The supported integration baseline is
-`torchfits 1.0.0` or newer.
+`torchfits 1.3.1` or newer.
 
 Package metadata requires Python **>=3.12** and
-[PyTorch](https://pytorch.org/) **>=2.13,<2.14**.
-The reproducible contributor lane pins Python 3.13.14, PyTorch 2.13.0, and
-torchfits 1.0.0. Native extensions still enforce their compiled PyTorch ABI.
+[PyTorch](https://pytorch.org/) **>=2.14,<2.15**.
+The reproducible contributor lane pins Python 3.13.14, PyTorch 2.14.0, and
+torchfits 1.3.1. Native extensions still enforce their compiled PyTorch ABI.
 
 ## Source Build
 
@@ -47,7 +47,7 @@ The package uses **scikit-build-core** as the build backend. With default `pip i
 If you install **without** build isolation (`--no-build-isolation`), you must have the backend and build-time deps available in the **same** environment as the interpreter:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.13,<2.14" "numpy>=1.20.0"
+python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.14,<2.15" "numpy>=1.20.0"
 ```
 
 Exact pins match `[build-system].requires` in `pyproject.toml`.

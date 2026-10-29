@@ -28,7 +28,7 @@ Confirm the version matches in:
 
 Finalize [the changelog](changelog.md). If a local artifact check is useful,
 build and inspect the wheel from the Pixi environment, then smoke-test it in a
-fresh environment with the supported `torchfits` baseline (`>=1.0.0`).
+fresh environment with the supported `torchfits` baseline (`>=1.3.1`).
 
 ## Publish
 

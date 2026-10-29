@@ -17,7 +17,7 @@ FITS image and table I/O is provided by the focused
 [`torchfits`](https://github.com/astroai/torchfits) package. The boundary is
 intentional: `torchfits` loads tensors and metadata; `torchsky` performs
 sky-domain computation without embedding a second FITS/CFITSIO engine.
-The supported integration baseline is `torchfits 1.0.0` or newer.
+The supported integration baseline is `torchfits 1.3.1` or newer (same PyTorch 2.14 lane).
 Torchsky does not expose alias namespaces for torchfits I/O, tables, caches, or
 datasets; import those directly from `torchfits`.
 
@@ -83,7 +83,7 @@ build from source in the meantime:
 pip install "torchsky @ file:///path/to/torchsky-0.4.0-cp*-*.whl"
 ```
 
-Package metadata supports Python `>=3.12`, PyTorch `>=2.13,<2.14`, and torchfits
+Package metadata supports Python `>=3.12`, PyTorch `>=2.14,<2.15`, and torchfits
 `>=1.0.0`. Native wheels fail closed on a mismatched compiled PyTorch ABI.
 Install `torchfits` alongside torchsky when a workflow reads or writes
 FITS files:
@@ -92,7 +92,7 @@ FITS files:
 pip install torchfits
 ```
 
-The integration baseline is `torchfits 1.0.0` or newer. Dataset and DataLoader
+The integration baseline is `torchfits 1.3.1` or newer. Dataset and DataLoader
 classes are provided by `torchfits.data`; torchsky does not alias them.
 
 ### Optional Extras

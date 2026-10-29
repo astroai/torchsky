@@ -3,7 +3,7 @@
 FITS table I/O is owned by
 [`torchfits.table`](https://github.com/astroai/torchfits). The former
 `torchsky.table` implementation is not a torchsky roadmap surface.
-The supported integration baseline is `torchfits 1.0.0` or newer;
+The supported integration baseline is `torchfits 1.3.1` or newer;
 verify exact scan/read signatures against its API docs before treating the
 examples below as stable.
 
