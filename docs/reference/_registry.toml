@@ -184,6 +184,13 @@ tier = "experimental"
 related = ["native-likelihood.md"]
 
 [[namespace]]
+name = "torchsky.map.field.chromatic"
+slug = "map-field-chromatic"
+tier = "experimental"
+related = ["field.md", "filter-profiles.md"]
+intro = "Chromatic PSF fields and continuous-wavelength sky fields integrated over band transmission curves."
+
+[[namespace]]
 name = "torchsky.map.field.joint_native_likelihood"
 slug = "map-field-joint-native-likelihood"
 tier = "experimental"

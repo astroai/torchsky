@@ -226,6 +226,12 @@
   "torchsky.map.evidence": [
     "EvidenceSnapshot"
   ],
+  "torchsky.map.field.chromatic": [
+    "ChromaticPSFField",
+    "LogLambdaRBFBasis",
+    "SpectralSkyField",
+    "spectral_coefficients_from_bands"
+  ],
   "torchsky.map.field.gaussian": [
     "bind_linear_band_grid_likelihood"
   ],

@@ -49,6 +49,7 @@ reference pages carry the contracts.
 | `torchsky.field` | experimental | 52 | [reference](field.md) |
 | `torchsky.filter_profiles` | experimental | 6 | [reference](filter-profiles.md) |
 | `torchsky.map.evidence` | experimental | 1 | [reference](map-evidence.md) |
+| `torchsky.map.field.chromatic` | experimental | 4 | [reference](map-field-chromatic.md) |
 | `torchsky.map.field.gaussian` | experimental | 1 | [reference](map-field-gaussian.md) |
 | `torchsky.map.field.joint_native_likelihood` | experimental | 1 | [reference](map-field-joint-native-likelihood.md) |
 | `torchsky.map.field.native_integrated_read` | experimental | 2 | [reference](map-field-native-integrated-read.md) |

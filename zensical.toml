@@ -94,6 +94,7 @@ nav = [
       "reference/map-operators-nuisance.md",
       "reference/map-operators-pixel-calibration.md",
       "reference/map-field-gaussian.md",
+      "reference/map-field-chromatic.md",
       "reference/map-field-joint-native-likelihood.md",
       "reference/map-field-native-integrated-read.md",
       "reference/map-field-native-response.md",
