@@ -404,3 +404,38 @@ def test_resolve_field_bandpass_svo_cache(tmp_path: Path) -> None:
     assert spec["svo_filter_id"] == "Subaru/HSC.i"
     assert spec["band_name"] == "I"
     assert np.isclose(spec["wavelength"], 7600.0)
+
+
+def test_photon_quadrature_matches_fine_integral() -> None:
+    import torch
+
+    from torchsky.filter_profiles import photon_quadrature
+
+    wl = torch.linspace(1.0, 2.0, 2001, dtype=torch.float64)
+    tr = torch.exp(-0.5 * ((wl - 1.5) / 0.15) ** 2)
+    nodes, weights = photon_quadrature(wl, tr, 8)
+    assert nodes.shape == (8,) and torch.allclose(weights.sum(), torch.tensor(1.0, dtype=torch.float64))
+    assert bool((nodes[1:] > nodes[:-1]).all())
+    # smooth spectrum: equal-mass quadrature reproduces the photon-weighted band average
+    g = lambda lam: 1.0 + 0.7 * lam**2
+    dens = tr / wl
+    exact = float(torch.trapezoid(g(wl) * dens, wl) / torch.trapezoid(dens, wl))
+    approx = float((g(nodes) * weights).sum())
+    assert abs(approx - exact) / exact < 2e-3
+
+
+def test_photon_quadrature_conventions_and_validation() -> None:
+    import pytest
+    import torch
+
+    from torchsky.filter_profiles import photon_quadrature
+
+    wl = torch.linspace(1.0, 3.0, 501, dtype=torch.float64)
+    tr = torch.ones_like(wl)
+    fnu, _ = photon_quadrature(wl, tr, 1, flux_convention="fnu")
+    flam, _ = photon_quadrature(wl, tr, 1, flux_convention="flambda")
+    assert float(fnu) < 2.0 < float(flam)  # 1/lambda weighting pulls the median blueward
+    with pytest.raises(ValueError):
+        photon_quadrature(wl, torch.zeros_like(wl), 4)
+    with pytest.raises(ValueError):
+        photon_quadrature(wl, tr, 0)

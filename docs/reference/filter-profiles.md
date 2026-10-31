@@ -26,6 +26,7 @@ namespace `torchsky.filter_profiles` unless the group text says otherwise.
         - bandpass_from_transmission_file
         - bandpass_gaussian
         - field_observation_spectral_kwargs
+        - photon_quadrature
         - resolve_field_bandpass
       heading_level: 3
       show_root_heading: false

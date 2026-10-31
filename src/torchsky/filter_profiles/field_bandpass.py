@@ -492,3 +492,47 @@ def resolve_field_bandpass(
             use_cache=svo_use_cache,
         )
     raise AssertionError("unreachable")
+
+def photon_quadrature(
+    wavelength: torch.Tensor,
+    throughput: torch.Tensor,
+    num_nodes: int,
+    *,
+    flux_convention: Literal["fnu", "flambda"] = "fnu",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Equal-weight quadrature nodes for a photon-counting band average.
+
+    The band average of a spectrum ``g`` seen by a photon counter is
+    ``<g> = int g(l) T(l) k(l) dl / int T(l) k(l) dl`` with ``k = 1/l`` for
+    ``f_nu`` (JWST, AB magnitudes) and ``k = l`` for ``f_lambda``. The nodes are the
+    midpoints of ``num_nodes`` equal-mass bins of that measure, so
+    ``<g> ~= mean_q g(l_q)``; they concentrate where the band transmits.
+    Returns ``(nodes, weights)`` in the units of ``wavelength``; weights sum to one.
+    """
+    if num_nodes < 1:
+        raise ValueError("num_nodes must be positive")
+    w = torch.as_tensor(wavelength, dtype=torch.float64).flatten()
+    t = torch.as_tensor(throughput, dtype=torch.float64).flatten().clamp(min=0.0)
+    if w.shape != t.shape or w.numel() < 2:
+        raise ValueError("wavelength and throughput must be 1-D curves of equal length >= 2")
+    order = torch.argsort(w)
+    w, t = w[order], t[order]
+    if not bool((w > 0).all()):
+        raise ValueError("wavelengths must be positive")
+    if flux_convention == "fnu":
+        density = t / w
+    elif flux_convention == "flambda":
+        density = t * w
+    else:
+        raise ValueError("flux_convention must be 'fnu' or 'flambda'")
+    seg = 0.5 * (density[1:] + density[:-1]) * (w[1:] - w[:-1])
+    cdf = torch.cat([torch.zeros(1, dtype=w.dtype), torch.cumsum(seg, 0)])
+    if not float(cdf[-1]) > 0.0:
+        raise ValueError("throughput must have positive integral")
+    cdf = cdf / cdf[-1]
+    q = (torch.arange(num_nodes, dtype=w.dtype) + 0.5) / num_nodes
+    idx = torch.searchsorted(cdf, q).clamp(1, cdf.numel() - 1)
+    frac = (q - cdf[idx - 1]) / (cdf[idx] - cdf[idx - 1]).clamp(min=1e-300)
+    nodes = w[idx - 1] + frac * (w[idx] - w[idx - 1])
+    weights = torch.full((num_nodes,), 1.0 / num_nodes, dtype=w.dtype)
+    return nodes, weights
