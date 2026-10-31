@@ -103,6 +103,7 @@ from .mapping import (
 )
 from .semantics import AxisSpec, DomainSpec, Epoch, FrameSpec, TimeSpec, UnitSpec
 from .frames import (
+    CelestialFrameBiasWarning,
     canonical_celestial_frame,
     convert_celestial,
     ecliptic_to_icrs,
@@ -257,6 +258,7 @@ __all__ = [
     "WCS",
     "WCSMapping",
     "air_wavelength_to_vacuum",
+    "CelestialFrameBiasWarning",
     "canonical_celestial_frame",
     "convert_celestial",
     "canonical_spectral_type",

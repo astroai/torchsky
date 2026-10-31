@@ -11,6 +11,7 @@ from torch import Tensor
 
 from ...domain import DomainSpec
 from ...wcs import WCS
+from ...wcs.frames import warn_frame_bias_conversion
 from .response import IndexedResponsePlan
 
 
@@ -79,6 +80,7 @@ def _convert_world_between_wcs(
         from_equinox == to_equinox or from_frame in {"ICRS", "GALACTIC", "ECLIPTIC"}
     ):
         return lon, lat
+    warn_frame_bias_conversion(from_frame, to_frame, from_equinox, to_equinox)
     shape = lon.shape
     converted_lon, converted_lat = from_wcs.convert_celestial(
         lon.reshape(-1),

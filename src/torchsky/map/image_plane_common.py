@@ -14,6 +14,7 @@ from torchfits import read
 from ..device import default_compute_device
 from ..sphere.moc import MOC
 from ..wcs import WCS
+from ..wcs.frames import warn_frame_bias_conversion
 from .io_utils import (
     _observation_header_for_area_scaling,
 )
@@ -106,6 +107,7 @@ def _convert_world_between_wcs(
         from_eq == to_eq or from_frame in {"ICRS", "GALACTIC", "ECLIPTIC"}
     ):
         return lon, lat
+    warn_frame_bias_conversion(from_frame, to_frame, from_eq, to_eq)
     orig_shape = lon.shape
     lon_c, lat_c = from_wcs.convert_celestial(
         lon.reshape(-1),

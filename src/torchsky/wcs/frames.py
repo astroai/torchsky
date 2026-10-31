@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Any
 
 import torch
@@ -1184,6 +1185,40 @@ def _fk5_to_icrs_radec(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
     vec = radec_to_unit(ra_deg, dec_deg)
     bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
     return unit_to_radec(torch.matmul(vec, bias))
+
+
+class CelestialFrameBiasWarning(UserWarning):
+    """A resampling path converted between FK5 (J2000) and ICRS.
+
+    The conversion is the 23-mas-scale FK5 frame bias, correct when the input
+    metadata are right. It is emitted because many survey headers keep a legacy
+    ``RADESYS``/``RADECSYS = 'FK5'`` (or ``EQUINOX = 2000`` alone) while their
+    astrometric solution was fitted to Gaia, i.e. is ICRS.
+    """
+
+
+def warn_frame_bias_conversion(
+    from_frame: str,
+    to_frame: str,
+    from_equinox: float | None,
+    to_equinox: float | None,
+    *,
+    stacklevel: int = 3,
+) -> None:
+    """Warn when world coordinates are converted between FK5 J2000 and ICRS."""
+    pair = {str(from_frame).upper(), str(to_frame).upper()}
+    if pair != {"FK5", "ICRS"}:
+        return
+    fk5_equinox = from_equinox if str(from_frame).upper() == "FK5" else to_equinox
+    if fk5_equinox is not None and abs(float(fk5_equinox) - 2000.0) > 1.0e-6:
+        return
+    warnings.warn(
+        f"converting {from_frame} -> {to_frame} applies the FK5 (J2000) to ICRS frame bias "
+        "(tens of mas on the sky). If the FK5 header's astrometry was solved against Gaia "
+        "or another ICRS catalogue, set RADESYS = 'ICRS' (and drop RADECSYS) on that header.",
+        CelestialFrameBiasWarning,
+        stacklevel=stacklevel,
+    )
 
 
 def canonical_celestial_frame(frame: str | None) -> str:
