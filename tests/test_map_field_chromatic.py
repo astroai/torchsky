@@ -89,3 +89,28 @@ def test_validation_errors() -> None:
         LogLambdaRBFBasis(1, 0.7, 5.0)
     with pytest.raises(ValueError):
         SpectralSkyField(nn.Identity(), LogLambdaRBFBasis(4, 0.7, 5.0), torch.ones(2, 3), torch.ones(3, 2))
+
+
+def test_relative_spectral_prior_is_brightness_independent() -> None:
+    basis = LogLambdaRBFBasis(8, 0.7, 5.3)
+    nodes = torch.tensor([[0.9, 1.0], [2.0, 2.2], [4.0, 4.4]])
+    weights = torch.full((3, 2), 0.5)
+    shape = torch.linspace(1.0, 2.0, 8)[:, None, None] ** 2 * torch.ones(8, 4, 4)
+
+    class Fixed(nn.Module):
+        def __init__(self, a: torch.Tensor) -> None:
+            super().__init__()
+            self.register_buffer("a", a)
+
+        def forward(self) -> torch.Tensor:
+            return self.a
+
+    def penalty(amplitude: float, mode: str) -> float:
+        sky = SpectralSkyField(Fixed(amplitude * shape), basis, nodes, weights, spectral_smoothness=1.0, smoothness_mode=mode)
+        return float(sky.penalty())
+
+    # same spectral shape at 1x and 1000x the noise level
+    assert penalty(1000.0, "absolute") / penalty(1.0, "absolute") > 1e5
+    assert penalty(1000.0, "relative") / penalty(1.0, "relative") < 10.0
+    with pytest.raises(ValueError):
+        SpectralSkyField(Fixed(shape), basis, nodes, weights, smoothness_mode="nope")

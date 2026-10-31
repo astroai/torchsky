@@ -204,6 +204,12 @@ class SpectralSkyField(nn.Module):
     ``coefficients`` is any module returning ``(K, H, W)`` (a pixel grid or a neural
     field); ``nodes_um`` / ``node_weights`` are ``(B, Q)`` band quadrature nodes, e.g.
     from :func:`torchsky.filter_profiles.photon_quadrature`.
+
+    The spectral prior penalises the second difference of ``a_k`` across ``k``.
+    ``smoothness_mode="relative"`` (the default) divides it by each pixel's own
+    spectral level (``mean_k |a_k| + floor * scale``), so a colour gradient costs the
+    same for a faint galaxy as for a bright one; ``"absolute"`` divides by ``scale``
+    only and flattens the spectra of bright sources.
     """
 
     def __init__(
@@ -215,6 +221,8 @@ class SpectralSkyField(nn.Module):
         *,
         spectral_smoothness: float = 0.0,
         scale: float = 1.0,
+        smoothness_mode: str = "relative",
+        floor: float = 3.0,
     ) -> None:
         super().__init__()
         if nodes_um.shape != node_weights.shape or nodes_um.dim() != 2:
@@ -222,7 +230,10 @@ class SpectralSkyField(nn.Module):
         self.coefficients, self.basis = coefficients, basis
         self.register_buffer("nodes_um", nodes_um.float())
         self.register_buffer("node_weights", node_weights.float())
+        if smoothness_mode not in ("relative", "absolute"):
+            raise ValueError("smoothness_mode must be 'relative' or 'absolute'")
         self.spectral_smoothness, self.scale = float(spectral_smoothness), float(scale)
+        self.smoothness_mode, self.floor = smoothness_mode, float(floor)
 
     def at_nodes(self) -> tuple[Tensor, Tensor]:
         """``(B, Q, H, W)`` sky at every quadrature node and ``(B, H, W)`` band averages."""
@@ -243,6 +254,9 @@ class SpectralSkyField(nn.Module):
             return torch.zeros((), device=self.nodes_um.device)
         a = self.coefficients()
         d2 = a[2:] - 2.0 * a[1:-1] + a[:-2]
+        if self.smoothness_mode == "relative":
+            level = (a.abs().mean(0, keepdim=True) + self.floor * self.scale).detach()
+            return self.spectral_smoothness * (d2 / level).pow(2).mean()
         return self.spectral_smoothness * (d2 / self.scale).pow(2).mean()
 
 
