@@ -48,7 +48,7 @@ def _set_context_bit(
 ) -> None:
     word = int(observation_index) // 32
     bit = int(observation_index) % 32
-    encoded = support.to(dtype=torch.int64) * (1 << bit)
+    encoded = support.to(device=context.device, dtype=torch.int64) * (1 << bit)
     plane = context[word]
     if target_window is None:
         plane.bitwise_or_(encoded)

@@ -341,10 +341,13 @@ def _coadd_image_plane_spatial_tiles(
     tw = max(int(tile_width), 1)
     device = map_device
     full_target_wcs = WCS(header_dict)
+    # The context bitmask is bookkeeping with one int64 plane per 32 inputs; at survey
+    # tile sizes it dominates accelerator memory (280 inputs on 10k x 10k = 7.2 GB),
+    # so tiled accumulation keeps it host-resident and fills it tile by tile.
     full_context = torch.zeros(
         (math.ceil(len(observations) / 32), H, W),
         dtype=torch.int64,
-        device=device,
+        device="cpu",
     )
     mosaic_surface_brightness_area_scaling: bool | None = None
     if value_semantics == "surface_brightness" and stacking_method == "weighted_mean":
@@ -602,7 +605,7 @@ def _coadd_image_plane_spatial_tiles(
                 if sub.overlap_count is not None:
                     full_overlap[y0:y1, x0:x1] = sub.overlap_count.to(device=device)
                 if sub.context is not None:
-                    full_context[:, y0:y1, x0:x1] = sub.context.to(device=device)
+                    full_context[:, y0:y1, x0:x1] = sub.context.to(device=full_context.device)
     else:
         numer = torch.zeros((H, W), dtype=torch.float32, device=device)
         denom = torch.zeros((H, W), dtype=torch.float32, device=device)
