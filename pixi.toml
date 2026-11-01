@@ -2,7 +2,8 @@
 preview = ["pixi-build"]
 channels = ["conda-forge"]
 platforms = [
-    "osx-arm64",
+    # torchfits 1.3.1 ships macosx_14_0 arm64 wheels.
+    { name = "osx-arm64-14", platform = "osx-arm64", macos = "14.0" },
     "linux-64",
     { name = "linux-64-cuda", platform = "linux-64", cuda = "13.0" },
 ]
@@ -51,7 +52,7 @@ scikit-build-core = ">=1.0.0"
 cmake = ">=3.21"
 ninja = ">=1.10"
 nanobind = ">=2.10.2"
-pytorch = "==2.14.0"
+pytorch = "2.14.*"
 numpy = ">=1.20"
 pre-commit = ">=3.5.0"
 twine = ">=6.0,<7"
@@ -109,7 +110,7 @@ test-dataloader = "pixi run -e default -- pytest tests/test_dataloader.py -v"
 
 
 [feature.prod]
-platforms = ["osx-arm64", "linux-64"]
+platforms = ["osx-arm64-14", "linux-64"]
 
 [feature.prod.dependencies]
 
@@ -131,7 +132,7 @@ pillow = ">=10.0"
 matplotlib = ">=3.8"
 pandas = ">=2.2"
 polars = ">=1.0"
-pyarrow = ">=14.0"
+pyarrow = ">=25.0"  # torchfits 1.3.1 requires pyarrow>=25
 pyright = ">=1.1.350"
 pytest-xdist = ">=3.0"
 requests = ">=2.28"

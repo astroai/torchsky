@@ -417,7 +417,9 @@ def test_photon_quadrature_matches_fine_integral() -> None:
     assert nodes.shape == (8,) and torch.allclose(weights.sum(), torch.tensor(1.0, dtype=torch.float64))
     assert bool((nodes[1:] > nodes[:-1]).all())
     # smooth spectrum: equal-mass quadrature reproduces the photon-weighted band average
-    g = lambda lam: 1.0 + 0.7 * lam**2
+    def g(lam):
+        return 1.0 + 0.7 * lam**2
+
     dens = tr / wl
     exact = float(torch.trapezoid(g(wl) * dens, wl) / torch.trapezoid(dens, wl))
     approx = float((g(nodes) * weights).sum())
