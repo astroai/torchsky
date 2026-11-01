@@ -3,6 +3,7 @@
 #include <Python.h>
 #include <string>
 
+#include "torchsky/drizzle_operators.h"
 #include "torchsky/fixed_operators.h"
 #include "torchsky/healpix.h"
 #include "torchsky/ishioka_kernels.h"
@@ -11,6 +12,7 @@
 namespace nb = nanobind;
 
 NB_MODULE(_cpp_ext, m) {
+    torchsky::ensure_drizzle_operators_linked();
     torchsky::ensure_fixed_operator_schemas_linked();
     torchsky::ensure_fixed_cpu_operators_linked();
     torchsky::ensure_wcs_operator_schemas_linked();

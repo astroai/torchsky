@@ -132,6 +132,9 @@ def test_extreme_magnification_streams_bounded_candidate_pairs(
         observed_batch_sizes.append(int(centers.shape[0]))
         return real_areas(quad_x, quad_y, centers)
 
+    # The candidate-pair batching belongs to the pure-torch overlap path; the native CPU
+    # kernel streams per quad without materialising pairs.
+    monkeypatch.setattr(drizzle_geometry, "_NATIVE_OVERLAP_ENABLED", False)
     monkeypatch.setattr(
         drizzle_geometry, "_MAX_OVERLAP_CANDIDATE_PAIRS", pair_limit
     )

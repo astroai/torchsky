@@ -27,6 +27,13 @@ owned by `torchfits`.
 
 ### Changed
 - Build lane moved to PyTorch 2.14 and `torchfits >= 1.3.1`.
+- Exact square drizzle (`drizzle_square`): the quad/pixel-box overlap is now the
+  axis-aligned boundary integral of each footprint edge (no generic polygon
+  clipping), the candidate boxes are the open bounding-box overlap, and CPU runs
+  use a native, thread-count-deterministic kernel (`TORCHSKY_DRIZZLE_NATIVE=0`
+  selects the pure-torch path, which is also used for differentiable inputs and
+  accelerators). Overlap areas are exact to float64 rounding in box-local
+  coordinates; results agree with the previous implementation to one float32 ulp.
 
 ### Fixed
 - Tiled image-plane coadds keep the context bitmask on the host, so large
