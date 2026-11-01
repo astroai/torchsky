@@ -60,7 +60,7 @@ def test_native_torch_abi_contract_is_consistent() -> None:
     for section in ("build-dependencies", "host-dependencies", "run-dependencies"):
         assert pixi["package"][section]["pytorch"] == ">=2.14,<2.15"
     assert pixi["package"]["run-dependencies"]["numpy"] == ">=1.20"
-    assert pixi["dependencies"]["pytorch"] == "==2.14.0"
+    assert pixi["dependencies"]["pytorch"] == "2.14.*"
     assert pixi["feature"]["prod"]["pypi-dependencies"]["torchfits"] == "==1.3.1"
     assert pixi["feature"]["py312"]["dependencies"]["python"] == "3.12.*"
     assert pixi["feature"]["py313"]["dependencies"]["python"] == "3.13.*"

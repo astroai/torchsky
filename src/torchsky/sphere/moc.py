@@ -435,28 +435,15 @@ def _hierarchical_polygon_uniq(
     return torch.cat([interior, bndry[c_in]])
 
 
-def _resolve_moc_table_hdu_index(path: str) -> int:
-    """Return 0-based HDU index of the IVOA MOC binary table extension."""
-    import torchfits.cpp as cpp
+def _moc_table_hdu(path: str) -> str:
+    """Return the EXTNAME of the IVOA MOC binary table extension, checking it exists."""
+    import torchfits
 
-    if hasattr(cpp, "resolve_hdu_name_cached"):
-        try:
-            return int(cpp.resolve_hdu_name_cached(path, "MOC"))
-        except Exception:
-            pass
-    i = 0
-    while i < 512:
-        try:
-            h_list = cpp.read_header_dict(path, i)
-        except Exception:
-            break
-        if not h_list:
-            break
-        ext = h_list.get("EXTNAME")
-        if ext == "MOC" or (isinstance(ext, str) and ext.strip() == "MOC"):
-            return i
-        i += 1
-    raise ValueError(f"No FITS extension with EXTNAME 'MOC' in {path!r}")
+    try:
+        torchfits.read_header(path, "MOC")
+    except ValueError as exc:
+        raise ValueError(f"No FITS extension with EXTNAME 'MOC' in {path!r}") from exc
+    return "MOC"
 
 
 def _uniq_column_from_table_dict(table: dict) -> Tensor:
@@ -1051,7 +1038,7 @@ class MOC:
         """Read a MOC from an IVOA FITS file through :mod:`torchfits`."""
         from torchfits.table import read_torch as read_table
 
-        hdu = _resolve_moc_table_hdu_index(filename)
+        hdu = _moc_table_hdu(filename)
         table = read_table(filename, hdu=hdu)
         uniqs = _uniq_column_from_table_dict(table)
         return cls(uniqs)

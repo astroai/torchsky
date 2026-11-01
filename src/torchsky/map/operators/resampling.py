@@ -178,7 +178,8 @@ def sample_separable_with_variance(
 
     ``image`` is ``[C,H,W]`` with ``[Hq,Wq]`` coordinates, or ``[B,C,H,W]`` /
     ``[C,H,W]`` with ``[B,Hq,Wq]`` coordinates, as in
-    :func:`custom_separable_sample`; the sampled channels are identical to it.
+    :func:`custom_separable_sample`; the sampled channels equal it to float
+    rounding (the extra variance column can change vectorized FMA rounding).
     ``source_variance`` is a ``[H,W]`` map of independent source variances; the
     returned variance is ``sum(coefficient**2 * source_variance)`` over the tap
     footprint with the same shape as ``x_src`` (no validity mask is applied;

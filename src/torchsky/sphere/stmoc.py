@@ -15,7 +15,7 @@ from torch import Tensor
 from torchfits import read_header as get_header, write
 from torchfits.table import read_torch as read_table
 from . import healpix as _healpix
-from .moc import MOC, _resolve_moc_table_hdu_index, nest2uniq
+from .moc import MOC, _moc_table_hdu, nest2uniq
 
 TIME_MAX_ORDER = 61
 _US_PER_DAY = 86_400_000_000
@@ -431,7 +431,7 @@ class STMOC:
 
     @classmethod
     def read_fits(cls, filename: str) -> "STMOC":
-        hdu = _resolve_moc_table_hdu_index(filename)
+        hdu = _moc_table_hdu(filename)
         hdr = dict(get_header(filename, hdu=hdu))
         table = read_table(filename, hdu=hdu)
         if "RANGE" not in table and "range" not in table:

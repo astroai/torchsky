@@ -1830,7 +1830,7 @@ class SparseHealpixMap:
         if pixtype == "HEALSPARSE" or ext0 == "COV":
             return cls._read_healsparse_fits(filename)
 
-        hdu = _resolve_sparse_table_hdu_index(filename)
+        hdu = _sparse_table_hdu(filename)
         hdr = get_header(filename, hdu=hdu)
         table = read_table(filename, hdu=hdu)
         nside = int(hdr.get("NSIDE", 0))
@@ -1913,28 +1913,15 @@ class SparseHealpixMap:
         )
 
 
-def _resolve_sparse_table_hdu_index(path: str) -> int:
-    """Return 0-based HDU index of the HealSparse ``SPARSE`` binary table extension."""
-    import torchfits.cpp as cpp
+def _sparse_table_hdu(path: str) -> str:
+    """Return the EXTNAME of the HealSparse ``SPARSE`` binary table extension, checking it exists."""
+    import torchfits
 
-    if hasattr(cpp, "resolve_hdu_name_cached"):
-        try:
-            return int(cpp.resolve_hdu_name_cached(path, "SPARSE"))
-        except Exception:
-            pass
-    i = 0
-    while i < 512:
-        try:
-            h_list = cpp.read_header_dict(path, i)
-        except Exception:
-            break
-        if not h_list:
-            break
-        ext = h_list.get("EXTNAME")
-        if ext == "SPARSE" or (isinstance(ext, str) and ext.strip() == "SPARSE"):
-            return i
-        i += 1
-    raise ValueError(f"No FITS extension with EXTNAME 'SPARSE' in {path!r}")
+    try:
+        torchfits.read_header(path, "SPARSE")
+    except ValueError as exc:
+        raise ValueError(f"No FITS extension with EXTNAME 'SPARSE' in {path!r}") from exc
+    return "SPARSE"
 
 
 def _validate_sparse_operands(

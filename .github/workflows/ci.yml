@@ -208,6 +208,9 @@ jobs:
         - shard: field-render-extra
           tests: tests/test_map_field_frequency_adaptive.py tests/test_map_field_gaussian.py tests/test_map_field_grid.py tests/test_map_field_losses.py tests/test_map_field_render_precision.py tests/test_map_field_render_tiling.py tests/test_map_field_streamed_tiles.py tests/test_map_scene_clean_breaks.py
           pytest_args: ''
+        - shard: tiling-resampling
+          tests: tests/test_map_auto_tiling.py tests/test_map_drizzle_overlap.py tests/test_map_field_chromatic.py tests/test_map_flux_area_window.py tests/test_map_footprint_window.py tests/test_map_interpolated_mapping.py tests/test_map_resampling_fused.py
+          pytest_args: ''
     steps:
     - uses: actions/checkout@v4
     - name: Install system dependencies (Ubuntu)

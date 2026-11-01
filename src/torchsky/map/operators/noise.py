@@ -1362,7 +1362,11 @@ def poisson_gaussian_cdf(
     survival_sum = torch.sum(weights * conditional_survival, dim=-1)
     # These are the same normalized law. The probability-half crossover only
     # selects the better-conditioned tail calculation, never a physical model.
-    result = torch.where(cdf_sum <= 0.5, cdf_sum, 1 - survival_sum).clamp(0.0, 1.0)
+    result = torch.where(cdf_sum <= 0.5, cdf_sum, 1 - survival_sum)
+    # Clamp only out-of-range rounding: clamp's gradient is zero at the bound,
+    # and the upper tail rounds to exactly 1 while its derivative is nonzero.
+    in_range = (result >= 0.0) & (result <= 1.0)
+    result = torch.where(in_range, result, result.clamp(0.0, 1.0))
     return _poisson_gaussian_zero_rate_jet(
         result,
         value,

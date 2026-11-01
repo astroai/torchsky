@@ -105,8 +105,10 @@ def test_old_entry_points_are_unchanged_wrappers(kernel, data):
         image, x_src=x2, y_src=y2, kernel=kernel, source_variance=variance
     )
     assert old.shape == (3, 1, x.numel())
-    torch.testing.assert_close(old, sampled[:, :], atol=0.0, rtol=0.0)
-    torch.testing.assert_close(old_var, var, atol=0.0, rtol=0.0)
+    # The fused path appends a variance column, which changes the vector width
+    # of the accumulation; FMA rounding may then differ by a few ulp per platform.
+    torch.testing.assert_close(old, sampled[:, :])
+    torch.testing.assert_close(old_var, var)
     expected, expected_var = _dense_reference(image, variance, x, y, kernel)
     _assert_close_to_std(old[:, 0], expected)
     _assert_close_to_std(old_var[0], expected_var)
