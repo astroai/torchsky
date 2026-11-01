@@ -33,7 +33,8 @@ def test_distances_match_astropy_and_are_batch_independent(om, ok, w0, wa) -> No
     np.testing.assert_allclose(d_a, ref.angular_diameter_distance(ZS).value, rtol=1e-6)
     for i, zi in enumerate(ZS):
         alone = C.luminosity_distance(torch.tensor([zi], dtype=F64), **kw)
-        assert alone.item() == d_l[i]
+        # Independent of the batch to float64 rounding (vectorized reductions may differ by 1 ulp).
+        assert alone.item() == pytest.approx(d_l[i], rel=1e-14)
 
 
 def test_comoving_distance_gradient_at_zero_redshift() -> None:
