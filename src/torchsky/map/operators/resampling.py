@@ -574,20 +574,27 @@ def _axis_tap_window(
 ) -> tuple[Tensor, Tensor, int]:
     """Window base ``[R]``, slots ``[B, R, T]`` and span of ``[B, R, T]`` taps.
 
-    Only taps with a non-zero coefficient position the window; the others
-    (clamped out-of-image taps, invalid or non-finite points) get slot 0 and
-    add nothing.
+    Taps are consecutive (clamped) pixels, so a point's taps lie between its
+    first and last index.  Only points with a non-zero coefficient position the
+    window; the taps of the others (invalid, non-finite or out-of-image points,
+    all coefficients zero) get slot 0 and add nothing.
     """
-    active = coefficients != 0
+    active = (coefficients != 0).any(dim=-1)
     sentinel = torch.iinfo(indices.dtype).max
-    base = torch.where(active, indices, torch.full_like(indices, sentinel)).amin(
-        dim=(0, 2)
+    first = torch.where(
+        active, indices[..., 0], torch.full_like(indices[..., 0], sentinel)
     )
-    base = torch.where(base == sentinel, torch.zeros_like(base), base)
+    last = torch.where(active, indices[..., -1], torch.full_like(first, -1))
+    base = first.amin(dim=0)
+    top = last.amax(dim=0)
+    has_taps = base != sentinel
+    base = torch.where(has_taps, base, torch.zeros_like(base))
+    span = int(torch.where(has_taps, top - base, torch.zeros_like(base)).max()) + 1
     slots = torch.where(
-        active, indices - base.view(1, -1, 1), torch.zeros_like(indices)
+        active.unsqueeze(-1),
+        indices - base.view(1, -1, 1),
+        torch.zeros_like(indices),
     )
-    span = int(slots.max()) + 1 if slots.numel() else 1
     return base, slots, span
 
 
