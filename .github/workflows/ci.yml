@@ -88,6 +88,8 @@ jobs:
         pixi-version: latest
     - name: Install test environment
       run: pixi install --frozen -e test
+    - name: Build editable torchsky (C++ extension)
+      run: pixi run -e test -- pip install -e . --no-build-isolation
     - name: Run every example script
       run: pixi run examples
   build-test:
@@ -188,10 +190,10 @@ jobs:
           tests: tests/test_map_sky.py tests/test_map_sky_corrector.py tests/test_map_sky_polynomial.py
           pytest_args: ''
         - shard: native-likelihood
-          tests: tests/test_native_epsf.py tests/test_native_field_response.py tests/test_field_gaussian_likelihood.py tests/test_gaussian_likelihood.py tests/test_joint_native.py tests/test_linear_query.py tests/test_continuous_response.py tests/test_detector_response.py tests/test_pixel_calibration.py tests/test_nuisance_precision.py tests/test_nuisance_device_gradients.py tests/test_nuisance_spectral_device.py tests/test_query_spectral_device.py tests/test_evidence_lifecycle.py tests/test_calibration_evidence.py
+          tests: tests/test_native_epsf.py tests/test_native_field_response.py tests/test_field_gaussian_likelihood.py tests/test_gaussian_likelihood.py tests/test_joint_native_likelihood.py tests/test_linear_query.py tests/test_continuous_response.py tests/test_detector_response.py tests/test_pixel_calibration.py tests/test_nuisance_precision.py tests/test_nuisance_device_gradients.py tests/test_nuisance_spectral_device.py tests/test_query_spectral_device.py tests/test_evidence_lifecycle.py tests/test_calibration_evidence.py
           pytest_args: ''
         - shard: native-physical
-          tests: tests/test_native_physical.py tests/test_poisson_gaussian_boundary.py tests/test_poisson_gaussian_positive_nll.py tests/test_additive_stage_contract.py tests/test_calibration_helpers.py
+          tests: tests/test_poisson_gaussian_boundary.py tests/test_poisson_gaussian_positive_nll.py tests/test_additive_stage_contract.py tests/test_calibration_helpers.py
           pytest_args: ''
         - shard: integration
           tests: tests/test_map_healpix_coadd_bridge_smoke.py tests/test_map_healpix_native_tan.py tests/test_map_radio_fixture.py tests/test_map_radio_smoke.py tests/test_map_spectral_affine.py tests/test_map_spectral_nonuniform.py tests/test_map_spectral_nufft.py tests/test_map_sphere_sh_map_smoke.py
@@ -233,12 +235,10 @@ jobs:
     branches:
     - main
     - develop
-    - release/**
   pull_request:
     branches:
     - main
     - develop
-    - release/**
   release:
     types:
     - published

@@ -9,7 +9,7 @@
 
 Chromatic PSF fields and continuous-wavelength sky fields integrated over band transmission curves.
 
-**Guides:** [field](../field.md), [filter-profiles](../filter-profiles.md)
+**Guides:** [field](../field.md), [map](../map.md)
 
 ---
 

@@ -187,7 +187,7 @@ related = ["native-likelihood.md"]
 name = "torchsky.map.field.chromatic"
 slug = "map-field-chromatic"
 tier = "experimental"
-related = ["field.md", "filter-profiles.md"]
+related = ["field.md", "map.md"]
 intro = "Chromatic PSF fields and continuous-wavelength sky fields integrated over band transmission curves."
 
 [[namespace]]
