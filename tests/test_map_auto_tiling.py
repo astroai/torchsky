@@ -226,7 +226,9 @@ def test_auto_tiling_with_forced_tiny_budget_equals_untiled(kernel) -> None:
     th, tw = tiled.provenance["spatial_tiles"]["tile_hw"]
     assert th < 150 or tw < 170, "the tiny budget must actually tile the target"
     assert untiled.inverse_variance is not None
-    _assert_same(untiled, tiled, exact=True)
+    # Separable kernels go through the chunked sampler, whose vectorised multiply-adds can round the last
+    # bit differently depending on where a sample falls in a chunk; tiles change that position.
+    _assert_same(untiled, tiled, exact=kernel == "bilinear")
     assert "spatial_tiles" not in (untiled.provenance or {})
 
 
