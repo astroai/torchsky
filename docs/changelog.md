@@ -26,6 +26,13 @@ owned by `torchfits`.
   against Gaia (ICRS); set `RADESYS = 'ICRS'` on such headers.
 
 ### Changed
+- Image-plane coadd: per-observation work is cropped to the source footprint for
+  every target size and WCS type (bit-identical inside the window), and the
+  target-to-source pixel mapping of SIP/TPV/non-TAN sources is evaluated on a
+  coarse lattice with Catmull-Rom interpolation verified against the exact
+  mapping (`torchsky.map.interpolated_mapping`; tolerance
+  `MAPPING_TOLERANCE_PX = 1e-3` source pixels, exact fallback per cell). Use
+  `mapping_mode("exact")` for the per-pixel inverse.
 - Build lane moved to PyTorch 2.14 and `torchfits >= 1.3.1`.
 
 ### Fixed

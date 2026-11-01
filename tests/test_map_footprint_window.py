@@ -8,6 +8,7 @@ import torch
 import torchsky
 import torchsky.map.image_plane_projection as projection_mod
 import torchsky.map.windowing as windowing_mod
+from torchsky.map.interpolated_mapping import mapping_mode
 from torchsky.map.observation import ImageObservation
 
 pytest.importorskip("torchsky._cpp")
@@ -71,6 +72,16 @@ def _prepared(header: dict, *, quadrature: bool = False):
 
 
 def _project(source_header, target_header, image, *, kernel, semantics, window, monkeypatch):
+    # Cropping is bit-identical for a fixed per-pixel mapping.  (The verified-lattice
+    # mapping is anchored to the window origin, so its sub-1e-5 px interpolation
+    # differences between windows are covered in test_map_interpolated_mapping.py.)
+    with mapping_mode("exact"):
+        return _project_impl(
+            source_header, target_header, image, kernel, semantics, window, monkeypatch
+        )
+
+
+def _project_impl(source_header, target_header, image, kernel, semantics, window, monkeypatch):
     target = _prepared(target_header, quadrature=semantics == "flux")
     monkeypatch.setattr(
         windowing_mod,

@@ -399,7 +399,7 @@ def _footprint_bbox_on_target(
                 ra_deg, dec_deg, to_frame, to_equinox=to_eq
             )
         x_tgt, y_tgt = target_wcs.world_to_pixel(ra_deg, dec_deg)
-    except Exception as exc:  # noqa: BLE001 - any mapping failure means "use the full target"
+    except Exception as exc:  # any mapping failure means "use the full target"
         raise _FootprintUnavailable(f"mapping failed: {exc}") from exc
     if not (
         bool(torch.isfinite(x_tgt).all())
@@ -474,13 +474,13 @@ def _footprint_bbox_on_target(
     cxmin, cxmax, cymin, cymax = _extent(x_tgt[coarse], y_tgt[coarse])
     growth = max(cxmin - xmin, xmax - cxmax, cymin - ymin, ymax - cymax, 0.0)
     ratio = max(xmax - xmin, ymax - ymin) / float(max(h_src, w_src))
-    pad = int(margin) + int(math.ceil(kernel_half_width * max(ratio, 1.0))) + int(
+    pad = int(margin) + math.ceil(kernel_half_width * max(ratio, 1.0)) + int(
         math.ceil(growth)
     )
-    x0 = max(int(math.floor(xmin)) - pad, 0)
-    x1 = min(int(math.ceil(xmax)) + pad + 1, width)
-    y0 = max(int(math.floor(ymin)) - pad, 0)
-    y1 = min(int(math.ceil(ymax)) + pad + 1, height)
+    x0 = max(math.floor(xmin) - pad, 0)
+    x1 = min(math.ceil(xmax) + pad + 1, width)
+    y0 = max(math.floor(ymin) - pad, 0)
+    y1 = min(math.ceil(ymax) + pad + 1, height)
     if x0 >= x1 or y0 >= y1:
         return None
     return y0, y1, x0, x1
