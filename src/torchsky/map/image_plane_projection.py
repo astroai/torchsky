@@ -13,6 +13,10 @@ from ..sphere.moc import MOC
 from ..wcs import WCS
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
+from .interpolated_mapping import (
+    interpolated_inverse_mapping,
+    resolve_mapping_mode,
+)
 
 # Header probe for area scaling: recoverable failures when reading metadata only.
 from .observation import (
@@ -306,6 +310,112 @@ def _roundtrip_validity_mask(
     return valid.reshape_as(x_src)
 
 
+def _use_interpolated_mapping(source_wcs: WCS, mapping: str | None) -> bool:
+    """Interpolate the target -> source pixel mapping for distorted / non-TAN sources.
+
+    Plain TAN sources keep the analytic path (homography or exact world -> pixel,
+    both cheap); SIP and every non-TAN projection (TPV, ...) have an iterative or
+    per-pixel inverse that the verified coarse lattice replaces.
+    """
+    if resolve_mapping_mode(mapping) != "interpolated":
+        return False
+    return bool(
+        getattr(source_wcs, "sip", None) is not None
+        or not getattr(source_wcs, "_is_tan", False)
+    )
+
+
+def _make_target_to_source_evaluator(
+    source_wcs: WCS,
+    target_wcs: WCS,
+    image_shape: tuple[int, int],
+    *,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+):
+    """Exact target pixel -> source pixel mapping as ``(x_src, y_src, ok)``.
+
+    ``ok`` is finite-ness and, for SIP sources, the same round-trip consistency gate
+    as :func:`_roundtrip_validity_mask` (evaluated at every point; the in-bounds test
+    is applied separately by the sampler).
+    """
+    roundtrip = _requires_roundtrip_validity_check(source_wcs)
+    max_err_arcsec = 0.0
+    if roundtrip:
+        max_err_arcsec = max(
+            _source_pixel_diameter_arcsec(
+                source_wcs, image_shape, device=torch.device("cpu")
+            ),
+            1.0e-3,
+        )
+
+    def evaluate(x: Tensor, y: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        shape = x.shape
+        ra, dec = target_wcs.pixel_to_world(
+            x.reshape(-1) + float(offset_x), y.reshape(-1) + float(offset_y)
+        )
+        ra, dec = _convert_world_between_wcs(ra, dec, target_wcs, source_wcs)
+        xs, ys = source_wcs.world_to_pixel(ra, dec)
+        ok = torch.isfinite(xs) & torch.isfinite(ys)
+        if roundtrip:
+            ra_back, dec_back = source_wcs.pixel_to_world(xs, ys)
+            dra = (ra_back - ra) * torch.cos(torch.deg2rad(dec))
+            ddec = dec_back - dec
+            err_arcsec = torch.sqrt(dra * dra + ddec * ddec) * 3600.0
+            ok = ok & (err_arcsec <= max_err_arcsec)
+        return xs.reshape(shape), ys.reshape(shape), ok.reshape(shape)
+
+    return evaluate
+
+
+def _interpolated_source_pixels(
+    source_wcs: WCS,
+    target_wcs: WCS,
+    target_shape: tuple[int, int],
+    image_shape: tuple[int, int],
+    *,
+    device: torch.device,
+    offsets: tuple[tuple[float, float], ...] = ((0.0, 0.0),),
+) -> tuple[Tensor, Tensor, Tensor | None]:
+    """Verified-interpolated source pixel coordinates for each target sub-pixel offset.
+
+    Returns ``(x_src, y_src, valid)`` with shape ``(H, W)`` (one offset) or
+    ``(len(offsets), H, W)``; ``valid`` is the SIP round-trip validity (``None`` when
+    the source has no round-trip gate).
+    """
+    map_device = torch.device("cpu") if device.type == "mps" else device
+    h_src, w_src = image_shape
+    xs, ys, oks = [], [], []
+    for off_x, off_y in offsets:
+        evaluate = _make_target_to_source_evaluator(
+            source_wcs,
+            target_wcs,
+            image_shape,
+            offset_x=off_x,
+            offset_y=off_y,
+        )
+        x_src, y_src, ok = interpolated_inverse_mapping(
+            evaluate,
+            int(target_shape[0]),
+            int(target_shape[1]),
+            device=map_device,
+            bounds_xy=(float(w_src - 1), float(h_src - 1)),
+        )
+        xs.append(x_src)
+        ys.append(y_src)
+        oks.append(ok)
+    x_all = xs[0] if len(xs) == 1 else torch.stack(xs, dim=0)
+    y_all = ys[0] if len(ys) == 1 else torch.stack(ys, dim=0)
+    valid = None
+    if _requires_roundtrip_validity_check(source_wcs):
+        valid = oks[0] if len(oks) == 1 else torch.stack(oks, dim=0)
+    if device.type == "mps":
+        x_all = x_all.to(device=device, dtype=torch.float32)
+        y_all = y_all.to(device=device, dtype=torch.float32)
+        valid = None if valid is None else valid.to(device)
+    return x_all, y_all, valid
+
+
 def _resample_weighted_to_target(
     image: Tensor,
     source_weight: Tensor,
@@ -315,7 +425,15 @@ def _resample_weighted_to_target(
     resampling_kernel: MapResamplingKernel,
     value_semantics: MapValueSemantics,
     return_variance_weight: bool = False,
+    mapping: str | None = None,
 ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
+    """Gather-resample one observation onto ``target``.
+
+    ``mapping`` selects how the target -> source pixel mapping of distorted sources is
+    obtained: ``"interpolated"`` (verified coarse lattice, see
+    :mod:`torchsky.map.interpolated_mapping`) or ``"exact"`` (per-pixel inverse);
+    ``None`` uses the module default.
+    """
     image = validate_image_plane_2d(image).to(dtype=torch.float32)
     source_weight = validate_image_plane_2d(source_weight).to(dtype=torch.float32)
 
@@ -630,6 +748,7 @@ def _resample_weighted_to_target(
         *,
         flat_ra: Tensor | None = None,
         flat_dec: Tensor | None = None,
+        valid_mask: Tensor | None = None,
     ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
         # WCS round trips can land an exact edge just outside the image.  Keep
         # the repair much smaller than a pixel even for float32/large mosaics.
@@ -744,7 +863,9 @@ def _resample_weighted_to_target(
             & (y_src >= 0.0)
             & (y_src <= (h_src - 1))
         )
-        if _requires_roundtrip_validity_check(source_wcs):
+        if _requires_roundtrip_validity_check(source_wcs) and valid_mask is not None:
+            in_bounds = in_bounds & valid_mask
+        elif _requires_roundtrip_validity_check(source_wcs):
             in_bounds = in_bounds & _roundtrip_validity_mask(
                 source_wcs,
                 x_src=x_src,
@@ -797,6 +918,34 @@ def _resample_weighted_to_target(
                 )
         return _result(sampled_numer, sampled_weight, sampled_variance_weight)
 
+    def _tpv_disjoint_from_target() -> bool:
+        if not (
+            bool(getattr(source_wcs, "_is_tpv", False))
+            and getattr(source_wcs, "sip", None) is None
+            and getattr(target.wcs, "celestial_frame", "ICRS")
+            == getattr(source_wcs, "celestial_frame", "ICRS")
+        ):
+            return False
+        source_cap_radius_deg = _tpv_source_cap_radius_deg(
+            source_wcs,
+            (h_src, w_src),
+        )
+        center_sep_deg = _angular_separation_deg(
+            float(source_wcs.alpha0),
+            float(source_wcs.delta0),
+            target.center_ra_deg,
+            target.center_dec_deg,
+        )
+        return center_sep_deg > source_cap_radius_deg + target.cap_radius_deg
+
+    def _zero_result(like_shape) -> tuple[Tensor, Tensor, Tensor | None] | tuple[Tensor, Tensor]:
+        zeros = torch.zeros(like_shape, dtype=torch.float32, device=image.device)
+        return _result(
+            zeros,
+            zeros,
+            zeros if coefficient_variance_supported else None,
+        )
+
     def _sample_on_world_grid(
         ra_deg: Tensor, dec_deg: Tensor
     ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
@@ -805,29 +954,13 @@ def _resample_weighted_to_target(
         )
         flat_ra = ra_conv.reshape(-1)
         flat_dec = dec_conv.reshape(-1)
-        if (
-            bool(getattr(source_wcs, "_is_tpv", False))
-            and getattr(source_wcs, "sip", None) is None
-            and getattr(target.wcs, "celestial_frame", "ICRS")
-            == getattr(source_wcs, "celestial_frame", "ICRS")
-        ):
-            source_cap_radius_deg = _tpv_source_cap_radius_deg(
-                source_wcs,
-                (h_src, w_src),
+        if _tpv_disjoint_from_target():
+            zeros = torch.zeros_like(ra_deg, dtype=torch.float32)
+            return _result(
+                zeros,
+                zeros,
+                zeros if coefficient_variance_supported else None,
             )
-            center_sep_deg = _angular_separation_deg(
-                float(source_wcs.alpha0),
-                float(source_wcs.delta0),
-                target.center_ra_deg,
-                target.center_dec_deg,
-            )
-            if center_sep_deg > source_cap_radius_deg + target.cap_radius_deg:
-                zeros = torch.zeros_like(ra_deg, dtype=torch.float32)
-                return _result(
-                    zeros,
-                    zeros,
-                    zeros if coefficient_variance_supported else None,
-                )
         x_src, y_src = source_wcs.world_to_pixel(flat_ra, flat_dec)
         x_src = x_src.reshape_as(ra_deg)
         y_src = y_src.reshape_as(dec_deg)
@@ -837,6 +970,8 @@ def _resample_weighted_to_target(
             flat_ra=flat_ra,
             flat_dec=flat_dec,
         )
+
+    use_interpolated_mapping = _use_interpolated_mapping(source_wcs, mapping)
 
     if not _requires_target_pixel_quadrature(
         source_wcs,
@@ -859,6 +994,17 @@ def _resample_weighted_to_target(
                 return _sample_on_source_grid(
                     x_src, y_src, flat_ra=None, flat_dec=None
                 )
+        if use_interpolated_mapping:
+            if _tpv_disjoint_from_target():
+                return _zero_result((h_tgt, w_tgt))
+            x_src, y_src, valid = _interpolated_source_pixels(
+                source_wcs,
+                target.wcs,
+                (h_tgt, w_tgt),
+                (h_src, w_src),
+                device=image.device,
+            )
+            return _sample_on_source_grid(x_src, y_src, valid_mask=valid)
         if min(h_tgt, w_tgt) < 500 or _requires_roundtrip_validity_check(source_wcs):
             ra_g, dec_g = _build_target_world_grid(
                 target.wcs,
@@ -879,6 +1025,27 @@ def _resample_weighted_to_target(
     device = target.wcs.device
     accum_numer = torch.zeros(target.shape, dtype=torch.float32, device=device)
     accum_weight = torch.zeros(target.shape, dtype=torch.float32, device=device)
+    if use_interpolated_mapping:
+        if _tpv_disjoint_from_target():
+            return _zero_result(tuple(target.shape))
+        half = 0.5 / math.sqrt(3.0)
+        x_src_b, y_src_b, valid = _interpolated_source_pixels(
+            source_wcs,
+            target.wcs,
+            tuple(target.shape),
+            (h_src, w_src),
+            device=device,
+            offsets=tuple((ox, oy) for oy in (-half, half) for ox in (-half, half)),
+        )
+        sub_result = _sample_on_source_grid(x_src_b, y_src_b, valid_mask=valid)
+        sub_numer, sub_weight = sub_result[:2]
+        sub_variance_weight = sub_result[2] if len(sub_result) == 3 else None
+        accum_numer = sub_numer.mean(dim=0)
+        accum_weight = sub_weight.mean(dim=0)
+        accum_numer = torch.where(
+            accum_weight > 0.0, accum_numer, torch.zeros_like(accum_numer)
+        )
+        return _result(accum_numer, accum_weight, sub_variance_weight)
     quadrature_world_grids = target.quadrature_world_grids
     if quadrature_world_grids is None:
         quadrature_world_grids = _quadrature_target_world_grids(
@@ -1259,6 +1426,7 @@ def _project_observation_to_target_chunk(
             source_shape=tuple(image.shape),
             target=prepared_target,
             value_semantics=value_semantics,
+            resampling_kernel=resampling_kernel,
         )
         if prepared_target_view is None:
             sampled_numer = torch.zeros((0, 0), dtype=torch.float32, device=device)
