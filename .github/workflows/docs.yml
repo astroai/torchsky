@@ -29,14 +29,18 @@ jobs:
         run: pixi install --frozen -e test
       - name: Docs contract (strict build, links, anchors, generated pages, snippets, tests)
         run: pixi run docs-contract
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
+      # Pages exists only on astroai/torchsky; forks still run the docs contract.
+      - if: github.repository == 'astroai/torchsky'
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b
+      - if: github.repository == 'astroai/torchsky'
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
         with:
           path: site/
 
   deploy:
     name: Deploy to GitHub Pages
     needs: build
+    if: github.repository == 'astroai/torchsky'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
