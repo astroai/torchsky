@@ -158,6 +158,7 @@ namespace `torchsky.wcs` unless the group text says otherwise.
 ::: torchsky.wcs
     options:
       members:
+        - CelestialFrameBiasWarning
         - canonical_celestial_frame
         - convert_celestial
         - ecliptic_of_date_to_icrs

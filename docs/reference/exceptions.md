@@ -47,6 +47,10 @@ Unspecified run-time error.
 
 Unspecified run-time error.
 
+**[`CelestialFrameBiasWarning`](wcs.md#torchsky.wcs.CelestialFrameBiasWarning)**
+
+A resampling path converted between FK5 (J2000) and ICRS.
+
 **[`UnsupportedInverseError`](wcs.md#torchsky.wcs.UnsupportedInverseError)**
 
 Unspecified run-time error.
