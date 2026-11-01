@@ -10,6 +10,38 @@ Historical benchmark tables and comparative performance claims have moved to
 They are not current package status. FITS/table I/O performance evidence is
 owned by `torchfits`.
 
+## [Unreleased]
+
+### Added
+- `torchsky.filter_profiles.photon_quadrature`: photon-weighted equal-mass
+  quadrature nodes of a bandpass for band-integrated forward models.
+- `torchsky.map.field.chromatic`: `ChromaticPSFField` (one PSF field smooth in
+  wavelength and detector position, diffraction-unit coordinates),
+  `LogLambdaRBFBasis`, and `SpectralSkyField` (continuous `s(x, y, lambda)`
+  sky integrated over each exposure's bandpass) with a brightness-independent
+  (`smoothness_mode="relative"`, default) spectral prior.
+- `torchsky.wcs.CelestialFrameBiasWarning`: resampling paths warn when they
+  convert between FK5 (J2000) and ICRS, the ~20-30 mas frame bias. Survey
+  headers often keep `RADECSYS = 'FK5'` while their astrometry was solved
+  against Gaia (ICRS); set `RADESYS = 'ICRS'` on such headers.
+
+### Changed
+- Build lane moved to PyTorch 2.14 and `torchfits >= 1.3.1`.
+
+### Fixed
+- Tiled image-plane coadds keep the context bitmask on the host, so large
+  mosaics no longer exhaust small GPU slices on bookkeeping.
+
+### Performance
+- SIP forward, inverse and Jacobian use nested Horner evaluation instead of
+  materialized power stacks (JWST order-5 SIP, 4 M points: distort 15x,
+  Newton inverse 4x faster; results equal to 1e-12 px).
+- The SIP round-trip validity tolerance samples the source pixel scale on a
+  33 x 33 lattice instead of building a detector-sized pixel-area map per
+  observation. Lanczos-3 coadd of 135 NIRCam exposures onto 512^2 pixels:
+  213 s -> 24 s on 8 CPU threads, 217 s -> 6 s on a GPU slice; outputs
+  bit-identical. Evidence: torchsky-harness `campaigns/adass2026` speed bench.
+
 ## [0.4.0] - Unreleased
 
 ### Architecture
