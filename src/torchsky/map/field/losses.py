@@ -9,6 +9,25 @@ from torch import Tensor
 from .types import FieldLossKind
 
 
+# exp(+-20) spans ~1e-9..5e8 and stays finite in float32 (exp overflows at ~88).
+# The map is the identity for |logvar| <= 10 (variances 4.5e-5..2.2e4, so ordinary
+# data scales are untouched) and a C1 tanh saturation toward +-20 beyond, so the
+# gradient never vanishes exactly, unlike a hard clamp.
+LOGVAR_LINEAR_BOUND = 10.0
+LOGVAR_SOFT_BOUND = 20.0
+
+
+def soft_bound_logvar(logvar: Tensor) -> Tensor:
+    """Identity inside ``|logvar| <= 10``; smooth tanh saturation toward ``+-20``."""
+    span = LOGVAR_SOFT_BOUND - LOGVAR_LINEAR_BOUND
+    magnitude = logvar.abs()
+    excess = (magnitude - LOGVAR_LINEAR_BOUND).clamp_min(0.0)
+    saturated = LOGVAR_LINEAR_BOUND + span * torch.tanh(excess / span)
+    return torch.where(
+        magnitude > LOGVAR_LINEAR_BOUND, torch.sign(logvar) * saturated, logvar
+    )
+
+
 def _field_residual_loss(
     residual: Tensor,
     *,
@@ -54,7 +73,7 @@ def _field_residual_loss(
         if logvar is None:
             raise ValueError("gaussian_nll requires predictive log-variance")
         safe_logvar = logvar if valid is None else torch.where(valid, logvar, 0.0)
-        clipped = torch.clamp(safe_logvar, min=-8.0, max=6.0)
+        clipped = soft_bound_logvar(safe_logvar)
         total_variance = torch.exp(clipped)
         if observation_invvar is not None:
             assert valid_invvar is not None

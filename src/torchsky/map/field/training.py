@@ -484,12 +484,66 @@ def compute_field_fit_diagnostics(
 
     with torch.no_grad():
         for obs_idx, observation in enumerate(observations):
-            try:
-                fctx = obs_forward_ctx[obs_idx]
-                pose = obs_exposure_poses[obs_idx]
-                observation_bundle = obs_operator_bundles[obs_idx]
+            fctx = obs_forward_ctx[obs_idx]
+            pose = obs_exposure_poses[obs_idx]
+            observation_bundle = obs_operator_bundles[obs_idx]
 
-                pred = render_field_observation(
+            pred = render_field_observation(
+                model,
+                observation,
+                num_spectral_samples=num_spectral_samples,
+                forward_context=fctx,
+                exposure_pose=pose,
+                operator_bundle=observation_bundle,
+                spatial_sampling=spatial_sampling,
+                spatial_tile_hw=spatial_tile_hw,
+            )
+
+            obs_img = observation.image.to(device=pred.device, dtype=pred.dtype)
+            weight = (
+                observation.weight.to(device=pred.device, dtype=pred.dtype)
+                if observation.weight is not None
+                else torch.ones_like(pred)
+            )
+
+            if observation.mask is not None:
+                mask = observation.mask.to(device=pred.device) > 0
+            else:
+                mask = torch.ones_like(pred, dtype=torch.bool)
+
+            residual = pred - obs_img
+            valid_res = residual[mask]
+            valid_weight = weight[mask]
+
+            if valid_res.numel() > 0:
+                weighted_sq_res = (valid_res**2) * valid_weight
+                obs_chi2 = float(weighted_sq_res.mean())
+                reduced_chi2s.append(obs_chi2)
+                quality_metrics.append(
+                    field_image_quality_metrics(
+                        pred,
+                        observation.image,
+                        weight=observation.weight,
+                        mask=observation.mask,
+                    )
+                )
+
+                if observation_bundle.psf is not None:
+                    from ..operators.psf import apply_psf_spec
+
+                    res_convolved = apply_psf_spec(residual, observation.psf_spec)
+                    valid_res_conv = res_convolved[mask]
+
+                    mx = valid_res.mean()
+                    my = valid_res_conv.mean()
+                    xm, ym = valid_res - mx, valid_res_conv - my
+                    r_num = torch.sum(xm * ym)
+                    r_den = torch.sqrt(torch.sum(xm**2) * torch.sum(ym**2) + 1.0e-8)
+                    psf_corr = float(r_num / r_den)
+                    psf_residual_correlations.append(psf_corr)
+
+            if field_model_has_predictive_distribution(model) and spatial_tile_hw is None:
+                _pred_mean, pred_logvar = render_field_observation_distribution(
                     model,
                     observation,
                     num_spectral_samples=num_spectral_samples,
@@ -497,79 +551,22 @@ def compute_field_fit_diagnostics(
                     exposure_pose=pose,
                     operator_bundle=observation_bundle,
                     spatial_sampling=spatial_sampling,
-                    spatial_tile_hw=spatial_tile_hw,
                 )
-
-                obs_img = observation.image.to(device=pred.device, dtype=pred.dtype)
-                weight = (
-                    observation.weight.to(device=pred.device, dtype=pred.dtype)
-                    if observation.weight is not None
-                    else torch.ones_like(pred)
-                )
+                stddev = torch.sqrt(torch.clamp(torch.exp(pred_logvar), min=1.0e-8))
 
                 if observation.mask is not None:
-                    mask = observation.mask.to(device=pred.device) > 0
+                    mask = observation.mask.to(device=stddev.device) > 0
+                    support_unc = stddev[mask]
+                    outer_unc = stddev[~mask]
+                    if support_unc.numel() > 0:
+                        support_uncs.append(float(support_unc.mean()))
+                    if outer_unc.numel() > 0:
+                        outer_uncs.append(float(outer_unc.mean()))
                 else:
-                    mask = torch.ones_like(pred, dtype=torch.bool)
-
-                residual = pred - obs_img
-                valid_res = residual[mask]
-                valid_weight = weight[mask]
-
-                if valid_res.numel() > 0:
-                    weighted_sq_res = (valid_res**2) * valid_weight
-                    obs_chi2 = float(weighted_sq_res.mean())
-                    reduced_chi2s.append(obs_chi2)
-                    quality_metrics.append(
-                        field_image_quality_metrics(
-                            pred,
-                            observation.image,
-                            weight=observation.weight,
-                            mask=observation.mask,
-                        )
-                    )
-
-                    if observation_bundle.psf is not None:
-                        from ..operators.psf import apply_psf_spec
-
-                        res_convolved = apply_psf_spec(residual, observation.psf_spec)
-                        valid_res_conv = res_convolved[mask]
-
-                        mx = valid_res.mean()
-                        my = valid_res_conv.mean()
-                        xm, ym = valid_res - mx, valid_res_conv - my
-                        r_num = torch.sum(xm * ym)
-                        r_den = torch.sqrt(torch.sum(xm**2) * torch.sum(ym**2) + 1.0e-8)
-                        psf_corr = float(r_num / r_den)
-                        psf_residual_correlations.append(psf_corr)
-
-                if field_model_has_predictive_distribution(model) and spatial_tile_hw is None:
-                    _pred_mean, pred_logvar = render_field_observation_distribution(
-                        model,
-                        observation,
-                        num_spectral_samples=num_spectral_samples,
-                        forward_context=fctx,
-                        exposure_pose=pose,
-                        operator_bundle=observation_bundle,
-                        spatial_sampling=spatial_sampling,
-                    )
-                    stddev = torch.sqrt(torch.clamp(torch.exp(pred_logvar), min=1.0e-8))
-
-                    if observation.mask is not None:
-                        mask = observation.mask.to(device=stddev.device) > 0
-                        support_unc = stddev[mask]
-                        outer_unc = stddev[~mask]
-                        if support_unc.numel() > 0:
-                            support_uncs.append(float(support_unc.mean()))
-                        if outer_unc.numel() > 0:
-                            outer_uncs.append(float(outer_unc.mean()))
-                    else:
-                        support_uncs.append(float(stddev.mean()))
-            except Exception:
-                pass
+                    support_uncs.append(float(stddev.mean()))
 
     mean_reduced_chi2 = (
-        sum(reduced_chi2s) / len(reduced_chi2s) if reduced_chi2s else 1.0
+        sum(reduced_chi2s) / len(reduced_chi2s) if reduced_chi2s else float("nan")
     )
     mean_psf_residual_corr = (
         sum(psf_residual_correlations) / len(psf_residual_correlations)

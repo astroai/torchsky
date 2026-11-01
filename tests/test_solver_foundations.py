@@ -416,3 +416,54 @@ def test_implicit_differentiation_policy_is_separate_and_fail_closed() -> None:
         ImplicitDifferentiationPolicy(
             mode=SolverDifferentiationMode.IMPLICIT
         ).validate(result)
+
+
+def test_cg_and_lsqr_apply_operator_once_per_iteration() -> None:
+    from torchsky.map.solvers._foundation import conjugate_gradient, lsqr
+
+    torch.manual_seed(0)
+    a = torch.randn(40, 25, dtype=torch.float64)
+    b = torch.randn(40, dtype=torch.float64)
+    m = a.T @ a
+    rhs = a.T @ b
+    reference = torch.linalg.solve(m, rhs)
+
+    calls = {"op": 0}
+
+    def op(x):
+        calls["op"] += 1
+        return m @ x
+
+    cg = conjugate_gradient(op, rhs, operator_is_hpd=True, max_iterations=200, rtol=1e-12)
+    assert torch.linalg.norm(cg.solution - reference) < 1e-9
+    # initial residual + one per iteration + one convergence certification
+    assert calls["op"] == cg.diagnostics.iterations + 2
+    assert cg.diagnostics.operator_applications == calls["op"]
+
+    ops = {"n": 0}
+
+    def fwd(x):
+        ops["n"] += 1
+        return a @ x
+
+    for damping in (0.0, 0.3):
+        ops["n"] = 0
+        res = lsqr(fwd, lambda y: a.T @ y, b, max_iterations=200, rtol=1e-12, damping=damping)
+        ref = torch.linalg.solve(m + damping * torch.eye(25, dtype=torch.float64), rhs)
+        assert torch.linalg.norm(res.solution - ref) < 1e-9
+        assert ops["n"] == res.diagnostics.iterations + 2
+
+
+def test_cg_casts_initial_solution_to_rhs_dtype() -> None:
+    from torchsky.map.solvers._foundation import conjugate_gradient
+
+    m = torch.eye(4, dtype=torch.float64) * 2.0
+    rhs = torch.ones(4, dtype=torch.float64)
+    result = conjugate_gradient(
+        lambda x: m @ x,
+        rhs,
+        operator_is_hpd=True,
+        initial_solution=torch.zeros(4, dtype=torch.float32),
+    )
+    assert result.solution.dtype == torch.float64
+    torch.testing.assert_close(result.solution, rhs / 2.0)

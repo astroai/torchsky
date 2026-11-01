@@ -1358,8 +1358,24 @@ def solve_linear_band_grid_cg(
     shared_edge_sq: tuple[Tensor, Tensor] | None = None,
     shared_source_sq: Tensor | None = None,
     diagnostics: dict[str, Any] | None = None,
+    well_covered_fraction: float = 0.5,
+    source_dead_zone_sigma: float = 2.0,
 ) -> LinearSolveResult:
-    """Solve normal equations via Preconditioned Conjugate Gradient or IRLS-PCG."""
+    """Solve normal equations via Preconditioned Conjugate Gradient or IRLS-PCG.
+
+    ``well_covered_fraction`` is the fraction of the median positive sensitivity
+    above which a pixel is trusted for data-driven priors (local means and the
+    IRLS prior solution); half the median excludes only strongly under-covered
+    pixels (edges, gaps) whose ``rhs / sensitivity`` estimate is noise dominated.
+    ``source_dead_zone_sigma`` is the SNR (in units of the sky sigma) below which
+    the edge-preserving source map ``u`` is zeroed, so sky noise at ``2 sigma``
+    (about 5% two-sided false-positive rate) does not switch off smoothing.
+    Both defaults are the previous hard-coded values.
+    """
+    if not math.isfinite(float(well_covered_fraction)) or well_covered_fraction < 0.0:
+        raise ValueError("well_covered_fraction must be finite and non-negative")
+    if not math.isfinite(float(source_dead_zone_sigma)) or source_dead_zone_sigma < 0.0:
+        raise ValueError("source_dead_zone_sigma must be finite and non-negative")
     if iterations < 1:
         raise ValueError("iterations must be positive")
     if irls_steps < 1:
@@ -1493,7 +1509,7 @@ def solve_linear_band_grid_cg(
         and not need_grad
         and sensitivity_diag is not None
     ):
-        well_covered = sensitivity_diag >= (0.5 * median_sens)
+        well_covered = sensitivity_diag >= (well_covered_fraction * median_sens)
         if bool(well_covered.any()):
             local_mean = (
                 rhs_base.detach()[well_covered].double()
@@ -1628,7 +1644,7 @@ def solve_linear_band_grid_cg(
 
             prior_sol = (
                 torch.where(
-                    stage_sens_diag >= (0.5 * median_sens),
+                    stage_sens_diag >= (well_covered_fraction * median_sens),
                     stage_rhs_base.detach()
                     / torch.clamp(stage_sens_diag.detach(), min=1.0e-12),
                     sol_det,
@@ -1637,7 +1653,9 @@ def solve_linear_band_grid_cg(
                 else sol_det
             )
             u = (prior_sol - sky_bg) / sky_sigma
-            u_dead = torch.sign(u) * torch.clamp(torch.abs(u) - 2.0, min=0.0)
+            u_dead = torch.sign(u) * torch.clamp(
+                torch.abs(u) - source_dead_zone_sigma, min=0.0
+            )
             if edge_preserving or shared_source_sq is not None:
                 src_sq = (
                     shared_source_sq.to(device=u.device, dtype=u.dtype)
@@ -1964,6 +1982,8 @@ def solve_joint_multiband_grid_cg(
     ) = "none",
     irls_config: IRLSConfig | None = None,
     diagnostics_by_band: dict[str, dict[str, Any]] | None = None,
+    well_covered_fraction: float = 0.5,
+    source_dead_zone_sigma: float = 2.0,
 ) -> dict[str, LinearSolveResult]:
     """Jointly solve multi-band surface-brightness grids via coupled Vector-Charbonnier IRLS-PCG.
 
@@ -2004,6 +2024,8 @@ def solve_joint_multiband_grid_cg(
                 data_weight_fn=data_weight_fn,
                 irls_config=irls_config,
                 diagnostics=band_diag,
+                well_covered_fraction=well_covered_fraction,
+                source_dead_zone_sigma=source_dead_zone_sigma,
             )
             if diagnostics_by_band is not None:
                 diagnostics_by_band[band] = band_diag
@@ -2047,7 +2069,9 @@ def solve_joint_multiband_grid_cg(
                 sigma_b = max(sky_sigmas.get(band, 1.0), 1.0e-30)
                 bg_b = sky_bgs.get(band, 0.0)
                 u_b = (sol_b - bg_b) / sigma_b
-                u_b_dead = torch.sign(u_b) * torch.clamp(torch.abs(u_b) - 2.0, min=0.0)
+                u_b_dead = torch.sign(u_b) * torch.clamp(
+                    torch.abs(u_b) - source_dead_zone_sigma, min=0.0
+                )
                 u_list.append(u_b_dead)
             u_stack = torch.stack(u_list, dim=0)
             shared_source_sq = torch.mean(torch.square(u_stack), dim=0)
@@ -2112,6 +2136,8 @@ def solve_joint_multiband_grid_cg(
                 shared_edge_sq=shared_edge_sq,
                 shared_source_sq=shared_source_sq,
                 diagnostics=stage_diag,
+                well_covered_fraction=well_covered_fraction,
+                source_dead_zone_sigma=source_dead_zone_sigma,
             )
             current_solutions[band] = res_b.solution
             sky_sigmas[band] = float(stage_diag.get("sky_sigma", 1.0))

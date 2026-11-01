@@ -23,6 +23,7 @@ from .bandpass import (
     bandpass_response as _bandpass_response,
 )
 from .hashgrid import sample_feature_plane
+from .losses import soft_bound_logvar
 from .networks import (
     ResidualStack,
 )
@@ -616,7 +617,7 @@ class SkyLambdaFeatureField(_BaseFieldModel):
         logvar = self.logvar_output(decoded).squeeze(-1) + self.logvar_refine(
             decoded
         ).squeeze(-1)
-        logvar = torch.clamp(logvar, min=-8.0, max=6.0)
+        logvar = soft_bound_logvar(logvar)
         return mean, logvar
 
     def _aggregate_hidden_stack(

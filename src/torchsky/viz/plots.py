@@ -40,7 +40,9 @@ def _stretch_unit(x: Tensor, stretch: str) -> Tensor:
 
 
 def _limits(images: list[Tensor], percentile: tuple[float, float]) -> tuple[float, float]:
-    finite = torch.cat([img[torch.isfinite(img)].flatten() for img in images])
+    finite = torch.cat(
+        [img[torch.isfinite(img)].flatten().detach().cpu() for img in images]
+    )
     if finite.numel() == 0:
         return 0.0, 1.0
     stride = max(1, finite.numel() // (1 << 20))

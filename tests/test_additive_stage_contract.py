@@ -326,3 +326,23 @@ def test_unsupported_rendering_paths_do_not_drop_components():
             render(_ConstantField(), observation, **coordinates)
     with pytest.raises(ValueError, match="typed additive planes"):
         render_spectral_power_foam_observation_exact(_ConstantField(), observation)
+
+
+def test_coherent_psf_variance_propagates_std_linearly():
+    from torchsky.map.field.rendering import render_field_observation_distribution
+
+    model = _ConstantField()  # predictive std = 1 everywhere, fully correlated
+    observation = _observation(side=15)
+    _, coherent = render_field_observation_distribution(
+        model, observation, num_spectral_samples=1, variance_mode="coherent"
+    )
+    _, independent = render_field_observation_distribution(
+        model,
+        observation,
+        num_spectral_samples=1,
+        variance_mode="independent_aleatoric",
+    )
+    # Normalised kernel on a uniform fully-correlated std keeps variance at 1.
+    assert torch.exp(coherent[7, 7]).item() == pytest.approx(1.0, rel=1e-5)
+    # Independent pixels: variance shrinks by sum(K**2) = 0.375 for this kernel.
+    assert torch.exp(independent[7, 7]).item() == pytest.approx(0.375, rel=1e-5)

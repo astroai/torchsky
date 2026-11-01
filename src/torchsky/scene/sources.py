@@ -696,7 +696,18 @@ class SourceCatalogScene(SceneRepresentation):
         profile = torch.exp(
             -bn * ((elliptical_radius / radius).clamp_min(0).pow(1.0 / index_n) - 1.0)
         )
-        return profile / profile.sum().clamp_min(torch.finfo(profile.dtype).tiny)
+        # Normalise analytically over the whole plane so stamps clipped by the
+        # image edge keep only their in-image flux fraction.
+        total_sky = (
+            2.0
+            * torch.pi
+            * axis_ratio
+            * radius.square()
+            * index_n
+            * torch.exp(bn - 2.0 * index_n * torch.log(bn) + torch.lgamma(2.0 * index_n))
+        )
+        pixel_area = torch.linalg.det(sky_from_pixel).abs()
+        return profile * (pixel_area / total_sky)
 
     def render_component(
         self,

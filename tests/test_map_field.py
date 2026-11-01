@@ -733,7 +733,8 @@ def test_distribution_tiling_and_psf_variance_match_full_render() -> None:
     kernel = gaussian_kernel1d(
         1.0, device=torch.device("cpu"), dtype=torch.float32
     )
-    expected_center_variance = 3.0 * torch.square(kernel).sum() ** 2
+    # Default variance_mode is coherent: std propagates linearly through the PSF.
+    expected_center_variance = 3.0 * kernel.sum() ** 2
     torch.testing.assert_close(
         torch.exp(full_logvar[5, 5]), expected_center_variance
     )

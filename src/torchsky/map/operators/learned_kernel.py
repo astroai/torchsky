@@ -811,6 +811,23 @@ def _legendre_basis(x: Tensor, degree: int) -> Tensor:
     return torch.stack(terms[: degree + 1], dim=0)
 
 
+_RHO_LIMIT = 0.99  # keeps 1 - rho**2 >= 0.02 so the quadratic form stays conditioned
+_RHO_LINEAR = 0.9  # identity below this |rho|; tanh saturation above
+
+
+def _soft_limit_correlation(rho: Tensor) -> Tensor:
+    """Identity for ``|rho| <= 0.9``, then a C1 tanh saturation toward ``0.99``.
+
+    Unlike a hard clamp the gradient never becomes exactly zero, so a learned
+    correlation cannot get stuck at the bound.
+    """
+    span = _RHO_LIMIT - _RHO_LINEAR
+    magnitude = rho.abs()
+    excess = (magnitude - _RHO_LINEAR).clamp_min(0.0)
+    saturated = _RHO_LINEAR + span * torch.tanh(excess / span)
+    return torch.where(magnitude > _RHO_LINEAR, torch.sign(rho) * saturated, rho)
+
+
 def gaussian_kernels_from_params(
     params: Tensor, *, size: int | None = None
 ) -> Tensor:
@@ -825,7 +842,7 @@ def gaussian_kernels_from_params(
         raise ValueError("params must have trailing shape (3,)")
     sigma_x = params[..., 0]
     sigma_y = params[..., 1]
-    rho = torch.clamp(params[..., 2], -0.99, 0.99)
+    rho = _soft_limit_correlation(params[..., 2])
     if size is None:
         sigma_max = torch.max(sigma_x, sigma_y)
         radius = max(1, int(torch.ceil(3.0 * sigma_max.max()).item()))

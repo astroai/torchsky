@@ -418,7 +418,9 @@ def conjugate_gradient(
             raise ValueError(f"{name} must be finite and non-negative")
     rhs_t = _validate_tree(rhs, name="rhs")
     solution = tree_zeros_like(rhs_t) if initial_solution is None else tree_clone(initial_solution)
-    _tree_zip_map(lambda left, right: right.to(dtype=left.dtype), rhs_t, solution)
+    solution = _tree_zip_map(
+        lambda left, right: right.to(dtype=left.dtype), rhs_t, solution
+    )
     solution = _project(projection, solution)
     rhs_projected = _project(projection, rhs_t)
     operator_applications = 0
@@ -556,8 +558,14 @@ def conjugate_gradient(
             )
             termination = TerminationReason.NONFINITE
             break
-        residual = tree_sub(rhs_projected, apply_operator(solution))
+        # Standard recurrence: one operator application per iteration. The true
+        # residual is recomputed only to certify apparent convergence, so
+        # recurrence drift can never produce a false CONVERGED.
+        residual = tree_axpy(residual, -alpha, image_direction)
         residual_norm = _scalar(tree_norm(residual))
+        if math.isfinite(residual_norm) and residual_norm <= threshold:
+            residual = tree_sub(rhs_projected, apply_operator(solution))
+            residual_norm = _scalar(tree_norm(residual))
         completed = iteration
         if record_residual_history:
             history.append(residual_norm)
@@ -683,7 +691,16 @@ def lsqr(
     augmented_rhs: StateTree = (
         rhs_t if damping == 0.0 else (rhs_t, tree_zeros_like(solution))
     )
-    augmented_residual = tree_sub(augmented_rhs, augmented_operator(solution))
+    def residual_state(state: StateT) -> tuple[StateTree, StateTree]:
+        """Undamped and augmented residuals from a single operator application."""
+        image = apply_operator(state)
+        _validate_output(rhs_t, image, name="operator")
+        augmented_image: StateTree = (
+            image if damping == 0.0 else (image, tree_scale(state, sqrt_damping))
+        )
+        return tree_sub(rhs_t, image), tree_sub(augmented_rhs, augmented_image)
+
+    actual_residual, augmented_residual = residual_state(solution)
     if not tree_isfinite(augmented_residual):
         breakdown = SolverBreakdown(
             BreakdownReason.NONFINITE_OPERATOR,
@@ -706,7 +723,6 @@ def lsqr(
             normal_residual_norm=math.inf,
         )
         return SolverResult(solution, (), diagnostics)
-    actual_residual = tree_sub(rhs_t, apply_operator(solution))
     residual_norm = _scalar(tree_norm(actual_residual))
     initial_residual_norm = residual_norm
     rhs_norm = _scalar(tree_norm(rhs_t))
@@ -835,12 +851,22 @@ def lsqr(
             )
             termination = TerminationReason.NONFINITE
             break
-        actual_residual = tree_sub(rhs_t, apply_operator(solution))
-        residual_norm = _scalar(tree_norm(actual_residual))
-        augmented_residual = tree_sub(augmented_rhs, augmented_operator(solution))
-        normal_residual = augmented_adjoint(augmented_residual)
-        normal_residual_norm = _scalar(tree_norm(normal_residual))
+        # Paige-Saunders recurrence estimates: ||r_aug|| = phi_bar and
+        # ||A_aug^T r_aug|| = phi_bar * alpha * |cosine|. The true residuals
+        # (one operator + one adjoint application) are computed only to certify
+        # apparent convergence.
+        residual_norm = _scalar(phi_bar)
+        normal_residual_norm = _scalar(phi_bar * alpha * cosine.abs())
         completed = iteration
+        if math.isfinite(residual_norm) and math.isfinite(normal_residual_norm) and (
+            residual_norm <= residual_threshold
+            or normal_residual_norm <= normal_threshold
+        ):
+            actual_residual, augmented_residual = residual_state(solution)
+            residual_norm = _scalar(tree_norm(actual_residual))
+            normal_residual_norm = _scalar(
+                tree_norm(augmented_adjoint(augmented_residual))
+            )
         if record_residual_history:
             history.append(residual_norm)
         if not math.isfinite(residual_norm) or not math.isfinite(normal_residual_norm):

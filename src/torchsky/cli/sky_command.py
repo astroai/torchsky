@@ -69,6 +69,11 @@ def _run_match(args: argparse.Namespace) -> int:
     corrector = CrossExposureSkyCorrector(estimator=est)
 
     if args.output:
+        if len(images) > 1 and "{i}" not in str(args.output):
+            raise SystemExit(
+                "--output must contain '{i}' (replaced by the input index) when "
+                "matching more than one image"
+            )
         corrected = corrector.correct(images, masks)
         for i, (corr, hdr) in enumerate(zip(corrected, hdrs)):
             write(str(args.output).replace("{i}", str(i)), corr, header=hdr, overwrite=True)

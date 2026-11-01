@@ -290,3 +290,226 @@ def test_lanczos_sinc_gradients_are_finite_at_integer_positions():
     out = custom_separable_sample(img, x_src=xs, y_src=ys, kernel="lanczos3")
     (gx,) = torch.autograd.grad(out.sum(), xs)
     assert torch.isfinite(gx).all()
+
+
+def test_field_fit_diagnostics_propagates_render_errors():
+    import torch.nn as nn
+
+    from torchsky.map.field.training import compute_field_fit_diagnostics
+
+    class Broken(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.p = nn.Parameter(torch.zeros(1))
+
+        def forward(self, *args, **kwargs):
+            raise RuntimeError("model is broken")
+
+    class Obs:
+        image = torch.zeros(4, 4)
+        weight = None
+        mask = None
+        psf_spec = None
+
+    with pytest.raises(Exception):
+        compute_field_fit_diagnostics(
+            Broken(),
+            [Obs()],
+            [None],
+            [None],
+            [None],
+            num_spectral_samples=1,
+            fit_duration_sec=1.0,
+            steps=1,
+            total_pixels=16,
+            max_mem=0,
+        )
+
+
+def test_gaussian_nll_learns_variance_below_old_clamp():
+    from torchsky.map.field.losses import _field_residual_loss, soft_bound_logvar
+
+    torch.manual_seed(0)
+    residual = 1.0e-3 * torch.randn(4000, dtype=torch.float64)
+    raw = torch.tensor(-9.0, dtype=torch.float64, requires_grad=True)
+    opt = torch.optim.Adam([raw], lr=0.05)
+    for _ in range(400):
+        opt.zero_grad()
+        loss = _field_residual_loss(
+            residual,
+            loss_kind="gaussian_nll",
+            charbonnier_eps=1e-3,
+            huber_delta=1.0,
+            logvar=raw.expand_as(residual),
+        ).mean()
+        loss.backward()
+        assert raw.grad is not None and raw.grad.abs() > 0
+        opt.step()
+    learned = torch.exp(soft_bound_logvar(raw.detach())).item()
+    assert learned == pytest.approx(residual.square().mean().item(), rel=0.05)
+
+
+def test_linear_band_grid_cg_exposes_documented_thresholds():
+    import inspect
+
+    from torchsky.map.field.inverse import (
+        solve_joint_multiband_grid_cg,
+        solve_linear_band_grid_cg,
+    )
+
+    for fn in (solve_linear_band_grid_cg, solve_joint_multiband_grid_cg):
+        params = inspect.signature(fn).parameters
+        assert params["well_covered_fraction"].default == 0.5
+        assert params["source_dead_zone_sigma"].default == 2.0
+    with pytest.raises(ValueError, match="source_dead_zone_sigma"):
+        solve_linear_band_grid_cg(None, None, source_dead_zone_sigma=-1.0)  # type: ignore[arg-type]
+
+
+def test_learned_psf_variance_matches_explicit_matrix_for_asymmetric_kernels(
+    monkeypatch,
+):
+    import torchsky.map.operators.psf as psf
+
+    torch.manual_seed(0)
+    h, w = 10, 12
+    kernels = torch.rand(4, 5, 5, dtype=torch.float64)
+    kernels = kernels / kernels.sum(dim=(-1, -2), keepdim=True)
+    monkeypatch.setattr(
+        psf,
+        "_cell_kernels_from_spec",
+        lambda spec, device, dtype: kernels.to(device=device, dtype=dtype),
+    )
+    spec = types.SimpleNamespace(mode="learned_lowrank", frozen=True)
+    matrix = torch.stack(
+        [
+            psf.apply_learned_psf_spec(e.reshape(h, w), spec).reshape(-1)
+            for e in torch.eye(h * w, dtype=torch.float64)
+        ],
+        dim=1,
+    )
+    variance = torch.rand(h, w, dtype=torch.float64)
+    exact = (matrix.square() @ variance.reshape(-1)).reshape(h, w)
+    torch.testing.assert_close(
+        psf.apply_learned_psf_variance_spec(variance, spec), exact
+    )
+
+
+@pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0])
+def test_one_over_f_psd_gradients_are_finite_at_zero_knee(exponent):
+    from torchsky.map.operators.noise import one_over_f_row_psd
+
+    e = torch.tensor(exponent, dtype=torch.float64, requires_grad=True)
+    k = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
+    one_over_f_row_psd(16, knee_frequency=k, exponent=e).sum().backward()
+    assert torch.isfinite(e.grad) and torch.isfinite(k.grad)
+
+
+def test_one_over_f_row_noise_default_knee_is_learnable():
+    from torchsky.map.operators.noise import OneOverFRowNoise
+
+    model = OneOverFRowNoise((1,))
+    assert model.knee_frequency.item() > 1.0e-3
+    torch.manual_seed(0)
+    rows = torch.cumsum(torch.randn(64, 256, dtype=torch.float32), dim=-1)
+    spec = torch.fft.rfft(rows, dim=-1, norm="ortho")
+    psd = model.psd(256)
+    nll = (spec.abs().square() / psd + psd.log()).sum()
+    nll.backward()
+    grad = model.raw_knee_frequency.grad
+    assert grad is not None and torch.isfinite(grad).all()
+    assert grad.abs().max() > 1.0e-3
+
+
+def test_gaussian_kernel_rho_has_gradient_beyond_old_clamp():
+    from torchsky.map.operators.learned_kernel import gaussian_kernels_from_params
+
+    base = torch.tensor([1.5, 1.5, 0.995], dtype=torch.float64, requires_grad=True)
+    kernels = gaussian_kernels_from_params(base, size=9)
+    (kernels * torch.randn_like(kernels)).sum().backward()
+    assert base.grad is not None and base.grad[2].abs() > 0
+    inside = torch.tensor([1.5, 1.5, 0.3], dtype=torch.float64)
+    # identity region is unchanged
+    k_in = gaussian_kernels_from_params(inside, size=9)
+    assert torch.isfinite(k_in).all()
+
+
+def test_coadd_healpix_converts_galactic_wcs_to_icrs_pixels():
+    from torchsky.map import Observation, coadd_healpix
+    from torchsky.sphere import healpix as hp
+    from torchsky.wcs import WCS
+    from torchsky.wcs.frames import galactic_to_icrs
+
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 16,
+        "NAXIS2": 16,
+        "CTYPE1": "GLON-TAN",
+        "CTYPE2": "GLAT-TAN",
+        "CRPIX1": 8.5,
+        "CRPIX2": 8.5,
+        "CRVAL1": 120.0,
+        "CRVAL2": 30.0,
+        "CDELT1": -0.2,
+        "CDELT2": 0.2,
+    }
+    obs = Observation(
+        data=torch.ones(16, 16),
+        header=header,
+        wcs=WCS(header),
+        weight_map=torch.ones(16, 16),
+    )
+    result = coadd_healpix([obs], nside=64, nest=True)
+    covered = torch.nonzero(result.overlap_count > 0).reshape(-1) if hasattr(
+        result, "overlap_count"
+    ) else None
+    if covered is None:
+        covered = torch.nonzero(result.weights > 0).reshape(-1)
+    assert covered.numel() > 0
+    ra, dec = hp.pix2ang(64, covered, nest=True, lonlat=True)
+    ra0, dec0 = galactic_to_icrs(torch.tensor(120.0), torch.tensor(30.0))
+    d_ra = (ra - ra0.item() + 180.0) % 360.0 - 180.0
+    assert d_ra.abs().max() < 3.0 / max(math.cos(math.radians(dec0.item())), 0.1)
+    assert (dec - dec0.item()).abs().max() < 3.0
+
+
+def test_ifu_angular_distance_gradient_finite_for_coincident_points():
+    from torchsky.map.ifu import _angular_distance_arcsec
+
+    ra = torch.tensor([10.0, 10.0], dtype=torch.float64, requires_grad=True)
+    dec = torch.tensor([5.0, 5.001], dtype=torch.float64, requires_grad=True)
+    ref_ra = torch.tensor(10.0, dtype=torch.float64)
+    ref_dec = torch.tensor(5.0, dtype=torch.float64)
+    dist = _angular_distance_arcsec(ra, dec, ref_ra, ref_dec)
+    dist.sum().backward()
+    assert torch.isfinite(ra.grad).all() and torch.isfinite(dec.grad).all()
+    assert dist[1].item() == pytest.approx(3.6, rel=1e-6)
+
+
+def test_ifu_cube_requires_explicit_spectral_axis():
+    from torchsky.map.cube import _coadd_ifu_3d_cube
+
+    with pytest.raises(ValueError, match="spectral_axis"):
+        _coadd_ifu_3d_cube(
+            [],
+            _hdr(4, 2.5, 0.001),
+            spectral_axis=None,
+            spectral_bin_edges=None,
+            spectral_unit="Angstrom",
+            spectral_type="wavelength",
+            spectral_kernel="linear",
+            pixfrac=1.0,
+            spectral_pixfrac=1.0,
+            emsm_scale=1.0,
+            device=None,
+        )
+
+
+def test_soft_bounds_have_unit_gradient_at_zero_and_nonzero_far_out():
+    from torchsky.map.field.losses import soft_bound_logvar
+
+    x = torch.tensor([0.0, 3.0, 15.0, -40.0], dtype=torch.float64, requires_grad=True)
+    y = soft_bound_logvar(x)
+    y.sum().backward()
+    assert x.grad[0] == 1.0 and x.grad[1] == 1.0
+    assert (x.grad[2:] > 0).all()
+    assert y.abs().max() < 20.0

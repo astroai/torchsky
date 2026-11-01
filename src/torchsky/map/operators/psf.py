@@ -419,9 +419,9 @@ def apply_learned_psf_variance_spec(variance: Tensor, psf_spec: object) -> Tenso
                     c1[4][ry0 - c1[0] : ry1 - c1[0], rx0 - c1[2] : rx1 - c1[2]]
                     * c2[4][ry0 - c2[0] : ry1 - c2[0], rx0 - c2[2] : rx1 - c2[2]]
                 )
-                corr = F.conv2d(padded, kk.flip(-1, -2).view(1, 1, *kk.shape)).squeeze(
-                    1
-                )[:, ry0:ry1, rx0:rx1]
+                corr = F.conv2d(padded, kk.view(1, 1, *kk.shape)).squeeze(1)[
+                    :, ry0:ry1, rx0:rx1
+                ]
                 out[:, ry0:ry1, rx0:rx1] += corr * coef[:, ry0:ry1, rx0:rx1]
         denom = S.square().clamp_min(torch.finfo(out.dtype).tiny)
         return (out / denom).reshape(variance.shape)

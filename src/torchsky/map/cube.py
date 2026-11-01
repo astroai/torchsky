@@ -113,25 +113,9 @@ def _coadd_ifu_3d_cube(
         header_dict = normalized_header_for_shape(dict(raw_hdr), (H, W), overrides=None)
 
     if spectral_axis is None:
-        # Infer from observations' wavelength_map or IFUSliceWCS
-        all_lams: list[Tensor] = []
-        for obs in observations:
-            if obs.wavelength_map is not None:
-                wmap = torch.as_tensor(obs.wavelength_map, dtype=torch.float64)
-                all_lams.append(wmap[torch.isfinite(wmap)])
-            elif obs.wavelength is not None:
-                all_lams.append(
-                    torch.tensor([float(obs.wavelength)], dtype=torch.float64)
-                )
-        if not all_lams:
-            raise ValueError("spectral_axis must be provided for 3D IFU cube building")
-        cat_lam = torch.cat(all_lams)
-        lmin = float(cat_lam.min().item())
-        lmax = float(cat_lam.max().item())
-        spectral_axis = SpectralAxis(
-            values=torch.linspace(lmin, lmax, 16, dtype=torch.float64),
-            unit=spectral_unit,
-            type=spectral_type,
+        raise ValueError(
+            "spectral_axis (or spectral_bin_edges / a CubeTarget carrying one) must "
+            "be provided for 3D IFU cube building; no default spectral sampling is assumed"
         )
     s_axis = _validated_spectral_axis(
         spectral_axis, default_unit=spectral_unit, default_type=spectral_type

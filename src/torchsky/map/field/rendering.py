@@ -484,6 +484,20 @@ def _apply_observation_background(
     return output
 
 
+def _propagate_psf_variance(
+    variance: Tensor, psf_spec: Any, variance_mode: VarianceIntegrationMode
+) -> Tensor:
+    """Carry predictive variance through the PSF consistently with ``variance_mode``.
+
+    Coherent (fully correlated) errors add in standard deviation, so the PSF acts
+    linearly on the std map; independent errors add in variance through K**2.
+    """
+    if variance_mode == "coherent":
+        std = torch.sqrt(torch.clamp_min(variance, torch.finfo(variance.dtype).tiny))
+        return torch.square(apply_psf_spec(std, psf_spec))
+    return apply_psf_variance_spec(variance, psf_spec)
+
+
 def _render_spatially_integrated_distribution(
     model: nn.Module,
     observation: FieldObservation,
@@ -592,7 +606,9 @@ def _render_spatially_integrated_distribution(
     )
     if operator_bundle.psf is not None:
         output_mean = apply_psf_spec(output_mean, observation.psf_spec)
-        output_var = apply_psf_variance_spec(output_var, observation.psf_spec)
+        output_var = _propagate_psf_variance(
+            output_var, observation.psf_spec, variance_mode
+        )
     if operator_bundle.background is not None:
         output_mean = apply_background_components(
             output_mean,
@@ -753,7 +769,9 @@ def render_field_observation_distribution(
     )
     if operator_bundle.psf is not None:
         mean = apply_psf_spec(mean, observation.psf_spec)
-        variance = apply_psf_variance_spec(torch.exp(logvar), observation.psf_spec)
+        variance = _propagate_psf_variance(
+            torch.exp(logvar), observation.psf_spec, variance_mode
+        )
         logvar = torch.log(torch.clamp(variance, min=1.0e-8))
     if operator_bundle.background is not None:
         mean = apply_background_components(

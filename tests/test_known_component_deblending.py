@@ -493,3 +493,23 @@ def test_chunked_and_unchunked_factorization_match() -> None:
     torch.testing.assert_close(chunked.spectra, unchunked.spectra)
     torch.testing.assert_close(chunked.morphologies[0], unchunked.morphologies[0])
     torch.testing.assert_close(chunked.predictions[0], unchunked.predictions[0])
+
+
+def test_sersic_edge_clipped_source_loses_off_image_flux() -> None:
+    header = _header(size=41)
+    blank = _blank(header, sigma=0.01)
+    coefficients = torch.tensor([[1.0]], dtype=torch.float64)
+    parameters = torch.tensor([[2.0, 1.0, 0.0, 1.0]], dtype=torch.float64)
+    totals = []
+    for x_pixel in (20.0, 0.0):
+        lon, lat = _positions(header, [(x_pixel, 20.0)])
+        scene = SourceCatalogScene(
+            lon,
+            lat,
+            morphology="sersic",
+            sersic_parameters=parameters,
+            coefficients=coefficients,
+        )
+        totals.append(float(scene.render_observation(blank).sum()))
+    assert totals[0] == pytest.approx(1.0, abs=0.05)
+    assert totals[1] < 0.75 * totals[0]

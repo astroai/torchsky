@@ -439,7 +439,16 @@ def one_over_f_row_psd(
     minimum_tensor = frequencies.new_tensor(minimum)
     safe_frequency = torch.where(frequencies > 0.0, frequencies, minimum_tensor)
     ratio = knee[..., None] / safe_frequency
-    return white[..., None] * (1.0 + ratio.pow(power[..., None]))
+    # ``0 ** p`` has an infinite (p < 1) or zero (p >= 1) knee gradient and a NaN
+    # exponent gradient at knee == 0; the knee == 0 branch is exactly white, so
+    # evaluate the power only where knee > 0 to keep every gradient finite.
+    has_knee = ratio > 0.0
+    knee_term = torch.where(
+        has_knee,
+        torch.where(has_knee, ratio, torch.ones_like(ratio)).pow(power[..., None]),
+        torch.zeros_like(ratio),
+    )
+    return white[..., None] * (1.0 + knee_term)
 
 
 one_over_f_psd = one_over_f_row_psd
@@ -522,14 +531,22 @@ whiten_rows_fft = fft_whiten_rows
 
 
 class OneOverFRowNoise(nn.Module):
-    """Positive learnable one-over-frequency PSDs for amp/exposure groups."""
+    """Positive learnable one-over-frequency PSDs for amp/exposure groups.
+
+    The knee is learned in log space (``knee = min_knee_frequency + exp(raw)``)
+    so its gradient scales with the knee instead of vanishing at small values.
+    ``knee_frequency=None`` starts at ``0.01 / sample_spacing`` (one hundredth of
+    the sampling rate, 50x below Nyquist): a nearly white initial PSD that still
+    has a usable knee gradient. An explicit ``0`` is accepted but sits at the
+    ``min_knee_frequency`` floor and is effectively unlearnable.
+    """
 
     def __init__(
         self,
         parameter_shape: int | tuple[int, ...] = (4,),
         *,
         white_psd: Tensor | float = 1.0,
-        knee_frequency: Tensor | float = 0.0,
+        knee_frequency: Tensor | float | None = None,
         exponent: Tensor | float = 1.0,
         sample_spacing: float = 1.0,
         min_white_psd: float = 1.0e-8,
@@ -556,6 +573,8 @@ class OneOverFRowNoise(nn.Module):
         self.min_white_psd = float(min_white_psd)
         self.min_knee_frequency = float(min_knee_frequency)
         self.min_exponent = float(min_exponent)
+        if knee_frequency is None:
+            knee_frequency = 0.01 / float(sample_spacing)
         reference = _reference_tensor(white_psd, knee_frequency, exponent)
         if reference is None:
             reference = torch.tensor(0.0, dtype=torch.get_default_dtype())
@@ -568,6 +587,7 @@ class OneOverFRowNoise(nn.Module):
             name: str,
             minimum: float,
             allow_zero: bool = False,
+            log_space: bool = False,
         ) -> nn.Parameter:
             tensor = _coerce(value, reference)
             if tensor.numel() == 1:
@@ -585,6 +605,8 @@ class OneOverFRowNoise(nn.Module):
             shifted = (tensor - tensor.new_tensor(minimum)).clamp_min(
                 torch.finfo(tensor.dtype).tiny
             )
+            if log_space:
+                return nn.Parameter(torch.log(shifted))
             return nn.Parameter(_inverse_softplus(shifted))
 
         self.raw_white_psd = init(
@@ -595,6 +617,7 @@ class OneOverFRowNoise(nn.Module):
             name="knee_frequency",
             minimum=self.min_knee_frequency,
             allow_zero=True,
+            log_space=True,
         )
         self.raw_exponent = init(exponent, name="exponent", minimum=self.min_exponent)
 
@@ -604,7 +627,9 @@ class OneOverFRowNoise(nn.Module):
 
     @property
     def knee_frequency(self) -> Tensor:
-        return _positive_parameter(self.raw_knee_frequency, self.min_knee_frequency)
+        return self.raw_knee_frequency.exp() + self.raw_knee_frequency.new_tensor(
+            self.min_knee_frequency
+        )
 
     @property
     def exponent(self) -> Tensor:

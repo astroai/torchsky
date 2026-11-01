@@ -128,6 +128,43 @@ class _SortedContributionAccumulator:
         self.pixels = merged_pixels
 
 
+
+class _IcrsWorldView:
+    """Present a non-ICRS celestial WCS through ICRS world coordinates.
+
+    HEALPix pixelization and ``pix2ang`` are expressed in ICRS lon/lat, while a
+    WCS with GLON/GLAT (or ELON/ELAT, FK4) axes works in its own native frame.
+    """
+
+    def __init__(self, wcs: WCS) -> None:
+        self._wcs = wcs
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wcs, name)
+
+    def pixel_to_world(self, x: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
+        lon, lat = self._wcs.pixel_to_world(x, y)
+        return self._wcs.convert_celestial(lon, lat, "ICRS")
+
+    def world_to_pixel(self, ra: Tensor, dec: Tensor) -> tuple[Tensor, Tensor]:
+        from ..wcs.frames import convert_celestial
+
+        lon, lat = convert_celestial(
+            ra,
+            dec,
+            from_frame="ICRS",
+            to_frame=self._wcs.celestial_frame,
+            to_equinox=self._wcs.celestial_equinox,
+        )
+        return self._wcs.world_to_pixel(lon, lat)
+
+
+def _icrs_view(wcs: WCS) -> Any:
+    if wcs.celestial_frame in ("ICRS", "FK5"):
+        return wcs
+    return _IcrsWorldView(wcs)
+
+
 def coadd_healpix(
     observations: Sequence[Observation],
     nside: int,
@@ -223,6 +260,7 @@ def coadd_healpix(
             if isinstance(obs.wcs, WCS)
             else WCS(obs.wcs if isinstance(obs.wcs, dict) else hdr_obs)
         ).to(map_device)
+        obs_wcs = _icrs_view(obs_wcs)
         H_s, W_s = int(cal_img.shape[-2]), int(cal_img.shape[-1])
         obs_moc = MOC.from_wcs(obs_wcs, shape=(H_s, W_s), max_order=order)
         union_moc = union_moc.union(obs_moc)
@@ -262,10 +300,10 @@ def coadd_healpix(
             in_b = (
                 torch.isfinite(x_2d[0])
                 & torch.isfinite(y_2d[0])
-                & (x_2d[0] >= 0.0)
-                & (x_2d[0] <= (W_s - 1))
-                & (y_2d[0] >= 0.0)
-                & (y_2d[0] <= (H_s - 1))
+                & (x_2d[0] >= -0.5)
+                & (x_2d[0] <= (W_s - 0.5))
+                & (y_2d[0] >= -0.5)
+                & (y_2d[0] <= (H_s - 0.5))
             )
             hit = in_b & (s_sup > 0.0) & (s_den > 0.0) & torch.isfinite(s_num)
             if bool(hit.any()):

@@ -122,6 +122,18 @@ def test_sky_match_rejects_mismatched_masks(tmp_path: Path) -> None:
         args.handler(args)
 
 
+def test_sky_match_output_without_index_placeholder_is_rejected(tmp_path: Path) -> None:
+    sources = [tmp_path / f"input-{index}.fits" for index in range(2)]
+    for path in sources:
+        _write_image(path)
+    args = build_parser().parse_args(
+        ["sky", "match", *(str(p) for p in sources), "--output", str(tmp_path / "out.fits")]
+    )
+    with pytest.raises(SystemExit, match=r"\{i\}"):
+        args.handler(args)
+    assert not (tmp_path / "out.fits").exists()
+
+
 def test_polynomial_sky_rejects_mesh_only_median(tmp_path: Path) -> None:
     source = tmp_path / "input.fits"
     output = tmp_path / "sky.fits"

@@ -106,3 +106,15 @@ def test_visualizers_raise_importerror_when_matplotlib_missing(
 
     with pytest.raises(ImportError, match="Matplotlib is required"):
         viz.plot_pixel_spectrum(cube, axis, 2, 3)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="MPS not available"
+)
+def test_display_limits_accept_mps_tensors() -> None:
+    from torchsky.viz.plots import _limits
+
+    image = torch.linspace(0.0, 1.0, 64 * 64).reshape(64, 64)
+    assert _limits([image.to("mps")], (1.0, 99.0)) == pytest.approx(
+        _limits([image], (1.0, 99.0))
+    )

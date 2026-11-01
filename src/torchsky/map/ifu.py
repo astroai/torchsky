@@ -125,7 +125,11 @@ def _angular_distance_arcsec(
         torch.sin(delta_dec / 2).square()
         + torch.cos(dec) * torch.cos(reference_dec) * torch.sin(delta_ra / 2).square()
     )
-    angle = 2.0 * torch.asin(torch.sqrt(haversine.clamp(0.0, 1.0)))
+    # atan2 form: finite gradients at coincident points (asin(sqrt(.)) is not).
+    haversine = haversine.clamp(0.0, 1.0)
+    angle = 2.0 * torch.atan2(
+        torch.sqrt(haversine), torch.sqrt((1.0 - haversine).clamp_min(0.0))
+    )
     return angle * (180.0 / math.pi) * 3600.0
 
 
