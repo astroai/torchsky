@@ -43,10 +43,15 @@ from .operators.config import (
 )
 from .operators.execution import (
     PreparedImageObservationData,
+    SpatialTilePlan,
+    TileAccumulators,
     accumulate_projected_observation,
+    accumulator_bytes_per_pixel,
     finalize_projected_stack,
     masked_median_stack,
+    plan_spatial_tiles,
     prepare_image_observation_data,
+    resolve_tile_memory_budget_bytes,
     require_exact_median_scratch_capacity,
     require_sigma_clipped_scratch_capacity,
     spilled_exact_median_stack,
@@ -113,8 +118,8 @@ from .image_plane_projection import (
     _project_observation_to_target,
     _project_observation_to_target_chunk,
 )
+from .io_utils import _observation_header_for_area_scaling
 from .planning import (
-    _obs_target_pixel_bbox,
     plan,
     plan_image_plane_cube_target,
 )
@@ -311,6 +316,156 @@ def _observations_have_quality(observations: Sequence[ImageObservation]) -> bool
     return False
 
 
+# Margin (target pixels) beyond the sampled observation outline inside which a
+# tile is still processed.  Identical to the margin of the bounding-box test.
+_FOOTPRINT_MARGIN_PIXELS = 8.0
+# A tile is skipped only when it lies outside the convex hull of the sampled
+# outline by more than this margin plus one pixel of slack.
+
+
+class _ObservationFootprint:
+    """Outline of an observation in target pixel coordinates.
+
+    ``bbox`` is the bounding box of the outline sampled by ``_obs_target_pixel_bbox``
+    (margin included).  ``hull`` is the convex hull of the same sample points.  A
+    tile is skipped when it lies outside the bounding box, or outside the hull
+    grown by the same margin: in both cases the sampler assigns zero weight to
+    every pixel of the tile, so skipping it leaves the accumulators unchanged.
+    The hull test removes the empty corners of the bounding box of a rotated
+    exposure.
+    """
+
+    __slots__ = ("bbox", "hull", "margin")
+
+    def __init__(
+        self,
+        bbox: tuple[float, float, float, float],
+        hull: list[tuple[float, float]],
+        margin: float,
+    ) -> None:
+        self.bbox = bbox
+        self.hull = hull
+        self.margin = margin
+
+    def intersects(self, y0: int, y1: int, x0: int, x1: int) -> bool:
+        ymin, ymax, xmin, xmax = self.bbox
+        if y1 <= ymin or y0 >= ymax or x1 <= xmin or x0 >= xmax:
+            return False
+        hull = self.hull
+        if len(hull) < 3:
+            return True
+        # Tile pixel centres span [x0, x1 - 1] x [y0, y1 - 1]; grow by margin + 1.
+        grow = self.margin + 1.0
+        rx0, rx1 = x0 - grow, x1 - 1 + grow
+        ry0, ry1 = y0 - grow, y1 - 1 + grow
+        # Separating-axis test between the rectangle and the convex hull.  The
+        # rectangle axes are covered by the hull's own extent (bbox above is the
+        # sampled extent, the hull has the same extent), so test the hull edges.
+        corners = ((rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1))
+        n = len(hull)
+        for i in range(n):
+            ax, ay = hull[i]
+            bx, by = hull[(i + 1) % n]
+            nx, ny = by - ay, ax - bx  # outward normal for a counter-clockwise hull
+            edge = nx * ax + ny * ay
+            if all(nx * cx + ny * cy > edge for cx, cy in corners):
+                return False
+        return True
+
+
+def _convex_hull(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Counter-clockwise convex hull (Andrew's monotone chain)."""
+    pts = sorted(set(points))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list[tuple[float, float]] = []
+    for pt in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], pt) <= 0.0:
+            lower.pop()
+        lower.append(pt)
+    upper: list[tuple[float, float]] = []
+    for pt in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], pt) <= 0.0:
+            upper.pop()
+        upper.append(pt)
+    return lower[:-1] + upper[:-1]
+
+
+def _obs_target_footprint(
+    source_wcs: WCS,
+    source_shape: tuple[int, int],
+    full_target_wcs: WCS,
+    *,
+    margin: float = _FOOTPRINT_MARGIN_PIXELS,
+) -> _ObservationFootprint | None:
+    """Footprint of a source image on the full target grid, or None if unbounded."""
+    hs, ws = int(source_shape[0]), int(source_shape[1])
+    if hs <= 0 or ws <= 0:
+        return _ObservationFootprint((0.0, -1.0, 0.0, -1.0), [], margin)
+    try:
+        t = torch.linspace(
+            0.0, 1.0, 9, dtype=source_wcs.crval.dtype, device=source_wcs.device
+        )
+        x0, x1 = -0.5, float(ws) - 0.5
+        y0, y1 = -0.5, float(hs) - 0.5
+        xs = torch.cat(
+            [
+                x0 + t * (x1 - x0),
+                torch.full_like(t, x1),
+                x1 - t * (x1 - x0),
+                torch.full_like(t, x0),
+            ]
+        )
+        ys = torch.cat(
+            [
+                torch.full_like(t, y0),
+                y0 + t * (y1 - y0),
+                torch.full_like(t, y1),
+                y1 - t * (y1 - y0),
+            ]
+        )
+        ra, dec = source_wcs.pixel_to_world(xs, ys)
+        ra, dec = _convert_world_between_wcs(ra, dec, source_wcs, full_target_wcs)
+        tx, ty = full_target_wcs.world_to_pixel(ra, dec)
+        if not bool((torch.isfinite(tx) & torch.isfinite(ty)).all()):
+            return None
+        txl = [float(v) for v in tx.tolist()]
+        tyl = [float(v) for v in ty.tolist()]
+    except Exception:  # noqa: BLE001 - same fallback as _obs_target_pixel_bbox
+        return None
+    bbox = (min(tyl) - margin, max(tyl) + margin, min(txl) - margin, max(txl) + margin)
+    return _ObservationFootprint(bbox, _convex_hull(list(zip(txl, tyl))), margin)
+
+
+def _observation_footprint_from_header(
+    observation: ImageObservation,
+    cached_header: dict | None,
+    full_target_wcs: WCS,
+) -> _ObservationFootprint | None:
+    """Footprint from the observation header alone (no pixel read)."""
+    try:
+        header = _observation_header_for_area_scaling(
+            observation, cached_header=cached_header
+        )
+        shape = (int(header.get("NAXIS2", 0)), int(header.get("NAXIS1", 0)))
+        if shape[0] <= 0 or shape[1] <= 0:
+            return None
+        return _obs_target_footprint(WCS(header), shape, full_target_wcs)
+    except Exception:  # noqa: BLE001 - an unreadable header disables the skip test
+        return None
+
+
+# Test hook: True/False force host-resident (staged) accumulators on any device.
+_FORCE_HOST_ACCUMULATORS: bool | None = None
+# Full-size accumulators move to the host when they exceed this fraction of the
+# memory budget (accelerator compute devices only).
+_HOST_ACCUMULATOR_BUDGET_FRACTION = 0.25
+
+
 def _coadd_image_plane_spatial_tiles(
     observations: Sequence[ImageObservation],
     *,
@@ -332,8 +487,20 @@ def _coadd_image_plane_spatial_tiles(
     scratch_dir: str | Path | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
+    propagate_variance: bool = True,
+    host_accumulators: bool | None = None,
+    tile_memory_budget_bytes: int | None = None,
 ) -> MapResult:
-    """Accumulate a large map with tile-bounded projection intermediates."""
+    """Accumulate a large map with tile-bounded projection intermediates.
+
+    Observation-major: each observation is loaded and calibrated once, then
+    projected onto only the tiles its footprint overlaps.  The full-size
+    accumulators live on the host when *host_accumulators* is true (default: on an
+    accelerator when they would take more than a quarter of the memory budget);
+    only the window each projection touches is copied to the compute device and
+    back.  Finalization runs per tile, so no full-size array is ever created on
+    the compute device.
+    """
     if not observations:
         raise ValueError("At least one observation is required")
     H, W = int(target_shape[0]), int(target_shape[1])
@@ -341,6 +508,25 @@ def _coadd_image_plane_spatial_tiles(
     tw = max(int(tile_width), 1)
     device = map_device
     full_target_wcs = WCS(header_dict)
+    if _FORCE_HOST_ACCUMULATORS is not None:
+        host_accumulators = _FORCE_HOST_ACCUMULATORS
+    elif host_accumulators is None:
+        host_accumulators = bool(
+            device.type != "cpu"
+            and H
+            * W
+            * accumulator_bytes_per_pixel(
+                len(observations),
+                value_semantics=value_semantics,
+                propagate_variance=propagate_variance,
+                include_context=False,
+            )
+            > _HOST_ACCUMULATOR_BUDGET_FRACTION
+            * resolve_tile_memory_budget_bytes(
+                device, budget_bytes=tile_memory_budget_bytes
+            )
+        )
+    storage_device = torch.device("cpu") if host_accumulators else device
     # The context bitmask is bookkeeping with one int64 plane per 32 inputs; at survey
     # tile sizes it dominates accelerator memory (280 inputs on 10k x 10k = 7.2 GB),
     # so tiled accumulation keeps it host-resident and fills it tile by tile.
@@ -404,7 +590,7 @@ def _coadd_image_plane_spatial_tiles(
                     background_estimator=background_estimator,
                 )
                 source_wcs = WCS(header_dict_obs)
-                obs_bbox = _obs_target_pixel_bbox(
+                footprint = _obs_target_footprint(
                     source_wcs,
                     (int(image.shape[0]), int(image.shape[1])),
                     full_target_wcs,
@@ -412,11 +598,8 @@ def _coadd_image_plane_spatial_tiles(
                 for y0 in range(0, H, th):
                     for x0 in range(0, W, tw):
                         y1, x1 = min(y0 + th, H), min(x0 + tw, W)
-                        if obs_bbox is not None and (
-                            y1 <= obs_bbox[0]
-                            or y0 >= obs_bbox[1]
-                            or x1 <= obs_bbox[2]
-                            or x0 >= obs_bbox[3]
+                        if footprint is not None and not footprint.intersects(
+                            y0, y1, x0, x1
                         ):
                             continue
                         tile_shape = (y1 - y0, x1 - x0)
@@ -459,6 +642,7 @@ def _coadd_image_plane_spatial_tiles(
                             value_semantics=value_semantics,
                             drizzle_pixfrac=drizzle_pixfrac,
                             background_estimator=None,
+                            propagate_variance=propagate_variance,
                         )
                         if projected.target_window is None:
                             global_window = (y0, y1, x0, x1)
@@ -552,14 +736,29 @@ def _coadd_image_plane_spatial_tiles(
                 (min(th, H), min(tw, W)),
                 scratch_dir=scratch_dir,
             )
-        full_data = torch.zeros((H, W), dtype=torch.float32, device=device)
-        full_weight = torch.zeros((H, W), dtype=torch.float32, device=device)
+        full_data = torch.zeros((H, W), dtype=torch.float32, device=storage_device)
+        full_weight = torch.zeros((H, W), dtype=torch.float32, device=storage_device)
         full_inverse_variance: Tensor | None = None
         full_correlation_factor: Tensor | None = None
-        full_overlap = torch.zeros((H, W), dtype=torch.int32, device=device)
+        full_overlap = torch.zeros((H, W), dtype=torch.int32, device=storage_device)
+        # Outlines from the headers alone, so a tile only stacks the exposures that
+        # can reach it instead of reprojecting (and re-reading) every exposure per tile.
+        footprints = [
+            _observation_footprint_from_header(
+                obs, dict(first_header) if obs_idx == 0 else None, full_target_wcs
+            )
+            for obs_idx, obs in enumerate(observations)
+        ]
         for y0 in range(0, H, th):
             for x0 in range(0, W, tw):
                 y1, x1 = min(y0 + th, H), min(x0 + tw, W)
+                subset = [
+                    obs_idx
+                    for obs_idx, fp in enumerate(footprints)
+                    if fp is None or fp.intersects(y0, y1, x0, x1)
+                ]
+                if not subset:
+                    continue
                 sub_header, _ = _subtarget_header_for_window(
                     header_dict,
                     full_shape=(H, W),
@@ -569,7 +768,7 @@ def _coadd_image_plane_spatial_tiles(
                     x1=x1,
                 )
                 sub = coadd_image_plane(
-                    observations,
+                    [observations[obs_idx] for obs_idx in subset],
                     target_header=sub_header,
                     output_path=None,
                     footprint_order=None,
@@ -587,31 +786,48 @@ def _coadd_image_plane_spatial_tiles(
                     scratch_dir=scratch_dir,
                     background_estimator=background_estimator,
                     cross_exposure_sky_corrector=None,
+                    propagate_variance=propagate_variance,
+                    _inner_tile=True,
                 )
-                full_data[y0:y1, x0:x1] = sub.data.to(device=device)
-                full_weight[y0:y1, x0:x1] = sub.weight.to(device=device)
+                full_data[y0:y1, x0:x1] = sub.data.to(device=storage_device)
+                full_weight[y0:y1, x0:x1] = sub.weight.to(device=storage_device)
                 if sub.inverse_variance is not None:
                     if full_inverse_variance is None:
                         full_inverse_variance = torch.zeros_like(full_weight)
                     full_inverse_variance[y0:y1, x0:x1] = sub.inverse_variance.to(
-                        device=device
+                        device=storage_device
                     )
                 if sub.correlation_factor is not None:
                     if full_correlation_factor is None:
                         full_correlation_factor = torch.zeros_like(full_weight)
                     full_correlation_factor[y0:y1, x0:x1] = sub.correlation_factor.to(
-                        device=device
+                        device=storage_device
                     )
                 if sub.overlap_count is not None:
-                    full_overlap[y0:y1, x0:x1] = sub.overlap_count.to(device=device)
+                    full_overlap[y0:y1, x0:x1] = sub.overlap_count.to(
+                        device=storage_device
+                    )
                 if sub.context is not None:
-                    full_context[:, y0:y1, x0:x1] = sub.context.to(device=full_context.device)
+                    sub_context = sub.context.to(device=full_context.device)
+                    if len(subset) == len(observations):
+                        full_context[:, y0:y1, x0:x1] = sub_context
+                    else:
+                        # Sub-call bit k is exposure subset[k]: move it to its own bit.
+                        for k, obs_idx in enumerate(subset):
+                            bit = (sub_context[k // 32] >> (k % 32)) & 1
+                            full_context[obs_idx // 32, y0:y1, x0:x1] |= bit << (
+                                obs_idx % 32
+                            )
     else:
-        numer = torch.zeros((H, W), dtype=torch.float32, device=device)
-        denom = torch.zeros((H, W), dtype=torch.float32, device=device)
-        variance_weight = torch.zeros_like(denom)
-        variance_available = stacking_method == "weighted_mean"
-        full_overlap = torch.zeros((H, W), dtype=torch.int32, device=device)
+        with_variance = propagate_variance and stacking_method == "weighted_mean"
+        acc = TileAccumulators(
+            (H, W),
+            compute_device=device,
+            storage_device=storage_device,
+            with_variance=with_variance,
+            staged=True if _FORCE_HOST_ACCUMULATORS else None,
+        )
+        variance_available = with_variance
         read_dev = str(device)
         for obs_idx, obs in enumerate(observations):
             if obs_idx == 0:
@@ -632,17 +848,14 @@ def _coadd_image_plane_spatial_tiles(
                 background_estimator=background_estimator,
             )
             source_wcs = WCS(header_dict_obs)
-            obs_bbox = _obs_target_pixel_bbox(
+            footprint = _obs_target_footprint(
                 source_wcs, (int(image.shape[0]), int(image.shape[1])), full_target_wcs
             )
             for y0 in range(0, H, th):
                 for x0 in range(0, W, tw):
                     y1, x1 = min(y0 + th, H), min(x0 + tw, W)
-                    if obs_bbox is not None and (
-                        y1 <= obs_bbox[0]
-                        or y0 >= obs_bbox[1]
-                        or x1 <= obs_bbox[2]
-                        or x0 >= obs_bbox[3]
+                    if footprint is not None and not footprint.intersects(
+                        y0, y1, x0, x1
                     ):
                         continue
                     tile_shape = (y1 - y0, x1 - x0)
@@ -685,6 +898,7 @@ def _coadd_image_plane_spatial_tiles(
                         value_semantics=value_semantics,
                         drizzle_pixfrac=drizzle_pixfrac,
                         background_estimator=None,
+                        propagate_variance=propagate_variance,
                     )
                     pixel_area_sr = None
                     if value_semantics == "flux":
@@ -697,62 +911,89 @@ def _coadd_image_plane_spatial_tiles(
                         if projected.target_window is not None:
                             py0, py1, px0, px1 = projected.target_window
                             pixel_area_sr = pixel_area_sr[py0:py1, px0:px1]
-                    accumulate_projected_observation(
-                        numer[y0:y1, x0:x1],
-                        denom[y0:y1, x0:x1],
-                        full_overlap[y0:y1, x0:x1],
-                        projected_numer=projected.numer,
-                        projected_weight=projected.weight,
-                        projected_overlap=projected.overlap,
-                        stacking_method=stacking_method,
-                        value_semantics=value_semantics,
-                        pixel_area_sr=pixel_area_sr,
-                        target_window=projected.target_window,
-                    )
+                    if projected.target_window is None:
+                        wy0, wy1, wx0, wx1 = y0, y1, x0, x1
+                    else:
+                        py0, py1, px0, px1 = projected.target_window
+                        wy0, wy1, wx0, wx1 = y0 + py0, y0 + py1, x0 + px0, x0 + px1
                     if projected.variance_weight is None:
                         variance_available = False
-                    elif variance_available:
-                        _accumulate_variance_weight(
-                            variance_weight[y0:y1, x0:x1],
-                            projected.variance_weight,
-                            projected.target_window,
+                    if wy1 > wy0 and wx1 > wx0:
+                        with acc.window(wy0, wy1, wx0, wx1) as (n_w, d_w, o_w, v_w):
+                            accumulate_projected_observation(
+                                n_w,
+                                d_w,
+                                o_w,
+                                projected_numer=projected.numer,
+                                projected_weight=projected.weight,
+                                projected_overlap=projected.overlap,
+                                stacking_method=stacking_method,
+                                value_semantics=value_semantics,
+                                pixel_area_sr=pixel_area_sr,
+                            )
+                            if v_w is not None and projected.variance_weight is not None:
+                                v_w.add_(projected.variance_weight)
+                        _set_context_bit(
+                            full_context[:, wy0:wy1, wx0:wx1],
+                            obs_idx,
+                            projected.overlap > 0,
+                            None,
                         )
-                    _set_context_bit(
-                        full_context[:, y0:y1, x0:x1],
-                        obs_idx,
-                        projected.overlap > 0,
-                        projected.target_window,
-                    )
             del prepared_observation, image
 
         full_pixel_area_sr = None
         if value_semantics == "flux":
             full_pixel_area_sr = pixel_area_sr_map(
-                WCS(header_dict), target_shape, device=device
+                full_target_wcs, target_shape, device=storage_device
             )
-        normalization = denom
-        full_data, full_weight = finalize_projected_stack(
-            numer,
-            denom,
-            stacking_method=stacking_method,
-            value_semantics=value_semantics,
-            pixel_area_sr=full_pixel_area_sr,
-        )
+        full_data = torch.zeros((H, W), dtype=torch.float32, device=storage_device)
+        full_weight = torch.zeros((H, W), dtype=torch.float32, device=storage_device)
         full_inverse_variance = (
-            _linear_inverse_variance(
-                normalization,
-                variance_weight,
-                value_semantics=value_semantics,
-                pixel_area_sr=full_pixel_area_sr,
-            )
+            torch.zeros((H, W), dtype=torch.float32, device=storage_device)
             if variance_available
             else None
         )
         full_correlation_factor = (
-            _local_noise_correlation_factor(normalization, variance_weight)
+            torch.zeros((H, W), dtype=torch.float32, device=storage_device)
             if variance_available
             else None
         )
+        full_overlap = acc.overlap
+        # Finalize tile by tile: elementwise, so identical to one pass over the
+        # canvas, but only a tile ever exists on the compute device.
+        for y0 in range(0, H, th):
+            for x0 in range(0, W, tw):
+                y1, x1 = min(y0 + th, H), min(x0 + tw, W)
+                sl = (slice(y0, y1), slice(x0, x1))
+                with acc.window(y0, y1, x0, x1, writeback=False) as (n_w, d_w, _o_w, v_w):
+                    pixel_area_tile = (
+                        None
+                        if full_pixel_area_sr is None
+                        else full_pixel_area_sr[sl].to(device=device)
+                    )
+                    coadd_tile, weight_tile = finalize_projected_stack(
+                        n_w,
+                        d_w,
+                        stacking_method=stacking_method,
+                        value_semantics=value_semantics,
+                        pixel_area_sr=pixel_area_tile,
+                    )
+                    full_data[sl] = coadd_tile.to(device=storage_device)
+                    full_weight[sl] = weight_tile.to(device=storage_device)
+                    if variance_available:
+                        assert v_w is not None
+                        assert full_inverse_variance is not None
+                        assert full_correlation_factor is not None
+                        full_inverse_variance[sl] = _linear_inverse_variance(
+                            d_w,
+                            v_w,
+                            value_semantics=value_semantics,
+                            pixel_area_sr=pixel_area_tile,
+                        ).to(device=storage_device)
+                        full_correlation_factor[sl] = _local_noise_correlation_factor(
+                            d_w, v_w
+                        ).to(device=storage_device)
+        del acc
     output_dq = _propagate_observation_dq(
         observations,
         target_header=header_dict,
@@ -762,6 +1003,8 @@ def _coadd_image_plane_spatial_tiles(
         drizzle_pixfrac=drizzle_pixfrac,
         output_weight=full_weight,
         device=device,
+        tile_hw=(th, tw),
+        output_device=storage_device,
     )
     provenance = _context_provenance(
         observations,
@@ -776,6 +1019,10 @@ def _coadd_image_plane_spatial_tiles(
         has_correlation_factor=full_correlation_factor is not None,
     )
     provenance["target_tile_cache"] = target_cache.stats()
+    provenance["spatial_tiles"] = {
+        "tile_hw": (th, tw),
+        "host_accumulators": bool(host_accumulators),
+    }
     result = MapResult(
         data=full_data,
         weight=full_weight,
@@ -818,20 +1065,31 @@ def _propagate_observation_dq(
     drizzle_pixfrac: float,
     output_weight: Tensor,
     device: torch.device,
+    tile_hw: tuple[int, int] | None = None,
+    output_device: torch.device | None = None,
 ) -> Tensor | None:
+    """OR-propagate observation DQ flags onto the target grid.
+
+    With *tile_hw* the projection of each flag plane is bounded to one tile at a
+    time (and skipped for tiles outside the observation footprint), and the int64
+    output lives on *output_device* (the host for a large target on an accelerator).
+    """
     if not _observations_have_quality(observations):
         return None
-    output = torch.zeros(target_shape, dtype=torch.int64, device=device)
-    prepared_target = _prepare_target(
-        header=target_header,
-        target_wcs=WCS(target_header),
-        target_shape=target_shape,
-        device=device,
-        include_pixel_area=(value_semantics == "flux"),
-        include_representative_pixel_area=False,
-        include_quadrature=(value_semantics == "flux"),
-        include_world_grid=False,
-    )
+    out_device = device if output_device is None else output_device
+    H, W = int(target_shape[0]), int(target_shape[1])
+    output = torch.zeros(target_shape, dtype=torch.int64, device=out_device)
+    full_target_wcs = WCS(target_header)
+    if tile_hw is None:
+        tiles = [(0, H, 0, W)]
+    else:
+        th, tw = max(int(tile_hw[0]), 1), max(int(tile_hw[1]), 1)
+        tiles = [
+            (y0, min(y0 + th, H), x0, min(x0 + tw, W))
+            for y0 in range(0, H, th)
+            for x0 in range(0, W, tw)
+        ]
+    whole_target: _PreparedImagePlaneTarget | None = None
     for observation in observations:
         image, observation_header = load_observation_image_and_header(
             observation,
@@ -853,6 +1111,15 @@ def _propagate_observation_dq(
         if flags.numel():
             for value in torch.unique(flags).tolist():
                 present |= int(value)
+        source_wcs = WCS(observation_header)
+        footprint = (
+            _obs_target_footprint(
+                source_wcs, (int(image.shape[0]), int(image.shape[1])), full_target_wcs
+            )
+            if tile_hw is not None
+            else None
+        )
+        tile_targets: dict[tuple[int, int, int, int], tuple[dict, _PreparedImagePlaneTarget]] = {}
         bit = 1
         while bit <= present:
             if present & bit:
@@ -886,31 +1153,82 @@ def _propagate_observation_dq(
                         var_rnoise=None,
                         var_flat=None,
                     )
-                    projected = _project_observation_to_target_chunk(
-                        flag_observation,
-                        image=flag_observation.data,
-                        header_dict_obs=dict(observation_header),
-                        source_wcs=WCS(observation_header),
-                        prepared_target=prepared_target,
-                        target_header=target_header,
-                        target_shape=target_shape,
-                        device=device,
-                        footprint_order=None,
-                        resampling_kernel=resampling_kernel,
-                        value_semantics=value_semantics,
-                        drizzle_pixfrac=drizzle_pixfrac,
-                        background_estimator=None,
-                    )
-                    flagged = projected.weight > 0.0
-                    if projected.target_window is None:
+                    for ty0, ty1, tx0, tx1 in tiles:
+                        if footprint is not None and not footprint.intersects(
+                            ty0, ty1, tx0, tx1
+                        ):
+                            continue
+                        tile_shape = (ty1 - ty0, tx1 - tx0)
+                        if tile_hw is None:
+                            if whole_target is None:
+                                whole_target = _prepare_target(
+                                    header=target_header,
+                                    target_wcs=full_target_wcs,
+                                    target_shape=target_shape,
+                                    device=device,
+                                    include_pixel_area=(value_semantics == "flux"),
+                                    include_representative_pixel_area=False,
+                                    include_quadrature=(value_semantics == "flux"),
+                                    include_world_grid=False,
+                                )
+                            tile_header, prepared_target = target_header, whole_target
+                        else:
+                            key = (ty0, ty1, tx0, tx1)
+                            if key not in tile_targets:
+                                sub_header, _ = _subtarget_header_for_window(
+                                    target_header,
+                                    full_shape=(H, W),
+                                    y0=ty0,
+                                    y1=ty1,
+                                    x0=tx0,
+                                    x1=tx1,
+                                )
+                                tile_targets[key] = (
+                                    sub_header,
+                                    _prepare_canvas_tile(
+                                        sub_header,
+                                        tile_shape,
+                                        device=device,
+                                        canvas_shape=(H, W),
+                                        origin_yx=(ty0, tx0),
+                                        value_semantics=value_semantics,
+                                        representative_pixel_area_sr=None,
+                                    ),
+                                )
+                            tile_header, prepared_target = tile_targets[key]
+                        projected = _project_observation_to_target_chunk(
+                            flag_observation,
+                            image=flag_observation.data,
+                            header_dict_obs=dict(observation_header),
+                            source_wcs=source_wcs,
+                            prepared_target=prepared_target,
+                            target_header=tile_header,
+                            target_shape=tile_shape,
+                            device=device,
+                            footprint_order=None,
+                            resampling_kernel=resampling_kernel,
+                            value_semantics=value_semantics,
+                            drizzle_pixfrac=drizzle_pixfrac,
+                            background_estimator=None,
+                            propagate_variance=False,
+                        )
+                        flagged = projected.weight > 0.0
+                        if projected.target_window is None:
+                            wy0, wy1, wx0, wx1 = ty0, ty1, tx0, tx1
+                        else:
+                            py0, py1, px0, px1 = projected.target_window
+                            if py1 <= py0 or px1 <= px0:
+                                continue
+                            wy0, wy1 = ty0 + py0, ty0 + py1
+                            wx0, wx1 = tx0 + px0, tx0 + px1
                         if rejected:
-                            flagged = flagged & (output_weight <= 0.0)
-                        output.bitwise_or_(flagged.to(torch.int64) * bit)
-                    else:
-                        y0, y1, x0, x1 = projected.target_window
-                        if rejected:
-                            flagged = flagged & (output_weight[y0:y1, x0:x1] <= 0.0)
-                        output[y0:y1, x0:x1].bitwise_or_(flagged.to(torch.int64) * bit)
+                            flagged = flagged & (
+                                output_weight[wy0:wy1, wx0:wx1].to(device=flagged.device)
+                                <= 0.0
+                            )
+                        output[wy0:wy1, wx0:wx1].bitwise_or_(
+                            (flagged.to(torch.int64) * bit).to(device=out_device)
+                        )
             bit <<= 1
     return output
 
@@ -934,7 +1252,46 @@ def coadd_image_plane(
     scratch_dir: str | Path | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
+    propagate_variance: bool = True,
+    auto_tile: bool = True,
+    tile_memory_budget_bytes: int | None = None,
+    _inner_tile: bool = False,
 ) -> MapResult:
+    """Coadd image-plane observations onto a common target grid.
+
+    Parameters beyond the resampling and stacking options:
+
+    spatial_tile_hw
+        ``(height, width)`` of the tiles the target is processed in.  ``None``
+        (default) chooses the tiling automatically from a memory budget (see
+        ``auto_tile``); an explicit value is always honoured.  Tiling is
+        incompatible with ``footprint_order``.
+    auto_tile
+        When ``spatial_tile_hw`` is ``None``, estimate the peak working set of the
+        single-pass coadd from the kernel, value semantics and target size
+        (bytes per output pixel measured on the samplers, see
+        :func:`torchsky.map.operators.execution.plan_spatial_tiles`) and tile the
+        target only if it would not fit in ``tile_memory_budget_bytes``.  Targets
+        that fit are not tiled.  ``False`` forces the single-pass path.  Ignored
+        with ``footprint_order`` (the MOC footprint is not defined per tile).
+    tile_memory_budget_bytes
+        Memory budget of the automatic planner.  The default is
+        ``execution.TILE_MEMORY_FRACTION`` (30%) of the free device memory on CUDA
+        or of the available host memory (cgroup limit aware) otherwise; the
+        ``TORCHSKY_TILE_MEMORY_BUDGET_BYTES`` environment variable and the
+        ``execution.TILE_MEMORY_BUDGET_BYTES`` constant override that default.
+        When the target is tiled on an accelerator the full-size accumulators and
+        the returned maps are host tensors; only tile windows visit the device.
+    propagate_variance
+        ``True`` (default) propagates the exact diagonal variance of the
+        resampling (``inverse_variance`` and ``correlation_factor`` on the result)
+        for observations with explicit noise information.  ``False`` skips that
+        second sampling pass: ``data``, ``weight``, ``overlap_count`` and
+        ``context`` are unchanged, ``inverse_variance`` and
+        ``correlation_factor`` are ``None``, and the coadd is faster.  Sigma-clipped
+        stacking weights its samples with the propagated variance, so it still
+        computes it internally (results unchanged) and only drops the outputs.
+    """
     if not observations:
         raise ValueError("At least one observation is required")
     if footprint_order is not None and footprint_order < 0:
@@ -983,6 +1340,23 @@ def coadd_image_plane(
             fallback=tuple(first_image.shape[-2:]),
         )
     device = map_device
+    tile_plan: SpatialTilePlan | None = None
+    if (
+        spatial_tile_hw is None
+        and footprint_order is None
+        and auto_tile
+        and not _inner_tile
+    ):
+        tile_plan = plan_spatial_tiles(
+            (int(target_shape[0]), int(target_shape[1])),
+            resampling_kernel=resampling_kernel,
+            value_semantics=value_semantics,
+            n_observations=len(observations),
+            source_pixels=int(first_image.shape[-2]) * int(first_image.shape[-1]),
+            device=map_device,
+            propagate_variance=propagate_variance and stacking_method == "weighted_mean",
+            budget_bytes=tile_memory_budget_bytes,
+        )
     if (
         spatial_tile_hw is None
         and footprint_order is None
@@ -994,6 +1368,15 @@ def coadd_image_plane(
         spatial_tile_hw = (
             min(1024, int(target_shape[0])),
             min(1024, int(target_shape[1])),
+        )
+    if tile_plan is not None and tile_plan.tile_hw is not None:
+        spatial_tile_hw = (
+            tile_plan.tile_hw
+            if spatial_tile_hw is None
+            else (
+                min(int(spatial_tile_hw[0]), tile_plan.tile_hw[0]),
+                min(int(spatial_tile_hw[1]), tile_plan.tile_hw[1]),
+            )
         )
     if spatial_tile_hw is not None:
         if footprint_order is not None:
@@ -1021,6 +1404,13 @@ def coadd_image_plane(
             scratch_dir=scratch_dir,
             background_estimator=background_estimator,
             cross_exposure_sky_corrector=cross_exposure_sky_corrector,
+            propagate_variance=propagate_variance,
+            host_accumulators=(
+                tile_plan.host_accumulators
+                if tile_plan is not None and tile_plan.tile_hw is not None
+                else None
+            ),
+            tile_memory_budget_bytes=tile_memory_budget_bytes,
         )
     if not (
         value_semantics == "surface_brightness" and stacking_method == "weighted_mean"
@@ -1056,8 +1446,12 @@ def coadd_image_plane(
 
     numer = torch.zeros(target_shape, dtype=torch.float32, device=device)
     denom = torch.zeros(target_shape, dtype=torch.float32, device=device)
-    variance_weight = torch.zeros_like(denom)
-    variance_available = stacking_method == "weighted_mean"
+    variance_available = stacking_method == "weighted_mean" and propagate_variance
+    variance_weight = (
+        torch.zeros_like(denom)
+        if variance_available or stacking_method == "sigma_clipped"
+        else None
+    )
     overlap_count = torch.zeros(target_shape, dtype=torch.int32, device=device)
     context = torch.zeros(
         (math.ceil(len(observations) / 32), *target_shape),
@@ -1105,6 +1499,7 @@ def coadd_image_plane(
             value_semantics=value_semantics,
             drizzle_pixfrac=drizzle_pixfrac,
             background_estimator=background_estimator,
+            propagate_variance=False,
         )
         contrib_numer, contrib_weight = stack_inputs_from_projected_observation(
             sampled_numer,
@@ -1159,6 +1554,9 @@ def coadd_image_plane(
             value_semantics=value_semantics,
             drizzle_pixfrac=drizzle_pixfrac,
             background_estimator=background_estimator,
+            # Sigma clipping weights its samples with the propagated variance, so the
+            # pass cannot be skipped there; the outputs are dropped below instead.
+            propagate_variance=True,
         )
         values = torch.where(
             projected.weight > 0.0,
@@ -1259,6 +1657,7 @@ def coadd_image_plane(
                 value_semantics=value_semantics,
                 drizzle_pixfrac=drizzle_pixfrac,
                 background_estimator=background_estimator,
+                propagate_variance=propagate_variance,
             )
             pixel_area_sr = None
             if value_semantics == "flux":
@@ -1390,12 +1789,10 @@ def coadd_image_plane(
         coadd = spilled_sigma_result.data
         denom = spilled_sigma_result.weight
         normalization = denom
-        variance_available = spilled_sigma_result.variance_weight is not None
-        variance_weight = (
-            torch.zeros_like(denom)
-            if spilled_sigma_result.variance_weight is None
-            else spilled_sigma_result.variance_weight
+        variance_available = (
+            spilled_sigma_result.variance_weight is not None and propagate_variance
         )
+        variance_weight = spilled_sigma_result.variance_weight
         overlap_count = spilled_sigma_result.overlap_count
         context = spilled_sigma_result.context
         pixel_area_sr = None
@@ -1437,15 +1834,19 @@ def coadd_image_plane(
         for moc in observation_mocs:
             coverage_moc = coverage_moc.union(moc)
 
-    output_dq = _propagate_observation_dq(
-        observations,
-        target_header=header_dict,
-        target_shape=target_shape,
-        resampling_kernel=resampling_kernel,
-        value_semantics=value_semantics,
-        drizzle_pixfrac=drizzle_pixfrac,
-        output_weight=denom,
-        device=device,
+    output_dq = (
+        None
+        if _inner_tile
+        else _propagate_observation_dq(
+            observations,
+            target_header=header_dict,
+            target_shape=target_shape,
+            resampling_kernel=resampling_kernel,
+            value_semantics=value_semantics,
+            drizzle_pixfrac=drizzle_pixfrac,
+            output_weight=denom,
+            device=device,
+        )
     )
     result = MapResult(
         data=coadd,

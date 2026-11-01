@@ -25,6 +25,22 @@ owned by `torchfits`.
   headers often keep `RADECSYS = 'FK5'` while their astrometry was solved
   against Gaia (ICRS); set `RADESYS = 'ICRS'` on such headers.
 
+### Added (image-plane coadd)
+- `coadd_image_plane` tiles the target automatically when the single-pass working
+  set (bytes per output pixel measured per kernel and value semantics) would
+  exceed a memory budget: 30% of the free device memory on CUDA, or of the
+  available host memory (cgroup limit aware) on CPU. Override with
+  `tile_memory_budget_bytes=`, `TORCHSKY_TILE_MEMORY_BUDGET_BYTES`, or disable
+  with `auto_tile=False`. Targets that fit are not tiled. A 2500 x 2500
+  Lanczos-3 coadd that was OOM-killed at 7 GB now runs in about 2 GB.
+- Tiled execution processes only the tiles an exposure's footprint reaches
+  (convex hull of its sampled outline, not just its bounding box), keeps the
+  full-size accumulators on the host when the compute device is an accelerator,
+  tiles DQ propagation, and stacks only the overlapping exposures per tile for
+  median and sigma-clipped stacks.
+- `coadd_image_plane(..., propagate_variance=False)` skips the exact diagonal
+  variance pass; data, weight, overlap and context are unchanged.
+
 ### Changed
 - Build lane moved to PyTorch 2.14 and `torchfits >= 1.3.1`.
 

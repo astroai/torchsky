@@ -1190,6 +1190,7 @@ def _project_observation_to_target_chunk(
     drizzle_pixfrac: float,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     prepare_target: Callable[[], _PreparedImagePlaneTarget] | None = None,
+    propagate_variance: bool = True,
 ) -> _ProjectedImagePlaneObservation:
     if not torch.isfinite(torch.tensor(obs.weight, dtype=torch.float64)):
         raise ValueError("Observation weights must be finite")
@@ -1214,7 +1215,8 @@ def _project_observation_to_target_chunk(
     image = prepared_observation.image
     source_weight = prepared_observation.source_weight
     operator_bundle = prepared_observation.operator_bundle
-    has_explicit_noise = operator_bundle.noise is not None
+    # Exact diagonal variance is a second sampling pass; skip it on request.
+    has_explicit_noise = operator_bundle.noise is not None and propagate_variance
     direct_copy = (
         tuple(image.shape) == target_shape
         and headers_equivalent_for_direct_copy(header_dict_obs, target_header)
@@ -1333,6 +1335,7 @@ def _project_observation_to_target(
     drizzle_pixfrac: float = 1.0,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     prepare_target: Callable[[], _PreparedImagePlaneTarget] | None = None,
+    propagate_variance: bool = True,
 ) -> tuple[Tensor, Tensor, Tensor, MOC | None]:
     projected = _project_observation_to_target_chunk(
         obs,
@@ -1349,6 +1352,7 @@ def _project_observation_to_target(
         drizzle_pixfrac=drizzle_pixfrac,
         background_estimator=background_estimator,
         prepare_target=prepare_target,
+        propagate_variance=propagate_variance,
     )
     if projected.target_window is None:
         return projected.numer, projected.weight, projected.overlap, projected.moc
