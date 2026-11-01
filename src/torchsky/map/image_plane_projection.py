@@ -46,6 +46,8 @@ from .operators.resampling import (
     infer_tan_projective_homography,
     sample_image_plane_batched_channels,
     sample_image_plane_diagonal_variance,
+    sample_separable_with_variance,
+    supports_fused_variance,
 )
 from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
 from .spectral_affine import resample_linear_affine_spectral_2d
@@ -663,6 +665,7 @@ def _resample_weighted_to_target(
             y_src,
         )
         sampled_variance_weight = None
+        fused_variance = None
         if resampling_kernel == "spectral_nonuniform":
             sampled_numer = resample_nonuniform_spectral_2d(
                 weighted_image,
@@ -710,22 +713,37 @@ def _resample_weighted_to_target(
                 else None
             )
         else:
-            x_norm = (2.0 * x_src / max(w_src - 1, 1)) - 1.0
-            y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
-            grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
-
             stacked_planes = (
                 torch.stack([weighted_image, weighted_weight, support_image], dim=0)
                 if support_image is not None
                 else torch.stack([weighted_image, weighted_weight], dim=0)
             )
-            sampled_planes = sample_image_plane_batched_channels(
-                stacked_planes,
-                x_src=x_src,
-                y_src=y_src,
-                grid=grid,
-                kernel=resampling_kernel,
-            )
+            if (
+                return_variance_weight
+                and coefficient_variance_supported
+                and x_src.ndim == 2
+                and supports_fused_variance(resampling_kernel)
+            ):
+                # One pass shares tap indices/coefficients between the sampled
+                # channels and the diagonal variance (masked below).
+                sampled_planes, fused_variance = sample_separable_with_variance(
+                    stacked_planes,
+                    x_src=x_src,
+                    y_src=y_src,
+                    kernel=resampling_kernel,
+                    source_variance=source_numerator_variance,
+                )
+            else:
+                x_norm = (2.0 * x_src / max(w_src - 1, 1)) - 1.0
+                y_norm = (2.0 * y_src / max(h_src - 1, 1)) - 1.0
+                grid = torch.stack([x_norm, y_norm], dim=-1).to(dtype=torch.float32)
+                sampled_planes = sample_image_plane_batched_channels(
+                    stacked_planes,
+                    x_src=x_src,
+                    y_src=y_src,
+                    grid=grid,
+                    kernel=resampling_kernel,
+                )
             if x_src.ndim == 2:
                 sampled_numer = sampled_planes[0]
                 sampled_weight = sampled_planes[1]
@@ -777,14 +795,19 @@ def _resample_weighted_to_target(
         )
         if return_variance_weight and coefficient_variance_supported:
             sample_valid = in_bounds & (sampled_weight > 0.0)
-            sampled_variance_weight = sample_image_plane_diagonal_variance(
-                source_numerator_variance,
-                x_src=x_src,
-                y_src=y_src,
-                kernel=resampling_kernel,
-                average_coordinate_batch=x_src.ndim == 3,
-                sample_valid=sample_valid,
-            )
+            if fused_variance is not None:
+                sampled_variance_weight = torch.where(
+                    sample_valid, fused_variance, torch.zeros_like(fused_variance)
+                )
+            else:
+                sampled_variance_weight = sample_image_plane_diagonal_variance(
+                    source_numerator_variance,
+                    x_src=x_src,
+                    y_src=y_src,
+                    kernel=resampling_kernel,
+                    average_coordinate_batch=x_src.ndim == 3,
+                    sample_valid=sample_valid,
+                )
         if (
             value_semantics == "surface_brightness"
             and target_representative_area_sr is not None

@@ -93,8 +93,8 @@ def kernel_weight(kernel: MapResamplingKernel, x: Tensor) -> Tensor:
     raise ValueError(f"custom weight is undefined for kernel {kernel!r}")
 
 
-def _normalize_lanczos_coefficients(coefficients: Tensor) -> Tensor:
-    total = coefficients.sum(dim=-1, keepdim=True)
+def _normalize_lanczos_coefficients(coefficients: Tensor, dim: int = -1) -> Tensor:
+    total = coefficients.sum(dim=dim, keepdim=True)
     safe_total = torch.where(
         torch.abs(total) > torch.finfo(coefficients.dtype).eps,
         total,
@@ -143,53 +143,100 @@ def custom_separable_sample(
     elif work.shape[0] != x_batch.shape[0]:
         raise ValueError("image and coordinate batch dimensions must match")
 
-    support = kernel_support(kernel)
-    x_batch = x_batch.to(dtype=work.dtype)
-    y_batch = y_batch.to(dtype=work.dtype)
-    x0 = torch.floor(x_batch).to(dtype=torch.int64)
-    y0 = torch.floor(y_batch).to(dtype=torch.int64)
-    offsets = torch.arange(
-        -support + 1,
-        support + 1,
-        device=image.device,
-        dtype=torch.int64,
+    spatial = tuple(x_batch.shape[1:])
+    sampled, _ = _separable_sample_chunked(
+        work,
+        None,
+        x_batch.reshape(x_batch.shape[0], -1),
+        y_batch.reshape(y_batch.shape[0], -1),
+        kernel=kernel,
+        require_finite=False,
+        chunk_size=None,
     )
-    offset_shape = (1,) * x0.ndim + (-1,)
-    xs = x0.unsqueeze(-1) + offsets.view(offset_shape)
-    ys = y0.unsqueeze(-1) + offsets.view(offset_shape)
-    dx = x_batch.unsqueeze(-1) - xs.to(dtype=work.dtype)
-    dy = y_batch.unsqueeze(-1) - ys.to(dtype=work.dtype)
-    wx = kernel_weight(kernel, dx)
-    wy = kernel_weight(kernel, dy)
-    if kernel in _CUSTOM_LANCZOS_KERNELS:
-        wx = _normalize_lanczos_coefficients(wx)
-        wy = _normalize_lanczos_coefficients(wy)
-
-    batch, channels, h_src, w_src = work.shape
-    x_valid = (xs >= 0) & (xs < w_src)
-    y_valid = (ys >= 0) & (ys < h_src)
-    xs = xs.clamp(0, w_src - 1)
-    ys = ys.clamp(0, h_src - 1)
-    sample_idx = ys.unsqueeze(-1) * w_src + xs.unsqueeze(-2)
-    flat_index = sample_idx.reshape(batch, 1, -1).expand(-1, channels, -1)
-    sampled = torch.gather(work.reshape(batch, channels, -1), 2, flat_index).reshape(
-        batch,
-        channels,
-        *x_batch.shape[1:],
-        sample_idx.shape[-2],
-        sample_idx.shape[-1],
-    )
-    weights = (
-        wy.unsqueeze(-1)
-        * wx.unsqueeze(-2)
-        * y_valid.unsqueeze(-1).to(dtype=work.dtype)
-        * x_valid.unsqueeze(-2).to(dtype=work.dtype)
-    )
-    out = torch.sum(sampled * weights.unsqueeze(1), dim=(-1, -2))
+    out = sampled.reshape(work.shape[0], work.shape[1], *spatial)
     if original_ndim < 4 and not coordinate_batch:
         out = out.squeeze(0)
         return out.squeeze(0) if original_ndim == 2 else out
     return out.squeeze(1) if original_ndim == 2 else out
+
+
+def supports_fused_variance(kernel: MapResamplingKernel) -> bool:
+    """Whether :func:`sample_separable_with_variance` implements ``kernel``."""
+    return kernel in _CUSTOM_SEPARABLE_KERNELS
+
+
+def sample_separable_with_variance(
+    image: Tensor,
+    *,
+    x_src: Tensor,
+    y_src: Tensor,
+    kernel: MapResamplingKernel,
+    source_variance: Tensor | None = None,
+    chunk_size: int | None = None,
+) -> tuple[Tensor, Tensor | None]:
+    """Sample channels and (optionally) diagonal variance in one fused pass.
+
+    ``image`` is ``[C,H,W]`` with ``[Hq,Wq]`` coordinates, or ``[B,C,H,W]`` /
+    ``[C,H,W]`` with ``[B,Hq,Wq]`` coordinates, as in
+    :func:`custom_separable_sample`; the sampled channels are identical to it.
+    ``source_variance`` is a ``[H,W]`` map of independent source variances; the
+    returned variance is ``sum(coefficient**2 * source_variance)`` over the tap
+    footprint with the same shape as ``x_src`` (no validity mask is applied;
+    callers zero invalid samples afterwards, which equals zeroing their
+    coefficients). The axis coefficients and tap indices are computed once and
+    shared, and the sample dimension is processed in chunks of bounded working
+    set (``chunk_size`` samples; derived from the tap/channel count by default).
+    """
+    if kernel not in _CUSTOM_SEPARABLE_KERNELS:
+        raise ValueError(f"fused separable sampling does not support {kernel!r}")
+    if image.ndim not in {3, 4} or not image.is_floating_point():
+        raise ValueError("fused sampling expects floating [C,H,W] or [B,C,H,W] input")
+    if x_src.shape != y_src.shape or x_src.ndim not in {2, 3}:
+        raise ValueError("x_src and y_src must be matching [Hq,Wq] or [B,Hq,Wq]")
+    if x_src.device != image.device or y_src.device != image.device:
+        raise ValueError("image, x_src, and y_src must be on the same device")
+    if not x_src.is_floating_point() or not y_src.is_floating_point():
+        raise TypeError("x_src and y_src must be floating tensors")
+    work = image.unsqueeze(0) if image.ndim == 3 else image
+    x_batch = x_src.unsqueeze(0) if x_src.ndim == 2 else x_src
+    y_batch = y_src.unsqueeze(0) if y_src.ndim == 2 else y_src
+    if work.shape[0] == 1 and x_batch.shape[0] > 1:
+        work = work.expand(x_batch.shape[0], *work.shape[1:])
+    elif x_batch.shape[0] == 1 and work.shape[0] > 1:
+        x_batch = x_batch.expand(work.shape[0], *x_batch.shape[1:])
+        y_batch = y_batch.expand(work.shape[0], *y_batch.shape[1:])
+    elif work.shape[0] != x_batch.shape[0]:
+        raise ValueError("image and coordinate batch dimensions must match")
+    if source_variance is not None and (
+        source_variance.shape != work.shape[-2:]
+        or source_variance.device != image.device
+        or not source_variance.is_floating_point()
+    ):
+        raise ValueError(
+            "source_variance must be a floating [H,W] tensor on the device"
+        )
+    if source_variance is not None and (
+        bool((source_variance < 0.0).any())
+        or not bool(torch.isfinite(source_variance).all())
+    ):
+        raise ValueError("source_variance must be finite and non-negative")
+    spatial = tuple(x_batch.shape[1:])
+    sampled, variance = _separable_sample_chunked(
+        work,
+        source_variance,
+        x_batch.reshape(x_batch.shape[0], -1),
+        y_batch.reshape(y_batch.shape[0], -1),
+        kernel=kernel,
+        require_finite=True,
+        chunk_size=chunk_size,
+    )
+    sampled = sampled.reshape(work.shape[0], work.shape[1], *spatial)
+    if variance is not None:
+        variance = variance.reshape(work.shape[0], *spatial)
+    if x_src.ndim == 2:
+        sampled = sampled.squeeze(0)
+        variance = variance.squeeze(0) if variance is not None else None
+    return sampled, variance
 
 
 def sample_image_plane(
@@ -332,51 +379,194 @@ def _axis_interpolation_coefficients(
     size: int,
     kernel: MapResamplingKernel,
 ) -> tuple[Tensor, Tensor]:
+    """Per-axis tap indices and coefficients, tap-major: both are ``[T, *coord]``.
+
+    Out-of-range taps and non-finite coordinates get zero coefficients; indices
+    are clamped into ``[0, size)`` so they can be gathered safely. Lanczos
+    coefficients are normalised over the full ``T``-tap window before masking.
+    """
     finite = torch.isfinite(coordinate)
     safe_coordinate = torch.where(finite, coordinate, torch.zeros_like(coordinate))
+    tap_shape = (-1,) + (1,) * coordinate.ndim
     if kernel == "nearest":
-        indices = torch.round(safe_coordinate).to(dtype=torch.int64).unsqueeze(-1)
-        coefficients = torch.ones_like(safe_coordinate).unsqueeze(-1)
-    elif kernel == "bilinear":
-        base = torch.floor(safe_coordinate).to(dtype=torch.int64)
-        offsets = torch.arange(2, device=coordinate.device, dtype=torch.int64)
-        indices = base.unsqueeze(-1) + offsets
-        coefficients = 1.0 - torch.abs(
-            safe_coordinate.unsqueeze(-1) - indices.to(dtype=coordinate.dtype)
-        )
-    elif kernel == "bicubic":
-        base = torch.floor(safe_coordinate).to(dtype=torch.int64)
-        offsets = torch.arange(-1, 3, device=coordinate.device, dtype=torch.int64)
-        indices = base.unsqueeze(-1) + offsets
-        coefficients = keys_cubic_weight(
-            safe_coordinate.unsqueeze(-1) - indices.to(dtype=coordinate.dtype),
-            b=0.0,
-            c=0.75,
-        )
-    elif kernel in _CUSTOM_SEPARABLE_KERNELS:
-        support = kernel_support(kernel)
-        base = torch.floor(safe_coordinate).to(dtype=torch.int64)
-        offsets = torch.arange(
-            -support + 1,
-            support + 1,
-            device=coordinate.device,
-            dtype=torch.int64,
-        )
-        indices = base.unsqueeze(-1) + offsets
-        coefficients = kernel_weight(
-            kernel,
-            safe_coordinate.unsqueeze(-1) - indices.to(dtype=coordinate.dtype),
-        )
-        if kernel in _CUSTOM_LANCZOS_KERNELS:
-            coefficients = _normalize_lanczos_coefficients(coefficients)
+        indices = torch.round(safe_coordinate).to(dtype=torch.int64).unsqueeze(0)
+        coefficients = torch.ones_like(safe_coordinate).unsqueeze(0)
     else:
-        raise ValueError(
-            f"diagonal variance coefficients are unavailable for kernel {kernel!r}"
-        )
-    valid = finite.unsqueeze(-1) & (indices >= 0) & (indices < int(size))
+        if kernel == "bilinear":
+            first, count = 0, 2
+        elif kernel == "bicubic":
+            first, count = -1, 4
+        elif kernel in _CUSTOM_SEPARABLE_KERNELS:
+            first, count = 1 - kernel_support(kernel), 2 * kernel_support(kernel)
+        else:
+            raise ValueError(
+                f"diagonal variance coefficients are unavailable for kernel {kernel!r}"
+            )
+        offsets = torch.arange(
+            first, first + count, device=coordinate.device, dtype=torch.int64
+        ).view(tap_shape)
+        indices = torch.floor(safe_coordinate).to(dtype=torch.int64).unsqueeze(0)
+        indices = indices + offsets
+        delta = safe_coordinate.unsqueeze(0) - indices.to(dtype=coordinate.dtype)
+        if kernel == "bilinear":
+            coefficients = 1.0 - torch.abs(delta)
+        elif kernel == "bicubic":
+            coefficients = keys_cubic_weight(delta, b=0.0, c=0.75)
+        else:
+            coefficients = kernel_weight(kernel, delta)
+            if kernel in _CUSTOM_LANCZOS_KERNELS:
+                coefficients = _normalize_lanczos_coefficients(coefficients, dim=0)
+    valid = finite.unsqueeze(0) & (indices >= 0) & (indices < int(size))
     return indices.clamp(0, int(size) - 1), coefficients * valid.to(
         dtype=coefficients.dtype
     )
+
+
+# Working-set budget (bytes) for one chunk of the separable sampler. Peak memory
+# is O(chunk * taps * channels) instead of O(N * taps^2 * channels). Throughput
+# is flat for chunks of 2^14..2^18 samples on CPU (1M-sample chunks are ~3x
+# slower from cache/memory pressure); the default sits in that plateau.
+_SEPARABLE_WORKING_SET_BYTES = 48 * 1024 * 1024
+_SEPARABLE_MIN_CHUNK = 1 << 12
+_SEPARABLE_MAX_CHUNK = 1 << 20
+
+
+def _axis_tap_count(kernel: MapResamplingKernel) -> int:
+    if kernel == "nearest":
+        return 1
+    if kernel == "bilinear":
+        return 2
+    if kernel == "bicubic":
+        return 4
+    return 2 * kernel_support(kernel)
+
+
+def _separable_chunk_size(taps: int, columns: int, itemsize: int) -> int:
+    per_sample = (
+        itemsize
+        * (2 * taps * columns + 8 * taps)  # gathered rows + products, coefficients
+        + 8 * 3 * taps  # int64 tap indices (x, row base, flat)
+    )
+    chunk = _SEPARABLE_WORKING_SET_BYTES // max(per_sample, 1)
+    return int(max(_SEPARABLE_MIN_CHUNK, min(_SEPARABLE_MAX_CHUNK, chunk)))
+
+
+def _column_weights(coefficients: Tensor, channels: int, with_variance: bool) -> Tensor:
+    """Tap weights per table column: ``w`` for channels, ``w**2`` for variance."""
+    weights = coefficients.unsqueeze(-1)
+    if not with_variance:
+        return weights
+    return torch.cat(
+        [weights.expand(*weights.shape[:-1], channels), weights * weights], dim=-1
+    )
+
+
+def _separable_sample_chunked(
+    planes: Tensor | None,
+    variance: Tensor | None,
+    x: Tensor,
+    y: Tensor,
+    *,
+    kernel: MapResamplingKernel,
+    require_finite: bool,
+    chunk_size: int | None,
+) -> tuple[Tensor | None, Tensor | None]:
+    """Separable-kernel sampling of channels and diagonal variance, chunked.
+
+    ``planes`` is ``[B,C,H,W]`` (``B`` may be an expanded view), ``variance`` an
+    ``[H,W]`` independent-variance map, ``x``/``y`` are ``[B,N]`` pixel
+    coordinates. Per chunk the axis tap indices and coefficients are computed
+    once (``T`` values per axis, not ``T*T``); source channels and variance are
+    gathered together as one channels-last row per tap and combined in two
+    separable stages (columns within a row, then rows), with squared axis
+    coefficients applied to the variance column. The result of every sample is
+    the same sum over the ``T x T`` footprint as the dense formulation, with the
+    normalisation and out-of-bounds masking of ``_axis_interpolation_coefficients``.
+    Returns ``(sampled [B,C,N] | None, variance [B,N] | None)``.
+    """
+    if planes is None and variance is None:
+        raise ValueError("nothing to sample")
+    if planes is not None:
+        batch, channels, height, width = (int(v) for v in planes.shape)
+        dtype, device = planes.dtype, planes.device
+    else:
+        assert variance is not None
+        batch, channels = int(x.shape[0]), 0
+        height, width = (int(v) for v in variance.shape)
+        dtype, device = variance.dtype, variance.device
+    count = int(x.shape[1])
+    columns = channels + (1 if variance is not None else 0)
+    taps = _axis_tap_count(kernel)
+    chunk = (
+        _separable_chunk_size(
+            taps, columns, torch.empty((), dtype=dtype).element_size()
+        )
+        if chunk_size is None
+        else int(chunk_size)
+    )
+    if chunk < 1:
+        raise ValueError("chunk_size must be positive")
+    sampled_out = (
+        torch.empty((batch, channels, count), dtype=dtype, device=device)
+        if planes is not None
+        else None
+    )
+    variance_out = (
+        torch.empty((batch, count), dtype=dtype, device=device)
+        if variance is not None
+        else None
+    )
+    finite_ok = torch.ones((), dtype=torch.bool, device=device)
+    variance_column = (
+        None if variance is None else variance.to(dtype=dtype).reshape(1, -1)
+    )
+    table = None
+    for b in range(batch):
+        if planes is not None and (table is None or planes.stride(0) != 0):
+            table = planes[b].reshape(channels, -1)
+            if variance_column is not None:
+                table = torch.cat([table, variance_column], dim=0)
+            table = table.t().contiguous()
+        elif planes is None and table is None:
+            table = variance_column.t().contiguous()  # type: ignore[union-attr]
+        for start in range(0, count, chunk):
+            stop = min(start + chunk, count)
+            xc = x[b, start:stop].to(dtype=dtype)
+            yc = y[b, start:stop].to(dtype=dtype)
+            if require_finite:
+                finite_ok = (
+                    finite_ok & torch.isfinite(xc).all() & torch.isfinite(yc).all()
+                )
+            x_idx, x_coef = _axis_interpolation_coefficients(
+                xc, size=width, kernel=kernel
+            )
+            y_idx, y_coef = _axis_interpolation_coefficients(
+                yc, size=height, kernel=kernel
+            )
+            x_w = _column_weights(x_coef, channels, variance is not None)
+            y_w = _column_weights(y_coef, channels, variance is not None)
+            acc = None
+            for ty in range(y_idx.shape[0]):
+                flat = x_idx + y_idx[ty] * width
+                row = None
+                for tx in range(x_idx.shape[0]):
+                    gathered = table.index_select(0, flat[tx])
+                    if row is None:
+                        row = gathered * x_w[tx]
+                    else:
+                        row.addcmul_(gathered, x_w[tx])
+                if acc is None:
+                    acc = row * y_w[ty]
+                else:
+                    acc.addcmul_(row, y_w[ty])
+            assert acc is not None
+            if sampled_out is not None:
+                sampled_out[b, :, start:stop] = acc[:, :channels].t()
+            if variance_out is not None:
+                variance_out[b, start:stop] = acc[:, channels]
+    if require_finite and not bool(finite_ok):
+        raise ValueError("x_src and y_src must contain only finite coordinates")
+    return sampled_out, variance_out
 
 
 def sample_image_plane_diagonal_variance(
@@ -452,11 +642,15 @@ def sample_image_plane_diagonal_variance(
                 size=width,
                 kernel=kernel,
             )
+            x_indices = x_indices.movedim(0, -1)
+            x_coefficients = x_coefficients.movedim(0, -1)
             y_indices, y_coefficients = _axis_interpolation_coefficients(
                 flat_y[:, start:stop].to(dtype=source_variance.dtype),
                 size=height,
                 kernel=kernel,
             )
+            y_indices = y_indices.movedim(0, -1)
+            y_coefficients = y_coefficients.movedim(0, -1)
             indices = (
                 y_indices.unsqueeze(-1) * width + x_indices.unsqueeze(-2)
             ).permute(1, 0, 2, 3)
@@ -497,24 +691,20 @@ def sample_image_plane_diagonal_variance(
             )
         return output.reshape(out_height, out_width)
 
-    x_indices, x_coefficients = _axis_interpolation_coefficients(
-        x_src.to(dtype=source_variance.dtype),
-        size=width,
+    _, variance = _separable_sample_chunked(
+        None,
+        source_variance,
+        x_src.reshape(1, -1),
+        y_src.reshape(1, -1),
         kernel=kernel,
+        require_finite=False,
+        chunk_size=None,
     )
-    y_indices, y_coefficients = _axis_interpolation_coefficients(
-        y_src.to(dtype=source_variance.dtype),
-        size=height,
-        kernel=kernel,
-    )
-    flat_indices = y_indices.unsqueeze(-1) * width + x_indices.unsqueeze(-2)
-    coefficients = y_coefficients.unsqueeze(-1) * x_coefficients.unsqueeze(-2)
+    assert variance is not None
+    variance = variance.reshape(x_src.shape)
     if sample_valid is not None:
-        coefficients = coefficients * sample_valid.unsqueeze(-1).unsqueeze(-1).to(
-            dtype=coefficients.dtype
-        )
-    sampled_variance = source_variance.reshape(-1)[flat_indices]
-    return torch.sum(sampled_variance * torch.square(coefficients), dim=(-1, -2))
+        variance = torch.where(sample_valid, variance, torch.zeros_like(variance))
+    return variance
 
 
 def _tan_homography_factors(wcs: WCS) -> tuple[Tensor, Tensor] | None:
@@ -564,7 +754,10 @@ def _tan_homography_factors(wcs: WCS) -> tuple[Tensor, Tensor] | None:
     q_mat = torch.stack((q1, q2, r0), dim=1)  # (3, 3)
 
     s_cd = s * cd
-    shift = torch.tensor([1.0 - float(crpix[0].item()), 1.0 - float(crpix[1].item())], dtype=torch.float64)
+    shift = torch.tensor(
+        [1.0 - float(crpix[0].item()), 1.0 - float(crpix[1].item())],
+        dtype=torch.float64,
+    )
     trans = s_cd @ shift
     a_mat = torch.eye(3, dtype=torch.float64)
     a_mat[:2, :2] = s_cd
