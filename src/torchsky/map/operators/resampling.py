@@ -569,6 +569,135 @@ def _separable_sample_chunked(
     return sampled_out, variance_out
 
 
+def _axis_tap_window(
+    indices: Tensor, coefficients: Tensor
+) -> tuple[Tensor, Tensor, int]:
+    """Window base ``[R]``, slots ``[B, R, T]`` and span of ``[B, R, T]`` taps.
+
+    Only taps with a non-zero coefficient position the window; the others
+    (clamped out-of-image taps, invalid or non-finite points) get slot 0 and
+    add nothing.
+    """
+    active = coefficients != 0
+    sentinel = torch.iinfo(indices.dtype).max
+    base = torch.where(active, indices, torch.full_like(indices, sentinel)).amin(
+        dim=(0, 2)
+    )
+    base = torch.where(base == sentinel, torch.zeros_like(base), base)
+    slots = torch.where(
+        active, indices - base.view(1, -1, 1), torch.zeros_like(indices)
+    )
+    span = int(slots.max()) + 1 if slots.numel() else 1
+    return base, slots, span
+
+
+def _quadrature_batch_variance(
+    source_variance: Tensor,
+    x: Tensor,
+    y: Tensor,
+    valid: Tensor | None,
+    *,
+    kernel: MapResamplingKernel,
+) -> Tensor:
+    """Variance of the mean over ``B`` sample points for ``R`` output pixels.
+
+    ``x``, ``y`` and ``valid`` are ``[B, R]``.  The coefficient of source pixel
+    ``(i, j)`` is ``sum_b wy_b(i) wx_b(j) / B`` (invalid points contribute 0)
+    and the result is ``sum_ij coef**2 * var[i, j]``, accumulated in float64
+    (float32 on MPS).
+    """
+    height, width = int(source_variance.shape[0]), int(source_variance.shape[1])
+    batch, rows_count = int(x.shape[0]), int(x.shape[1])
+    accumulate_dtype = (
+        torch.float32 if source_variance.device.type == "mps" else torch.float64
+    )
+    x_indices, x_coefficients = _axis_interpolation_coefficients(
+        x.to(dtype=source_variance.dtype), size=width, kernel=kernel
+    )
+    y_indices, y_coefficients = _axis_interpolation_coefficients(
+        y.to(dtype=source_variance.dtype), size=height, kernel=kernel
+    )
+    x_indices = x_indices.movedim(0, -1)
+    y_indices = y_indices.movedim(0, -1)
+    x_coefficients = x_coefficients.movedim(0, -1).to(dtype=accumulate_dtype)
+    y_coefficients = y_coefficients.movedim(0, -1).to(dtype=accumulate_dtype)
+    point_scale = torch.full(
+        (batch, rows_count),
+        1.0 / float(batch),
+        dtype=accumulate_dtype,
+        device=source_variance.device,
+    )
+    if valid is not None:
+        point_scale = point_scale * valid.to(dtype=accumulate_dtype)
+    y_coefficients = y_coefficients * point_scale.unsqueeze(-1)
+    x_base, x_slots, x_span = _axis_tap_window(x_indices, x_coefficients)
+    y_base, y_slots, y_span = _axis_tap_window(y_indices, y_coefficients)
+    taps = batch * x_indices.shape[-1] * y_indices.shape[-1]
+    if x_span * y_span <= taps:
+        # The points of one output pixel are a fraction of a source pixel apart:
+        # their taps share a small window.  Accumulate each axis onto window
+        # slots; the summed 2-D coefficient is sum_b wy_b (x) wx_b.
+        x_weights = torch.zeros(
+            (batch, rows_count, x_span),
+            dtype=accumulate_dtype,
+            device=source_variance.device,
+        ).scatter_add_(2, x_slots, x_coefficients)
+        y_weights = torch.zeros(
+            (batch, rows_count, y_span),
+            dtype=accumulate_dtype,
+            device=source_variance.device,
+        ).scatter_add_(2, y_slots, y_coefficients)
+        combined = torch.einsum("brk,brl->rkl", y_weights, x_weights)
+        rows = (y_base.unsqueeze(1) + torch.arange(y_span, device=y_base.device)).clamp(
+            max=height - 1
+        )
+        cols = (x_base.unsqueeze(1) + torch.arange(x_span, device=x_base.device)).clamp(
+            max=width - 1
+        )
+        # Slots past the image edge have zero coefficient.
+        local_variance = source_variance[rows.unsqueeze(-1), cols.unsqueeze(-2)]
+        variance = (
+            torch.square(combined) * local_variance.to(dtype=accumulate_dtype)
+        ).sum(dim=(1, 2))
+        return variance.to(dtype=source_variance.dtype)
+    # Points spread over many source pixels: reduce the explicit terms, sorted
+    # by source index, per run of equal indices (run sums are differences of a
+    # running sum read at each run's last term).
+    indices = (
+        (y_indices.unsqueeze(-1) * width + x_indices.unsqueeze(-2))
+        .permute(1, 0, 2, 3)
+        .reshape(rows_count, taps)
+    )
+    coefficients = (
+        (y_coefficients.unsqueeze(-1) * x_coefficients.unsqueeze(-2))
+        .permute(1, 0, 2, 3)
+        .reshape(rows_count, taps)
+    )
+    sorted_indices, order = torch.sort(indices, dim=1)
+    running = torch.cumsum(torch.gather(coefficients, 1, order), dim=1)
+    run_end = torch.ones_like(sorted_indices, dtype=torch.bool)
+    run_end[:, :-1] = sorted_indices[:, 1:] != sorted_indices[:, :-1]
+    position = torch.arange(taps, dtype=torch.int64, device=indices.device)
+    end_position = torch.where(run_end, position, torch.full_like(position, -1))
+    previous_end = torch.cummax(
+        F.pad(end_position[:, :-1], (1, 0), value=-1), dim=1
+    ).values
+    previous_running = torch.where(
+        previous_end >= 0,
+        torch.gather(running, 1, previous_end.clamp(min=0)),
+        torch.zeros_like(running),
+    )
+    run_coefficient = torch.where(
+        run_end, running - previous_running, torch.zeros_like(running)
+    )
+    source_flat = source_variance.reshape(-1)
+    variance = (
+        source_flat[sorted_indices].to(dtype=accumulate_dtype)
+        * torch.square(run_coefficient)
+    ).sum(dim=1)
+    return variance.to(dtype=source_variance.dtype)
+
+
 def sample_image_plane_diagonal_variance(
     source_variance: Tensor,
     *,
@@ -601,7 +730,6 @@ def sample_image_plane_diagonal_variance(
             raise ValueError("sample_valid must match coordinate shape and device")
         sample_valid = sample_valid.to(dtype=torch.bool)
 
-    height, width = int(source_variance.shape[0]), int(source_variance.shape[1])
     if average_coordinate_batch:
         batch, out_height, out_width = (
             int(x_src.shape[0]),
@@ -617,12 +745,12 @@ def sample_image_plane_diagonal_variance(
             axis_terms = 4
         else:
             axis_terms = 2 * kernel_support(kernel)
+        # Taps of the quadrature points that hit the same source pixel are summed
+        # before squaring (they are one linear operator).
         terms_per_pixel = batch * axis_terms * axis_terms
-        # ponytail: bounded per-pixel sorting is exact and simple; replace the
-        # Python term scan with a segmented kernel only if quadrature profiles it.
         chunk_pixels = max(
             1,
-            min(pixel_count, (64 * 1024 * 1024) // max(48 * terms_per_pixel, 1)),
+            min(pixel_count, (64 * 1024 * 1024) // max(64 * terms_per_pixel, 1)),
         )
         output = torch.empty(
             pixel_count,
@@ -634,60 +762,14 @@ def sample_image_plane_diagonal_variance(
         flat_valid = (
             None if sample_valid is None else sample_valid.reshape(batch, pixel_count)
         )
-        source_flat = source_variance.reshape(-1)
         for start in range(0, pixel_count, chunk_pixels):
             stop = min(start + chunk_pixels, pixel_count)
-            x_indices, x_coefficients = _axis_interpolation_coefficients(
-                flat_x[:, start:stop].to(dtype=source_variance.dtype),
-                size=width,
+            output[start:stop] = _quadrature_batch_variance(
+                source_variance,
+                flat_x[:, start:stop],
+                flat_y[:, start:stop],
+                None if flat_valid is None else flat_valid[:, start:stop],
                 kernel=kernel,
-            )
-            x_indices = x_indices.movedim(0, -1)
-            x_coefficients = x_coefficients.movedim(0, -1)
-            y_indices, y_coefficients = _axis_interpolation_coefficients(
-                flat_y[:, start:stop].to(dtype=source_variance.dtype),
-                size=height,
-                kernel=kernel,
-            )
-            y_indices = y_indices.movedim(0, -1)
-            y_coefficients = y_coefficients.movedim(0, -1)
-            indices = (
-                y_indices.unsqueeze(-1) * width + x_indices.unsqueeze(-2)
-            ).permute(1, 0, 2, 3)
-            coefficients = y_coefficients.unsqueeze(-1) * x_coefficients.unsqueeze(-2)
-            if flat_valid is not None:
-                coefficients = coefficients * flat_valid[:, start:stop].unsqueeze(
-                    -1
-                ).unsqueeze(-1).to(dtype=coefficients.dtype)
-            coefficients = coefficients.permute(1, 0, 2, 3) / float(batch)
-            indices = indices.reshape(stop - start, terms_per_pixel)
-            coefficients = coefficients.reshape(stop - start, terms_per_pixel)
-            sorted_indices, order = torch.sort(indices, dim=1)
-            sorted_coefficients = torch.gather(coefficients, 1, order)
-            current_index = sorted_indices[:, 0]
-            current_coefficient = sorted_coefficients[:, 0]
-            variance = torch.zeros(
-                stop - start,
-                dtype=source_variance.dtype,
-                device=source_variance.device,
-            )
-            for term in range(1, terms_per_pixel):
-                next_index = sorted_indices[:, term]
-                next_coefficient = sorted_coefficients[:, term]
-                same = next_index == current_index
-                variance = variance + torch.where(
-                    same,
-                    torch.zeros_like(variance),
-                    source_flat[current_index] * torch.square(current_coefficient),
-                )
-                current_index = torch.where(same, current_index, next_index)
-                current_coefficient = torch.where(
-                    same,
-                    current_coefficient + next_coefficient,
-                    next_coefficient,
-                )
-            output[start:stop] = variance + source_flat[current_index] * torch.square(
-                current_coefficient
             )
         return output.reshape(out_height, out_width)
 

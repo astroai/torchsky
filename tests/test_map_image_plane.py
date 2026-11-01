@@ -4862,3 +4862,58 @@ def test_coadd_image_plane_deterministic_accumulation(
     assert torch.equal(result_a.weight, result_b.weight)
     if result_a.overlap_count is not None and result_b.overlap_count is not None:
         assert torch.equal(result_a.overlap_count, result_b.overlap_count)
+
+
+@pytest.mark.parametrize("spread", [0.29, 4.0])
+@pytest.mark.parametrize("kernel", ["lanczos3", "bicubic", "bilinear"])
+def test_quadrature_batch_diagonal_variance_matches_dense_operator(
+    kernel, spread
+) -> None:
+    # Four quadrature points per output pixel share most taps; the reduction must
+    # sum shared-tap coefficients before squaring, including at the image edges.
+    # spread=0.29: compact tap window; spread=4: points far apart (sorted terms).
+    generator = torch.Generator().manual_seed(20261101)
+    height, width = 13, 15
+    source_variance = (
+        torch.rand((height, width), generator=generator, dtype=torch.float32) + 0.25
+    )
+    base_x = torch.tensor([[0.0, 3.4, 14.0], [7.5, 1.2, 13.7]], dtype=torch.float32)
+    base_y = torch.tensor([[0.0, 6.1, 12.0], [2.6, 11.9, 0.3]], dtype=torch.float32)
+    offsets = spread * torch.tensor(
+        [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]], dtype=torch.float32
+    )
+    x_src = (base_x.unsqueeze(0) + offsets[:, 0].reshape(4, 1, 1)).clamp(
+        0.0, width - 1.0
+    )
+    y_src = (base_y.unsqueeze(0) + offsets[:, 1].reshape(4, 1, 1)).clamp(
+        0.0, height - 1.0
+    )
+    sample_valid = torch.ones_like(x_src, dtype=torch.bool)
+    sample_valid[2, 1, 1] = False
+    grid = torch.stack(
+        [(2.0 * x_src / (width - 1)) - 1.0, (2.0 * y_src / (height - 1)) - 1.0],
+        dim=-1,
+    )
+    basis = torch.eye(height * width, dtype=torch.float32).reshape(
+        height * width, height, width
+    )
+    sampled_basis = resampling_mod.sample_image_plane_batched_channels(
+        basis, x_src=x_src, y_src=y_src, grid=grid, kernel=kernel
+    )
+    mean_coefficients = (
+        sampled_basis.double() * sample_valid.unsqueeze(1).double()
+    ).mean(dim=0)
+    expected = (
+        torch.square(mean_coefficients) * source_variance.double().reshape(-1, 1, 1)
+    ).sum(dim=0)
+
+    actual = resampling_mod.sample_image_plane_diagonal_variance(
+        source_variance,
+        x_src=x_src,
+        y_src=y_src,
+        kernel=kernel,
+        average_coordinate_batch=True,
+        sample_valid=sample_valid,
+    )
+    assert actual.dtype == torch.float32
+    torch.testing.assert_close(actual.double(), expected, atol=1.0e-6, rtol=1.0e-5)

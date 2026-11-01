@@ -70,6 +70,14 @@ owned by `torchfits`.
   -> 5.5 s, 1200^2 27.6 s -> 13.1 s, 2500^2 (auto-tiled) 403 s -> 198 s on 4
   CPU threads; results equal to float32 rounding (max 4e-6 of the image
   scatter), identical coverage.
+- The exact diagonal variance of flux-quadrature samples (four points per
+  target pixel averaged as one operator) reduced the shared taps with a Python
+  scan over every sorted term. It now accumulates each axis's coefficients on
+  the small tap window the points share (sorted-run reduction when the points
+  spread over more source pixels than they have taps), in float64, without
+  atomics: 3.2x faster on a 600^2 Lanczos-3 batch, inverse variance equal to
+  6e-7 relative. With the source-area change, the Lanczos-3 flux coadds above
+  run in 4.1 s, 8.8 s and 119 s.
 - Tiled image-plane coadds keep the context bitmask on the host, so large
   mosaics no longer exhaust small GPU slices on bookkeeping.
 - A tiled coadd on an accelerator returns its maps and context words on the
