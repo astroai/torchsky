@@ -32,6 +32,8 @@ Survey-scale products are bounded by configuration, not by hope. The main knobs:
 |---|---|---|
 | `torchsky.map.coadd` | `stack=StackConfig(..., tile_size=1024)` | Output tile working set during stacking |
 | `torchsky.map.coadd` | `spatial_tile_hw=(512, 512)` | Spatial tile for projection and accumulation |
+| `torchsky.map.image_plane_coadd.coadd_image_plane` | `spatial_tile_hw=None` (automatic), `tile_memory_budget_bytes`, `auto_tile` | Tiles are chosen from a memory budget (30% of free device memory on CUDA, of available host/cgroup memory otherwise; `TORCHSKY_TILE_MEMORY_BUDGET_BYTES` overrides). Targets that fit are not tiled; a tiled CUDA run keeps the full-size accumulators and results on the host |
+| `torchsky.map.image_plane_coadd.coadd_image_plane` | `propagate_variance=False` | Skips the exact diagonal-variance sampling pass (`inverse_variance`/`correlation_factor` are then `None`) |
 | `torchsky.map.aperture_uncertainty` | `spatial_tile_hw=(512, 512)` | Tile size for the finite-aperture adjoint |
 | `ResampleConfig` | `response_chunk_size=65536` | Source pixels processed per response chunk |
 | `ResampleConfig` | `max_response_entries` | Hard cap on response entries; fails closed instead of growing |
