@@ -15,11 +15,11 @@ from .execution import wcs_has_distortion
 
 def sinc(x: Tensor) -> Tensor:
     pix = torch.pi * x
-    return torch.where(
-        torch.abs(x) < 1e-6,
-        torch.ones_like(x),
-        torch.sin(pix) / pix,
-    )
+    small = torch.abs(x) < 1e-6
+    # Safe denominator: ``torch.where`` evaluates both branches in backward, so the
+    # unselected 0/0 would otherwise inject NaN into the gradient at x == 0.
+    safe = torch.where(small, torch.ones_like(pix), pix)
+    return torch.where(small, 1.0 - pix * pix / 6.0, torch.sin(safe) / safe)
 
 
 def lanczos_weight(x: Tensor, *, a: int) -> Tensor:

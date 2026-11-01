@@ -60,6 +60,10 @@ def splat_bilinear(
     y = xy[..., 1].to(dtype)
     x0 = torch.floor(x)
     y0 = torch.floor(y)
+    # Fractional offsets keep d(weight)/d(position) = +-1 at integer positions
+    # (``abs`` has a zero sub-gradient there); the right-hand derivative is used.
+    fx = x - x0
+    fy = y - y0
 
     out = torch.zeros(batch, hn * wn, device=device, dtype=dtype)
     retained_weight = torch.zeros_like(flux)
@@ -67,8 +71,10 @@ def splat_bilinear(
         for dy in (0.0, 1.0):
             xi = (x0 + dx).long()
             yi = (y0 + dy).long()
-            weight = (1.0 - torch.abs(x - (x0 + dx))) * (1.0 - torch.abs(y - (y0 + dy)))
-            valid = (xi >= 0) & (xi < wn) & (yi >= 0) & (yi < hn) & (weight > 0)
+            wx = fx if dx else 1.0 - fx
+            wy = fy if dy else 1.0 - fy
+            weight = wx * wy
+            valid = (xi >= 0) & (xi < wn) & (yi >= 0) & (yi < hn)
             weight = torch.where(valid, weight, torch.zeros_like(weight))
             retained_weight = retained_weight + weight
             flat = yi.clamp(0, hn - 1) * wn + xi.clamp(0, wn - 1)

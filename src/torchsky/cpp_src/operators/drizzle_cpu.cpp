@@ -19,6 +19,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "torchsky/drizzle_operators.h"
@@ -94,9 +95,38 @@ int64_t drizzle_square_accumulate_cpu(
     const torch::Tensor& out_variance_weight,
     bool with_variance
 ) {
+    TORCH_CHECK(quad_x.dim() == 2 && quad_x.size(1) == 4, "quad_x must have shape (n, 4)");
+    TORCH_CHECK(quad_y.sizes() == quad_x.sizes(), "quad_y must have the same shape as quad_x");
     const int64_t n_quads = quad_x.size(0);
+    TORCH_CHECK(
+        quad_x.scalar_type() == torch::kFloat64 && quad_y.scalar_type() == torch::kFloat64,
+        "quad_x and quad_y must be float64");
+    TORCH_CHECK(
+        numer.scalar_type() == torch::kFloat32 && weight.scalar_type() == torch::kFloat32 &&
+            out_numer.scalar_type() == torch::kFloat32 &&
+            out_weight.scalar_type() == torch::kFloat32,
+        "numer, weight and the output buffers must be float32");
+    TORCH_CHECK(
+        quad_x.is_contiguous() && quad_y.is_contiguous() && numer.is_contiguous() &&
+            weight.is_contiguous() && out_numer.is_contiguous() && out_weight.is_contiguous(),
+        "drizzle_square_accumulate requires contiguous tensors");
+    TORCH_CHECK(
+        numer.dim() == 1 && numer.size(0) == n_quads && weight.dim() == 1 &&
+            weight.size(0) == n_quads,
+        "numer and weight must be 1-D with one entry per quad");
     if (n_quads == 0 || width <= 0 || height <= 0) {
         return 0;
+    }
+    TORCH_CHECK(
+        width <= std::numeric_limits<int64_t>::max() / height &&
+            out_numer.numel() == width * height && out_weight.numel() == width * height,
+        "output buffers must hold width * height elements");
+    if (with_variance) {
+        TORCH_CHECK(
+            out_variance_weight.scalar_type() == torch::kFloat32 &&
+                out_variance_weight.is_contiguous() &&
+                out_variance_weight.numel() == width * height,
+            "out_variance_weight must be a contiguous float32 buffer of width * height elements");
     }
     const double* qx = quad_x.data_ptr<double>();
     const double* qy = quad_y.data_ptr<double>();

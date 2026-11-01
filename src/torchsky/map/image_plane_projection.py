@@ -6,11 +6,11 @@ import math
 from collections.abc import Callable
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 
 from ..sphere.moc import MOC
 from ..wcs import WCS
+from .box_overlap import box_overlap_taps
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
 from . import interpolated_mapping as _interpolated_mapping_module
@@ -174,67 +174,6 @@ def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
     # through a wrong TAN-only shortcut, but after fixing that dispatch the same
     # gate became over-rejective on realistic warped-stack benchmarks.
     return bool(getattr(source_wcs, "sip", None) is not None)
-
-
-def _coarse_grid_shape(
-    height: int, width: int, *, coarse_stride: int = 128
-) -> tuple[int, int, int]:
-    stride = max(1, min(height, width) // coarse_stride, 1)
-    stride = min(stride, 128)
-    hc = max(1, height // stride)
-    wc = max(1, width // stride)
-    if hc < 4 or wc < 4:
-        stride = 1
-        hc, wc = height, width
-    return stride, hc, wc
-
-
-def _interpolate_forward_mapping_from_coarse(
-    source_wcs: WCS,
-    target_wcs: WCS,
-    height: int,
-    width: int,
-    *,
-    device: torch.device,
-    coarse_stride: int = 128,
-) -> tuple[Tensor, Tensor]:
-    stride, hc, wc = _coarse_grid_shape(height, width, coarse_stride=coarse_stride)
-
-    y_coarse = torch.arange(0, height, stride, dtype=torch.float64, device=device)
-    x_coarse = torch.arange(0, width, stride, dtype=torch.float64, device=device)
-
-    yy, xx = torch.meshgrid(y_coarse, x_coarse, indexing="ij")
-    ra_c, dec_c = target_wcs.pixel_to_world(xx, yy)
-    ra_c, dec_c = _convert_world_between_wcs(ra_c, dec_c, target_wcs, source_wcs)
-    x_src_c, y_src_c = source_wcs.world_to_pixel(ra_c, dec_c)
-
-    if stride == 1:
-        x_out = x_src_c.reshape(height, width).to(dtype=torch.float32)
-        y_out = y_src_c.reshape(height, width).to(dtype=torch.float32)
-        return x_out, y_out
-
-    hc, wc = int(y_coarse.numel()), int(x_coarse.numel())
-    coarse = (
-        torch.stack([x_src_c, y_src_c], dim=0)
-        .to(dtype=torch.float32)
-        .reshape(1, 2, hc, wc)
-    )
-
-    y_g = torch.arange(height, dtype=torch.float32, device=device) / stride
-    x_g = torch.arange(width, dtype=torch.float32, device=device) / stride
-
-    # Bicubic grid_sample expects one row/col of margin for boundary handling.
-    # The last coarse pixel has index stride*(Nc-1). Pixels beyond that have
-    # normalized coordinate > 1 and are clamped to border.
-    y_n = y_g / max(hc - 1, 1) * 2.0 - 1.0
-    x_n = x_g / max(wc - 1, 1) * 2.0 - 1.0
-    gy, gx = torch.meshgrid(y_n.clamp(-1.0, 1.0), x_n.clamp(-1.0, 1.0), indexing="ij")
-    grid = torch.stack([gx, gy], dim=-1).unsqueeze(0)
-
-    full = F.grid_sample(
-        coarse, grid, mode="bicubic", padding_mode="border", align_corners=True
-    )
-    return full[0, 0], full[0, 1]
 
 
 def _requires_target_pixel_quadrature(
@@ -1160,7 +1099,11 @@ def _resample_weighted_to_target(
                 device=image.device,
             )
             return _sample_on_source_grid(x_src, y_src, valid_mask=valid)
-        if min(h_tgt, w_tgt) < 500 or _requires_roundtrip_validity_check(source_wcs):
+        if (
+            min(h_tgt, w_tgt) < 500
+            or _requires_roundtrip_validity_check(source_wcs)
+            or resolve_mapping_mode(mapping) != "interpolated"
+        ):
             ra_g, dec_g = _build_target_world_grid(
                 target.wcs,
                 h_tgt,
@@ -1168,11 +1111,13 @@ def _resample_weighted_to_target(
                 device=image.device,
             )
             return _sample_on_world_grid(ra_g, dec_g)
-        x_src, y_src = _interpolate_forward_mapping_from_coarse(
+        # Verified lattice (every pixel within the stated tolerance of the exact
+        # mapping, last row/column included) instead of an unverified coarse grid.
+        x_src, y_src, _ = _interpolated_source_pixels(
             source_wcs,
             target.wcs,
-            h_tgt,
-            w_tgt,
+            (h_tgt, w_tgt),
+            (h_src, w_src),
             device=image.device,
         )
         return _sample_on_source_grid(x_src, y_src, flat_ra=None, flat_dec=None)
@@ -1261,6 +1206,36 @@ def _drizzle_separable_1d_weight(
         torch.sinc(u) * torch.sinc(u / a),
         torch.zeros_like(u),
     )
+
+
+def _forward_box_target_widths(
+    source_wcs: WCS,
+    target_wcs: WCS,
+    x_src: Tensor,
+    y_src: Tensor,
+    x_tgt: Tensor,
+    y_tgt: Tensor,
+    footprint: float,
+) -> tuple[Tensor, Tensor]:
+    """Target-pixel extent of a ``footprint``-wide source-pixel box along x and y.
+
+    The local Jacobian ``d(x_t, y_t) / d(x_s, y_s)`` comes from one-pixel forward
+    differences (exact for affine maps); the box spans ``footprint`` times the length
+    of each target axis' source-pixel row of the Jacobian.
+    """
+    n = int(x_src.numel())
+    xs = torch.cat([x_src + 1.0, x_src])
+    ys = torch.cat([y_src, y_src + 1.0])
+    ra, dec = source_wcs.pixel_to_world(xs, ys)
+    ra, dec = _convert_world_between_wcs(ra, dec, source_wcs, target_wcs)
+    xt, yt = target_wcs.world_to_pixel(ra, dec)
+    xt = xt.to(dtype=torch.float32)
+    yt = yt.to(dtype=torch.float32)
+    dxdx, dxdy = xt[:n] - x_tgt, xt[n:] - x_tgt
+    dydx, dydy = yt[:n] - y_tgt, yt[n:] - y_tgt
+    width_x = footprint * torch.hypot(dxdx, dxdy)
+    width_y = footprint * torch.hypot(dydx, dydy)
+    return width_x, width_y
 
 
 def _forward_project_weighted_to_target(
@@ -1358,6 +1333,8 @@ def _forward_project_weighted_to_target(
 
         x_tgt = x_tgt[finite]
         y_tgt = y_tgt[finite]
+        x_chunk = x_chunk[finite]
+        y_chunk = y_chunk[finite]
         numer_chunk = numer_chunk[finite]
         weight_chunk = weight_chunk[finite]
         if variance_chunk is not None:
@@ -1440,20 +1417,31 @@ def _forward_project_weighted_to_target(
                         )
             continue
 
+        # Box footprint: pixfrac source pixels wide, scaled to target pixels by the
+        # local Jacobian, then overlapped exactly with the target pixel grid.
         footprint = max(float(drizzle_pixfrac), 1e-6)
-        x_tgt = x_tgt - 0.5 * (footprint - 1.0)
-        y_tgt = y_tgt - 0.5 * (footprint - 1.0)
-        x0 = torch.floor(x_tgt).to(dtype=torch.int64)
-        y0 = torch.floor(y_tgt).to(dtype=torch.int64)
-        dx = torch.clamp((x_tgt - x0.to(dtype=torch.float32)) / footprint, 0.0, 1.0)
-        dy = torch.clamp((y_tgt - y0.to(dtype=torch.float32)) / footprint, 0.0, 1.0)
-        for off_y, wy in ((0, 1.0 - dy), (1, dy)):
-            iy = y0 + off_y
+        width_x, width_y = _forward_box_target_widths(
+            source_wcs, target.wcs, x_chunk, y_chunk, x_tgt, y_tgt, footprint
+        )
+        ok = torch.isfinite(width_x) & torch.isfinite(width_y)
+        if not bool(ok.all()):
+            # Footprints with a non-finite Jacobian are skipped, like non-finite centres.
+            x_tgt, y_tgt = x_tgt[ok], y_tgt[ok]
+            width_x, width_y = width_x[ok], width_y[ok]
+            numer_chunk, weight_chunk = numer_chunk[ok], weight_chunk[ok]
+            if variance_chunk is not None:
+                variance_chunk = variance_chunk[ok]
+            if x_tgt.numel() == 0:
+                continue
+        first_x, taps_x = box_overlap_taps(x_tgt, width_x)
+        first_y, taps_y = box_overlap_taps(y_tgt, width_y)
+        for ky in range(taps_y.shape[0]):
+            iy = first_y + ky
             if not bool(((iy >= 0) & (iy < height)).any()):
                 continue
-            for off_x, wx in ((0, 1.0 - dx), (1, dx)):
-                ix = x0 + off_x
-                frac = wx * wy
+            for kx in range(taps_x.shape[0]):
+                ix = first_x + kx
+                frac = taps_x[kx] * taps_y[ky]
                 inside = (
                     (ix >= 0) & (ix < width) & (iy >= 0) & (iy < height) & (frac > 0.0)
                 )

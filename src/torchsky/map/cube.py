@@ -16,6 +16,7 @@ from torch import Tensor
 
 from ..spectral import SpectralAxis
 from ..wcs import WCS
+from .box_overlap import box_overlap_taps
 from .calibration import (
     _apply_observation_calibration,
     _load_observation_weight_map,
@@ -95,7 +96,7 @@ def _coadd_ifu_3d_cube(
     map_device = _resolve_map_device(device)
     read_dev = str(map_device)
 
-    if isinstance(target, PlannedImagePlaneCubeTarget):
+    if isinstance(target, (PlannedImagePlaneCubeTarget, CubeTarget)):
         header_dict = dict(target.header)
         H, W = int(target.shape[0]), int(target.shape[1])
         if spectral_axis is None:
@@ -304,20 +305,23 @@ def _coadd_ifu_3d_cube(
                 if spectral_kernel == "drizzle"
                 else 1.0
             )
-            xs = xt - 0.5 * (pf_xy - 1.0)
-            ys = yt - 0.5 * (pf_xy - 1.0)
-            zs = zt - 0.5 * (pf_z - 1.0)
-            x0 = torch.floor(xs).to(torch.int64)
-            y0 = torch.floor(ys).to(torch.int64)
-            z0 = torch.floor(zs).to(torch.int64)
-            dx = torch.clamp((xs - x0.to(torch.float32)) / pf_xy, 0.0, 1.0)
-            dy = torch.clamp((ys - y0.to(torch.float32)) / pf_xy, 0.0, 1.0)
-            dz = torch.clamp((zs - z0.to(torch.float32)) / pf_z, 0.0, 1.0)
-            for oz, wz in ((0, 1.0 - dz), (1, dz)):
+            if spectral_kernel == "drizzle":
+                # Exact box/voxel overlap; footprints are in output voxels.
+                x0, wxs = box_overlap_taps(xt, pf_xy)
+                y0, wys = box_overlap_taps(yt, pf_xy)
+                z0, wzs = box_overlap_taps(zt, pf_z)
+            else:
+                # Trilinear splat.
+                x0, y0, z0 = (torch.floor(v).to(torch.int64) for v in (xt, yt, zt))
+                dx, dy, dz = xt - x0, yt - y0, zt - z0
+                wxs = torch.stack([1.0 - dx, dx])
+                wys = torch.stack([1.0 - dy, dy])
+                wzs = torch.stack([1.0 - dz, dz])
+            for oz, wz in enumerate(wzs):
                 iz = z0 + oz
-                for oy, wy in ((0, 1.0 - dy), (1, dy)):
+                for oy, wy in enumerate(wys):
                     iy = y0 + oy
-                    for ox, wx in ((0, 1.0 - dx), (1, dx)):
+                    for ox, wx in enumerate(wxs):
                         ix = x0 + ox
                         frac = wz * wy * wx
                         in_b = (
@@ -549,7 +553,7 @@ def coadd_cube(
             device=device,
             background_estimator=background_estimator,
         )
-    if isinstance(target, PlannedImagePlaneCubeTarget):
+    if isinstance(target, (PlannedImagePlaneCubeTarget, CubeTarget)):
         target_hdr = dict(target.header)
         if spectral_axis is None:
             spectral_axis = target.spectral_axis

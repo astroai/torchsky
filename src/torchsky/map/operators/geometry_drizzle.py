@@ -51,18 +51,30 @@ def _source_row_vertical_bounds(
     source_height: int,
     target_height: int,
 ) -> tuple[Tensor, Tensor]:
-    """Point-drizzle center bounds preserving the established outer-edge contract."""
-    lower = torch.full_like(source_y, -_DRIZZLE_BOUNDARY_EPS)
+    """Point-drizzle y-centre bounds, the same ``[-0.5, n - 0.5]`` edges as x.
+
+    ``source_height`` is kept for call compatibility; no source row is special.
+    """
+    lower = torch.full_like(source_y, -0.5 - _DRIZZLE_BOUNDARY_EPS)
     upper = torch.full_like(
         source_y,
         float(target_height - 1) + 0.5 + _DRIZZLE_BOUNDARY_EPS,
     )
-    upper = torch.where(
-        source_y >= float(source_height - 1),
-        float(target_height - 1) + _DRIZZLE_BOUNDARY_EPS,
-        upper,
-    )
     return lower, upper
+
+
+def _relu_split(x: Tensor) -> Tensor:
+    """``max(x, 0)`` whose gradient at exactly ``x == 0`` is 1/2 (``Tensor.clamp`` gives 0).
+
+    Pixel-aligned grids put polygon vertices exactly on box edges, where a zero
+    sub-gradient would drop the boundary contribution from autograd.
+    """
+    return torch.maximum(x, torch.zeros_like(x))
+
+
+def _unit_clamp_split(x: Tensor) -> Tensor:
+    """``clamp(x, 0, 1)`` with tie-splitting gradients at both bounds."""
+    return torch.minimum(_relu_split(x), torch.ones_like(x))
 
 
 def _positive_part_mean(lo: Tensor, hi: Tensor) -> Tensor:
@@ -73,8 +85,8 @@ def _positive_part_mean(lo: Tensor, hi: Tensor) -> Tensor:
     all other cases are the trapezoid ``(max(lo, 0) + max(hi, 0)) / 2``.  Both branches
     are sums of non-negative terms, so there is no cancellation for near-vertical edges.
     """
-    p = lo.clamp(min=0.0)
-    q = hi.clamp(min=0.0)
+    p = _relu_split(lo)
+    q = _relu_split(hi)
     crossing = (torch.minimum(lo, hi) < 0.0) & (torch.maximum(lo, hi) > 0.0)
     top = torch.maximum(p, q)
     span = (hi - lo).abs().clamp(min=1.0e-300)
@@ -112,8 +124,8 @@ def _unit_box_overlap_areas(x: Tensor, y: Tensor) -> Tensor:
         & (y.amax(dim=0) > 0.0)
     )
 
-    ya = y.clamp(0.0, 1.0)
-    yb = y_next.clamp(0.0, 1.0)
+    ya = _unit_clamp_split(y)
+    yb = _unit_clamp_split(y_next)
     clipped_dy = yb - ya
     safe_dy = torch.where(dy == 0.0, torch.ones_like(dy), dy)
     ta = (ya - y) / safe_dy
@@ -123,7 +135,7 @@ def _unit_box_overlap_areas(x: Tensor, y: Tensor) -> Tensor:
     mean_clamped = _positive_part_mean(xa, xb) - _positive_part_mean(xa - 1.0, xb - 1.0)
     signed = (clipped_dy * mean_clamped).sum(dim=0)
     return torch.where(
-        overlapping, (signed * sign).clamp(min=0.0), torch.zeros_like(signed)
+        overlapping, _relu_split(signed * sign), torch.zeros_like(signed)
     )
 
 

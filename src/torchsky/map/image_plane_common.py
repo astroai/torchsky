@@ -186,7 +186,9 @@ def _coerce_target_header(
 ) -> dict[str, Any] | None:
     if target is None:
         return None
-    if isinstance(target, (PlannedImagePlaneTarget, PlannedImagePlaneCubeTarget)):
+    if isinstance(
+        target, (PlannedImagePlaneTarget, PlannedImagePlaneCubeTarget, CubeTarget)
+    ):
         return dict(target.header)
     if isinstance(target, WCS):
         return target.to_header()

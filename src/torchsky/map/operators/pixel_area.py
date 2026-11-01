@@ -71,6 +71,19 @@ def _spherical_pixel_area_sr(wcs, x: Tensor, y: Tensor) -> Tensor:
     )
 
 
+def _float64_wcs(wcs):
+    """The WCS on a device with float64 support.
+
+    MPS has no float64, and world coordinates in float32 degrees are quantised at
+    ~1e-5 deg (tens of per cent of an arcsecond pixel), so spherical areas are
+    evaluated on the CPU in float64 instead.
+    """
+    dev = getattr(wcs, "device", None)
+    if isinstance(dev, torch.device) and dev.type == "mps":
+        return wcs.to(torch.device("cpu"))
+    return wcs
+
+
 def pixel_area_sr_at(wcs, x: Tensor, y: Tensor) -> Tensor:
     """Return local pixel solid angles at arbitrary pixel coordinates.
 
@@ -78,10 +91,15 @@ def pixel_area_sr_at(wcs, x: Tensor, y: Tensor) -> Tensor:
     Jacobian follows the same convention as :func:`pixel_area_sr_map`, but
     avoids constructing a full detector-sized area map for sparse footprints.
     """
+    caller_wcs_dev = getattr(wcs, "device", None)
+    wcs = _float64_wcs(wcs)
     wcs_dev = getattr(wcs, "device", None)
     if not isinstance(x, Tensor) and not isinstance(y, Tensor):
         target_dev = wcs_dev if isinstance(wcs_dev, torch.device) else torch.device("cpu")
-        out_dev = target_dev
+        # Results stay on the caller's WCS device even when evaluated on the CPU.
+        out_dev = (
+            caller_wcs_dev if isinstance(caller_wcs_dev, torch.device) else target_dev
+        )
     else:
         reference = x if isinstance(x, Tensor) else y
         assert isinstance(reference, Tensor)
@@ -119,6 +137,7 @@ def pixel_area_sr_map(
     y0, x0 = max(int(y0), 0), max(int(x0), 0)
     y1, x1 = min(int(y1), height), min(int(x1), width)
     out_h, out_w = max(y1 - y0, 0), max(x1 - x0, 0)
+    wcs = _float64_wcs(wcs)
     wcs_dev = getattr(wcs, "device", device)
     if not isinstance(wcs_dev, torch.device):
         wcs_dev = torch.device(wcs_dev)
@@ -147,6 +166,7 @@ def representative_pixel_area_sr(
 ) -> float:
     """Estimate a representative central-pixel solid angle in steradians."""
     height, width = int(shape[0]), int(shape[1])
+    wcs = _float64_wcs(wcs)
     wcs_dev = getattr(wcs, "device", device)
     if not isinstance(wcs_dev, torch.device):
         wcs_dev = torch.device(wcs_dev)
