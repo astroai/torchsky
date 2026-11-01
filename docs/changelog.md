@@ -89,6 +89,14 @@ owned by `torchfits`.
   observation. Lanczos-3 coadd of 135 NIRCam exposures onto 512^2 pixels:
   213 s -> 24 s on 8 CPU threads, 217 s -> 6 s on a GPU slice; outputs
   bit-identical. Evidence: torchsky-harness `campaigns/adass2026` speed bench.
+- Large output grids (same 135 NIRCam exposures, 566 Mpix, onto 5025 x 5018
+  pixels at 0.04", 8 CPU threads / H100 MIG 1g.12gb, wall clock with reads):
+  Lanczos-3 784 s -> 221 s on CPU (SWarp 2.41: 144 s), OOM -> 65 s on GPU;
+  exact square drizzle 1849 s -> 149 s on CPU, 584 s -> 148 s on GPU (STScI
+  drizzle 3.0: 245 s). 512^2 field: Lanczos-3 24 s -> 14 s CPU (SWarp 30 s),
+  5.2 s GPU; drizzle 124 s -> 71 s CPU (STScI 171 s), 27 s GPU. Outputs
+  unchanged: drizzle = STScI drizzle to 2e-6 sigma, CPU and GPU drizzle
+  bitwise identical, Lanczos-3 CPU vs GPU 1e-7 sigma.
 
 ## [0.4.0] - Unreleased
 
