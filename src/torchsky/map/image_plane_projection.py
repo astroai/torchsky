@@ -13,6 +13,7 @@ from ..sphere.moc import MOC
 from ..wcs import WCS
 from .fft_affine_ldu import resample_fft_ldu_affine_2d
 from .fft_resample import resample_diagonal_affine_fft2d, resample_translation_fft2d
+from . import interpolated_mapping as _interpolated_mapping_module
 from .interpolated_mapping import (
     interpolated_inverse_mapping,
     resolve_mapping_mode,
@@ -312,14 +313,33 @@ def _roundtrip_validity_mask(
     return valid.reshape_as(x_src)
 
 
-def _use_interpolated_mapping(source_wcs: WCS, mapping: str | None) -> bool:
+def _use_interpolated_mapping(
+    source_wcs: WCS,
+    mapping: str | None,
+    *,
+    device: torch.device | None = None,
+    n_pixels: int | None = None,
+) -> bool:
     """Interpolate the target -> source pixel mapping for distorted / non-TAN sources.
 
     Plain TAN sources keep the analytic path (homography or exact world -> pixel,
     both cheap); SIP and every non-TAN projection (TPV, ...) have an iterative or
     per-pixel inverse that the verified coarse lattice replaces.
+
+    On an accelerator the exact inverse is one wide data-parallel solve, while the
+    lattice is a fixed chain of small launch-bound solves; the default mapping then
+    switches to the lattice only for windows of at least
+    :data:`~torchsky.map.interpolated_mapping.MAPPING_MIN_PIXELS_ACCELERATOR` pixels.  An explicit ``mapping=`` is honoured.
     """
     if resolve_mapping_mode(mapping) != "interpolated":
+        return False
+    if (
+        mapping is None
+        and device is not None
+        and device.type != "cpu"
+        and n_pixels is not None
+        and n_pixels < _interpolated_mapping_module.MAPPING_MIN_PIXELS_ACCELERATOR
+    ):
         return False
     return bool(
         getattr(source_wcs, "sip", None) is not None
@@ -1006,7 +1026,12 @@ def _resample_weighted_to_target(
             flat_dec=flat_dec,
         )
 
-    use_interpolated_mapping = _use_interpolated_mapping(source_wcs, mapping)
+    use_interpolated_mapping = _use_interpolated_mapping(
+        source_wcs,
+        mapping,
+        device=image.device,
+        n_pixels=int(target.shape[0]) * int(target.shape[1]),
+    )
 
     if not _requires_target_pixel_quadrature(
         source_wcs,

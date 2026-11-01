@@ -45,6 +45,9 @@ _MIN_PIXELS_FOR_LATTICE = 4096
 
 # "interpolated" (verified coarse lattice) or "exact" (per-pixel inverse).
 MAPPING_MODE = "interpolated"
+# On an accelerator the default mode uses the lattice only for target windows of at
+# least this many pixels (see ``image_plane_projection._use_interpolated_mapping``).
+MAPPING_MIN_PIXELS_ACCELERATOR = 1 << 22
 
 _T_LO = (3.0 - math.sqrt(3.0)) / 6.0
 _T_HI = 1.0 - _T_LO
@@ -179,12 +182,6 @@ def _level(
     sy = float(height - 1) / (ny - 1)
     sx = float(width - 1) / (nx - 1)
     gy, gx = torch.meshgrid(ys, xs, indexing="ij")
-    nx_src, ny_src, n_ok = evaluate(gx.reshape(-1), gy.reshape(-1))
-    nodes = torch.stack([nx_src.reshape(ny, nx), ny_src.reshape(ny, nx)], dim=0)
-    node_bad = (~n_ok.reshape(ny, nx)) | ~torch.isfinite(nodes).all(dim=0)
-    nodes = torch.where(torch.isfinite(nodes), nodes, torch.zeros_like(nodes))
-    padded = _pad_nodes(_pad_nodes(nodes, 1), 2)
-
     # Verification points in every cell.  The leading Catmull-Rom error term of a
     # smooth map is ~ f_xxx h^3 t (1 - t) (1 - 2t): it vanishes at the centre and on
     # the lattice lines, so those are blind spots.  Its extrema are at
@@ -193,11 +190,28 @@ def _level(
     cy_idx = torch.arange(ny - 1, device=device, dtype=torch.float64)
     cx_idx = torch.arange(nx - 1, device=device, dtype=torch.float64)
     cell_err = torch.zeros((ny - 1, nx - 1), dtype=torch.float64, device=device)
+    verify_u = []
     for t_y, t_x in _VERIFY_OFFSETS:
         u_y, u_x = torch.meshgrid(cy_idx + t_y, cx_idx + t_x, indexing="ij")
-        u_y, u_x = u_y.reshape(-1), u_x.reshape(-1)
+        verify_u.append((u_y.reshape(-1), u_x.reshape(-1)))
+    # One evaluator call for the nodes and all verification points: the exact mapping
+    # is an iterative per-point solve, so on an accelerator the cost of a call is
+    # dominated by kernel launches, not by the number of points.
+    eval_x = torch.cat([gx.reshape(-1)] + [u_x * sx for _, u_x in verify_u])
+    eval_y = torch.cat([gy.reshape(-1)] + [u_y * sy for u_y, _ in verify_u])
+    all_x, all_y, all_ok = _evaluate_exact_chunked(evaluate, eval_x, eval_y)
+    n_nodes = ny * nx
+    nx_src, ny_src, n_ok = all_x[:n_nodes], all_y[:n_nodes], all_ok[:n_nodes]
+    nodes = torch.stack([nx_src.reshape(ny, nx), ny_src.reshape(ny, nx)], dim=0)
+    node_bad = (~n_ok.reshape(ny, nx)) | ~torch.isfinite(nodes).all(dim=0)
+    nodes = torch.where(torch.isfinite(nodes), nodes, torch.zeros_like(nodes))
+    padded = _pad_nodes(_pad_nodes(nodes, 1), 2)
+
+    n_cells = (ny - 1) * (nx - 1)
+    for k, (u_y, u_x) in enumerate(verify_u):
         interp = _interpolate_points(padded, u_y, u_x, ny, nx)
-        ex, ey, eok = evaluate(u_x * sx, u_y * sy)
+        lo = n_nodes + k * n_cells
+        ex, ey, eok = all_x[lo : lo + n_cells], all_y[lo : lo + n_cells], all_ok[lo : lo + n_cells]
         err = torch.hypot(interp[0] - ex, interp[1] - ey)
         err = torch.where(
             eok & torch.isfinite(err), err, torch.full_like(err, float("inf"))
