@@ -2,11 +2,30 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 from torch import Tensor
 
 _DRIZZLE_BOUNDARY_EPS = 1.0e-4
+# Candidate (quad, box) pairs evaluated per tensor batch.  The CPU limit keeps the working
+# set of the ~100 elementwise passes inside the cache; accelerators amortise launches with
+# larger batches.
 _MAX_OVERLAP_CANDIDATE_PAIRS = 65_536
+_MAX_OVERLAP_CANDIDATE_PAIRS_ACCELERATOR = 1_048_576
+# ``TORCHSKY_DRIZZLE_NATIVE=0`` forces the pure-torch overlap path (identical semantics).
+_NATIVE_OVERLAP_ENABLED = os.environ.get("TORCHSKY_DRIZZLE_NATIVE", "1") != "0"
+
+
+def _native_overlap_op():
+    """Return the compiled CPU overlap-accumulation operator, or ``None``."""
+    if not _NATIVE_OVERLAP_ENABLED:
+        return None
+    from ..._native import cpp
+
+    if cpp is None:
+        return None
+    return getattr(torch.ops.torchsky, "drizzle_square_accumulate", None)
 
 
 def _iter_valid_source_pixel_chunks(valid: Tensor, chunk_pixels: int):
@@ -46,99 +65,66 @@ def _source_row_vertical_bounds(
     return lower, upper
 
 
-def _half_plane_clip_batch(
-    x: Tensor,
-    y: Tensor,
-    n: Tensor,
-    axis: int,
-    boundaries: Tensor,
-    keep_greater: bool,
-) -> tuple[Tensor, Tensor, Tensor]:
-    M, V = x.shape
-    device = x.device
+def _positive_part_mean(lo: Tensor, hi: Tensor) -> Tensor:
+    """Mean of ``max(u, 0)`` along a segment whose ends carry ``u = lo`` and ``u = hi``.
 
-    nan_scalar = torch.tensor(float("nan"), device=device)
-    Vn_slots = 2 * V
-    slots = torch.full((M, Vn_slots, 2), float("nan"), dtype=x.dtype, device=device)
-    idx_m = torch.arange(M, device=device)
+    Exact for a linear ``u``.  A sign change splits the segment at the zero crossing,
+    where the positive branch is a triangle of mean ``max(lo, hi)**2 / (2 |hi - lo|)``;
+    all other cases are the trapezoid ``(max(lo, 0) + max(hi, 0)) / 2``.  Both branches
+    are sums of non-negative terms, so there is no cancellation for near-vertical edges.
+    """
+    p = lo.clamp(min=0.0)
+    q = hi.clamp(min=0.0)
+    crossing = (torch.minimum(lo, hi) < 0.0) & (torch.maximum(lo, hi) > 0.0)
+    top = torch.maximum(p, q)
+    span = (hi - lo).abs().clamp(min=1.0e-300)
+    return torch.where(crossing, top * top / (2.0 * span), 0.5 * (p + q))
 
-    def inside(vals: Tensor, bnd: Tensor) -> Tensor:
-        return vals >= bnd if keep_greater else vals <= bnd
 
-    bnd = boundaries
+def _unit_box_overlap_areas(x: Tensor, y: Tensor) -> Tensor:
+    """Exact area of convex quadrilaterals ``x[:, k], y[:, k]`` inside ``[0, 1]**2``.
 
-    last_idx = (n - 1).clamp(min=0)
-    e_valid = n > 0
-    px = x[idx_m, last_idx]
-    py = y[idx_m, last_idx]
-    cx_ = x[:, 0]
-    cy_ = y[:, 0]
+    ``x`` and ``y`` have shape ``(4, P)`` (vertex-major, contiguous rows) and are given
+    relative to the lower-left corner of the box.  The overlap is the Green's-theorem
+    boundary integral ``oint clamp(x, 0, 1) dy`` over the polygon edges clipped to
+    ``0 <= y <= 1`` (the specialised axis-aligned form of what STScI ``boxer``/``sgarea``
+    do per edge), so no intermediate polygon is built.  A separating-axis test (the four
+    quad edge normals and the two box axes) returns exactly zero for non-overlapping
+    candidates instead of rounding noise.
+    """
+    x_next = torch.roll(x, shifts=-1, dims=0)
+    y_next = torch.roll(y, shifts=-1, dims=0)
+    dx = x_next - x
+    dy = y_next - y
+    # Orientation from the shoelace sum: +1 counter-clockwise, -1 clockwise, 0 degenerate.
+    sign = torch.sign((x * y_next - x_next * y).sum(dim=0))
+    # Separating axis on the quad edges: the box corner deepest inside each edge's
+    # half-plane must be strictly inside, otherwise the box and the quad do not overlap.
+    ex = dx * sign
+    ey = dy * sign
+    deepest = ex.clamp(min=0.0) + (-ey).clamp(min=0.0) - ex * y + ey * x
+    overlapping = (deepest > 0.0).all(dim=0) & (sign != 0.0)
+    # ... and on the two box axes.
+    overlapping &= (
+        (x.amin(dim=0) < 1.0)
+        & (x.amax(dim=0) > 0.0)
+        & (y.amin(dim=0) < 1.0)
+        & (y.amax(dim=0) > 0.0)
+    )
 
-    pv = px if axis == 0 else py
-    cv = cx_ if axis == 0 else cy_
-    pi = inside(pv, bnd)
-    ci = inside(cv, bnd)
-
-    dv = cv - pv
-    dv_s = torch.where(torch.abs(dv) < 1e-12, torch.ones_like(dv), dv)
-    t = torch.where(torch.abs(dv) < 1e-12, torch.zeros_like(dv), (bnd - pv) / dv_s)
-    xi_ = px + t * (cx_ - px)
-    yi_ = py + t * (cy_ - py)
-
-    add_both = ci & ~pi
-    add_curr = ci & pi
-    add_int = ~ci & pi
-
-    s0_mask = (add_both | add_int) & e_valid
-    s1_mask = (add_both | add_curr) & e_valid
-    slots[:, 0, 0] = torch.where(s0_mask, xi_, nan_scalar)
-    slots[:, 0, 1] = torch.where(s0_mask, yi_, nan_scalar)
-    slots[:, 1, 0] = torch.where(s1_mask, cx_, nan_scalar)
-    slots[:, 1, 1] = torch.where(s1_mask, cy_, nan_scalar)
-
-    for e in range(1, V):
-        px = x[:, e - 1]
-        py = y[:, e - 1]
-        cx_ = x[:, e]
-        cy_ = y[:, e]
-
-        pv = px if axis == 0 else py
-        cv = cx_ if axis == 0 else cy_
-        pi = inside(pv, bnd)
-        ci = inside(cv, bnd)
-        e_valid = e < n
-
-        dv = cv - pv
-        dv_s = torch.where(torch.abs(dv) < 1e-12, torch.ones_like(dv), dv)
-        t = torch.where(torch.abs(dv) < 1e-12, torch.zeros_like(dv), (bnd - pv) / dv_s)
-        xi_ = px + t * (cx_ - px)
-        yi_ = py + t * (cy_ - py)
-
-        add_both = ci & ~pi
-        add_curr = ci & pi
-        add_int = ~ci & pi
-
-        s0_mask = (add_both | add_int) & e_valid
-        s1_mask = (add_both | add_curr) & e_valid
-        s0 = 2 * e
-        s1 = 2 * e + 1
-        slots[:, s0, 0] = torch.where(s0_mask, xi_, nan_scalar)
-        slots[:, s0, 1] = torch.where(s0_mask, yi_, nan_scalar)
-        slots[:, s1, 0] = torch.where(s1_mask, cx_, nan_scalar)
-        slots[:, s1, 1] = torch.where(s1_mask, cy_, nan_scalar)
-
-    is_nan = torch.isnan(slots[..., 0])
-    count = Vn_slots - is_nan.sum(dim=-1)
-    n_out = count.clamp(max=V + 1)
-    order = torch.argsort(is_nan.to(torch.int64), dim=-1, stable=True)
-    x_all = torch.gather(slots[..., 0], 1, order)
-    y_all = torch.gather(slots[..., 1], 1, order)
-    x_out = x_all[:, : V + 1]
-    y_out = y_all[:, : V + 1]
-    x_out = torch.nan_to_num(x_out, 0.0)
-    y_out = torch.nan_to_num(y_out, 0.0)
-
-    return x_out, y_out, n_out
+    ya = y.clamp(0.0, 1.0)
+    yb = y_next.clamp(0.0, 1.0)
+    clipped_dy = yb - ya
+    safe_dy = torch.where(dy == 0.0, torch.ones_like(dy), dy)
+    ta = (ya - y) / safe_dy
+    tb = (yb - y) / safe_dy
+    xa = x + dx * ta
+    xb = x + dx * tb
+    mean_clamped = _positive_part_mean(xa, xb) - _positive_part_mean(xa - 1.0, xb - 1.0)
+    signed = (clipped_dy * mean_clamped).sum(dim=0)
+    return torch.where(
+        overlapping, (signed * sign).clamp(min=0.0), torch.zeros_like(signed)
+    )
 
 
 def _batch_quads_pixel_areas(
@@ -146,55 +132,28 @@ def _batch_quads_pixel_areas(
     quad_y: Tensor,
     centers: Tensor,
 ) -> Tensor:
-    """Clip one quadrilateral per target-pixel centre in one tensor batch."""
+    """Overlap area of each quadrilateral with the unit pixel box at its own centre."""
     M = centers.shape[0]
     if M == 0:
         return torch.empty(0, dtype=quad_x.dtype, device=quad_x.device)
-
-    x = quad_x.clone()
-    y = quad_y.clone()
-    n = torch.full((M,), 4, dtype=torch.int64, device=quad_x.device)
-
-    b = centers[:, 0] - 0.5
-    x, y, n = _half_plane_clip_batch(x, y, n, 0, b, keep_greater=True)
-
-    b = centers[:, 0] + 0.5
-    x, y, n = _half_plane_clip_batch(x, y, n, 0, b, keep_greater=False)
-
-    b = centers[:, 1] - 0.5
-    x, y, n = _half_plane_clip_batch(x, y, n, 1, b, keep_greater=True)
-
-    b = centers[:, 1] + 0.5
-    x, y, n = _half_plane_clip_batch(x, y, n, 1, b, keep_greater=False)
-
-    Vn = x.shape[1]
-    x_r = torch.cat([x[:, 1:], x[:, 0:1]], dim=1)
-    y_r = torch.cat([y[:, 1:], y[:, 0:1]], dim=1)
-    s1 = (x[:, : Vn - 1] * y_r[:, : Vn - 1] - x_r[:, : Vn - 1] * y[:, : Vn - 1]).sum(
-        dim=1
+    left = (centers[:, 0] - 0.5).unsqueeze(0)
+    bottom = (centers[:, 1] - 0.5).unsqueeze(0)
+    return _unit_box_overlap_areas(
+        quad_x.t().contiguous() - left, quad_y.t().contiguous() - bottom
     )
-    idx = (n - 1).clamp(min=0).unsqueeze(1)
-    xn1 = torch.gather(x, 1, idx).squeeze(1)
-    yn1 = torch.gather(y, 1, idx).squeeze(1)
-    s2 = xn1 * y[:, 0] - x[:, 0] * yn1
-    valid = n >= 3
-    s = s1 + s2 * valid.to(s1.dtype)
-    areas = 0.5 * s.abs()
-    areas = areas * valid.to(areas.dtype)
-
-    return areas
 
 
 def _quadrilateral_areas_and_validity(
     quad_x: Tensor, quad_y: Tensor
 ) -> tuple[Tensor, Tensor]:
-    next_x = torch.roll(quad_x, shifts=-1, dims=1)
-    next_y = torch.roll(quad_y, shifts=-1, dims=1)
-    following_x = torch.roll(quad_x, shifts=-2, dims=1)
-    following_y = torch.roll(quad_y, shifts=-2, dims=1)
-    turns = (next_x - quad_x) * (following_y - next_y) - (
-        next_y - quad_y
-    ) * (following_x - next_x)
+    """Quadrilateral areas and strict convexity (all four turns of one sign)."""
+    next_x = torch.cat((quad_x[:, 1:], quad_x[:, :1]), dim=1)
+    next_y = torch.cat((quad_y[:, 1:], quad_y[:, :1]), dim=1)
+    edge_x = next_x - quad_x
+    edge_y = next_y - quad_y
+    following_x = torch.cat((edge_x[:, 1:], edge_x[:, :1]), dim=1)
+    following_y = torch.cat((edge_y[:, 1:], edge_y[:, :1]), dim=1)
+    turns = edge_x * following_y - edge_y * following_x
     valid = (turns > 0.0).all(dim=1) | (turns < 0.0).all(dim=1)
     areas = 0.5 * torch.abs(
         (quad_x[:, 2] - quad_x[:, 0]) * (quad_y[:, 3] - quad_y[:, 1])
@@ -217,11 +176,66 @@ def _accumulate_quadrilateral_overlaps(
 ) -> None:
     if quad_x.numel() == 0:
         return
+    native = _native_overlap_op()
+    if (
+        native is not None
+        # The native kernel has no autograd formula: differentiable inputs use the torch path.
+        and not (
+            torch.is_grad_enabled()
+            and any(
+                t.requires_grad
+                for t in (
+                    quad_x,
+                    quad_y,
+                    quad_numer,
+                    quad_weight,
+                    flat_numer,
+                    flat_weight,
+                )
+            )
+        )
+        and quad_x.device.type == "cpu"
+        and quad_x.dtype == torch.float64
+        and quad_y.dtype == torch.float64
+        and flat_numer.dtype == torch.float32
+        and quad_numer.dtype == torch.float32
+        and quad_weight.dtype == torch.float32
+    ):
+        variance = (
+            flat_variance_weight if flat_variance_weight is not None else flat_numer[:0]
+        )
+        invalid = native(
+            quad_x.contiguous(),
+            quad_y.contiguous(),
+            quad_numer.contiguous(),
+            quad_weight.contiguous(),
+            int(width),
+            int(height),
+            flat_numer,
+            flat_weight,
+            variance,
+            flat_variance_weight is not None,
+        )
+        if invalid:
+            raise ValueError(
+                "projected source footprint is self-intersecting, non-convex, or degenerate"
+            )
+        return
+    finite = torch.isfinite(quad_x).all(dim=1) & torch.isfinite(quad_y).all(dim=1)
+    if not bool(finite.all()):
+        quad_x = quad_x[finite]
+        quad_y = quad_y[finite]
+        quad_numer = quad_numer[finite]
+        quad_weight = quad_weight[finite]
+        if quad_x.numel() == 0:
+            return
     areas, valid_footprints = _quadrilateral_areas_and_validity(quad_x, quad_y)
-    min_x = torch.ceil(quad_x.min(dim=1).values - 0.5).to(torch.int64)
-    max_x = torch.floor(quad_x.max(dim=1).values + 0.5).to(torch.int64)
-    min_y = torch.ceil(quad_y.min(dim=1).values - 0.5).to(torch.int64)
-    max_y = torch.floor(quad_y.max(dim=1).values + 0.5).to(torch.int64)
+    # Pixel i covers [i - 0.5, i + 0.5]; boxes that only touch the bounding box have
+    # zero overlap, so the candidate range is the open overlap with [min, max].
+    min_x = torch.floor(quad_x.min(dim=1).values - 0.5).to(torch.int64) + 1
+    max_x = torch.ceil(quad_x.max(dim=1).values + 0.5).to(torch.int64) - 1
+    min_y = torch.floor(quad_y.min(dim=1).values - 0.5).to(torch.int64) + 1
+    max_y = torch.ceil(quad_y.max(dim=1).values + 0.5).to(torch.int64) - 1
     min_x.clamp_(min=0)
     max_x.clamp_(max=width - 1)
     min_y.clamp_(min=0)
@@ -231,6 +245,16 @@ def _accumulate_quadrilateral_overlaps(
     counts = torch.where(
         valid_footprints & (areas > 0.0), nx * ny, torch.zeros_like(nx)
     )
+    # Overlaps below the representation error of the input vertices (``eps * |coordinate|``
+    # times the chord, bounded by the footprint extent) are grazing contacts, not overlap.
+    coordinate_scale = torch.maximum(
+        torch.maximum(quad_x.abs().amax(dim=1), quad_y.abs().amax(dim=1)),
+        torch.ones_like(areas),
+    )
+    extent = torch.maximum(
+        quad_x.amax(dim=1) - quad_x.amin(dim=1), quad_y.amax(dim=1) - quad_y.amin(dim=1)
+    )
+    resolution = 16.0 * torch.finfo(quad_x.dtype).eps * coordinate_scale * extent
     ends = torch.cumsum(counts, dim=0)
     summary = torch.stack((ends[-1], (~valid_footprints).sum())).tolist()
     pair_count = int(summary[0])
@@ -241,7 +265,11 @@ def _accumulate_quadrilateral_overlaps(
     if pair_count == 0:
         return
     starts = ends - counts
-    pair_chunk = _MAX_OVERLAP_CANDIDATE_PAIRS
+    pair_chunk = (
+        _MAX_OVERLAP_CANDIDATE_PAIRS
+        if quad_x.device.type == "cpu"
+        else _MAX_OVERLAP_CANDIDATE_PAIRS_ACCELERATOR
+    )
     for pair_start in range(0, pair_count, pair_chunk):
         pair_stop = min(pair_start + pair_chunk, pair_count)
         if pair_start == 0 and pair_stop == pair_count:
@@ -305,7 +333,7 @@ def _accumulate_quadrilateral_overlaps(
         overlaps = _batch_quads_pixel_areas(
             quad_x[owners], quad_y[owners], centers
         )
-        overlap_valid = overlaps > 0.0
+        overlap_valid = overlaps > resolution[owners]
         if not bool(overlap_valid.any()):
             continue
         owners = owners[overlap_valid]
@@ -395,13 +423,7 @@ def exact_square_drizzle_project(
         x_tgt, y_tgt = target.wcs.world_to_pixel(ra_deg, dec_deg)
         x_tgt = x_tgt.reshape(-1, 4).to(dtype=torch.float64)
         y_tgt = y_tgt.reshape(-1, 4).to(dtype=torch.float64)
-        finite = torch.isfinite(x_tgt).all(dim=1) & torch.isfinite(y_tgt).all(dim=1)
-        if not bool(finite.any()):
-            continue
-        x_tgt = x_tgt[finite]
-        y_tgt = y_tgt[finite]
-        numer_chunk = numer_chunk[finite]
-        weight_chunk = weight_chunk[finite]
+        # Footprints with a non-finite corner are skipped inside the accumulation.
         _accumulate_quadrilateral_overlaps(
             x_tgt,
             y_tgt,
