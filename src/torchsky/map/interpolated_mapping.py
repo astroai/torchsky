@@ -47,7 +47,12 @@ _MIN_PIXELS_FOR_LATTICE = 4096
 MAPPING_MODE = "interpolated"
 # On an accelerator the default mode uses the lattice only for target windows of at
 # least this many pixels (see ``image_plane_projection._use_interpolated_mapping``).
-MAPPING_MIN_PIXELS_ACCELERATOR = 1 << 22
+# The exact mapping is one wide data-parallel solve there (about 0.1 us per pixel
+# beyond launch latency), the lattice a chain of small launch-bound solves.  Measured
+# per exposure on an H100 MIG 1g.12gb (SIP order 5, Lanczos-3, windows of 0.12-1.3 M
+# pixels): exact is faster below ~0.5 M pixels (28 vs 38 ms at 0.25 M, 38 vs 42 ms at
+# 0.45 M), break-even at ~0.5 M, and the lattice is 20-30% faster from 0.8 M pixels.
+MAPPING_MIN_PIXELS_ACCELERATOR = 1 << 19
 
 _T_LO = (3.0 - math.sqrt(3.0)) / 6.0
 _T_HI = 1.0 - _T_LO

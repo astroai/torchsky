@@ -61,6 +61,24 @@ owned by `torchfits`.
 ### Fixed
 - Tiled image-plane coadds keep the context bitmask on the host, so large
   mosaics no longer exhaust small GPU slices on bookkeeping.
+- A tiled coadd on an accelerator returns its maps and context words on the
+  requested device, like an untiled coadd (they were host tensors). They are moved
+  back at the end; if they do not fit the free device memory (or the copy runs out
+  of memory) they stay on the host and a `RuntimeWarning` says so.
+- CUDA drizzle / conservative-polygon coadds are bitwise reproducible again: the
+  pure-torch overlap accumulation summed colliding pixels with `scatter_add_`
+  float atomics; on CUDA the pairs are stable-sorted by target pixel and summed
+  per pixel with `segment_reduce` (about +1% on the 36-exposure 512^2 drizzle).
+  The CPU native kernel and `scatter_add_` path are unchanged.
+- The interpolated target-to-source mapping returns coordinates on the image
+  device (the flux-quadrature path used the WCS device).
+- GPU Lanczos-3 coadds were slower with the lattice mapping on small windows
+  (launch-bound SIP Newton solves): lattice nodes and verification points now
+  share one evaluator call per level (CPU results bit-identical), and on
+  accelerators the default mapping switches to the lattice only for windows of
+  at least `interpolated_mapping.MAPPING_MIN_PIXELS_ACCELERATOR` (2^19) pixels,
+  where it measured faster than the exact inverse. An explicit `mapping=` and
+  the CPU behaviour are unchanged.
 
 ### Performance
 - SIP forward, inverse and Jacobian use nested Horner evaluation instead of

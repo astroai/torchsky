@@ -292,3 +292,39 @@ def test_interpolated_mapping_default_is_used_for_sip_and_skipped_for_tan() -> N
     assert not projection_mod._use_interpolated_mapping(tan_wcs, None)
     assert not projection_mod._use_interpolated_mapping(sip_wcs, "exact")
     assert math.isfinite(im.MAPPING_TOLERANCE_PX)
+
+
+def test_lattice_level_uses_one_evaluator_call_for_nodes_and_verification() -> None:
+    # The exact mapping is an iterative per-point solve: on an accelerator a call costs
+    # kernel launches, so nodes and all verification points share one call per level.
+    calls: list[int] = []
+
+    def affine(x, y):
+        calls.append(int(x.numel()))
+        return 0.5 * x + 1.0, 2.0 * y - 3.0, torch.ones_like(x, dtype=torch.bool)
+
+    h, w = 64, 96
+    xs, ys, ok = im.interpolated_inverse_mapping(affine, h, w, device=CPU)
+    # one level (affine -> every cell accepted); no exact fallback call
+    assert len(calls) == 1
+    yy, xx = torch.meshgrid(
+        torch.arange(h, dtype=torch.float64), torch.arange(w, dtype=torch.float64), indexing="ij"
+    )
+    assert torch.allclose(xs, 0.5 * xx + 1.0, atol=1e-9)
+    assert torch.allclose(ys, 2.0 * yy - 3.0, atol=1e-9)
+    assert bool(ok.all())
+
+
+def test_accelerator_default_uses_lattice_only_for_large_windows(monkeypatch) -> None:
+    source = torchsky.WCS(_strong_sip_header(128))
+    cuda, cpu = torch.device("cuda"), CPU
+    small = im.MAPPING_MIN_PIXELS_ACCELERATOR // 4
+    large = im.MAPPING_MIN_PIXELS_ACCELERATOR
+    use = projection_mod._use_interpolated_mapping
+    assert use(source, None, device=cpu, n_pixels=small)  # CPU: always the lattice
+    assert not use(source, None, device=cuda, n_pixels=small)
+    assert use(source, None, device=cuda, n_pixels=large)
+    assert use(source, "interpolated", device=cuda, n_pixels=small)  # explicit wins
+    assert not use(source, "exact", device=cuda, n_pixels=large)
+    monkeypatch.setattr(im, "MAPPING_MIN_PIXELS_ACCELERATOR", 0)
+    assert use(source, None, device=cuda, n_pixels=1)

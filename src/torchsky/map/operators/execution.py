@@ -338,8 +338,9 @@ def plan_spatial_tiles(
     untiled = fixed + pixels * (projection_bpp + accumulator_bpp + context_bpp)
     if untiled <= budget:
         return SpatialTilePlan(None, False, budget, untiled, untiled, projection_bpp)
-    # Tiled: the context bit words are always host-resident.  Accumulators move
-    # to the host on an accelerator, where only the tile working set counts.
+    # Tiled: the context bit words are always host-resident while accumulating.
+    # Accumulators move to the host on an accelerator, where only the tile working
+    # set counts; the finished maps are returned to the compute device.
     host_accumulators = device.type != "cpu"
     resident = 0 if host_accumulators else pixels * accumulator_bpp
     staged = 4 * (4 if propagate_variance else 3)  # tile slices moved to the device
