@@ -1257,6 +1257,7 @@ def _project_observation_to_target_chunk(
             source_shape=tuple(image.shape),
             target=prepared_target,
             value_semantics=value_semantics,
+            resampling_kernel=resampling_kernel,
         )
         if prepared_target_view is None:
             sampled_numer = torch.zeros((0, 0), dtype=torch.float32, device=device)
