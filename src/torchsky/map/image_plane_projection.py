@@ -1203,10 +1203,11 @@ def _resample_weighted_to_target(
         return _result(accum_numer, accum_weight, sub_variance_weight)
     quadrature_world_grids = target.quadrature_world_grids
     if quadrature_world_grids is None:
+        # Same device as grids prepared with the target (the image's device).
         quadrature_world_grids = _quadrature_target_world_grids(
             target.wcs,
             target.shape,
-            device=device,
+            device=image.device,
         )
     flat_ra = torch.cat(
         [sub_ra.reshape(-1) for sub_ra, _ in quadrature_world_grids], dim=0
