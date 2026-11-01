@@ -207,6 +207,7 @@ def test_balanced_tile_hw_is_never_a_sliver() -> None:
 
 
 @pytest.mark.parametrize("kernel", ["bilinear", "lanczos3"])
+@pytest.mark.needs_float64
 def test_auto_tiling_with_forced_tiny_budget_equals_untiled(kernel) -> None:
     observations = _observations()
     untiled = coadd_image_plane(
@@ -276,6 +277,7 @@ def test_footprint_order_disables_auto_tiling() -> None:
 
 
 @pytest.mark.parametrize("stacking", ["median", "sigma_clipped"])
+@pytest.mark.needs_float64
 def test_auto_tiling_median_and_sigma_clipped_skip_unrelated_exposures(
     stacking, monkeypatch
 ) -> None:
@@ -305,10 +307,10 @@ def test_auto_tiling_median_and_sigma_clipped_skip_unrelated_exposures(
     monkeypatch.undo()
     assert sizes, "tile sub-coadds were expected"
     assert min(sizes) < 4, "tiles must only stack the exposures that reach them"
-    assert torch.equal(tiled.data, untiled.data)
-    assert torch.equal(tiled.weight, untiled.weight)
-    assert torch.equal(tiled.overlap_count, untiled.overlap_count)
-    assert torch.equal(tiled.context, untiled.context)
+    assert torch.equal(tiled.data.cpu(), untiled.data.cpu())
+    assert torch.equal(tiled.weight.cpu(), untiled.weight.cpu())
+    assert torch.equal(tiled.overlap_count.cpu(), untiled.overlap_count.cpu())
+    assert torch.equal(tiled.context.cpu(), untiled.context.cpu())
 
 
 def test_tiled_dq_matches_untiled_dq() -> None:
@@ -452,6 +454,7 @@ def test_tiles_outside_the_footprint_are_not_projected(monkeypatch) -> None:
 
 @pytest.mark.parametrize("kernel", ["bilinear", "lanczos3", "drizzle_square"])
 @pytest.mark.parametrize("tile", [None, (64, 70)])
+@pytest.mark.needs_float64('drizzle_square')
 def test_propagate_variance_false_only_drops_variance(kernel, tile) -> None:
     observations = _observations(n=2)
     kwargs = dict(

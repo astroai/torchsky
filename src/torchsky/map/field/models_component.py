@@ -427,11 +427,14 @@ class FieldComponentDecomposition(_BaseFieldModel):
             )
             shared_est_chunks.append(shared_est.reshape(-1))
             private_est_chunks.append(private_est.reshape(-1))
-            shared_truth_chunks.append(shared_truth.reshape(-1))
-            private_truth_chunks.append(private_truth.reshape(-1))
+            # The truth/anchor models may live on a different device than the
+            # (possibly device-moved) fitted model; compare on the estimate's device.
+            est_device = shared_est.device
+            shared_truth_chunks.append(shared_truth.reshape(-1).to(est_device))
+            private_truth_chunks.append(private_truth.reshape(-1).to(est_device))
             for basis_idx in range(int(private_truth_basis.shape[0])):
                 private_basis_chunks[basis_idx].append(
-                    private_truth_basis[basis_idx].reshape(-1)
+                    private_truth_basis[basis_idx].reshape(-1).to(est_device)
                 )
             if calibration_anchor_model is not None:
                 base_observation = _observation_without_background(observation)
@@ -447,7 +450,7 @@ class FieldComponentDecomposition(_BaseFieldModel):
                         base_observation,
                         **render_kwargs,
                     )
-                calibration_anchor_chunks.append(anchor.reshape(-1))
+                calibration_anchor_chunks.append(anchor.reshape(-1).to(est_device))
 
         shared_est_vec = torch.cat(shared_est_chunks, dim=0)
         private_est_vec = torch.cat(private_est_chunks, dim=0)

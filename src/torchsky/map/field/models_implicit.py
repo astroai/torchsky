@@ -533,13 +533,16 @@ class FourierMLPField(_BaseFieldModel):
     def _fourier_features(self, coords: Tensor) -> Tensor:
         if self.num_frequencies <= 0:
             return coords
-        scales = torch.logspace(
-            0.0,
-            math.log2(max(self.max_frequency, 1.0)),
-            steps=self.num_frequencies,
-            base=2.0,
-            device=coords.device,
-            dtype=coords.dtype,
+        # base ** linspace == logspace; aten::logspace is not implemented on MPS.
+        scales = torch.pow(
+            2.0,
+            torch.linspace(
+                0.0,
+                math.log2(max(self.max_frequency, 1.0)),
+                steps=self.num_frequencies,
+                device=coords.device,
+                dtype=coords.dtype,
+            ),
         )
         # Vectorized phase computation: (..., num_frequencies, coords_dim)
         phase = math.pi * coords.unsqueeze(-2) * scales.unsqueeze(-1)

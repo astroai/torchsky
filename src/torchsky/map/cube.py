@@ -168,7 +168,7 @@ def _coadd_ifu_3d_cube(
         x_det = xx.to(dtype=w_dtype)
         y_det = yy.to(dtype=w_dtype)
         if ifu_obj is not None:
-            ra_d, dec_d, lam_d = ifu_obj.pixel_to_world(x_det, y_det)
+            ra_d, dec_d, lam_d = ifu_obj.to(map_device).pixel_to_world(x_det, y_det)
         else:
             obs_wcs = (
                 obs.wcs

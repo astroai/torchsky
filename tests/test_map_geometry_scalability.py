@@ -226,8 +226,8 @@ def test_streamed_polygon_projection_preserves_gradients_and_device(
         chunk_pixels=5,
     )
 
-    assert numer.device == execution_device
-    assert projected_weight.device == execution_device
+    assert numer.device.type == execution_device.type
+    assert projected_weight.device.type == execution_device.type
     numer.sum().backward()
     assert image.grad is not None
     torch.testing.assert_close(image.grad, torch.ones_like(image))

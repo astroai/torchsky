@@ -6,6 +6,7 @@ import sys
 
 import pytest
 import torch
+from conftest import assert_close_on_device
 import torchfits
 from torchfits import HDUList, TensorHDU
 
@@ -71,9 +72,10 @@ def test_batched_square_drizzle_areas_match_independent_quads() -> None:
         ]
     )
 
-    torch.testing.assert_close(batched, independent, rtol=0.0, atol=1.0e-12)
+    assert_close_on_device(batched, independent, rtol=0.0, atol=1.0e-12)
 
 
+@pytest.mark.needs_float64
 def test_exact_square_drizzle_projects_sip_footprints() -> None:
     real_path = _astropy_sip_fixture()
     _, header = torchfits.read(str(real_path), return_header=True)
@@ -125,10 +127,10 @@ def test_target_wcs_grids_mps_match_cpu() -> None:
 
     assert ra_mps.device.type == "mps"
     assert dec_mps.device.type == "mps"
-    torch.testing.assert_close(ra_mps.cpu(), ra_cpu.to(dtype=torch.float32))
-    torch.testing.assert_close(dec_mps.cpu(), dec_cpu.to(dtype=torch.float32))
-    torch.testing.assert_close(quad_mps[0].cpu(), quad_cpu[0].to(dtype=torch.float32))
-    torch.testing.assert_close(quad_mps[1].cpu(), quad_cpu[1].to(dtype=torch.float32))
+    assert_close_on_device(ra_mps.cpu(), ra_cpu.to(dtype=torch.float32))
+    assert_close_on_device(dec_mps.cpu(), dec_cpu.to(dtype=torch.float32))
+    assert_close_on_device(quad_mps[0].cpu(), quad_cpu[0].to(dtype=torch.float32))
+    assert_close_on_device(quad_mps[1].cpu(), quad_cpu[1].to(dtype=torch.float32))
 
 
 def test_small_tan_target_cap_uses_exact_corner_separation() -> None:
@@ -638,10 +640,10 @@ def test_coadd_image_plane_identical_wcs(tmp_path) -> None:
         [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
     )
     expected = (data_a + data_b) / 2.0
-    torch.testing.assert_close(result.data, expected, atol=1e-4, rtol=1e-4)
+    assert_close_on_device(result.data, expected, atol=1e-4, rtol=1e-4)
     assert result.weight.shape == expected.shape
     assert result.overlap_count is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count,
         torch.full((8, 8), 2, dtype=torch.int32),
     )
@@ -661,10 +663,10 @@ def test_coadd_image_plane_spatial_tile_single_canvas_matches_non_tiled(
     obs = [ImageObservation(str(path_a)), ImageObservation(str(path_b))]
     full = coadd_image_plane(obs)
     tiled = coadd_image_plane(obs, spatial_tile_hw=(8, 8))
-    torch.testing.assert_close(tiled.data, full.data, atol=1e-4, rtol=1e-4)
-    torch.testing.assert_close(tiled.weight, full.weight, atol=1e-4, rtol=1e-4)
+    assert_close_on_device(tiled.data, full.data, atol=1e-4, rtol=1e-4)
+    assert_close_on_device(tiled.weight, full.weight, atol=1e-4, rtol=1e-4)
     assert full.overlap_count is not None and tiled.overlap_count is not None
-    torch.testing.assert_close(tiled.overlap_count, full.overlap_count)
+    assert_close_on_device(tiled.overlap_count, full.overlap_count)
 
 
 def test_spatial_tile_ignores_non_grid_header_metadata(tmp_path, monkeypatch) -> None:
@@ -692,7 +694,7 @@ def test_spatial_tile_ignores_non_grid_header_metadata(tmp_path, monkeypatch) ->
         target_header=header,
         spatial_tile_hw=(8, 8),
     )
-    torch.testing.assert_close(result.data, image)
+    assert_close_on_device(result.data, image)
 
 
 def test_coadd_image_plane_spatial_tiles_are_exposure_major(
@@ -732,10 +734,10 @@ def test_coadd_image_plane_spatial_tiles_are_exposure_major(
 
     assert read_calls == [(str(path_a), None), (str(path_b), None)]
     assert prepare_calls == [str(path_a), str(path_b)]
-    torch.testing.assert_close(tiled.data, expected.data, atol=1e-4, rtol=1e-4)
-    torch.testing.assert_close(tiled.weight, expected.weight, atol=1e-4, rtol=1e-4)
+    assert_close_on_device(tiled.data, expected.data, atol=1e-4, rtol=1e-4)
+    assert_close_on_device(tiled.weight, expected.weight, atol=1e-4, rtol=1e-4)
     assert tiled.overlap_count is not None and expected.overlap_count is not None
-    torch.testing.assert_close(tiled.overlap_count, expected.overlap_count)
+    assert_close_on_device(tiled.overlap_count, expected.overlap_count)
 
 
 def test_tiled_target_cache_hits_misses_admission_and_zero_capacity() -> None:
@@ -797,16 +799,16 @@ def test_tiled_target_cache_hits_misses_admission_and_zero_capacity() -> None:
         "evictions": 0,
         "admission_skips": 8,
     }
-    torch.testing.assert_close(cached.data, uncached.data)
-    torch.testing.assert_close(cached.weight, uncached.weight)
-    torch.testing.assert_close(cached.overlap_count, uncached.overlap_count)
-    torch.testing.assert_close(cached.context, uncached.context)
+    assert_close_on_device(cached.data, uncached.data)
+    assert_close_on_device(cached.weight, uncached.weight)
+    assert_close_on_device(cached.overlap_count, uncached.overlap_count)
+    assert_close_on_device(cached.context, uncached.context)
     assert cached.inverse_variance is not None and uncached.inverse_variance is not None
     assert cached.correlation_factor is not None
     assert uncached.correlation_factor is not None
-    torch.testing.assert_close(cached.inverse_variance, uncached.inverse_variance)
-    torch.testing.assert_close(cached.correlation_factor, uncached.correlation_factor)
-    torch.testing.assert_close(evicted.data, uncached.data)
+    assert_close_on_device(cached.inverse_variance, uncached.inverse_variance)
+    assert_close_on_device(cached.correlation_factor, uncached.correlation_factor)
+    assert_close_on_device(evicted.data, uncached.data)
 
 
 def test_tiled_target_cache_preserves_source_gradients() -> None:
@@ -826,15 +828,15 @@ def test_tiled_target_cache_preserves_source_gradients() -> None:
             target_cache_capacity=capacity,
         )
         coefficients = torch.linspace(-1.0, 1.0, 64).reshape(8, 8)
-        torch.sum(result.data * coefficients).backward()
+        torch.sum(result.data * coefficients.to(result.data.device)).backward()
         assert source.grad is not None
         return result.data.detach(), source.grad.detach()
 
     uncached_data, uncached_gradient = evaluate(0)
     cached_data, cached_gradient = evaluate(4)
 
-    torch.testing.assert_close(cached_data, uncached_data)
-    torch.testing.assert_close(cached_gradient, uncached_gradient)
+    assert_close_on_device(cached_data, uncached_data)
+    assert_close_on_device(cached_gradient, uncached_gradient)
 
 
 def test_target_cache_capacity_must_be_non_negative() -> None:
@@ -856,8 +858,8 @@ def test_coadd_image_plane_does_not_reuse_overwritten_input(tmp_path) -> None:
     torchfits.write(str(path), torch.full((8, 8), 7.0), header=header, overwrite=True)
     second = coadd_image_plane([ImageObservation(str(path))])
 
-    torch.testing.assert_close(first.data, torch.ones((8, 8)))
-    torch.testing.assert_close(second.data, torch.full((8, 8), 7.0))
+    assert_close_on_device(first.data, torch.ones((8, 8)))
+    assert_close_on_device(second.data, torch.full((8, 8), 7.0))
 
 
 @pytest.mark.parametrize(
@@ -871,6 +873,7 @@ def test_coadd_image_plane_does_not_reuse_overwritten_input(tmp_path) -> None:
         ("conservative_polygon", "surface_brightness", "weighted_mean"),
     ],
 )
+@pytest.mark.needs_float64('conservative_polygon', 'drizzle_square')
 def test_exposure_major_tiles_match_shifted_wcs_coadd(
     tmp_path, kernel, value_semantics, stacking_method
 ) -> None:
@@ -896,13 +899,14 @@ def test_exposure_major_tiles_match_shifted_wcs_coadd(
     expected = coadd_image_plane(observations, **kwargs)
     tiled = coadd_image_plane(observations, spatial_tile_hw=(3, 5), **kwargs)
 
-    torch.testing.assert_close(tiled.data, expected.data, atol=2e-4, rtol=2e-4)
-    torch.testing.assert_close(tiled.weight, expected.weight, atol=2e-4, rtol=2e-4)
+    assert_close_on_device(tiled.data, expected.data, atol=2e-4, rtol=2e-4)
+    assert_close_on_device(tiled.weight, expected.weight, atol=2e-4, rtol=2e-4)
     assert tiled.overlap_count is not None and expected.overlap_count is not None
-    torch.testing.assert_close(tiled.overlap_count, expected.overlap_count)
+    assert_close_on_device(tiled.overlap_count, expected.overlap_count)
 
 
 @pytest.mark.parametrize("kernel", ["bilinear", "conservative_polygon", "splat_box"])
+@pytest.mark.needs_float64('conservative_polygon', 'splat_box')
 def test_tiled_squared_coefficient_variance_matches_full_projection(
     tmp_path,
     kernel,
@@ -935,15 +939,15 @@ def test_tiled_squared_coefficient_variance_matches_full_projection(
     assert tiled.inverse_variance is not None
     assert full.correlation_factor is not None
     assert tiled.correlation_factor is not None
-    torch.testing.assert_close(tiled.data, full.data, atol=2e-4, rtol=2e-4)
-    torch.testing.assert_close(tiled.weight, full.weight, atol=2e-4, rtol=2e-4)
-    torch.testing.assert_close(
+    assert_close_on_device(tiled.data, full.data, atol=2e-4, rtol=2e-4)
+    assert_close_on_device(tiled.weight, full.weight, atol=2e-4, rtol=2e-4)
+    assert_close_on_device(
         tiled.inverse_variance,
         full.inverse_variance,
         atol=2e-4,
         rtol=2e-4,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         tiled.correlation_factor,
         full.correlation_factor,
         atol=2e-4,
@@ -951,6 +955,7 @@ def test_tiled_squared_coefficient_variance_matches_full_projection(
     )
 
 
+@pytest.mark.needs_float64
 def test_square_drizzle_tiles_keep_drops_overlapping_outer_canvas(
     tmp_path,
 ) -> None:
@@ -987,8 +992,8 @@ def test_square_drizzle_tiles_keep_drops_overlapping_outer_canvas(
         **kwargs,
     )
 
-    torch.testing.assert_close(tiled.data, full.data, atol=2e-4, rtol=2e-4)
-    torch.testing.assert_close(tiled.weight, full.weight, atol=2e-4, rtol=2e-4)
+    assert_close_on_device(tiled.data, full.data, atol=2e-4, rtol=2e-4)
+    assert_close_on_device(tiled.weight, full.weight, atol=2e-4, rtol=2e-4)
 
     mask_path = tmp_path / "outer_center_mask.fits"
     outer_mask = torch.zeros_like(data)
@@ -1010,7 +1015,7 @@ def test_square_drizzle_tiles_keep_drops_overlapping_outer_canvas(
         spatial_tile_hw=(3, 3),
     )
     assert int(torch.count_nonzero(outer.weight)) > 0
-    torch.testing.assert_close(outer_tiled.weight, outer.weight)
+    assert_close_on_device(outer_tiled.weight, outer.weight)
 
 
 def test_cli_map_coadd_writes_output(tmp_path, monkeypatch) -> None:
@@ -1039,7 +1044,7 @@ def test_cli_map_coadd_writes_output(tmp_path, monkeypatch) -> None:
     )
     assert main() == 0
     got, _ = torchfits.read(str(out), return_header=True)
-    torch.testing.assert_close(
+    assert_close_on_device(
         got[1:-1, 1:-1], (data_a + data_b)[1:-1, 1:-1] / 2.0, atol=1e-4, rtol=1e-4
     )
 
@@ -1070,20 +1075,20 @@ def test_coadd_image_plane_mean_stacking_averages_observations_equally(
         stacking_method="mean",
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         weighted.data,
         torch.full((8, 8), 8.2, dtype=torch.float32),
         atol=1e-5,
         rtol=1e-5,
     )
     assert weighted.inverse_variance is None
-    torch.testing.assert_close(
+    assert_close_on_device(
         mean.data,
         torch.full((8, 8), 5.0, dtype=torch.float32),
         atol=1e-5,
         rtol=1e-5,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         mean.weight,
         torch.full((8, 8), 2.0, dtype=torch.float32),
         atol=1e-5,
@@ -1121,13 +1126,13 @@ def test_coadd_image_plane_median_stacking_uses_observation_median(tmp_path) -> 
     )
 
     assert float(weighted.data[0, 0].item()) > 80.0
-    torch.testing.assert_close(
+    assert_close_on_device(
         median.data,
         torch.full((8, 8), 9.0, dtype=torch.float32),
         atol=1e-5,
         rtol=1e-5,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         median.weight,
         torch.full((8, 8), 3.0, dtype=torch.float32),
         atol=1e-5,
@@ -1157,8 +1162,8 @@ def test_spilled_exact_median_matches_memory_and_cleans_scratch(tmp_path) -> Non
         working_memory_bytes=32,
     )
 
-    torch.testing.assert_close(actual[0], expected[0])
-    torch.testing.assert_close(actual[1], expected[1])
+    assert_close_on_device(actual[0], expected[0])
+    assert_close_on_device(actual[1], expected[1])
     assert scratch.is_dir()
     assert list(scratch.iterdir()) == []
 
@@ -1235,12 +1240,12 @@ def test_coadd_image_plane_tiled_median_uses_and_cleans_scratch(tmp_path) -> Non
         scratch_dir=scratch,
     )
 
-    torch.testing.assert_close(tiled.data, full.data)
-    torch.testing.assert_close(tiled.weight, full.weight)
+    assert_close_on_device(tiled.data, full.data)
+    assert_close_on_device(tiled.weight, full.weight)
     assert tiled.context is not None and full.context is not None
-    torch.testing.assert_close(tiled.context, full.context)
+    assert_close_on_device(tiled.context, full.context)
     assert tiled.overlap_count is not None and full.overlap_count is not None
-    torch.testing.assert_close(tiled.overlap_count, full.overlap_count)
+    assert_close_on_device(tiled.overlap_count, full.overlap_count)
     assert list(scratch.iterdir()) == []
 
 
@@ -1274,25 +1279,25 @@ def test_coadd_image_plane_sigma_clipped_rejects_outlier_and_tracks_context(
         scratch_dir=scratch,
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         clipped.data,
         torch.full((8, 8), 1.0125),
         rtol=0.0,
         atol=1.0e-6,
     )
-    torch.testing.assert_close(clipped.weight, torch.full((8, 8), 16.0))
+    assert_close_on_device(clipped.weight, torch.full((8, 8), 16.0))
     assert clipped.inverse_variance is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         clipped.inverse_variance,
         torch.full((8, 8), 16.0),
     )
     assert clipped.overlap_count is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         clipped.overlap_count,
         torch.full((8, 8), 4, dtype=torch.int32),
     )
     assert clipped.context is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         clipped.context[0],
         torch.full((8, 8), 0b01111, dtype=torch.int64),
     )
@@ -1322,12 +1327,12 @@ def test_coadd_image_plane_tiled_sigma_clipped_matches_full(tmp_path) -> None:
     full = coadd_image_plane(observations, **kwargs)
     tiled = coadd_image_plane(observations, spatial_tile_hw=(3, 5), **kwargs)
 
-    torch.testing.assert_close(tiled.data, full.data)
-    torch.testing.assert_close(tiled.weight, full.weight)
+    assert_close_on_device(tiled.data, full.data)
+    assert_close_on_device(tiled.weight, full.weight)
     assert full.inverse_variance is None
     assert tiled.inverse_variance is None
     assert tiled.context is not None and full.context is not None
-    torch.testing.assert_close(tiled.context, full.context)
+    assert_close_on_device(tiled.context, full.context)
     assert list(scratch.iterdir()) == []
 
 
@@ -1394,21 +1399,21 @@ def test_spilled_sigma_clipping_uses_explicit_propagated_noise(tmp_path) -> None
         scratch_dir=tmp_path / "explicit-noise",
     )
 
-    torch.testing.assert_close(without_noise.data, torch.zeros((1, 1)))
-    torch.testing.assert_close(
+    assert_close_on_device(without_noise.data, torch.zeros((1, 1)))
+    assert_close_on_device(
         without_noise.overlap_count,
         torch.full((1, 1), 2, dtype=torch.int32),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         with_noise.data,
         torch.full((1, 1), 10.0 / 3.0),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         with_noise.overlap_count,
         torch.full((1, 1), 3, dtype=torch.int32),
     )
     assert with_noise.variance_weight is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         with_noise.variance_weight,
         torch.full((1, 1), 10_002.0),
     )
@@ -1484,12 +1489,12 @@ def test_tiled_overlap_background_uses_one_read_per_exposure_and_cleans_scratch(
     )
 
     assert read_calls == [str(observation.path) for observation in observations]
-    torch.testing.assert_close(tiled.data, expected.data, atol=2.0e-4, rtol=2.0e-4)
-    torch.testing.assert_close(tiled.weight, expected.weight, atol=2.0e-4, rtol=2.0e-4)
+    assert_close_on_device(tiled.data, expected.data, atol=2.0e-4, rtol=2.0e-4)
+    assert_close_on_device(tiled.weight, expected.weight, atol=2.0e-4, rtol=2.0e-4)
     assert tiled.context is not None and expected.context is not None
-    torch.testing.assert_close(tiled.context, expected.context)
+    assert_close_on_device(tiled.context, expected.context)
     assert tiled.overlap_count is not None and expected.overlap_count is not None
-    torch.testing.assert_close(tiled.overlap_count, expected.overlap_count)
+    assert_close_on_device(tiled.overlap_count, expected.overlap_count)
     assert scratch.is_dir()
     assert list(scratch.iterdir()) == []
 
@@ -1548,7 +1553,7 @@ def test_tiled_overlap_background_renders_compact_models(
         cross_exposure_sky_corrector=corrector,
     )
 
-    torch.testing.assert_close(result.data, expected.data, atol=2.0e-4, rtol=2.0e-4)
+    assert_close_on_device(result.data, expected.data, atol=2.0e-4, rtol=2.0e-4)
 
 
 def test_tiled_overlap_background_rejects_noncompact_estimators(tmp_path) -> None:
@@ -1612,8 +1617,8 @@ def test_tiled_overlap_background_uses_one_global_chain_graph(tmp_path) -> None:
         cross_exposure_sky_corrector=corrector,
     )
 
-    torch.testing.assert_close(tiled.data, expected.data, atol=2.0e-4, rtol=0.0)
-    torch.testing.assert_close(tiled.weight, expected.weight)
+    assert_close_on_device(tiled.data, expected.data, atol=2.0e-4, rtol=0.0)
+    assert_close_on_device(tiled.weight, expected.weight)
 
 
 def test_spilled_overlap_background_preserves_propagated_inverse_variance(
@@ -1649,7 +1654,7 @@ def test_spilled_overlap_background_preserves_propagated_inverse_variance(
     )
 
     assert result.inverse_variance is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.inverse_variance,
         torch.full((8, 8), 8.0),
     )
@@ -1716,13 +1721,13 @@ def test_stack_map_product_passes_mean_stacking_to_single_band_coadd(tmp_path) -
         stacking_method="mean",
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data.squeeze(0),
         torch.full((8, 8), 6.0, dtype=torch.float32),
         atol=1e-5,
         rtol=1e-5,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.weight.squeeze(0),
         torch.full((8, 8), 2.0, dtype=torch.float32),
         atol=1e-5,
@@ -1819,8 +1824,8 @@ def test_coadd_image_plane_applies_known_photometric_scale_and_background(
         ]
     )
 
-    torch.testing.assert_close(result.data, truth, atol=1e-5, rtol=1e-5)
-    torch.testing.assert_close(
+    assert_close_on_device(result.data, truth, atol=1e-5, rtol=1e-5)
+    assert_close_on_device(
         result.weight,
         torch.full((8, 8), 1.25, dtype=torch.float32),
         atol=1e-5,
@@ -1848,13 +1853,13 @@ def test_coadd_image_plane_rescales_weight_map_with_photometric_scale(tmp_path) 
         ]
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data,
         torch.full((8, 8), 4.0, dtype=torch.float32),
         atol=1e-5,
         rtol=1e-5,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.weight,
         torch.full((8, 8), 2.0, dtype=torch.float32),
         atol=1e-5,
@@ -2009,7 +2014,7 @@ def test_sample_image_plane_batched_channels_matches_separate_sampling(
         dim=0,
     )
 
-    torch.testing.assert_close(combined, separate, atol=1e-5, rtol=1e-5)
+    assert_close_on_device(combined, separate, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.parametrize("kernel", ["lanczos3", "lanczos5"])
@@ -2049,7 +2054,7 @@ def test_lanczos_sampling_preserves_constant_on_complete_support(
     operations = (2 * support) ** 2 + 4 * support
     error = operations * torch.finfo(dtype).eps
     bound = error / (1 - error) * float((norms[0] * norms[1]).max())
-    torch.testing.assert_close(sampled, torch.ones_like(sampled), atol=bound, rtol=0.0)
+    assert_close_on_device(sampled, torch.ones_like(sampled), atol=bound, rtol=0.0)
 
 
 @pytest.mark.parametrize(
@@ -2095,7 +2100,7 @@ def test_sample_image_plane_diagonal_variance_matches_basis_oracle(kernel) -> No
         kernel=kernel,
     )
 
-    torch.testing.assert_close(actual, expected, atol=2.0e-6, rtol=2.0e-6)
+    assert_close_on_device(actual, expected, atol=2.0e-6, rtol=2.0e-6)
 
 
 def test_batched_quadrature_variance_squares_mean_coefficients() -> None:
@@ -2160,7 +2165,7 @@ def test_batched_quadrature_variance_squares_mean_coefficients() -> None:
         sample_valid=sample_valid,
     )
 
-    torch.testing.assert_close(actual, expected, atol=2.0e-6, rtol=2.0e-6)
+    assert_close_on_device(actual, expected, atol=2.0e-6, rtol=2.0e-6)
 
 
 def test_bilinear_diagonal_variance_matches_monte_carlo() -> None:
@@ -2222,7 +2227,7 @@ def test_bilinear_local_correlation_factor_predicts_large_aperture_variance() ->
         kernel="bilinear",
     )
     local_factor = diagonal.reciprocal()
-    torch.testing.assert_close(local_factor, torch.full_like(local_factor, 2.0))
+    assert_close_on_device(local_factor, torch.full_like(local_factor, 2.0))
 
     noise = torch.randn(
         (draws, 2, width),
@@ -2389,8 +2394,8 @@ def test_aperture_uncertainty_reuses_call_scoped_target_tiles(monkeypatch) -> No
         target_cache_capacity=0,
     )
     assert prepare_calls == 8
-    torch.testing.assert_close(cached.variance, uncached.variance)
-    torch.testing.assert_close(cached.diagonal_variance, uncached.diagonal_variance)
+    assert_close_on_device(cached.variance, uncached.variance)
+    assert_close_on_device(cached.diagonal_variance, uncached.diagonal_variance)
 
 
 @pytest.mark.parametrize("device", ["cuda", "mps"])
@@ -2443,7 +2448,7 @@ def test_finite_aperture_uncertainty_device_parity(
         device=device,
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         accelerator.variance.cpu(),
         cpu.variance.to(dtype=accelerator.variance.dtype),
         rtol=5.0e-5,
@@ -2455,6 +2460,7 @@ def test_finite_aperture_uncertainty_device_parity(
     "kernel",
     ["bilinear", "drizzle_square", "conservative_polygon", "splat_box"],
 )
+@pytest.mark.needs_float64('conservative_polygon', 'drizzle_square', 'splat_box')
 def test_finite_aperture_uncertainty_matches_source_basis_oracle(
     tmp_path: Path,
     kernel: str,
@@ -2503,7 +2509,7 @@ def test_finite_aperture_uncertainty_matches_source_basis_oracle(
         responses.append(torch.sum(aperture * basis_result.data))
     expected = torch.sum(torch.square(torch.stack(responses)))
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         uncertainty.variance,
         expected.to(dtype=uncertainty.variance.dtype),
         rtol=2.0e-5,
@@ -2515,6 +2521,7 @@ def test_finite_aperture_uncertainty_matches_source_basis_oracle(
     "kernel",
     sorted(image_plane_coadd_mod._FINITE_APERTURE_COVARIANCE_KERNELS),
 )
+@pytest.mark.needs_float64('conservative_polygon', 'drizzle_gaussian', 'drizzle_lanczos2', 'drizzle_lanczos3', 'drizzle_point', 'drizzle_square', 'drizzle_turbo', 'splat_box', 'splat_point')
 def test_finite_aperture_uncertainty_single_pixel_matches_diagonal_plane(
     tmp_path: Path,
     kernel: str,
@@ -2548,7 +2555,7 @@ def test_finite_aperture_uncertainty_single_pixel_matches_diagonal_plane(
 
     assert result.inverse_variance is not None
     expected = result.inverse_variance[3, 3].reciprocal()
-    torch.testing.assert_close(
+    assert_close_on_device(
         uncertainty.variance,
         expected.to(dtype=uncertainty.variance.dtype),
         rtol=3.0e-5,
@@ -2607,7 +2614,7 @@ def test_finite_aperture_uncertainty_matches_distorted_wcs_basis_oracle(
         responses.append(torch.sum(aperture * basis_result.data))
     expected = torch.sum(torch.square(torch.stack(responses)))
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         uncertainty.variance,
         expected.to(dtype=uncertainty.variance.dtype),
         rtol=3.0e-5,
@@ -2651,11 +2658,11 @@ def test_distorted_surface_brightness_area_scaling_is_tile_invariant(
         spatial_tile_hw=(3, 3),
     )
 
-    torch.testing.assert_close(tiled.data, full.data, rtol=2.0e-5, atol=2.0e-5)
-    torch.testing.assert_close(tiled.weight, full.weight, rtol=2.0e-5, atol=2.0e-5)
+    assert_close_on_device(tiled.data, full.data, rtol=2.0e-5, atol=2.0e-5)
+    assert_close_on_device(tiled.weight, full.weight, rtol=2.0e-5, atol=2.0e-5)
     assert tiled.inverse_variance is not None
     assert full.inverse_variance is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         tiled.inverse_variance,
         full.inverse_variance,
         rtol=3.0e-5,
@@ -2705,7 +2712,7 @@ def test_flux_aperture_uncertainty_matches_source_basis_oracle(
         responses.append(torch.sum(aperture * basis_result.data))
     expected = torch.sum(torch.square(torch.stack(responses))) / 3.0
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         uncertainty.variance,
         expected.to(dtype=uncertainty.variance.dtype),
         rtol=3.0e-5,
@@ -2767,7 +2774,7 @@ def test_aperture_uncertainty_matches_spatial_noise_map_basis_oracle(
         )
     expected = torch.sum(torch.stack(contributions))
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         uncertainty.variance,
         expected.to(dtype=uncertainty.variance.dtype),
         rtol=3.0e-5,
@@ -2842,6 +2849,7 @@ def test_finite_aperture_uncertainty_rejects_missing_noise_and_global_kernels(
         "splat_box",
     ],
 )
+@pytest.mark.needs_float64('drizzle_point', 'drizzle_square', 'splat_box', 'splat_point')
 def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
     tmp_path, kernel: str
 ) -> None:
@@ -2873,6 +2881,7 @@ def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
         "splat_box",
     ],
 )
+@pytest.mark.needs_float64
 def test_coadd_image_plane_forward_geometry_kernels_bypass_grid_sample(
     tmp_path: Path,
     monkeypatch,
@@ -2905,6 +2914,7 @@ def test_coadd_image_plane_forward_geometry_kernels_bypass_grid_sample(
     assert not calls
 
 
+@pytest.mark.needs_float64
 def test_coadd_image_plane_conservative_polygon_preserves_shifted_support_and_finite_output(
     tmp_path: Path,
 ) -> None:
@@ -2928,6 +2938,7 @@ def test_coadd_image_plane_conservative_polygon_preserves_shifted_support_and_fi
     assert bool(support.any())
 
 
+@pytest.mark.needs_float64
 def test_coadd_image_plane_exact_drizzle_square_preserves_flux_under_shift(
     tmp_path: Path,
 ) -> None:
@@ -2950,7 +2961,7 @@ def test_coadd_image_plane_exact_drizzle_square_preserves_flux_under_shift(
     assert torch.isfinite(result.data).all()
     support = result.weight > 0.0
     assert bool(support.any())
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[support],
         torch.ones_like(result.data[support]),
         atol=1e-2,
@@ -2997,7 +3008,7 @@ def test_coadd_fft_shift_matches_bilinear_for_pure_crpix_offset_interior(
         r_bi.weight[inner_y, inner_x] > 0.0
     )
     assert int(mask.sum().item()) > 50
-    torch.testing.assert_close(
+    assert_close_on_device(
         r_fft.data[inner_y, inner_x][mask],
         r_bi.data[inner_y, inner_x][mask],
         atol=0.06,
@@ -3047,7 +3058,7 @@ def test_coadd_fft_diagonal_affine_tracks_bilinear_scaled_cdelta_interior(
         r_bi.weight[inner_y, inner_x] > 0.0
     )
     assert int(mask.sum().item()) > 80
-    torch.testing.assert_close(
+    assert_close_on_device(
         r_fft.data[inner_y, inner_x][mask],
         r_bi.data[inner_y, inner_x][mask],
         atol=0.08,
@@ -3055,6 +3066,7 @@ def test_coadd_fft_diagonal_affine_tracks_bilinear_scaled_cdelta_interior(
     )
 
 
+@pytest.mark.needs_float64
 def test_coadd_periodic_linear_affine_matches_bilinear_skewed_cd_interior(
     tmp_path: Path,
 ) -> None:
@@ -3109,7 +3121,7 @@ def test_coadd_periodic_linear_affine_matches_bilinear_skewed_cd_interior(
     inner_y = slice(8, ny - 8)
     inner_x = slice(8, nx - 8)
     mask = (r_p.weight[inner_y, inner_x] > 0.0) & (r_b.weight[inner_y, inner_x] > 0.0)
-    torch.testing.assert_close(
+    assert_close_on_device(
         r_p.data[inner_y, inner_x][mask],
         r_b.data[inner_y, inner_x][mask],
         atol=1e-4,
@@ -3117,6 +3129,7 @@ def test_coadd_periodic_linear_affine_matches_bilinear_skewed_cd_interior(
     )
 
 
+@pytest.mark.needs_float64
 def test_coadd_fft_linear_affine_matches_periodic_linear_affine_scaled_cdelta_interior(
     tmp_path: Path,
 ) -> None:
@@ -3161,7 +3174,7 @@ def test_coadd_fft_linear_affine_matches_periodic_linear_affine_scaled_cdelta_in
         r_fl.weight[inner_y, inner_x] > 0.0
     )
     assert int(mask.sum().item()) > 80
-    torch.testing.assert_close(
+    assert_close_on_device(
         r_fl.data[inner_y, inner_x][mask],
         r_pla.data[inner_y, inner_x][mask],
         atol=0.004,
@@ -3169,6 +3182,7 @@ def test_coadd_fft_linear_affine_matches_periodic_linear_affine_scaled_cdelta_in
     )
 
 
+@pytest.mark.needs_float64
 def test_coadd_spectral_linear_affine_tracks_bilinear_skewed_cd_interior(
     tmp_path: Path,
 ) -> None:
@@ -3226,7 +3240,7 @@ def test_coadd_spectral_linear_affine_tracks_bilinear_skewed_cd_interior(
         r_bi.weight[inner_y, inner_x] > 0.0
     )
     assert int(mask.sum().item()) > 100
-    torch.testing.assert_close(
+    assert_close_on_device(
         r_spec.data[inner_y, inner_x][mask],
         r_bi.data[inner_y, inner_x][mask],
         atol=0.05,
@@ -3234,6 +3248,7 @@ def test_coadd_spectral_linear_affine_tracks_bilinear_skewed_cd_interior(
     )
 
 
+@pytest.mark.needs_float64
 def test_coadd_spectral_linear_affine_zero_boundary_does_not_wrap_corner_source(
     tmp_path: Path,
 ) -> None:
@@ -3266,9 +3281,10 @@ def test_coadd_spectral_linear_affine_zero_boundary_does_not_wrap_corner_source(
     )
     r_bi = coadd_image_plane(obs, target_header=ht, resampling_kernel="bilinear")
     assert float(r_spec.data[:, -1].abs().max()) < 1e-5
-    torch.testing.assert_close(r_spec.data, r_bi.data, atol=0.03, rtol=0.03)
+    assert_close_on_device(r_spec.data, r_bi.data, atol=0.03, rtol=0.03)
 
 
+@pytest.mark.needs_float64
 def test_coadd_spectral_nonuniform_tracks_bilinear_on_subpixel_crval_shift(
     tmp_path: Path,
 ) -> None:
@@ -3311,7 +3327,7 @@ def test_coadd_spectral_nonuniform_tracks_bilinear_on_subpixel_crval_shift(
     inner = (slice(8, size - 8), slice(8, size - 8))
     mask = (r_spec.weight[inner] > 0.0) & (r_bi.weight[inner] > 0.0)
     assert int(mask.sum().item()) > 100
-    torch.testing.assert_close(
+    assert_close_on_device(
         r_spec.data[inner][mask],
         r_bi.data[inner][mask],
         atol=0.05,
@@ -3319,6 +3335,7 @@ def test_coadd_spectral_nonuniform_tracks_bilinear_on_subpixel_crval_shift(
     )
 
 
+@pytest.mark.needs_float64
 def test_coadd_spectral_nonuniform_fast_tracks_direct_nonuniform_on_subpixel_shift(
     tmp_path: Path,
 ) -> None:
@@ -3365,7 +3382,7 @@ def test_coadd_spectral_nonuniform_fast_tracks_direct_nonuniform_on_subpixel_shi
     inner = (slice(8, size - 8), slice(8, size - 8))
     mask = (r_fast.weight[inner] > 0.0) & (r_direct.weight[inner] > 0.0)
     assert int(mask.sum().item()) > 100
-    torch.testing.assert_close(
+    assert_close_on_device(
         r_fast.data[inner][mask],
         r_direct.data[inner][mask],
         atol=0.04,
@@ -3577,9 +3594,17 @@ def test_coadd_image_plane_flux_semantics_improves_flux_conservation(tmp_path) -
     )
 
     surface_flux_err = (
-        torch.abs(surface_result.data - expected_target_flux).mean().item()
+        torch.abs(
+            surface_result.data - expected_target_flux.to(surface_result.data.device)
+        )
+        .mean()
+        .item()
     )
-    flux_flux_err = torch.abs(flux_result.data - expected_target_flux).mean().item()
+    flux_flux_err = (
+        torch.abs(flux_result.data - expected_target_flux.to(flux_result.data.device))
+        .mean()
+        .item()
+    )
     assert flux_flux_err < surface_flux_err
 
 
@@ -3784,8 +3809,8 @@ def test_project_observation_large_tan_windowing_matches_full_reprojection(
             original_resample,
         )
 
-    torch.testing.assert_close(forced_numer, full_numer, atol=0.0, rtol=0.0)
-    torch.testing.assert_close(forced_weight, full_weight, atol=0.0, rtol=0.0)
+    assert_close_on_device(forced_numer, full_numer, atol=0.0, rtol=0.0)
+    assert_close_on_device(forced_weight, full_weight, atol=0.0, rtol=0.0)
     assert forced_weight.sum().item() > 0.0
 
 
@@ -3933,36 +3958,36 @@ def test_coadd_image_plane_supports_weight_and_mask_maps(tmp_path) -> None:
 
     expected_left = (2.0 * 3.0 + 10.0 * 1.0) / 4.0
     expected_right = 2.0
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[:, :4],
         torch.full((8, 4), expected_left, dtype=torch.float32),
         atol=1e-5,
         rtol=0.0,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[:, 4:],
         torch.full((8, 4), expected_right, dtype=torch.float32),
         atol=1e-5,
         rtol=0.0,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.weight[:, :4],
         torch.full((8, 4), 4.0, dtype=torch.float32),
         atol=1e-5,
         rtol=0.0,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.weight[:, 4:],
         torch.full((8, 4), 1.0, dtype=torch.float32),
         atol=1e-5,
         rtol=0.0,
     )
     assert result.overlap_count is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count[:, :4],
         torch.full((8, 4), 2, dtype=torch.int32),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count[:, 4:],
         torch.full((8, 4), 1, dtype=torch.int32),
     )
@@ -4021,15 +4046,15 @@ def test_coadd_image_plane_real_astropy_sip_fixture_with_complementary_masks(
         footprint_order=6,
     )
 
-    torch.testing.assert_close(result.data, image, atol=1e-4, rtol=1e-4)
-    torch.testing.assert_close(
+    assert_close_on_device(result.data, image, atol=1e-4, rtol=1e-4)
+    assert_close_on_device(
         result.weight,
         torch.ones_like(result.weight),
         atol=1e-6,
         rtol=0.0,
     )
     assert result.overlap_count is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count,
         torch.ones_like(result.overlap_count),
     )
@@ -4065,9 +4090,9 @@ def test_distorted_flux_quadrature_propagates_tiled_variance() -> None:
     assert full.inverse_variance is not None
     assert tiled.inverse_variance is not None
     assert bool((full.inverse_variance[full.weight > 0.0] > 0.0).all())
-    torch.testing.assert_close(tiled.data, full.data, atol=2.0e-4, rtol=2.0e-4)
-    torch.testing.assert_close(tiled.weight, full.weight, atol=2.0e-4, rtol=2.0e-4)
-    torch.testing.assert_close(
+    assert_close_on_device(tiled.data, full.data, atol=2.0e-4, rtol=2.0e-4)
+    assert_close_on_device(tiled.weight, full.weight, atol=2.0e-4, rtol=2.0e-4)
+    assert_close_on_device(
         tiled.inverse_variance,
         full.inverse_variance,
         atol=2.0e-4,
@@ -4089,8 +4114,8 @@ def test_realistic_small_pixel_flux_identity_preserves_unit_weight_and_ivar() ->
     )
 
     assert result.inverse_variance is not None
-    torch.testing.assert_close(result.weight, torch.ones_like(result.weight))
-    torch.testing.assert_close(
+    assert_close_on_device(result.weight, torch.ones_like(result.weight))
+    assert_close_on_device(
         result.inverse_variance,
         torch.ones_like(result.inverse_variance),
     )
@@ -4128,7 +4153,7 @@ def test_coadd_image_plane_supports_mef_science_extensions(tmp_path) -> None:
     assert result.coverage_moc is not None
     assert result.observation_mocs is not None
     assert len(result.observation_mocs) == 2
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[:, image.shape[1] // 3 : (2 * image.shape[1]) // 3],
         image[:, image.shape[1] // 3 : (2 * image.shape[1]) // 3],
         atol=1e-4,
@@ -4262,19 +4287,19 @@ def test_coadd_image_plane_multiband_stacks_sorted_wavelengths(tmp_path) -> None
         footprint_order=6,
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.wavelength,
         torch.tensor([4800.0, 6500.0], dtype=torch.float64),
     )
     assert result.spectral_axis.unit == "Angstrom"
     assert result.spectral_axis.type == "WAVE"
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[0],
         torch.full((8, 8), 2.0, dtype=torch.float32),
         atol=1e-5,
         rtol=0.0,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[1],
         torch.full((8, 8), 12.0, dtype=torch.float32),
         atol=1e-5,
@@ -4283,7 +4308,7 @@ def test_coadd_image_plane_multiband_stacks_sorted_wavelengths(tmp_path) -> None
     assert tuple(result.data.shape) == (2, 8, 8)
     assert tuple(result.weight.shape) == (2, 8, 8)
     assert result.overlap_count is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count,
         torch.full((2, 8, 8), 2, dtype=torch.int32),
     )
@@ -4293,7 +4318,7 @@ def test_coadd_image_plane_multiband_stacks_sorted_wavelengths(tmp_path) -> None
         moc is not None and moc.area_sq_deg > 0.0 for moc in result.coverage_mocs
     )
     assert result.band_observation_counts is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.band_observation_counts,
         torch.tensor([2, 2], dtype=torch.int64),
     )
@@ -4335,47 +4360,47 @@ def test_coadd_image_plane_multiband_real_astropy_fixture(tmp_path) -> None:
     )
 
     assert tuple(result.data.shape) == (2, 50, 100)
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.wavelength,
         torch.tensor([4800.0, 6500.0], dtype=torch.float64),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4
     )
-    torch.testing.assert_close(result.data[0, :, 50:], torch.zeros_like(image[:, 50:]))
-    torch.testing.assert_close(result.data[1, :, :50], torch.zeros_like(image[:, :50]))
-    torch.testing.assert_close(
+    assert_close_on_device(result.data[0, :, 50:], torch.zeros_like(image[:, 50:]))
+    assert_close_on_device(result.data[1, :, :50], torch.zeros_like(image[:, :50]))
+    assert_close_on_device(
         result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4
     )
     assert result.overlap_count is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count[0, :, :50],
         torch.ones_like(result.overlap_count[0, :, :50]),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count[0, :, 50:],
         torch.zeros_like(result.overlap_count[0, :, 50:]),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count[1, :, :50],
         torch.zeros_like(result.overlap_count[1, :, :50]),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.overlap_count[1, :, 50:],
         torch.ones_like(result.overlap_count[1, :, 50:]),
     )
-    torch.testing.assert_close(result.weight[0, :, :50], torch.ones_like(image[:, :50]))
-    torch.testing.assert_close(
+    assert_close_on_device(result.weight[0, :, :50], torch.ones_like(image[:, :50]))
+    assert_close_on_device(
         result.weight[0, :, 50:], torch.zeros_like(image[:, 50:])
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.weight[1, :, :50], torch.zeros_like(image[:, :50])
     )
-    torch.testing.assert_close(result.weight[1, :, 50:], torch.ones_like(image[:, 50:]))
+    assert_close_on_device(result.weight[1, :, 50:], torch.ones_like(image[:, 50:]))
     assert result.coverage_mocs is not None
     assert len(result.coverage_mocs) == 2
     assert result.band_observation_counts is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.band_observation_counts,
         torch.tensor([1, 1], dtype=torch.int64),
     )
@@ -4475,19 +4500,19 @@ def test_plan_image_plane_cube_target_builds_band_metadata(tmp_path) -> None:
         reference_index=0,
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         planned.spectral_axis.values,
         torch.tensor([4800.0, 6500.0], dtype=torch.float64),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         planned.band_metadata.center,
         torch.tensor([4800.0, 6500.0], dtype=torch.float64),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         planned.band_metadata.observation_count,
         torch.tensor([1, 1], dtype=torch.int64),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         planned.band_metadata.spectral_weight_sum,
         torch.tensor([1.0, 1.0], dtype=torch.float64),
     )
@@ -4529,13 +4554,13 @@ def test_coadd_image_plane_cube_reprojects_spectral_intervals(tmp_path) -> None:
     expected_weights = torch.tensor([0.25, 0.50, 0.25], dtype=torch.float32).view(
         3, 1, 1
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.weight,
         expected_weights.expand_as(result.weight),
         atol=1e-6,
         rtol=0.0,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data,
         torch.full((3, 8, 8), 4.0, dtype=torch.float32),
         atol=1e-6,
@@ -4543,22 +4568,22 @@ def test_coadd_image_plane_cube_reprojects_spectral_intervals(tmp_path) -> None:
     )
     assert result.inverse_variance is not None
     assert result.correlation_factor is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.inverse_variance,
         torch.ones_like(result.inverse_variance),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.correlation_factor,
         torch.ones_like(result.correlation_factor),
     )
     assert result.coverage_mocs is not None
     assert len(result.coverage_mocs) == 3
     assert result.band_metadata.band_names == ("wide", "wide", "wide")
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.band_metadata.observation_count,
         torch.tensor([1, 1, 1], dtype=torch.int64),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.band_metadata.spectral_weight_sum,
         torch.tensor([0.25, 0.50, 0.25], dtype=torch.float64),
     )
@@ -4606,19 +4631,19 @@ def test_coadd_image_plane_cube_reprojects_gaussian_transmission_filters(
         - torch.erf((left - 5000.0) / (120.0 * sqrt2))
     )
     expected = expected / expected.sum()
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.band_metadata.spectral_weight_sum,
         expected,
         atol=1e-6,
         rtol=0.0,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.weight,
         expected.to(dtype=torch.float32).view(3, 1, 1).expand_as(result.weight),
         atol=1e-6,
         rtol=0.0,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data,
         torch.full((3, 8, 8), 5.0, dtype=torch.float32),
         atol=1e-6,
@@ -4717,17 +4742,17 @@ def test_coadd_image_plane_cube_real_astropy_fixture_to_data_cube(tmp_path) -> N
     )
 
     assert tuple(result.data.shape) == (2, 50, 100)
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4
     )
-    torch.testing.assert_close(result.data[0, :, 50:], torch.zeros_like(image[:, 50:]))
-    torch.testing.assert_close(result.data[1, :, :50], torch.zeros_like(image[:, :50]))
-    torch.testing.assert_close(
+    assert_close_on_device(result.data[0, :, 50:], torch.zeros_like(image[:, 50:]))
+    assert_close_on_device(result.data[1, :, :50], torch.zeros_like(image[:, :50]))
+    assert_close_on_device(
         result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4
     )
     cube = result.to_data_cube()
     assert cube.spatial_wcs is not None
-    torch.testing.assert_close(cube.spectral_axis.values, result.spectral_axis.values)
+    assert_close_on_device(cube.spectral_axis.values, result.spectral_axis.values)
     assert result.band_metadata.band_names == ("g", "r")
 
 
@@ -4802,12 +4827,12 @@ def test_plan_image_plane_cube_target_from_header_uses_spectral_wcs(tmp_path) ->
         spectral_header,
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         planned.spectral_axis.values,
         torch.tensor([4800.0, 5000.0, 5200.0], dtype=torch.float64),
     )
     assert planned.spectral_bin_edges is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         planned.spectral_bin_edges,
         torch.tensor([4700.0, 4900.0, 5100.0, 5300.0], dtype=torch.float64),
     )
@@ -4837,6 +4862,7 @@ _STACKING_METHODS_DETERMINISTIC = [
 
 @pytest.mark.parametrize("kernel", _KERNELS_DETERMINISTIC)
 @pytest.mark.parametrize("stacking_method", _STACKING_METHODS_DETERMINISTIC)
+@pytest.mark.needs_float64('conservative_polygon', 'drizzle_point', 'drizzle_square', 'splat_box', 'splat_point')
 def test_coadd_image_plane_deterministic_accumulation(
     tmp_path, kernel: str, stacking_method: str
 ) -> None:
@@ -4916,4 +4942,4 @@ def test_quadrature_batch_diagonal_variance_matches_dense_operator(
         sample_valid=sample_valid,
     )
     assert actual.dtype == torch.float32
-    torch.testing.assert_close(actual.double(), expected, atol=1.0e-6, rtol=1.0e-5)
+    assert_close_on_device(actual.double(), expected, atol=1.0e-6, rtol=1.0e-5)

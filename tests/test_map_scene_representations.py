@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+from conftest import assert_close_on_device
 
 from torchsky.map.field import PSFSpec
 from torchsky.map.scenes import (
@@ -50,7 +51,7 @@ def test_discrete_target_image_renders_directly_to_matching_target() -> None:
     data = torch.arange(16, dtype=torch.float32).reshape(4, 4)
     target = TargetRenderSpec.from_header(_simple_header())
     rendered = DiscreteTargetImage(data).render_to_target(target)
-    torch.testing.assert_close(rendered, data)
+    assert_close_on_device(rendered, data)
 
 
 def test_continuous_field_model_uses_field_render_path() -> None:
@@ -65,7 +66,7 @@ def test_continuous_field_model_uses_field_render_path() -> None:
         observation=obs,
         num_spectral_samples=1,
     )
-    torch.testing.assert_close(rendered, torch.ones((4, 4), dtype=torch.float32))
+    assert_close_on_device(rendered, torch.ones((4, 4), dtype=torch.float32))
 
 
 def test_continuous_field_model_forwards_operator_bundle() -> None:
@@ -86,8 +87,8 @@ def test_continuous_field_model_forwards_operator_bundle() -> None:
         operator_bundle=ObservationOperatorBundle(),
     )
 
-    torch.testing.assert_close(implicit, torch.full((4, 4), 4.0))
-    torch.testing.assert_close(explicit, torch.ones((4, 4), dtype=torch.float32))
+    assert_close_on_device(implicit, torch.full((4, 4), 4.0))
+    assert_close_on_device(explicit, torch.ones((4, 4), dtype=torch.float32))
 
 
 def test_continuous_field_model_distribution_forwards_operator_bundle() -> None:
@@ -107,8 +108,8 @@ def test_continuous_field_model_distribution_forwards_operator_bundle() -> None:
         operator_bundle=ObservationOperatorBundle(),
     )
 
-    torch.testing.assert_close(mean, torch.ones((4, 4), dtype=torch.float32))
-    torch.testing.assert_close(logvar, torch.zeros((4, 4), dtype=torch.float32))
+    assert_close_on_device(mean, torch.ones((4, 4), dtype=torch.float32))
+    assert_close_on_device(logvar, torch.zeros((4, 4), dtype=torch.float32))
 
 
 def test_target_to_field_observation_preserves_bandpass_and_psf_metadata() -> None:
@@ -142,7 +143,7 @@ def test_continuous_field_model_can_render_from_target_spec_alone() -> None:
         num_spectral_samples=1,
     )
 
-    torch.testing.assert_close(rendered, torch.ones((4, 4), dtype=torch.float32))
+    assert_close_on_device(rendered, torch.ones((4, 4), dtype=torch.float32))
 
 
 def test_as_scene_representation_coerces_module_and_tensor() -> None:
@@ -166,7 +167,7 @@ def test_healpix_map_scene_renders_constant_map_through_spherical_bundle() -> No
         operators=spherical_spectral_operator_bundle(mode="harmonic_direct"),
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         rendered,
         torch.ones((4, 4), dtype=torch.float32),
         atol=5.0e-2,
@@ -181,7 +182,7 @@ def test_harmonic_alm_scene_renders_monopole_constant_field() -> None:
 
     rendered = HarmonicAlmScene(alm, lmax=0).render_to_target(target)
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         rendered,
         torch.ones((4, 4), dtype=rendered.dtype),
         atol=1.0e-5,
@@ -213,4 +214,4 @@ def test_spin_harmonic_alm_scene_matches_direct_spin_projection() -> None:
         lmax=lmax,
     )
 
-    torch.testing.assert_close(rendered, direct)
+    assert_close_on_device(rendered, direct)

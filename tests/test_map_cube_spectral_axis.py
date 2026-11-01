@@ -107,7 +107,15 @@ def _max_relative_error(values: torch.Tensor, truth: torch.Tensor) -> float:
     return float(((values - truth).abs() / truth.abs()).max())
 
 
-@pytest.mark.parametrize("spectral_kernel", ["nearest", "drizzle", "linear"])
+@pytest.mark.parametrize(
+    "spectral_kernel",
+    [
+        # float32 voxel rounding at pixel-centre ties flips nearest assignment
+        pytest.param("nearest", marks=pytest.mark.needs_float64),
+        "drizzle",
+        "linear",
+    ],
+)
 def test_irregular_axis_line_localization(spectral_kernel: str) -> None:
     """A monochromatic detector row must land in the bin that contains its wavelength."""
     for line_index, line_wave in enumerate(IRREGULAR_AXIS.tolist()):
@@ -176,7 +184,7 @@ def test_regular_axis_interpolates_a_smooth_spectrum() -> None:
             assert bool(interior.any())
             error = _max_relative_error(
                 result.cube[interior],
-                truth.expand_as(result.cube)[interior],
+                truth.to(result.cube.device).expand_as(result.cube)[interior],
             )
             assert error <= 2.5e-3
 
@@ -193,7 +201,7 @@ def test_irregular_axis_error_envelope(axis: torch.Tensor, envelope: float) -> N
     """
     result = _cube(_sloped_spectrum, axis, spectral_kernel="drizzle")
     interior = _interior_mask(result.weight)
-    truth = _sloped_spectrum(axis).to(torch.float32)
+    truth = _sloped_spectrum(axis).to(device=result.cube.device, dtype=torch.float32)
     truth = truth.view(-1, 1, 1).expand_as(result.cube)
     error = _max_relative_error(result.cube[interior], truth[interior])
     assert error <= envelope

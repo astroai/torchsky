@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+from conftest import assert_close_on_device
 
 from torchsky.map.field import FieldObservation, render_field_observation
 from torchsky.map.operators.background import (
@@ -40,7 +41,7 @@ def test_constant_background_helper_and_combiner() -> None:
     image = torch.ones((3, 3), dtype=torch.float32)
     bg = constant_background((3, 3), value=2.5, device=image.device)
     out = apply_background_components(image, detector=bg)
-    torch.testing.assert_close(out, torch.full((3, 3), 3.5))
+    assert_close_on_device(out, torch.full((3, 3), 3.5))
 
 
 def test_polynomial_background_uses_structured_coefficients() -> None:
@@ -56,7 +57,7 @@ def test_polynomial_background_uses_structured_coefficients() -> None:
         torch.arange(3, dtype=torch.float32),
         indexing="ij",
     )
-    torch.testing.assert_close(bg, 1.0 + 2.0 * xx - 3.0 * yy)
+    assert_close_on_device(bg, 1.0 + 2.0 * xx - 3.0 * yy)
 
 
 def test_fit_background_plane_recovers_structured_residual() -> None:
@@ -70,8 +71,8 @@ def test_fit_background_plane_recovers_structured_residual() -> None:
 
     summary = fit_background_plane(residual, mask)
 
-    torch.testing.assert_close(summary.model, residual, atol=1e-5, rtol=1e-5)
-    torch.testing.assert_close(
+    assert_close_on_device(summary.model, residual, atol=1e-5, rtol=1e-5)
+    assert_close_on_device(
         summary.coeffs, torch.tensor([0.5, -0.25, 1.5]), atol=1e-5, rtol=1e-5
     )
     assert summary.detrended_rms < 1e-5
@@ -97,8 +98,8 @@ def test_fit_background_plane_uses_weights_and_rejects_source_outlier() -> None:
         sigma_clip=4.0,
     )
 
-    torch.testing.assert_close(summary.model, truth, atol=2e-5, rtol=2e-5)
-    torch.testing.assert_close(
+    assert_close_on_device(summary.model, truth, atol=2e-5, rtol=2e-5)
+    assert_close_on_device(
         summary.coeffs,
         torch.tensor([0.02, -0.03, 1.2]),
         atol=2e-5,
@@ -114,7 +115,7 @@ def test_render_field_observation_applies_background_offset() -> None:
         background_offset=1.25,
     )
     rendered = render_field_observation(_ZeroField(), obs, num_spectral_samples=1)
-    torch.testing.assert_close(rendered, torch.full((4, 4), 1.25))
+    assert_close_on_device(rendered, torch.full((4, 4), 1.25))
 
 
 def test_observation_background_components_separates_structured_terms() -> None:
@@ -138,9 +139,9 @@ def test_observation_background_components_separates_structured_terms() -> None:
         dtype=torch.float32,
     )
 
-    torch.testing.assert_close(components["sky"], sky)
-    torch.testing.assert_close(components["instrument"], instrument)
-    torch.testing.assert_close(components["detector"], detector + 0.25)
+    assert_close_on_device(components["sky"], sky)
+    assert_close_on_device(components["instrument"], instrument)
+    assert_close_on_device(components["detector"], detector + 0.25)
 
 
 def test_render_field_observation_applies_structured_background_components() -> None:
@@ -161,7 +162,7 @@ def test_render_field_observation_applies_structured_background_components() -> 
 
     rendered = render_field_observation(_ZeroField(), obs, num_spectral_samples=1)
 
-    torch.testing.assert_close(rendered, 0.1 * xx + 0.2 * yy + 0.7)
+    assert_close_on_device(rendered, 0.1 * xx + 0.2 * yy + 0.7)
 
 
 def test_field_observation_rejects_mismatched_background_shape() -> None:

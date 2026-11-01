@@ -90,6 +90,7 @@ def test_strainer_trunk_checkpoint_roundtrip() -> None:
         os.unlink(path)
 
 
+@pytest.mark.needs_float64
 def test_fit_field_model_freeze_encoder_trains_head_only() -> None:
     torch.manual_seed(42)
     truth_domain = FieldDomain(
@@ -128,7 +129,10 @@ def test_fit_field_model_freeze_encoder_trains_head_only() -> None:
         freeze_field_encoder=True,
         freeze_field_body=True,
     )
-    assert torch.allclose(body0, next(model.body.parameters()))
+    assert torch.allclose(
+        body0.to(next(model.body.parameters()).device),
+        next(model.body.parameters()),
+    )
     assert fit.final_loss < fit.initial_loss
 
 

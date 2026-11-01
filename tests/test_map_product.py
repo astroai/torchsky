@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from conftest import assert_close_on_device
 
 import torchsky
 import torchsky.map.product as map_product_mod
@@ -87,7 +88,7 @@ def test_plan_map_product_single_band_stack_matches_image_plane(tmp_path: Path) 
 
     assert product.n_bands == 1
     assert result.data.shape == (1, 6, 6)
-    torch.testing.assert_close(result.data[0], (data_a + data_b) / 2.0)
+    assert_close_on_device(result.data[0], (data_a + data_b) / 2.0)
     assert result.uncertainty is None
 
 
@@ -111,7 +112,7 @@ def test_explicit_unit_inverse_variance_is_not_confused_with_default_weight(
 
     assert default_result.uncertainty is None
     assert explicit_result.uncertainty is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         explicit_result.uncertainty.inverse_variance,
         torch.ones((1, 6, 6)),
     )
@@ -239,8 +240,8 @@ def test_plan_map_product_cube_tracks_requested_bands(tmp_path: Path) -> None:
 
     assert tuple(band.label for band in product.bands) == ("blue", "red")
     assert result.data.shape == (2, 6, 6)
-    torch.testing.assert_close(result.data[0], blue)
-    torch.testing.assert_close(result.data[1], red)
+    assert_close_on_device(result.data[0], blue)
+    assert_close_on_device(result.data[1], red)
 
 
 def test_render_field_product_matches_product_shape() -> None:
@@ -282,7 +283,7 @@ def test_render_field_product_labels_likelihood_variance_as_detector() -> None:
 
     assert result.uncertainty is not None
     assert result.uncertainty.kind == "model_predictive"
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.uncertainty.components["detector"],
         torch.full_like(result.data, 4.0),
     )
@@ -313,20 +314,20 @@ def test_render_field_ensemble_product_separates_uncertainty_components() -> Non
 
     assert result.uncertainty is not None
     assert result.uncertainty.kind == "ensemble_predictive"
-    torch.testing.assert_close(result.data, torch.full_like(result.data, 2.0))
-    torch.testing.assert_close(
+    assert_close_on_device(result.data, torch.full_like(result.data, 2.0))
+    assert_close_on_device(
         result.uncertainty.components["epistemic"],
         torch.full_like(result.data, 2.0),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.uncertainty.components["detector"],
         torch.full_like(result.data, 4.0),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.uncertainty.components["calibration"],
         torch.full_like(result.data, 2.0),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.uncertainty.variance,
         torch.full_like(result.data, 8.0),
     )
@@ -375,7 +376,7 @@ def test_render_field_product_supports_spatial_quadrature() -> None:
         spatial_tile_hw=(4, 3),
     )
 
-    torch.testing.assert_close(result.data, torch.full((1, 6, 6), 2.5))
+    assert_close_on_device(result.data, torch.full((1, 6, 6), 2.5))
 
 
 def test_tiled_field_product_allocates_on_model_device(monkeypatch) -> None:
@@ -407,6 +408,7 @@ def test_tiled_field_product_allocates_on_model_device(monkeypatch) -> None:
     assert result.data.device.type == "meta"
 
 
+@pytest.mark.needs_float64
 def test_square_drizzle_reports_squared_coefficient_inverse_variance(
     tmp_path: Path,
 ) -> None:
@@ -455,6 +457,7 @@ def test_square_drizzle_reports_squared_coefficient_inverse_variance(
     ["bilinear", "conservative_polygon", "splat_box"],
 )
 @pytest.mark.parametrize("value_semantics", ["surface_brightness", "flux"])
+@pytest.mark.needs_float64('conservative_polygon', 'splat_box')
 def test_half_pixel_projection_reports_squared_coefficient_inverse_variance(
     tmp_path: Path,
     kernel: str,
@@ -559,7 +562,7 @@ def test_map_uncertainty_product_exposes_honest_inverse_variance() -> None:
         correlation_factor=torch.tensor([[[2.0, 0.0]]]),
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         uncertainty.inverse_variance,
         torch.tensor([[[0.25, 0.0]]], dtype=torch.float32),
     )
@@ -597,8 +600,8 @@ def test_internal_scene_product_render_supports_discrete_multiband_cube() -> Non
 
     result = map_product_mod.render_scene_product(scene, product)
 
-    torch.testing.assert_close(result.data[0], torch.full((6, 6), 2.0))
-    torch.testing.assert_close(result.data[1], torch.full((6, 6), 5.0))
+    assert_close_on_device(result.data[0], torch.full((6, 6), 2.0))
+    assert_close_on_device(result.data[1], torch.full((6, 6), 5.0))
     assert result.weight is None
     assert result.uncertainty is None
     assert result.mask is not None and bool(torch.all(result.mask))
@@ -666,13 +669,13 @@ def test_render_field_product_matches_exact_transmission_per_band_stacks(
         num_spectral_samples=1,
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         rendered_product.data,
         torch.stack(expected_planes, dim=0),
         rtol=0.0,
         atol=1.0e-5,
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         stacked.data,
         rendered_product.data,
         rtol=0.0,
@@ -707,8 +710,8 @@ def test_render_field_product_uses_shared_scene_product_renderer() -> None:
         num_spectral_samples=3,
     )
 
-    torch.testing.assert_close(direct.data, shared.data)
-    torch.testing.assert_close(direct.weight, shared.weight)
+    assert_close_on_device(direct.data, shared.data)
+    assert_close_on_device(direct.weight, shared.weight)
 
 
 def test_render_scene_product_accepts_plain_module_scene() -> None:
@@ -755,7 +758,7 @@ def test_render_scene_product_renders_healpix_scene_through_solver_hooks() -> No
         ),
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         result.data[0],
         torch.ones((6, 6), dtype=torch.float32),
         atol=5.0e-2,
@@ -805,7 +808,7 @@ def test_estimate_map_inverse_variance_never_invents_field_weights() -> None:
         kind="model_predictive",
         components={"epistemic": variance},
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         estimate_map_inverse_variance(result),
         torch.full_like(result.data, 0.25),
     )

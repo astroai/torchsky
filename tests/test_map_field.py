@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import math
 
 import pytest
 import torch
+from conftest import assert_close_on_device
 
 from torchsky import WCS
 from torchsky.map.field import (
@@ -164,7 +166,7 @@ def test_fit_field_model_amp_skips_overflowing_step() -> None:
                     wavelength / 5000.0,
                 ),
                 dim=-1,
-            )
+            ).to(self.linear.weight.dtype)
             return self.linear(features).squeeze(-1) * 1.0e6
 
     domain = FieldDomain(
@@ -206,7 +208,7 @@ def test_fit_field_model_amp_skips_overflowing_step() -> None:
     assert result.diagnostics["amp_overflow_steps"] == 1
     assert result.amp_scaler_state is not None
     for name, parameter in result.model.named_parameters():
-        torch.testing.assert_close(parameter.cpu(), initial[name])
+        assert_close_on_device(parameter.cpu(), initial[name])
 
 
 class _AffineSpectralField(_BaseFieldModel):
@@ -367,8 +369,8 @@ def test_render_field_observation_accepts_explicit_operator_bundle() -> None:
         operator_bundle=field_rendering.ObservationOperatorBundle(),
     )
 
-    torch.testing.assert_close(implicit, torch.full((4, 4), 5.0))
-    torch.testing.assert_close(explicit, torch.full((4, 4), 2.0))
+    assert_close_on_device(implicit, torch.full((4, 4), 5.0))
+    assert_close_on_device(explicit, torch.full((4, 4), 2.0))
 
 
 def test_observation_crop_preserves_physical_background_components() -> None:
@@ -390,12 +392,12 @@ def test_observation_crop_preserves_physical_background_components() -> None:
         height=3,
     )
 
-    torch.testing.assert_close(cropped.image, values[1:4, 2:6])
-    torch.testing.assert_close(cropped.sky_background, values[1:4, 2:6] + 100.0)
-    torch.testing.assert_close(
+    assert_close_on_device(cropped.image, values[1:4, 2:6])
+    assert_close_on_device(cropped.sky_background, values[1:4, 2:6] + 100.0)
+    assert_close_on_device(
         cropped.instrument_background, values[1:4, 2:6] + 200.0
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         cropped.detector_background, values[1:4, 2:6] + 300.0
     )
     assert cropped.detector_x0_pix == 2.0
@@ -429,10 +431,10 @@ def test_native_detector_transform_uses_full_detector_coordinates_after_crop() -
         cropped, shape=(2, 2), device=torch.device("cpu")
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         ra_deg[0, 0], torch.tensor(150.0 + 103.25 / 3600.0, dtype=torch.float64)
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         dec_deg[0, 0], torch.tensor(2.0 + 202.0 / 3600.0, dtype=torch.float64)
     )
     ra_deg.sum().backward()
@@ -478,7 +480,7 @@ def test_psf_halo_training_crop_matches_full_render_and_gradient() -> None:
     assert halo.mask is not None
     assert int(torch.count_nonzero(halo.mask)) == width * height
     assert float(torch.max(torch.abs(naive_render - expected)).detach()) > 0.1
-    torch.testing.assert_close(halo_render[halo.mask], expected.reshape(-1))
+    assert_close_on_device(halo_render[halo.mask], expected.reshape(-1))
 
     model.zero_grad(set_to_none=True)
     expected.sum().backward()
@@ -486,7 +488,7 @@ def test_psf_halo_training_crop_matches_full_render_and_gradient() -> None:
     full_gradient = model.value.grad.detach().clone()
     model.zero_grad(set_to_none=True)
     render_field_observation(model, halo, num_spectral_samples=1)[halo.mask].sum().backward()
-    torch.testing.assert_close(model.value.grad, full_gradient)
+    assert_close_on_device(model.value.grad, full_gradient)
 
     edge_halo = crop_field_observation_for_training(
         observation,
@@ -499,7 +501,7 @@ def test_psf_halo_training_crop_matches_full_render_and_gradient() -> None:
         model, edge_halo, num_spectral_samples=1
     )
     assert edge_halo.mask is not None
-    torch.testing.assert_close(
+    assert_close_on_device(
         edge_render[edge_halo.mask], full[:height, :width].reshape(-1)
     )
 
@@ -579,11 +581,11 @@ def test_field_spatial_quadrature_preserves_constant_and_tiles() -> None:
         spatial_tile_hw=(4, 5),
     )
 
-    torch.testing.assert_close(center, torch.full((9, 9), 5.0))
-    torch.testing.assert_close(quadrature, center)
-    torch.testing.assert_close(tiled, quadrature)
+    assert_close_on_device(center, torch.full((9, 9), 5.0))
+    assert_close_on_device(quadrature, center)
+    assert_close_on_device(tiled, quadrature)
     quadrature.sum().backward()
-    torch.testing.assert_close(model.value.grad, torch.tensor(81.0))
+    assert_close_on_device(model.value.grad, torch.tensor(81.0))
 
 
 def test_field_spatial_quadrature_reduces_subpixel_gaussian_error() -> None:
@@ -735,7 +737,7 @@ def test_distribution_tiling_and_psf_variance_match_full_render() -> None:
     )
     # Default variance_mode is coherent: std propagates linearly through the PSF.
     expected_center_variance = 3.0 * kernel.sum() ** 2
-    torch.testing.assert_close(
+    assert_close_on_device(
         torch.exp(full_logvar[5, 5]), expected_center_variance
     )
     full_logvar.sum().backward()
@@ -750,12 +752,12 @@ def test_distribution_tiling_and_psf_variance_match_full_render() -> None:
         num_spectral_samples=1,
         spatial_tile_hw=(4, 5),
     )
-    torch.testing.assert_close(tiled_mean, full_mean)
-    torch.testing.assert_close(tiled_logvar, full_logvar)
+    assert_close_on_device(tiled_mean, full_mean)
+    assert_close_on_device(tiled_logvar, full_logvar)
     assert observation._cached_ra_deg is None
     assert observation._cached_dec_deg is None
     tiled_logvar.sum().backward()
-    torch.testing.assert_close(model.log_variance.grad, full_gradient)
+    assert_close_on_device(model.log_variance.grad, full_gradient)
 
 
 def test_psf_kernel_requires_a_physical_odd_support() -> None:
@@ -773,7 +775,7 @@ def test_kernel_psf_variance_uses_squared_normalized_weights() -> None:
     )
     propagated = apply_kernel2d_variance(variance, kernel)
     normalized = kernel / kernel.sum()
-    torch.testing.assert_close(propagated[4, 4], torch.square(normalized).sum())
+    assert_close_on_device(propagated[4, 4], torch.square(normalized).sum())
     propagated.sum().backward()
     assert variance.grad is not None
     assert bool(torch.isfinite(variance.grad).all())
@@ -897,7 +899,7 @@ def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> No
         operator_bundle=bundle,
         spatial_tile_hw=(6, 5),
     )
-    torch.testing.assert_close(tiled, full, rtol=2e-5, atol=2e-6)
+    assert_close_on_device(tiled, full, rtol=2e-5, atol=2e-6)
     tiled.square().sum().backward()
     tiled_gradients = {
         name: parameter.grad
@@ -910,7 +912,7 @@ def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> No
     }
     assert full_gradients.keys() == tiled_gradients.keys()
     for name, expected in full_gradients.items():
-        torch.testing.assert_close(
+        assert_close_on_device(
             tiled_gradients[name], expected, rtol=2e-4, atol=2e-5
         )
 
@@ -930,6 +932,7 @@ def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> No
 
 
 @pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.needs_float64
 def test_fit_field_model_optimizes_conditioned_background_bundle(
     streaming: bool,
 ) -> None:
@@ -1057,10 +1060,10 @@ def test_field_component_decomposition_respects_contextual_roles() -> None:
         aggregate=False,
     )
 
-    torch.testing.assert_close(full, torch.full((2, 2), 8.0, dtype=torch.float32))
-    torch.testing.assert_close(private, torch.full((2, 2), 7.0, dtype=torch.float32))
-    torch.testing.assert_close(parts[0], torch.full((2, 2), 1.0, dtype=torch.float32))
-    torch.testing.assert_close(parts[1], torch.full((2, 2), 6.0, dtype=torch.float32))
+    assert_close_on_device(full, torch.full((2, 2), 8.0, dtype=torch.float32))
+    assert_close_on_device(private, torch.full((2, 2), 7.0, dtype=torch.float32))
+    assert_close_on_device(parts[0], torch.full((2, 2), 1.0, dtype=torch.float32))
+    assert_close_on_device(parts[1], torch.full((2, 2), 6.0, dtype=torch.float32))
 
 
 def test_field_component_render_ignores_observation_backgrounds() -> None:
@@ -1096,7 +1099,7 @@ def test_field_component_render_ignores_observation_backgrounds() -> None:
         num_spectral_samples=1,
     )
 
-    torch.testing.assert_close(rendered, torch.full((4, 4), 2.5, dtype=torch.float32))
+    assert_close_on_device(rendered, torch.full((4, 4), 2.5, dtype=torch.float32))
 
 
 def test_field_component_fix_scale_gauge_preserves_predictions() -> None:
@@ -1127,13 +1130,13 @@ def test_field_component_fix_scale_gauge_preserves_predictions() -> None:
     gains = model.fix_component_scale_gauge_()
     after = model(ra, dec, 5600.0, forward_context=context)
 
-    torch.testing.assert_close(before, after)
-    torch.testing.assert_close(gains, torch.ones_like(gains))
-    torch.testing.assert_close(
+    assert_close_on_device(before, after)
+    assert_close_on_device(gains, torch.ones_like(gains))
+    assert_close_on_device(
         model.mixer.shared_weights,
         torch.tensor([2.0, 0.0], dtype=torch.float32),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         model.mixer.survey_weights[1],
         torch.tensor([0.0, -3.0], dtype=torch.float32),
     )
@@ -1191,8 +1194,8 @@ def test_field_component_anchor_loss_matches_shared_target() -> None:
         num_spectral_samples=1,
     )
 
-    torch.testing.assert_close(matched_loss, torch.zeros((), dtype=torch.float32))
-    torch.testing.assert_close(shifted_loss, torch.tensor(2.0, dtype=torch.float32))
+    assert_close_on_device(matched_loss, torch.zeros((), dtype=torch.float32))
+    assert_close_on_device(shifted_loss, torch.tensor(2.0, dtype=torch.float32))
 
 
 def test_field_component_anchor_loss_supports_sample_spectral_targets() -> None:
@@ -1234,7 +1237,7 @@ def test_field_component_anchor_loss_supports_sample_spectral_targets() -> None:
         num_spectral_samples=1,
     )
 
-    torch.testing.assert_close(loss, torch.tensor(2.0 / 3.0, dtype=torch.float32))
+    assert_close_on_device(loss, torch.tensor(2.0 / 3.0, dtype=torch.float32))
 
 
 def test_field_component_anchor_loss_supports_astrometric_pixel_targets() -> None:
@@ -1282,7 +1285,7 @@ def test_field_component_anchor_loss_supports_astrometric_pixel_targets() -> Non
         num_spectral_samples=1,
     )
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         loss, torch.zeros((), dtype=torch.float32), atol=1.0e-6, rtol=0.0
     )
 
@@ -1401,15 +1404,15 @@ def test_field_component_decomposition_diagnostics_measure_exact_leakage() -> No
     )
 
     assert isinstance(diagnostics, ComponentDecompositionDiagnostics)
-    torch.testing.assert_close(
+    assert_close_on_device(
         torch.tensor(diagnostics.shared_to_private_leakage),
         torch.tensor(0.5),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         torch.tensor(diagnostics.private_to_shared_leakage),
         torch.tensor(0.25),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         torch.tensor(diagnostics.calibration_transfer_stability),
         torch.tensor(0.25),
     )
@@ -1504,8 +1507,8 @@ def test_fit_field_component_decomposition_trains_contextual_split() -> None:
         forward_context=contexts[1],
     )
 
-    torch.testing.assert_close(pred_a, observations[0].image, atol=5.0e-2, rtol=0.0)
-    torch.testing.assert_close(pred_b, observations[1].image, atol=5.0e-2, rtol=0.0)
+    assert_close_on_device(pred_a, observations[0].image, atol=5.0e-2, rtol=0.0)
+    assert_close_on_device(pred_b, observations[1].image, atol=5.0e-2, rtol=0.0)
     assert result.final_loss < 5.0e-3
 
 
@@ -1751,6 +1754,7 @@ def test_sample_anchor_terms_improve_shared_spectral_calibration_stability() -> 
     )
 
 
+@pytest.mark.needs_float64
 def test_component_centroid_anchor_terms_improve_shared_geometry() -> None:
     torch.manual_seed(0)
     domain = FieldDomain(
@@ -2205,6 +2209,7 @@ def test_noise_pretraining_updates_trunk_but_restores_decoder_head() -> None:
     assert torch.allclose(model.output.bias, initial_output_bias)
 
 
+@pytest.mark.needs_float64
 def test_fit_field_model_supports_noise_pretraining_for_sky_encoder_mlp() -> None:
     torch.manual_seed(3210)
     truth_domain = FieldDomain(
@@ -2403,6 +2408,7 @@ def test_fit_field_model_supports_shared_sky_patch_sampling() -> None:
     assert fit.final_loss < fit.initial_loss
 
 
+@pytest.mark.needs_float64
 def test_fit_field_model_supports_pixel_sampled_training() -> None:
     torch.manual_seed(2238)
     truth_domain = FieldDomain(
@@ -2663,6 +2669,20 @@ def test_fit_field_model_supports_bandpass_mc_training() -> None:
         )
     fit_domain = estimate_field_domain(observations)
     model = SineImplicitField(fit_domain, hidden_dim=24, hidden_layers=2)
+    initial_model = copy.deepcopy(model)
+
+    def _deterministic_loss(field: torch.nn.Module) -> float:
+        # The reported fit losses are evaluated on different Monte-Carlo bandpass
+        # draws (device RNG streams differ), so at ~1e-6 they are noise-limited.
+        # Compare the trained and initial models on the fixed quadrature instead.
+        total = 0.0
+        for obs in observations:
+            rendered = render_field_observation(field, obs, num_spectral_samples=7)
+            total += float(
+                torch.mean((rendered - obs.image.to(rendered.device)) ** 2).detach()
+            )
+        return total
+
     fit = fit_field_model(
         observations,
         model,
@@ -2677,7 +2697,7 @@ def test_fit_field_model_supports_bandpass_mc_training() -> None:
         observations[0],
         num_spectral_samples=7,
     )
-    assert fit.final_loss < fit.initial_loss
+    assert _deterministic_loss(fit.model) < _deterministic_loss(initial_model)
     assert pred.shape == observations[0].image.shape
     assert torch.isfinite(pred).all()
 
@@ -2893,6 +2913,7 @@ def test_fourier_mlp_field_supports_charbonnier_fit() -> None:
     assert fit.final_loss < 2.0e-2
 
 
+@pytest.mark.needs_float64
 def test_spectral_basis_field_supports_exact_wavelength_fit() -> None:
     torch.manual_seed(5312)
     truth_domain = FieldDomain(
@@ -2994,6 +3015,7 @@ def test_conditioned_spectral_field_supports_exact_wavelength_fit() -> None:
     assert min(fit.loss_history) < fit.initial_loss
 
 
+@pytest.mark.needs_float64
 def test_learned_spectral_basis_field_supports_exact_wavelength_fit() -> None:
     torch.manual_seed(5316)
     truth_domain = FieldDomain(
@@ -3721,6 +3743,7 @@ def test_bandpass_conditioned_field_supports_exact_wavelength_fit() -> None:
     assert min(fit.loss_history) < fit.initial_loss
 
 
+@pytest.mark.needs_float64
 def test_sky_encoder_bandpass_field_supports_broad_band_fit() -> None:
     torch.manual_seed(5322)
     truth_domain = FieldDomain(
@@ -3775,6 +3798,7 @@ def test_sky_encoder_bandpass_field_supports_broad_band_fit() -> None:
     assert min(fit.loss_history) < fit.initial_loss
 
 
+@pytest.mark.needs_float64
 def test_sky_encoder_mlp_field_supports_charbonnier_fit() -> None:
     torch.manual_seed(1357)
     truth_domain = FieldDomain(
@@ -4045,6 +4069,7 @@ def test_hashgrid_resmlp_field_supports_charbonnier_fit() -> None:
     assert min(fit.loss_history) < fit.initial_loss
 
 
+@pytest.mark.needs_float64
 def test_sky_encoder_resmlp_field_supports_charbonnier_fit() -> None:
     torch.manual_seed(24601)
     truth_domain = FieldDomain(
@@ -4098,6 +4123,7 @@ def test_sky_encoder_resmlp_field_supports_charbonnier_fit() -> None:
     assert min(fit.loss_history) < fit.initial_loss
 
 
+@pytest.mark.needs_float64
 def test_fit_field_model_supports_exact_wavelength_observations_with_cosine_schedule() -> (
     None
 ):
@@ -4207,8 +4233,8 @@ def test_tabulated_bandpass_quadrature_runs_on_cuda() -> None:
         transmission_throughput=tt_tab,
     )
     samples, weights = bandpass_quadrature(obs, num_spectral_samples=128, device=device)
-    assert samples.device == device
-    assert weights.device == device
+    assert samples.device.type == device.type
+    assert weights.device.type == device.type
     assert torch.isfinite(samples).all() and torch.isfinite(weights).all()
 
 
@@ -4399,3 +4425,67 @@ def test_render_field_cube_rejects_non_positive_spatial_tile() -> None:
             spectral_axis=axis,
             spatial_tile_hw=(4, 0),
         )
+
+
+def test_decomposition_diagnostics_accept_truth_and_anchor_on_other_device(
+    compute_device,
+) -> None:
+    """A device-moved fitted model is compared with a CPU truth/anchor model."""
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    header = _tan_header(4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0)
+
+    def _model(value: float) -> FieldComponentDecomposition:
+        return FieldComponentDecomposition(
+            [_ConstantField(domain, value), _ConstantField(domain, 1.0)],
+            component_roles=("shared", "survey"),
+            surveys=("A",),
+            instruments=("cam1",),
+        )
+
+    estimate = _model(2.0).to(compute_device)
+    truth = _model(3.0)
+    observation = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=header,
+        spectral_min=5600.0,
+        spectral_max=5600.0,
+        transmission_center=5600.0,
+        transmission_sigma=None,
+    )
+    diagnostics = estimate.decomposition_diagnostics(
+        [observation],
+        truth,
+        observation_forward_contexts=[ForwardContext(survey="A", instrument="cam1")],
+        num_spectral_samples=1,
+        calibration_anchor_model=truth,
+        calibration_anchor_roles="shared",
+    )
+    assert diagnostics.calibration_transfer_stability is not None
+    assert math.isfinite(float(diagnostics.calibration_transfer_stability))
+
+
+def test_fourier_mlp_features_build_on_device(compute_device) -> None:
+    """Fourier frequency scales must be built with ops available on every backend."""
+    from torchsky.map.field.models_implicit import FourierMLPField
+
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    field = FourierMLPField(
+        domain, hidden_dim=8, hidden_layers=1, num_frequencies=3, max_frequency=8.0
+    ).to(compute_device)
+    coords = torch.linspace(-1.0, 1.0, 12).reshape(4, 3)
+    features = field._fourier_features(coords.to(compute_device))
+    reference = field.cpu()._fourier_features(coords)
+    assert features.device.type == compute_device.type
+    torch.testing.assert_close(features.cpu(), reference, rtol=1e-5, atol=1e-5)

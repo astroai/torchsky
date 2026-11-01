@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 import torch
 
+from torchsky.device import default_compute_device
 from torchsky.map import Observation, coadd_healpix
 from torchsky.map.healpix_coadd import _SortedContributionAccumulator
 from torchsky.wcs import WCS
@@ -285,7 +286,7 @@ def test_empty_sparse_coadd_preserves_order_device_and_dtypes(nest: bool) -> Non
     assert result.data.values.dtype == torch.float32
     assert result.weight.values.dtype == torch.float32
     assert result.overlap_count.values.dtype == torch.int32
-    assert result.data.values.device.type == "cpu"
+    assert result.data.values.device.type == default_compute_device().type
     assert result.data.valid_pixels.numel() == 0
 
 

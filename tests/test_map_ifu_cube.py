@@ -337,3 +337,25 @@ def test_legacy_ifu_coadd_remains_available() -> None:
         resample=ResampleConfig(spectral_kernel="linear"),
     )
     assert result.data.shape == (3, 3, 2)
+
+
+def test_legacy_ifu_coadd_accepts_cpu_ifu_wcs_on_device(compute_device) -> None:
+    """CPU-resident IFU maps must be moved to the compute device, not mixed with it."""
+    from torchsky.map import Observation, Target
+
+    transform = _transform((3, 2), dtype=torch.float32)
+    legacy = IFUSliceWCS(
+        transform.ra_map,
+        transform.dec_map,
+        transform.wavelength_map,
+        transform.slice_id_map,
+    )
+    result = coadd_cube(
+        [Observation(data=torch.ones((3, 2)), ifu_wcs=legacy)],
+        Target(wcs=_wcs((3, 2)), shape=(3, 2)),
+        wavelengths=torch.tensor([5000.0, 5010.0, 5020.0]),
+        resample=ResampleConfig(spectral_kernel="linear"),
+        device=compute_device,
+    )
+    assert result.data.device.type == compute_device.type
+    assert result.data.shape == (3, 3, 2)

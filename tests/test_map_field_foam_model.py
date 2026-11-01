@@ -1372,6 +1372,7 @@ def test_spectral_power_foam_hard_render_supports_conditioned_operators() -> Non
     assert background.network[-1].bias.grad is not None
 
 
+@pytest.mark.needs_float64
 def test_spectral_power_foam_fits_multiple_observations_then_hard_renders() -> None:
     domain = FieldDomain(
         center_ra_deg=10.0,
@@ -1432,4 +1433,7 @@ def test_spectral_power_foam_fits_multiple_observations_then_hard_renders() -> N
 
     assert len(fit.loss_history) == 2
     assert bool(torch.isfinite(rendered).all())
-    assert not torch.equal(fit.model.cell_coefficients, initial_coefficients)
+    assert not torch.equal(
+        fit.model.cell_coefficients,
+        initial_coefficients.to(fit.model.cell_coefficients.device),
+    )
