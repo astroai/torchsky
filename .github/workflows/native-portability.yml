@@ -5,10 +5,12 @@ name: Native Portability
     branches:
       - main
       - develop
+      - 'release/**'
   pull_request:
     branches:
       - main
       - develop
+      - 'release/**'
   workflow_dispatch:
 
 permissions:

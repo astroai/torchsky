@@ -230,10 +230,13 @@ jobs:
     branches:
     - main
     - develop
+    - release/**
   pull_request:
     branches:
     - main
     - develop
+    - release/**
   release:
     types:
     - published
+  workflow_dispatch:
