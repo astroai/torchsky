@@ -45,7 +45,7 @@ jobs:
       - name: Run native safety contracts
         run: |
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
-          python -m pytest -v -rA -p no:cacheprovider tests/test_cpp_dispatcher.py tests/test_cpp_fixed_dispatcher.py tests/test_cpp_spectral_dispatcher.py tests/test_cpp_wcs_safety.py
+          python -m pytest -v -rA -s -p no:cacheprovider tests/test_cpp_dispatcher.py tests/test_cpp_fixed_dispatcher.py tests/test_cpp_spectral_dispatcher.py tests/test_cpp_wcs_safety.py
 
   linux-x86-native:
     name: Linux x86-64 baseline and AVX2/FMA
@@ -97,7 +97,7 @@ jobs:
 
   macos-arm64-native:
     name: macOS arm64 NEON and scalar
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       CMAKE_ARGS: -DTORCHSKY_ENABLE_IPO=OFF

@@ -29,8 +29,9 @@ def _runtime_module():
 def test_native_portability_workflow_covers_hosted_cpu_isa_contracts() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "runs-on: ubuntu-latest" in source
-    assert "runs-on: macos-14" in source
+    # Ubuntu 26.04 ships x86-64-v3 packages; emulation and sanitizer jobs stay on 24.04.
+    assert source.count("runs-on: ubuntu-24.04") == 2
+    assert "runs-on: macos-15" in source
     assert 'test "$(uname -m)" = arm64' in source
     assert "CMAKE_ARGS: -DTORCHSKY_ENABLE_IPO=OFF" in source
     assert "CMAKE_BUILD_PARALLEL_LEVEL: '2'" in source
@@ -44,7 +45,8 @@ def test_native_portability_workflow_covers_hosted_cpu_isa_contracts() -> None:
     assert source.count("timeout-minutes:") == 4
     assert "cancel-in-progress: true" in source
     assert source.count("cache: pip") == 3
-    assert "cache: true" in source
+    # setup-pixi rejects cache: true together with run-install: false.
+    assert "cache: true" not in source
     assert "run-install: false" in source
 
 
