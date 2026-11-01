@@ -373,3 +373,36 @@ def test_grazing_contact_below_vertex_resolution_is_not_overlap(
     )
     assert w[0] == pytest.approx(1.0, abs=1e-6)
     assert float(w[1]) == 0.0 and float(w[2]) == 0.0
+
+
+def test_scatter_add_ordered_matches_scatter_add() -> None:
+    from torchsky.map.operators.geometry_drizzle import _scatter_add_ordered
+
+    gen = torch.Generator().manual_seed(3)
+    index = torch.randint(0, 40, (50_000,), generator=gen)
+    values = [torch.rand(50_000, generator=gen), torch.rand(50_000, generator=gen)]
+    reference = [torch.zeros(64) for _ in values]
+    ordered = [torch.zeros(64) for _ in values]
+    for target, value in zip(reference, values):
+        target.scatter_add_(0, index, value)
+    _scatter_add_ordered(ordered, index, values, ordered=True)
+    for expected, got in zip(reference, ordered):
+        torch.testing.assert_close(got, expected, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_scatter_add_ordered_is_bitwise_reproducible_on_cuda() -> None:
+    from torchsky.map.operators.geometry_drizzle import _scatter_add_ordered
+
+    gen = torch.Generator().manual_seed(5)
+    index = torch.randint(0, 64, (1_000_000,), generator=gen).cuda()
+    values = [torch.rand(1_000_000, generator=gen).cuda()]
+    runs = []
+    for _ in range(4):
+        target = [torch.zeros(64, device="cuda")]
+        _scatter_add_ordered(target, index, values)
+        runs.append(target[0])
+    assert all(torch.equal(runs[0], run) for run in runs[1:])
+    # float atomics (scatter_add_) are the non-reproducible baseline being replaced
+    reference = torch.zeros(64, device="cuda").scatter_add_(0, index, values[0])
+    torch.testing.assert_close(runs[0], reference, rtol=1e-4, atol=1e-2)

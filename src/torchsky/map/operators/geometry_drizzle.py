@@ -162,6 +162,36 @@ def _quadrilateral_areas_and_validity(
     return areas, valid
 
 
+def _scatter_add_ordered(
+    targets: list[Tensor],
+    index: Tensor,
+    values: list[Tensor],
+    *,
+    ordered: bool | None = None,
+) -> None:
+    """``targets[k].scatter_add_(0, index, values[k])`` with a run-independent result.
+
+    CUDA ``scatter_add_`` accumulates colliding entries with float atomics, whose order
+    varies from run to run, so the rounded sums are not reproducible.  On CUDA the
+    entries are instead stable-sorted by target index and each run of equal indices is
+    summed sequentially (``segment_reduce``, no atomics) and added to the target once
+    per index, which fixes the summation order.  Other devices use ``scatter_add_``
+    (serial on CPU, hence already deterministic).  ``ordered`` forces either path.
+    """
+    if ordered is None:
+        ordered = index.device.type == "cuda"
+    if not ordered:
+        for target, value in zip(targets, values):
+            target.scatter_add_(0, index, value)
+        return
+    order = torch.sort(index, stable=True).indices
+    sorted_index = index[order]
+    unique_index, counts = torch.unique_consecutive(sorted_index, return_counts=True)
+    for target, value in zip(targets, values):
+        sums = torch.segment_reduce(value[order], "sum", lengths=counts)
+        target[unique_index] = target[unique_index] + sums
+
+
 def _accumulate_quadrilateral_overlaps(
     quad_x: Tensor,
     quad_y: Tensor,
@@ -343,18 +373,12 @@ def _accumulate_quadrilateral_overlaps(
         coefficients = (overlaps[overlap_valid] / areas[owners]).to(
             dtype=torch.float32
         )
-        flat_numer.scatter_add_(
-            0, output_index, quad_numer[owners] * coefficients
-        )
-        flat_weight.scatter_add_(
-            0, output_index, quad_weight[owners] * coefficients
-        )
+        targets = [flat_numer, flat_weight]
+        values = [quad_numer[owners] * coefficients, quad_weight[owners] * coefficients]
         if flat_variance_weight is not None:
-            flat_variance_weight.scatter_add_(
-                0,
-                output_index,
-                quad_weight[owners] * torch.square(coefficients),
-            )
+            targets.append(flat_variance_weight)
+            values.append(quad_weight[owners] * torch.square(coefficients))
+        _scatter_add_ordered(targets, output_index, values)
 
 
 def exact_square_drizzle_project(

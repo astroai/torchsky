@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import operator
+import warnings
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -47,6 +48,7 @@ from .operators.execution import (
     TileAccumulators,
     accumulate_projected_observation,
     accumulator_bytes_per_pixel,
+    available_device_memory_bytes,
     finalize_projected_stack,
     masked_median_stack,
     plan_spatial_tiles,
@@ -464,6 +466,54 @@ _FORCE_HOST_ACCUMULATORS: bool | None = None
 # Full-size accumulators move to the host when they exceed this fraction of the
 # memory budget (accelerator compute devices only).
 _HOST_ACCUMULATOR_BUDGET_FRACTION = 0.25
+
+
+# A tiled coadd hands its host-resident maps back to the compute device only if they
+# take at most this fraction of the memory the device can still allocate.
+_RESTORE_DEVICE_MEMORY_FRACTION = 0.9
+
+
+def _restore_to_compute_device(
+    device: torch.device,
+    tensors: Sequence[Tensor | None],
+    *,
+    label: str,
+) -> list[Tensor | None]:
+    """Return *tensors* on *device*, or unchanged (with a warning) if they do not fit.
+
+    A tiled coadd on an accelerator accumulates on the host and so ends with host
+    tensors.  An untiled coadd returns tensors on the requested device, so the tiled
+    result is moved back to be interchangeable with it.  The move is all-or-nothing
+    per group: if the group is larger than the free device memory (or the copy runs
+    out of memory) the tensors stay on the host and a ``RuntimeWarning`` says so.
+    """
+    pending = [t for t in tensors if t is not None and t.device != device]
+    if not pending:
+        return list(tensors)
+    needed = sum(int(t.numel()) * int(t.element_size()) for t in pending)
+    available = available_device_memory_bytes(device)
+    reason = None
+    if available is not None and needed > _RESTORE_DEVICE_MEMORY_FRACTION * available:
+        reason = (
+            f"{needed / 2**30:.2f} GiB needed but only {available / 2**30:.2f} GiB "
+            f"free on {device}"
+        )
+    else:
+        out_of_memory = getattr(torch, "OutOfMemoryError", RuntimeError)
+        try:
+            return [None if t is None else t.to(device=device) for t in tensors]
+        except out_of_memory as exc:
+            if out_of_memory is RuntimeError and "out of memory" not in str(exc):
+                raise
+            reason = f"copy to {device} ran out of memory"
+    warnings.warn(
+        f"coadd_image_plane: the tiled {label} stay on the host ({reason}); the "
+        f"result is not on the requested device {device}. Move them explicitly, or "
+        "use a smaller target / more device memory to get device-resident maps.",
+        RuntimeWarning,
+        stacklevel=4,
+    )
+    return list(tensors)
 
 
 def _coadd_image_plane_spatial_tiles(
@@ -1006,6 +1056,9 @@ def _coadd_image_plane_spatial_tiles(
         tile_hw=(th, tw),
         output_device=storage_device,
     )
+    if output_path is not None:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        write(output_path, full_data, header=header_dict, overwrite=True)
     provenance = _context_provenance(
         observations,
         resampling_kernel=resampling_kernel,
@@ -1023,6 +1076,30 @@ def _coadd_image_plane_spatial_tiles(
         "tile_hw": (th, tw),
         "host_accumulators": bool(host_accumulators),
     }
+    # Same placement as the untiled coadd: results live on the requested device even
+    # though the accumulators (and the context words) were kept on the host.
+    (
+        full_data,
+        full_weight,
+        full_inverse_variance,
+        full_correlation_factor,
+        full_overlap,
+        output_dq,
+    ) = _restore_to_compute_device(
+        device,
+        [
+            full_data,
+            full_weight,
+            full_inverse_variance,
+            full_correlation_factor,
+            full_overlap,
+            output_dq,
+        ],
+        label="maps",
+    )
+    (full_context,) = _restore_to_compute_device(
+        device, [full_context], label="context words"
+    )
     result = MapResult(
         data=full_data,
         weight=full_weight,
@@ -1049,9 +1126,6 @@ def _coadd_image_plane_spatial_tiles(
             else None
         ),
     )
-    if output_path is not None:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        write(output_path, full_data, header=header_dict, overwrite=True)
     return result
 
 
@@ -1280,8 +1354,12 @@ def coadd_image_plane(
         or of the available host memory (cgroup limit aware) otherwise; the
         ``TORCHSKY_TILE_MEMORY_BUDGET_BYTES`` environment variable and the
         ``execution.TILE_MEMORY_BUDGET_BYTES`` constant override that default.
-        When the target is tiled on an accelerator the full-size accumulators and
-        the returned maps are host tensors; only tile windows visit the device.
+        When the target is tiled on an accelerator the full-size accumulators are
+        host tensors and only tile windows visit the device; the returned maps
+        (and context words) are moved back to the requested device at the end,
+        exactly like an untiled coadd.  Only if that move would not fit the free
+        device memory (or runs out of memory) do the affected tensors stay on the
+        host, and a ``RuntimeWarning`` is emitted.
     propagate_variance
         ``True`` (default) propagates the exact diagonal variance of the
         resampling (``inverse_variance`` and ``correlation_factor`` on the result)

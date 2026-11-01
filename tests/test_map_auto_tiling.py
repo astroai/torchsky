@@ -518,3 +518,66 @@ def test_propagate_variance_false_other_stacks(stacking) -> None:
     assert lean.inverse_variance is None
     assert torch.equal(full.data, lean.data)
     assert torch.equal(full.weight, lean.weight)
+
+
+# ---------------------------------------------------------------------------
+# Result placement: a tiled coadd returns maps on the requested device.
+# ---------------------------------------------------------------------------
+
+
+def test_restore_to_compute_device_moves_and_warns(monkeypatch) -> None:
+    # The meta device stands in for an accelerator: host tensors can be moved to it
+    # without hardware, and the copy path / warning path are device agnostic.
+    target = torch.device("meta")
+    host = [torch.ones(8, 8), None, torch.ones(8, 8, dtype=torch.int64)]
+    moved = coadd_mod._restore_to_compute_device(target, host, label="maps")
+    assert moved[0].device == target and moved[1] is None and moved[2].device == target
+
+    monkeypatch.setattr(coadd_mod, "available_device_memory_bytes", lambda device: 100)
+    with pytest.warns(RuntimeWarning, match="stay on the host"):
+        kept = coadd_mod._restore_to_compute_device(target, host, label="maps")
+    assert kept[0].device.type == "cpu" and kept[1] is None and kept[2] is host[2]
+
+    # Already on the device (or nothing to move): untouched, no warning.
+    same = coadd_mod._restore_to_compute_device(
+        torch.device("cpu"), host, label="maps"
+    )
+    assert same[0] is host[0]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+@pytest.mark.parametrize("stacking", ["weighted_mean", "median"])
+def test_tiled_coadd_on_cuda_returns_cuda_maps(stacking, monkeypatch) -> None:
+    observations = _observations(n=3)
+    kwargs = dict(
+        target_header=TARGET,
+        resampling_kernel="bilinear",
+        stacking_method=stacking,
+        device="cuda",
+        auto_tile=False,
+    )
+    untiled = coadd_image_plane(observations, **kwargs)
+    monkeypatch.setattr(coadd_mod, "_FORCE_HOST_ACCUMULATORS", True)
+    tiled = coadd_image_plane(observations, spatial_tile_hw=(64, 70), **kwargs)
+    for name in ("data", "weight", "overlap_count", "context"):
+        t, u = getattr(tiled, name), getattr(untiled, name)
+        assert t.device == u.device == torch.device("cuda", torch.cuda.current_device()), name
+    assert torch.allclose(tiled.data, untiled.data, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_tiled_coadd_on_cuda_keeps_host_maps_with_warning_when_they_do_not_fit(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(coadd_mod, "_FORCE_HOST_ACCUMULATORS", True)
+    monkeypatch.setattr(coadd_mod, "available_device_memory_bytes", lambda device: 1)
+    with pytest.warns(RuntimeWarning, match="stay on the host"):
+        result = coadd_image_plane(
+            _observations(n=2),
+            target_header=TARGET,
+            resampling_kernel="bilinear",
+            device="cuda",
+            spatial_tile_hw=(64, 70),
+            auto_tile=False,
+        )
+    assert result.data.device.type == "cpu"

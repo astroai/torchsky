@@ -389,13 +389,25 @@ def _interpolated_source_pixels(
     h_src, w_src = image_shape
     xs, ys, oks = [], [], []
     for off_x, off_y in offsets:
-        evaluate = _make_target_to_source_evaluator(
+        exact = _make_target_to_source_evaluator(
             source_wcs,
             target_wcs,
             image_shape,
             offset_x=off_x,
             offset_y=off_y,
         )
+
+        def evaluate(x: Tensor, y: Tensor, _exact=exact) -> tuple[Tensor, Tensor, Tensor]:
+            # The WCS follows its own device; the lattice lives on ``map_device``.
+            x_s, y_s, ok = _exact(x, y)
+            if x_s.device != map_device:
+                x_s, y_s, ok = (
+                    x_s.to(device=map_device),
+                    y_s.to(device=map_device),
+                    ok.to(device=map_device),
+                )
+            return x_s, y_s, ok
+
         x_src, y_src, ok = interpolated_inverse_mapping(
             evaluate,
             int(target_shape[0]),
@@ -1057,7 +1069,7 @@ def _resample_weighted_to_target(
             target.wcs,
             tuple(target.shape),
             (h_src, w_src),
-            device=device,
+            device=image.device,
             offsets=tuple((ox, oy) for oy in (-half, half) for ox in (-half, half)),
         )
         sub_result = _sample_on_source_grid(x_src_b, y_src_b, valid_mask=valid)
