@@ -114,7 +114,7 @@ class _RotationMixin:
         ra_out = torch.remainder(ra_out, 360.0)
 
         return ra_out, dec_out
-    def _spherical_rotation_optimized(
+    def _spherical_rotation_optimized_base(
         self,
         phi: Tensor,
         theta: Tensor,
@@ -158,7 +158,7 @@ class _RotationMixin:
         d2r = 0.017453292519943295
         r2d = 57.29577951308232
 
-        phi_rad = (phi - self.phi_p) * d2r
+        phi_rad = (phi - self._phi_p_native) * d2r
         theta_rad = theta * d2r
 
         sin_theta, cos_theta = _sincos(theta_rad)
@@ -277,7 +277,7 @@ class _RotationMixin:
         alpha = torch.remainder(alpha, 360.0)
 
         return alpha, delta
-    def _inverse_spherical_rotation(
+    def _inverse_spherical_rotation_base(
         self,
         ra: Tensor,
         dec: Tensor,
@@ -374,6 +374,64 @@ class _RotationMixin:
         )
 
         theta = torch.atan2(w, torch.hypot(u, v)) * r2d
-        phi = torch.remainder(torch.atan2(u, v) * r2d + self.phi_p, 360.0)
+        phi = torch.remainder(torch.atan2(u, v) * r2d + self._phi_p_native, 360.0)
 
         return phi, theta
+
+
+    def _apply_celestial_postrot(
+        self, ra: Tensor, dec: Tensor, *, inverse: bool = False
+    ) -> Tuple[Tensor, Tensor]:
+        """Apply the exact residual LONPOLE/LATPOLE rotation (Paper II) to (ra, dec)."""
+        m = self._celestial_postrot
+        d2r = 0.017453292519943295
+        r2d = 57.29577951308232
+        sin_dec, cos_dec = _sincos(dec * d2r)
+        sin_ra, cos_ra = _sincos(ra * d2r)
+        v = (cos_dec * cos_ra, cos_dec * sin_ra, sin_dec)
+        if inverse:
+            c = [[m[j][i] for j in range(3)] for i in range(3)]
+        else:
+            c = m
+        x = c[0][0] * v[0] + c[0][1] * v[1] + c[0][2] * v[2]
+        y = c[1][0] * v[0] + c[1][1] * v[1] + c[1][2] * v[2]
+        z = c[2][0] * v[0] + c[2][1] * v[1] + c[2][2] * v[2]
+        lon = torch.remainder(torch.atan2(y, x) * r2d, 360.0)
+        lat = torch.atan2(z, torch.hypot(x, y)) * r2d
+        return lon, lat
+
+    def _spherical_rotation_optimized(
+        self,
+        phi: Tensor,
+        theta: Tensor,
+        native_type: str = "pole",
+        *,
+        allow_cpp_sphere: bool = True,
+    ) -> Tuple[Tensor, Tensor]:
+        """Native -> celestial, honouring LONPOLE/LATPOLE exactly."""
+        if self._celestial_postrot is None:
+            return self._spherical_rotation_optimized_base(
+                phi, theta, native_type, allow_cpp_sphere=allow_cpp_sphere
+            )
+        ra, dec = self._spherical_rotation_optimized_base(
+            phi, theta, native_type, allow_cpp_sphere=allow_cpp_sphere
+        )
+        return self._apply_celestial_postrot(ra, dec)
+
+    def _inverse_spherical_rotation(
+        self,
+        ra: Tensor,
+        dec: Tensor,
+        native_type: str = "pole",
+        *,
+        allow_cpp_inverse_sphere: bool = True,
+    ) -> Tuple[Tensor, Tensor]:
+        """Celestial -> native, honouring LONPOLE/LATPOLE exactly."""
+        if self._celestial_postrot is not None:
+            ra, dec = self._apply_celestial_postrot(ra, dec, inverse=True)
+        return self._inverse_spherical_rotation_base(
+            ra,
+            dec,
+            native_type,
+            allow_cpp_inverse_sphere=allow_cpp_inverse_sphere,
+        )

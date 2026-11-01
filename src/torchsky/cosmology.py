@@ -22,6 +22,22 @@ PLANCK18_OM0 = 0.3111
 PLANCK18_W0 = -1.0
 
 
+_GL_NODES = 64
+
+
+def _gauss_legendre_unit(
+    n: int, device: torch.device, dtype: torch.dtype
+) -> tuple[Tensor, Tensor]:
+    """Gauss-Legendre nodes and weights on [0, 1]."""
+    import numpy as np
+
+    x, w = np.polynomial.legendre.leggauss(n)
+    return (
+        torch.as_tensor(0.5 * (x + 1.0), device=device, dtype=dtype),
+        torch.as_tensor(0.5 * w, device=device, dtype=dtype),
+    )
+
+
 def _floating_tensor(value: Tensor | float) -> Tensor:
     tensor = torch.as_tensor(value)
     return (
@@ -217,7 +233,8 @@ def _nonnegative_redshift(z: Tensor) -> Tensor:
     z_t = _floating_tensor(z)
     if z_t.numel() and not bool(torch.isfinite(z_t).all()):
         raise ValueError("redshift must be finite")
-    return z_t.clamp(min=0.0)
+    # where-form keeps a unit gradient exactly at z = 0 (clamp gives 0 there).
+    return torch.where(z_t < 0.0, torch.zeros_like(z_t), z_t)
 
 
 def comoving_distance(
@@ -232,8 +249,9 @@ def comoving_distance(
 ) -> Tensor:
     """Line-of-sight comoving distance ``D_C`` in Mpc.
 
-    Integrates ``1/E(z')`` on a shared grid to ``max(z)`` then interpolates.
-    ``z`` is clamped at zero; ``D_C(0) = 0``.
+    Integrates ``1/E(z')`` per point with fixed Gauss-Legendre nodes in
+    ``ln(1+z)``; results are independent of the other batch entries.
+    Negative ``z`` is treated as zero; ``D_C(0) = 0``.
 
     Args:
         z: Redshift tensor.
@@ -242,7 +260,8 @@ def comoving_distance(
         ok0: Present-day curvature density parameter.
         w0: Dark-energy equation-of-state value at scale factor one.
         wa: CPL dark-energy evolution coefficient.
-        n_steps: Number of shared trapezoidal integration intervals.
+        n_steps: Validated (``>= 2``) but unused; quadrature uses a fixed
+            64-node Gauss-Legendre rule in ``ln(1+z)``.
 
     Returns:
         Line-of-sight comoving distances in Mpc with the shape of ``z``.
@@ -259,26 +278,17 @@ def comoving_distance(
     if z_t.numel() == 0:
         return z_t
     z_nonneg = _nonnegative_redshift(z_t)
-    z_limit = z_nonneg.detach().amax() * 1.01 + 1e-5
-    table_size = int(n_steps)
-    z_grid = (
-        torch.linspace(0.0, 1.0, table_size, device=z_t.device, dtype=z_t.dtype)
-        * z_limit
-    )
-    integrand = 1.0 / e_of_z(z_grid, om0=om0, ok0=ok0, w0=w0, wa=wa)
-    step = z_limit / (table_size - 1)
-    areas = (integrand[:-1] + integrand[1:]) * 0.5 * step
-    integral = torch.cat(
-        (
-            torch.zeros(1, device=z_t.device, dtype=z_t.dtype),
-            torch.cumsum(areas, dim=0),
-        )
-    )
-    d_c_grid = _hubble_distance_mpc(H0, device=z_t.device, dtype=z_t.dtype) * integral
-    idx_float = z_nonneg / step
-    idx_floor = idx_float.floor().to(dtype=torch.long).clamp(0, table_size - 2)
-    weight = idx_float - idx_floor.to(dtype=z_t.dtype)
-    return d_c_grid[idx_floor] * (1.0 - weight) + d_c_grid[idx_floor + 1] * weight
+    # Per-point Gauss-Legendre quadrature in u = ln(1+z):
+    #   chi = D_H * int_0^{u_max} (1+z(u)) / E(z(u)) du.
+    # The integrand is smooth in u out to z ~ 1e3, and every query point has
+    # its own nodes, so a result never depends on the rest of the batch.
+    nodes, weights = _gauss_legendre_unit(_GL_NODES, z_t.device, z_t.dtype)
+    u_max = torch.log1p(z_nonneg).unsqueeze(-1)
+    u = u_max * nodes
+    one_plus_z = torch.exp(u)
+    integrand = one_plus_z / e_of_z(one_plus_z - 1.0, om0=om0, ok0=ok0, w0=w0, wa=wa)
+    integral = u_max.squeeze(-1) * torch.sum(integrand * weights, dim=-1)
+    return _hubble_distance_mpc(H0, device=z_t.device, dtype=z_t.dtype) * integral
 
 
 def transverse_comoving_distance(

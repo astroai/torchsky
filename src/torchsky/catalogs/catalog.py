@@ -229,7 +229,7 @@ class Catalog:
         obstime_mjd_utc: Any,
         site: Site,
         eop: EarthOrientation,
-        pn: PNModel = "none",
+        pn: PNModel | None = None,
         aberration: bool = False,
         refraction: bool = False,
     ) -> Catalog:

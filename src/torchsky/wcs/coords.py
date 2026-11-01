@@ -29,7 +29,7 @@ def transform(
     obstime_mjd_utc: Any | None = None,
     site: Site | None = None,
     eop: EarthOrientation | None = None,
-    pn: PNModel = "none",
+    pn: PNModel | None = None,
     aberration: bool = False,
     refraction: bool = False,
 ) -> tuple[Tensor, Tensor]:

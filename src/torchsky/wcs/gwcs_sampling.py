@@ -486,8 +486,14 @@ class IFUSliceWCS:
         y0 = torch.floor(yf).to(torch.int64).clamp(0, h - 1)
         x1 = (x0 + 1).clamp(0, w - 1)
         y1 = (y0 + 1).clamp(0, h - 1)
-        fx = (xf - x0.to(dt)).clamp(0.0, 1.0)
-        fy = (yf - y0.to(dt)).clamp(0.0, 1.0)
+        fx_raw = xf - x0.to(dt)
+        fy_raw = yf - y0.to(dt)
+        fx = torch.where(
+            (fx_raw >= 0.0) & (fx_raw <= 1.0), fx_raw, fx_raw.clamp(0.0, 1.0)
+        )
+        fy = torch.where(
+            (fy_raw >= 0.0) & (fy_raw <= 1.0), fy_raw, fy_raw.clamp(0.0, 1.0)
+        )
 
         w00 = (1.0 - fx) * (1.0 - fy)
         w10 = fx * (1.0 - fy)

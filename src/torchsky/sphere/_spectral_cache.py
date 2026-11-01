@@ -207,7 +207,10 @@ class SpectralCacheManager:
             return cast(T, flight.value)
 
         try:
-            value = builder()
+            # Cached tensors outlive the calling mode: never store inference
+            # tensors, which would poison later autograd use.
+            with torch.inference_mode(False):
+                value = builder()
             size_bytes = value_nbytes(value)
         except BaseException as exc:
             with self._lock:

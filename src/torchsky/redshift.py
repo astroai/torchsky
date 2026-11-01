@@ -68,10 +68,16 @@ def normalize_v_kind(kind: Any) -> int:
     )
 
 
+def _require_subluminal(beta: Tensor | float) -> None:
+    beta_t = torch.as_tensor(beta)
+    if beta_t.numel() and not bool((beta_t.abs() < 1.0).all()):
+        raise ValueError("beta must satisfy |beta| < 1")
+
+
 def one_plus_z_from_beta(beta: Tensor, relativistic: bool = True) -> Tensor:
-    """``1 + z = sqrt((1+b)/(1-b))``; ``b`` is clamped short of ``+-1``."""
+    """``1 + z = sqrt((1+b)/(1-b))``; requires ``|b| < 1`` when relativistic."""
     if relativistic:
-        beta = torch.clamp(beta, min=-0.99999, max=0.99999)
+        _require_subluminal(beta)
         return torch.sqrt((1.0 + beta) / (1.0 - beta))
     return 1.0 + beta
 
@@ -192,7 +198,8 @@ def zeta_from_redshift(z: Tensor | float) -> Tensor:
 def zeta_from_beta(beta: Tensor | float) -> Tensor:
     """Peculiar rapidity ``ζ_pec = atanh(β)``."""
     beta_t = torch.as_tensor(beta)
-    return torch.atanh(torch.clamp(beta_t, min=-0.99999, max=0.99999))
+    _require_subluminal(beta_t)
+    return torch.atanh(beta_t)
 
 
 def zeta_from_velocity_kms(v_kms: Tensor | float) -> Tensor:

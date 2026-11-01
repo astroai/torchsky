@@ -153,24 +153,34 @@ def project_zenithal(
                     if max_m == 1 and coeffs[1].abs() > 1e-15:
                         w = (r_rad_target - coeffs[0]) / coeffs[1]
                     else:
-                        w = r_rad_target.clone()
-
-                        # Newton-Raphson (Horner's method)
                         rev_c = torch.flip(coeffs, dims=(0,))
-                        c0 = rev_c[0]
-                        for _ in range(12):
-                            val = torch.full_like(w, c0)
-                            der = torch.zeros_like(w)
+
+                        def _poly_and_slope(wv: Tensor) -> Tuple[Tensor, Tensor]:
+                            val = torch.full_like(wv, rev_c[0].item())
+                            der = torch.zeros_like(wv)
                             for c in rev_c[1:]:
-                                der.mul_(w).add_(val)
-                                val.mul_(w).add_(c)
+                                der = der * wv + val
+                                val = val * wv + c
+                            return val, der
 
-                            diff = val.sub_(r_rad_target)
-
-                            mask_nz = der.abs() > 1e-15
-                            der.masked_fill_(~mask_nz, 1.0)
-                            diff.masked_fill_(~mask_nz, 0.0)
-                            w.sub_(diff.div_(der))
+                        # Newton-Raphson on a detached copy (no in-place updates, so
+                        # autograd never sees the iteration), then one differentiable
+                        # out-of-place Newton step: dw/dr = 1/P'(w) at the root.
+                        w0 = r_rad_target.detach().clone()
+                        for _ in range(12):
+                            val, der = _poly_and_slope(w0)
+                            safe = der.abs() > 1e-15
+                            step = torch.where(
+                                safe, (val - r_rad_target.detach()) / torch.where(safe, der, torch.ones_like(der)), torch.zeros_like(der)
+                            )
+                            w0 = w0 - step
+                        val, der = _poly_and_slope(w0)
+                        safe = der.abs() > 1e-15
+                        w = w0 - torch.where(
+                            safe,
+                            (val - r_rad_target) / torch.where(safe, der, torch.ones_like(der)),
+                            torch.zeros_like(der),
+                        )
 
                     val = torch.zeros_like(w)
                     for c in torch.flip(coeffs, dims=(0,)):
@@ -228,7 +238,7 @@ def project_zenithal(
         theta_c = _pv_param(pv2, 3, 90.0, like=xi)
         inv_r0 = 1.0 / R2D
         zp = mu * torch.sin(theta_c * D2R) + 1.0
-        xp = -mu * torch.cos(theta_c * D2R) * torch.sin(phi_c * D2R)
+        xp = mu * torch.cos(theta_c * D2R) * torch.sin(phi_c * D2R)
         yp = mu * torch.cos(theta_c * D2R) * torch.cos(phi_c * D2R)
         # Torchsky zenithal convention: x_wcslib = -xi, so xr = -xi/r0
         xr = -xi * inv_r0
@@ -432,7 +442,7 @@ def deproject_zenithal(
         theta_c = _pv_param(pv2, 3, 90.0, like=phi)
         r0 = R2D
         zp = float(mu.item()) * math.sin(float(theta_c.item()) * D2R) + 1.0
-        xp = -float(mu.item()) * math.cos(float(theta_c.item()) * D2R) * math.sin(float(phi_c.item()) * D2R)
+        xp = float(mu.item()) * math.cos(float(theta_c.item()) * D2R) * math.sin(float(phi_c.item()) * D2R)
         yp = float(mu.item()) * math.cos(float(theta_c.item()) * D2R) * math.cos(float(phi_c.item()) * D2R)
         w4 = r0 * xp
         w5 = r0 * yp

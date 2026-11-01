@@ -214,6 +214,8 @@ def _face_to_xy(face: Tensor, xf: Tensor, yf: Tensor) -> Tuple[Tensor, Tensor]:
 
 def _xy_to_face(x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
     """Return face, xf, yf, valid for plane points on the cross layout."""
+    # Cross layout spans x in [-45, 315]; WCSLIB wraps x < -45 by +360 (tscx2s etc.).
+    x = torch.where(x < -45.0, x + 360.0, x)
     face = torch.full_like(x, -1, dtype=torch.long)
     xf = torch.zeros_like(x)
     yf = torch.zeros_like(y)

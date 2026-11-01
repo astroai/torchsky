@@ -145,7 +145,10 @@ class Passband:
         x0, x1 = grid[idx0], grid[idx1]
         t0, t1 = trans[idx0], trans[idx1]
         denom = (x1 - x0).clamp_min(1e-12)
-        value = t0 + ((query - x0) / denom).clamp(0.0, 1.0) * (t1 - t0)
+        frac = (query - x0) / denom
+        in_range = (frac >= 0.0) & (frac <= 1.0)
+        frac = torch.where(in_range, frac, frac.clamp(0.0, 1.0))
+        value = t0 + frac * (t1 - t0)
         outside = (query < grid[0]) | (query > grid[-1])
         return torch.where(outside, torch.zeros_like(value), value)
 

@@ -21,12 +21,7 @@ def _pv_param(
 ) -> Tensor:
     if params is None or idx >= int(params.numel()):
         return torch.as_tensor(default, dtype=like.dtype, device=like.device)
-    value = params[idx].to(dtype=like.dtype, device=like.device)
-    return torch.where(
-        torch.isclose(value, torch.zeros_like(value)),
-        torch.as_tensor(default, dtype=like.dtype, device=like.device),
-        value,
-    )
+    return params[idx].to(dtype=like.dtype, device=like.device)
 
 
 def project_cylindrical(

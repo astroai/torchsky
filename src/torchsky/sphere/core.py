@@ -112,7 +112,14 @@ def pairwise_angular_distance(
     cross_z = x[:, None] * y[None, :] - y[:, None] * x[None, :]
     cross_sq = cross_sq + cross_z.square()
     diagonal = torch.eye(v.shape[0], dtype=torch.bool, device=v.device)
-    cross = torch.sqrt(torch.where(diagonal, torch.ones_like(cross_sq), cross_sq))
+    # Safe-sqrt: zero cross norm (diagonal or duplicate points) has zero
+    # subgradient instead of inf * 0 = NaN.
+    positive = (cross_sq > 0.0) & ~diagonal
+    cross = torch.where(
+        positive,
+        torch.sqrt(torch.where(positive, cross_sq, torch.ones_like(cross_sq))),
+        torch.zeros_like(cross_sq),
+    )
     dist_rad = torch.atan2(cross, dot)
     dist_rad = torch.where(diagonal, torch.zeros_like(dist_rad), dist_rad)
     if degrees:

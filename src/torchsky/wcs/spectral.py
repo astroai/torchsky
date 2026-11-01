@@ -334,7 +334,9 @@ def _spectral_derivative_si(
         y.backward()
         if x.grad is not None and torch.isfinite(x.grad):
             return float(x.grad.item())
-    except Exception:
+    except RuntimeError:
+        # The conversion is not autograd-differentiable (e.g. detached or non-tensor
+        # ops); fall back to a central finite difference below.
         pass
     eps = 1e-6 * max(1.0, abs(value_si))
     plus = float(
@@ -528,7 +530,8 @@ class SpectralTransform:
                 )
                 X_tensor.backward()
                 self.dXdS_si = float(s_tensor.grad.item())
-            except Exception:
+            except RuntimeError:
+                # Not autograd-differentiable: use a central finite difference.
                 eps = 1e-6 * max(1.0, abs(self.crval_si))
                 val_plus = float(
                     convert_spectral(

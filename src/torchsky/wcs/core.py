@@ -20,6 +20,7 @@ import numpy as np
 from torchsky import _ops
 from ._geometry import _GeometryMixin, _HeaderIOMixin
 from ._math import _sincos, _wrap_lon180, _wrap_lon360
+from . import _celprm
 from ._rotation import _RotationMixin
 
 from .tpv import TPV, PV1_KEYS, PV2_KEYS, PV1_KEYS_SET, PV2_KEYS_SET
@@ -664,6 +665,9 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 pc_key = f"PC{i}_{j}"
                 if self._header_has(header, pc_key):
                     self.wcs_params[pc_key] = float(self._header_get(header, pc_key))
+            crota_key = f"CROTA{i}"
+            if self._header_has(header, crota_key):
+                self.wcs_params[crota_key] = float(self._header_get(header, crota_key))
 
     def _parse_pole(self, header: Dict[str, Any]) -> None:
         """Parse LONPOLE and LATPOLE keywords."""
@@ -1237,6 +1241,33 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         linear = crval + crval * (1.0 - crval / safe_world)
         return torch.where(valid, linear, torch.full_like(linear, torch.nan))
 
+    def _crota_pc_overrides(self) -> dict[tuple[int, int], float]:
+        """PCi_j implied by the legacy CROTAi keyword (Paper I, sec. 6.1 / WCSLIB).
+
+        Only used when no CD/PC keywords exist. The rotation is the CROTA of the
+        latitude axis: PC_lon,lon = PC_lat,lat = cos(rho), PC_lon,lat =
+        -sin(rho) * CDELT_lat / CDELT_lon, PC_lat,lon = sin(rho) * CDELT_lon / CDELT_lat.
+        """
+        if not self._has_celestial or self.naxis < 2:
+            return {}
+        if any(key.startswith("PC") for key in self.wcs_params):
+            return {}
+        lon, lat = self._celestial_lon_axis, self._celestial_lat_axis
+        rho = self.wcs_params.get(f"CROTA{lat + 1}")
+        if rho is None:
+            return {}
+        rho = math.radians(float(rho))
+        c_lon = float(self.wcs_params.get(f"CDELT{lon + 1}", 1.0))
+        c_lat = float(self.wcs_params.get(f"CDELT{lat + 1}", 1.0))
+        if c_lon == 0.0 or c_lat == 0.0:
+            return {}
+        return {
+            (lon + 1, lon + 1): math.cos(rho),
+            (lat + 1, lat + 1): math.cos(rho),
+            (lon + 1, lat + 1): -math.sin(rho) * c_lat / c_lon,
+            (lat + 1, lon + 1): math.sin(rho) * c_lon / c_lat,
+        }
+
     def _setup_tensors(self):
         """Convert scalar params to PyTorch tensors for computation."""
         unit_factors = torch.tensor(
@@ -1290,11 +1321,14 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             # Construct from PC and CDELT: CDi_j = CDELTi * PCi_j
             cd_data = []
             pc_data = []
+            crota_pc = self._crota_pc_overrides()
             for i in range(1, self.naxis + 1):
                 row = []
                 pc_row = []
                 for j in range(1, self.naxis + 1):
                     pc_val = self.wcs_params.get(f"PC{i}_{j}", 1.0 if i == j else 0.0)
+                    if (i, j) in crota_pc:
+                        pc_val = crota_pc[(i, j)]
                     row.append(self.cdelt[i - 1].item() * pc_val)
                     pc_row.append(pc_val)
                 cd_data.append(row)
@@ -1392,11 +1426,45 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 self._theta0 = 0.0
 
         # LONPOLE / LATPOLE
-        self.phi_p = float(
-            self.wcs_params.get("LONPOLE", 180.0 if self._theta0 == 90.0 else 0.0)
+        # Paper II: LONPOLE defaults to 0 if delta_0 >= theta_0, else 180.
+        # PV{lon}_3 / PV{lon}_4 are LONPOLE / LATPOLE; PV{lon}_1 / PV{lon}_2 are the
+        # native fiducial point (phi_0, theta_0), which is not implemented.
+        pj = self._projection_params
+        # Bonne's native fiducial point is (0, 0): its y-offset puts the origin there.
+        cel_theta0 = 0.0 if self._proj_code == "BON" else self._theta0
+        if self._has_celestial and not (
+            self._is_tpv or self._proj_code in ("HPX", "SFL", "GLS", "TPV")
+        ):
+            for key, default in (("PV1_1", 0.0), ("PV1_2", self._theta0)):
+                if key in pj and float(pj[key]) != default:
+                    raise NotImplementedError(
+                        f"{key} (native fiducial point phi_0/theta_0) differs from "
+                        f"the {self._proj_code} default; not supported"
+                    )
+        if "LONPOLE" in self.wcs_params:
+            lonpole = float(self.wcs_params["LONPOLE"])
+        elif "PV1_3" in pj:
+            lonpole = float(pj["PV1_3"])
+        else:
+            lonpole = _celprm.default_lonpole(self.delta0, cel_theta0)
+        if "LATPOLE" in self.wcs_params:
+            latpole = float(self.wcs_params["LATPOLE"])
+        elif "PV1_4" in pj:
+            latpole = float(pj["PV1_4"])
+        else:
+            latpole = 90.0
+        self.phi_p = lonpole
+        self.theta_p = latpole
+        # The projection/rotation kernels bake in LONPOLE=180 (zenithal) or the
+        # Paper II default (others) with LATPOLE=90; ``_celestial_postrot`` is the
+        # exact residual rotation, applied on every path (None when identity).
+        # Kernel-internal phi_p (selects the pole basis conventions below).
+        self._phi_p_native = 180.0 if self._theta0 == 90.0 else 0.0
+        exist_lonpole = (
+            180.0
+            if self._theta0 == 90.0
+            else _celprm.default_lonpole(self.delta0, cel_theta0)
         )
-        self.theta_p = float(self.wcs_params.get("LATPOLE", 90.0))
-
         d2r = math.pi / 180.0
         self._d2r = d2r
         self._r2d = 180.0 / math.pi
@@ -1435,21 +1503,57 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             # projection's y-offset places intermediate (0,0) at native (0,0),
             # matching the center-equator rotation when delta_0 ≈ 0.
             self.delta_p = 90.0
-            self.alpha_p = self.alpha0 + 180.0 if self.phi_p == 0.0 else self.alpha0
+            self.alpha_p = self.alpha0 + 180.0 if self._phi_p_native == 0.0 else self.alpha0
             self._native_type = "center"
         elif self._proj_code in ("PCO",) or self._proj_code in self.QUADCUBE_CODES:
             self.delta_p = 90.0
-            self.alpha_p = self.alpha0 + 180.0 if self.phi_p == 0.0 else self.alpha0
+            self.alpha_p = self.alpha0 + 180.0 if self._phi_p_native == 0.0 else self.alpha0
             self._native_type = "center"
         else:
             self.delta_p = 90.0
-            self.alpha_p = self.alpha0 + 180.0 if self.phi_p == 0.0 else self.alpha0
+            self.alpha_p = self.alpha0 + 180.0 if self._phi_p_native == 0.0 else self.alpha0
             self._native_type = "center"
+
+        exist_matrix = None
+        if self._native_type == "center":
+            # Realized by _spherical_rotation(center): (cos t cos p, cos t sin p, sin t)
+            # -> cos t cos p * r + cos t sin p * e + sin t * n, with (e, n, r) at CRVAL.
+            exist_matrix = [
+                [self._radial_x, self._east_x, self._north_x],
+                [self._radial_y, self._east_y, self._north_y],
+                [self._radial_z, 0.0, self._north_z],
+            ]
+        elif self._proj_code in self.CONIC_CODES:
+            # Pole-type basis at (alpha_p, delta_p) with the conic kernels' negated phi:
+            # (u, v, w) = (-n_y, n_x, n_z) for std native n.
+            sa, ca = math.sin(self.alpha_p * d2r), math.cos(self.alpha_p * d2r)
+            sd, cd = math.sin(self.delta_p * d2r), math.cos(self.delta_p * d2r)
+            ex, ey, ez = -sa, ca, 0.0
+            nx_, ny_, nz_ = -sd * ca, -sd * sa, cd
+            rx_, ry_, rz_ = cd * ca, cd * sa, sd
+            exist_matrix = [
+                [nx_, -ex, rx_],
+                [ny_, -ey, ry_],
+                [nz_, -ez, rz_],
+            ]
+        self._celestial_postrot = (
+            _celprm.celestial_correction(
+                self.alpha0,
+                self.delta0,
+                cel_theta0,
+                lonpole,
+                latpole,
+                exist_lonpole,
+                exist_matrix,
+            )
+            if self._has_celestial
+            else None
+        )
 
         # Precompute Tensors
         self._ra_p_rad = self.alpha_p * d2r
         self._dec_p_rad = self.delta_p * d2r
-        self._phi_p_rad = self.phi_p * d2r
+        self._phi_p_rad = self._phi_p_native * d2r
         dec_p_tensor = torch.as_tensor(
             self._dec_p_rad, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
@@ -1585,6 +1689,15 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         # projections have non-zero defaults (e.g. SZP theta_c = 90°).
         if self._proj_code == "SZP" and "PV2_3" not in self._projection_params:
             self._projection_params["PV2_3"] = 90.0
+        # Defaults fill absent keywords only; an explicit PV value of 0 is honoured.
+        for _code, _defaults in (
+            ("CEA", {"PV2_1": 1.0}),
+            ("CYP", {"PV2_1": 1.0, "PV2_2": 1.0}),
+            ("AIR", {"PV2_1": 90.0}),
+        ):
+            if self._proj_code == _code:
+                for _key, _value in _defaults.items():
+                    self._projection_params.setdefault(_key, _value)
 
         # NCP (obsolete AIPS) ≡ slant SIN with PV2_1=0, PV2_2=cot(δ₀)
         # (Paper II §6.1.2). Must set PV before project; δ₀ = CRVAL2.
@@ -1673,6 +1786,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             and not self._is_zpx
             and self.sip is None
             and not self._has_paper4_lut()
+            and self._celestial_postrot is None
             and self.alpha0 == self.alpha_p
             and self.delta0 == self.delta_p
         )
@@ -1691,7 +1805,8 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             and not self._is_gls
             and not self._has_paper4_lut()
             and abs(self.delta0) < 1e-12
-            and abs((self.phi_p % 360.0)) < 1e-12
+            and abs((self._phi_p_native % 360.0)) < 1e-12
+            and self._celestial_postrot is None
         )
         self._cpp_zenithal_project = None
         self._cpp_zpn_project = None
@@ -1710,7 +1825,8 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         self._cpp_spherical_rotation_pole = None
         self._cpp_tan_intermediate_from_radec = None
         self._cpp_direct_static_ok = (
-            self.sip is None
+            self._celestial_postrot is None
+            and self.sip is None
             and not self._tpv_uses_pixel_intermediate
             and not self._is_tpv
             and not self._is_tnx
@@ -1768,7 +1884,8 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         self._has_cpp_direct_p2w = bool(self._cpp_p2w_direct_kind)
         self._has_cpp_direct_w2p = bool(self._cpp_w2p_direct_kind)
         self._can_use_fused_p2w_static = (
-            self._enable_fused_wcs
+            self._celestial_postrot is None
+            and self._enable_fused_wcs
             and self._enable_cpp_dispatcher
             and _ops.has_wcs_dispatcher()
             and self.sip is None
@@ -1801,7 +1918,8 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             )
         )
         self._can_use_fused_w2p_static = (
-            self._enable_fused_wcs
+            self._celestial_postrot is None
+            and self._enable_fused_wcs
             and self._enable_cpp_dispatcher
             and _ops.has_wcs_dispatcher()
             and self.sip is None
@@ -2576,6 +2694,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             and not self._is_tpv
             and not self._is_tnx
             and not self._is_zpx
+            and self._celestial_postrot is None
             and self.alpha0 == self.alpha_p
             and self.delta0 == self.delta_p
         ):
@@ -2787,7 +2906,13 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
         # Exact TAN analytic inverse: use direct intermediate coordinates instead of
         # inverse-rotation + zenithal deprojection chain.
-        if self._is_tan and not self._is_tpv and not self._is_tnx and not self._is_zpx:
+        if (
+            self._is_tan
+            and not self._is_tpv
+            and not self._is_tnx
+            and not self._is_zpx
+            and self._celestial_postrot is None
+        ):
             xi, eta = self._tan_intermediate_from_radec(ra, dec)
             if self.sip is None:
                 px, py = self._apply_cd_inv_2d(xi, eta)
@@ -2809,25 +2934,24 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         if valid_center_input and self._use_cpp_center_world_to_pixel_small_n(
             ra, dec, device_ok=device_ok, dtype_ok=dtype_ok
         ):
-            try:
-                return self._cpp_center_world_to_pixel(
-                    ra,
-                    dec,
-                    self._crpix0,
-                    self._crpix1,
-                    self._cdi00,
-                    self._cdi01,
-                    self._cdi10,
-                    self._cdi11,
-                    self._proj_code,
-                    self.alpha0,
-                    self._cea_eta_scale,
-                    float(origin),
-                    self._hpx_h,
-                    self._hpx_k,
-                )
-            except (TypeError, RuntimeError):
-                pass
+            # Gated by _use_cpp_center_world_to_pixel_small_n (binding present,
+            # supported projection, CPU float64, no autograd); errors propagate.
+            return self._cpp_center_world_to_pixel(
+                ra,
+                dec,
+                self._crpix0,
+                self._crpix1,
+                self._cdi00,
+                self._cdi01,
+                self._cdi10,
+                self._cdi11,
+                self._proj_code,
+                self.alpha0,
+                self._cea_eta_scale,
+                float(origin),
+                self._hpx_h,
+                self._hpx_k,
+            )
 
         if self._is_center_cylindrical_shortcut():
             xi, eta = self._center_equator_deproject(ra, dec)
@@ -3841,6 +3965,78 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             guess = guess - step
         return guess
 
+    # Offset (pixel / degree) used to differentiate exactly at the reference point,
+    # where the zenithal/pseudo-cylindrical native longitude is singular.
+    _REF_TOL = 1e-7
+    _REF_STEP = 1e-2
+
+    def _scatter_rows(self, full_shape, dtype, device, idx_a, vals_a, idx_b, vals_b):
+        out = torch.zeros(full_shape, dtype=dtype, device=device)
+        out = out.index_put((idx_a,), vals_a)
+        return out.index_put((idx_b,), vals_b)
+
+    def _grad_safe_eval(self, fn, x: Tensor, at_ref: Tensor, shift: Tensor) -> Tensor:
+        """Evaluate ``fn`` row-wise so autograd stays finite at singular rows.
+
+        Rows flagged by ``at_ref`` (the reference point, where native longitude is
+        undefined and the chain rule produces 0 * inf) keep the exact forward
+        value, while their gradient is the symmetric average of the gradients at
+        ``x +/- shift`` (error O(shift^2)).
+        """
+        idx_s = torch.nonzero(at_ref, as_tuple=True)[0]
+        idx_o = torch.nonzero(~at_ref, as_tuple=True)[0]
+        out_o = fn(x.index_select(0, idx_o)) if idx_o.numel() else None
+        xs = x.index_select(0, idx_s)
+        with torch.no_grad():
+            val = fn(xs.detach())
+        sh = shift.to(dtype=xs.dtype, device=xs.device)
+        g = 0.5 * (fn(xs + sh) + fn(xs - sh))
+        out_s = g - g.detach() + val
+        if out_o is None:
+            return self._scatter_rows(
+                (x.shape[0], out_s.shape[1]), out_s.dtype, out_s.device,
+                idx_s, out_s, idx_s[:0], out_s[:0],
+            )
+        return self._scatter_rows(
+            (x.shape[0], out_s.shape[1]), out_s.dtype, out_s.device,
+            idx_o, out_o, idx_s, out_s,
+        )
+
+    def _grad_safe_pixels_to_world(self, pixels_flat: Tensor, origin: float) -> Tensor:
+        def fn(p):
+            return self._stacked_pixels_to_world_flat(p, origin, allow_cpp_sphere=False)
+
+        if not (torch.is_grad_enabled() and pixels_flat.requires_grad):
+            return fn(pixels_flat)
+        rel = pixels_flat.detach()[:, :2] + (1.0 - origin) - self.crpix[:2].to(
+            device=pixels_flat.device, dtype=pixels_flat.dtype
+        )
+        at_ref = rel.abs().amax(dim=1) < self._REF_TOL
+        if not bool(at_ref.any()):
+            return fn(pixels_flat)
+        return self._grad_safe_eval(
+            fn, pixels_flat, at_ref, self._REF_STEP * torch.tensor([[1.0, 0.371]]).expand(1, pixels_flat.shape[1]).contiguous()
+        )
+
+    def _grad_safe_world_to_pixel(self, world_flat: Tensor, origin: float) -> Tensor:
+        def fn(w):
+            return self._stacked_world_to_pixel_flat(
+                w, origin, allow_cpp_inverse_sphere=False
+            )
+
+        if not (torch.is_grad_enabled() and world_flat.requires_grad):
+            return fn(world_flat)
+        w = world_flat.detach()
+        lon, lat = self._celestial_lon_axis, self._celestial_lat_axis
+        dlon = torch.remainder(w[:, lon] - self.alpha0 + 180.0, 360.0) - 180.0
+        at_ref = (dlon.abs() < self._REF_TOL) & ((w[:, lat] - self.delta0).abs() < self._REF_TOL)
+        if not bool(at_ref.any()):
+            return fn(world_flat)
+        shift = torch.zeros((1, world_flat.shape[1]))
+        shift[0, lon] = self._REF_STEP
+        shift[0, lat] = 0.371 * self._REF_STEP
+        return self._grad_safe_eval(fn, world_flat, at_ref, shift)
+
     def pixel_to_world_differentiable(self, pixels: Any, *, origin: int = 0) -> Tensor:
         """Pure-Torch pixel-to-world transform intended for optimization loops.
 
@@ -3853,9 +4049,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         original_shape = pixels_t.shape
         pixels_flat = self._contiguous_if_needed(pixels_t).reshape(-1, self.naxis)
         if self.naxis == 2 and self._is_spatial:
-            world_flat = self._stacked_pixels_to_world_flat(
-                pixels_flat, float(origin), allow_cpp_sphere=False
-            )
+            world_flat = self._grad_safe_pixels_to_world(pixels_flat, float(origin))
         else:
             rel_flat = pixels_flat + (1.0 - float(origin)) - self.crpix
             world_flat = self._transform_optimized(rel_flat, allow_cpp_sphere=False)
@@ -3867,9 +4061,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         original_shape = world_t.shape
         world_flat = self._contiguous_if_needed(world_t).reshape(-1, self.naxis)
         if self.naxis == 2 and self._is_spatial:
-            pix_flat = self._stacked_world_to_pixel_flat(
-                world_flat, float(origin), allow_cpp_inverse_sphere=False
-            )
+            pix_flat = self._grad_safe_world_to_pixel(world_flat, float(origin))
         elif self._is_spatial:
             pix_result = self.world_to_pixel(world_flat, origin=origin)
             assert isinstance(pix_result, Tensor)
@@ -4906,7 +5098,8 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             elif (
                 (self._is_tan or self._is_tpv)
                 and not self._is_tnx
-                and self.alpha0 == self.alpha_p
+                and self._celestial_postrot is None
+            and self.alpha0 == self.alpha_p
                 and self.delta0 == self.delta_p
             ):
                 lon, lat = self._project_tan(xi, eta)
@@ -4947,6 +5140,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         if (
             self.naxis == 2
             and self._is_tan
+            and self._celestial_postrot is None
             and not self._is_tpv
             and not self._is_tnx
             and not self._is_zpx

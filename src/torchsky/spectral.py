@@ -941,10 +941,12 @@ class Spectrum1D:
             1, current_wave.numel() - 1
         )
         idx_lo = idx_hi - 1
-        alpha64 = (
-            (target_wave - current_wave[idx_lo])
-            / (current_wave[idx_hi] - current_wave[idx_lo])
-        ).clamp(0.0, 1.0)
+        alpha_raw = (target_wave - current_wave[idx_lo]) / (
+            current_wave[idx_hi] - current_wave[idx_lo]
+        )
+        alpha64 = torch.where(
+            (alpha_raw >= 0.0) & (alpha_raw <= 1.0), alpha_raw, alpha_raw.clamp(0.0, 1.0)
+        )
 
         flux = self.flux
         if not flux.is_floating_point():

@@ -1795,6 +1795,7 @@ inline std::pair<double, double> eval_tpv_scalar(
 }
 
 bool quadcube_xy_to_face(double x, double y, int* face, double* xf, double* yf) {
+    if (x < -45.0) x += 360.0;  // cross layout spans x in [-45, 315] (WCSLIB wrap)
     static const double cx[6] = {0.0, 0.0, 90.0, 180.0, 270.0, 0.0};
     static const double cy[6] = {90.0, 0.0, 0.0, 0.0, 0.0, -90.0};
     for (int f = 0; f < 6; ++f) {
@@ -2493,8 +2494,9 @@ void wcs_pixel_to_world_fused_cpu(
             static const double cy[6] = {90.0, 0.0, 0.0, 0.0, 0.0, -90.0};
             int face = -1;
             double xf = 0.0, yf = 0.0;
+            const double xi_wrapped = xi_deg < -45.0 ? xi_deg + 360.0 : xi_deg;
             for (int f = 0; f < 6; ++f) {
-                double fx = (xi_deg - cx[f]) / 45.0;
+                double fx = (xi_wrapped - cx[f]) / 45.0;
                 double fy = (eta_deg - cy[f]) / 45.0;
                 if (std::abs(fx) <= 1.0 + 1e-9 && std::abs(fy) <= 1.0 + 1e-9) {
                     face = f;

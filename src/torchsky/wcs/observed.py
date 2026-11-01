@@ -1,11 +1,18 @@
 """Observed-place transforms with explicit Earth orientation.
 
 This module is separate from geometric frames. Earth orientation is never
-inferred. Without polar motion the path is classical DUT1 hour-angle AltAz.
-With ``xp``/``yp`` supplied, the path is ICRS → (optional IAU 2006 PN) → ERA →
-polar-motion ITRS → geodetic AltAz. ``pn='iau2006'`` is Fukushima-Williams
+inferred. One path serves every option: ICRS → (aberration) → celestial-to-
+terrestrial rotation → geodetic AltAz. ``pn='iau2006'`` is Fukushima-Williams
 precession-bias plus full IAU 2000A nutation (IAU 2006/P03 adjustments) on
-the CIO/ERA path (GCRS → CIRS).
+the CIO/ERA path (GCRS → CIRS → ERA). ``pn='none'`` skips precession-nutation
+and rotates by GMST (equinox hour angle), so it is only an approximation
+(~0.3 deg in 2024) to a true observed place. Polar motion, when supplied, is
+applied after the Earth rotation in both models.
+
+All scalar time quantities (UT1, TT, ERA, GMST, PN/CIO matrices, Earth
+velocity) are computed in float64 on the CPU regardless of the coordinate
+device/dtype (MPS float32 MJD would lose ~0.4 day-fraction digits); only the
+resulting 3x3 matrices and velocities move to the working device.
 """
 
 from __future__ import annotations
@@ -152,54 +159,104 @@ def _gmst_deg_from_ut1_mjd(ut1_mjd: Tensor) -> Tensor:
     return _wrap360(gmst)
 
 
+def _time64(value: Any) -> Tensor:
+    """Time/EOP scalar as float64 on CPU (never the accelerator working dtype)."""
+    if isinstance(value, Tensor):
+        # Two steps: MPS ``.to(device="cpu", dtype=float64)`` returns zeros.
+        return value.cpu().to(torch.float64)
+    return torch.as_tensor(value, dtype=torch.float64)
+
+
+def _resolve_pn(pn: PNModel | None, eop: EarthOrientation) -> PNModel:
+    """``None`` selects the astropy-matching IAU 2006 model when TT-UTC is known."""
+    if pn is None:
+        return "iau2006" if eop.tt_minus_utc_s is not None else "none"
+    if pn not in ("none", "iau2006"):
+        raise ValueError("pn must be 'none' or 'iau2006'")
+    return pn
+
+
+def _tt64(utc64: Tensor, eop: EarthOrientation, why: str) -> Tensor:
+    if eop.tt_minus_utc_s is None:
+        raise ValueError(f"{why} requires eop.tt_minus_utc_s")
+    return tt_mjd_from_utc(utc64, _time64(eop.tt_minus_utc_s))
+
+
+def _ut1_64(utc64: Tensor, eop: EarthOrientation) -> Tensor:
+    return utc64 + _time64(eop.dut1_s) / SECONDS_PER_DAY
+
+
+def _gcrs_to_terrestrial_matrix(
+    utc64: Tensor, eop: EarthOrientation, pn: PNModel
+) -> Tensor:
+    """GCRS -> ITRS rotation, float64 on CPU."""
+    ut1 = _ut1_64(utc64, eop)
+    if pn == "iau2006":
+        tt = _tt64(utc64, eop, "pn='iau2006'")
+        rot = _rz(_era_rad_from_ut1_mjd(ut1)) @ cirs_matrix(tt)
+    else:
+        rot = _rz(_gmst_deg_from_ut1_mjd(ut1) * D2R)
+    if eop.xp_arcsec is not None or eop.yp_arcsec is not None:
+        z = torch.zeros((), dtype=torch.float64)
+        xp = z if eop.xp_arcsec is None else _time64(eop.xp_arcsec)
+        yp = z if eop.yp_arcsec is None else _time64(eop.yp_arcsec)
+        rot = _polar_motion_matrix(xp, yp) @ rot
+    return rot
+
+
+def _apply_matrix(m: Tensor, v: Tensor) -> Tensor:
+    m = m.to(device=v.device, dtype=v.dtype)
+    return (m @ v.unsqueeze(-1)).squeeze(-1)
+
+
 def observed_altaz(
     state: CatalogState,
     *,
     obstime_mjd_utc: Any,
     site: Site,
     eop: EarthOrientation,
-    pn: PNModel = "none",
+    pn: PNModel | None = None,
     aberration: bool = False,
     refraction: bool = False,
 ) -> tuple[Tensor, Tensor]:
     """Return ``(az_deg, alt_deg)`` from north toward east.
 
     ``obstime_mjd_utc`` is UTC MJD. UT1 = UTC + DUT1. Polar motion is applied
-    when ``xp``/``yp`` are set. ``pn='iau2006'`` applies Fukushima-Williams
-    bias-precession and IAU 2000A nutation via the CIRS matrix (requires
-    ``eop.tt_minus_utc_s``). Stellar aberration and Saemundsson refraction are
-    off unless requested. Refraction needs ``site.pressure_mbar`` and
-    ``site.temperature_c``. CUDA keeps float64; MPS uses float32. The kernels
-    are ATen, not fused C++.
+    when ``xp``/``yp`` are set.
+
+    ``pn=None`` (default) selects ``'iau2006'`` when ``eop.tt_minus_utc_s`` is
+    given, which matches astropy ``AltAz`` (with ``aberration=True``) to about
+    1 arcsec, and ``'none'`` otherwise. ``pn='iau2006'`` applies
+    Fukushima-Williams bias-precession and IAU 2000A nutation via the CIRS
+    matrix (requires ``eop.tt_minus_utc_s``). ``pn='none'`` omits
+    precession-nutation and uses GMST; it is approximate (~0.3 deg off) and is
+    continuous in ``xp``/``yp`` (zero polar motion equals no polar motion).
+    Stellar aberration and Saemundsson refraction are off unless requested.
+    Refraction needs ``site.pressure_mbar`` and ``site.temperature_c``.
+
+    Time-only quantities are evaluated in float64 on CPU on every device; only
+    the final rotation matrices move to the coordinate device (CUDA float64,
+    MPS float32). Gradients flow through the coordinates. The kernels are
+    ATen, not fused C++.
     """
     if eop is None:
         raise ValueError("EarthOrientation is required; IERS DUT1 is never inferred")
-    if pn not in ("none", "iau2006"):
-        raise ValueError("pn must be 'none' or 'iau2006'")
+    pn = _resolve_pn(pn, eop)
     icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
     device = icrs.lon.device
     dtype = _work_dtype(device)
-    utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
-    dut1 = eop.dut1_s.to(device=device, dtype=dtype)
-    ut1 = utc + dut1 / SECONDS_PER_DAY
-    use_vector = (
-        pn != "none"
-        or aberration
-        or eop.xp_arcsec is not None
-        or eop.yp_arcsec is not None
+    v_itrs = _icrs_unit_to_itrs(
+        icrs, obstime_mjd_utc, eop, pn=pn, aberration=aberration
     )
-    if not use_vector:
-        az, alt = _classical_gmst_altaz(icrs, ut1, site)
-    else:
-        az, alt = _vector_altaz(
-            icrs,
-            utc,
-            ut1,
-            site,
-            eop,
-            pn=pn,
-            aberration=aberration,
-        )
+    lon_rad = site.lon_deg.to(device=device, dtype=dtype) * D2R
+    lat_rad = site.lat_deg.to(device=device, dtype=dtype) * D2R
+    height = site.height_m.to(device=device, dtype=dtype)
+    if not bool(torch.isfinite(height).all()):
+        raise ValueError("site.height_m must be finite WGS84 ellipsoidal height")
+    east, north, up = _geodetic_normal_east_north(lon_rad, lat_rad)
+    alt = torch.asin(torch.clamp((v_itrs * up).sum(dim=-1), -1.0, 1.0)) * R2D
+    az = torch.atan2((v_itrs * east).sum(dim=-1), (v_itrs * north).sum(dim=-1)) * R2D
+    az = _wrap360(az)
     if refraction:
         if site.pressure_mbar is None or site.temperature_c is None:
             raise ValueError(
@@ -213,48 +270,19 @@ def observed_altaz(
     return az, alt
 
 
-def _classical_gmst_altaz(
-    icrs: CatalogState, ut1: Tensor, site: Site
-) -> tuple[Tensor, Tensor]:
-    dtype = ut1.dtype
-    device = ut1.device
-    lon = icrs.lon.to(device=device, dtype=dtype)
-    lat = icrs.lat.to(device=device, dtype=dtype)
-    gmst = _gmst_deg_from_ut1_mjd(ut1)
-    last = _wrap360(gmst + site.lon_deg.to(device=device, dtype=dtype))
-    ha_rad = (_wrap360(last - lon) - 180.0) * D2R + torch.pi
-    dec_rad = lat * D2R
-    lat_rad = site.lat_deg.to(device=device, dtype=dtype) * D2R
-    sin_alt = torch.sin(lat_rad) * torch.sin(dec_rad) + torch.cos(lat_rad) * torch.cos(
-        dec_rad
-    ) * torch.cos(ha_rad)
-    alt = torch.asin(torch.clamp(sin_alt, -1.0, 1.0)) * R2D
-    az = (
-        torch.atan2(
-            -torch.cos(dec_rad) * torch.sin(ha_rad),
-            torch.cos(lat_rad) * torch.sin(dec_rad)
-            - torch.sin(lat_rad) * torch.cos(dec_rad) * torch.cos(ha_rad),
-        )
-        * R2D
-    )
-    return _wrap360(az), alt
-
-
 def icrs_to_itrs_xyz(
     state: CatalogState,
     *,
     obstime_mjd_utc: Any,
     eop: EarthOrientation,
-    pn: PNModel = "none",
+    pn: PNModel | None = None,
     aberration: bool = False,
 ) -> Tensor:
     """Unit ICRS direction to ITRS Cartesian (dimensionless)."""
     icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
-    device = icrs.lon.device
-    dtype = _work_dtype(device)
-    utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
-    ut1 = utc + eop.dut1_s.to(device=device, dtype=dtype) / SECONDS_PER_DAY
-    return _icrs_unit_to_itrs(icrs, utc, ut1, eop, pn=pn, aberration=aberration)
+    return _icrs_unit_to_itrs(
+        icrs, obstime_mjd_utc, eop, pn=_resolve_pn(pn, eop), aberration=aberration
+    )
 
 
 def itrs_xyz_to_lonlat_deg(xyz: Tensor) -> tuple[Tensor, Tensor]:
@@ -270,7 +298,7 @@ def itrs_xyz_to_lonlat_deg(xyz: Tensor) -> tuple[Tensor, Tensor]:
 
 def _icrs_to_gcrs_unit(
     icrs: CatalogState,
-    utc: Tensor,
+    obstime: Any,
     eop: EarthOrientation,
     *,
     aberration: bool,
@@ -281,29 +309,10 @@ def _icrs_to_gcrs_unit(
     if aberration:
         if eop.tt_minus_utc_s is None:
             raise ValueError("aberration requires eop.tt_minus_utc_s")
-        tt = tt_mjd_from_utc(
-            utc.to(dtype=dtype),
-            eop.tt_minus_utc_s.to(device=device, dtype=dtype),
-        )
-        vel = earth_barycentric_velocity_icrs(tt)
+        tt = _tt64(_time64(obstime), eop, "aberration")
+        vel = earth_barycentric_velocity_icrs(tt).to(device=device, dtype=dtype)
         v = apply_stellar_aberration(v, vel)
     return v
-
-
-def _tt_from_eop(
-    utc: Tensor,
-    eop: EarthOrientation,
-    *,
-    device: torch.device,
-    dtype: torch.dtype,
-    why: str,
-) -> Tensor:
-    if eop.tt_minus_utc_s is None:
-        raise ValueError(f"{why} requires eop.tt_minus_utc_s")
-    return tt_mjd_from_utc(
-        utc.to(dtype=dtype),
-        eop.tt_minus_utc_s.to(device=device, dtype=dtype),
-    )
 
 
 def icrs_to_gcrs_xyz(
@@ -315,10 +324,7 @@ def icrs_to_gcrs_xyz(
 ) -> Tensor:
     """ICRS direction to GCRS. Optional Keplerian aberration; no PN."""
     icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
-    device = icrs.lon.device
-    dtype = _work_dtype(device)
-    utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
-    return _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
+    return _icrs_to_gcrs_unit(icrs, obstime_mjd_utc, eop, aberration=aberration)
 
 
 def icrs_to_cirs_xyz(
@@ -330,12 +336,9 @@ def icrs_to_cirs_xyz(
 ) -> Tensor:
     """GCRS then IAU 2006 CIRS matrix (SOFA c2i06a)."""
     icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
-    device = icrs.lon.device
-    dtype = _work_dtype(device)
-    utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
-    v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
-    tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="CIRS")
-    return (cirs_matrix(tt) @ v.unsqueeze(-1)).squeeze(-1)
+    v = _icrs_to_gcrs_unit(icrs, obstime_mjd_utc, eop, aberration=aberration)
+    tt = _tt64(_time64(obstime_mjd_utc), eop, "CIRS")
+    return _apply_matrix(cirs_matrix(tt), v)
 
 
 def icrs_to_tete_xyz(
@@ -347,58 +350,19 @@ def icrs_to_tete_xyz(
 ) -> Tensor:
     """GCRS then IAU 2006 true equator/equinox of date (SOFA pnm06a)."""
     icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
-    device = icrs.lon.device
-    dtype = _work_dtype(device)
-    utc = _as_tensor(obstime_mjd_utc).to(device=device, dtype=dtype)
-    v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
-    tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="TETE")
-    return (npb_matrix(tt) @ v.unsqueeze(-1)).squeeze(-1)
+    v = _icrs_to_gcrs_unit(icrs, obstime_mjd_utc, eop, aberration=aberration)
+    tt = _tt64(_time64(obstime_mjd_utc), eop, "TETE")
+    return _apply_matrix(npb_matrix(tt), v)
 
 
 def _icrs_unit_to_itrs(
     icrs: CatalogState,
-    utc: Tensor,
-    ut1: Tensor,
+    obstime: Any,
     eop: EarthOrientation,
     *,
     pn: PNModel,
     aberration: bool,
 ) -> Tensor:
-    device = icrs.lon.device
-    dtype = _work_dtype(device)
-    v = _icrs_to_gcrs_unit(icrs, utc, eop, aberration=aberration)
-    if pn == "iau2006":
-        tt = _tt_from_eop(utc, eop, device=device, dtype=dtype, why="pn='iau2006'")
-        v = (cirs_matrix(tt) @ v.unsqueeze(-1)).squeeze(-1)
-    era = _era_rad_from_ut1_mjd(ut1.to(dtype=dtype))
-    xp = eop.xp_arcsec
-    yp = eop.yp_arcsec
-    z = torch.zeros((), dtype=dtype, device=device)
-    xp_t = z if xp is None else xp.to(device=device, dtype=dtype)
-    yp_t = z if yp is None else yp.to(device=device, dtype=dtype)
-    r_itrs = _polar_motion_matrix(xp_t, yp_t) @ _rz(era)
-    return (r_itrs @ v.unsqueeze(-1)).squeeze(-1)
-
-
-def _vector_altaz(
-    icrs: CatalogState,
-    utc: Tensor,
-    ut1: Tensor,
-    site: Site,
-    eop: EarthOrientation,
-    *,
-    pn: PNModel,
-    aberration: bool,
-) -> tuple[Tensor, Tensor]:
-    device = icrs.lon.device
-    dtype = _work_dtype(device)
-    v_itrs = _icrs_unit_to_itrs(icrs, utc, ut1, eop, pn=pn, aberration=aberration)
-    lon_rad = site.lon_deg.to(device=device, dtype=dtype) * D2R
-    lat_rad = site.lat_deg.to(device=device, dtype=dtype) * D2R
-    height = site.height_m.to(device=device, dtype=dtype)
-    if not bool(torch.isfinite(height).all()):
-        raise ValueError("site.height_m must be finite WGS84 ellipsoidal height")
-    east, north, up = _geodetic_normal_east_north(lon_rad, lat_rad)
-    alt = torch.asin(torch.clamp((v_itrs * up).sum(dim=-1), -1.0, 1.0)) * R2D
-    az = torch.atan2((v_itrs * east).sum(dim=-1), (v_itrs * north).sum(dim=-1)) * R2D
-    return _wrap360(az), alt
+    v = _icrs_to_gcrs_unit(icrs, obstime, eop, aberration=aberration)
+    rot = _gcrs_to_terrestrial_matrix(_time64(obstime), eop, pn)
+    return _apply_matrix(rot, v)

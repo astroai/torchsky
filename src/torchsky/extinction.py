@@ -187,6 +187,11 @@ def _f99_spline_matrix(device: torch.device, dtype: torch.dtype) -> Tensor:
     Cached because the knot abscissae are constants; callers solve against it
     instead of forming an explicit inverse.
     """
+    with torch.inference_mode(False):
+        return _f99_spline_matrix_build(device, dtype)
+
+
+def _f99_spline_matrix_build(device: torch.device, dtype: torch.dtype) -> Tensor:
     xk = torch.tensor(_F99_XKNOTS, device=device, dtype=dtype)
     h = xk[1:] - xk[:-1]
     matrix = torch.zeros((7, 7), device=device, dtype=dtype)
@@ -436,9 +441,9 @@ def transmission(
 
     ``A`` is clamped at zero: a dust screen cannot emit.
     """
-    mag = a_lambda(
-        wave, ebv=ebv, r_v=r_v, law=law, wavelength_unit=wavelength_unit
-    ).clamp_min(0.0)
+    mag = a_lambda(wave, ebv=ebv, r_v=r_v, law=law, wavelength_unit=wavelength_unit)
+    # where-form keeps a unit gradient exactly at A = 0 (clamp_min gives 0).
+    mag = torch.where(mag < 0.0, torch.zeros_like(mag), mag)
     return torch.pow(10.0, (-0.4 * mag).clamp(min=-30.0))
 
 
