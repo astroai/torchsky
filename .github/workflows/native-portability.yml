@@ -21,7 +21,7 @@ concurrency:
 jobs:
   linux-native-sanitizers:
     name: Linux native ASan and UBSan contracts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       CXXFLAGS: -fsanitize=address,undefined -fno-omit-frame-pointer -O1
@@ -45,11 +45,11 @@ jobs:
       - name: Run native safety contracts
         run: |
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
-          python -m pytest -q tests/test_cpp_dispatcher.py tests/test_cpp_fixed_dispatcher.py tests/test_cpp_spectral_dispatcher.py tests/test_cpp_wcs_safety.py
+          python -m pytest -v -rA -p no:cacheprovider tests/test_cpp_dispatcher.py tests/test_cpp_fixed_dispatcher.py tests/test_cpp_spectral_dispatcher.py tests/test_cpp_wcs_safety.py
 
   linux-x86-native:
     name: Linux x86-64 baseline and AVX2/FMA
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       SKBUILD_BUILD_DIR: build/native-portability
@@ -139,7 +139,6 @@ jobs:
       - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
         with:
           pixi-version: latest
-          cache: true
           run-install: false
       - name: Provision locked CUDA-enabled PyTorch and full toolkit
         run: pixi install --frozen -e cuda-bench
