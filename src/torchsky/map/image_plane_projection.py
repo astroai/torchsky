@@ -33,6 +33,7 @@ from .operators.image_grid import (
     validate_image_plane_2d,
 )
 from .operators.pixel_area import (
+    pixel_area_sr_at,
     pixel_area_sr_map,
     representative_pixel_area_sr,
 )
@@ -257,7 +258,13 @@ def _angular_separation_deg(
 def _source_pixel_diameter_arcsec(
     source_wcs: WCS, shape: tuple[int, int], *, device: torch.device
 ) -> float:
-    area_sr = pixel_area_sr_map(source_wcs, shape, device=device)
+    # Only a scale is needed (the round-trip tolerance): the median over a 33 x 33 lattice of pixel centres
+    # matches the full-map median to far better than the tolerance, without a detector-sized area map.
+    h, w = int(shape[0]), int(shape[1])
+    ys = torch.linspace(0.0, float(max(h - 1, 0)), min(h, 33), dtype=torch.float64)
+    xs = torch.linspace(0.0, float(max(w - 1, 0)), min(w, 33), dtype=torch.float64)
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    area_sr = pixel_area_sr_at(source_wcs, xx.reshape(-1), yy.reshape(-1))
     median_area_sr = float(torch.median(area_sr).item())
     if not math.isfinite(median_area_sr) or median_area_sr <= 0.0:
         return 0.0
