@@ -116,6 +116,11 @@ owned by `torchfits`.
   5.2 s GPU; drizzle 124 s -> 71 s CPU (STScI 171 s), 27 s GPU. Outputs
   unchanged: drizzle = STScI drizzle to 2e-6 sigma, CPU and GPU drizzle
   bitwise identical, Lanczos-3 CPU vs GPU 1e-7 sigma.
+- UNIONS tile CFIS.000.229 r (280 MegaCam CCDs, TPV, onto 10k x 10k pixels,
+  Lanczos-3 flux, weighted mean, 16 CPU threads, automatic tiling): 2292 s
+  with 2500^2 tiles before this release cycle -> 711 s, and 660 s on an H100
+  MIG 1g.12gb slice (auto-tiled, no out-of-memory); photometry, astrometry and
+  pixel statistics against the official tile unchanged.
 
 ## [0.4.0] - Unreleased
 
