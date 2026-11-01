@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
 import math
+import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 import torch
 from torch import Tensor
@@ -38,6 +40,385 @@ _OVERLAP_PROJECTED_BYTES_PER_SAMPLE = 12
 _OVERLAP_WEIGHTED_VARIANCE_BYTES_PER_SAMPLE = 4
 _OVERLAP_GRAPH_RHS_BYTES_PER_SAMPLE = 4
 _OVERLAP_COMPACT_FIT_SCRATCH_BYTES_PER_PIXEL = 4
+
+
+# ---------------------------------------------------------------------------
+# Memory-aware spatial tiling
+# ---------------------------------------------------------------------------
+#
+# ``coadd_image_plane`` projects one observation at a time onto the target
+# window.  The projection intermediates (target world grid, source pixel
+# coordinates, kernel taps, the second 36-tap pass of the exact diagonal
+# variance, flux quadrature grids) scale with the number of output pixels that
+# are processed at once, so a large target must be processed in tiles.  The
+# coefficients below are the measured peak-RSS slope (bytes per output pixel of
+# the processed window) of a single-exposure coadd on CPU, taken from the
+# difference between two target sizes so the fixed cost of the interpreter, the
+# source image and the drizzle chunk buffers drops out; each value is rounded up
+# by about 20% as headroom.  They are upper bounds that hold for the
+# weighted-mean stack with or without variance propagation (the variance pass
+# runs after the sampling pass and reuses its buffers, so it does not move the
+# peak).  Re-measure with the memory probe in the PR description whenever a
+# sampler changes: an over-estimate only makes tiles smaller.
+
+# Fraction of the free memory (device memory on CUDA, available host memory
+# otherwise) that a coadd plans to use.  The remainder is left to the allocator
+# cache, other processes sharing the node, and estimation error.
+TILE_MEMORY_FRACTION = 0.30
+# Hard override of the planning budget in bytes (None: derive from free memory).
+# The ``TORCHSKY_TILE_MEMORY_BUDGET_BYTES`` environment variable and the
+# ``tile_memory_budget_bytes`` argument of ``coadd_image_plane`` take
+# precedence over this constant, in that order.
+TILE_MEMORY_BUDGET_BYTES: int | None = None
+# Budget used when the free memory cannot be determined.
+_TILE_FALLBACK_BUDGET_BYTES = 2 * 1024**3
+# Smallest tile edge the planner will produce, even for a tiny budget.
+_TILE_MIN_EDGE = 64
+
+_TILE_BYTES_PER_PIXEL_SURFACE_BRIGHTNESS: dict[str, int] = {
+    "nearest": 500,
+    "bilinear": 500,
+    "bicubic": 1100,
+    "catmull_rom": 1100,
+    "mitchell_netravali": 1100,
+    "lanczos2": 1100,
+    "lanczos3": 1900,
+    "lanczos4": 3300,
+    "lanczos5": 4000,
+    # Forward drizzle / splat / polygon clipping run in fixed-size source
+    # chunks; only the accumulators and the output scale with the window.
+    "drizzle_point": 120,
+    "drizzle_square": 120,
+    "drizzle_turbo": 120,
+    "drizzle_gaussian": 120,
+    "drizzle_lanczos2": 120,
+    "drizzle_lanczos3": 120,
+    "conservative_polygon": 120,
+    "splat_point": 120,
+    "splat_box": 120,
+}
+_TILE_BYTES_PER_PIXEL_UNKNOWN_KERNEL = 2000
+# Extra bytes per pixel for flux semantics (four-point target-pixel quadrature on
+# top of the sampling pass): measured +1.3 kB for bilinear and +6.5 kB for
+# lanczos3; the larger value is used for every interpolating kernel.
+_TILE_FLUX_QUADRATURE_BYTES_PER_PIXEL = 6500
+_TILE_FORWARD_KERNEL_PREFIXES = ("drizzle", "splat", "conservative")
+# Working memory independent of the window.  Source images are held several
+# times (image, weight, their product, calibrated copies); forward kernels also
+# keep fixed-size source-chunk buffers (262144 source pixels per chunk,
+# ~1.5 kB per chunk pixel measured).
+_TILE_SOURCE_BYTES_PER_PIXEL = 40
+_TILE_FORWARD_CHUNK_PIXELS = 262_144
+_TILE_FORWARD_CHUNK_BYTES_PER_PIXEL = 1500
+
+
+def projection_bytes_per_pixel(
+    resampling_kernel: str,
+    value_semantics: str = "surface_brightness",
+) -> int:
+    """Return the measured peak working set per processed output pixel."""
+    base = _TILE_BYTES_PER_PIXEL_SURFACE_BRIGHTNESS.get(
+        resampling_kernel, _TILE_BYTES_PER_PIXEL_UNKNOWN_KERNEL
+    )
+    if value_semantics == "flux" and not resampling_kernel.startswith(
+        _TILE_FORWARD_KERNEL_PREFIXES
+    ):
+        base += _TILE_FLUX_QUADRATURE_BYTES_PER_PIXEL
+    return base
+
+
+def accumulator_bytes_per_pixel(
+    n_observations: int,
+    *,
+    value_semantics: str = "surface_brightness",
+    propagate_variance: bool = True,
+    include_context: bool = True,
+) -> int:
+    """Bytes per output pixel of the full-size accumulators and finalized outputs.
+
+    Numerator, weight, overlap count, (variance weight), the finalized data,
+    (inverse variance and correlation factor), the flux pixel-area map and the
+    int64 context bit words (one per 32 inputs).
+    """
+    total = 4 * 3 + 4  # numerator, weight, overlap, finalized data
+    if propagate_variance:
+        total += 4 * 3  # variance weight, inverse variance, correlation factor
+    if value_semantics == "flux":
+        total += 4
+    if include_context:
+        total += 8 * math.ceil(max(int(n_observations), 1) / 32)
+    return total
+
+
+def _read_int_file(path: str) -> int | None:
+    try:
+        with open(path, encoding="ascii") as handle:
+            text = handle.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text or not text.isdigit():
+        return None
+    return int(text)
+
+
+def available_host_memory_bytes() -> int | None:
+    """Memory a process can still allocate on this host, or None if unknown.
+
+    The minimum of the kernel's ``MemAvailable`` and the remaining allowance of
+    the enclosing cgroup (a container or batch-system memory limit, which
+    ``/proc/meminfo`` does not reflect).  ``psutil`` is used only when
+    importable; no hard dependency.
+    """
+    candidates: list[int] = []
+    try:
+        with open("/proc/meminfo", encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    candidates.append(int(line.split()[1]) * 1024)
+                    break
+    except (OSError, ValueError, IndexError):
+        pass
+    for limit_file, usage_file in (
+        ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+        (
+            "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+        ),
+    ):
+        limit = _read_int_file(limit_file)
+        usage = _read_int_file(usage_file)
+        # cgroup v1 reports "unlimited" as a value near 2**63.
+        if limit is not None and usage is not None and limit < 2**60:
+            candidates.append(max(limit - usage, 0))
+    if not candidates:
+        try:
+            import psutil  # type: ignore[import-not-found]
+
+            candidates.append(int(psutil.virtual_memory().available))
+        except Exception:  # noqa: BLE001 - optional dependency, any failure means unknown
+            try:
+                candidates.append(
+                    int(os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE"))
+                )
+            except (AttributeError, ValueError, OSError):
+                pass
+    return min(candidates) if candidates else None
+
+
+def available_device_memory_bytes(device: torch.device | str) -> int | None:
+    """Free memory on *device*, or None if unknown.
+
+    CUDA: driver-reported free memory plus the part of this process's caching
+    allocator that is reserved but unused.  Other devices (CPU, MPS with unified
+    memory): available host memory.
+    """
+    device = torch.device(device)
+    if device.type == "cuda":
+        try:
+            free, _total = torch.cuda.mem_get_info(device)
+            reusable = max(
+                torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device),
+                0,
+            )
+            return int(free) + int(reusable)
+        except (RuntimeError, AttributeError):
+            return None
+    return available_host_memory_bytes()
+
+
+def resolve_tile_memory_budget_bytes(
+    device: torch.device | str,
+    *,
+    budget_bytes: int | None = None,
+) -> int:
+    """Memory budget in bytes for planning spatial tiles.
+
+    Precedence: *budget_bytes*, ``TORCHSKY_TILE_MEMORY_BUDGET_BYTES``,
+    :data:`TILE_MEMORY_BUDGET_BYTES`, then ``TILE_MEMORY_FRACTION`` times the
+    free memory of *device*.
+    """
+    if budget_bytes is not None:
+        resolved = int(budget_bytes)
+        if resolved <= 0:
+            raise ValueError("tile_memory_budget_bytes must be positive")
+        return resolved
+    env = os.environ.get("TORCHSKY_TILE_MEMORY_BUDGET_BYTES")
+    if env:
+        try:
+            resolved = int(float(env))
+        except ValueError as exc:
+            raise ValueError(
+                "TORCHSKY_TILE_MEMORY_BUDGET_BYTES must be a number of bytes"
+            ) from exc
+        if resolved <= 0:
+            raise ValueError("TORCHSKY_TILE_MEMORY_BUDGET_BYTES must be positive")
+        return resolved
+    if TILE_MEMORY_BUDGET_BYTES is not None:
+        return int(TILE_MEMORY_BUDGET_BYTES)
+    free = available_device_memory_bytes(device)
+    if free is None:
+        return _TILE_FALLBACK_BUDGET_BYTES
+    return max(int(free * TILE_MEMORY_FRACTION), 1)
+
+
+def balanced_tile_hw(
+    shape: tuple[int, int],
+    max_pixels: int,
+    *,
+    min_edge: int = _TILE_MIN_EDGE,
+) -> tuple[int, int]:
+    """Largest near-square tile of at most *max_pixels* whose tiling has no slivers.
+
+    The tile edges are the canvas edges divided into equal parts, so the last
+    tile is never a thin remainder and every tile respects the same bound.
+    """
+    height, width = int(shape[0]), int(shape[1])
+    if height * width <= max_pixels:
+        return height, width
+    side = max(int(math.isqrt(max(int(max_pixels), 1))), 1)
+    th = min(height, max(side, min_edge))
+    tw = min(width, max(int(max_pixels) // th, min_edge))
+    th = math.ceil(height / math.ceil(height / th))
+    tw = math.ceil(width / math.ceil(width / tw))
+    return th, tw
+
+
+@dataclass(frozen=True)
+class SpatialTilePlan:
+    """Result of :func:`plan_spatial_tiles`."""
+
+    tile_hw: tuple[int, int] | None
+    host_accumulators: bool
+    budget_bytes: int
+    untiled_bytes: int
+    tile_bytes: int
+    bytes_per_pixel: int
+
+
+def plan_spatial_tiles(
+    target_shape: tuple[int, int],
+    *,
+    resampling_kernel: str,
+    value_semantics: str,
+    n_observations: int,
+    source_pixels: int,
+    device: torch.device | str,
+    propagate_variance: bool = True,
+    budget_bytes: int | None = None,
+) -> SpatialTilePlan:
+    """Choose a spatial tiling that keeps the coadd inside a memory budget.
+
+    The untiled estimate is ``(projection + accumulator bytes per pixel) *
+    target pixels`` plus the fixed and source-image terms.  When it fits the
+    budget no tiling is used (``tile_hw=None``).  Otherwise the full-size
+    accumulators are charged to the budget (to the host when the compute device
+    is not the CPU, since they then live on the host and only tile slices move
+    to the device) and the remaining budget, divided by the per-pixel working
+    set, bounds the tile area.
+    """
+    device = torch.device(device)
+    height, width = int(target_shape[0]), int(target_shape[1])
+    pixels = height * width
+    budget = resolve_tile_memory_budget_bytes(device, budget_bytes=budget_bytes)
+    projection_bpp = projection_bytes_per_pixel(resampling_kernel, value_semantics)
+    accumulator_bpp = accumulator_bytes_per_pixel(
+        n_observations,
+        value_semantics=value_semantics,
+        propagate_variance=propagate_variance,
+        include_context=False,
+    )
+    context_bpp = 8 * math.ceil(max(int(n_observations), 1) / 32)
+    source_pixels = max(int(source_pixels), 0)
+    fixed = _TILE_SOURCE_BYTES_PER_PIXEL * source_pixels
+    if resampling_kernel.startswith(_TILE_FORWARD_KERNEL_PREFIXES):
+        fixed += (
+            min(source_pixels, _TILE_FORWARD_CHUNK_PIXELS)
+            * _TILE_FORWARD_CHUNK_BYTES_PER_PIXEL
+        )
+    untiled = fixed + pixels * (projection_bpp + accumulator_bpp + context_bpp)
+    if untiled <= budget:
+        return SpatialTilePlan(None, False, budget, untiled, untiled, projection_bpp)
+    # Tiled: the context bit words are always host-resident.  Accumulators move
+    # to the host on an accelerator, where only the tile working set counts.
+    host_accumulators = device.type != "cpu"
+    resident = 0 if host_accumulators else pixels * accumulator_bpp
+    staged = 4 * (4 if propagate_variance else 3)  # tile slices moved to the device
+    available = budget - fixed - resident
+    max_pixels = max(int(available // (projection_bpp + staged)), 1)
+    tile_hw = balanced_tile_hw((height, width), max_pixels)
+    if tile_hw[0] >= height and tile_hw[1] >= width:
+        # The fixed terms alone exceed the budget; tiling cannot help.
+        return SpatialTilePlan(None, False, budget, untiled, untiled, projection_bpp)
+    tile_pixels = tile_hw[0] * tile_hw[1]
+    tile_bytes = fixed + resident + tile_pixels * (projection_bpp + staged)
+    return SpatialTilePlan(
+        tile_hw, host_accumulators, budget, untiled, tile_bytes, projection_bpp
+    )
+
+
+class TileAccumulators:
+    """Full-canvas stacking accumulators with windowed staging to the compute device.
+
+    ``numer``, ``denom``, ``overlap`` (and ``variance`` when requested) live on
+    ``storage_device``.  When it differs from the compute device (or *staged* is
+    forced), :meth:`window` copies only the requested window to the compute device
+    and writes it back on exit, so a large canvas never has to fit on the
+    accelerator.  Otherwise it yields views and moves nothing.
+    """
+
+    def __init__(
+        self,
+        shape: tuple[int, int],
+        *,
+        compute_device: torch.device,
+        storage_device: torch.device | None = None,
+        with_variance: bool = True,
+        staged: bool | None = None,
+    ) -> None:
+        self.shape = (int(shape[0]), int(shape[1]))
+        self.compute_device = torch.device(compute_device)
+        self.storage_device = (
+            self.compute_device if storage_device is None else torch.device(storage_device)
+        )
+        self.staged = (
+            self.storage_device != self.compute_device if staged is None else bool(staged)
+        )
+        self.numer = torch.zeros(self.shape, dtype=torch.float32, device=self.storage_device)
+        self.denom = torch.zeros_like(self.numer)
+        self.overlap = torch.zeros(self.shape, dtype=torch.int32, device=self.storage_device)
+        self.variance: Tensor | None = (
+            torch.zeros_like(self.numer) if with_variance else None
+        )
+
+    @contextmanager
+    def window(
+        self, y0: int, y1: int, x0: int, x1: int, *, writeback: bool = True
+    ) -> Iterator[tuple[Tensor, Tensor, Tensor, Tensor | None]]:
+        sl = (slice(y0, y1), slice(x0, x1))
+        fields = [self.numer, self.denom, self.overlap]
+        if self.variance is not None:
+            fields.append(self.variance)
+        if not self.staged:
+            yield (
+                self.numer[sl],
+                self.denom[sl],
+                self.overlap[sl],
+                None if self.variance is None else self.variance[sl],
+            )
+            return
+        views = [field[sl] for field in fields]
+        tiles = [
+            view.to(device=self.compute_device, copy=True) for view in views
+        ]
+        yield (
+            tiles[0],
+            tiles[1],
+            tiles[2],
+            tiles[3] if self.variance is not None else None,
+        )
+        if writeback:
+            for view, tile in zip(views, tiles):
+                view.copy_(tile)
 
 
 @dataclass(frozen=True)
