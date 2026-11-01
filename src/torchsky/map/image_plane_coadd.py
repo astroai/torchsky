@@ -280,7 +280,10 @@ def _prepare_canvas_tile(
         canvas_origin_yx=origin_yx,
         include_pixel_area=(value_semantics == "flux"),
         include_representative_pixel_area=False,
-        include_quadrature=(value_semantics == "flux"),
+        # Quadrature world grids are built on demand for the footprint window
+        # of each observation (and never for the interpolated mapping), not
+        # for the whole canvas tile.
+        include_quadrature=False,
         include_world_grid=False,
     )
     prepared.representative_pixel_area_sr = representative_pixel_area_sr

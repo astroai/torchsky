@@ -94,6 +94,78 @@ from .image_plane_common import (
 
 _DRIZZLE_FORWARD_CHUNK_PIXELS = 262_144
 _FORWARD_SOURCE_RATIO = 0.2  # forward projection when source < 20% of target
+# Source pixels a gather kernel can read on either side of floor(x): its
+# support radius plus one pixel of margin.  Kernels absent here (spectral,
+# FFT, periodic) read the whole image.
+_SOURCE_TAP_RADIUS: dict[str, int] = {
+    "nearest": 2,
+    "bilinear": 2,
+    "bicubic": 3,
+    "catmull_rom": 3,
+    "mitchell_netravali": 3,
+    "lanczos2": 3,
+    "lanczos3": 4,
+    "lanczos4": 5,
+    "lanczos5": 6,
+}
+
+
+def _source_tap_window(
+    x_src: Tensor,
+    y_src: Tensor,
+    shape: tuple[int, int],
+    *,
+    radius: int,
+) -> tuple[int, int, int, int]:
+    """Smallest source window ``(y0, y1, x0, x1)`` holding every kernel tap.
+
+    Coordinates are clamped to the image first: samples outside it are masked
+    after sampling, so only the taps of in-image samples need valid values.
+    """
+    h_src, w_src = int(shape[0]), int(shape[1])
+    finite = torch.isfinite(x_src) & torch.isfinite(y_src)
+    if not bool(finite.any()):
+        return 0, 0, 0, 0
+    xs = x_src[finite].clamp(0.0, float(w_src - 1))
+    ys = y_src[finite].clamp(0.0, float(h_src - 1))
+    bounds = torch.stack((xs.min(), xs.max(), ys.min(), ys.max())).tolist()
+    x0 = max(math.floor(bounds[0]) - radius, 0)
+    x1 = min(math.floor(bounds[1]) + radius + 1, w_src)
+    y0 = max(math.floor(bounds[2]) - radius, 0)
+    y1 = min(math.floor(bounds[3]) + radius + 1, h_src)
+    return y0, y1, x0, x1
+
+
+def _flux_weighted_planes_in_tap_window(
+    image: Tensor,
+    source_weight: Tensor,
+    source_wcs: WCS,
+    x_src: Tensor,
+    y_src: Tensor,
+    *,
+    radius: int,
+) -> tuple[Tensor, Tensor]:
+    """Flux-weighted planes ``image * w * area`` and ``w * area**2``.
+
+    Exact inside the tap window of the sampled positions, zero outside it (no
+    tap of an in-image sample reads there).
+    """
+    shape = (int(image.shape[0]), int(image.shape[1]))
+    window = _source_tap_window(x_src, y_src, shape, radius=radius)
+    y0, y1, x0, x1 = window
+    weighted_image = torch.zeros_like(image)
+    weighted_weight = torch.zeros_like(source_weight)
+    if y1 > y0 and x1 > x0:
+        area = pixel_area_sr_map(
+            source_wcs,
+            shape,
+            device=image.device,
+            window=window,
+        )
+        weight = source_weight[y0:y1, x0:x1]
+        weighted_image[y0:y1, x0:x1] = image[y0:y1, x0:x1] * weight * area
+        weighted_weight[y0:y1, x0:x1] = weight * (area * area)
+    return weighted_image, weighted_weight
 
 
 def _requires_roundtrip_validity_check(source_wcs: WCS) -> bool:
@@ -476,7 +548,19 @@ def _resample_weighted_to_target(
 
     # Reproject weighted signal and weight separately, then form the weighted mean
     # only after all observations have been accumulated on the target grid.
-    if value_semantics == "flux":
+    # Flux semantics weight every source pixel by its exact solid angle.  For
+    # gather kernels with a bounded tap radius only the source pixels inside the
+    # taps of the sampled positions matter, so the area map (a spherical pixel
+    # polygon per pixel on distorted WCS) is evaluated on that window only.
+    windowed_flux_area = (
+        value_semantics == "flux" and resampling_kernel in _SOURCE_TAP_RADIUS
+    )
+    if windowed_flux_area:
+        # Placeholders: built from the mapped positions in _sample_on_source_grid,
+        # the only consumer for these kernels.
+        placeholder = image.new_empty(0)
+        weighted_image = weighted_weight = source_numerator_variance = placeholder
+    elif value_semantics == "flux":
         source_area_sr = pixel_area_sr_map(
             source_wcs,
             tuple(image.shape),
@@ -784,6 +868,7 @@ def _resample_weighted_to_target(
         flat_dec: Tensor | None = None,
         valid_mask: Tensor | None = None,
     ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
+        nonlocal weighted_image, weighted_weight, source_numerator_variance
         # WCS round trips can land an exact edge just outside the image.  Keep
         # the repair much smaller than a pixel even for float32/large mosaics.
         roundoff_tol = min(
@@ -815,6 +900,16 @@ def _resample_weighted_to_target(
             torch.full_like(y_src, float(h_src - 1)),
             y_src,
         )
+        if windowed_flux_area:
+            weighted_image, weighted_weight = _flux_weighted_planes_in_tap_window(
+                image,
+                source_weight,
+                source_wcs,
+                x_src,
+                y_src,
+                radius=_SOURCE_TAP_RADIUS[resampling_kernel],
+            )
+            source_numerator_variance = weighted_weight
         sampled_variance_weight = None
         fused_variance = None
         if resampling_kernel == "spectral_nonuniform":

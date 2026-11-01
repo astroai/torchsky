@@ -59,6 +59,17 @@ owned by `torchfits`.
   coordinates; results agree with the previous implementation to one float32 ulp.
 
 ### Fixed
+- Flux-semantics image-plane coadds evaluated the exact solid angle of every
+  source pixel (a spherical pixel polygon per pixel on distorted WCS) for each
+  target window an observation touched, and the target quadrature world grids
+  for the whole canvas tile; tiled runs paid both once per (tile, observation)
+  pair. The source area is now evaluated only on the window read by the kernel
+  taps (gather kernels with a bounded support; spectral/FFT kernels keep the
+  full map) and the quadrature grids are built on demand for the observation's
+  footprint window. Lanczos-3 flux coadds of 3 NIRCam exposures: 512^2 21.7 s
+  -> 5.5 s, 1200^2 27.6 s -> 13.1 s, 2500^2 (auto-tiled) 403 s -> 198 s on 4
+  CPU threads; results equal to float32 rounding (max 4e-6 of the image
+  scatter), identical coverage.
 - Tiled image-plane coadds keep the context bitmask on the host, so large
   mosaics no longer exhaust small GPU slices on bookkeeping.
 - A tiled coadd on an accelerator returns its maps and context words on the

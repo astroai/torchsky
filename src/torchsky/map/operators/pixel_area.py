@@ -104,26 +104,36 @@ def pixel_area_sr_map(
     *,
     device: torch.device,
     chunk_size: int = 128,
+    window: tuple[int, int, int, int] | None = None,
 ) -> Tensor:
     """Per-pixel solid angle in steradians from local WCS Jacobians.
 
     Uses the exact local TAN Jacobian for undistorted tangent-plane WCS and
     spherical pixel polygons otherwise. Computation is row-chunked for memory.
+    ``window=(y0, y1, x0, x1)`` evaluates only those pixels of the ``shape``
+    image and returns a ``(y1 - y0, x1 - x0)`` map whose values equal the
+    corresponding slice of the full map.
     """
     height, width = int(shape[0]), int(shape[1])
+    y0, y1, x0, x1 = (0, height, 0, width) if window is None else window
+    y0, x0 = max(int(y0), 0), max(int(x0), 0)
+    y1, x1 = min(int(y1), height), min(int(x1), width)
+    out_h, out_w = max(y1 - y0, 0), max(x1 - x0, 0)
     wcs_dev = getattr(wcs, "device", device)
     if not isinstance(wcs_dev, torch.device):
         wcs_dev = torch.device(wcs_dev)
     coord_dtype = torch.float32 if wcs_dev.type == "mps" else torch.float64
-    area_sr = torch.empty(height, width, dtype=torch.float32, device=device)
-    for y_start in range(0, height, chunk_size):
-        y_end = min(y_start + chunk_size, height)
+    area_sr = torch.empty(out_h, out_w, dtype=torch.float32, device=device)
+    if out_w == 0:
+        return area_sr
+    for y_start in range(y0, y1, chunk_size):
+        y_end = min(y_start + chunk_size, y1)
         y, x = torch.meshgrid(
             torch.arange(y_start, y_end, dtype=coord_dtype, device=wcs_dev),
-            torch.arange(width, dtype=coord_dtype, device=wcs_dev),
+            torch.arange(x0, x1, dtype=coord_dtype, device=wcs_dev),
             indexing="ij",
         )
-        area_sr[y_start:y_end] = pixel_area_sr_at(wcs, x, y).to(
+        area_sr[y_start - y0 : y_end - y0] = pixel_area_sr_at(wcs, x, y).to(
             device=device, dtype=torch.float32
         )
     return area_sr
