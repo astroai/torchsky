@@ -147,6 +147,22 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Multi
+
+::: torchsky.catalogs
+    options:
+      members:
+        - ManyMatchResult
+        - SelfMatchResult
+        - crossmatch_exact
+        - crossmatch_many
+        - crossmatch_self
+        - join_rows
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Photometry
 
 <a id="torchsky.catalogs.BlendFitDiagnostics"></a>

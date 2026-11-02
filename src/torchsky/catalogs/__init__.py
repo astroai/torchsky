@@ -8,6 +8,14 @@ from .index import HealpixIndex
 from .index import cap_covering_pixels
 from .index import nside_for_cap
 from .catalog import Catalog
+from .multi import (
+    ManyMatchResult,
+    SelfMatchResult,
+    crossmatch_exact,
+    crossmatch_many,
+    crossmatch_self,
+    join_rows,
+)
 from .core import (
     CatalogStreamDataset,
     CrossmatchResult,
@@ -83,7 +91,10 @@ def crossmatch(
     """
     if isinstance(left, Catalog) and isinstance(right, Catalog):
         rad = radius_arcsec if radius_arcsec is not None else radius_arcsec_or_right_lon
-        if rad is None:
+        if rad is None and not (
+            kwargs.get("left_err_arcsec") is not None
+            or kwargs.get("right_err_arcsec") is not None
+        ):
             raise ValueError("radius_arcsec is required")
         return left.crossmatch(right, rad, find=find, **kwargs)
 
@@ -154,20 +165,26 @@ __all__ = [
     "FitAdequacyDiagnostics",
     "HealpixIndex",
     "KnownComponentFitError",
+    "ManyMatchResult",
     "MorphologySpectrumDeblendResult",
     "ParametricBlendDiagnostics",
     "ParametricBounds",
     "ParametricDeblendResult",
     "PhotometrySolver",
+    "SelfMatchResult",
     "SourceGrouping",
     "build_source_groups",
     "cap_covering_pixels",
     "crossmatch",
+    "crossmatch_exact",
+    "crossmatch_many",
+    "crossmatch_self",
     "crossmatch_sky",
     "crossmatch_sky_from_arrow",
     "crossmatch_sky_streamed",
     "fit_forced_photometry",
     "fit_morphology_spectrum_deblending",
     "fit_parametric_deblending",
+    "join_rows",
     "nside_for_cap",
 ]

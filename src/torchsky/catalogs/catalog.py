@@ -328,12 +328,14 @@ class Catalog:
     def crossmatch(
         self,
         other: Catalog,
-        radius_arcsec: float | Tensor,
+        radius_arcsec: float | Tensor | None = None,
         *,
         find: str = "best",
         right_index: HealpixIndex | None = None,
         target_epoch: float | Tensor | None = None,
         motion: str = "angular",
+        left_err_arcsec: float | Tensor | str | None = None,
+        right_err_arcsec: float | Tensor | str | None = None,
     ) -> CrossmatchResult:
         """Match stored positions, or explicitly propagate to a common Julian year.
 
@@ -341,6 +343,11 @@ class Catalog:
         changes; ``"physical"`` additionally requires parallax and radial
         velocity. Missing motion is never filled with zero. A supplied index
         must be rebuilt by the caller after frame/epoch changes.
+
+        ``find`` and the error options follow :func:`crossmatch_sky`;
+        ``left_err_arcsec`` / ``right_err_arcsec`` may also name a column of
+        ``self`` / ``other`` (values in arcsec). Epoch/frame alignment reorders
+        nothing, so returned indices always refer to the original rows.
         """
         if motion not in ("angular", "physical"):
             raise ValueError("motion must be 'angular' or 'physical'")
@@ -367,6 +374,28 @@ class Catalog:
 
             left, right = align(left), align(right)
         right = right if right.frame == left.frame else right.to_frame(left.frame)
+
+        def _err(value: Any, cat: Catalog) -> Any:
+            return cat.columns[value] if isinstance(value, str) else value
+
+        left_err = _err(left_err_arcsec, self)
+        right_err = _err(right_err_arcsec, other)
+        if (
+            left_err is not None
+            or right_err is not None
+            or find not in ("best", "best1", "all")
+        ):
+            # Error radii, best2 and symmetric use the strip index directly.
+            return crossmatch_sky(
+                left.lon,
+                left.lat,
+                right.lon,
+                right.lat,
+                radius_arcsec=radius_arcsec,
+                find=find,
+                left_err_arcsec=left_err,
+                right_err_arcsec=right_err,
+            )
         index = right_index if right_index is not None else right.index()
         return crossmatch_sky(
             left.lon,

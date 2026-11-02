@@ -795,7 +795,13 @@ class _DecStripIndex:
     of sky area per left row), with no per-pixel Python loop.
     """
 
-    def __init__(self, right_ra: Tensor, right_dec: Tensor, radius_max_arcsec: float):
+    def __init__(
+        self,
+        right_ra: Tensor,
+        right_dec: Tensor,
+        radius_max_arcsec: float,
+        right_radius_arcsec: Tensor | None = None,
+    ):
         device = right_ra.device
         self.device = device
         self.dtype = right_ra.dtype
@@ -808,6 +814,11 @@ class _DecStripIndex:
         self.key = key[order]
         self.ra = right_ra[order]
         self.dec = right_dec[order]
+        # Per-right-row match radius (skyerr): pair threshold is left + right.
+        self.rr = None if right_radius_arcsec is None else right_radius_arcsec[order]
+        self.rr_max = (
+            0.0 if right_radius_arcsec is None else float(right_radius_arcsec.max())
+        )
 
     def _strip_of(self, dec: Tensor) -> Tensor:
         idx = torch.floor((dec + 90.0) / self.strip_height).to(torch.int64)
@@ -883,8 +894,10 @@ class _DecStripIndex:
         right_hits: list[Tensor],
         sep_hits: list[Tensor],
         stats: _CrossmatchStats | None,
+        accept: Callable[[Tensor, Tensor], Tensor] | None = None,
     ) -> None:
-        radius_deg = radius_arcsec / 3600.0
+        # The candidate window must cover the largest possible pair threshold.
+        radius_deg = (radius_arcsec + self.rr_max) / 3600.0
         seg_left, starts, stops = self._segments(left_ra, left_dec, radius_deg)
         if stats is not None:
             stats.candidate_rows_considered += int((stops - starts).sum().item())
@@ -905,12 +918,20 @@ class _DecStripIndex:
                 )
                 * 3600.0
             )
-            mask = sep <= radius_arcsec[lrel]
+            threshold = radius_arcsec[lrel]
+            if self.rr is not None:
+                threshold = threshold + self.rr[right_sorted]
+            mask = sep <= threshold
             lrel, right_sorted, sep = lrel[mask], right_sorted[mask], sep[mask]
             if lrel.numel() == 0:
                 continue
             right_orig = self.order[right_sorted]
             lrel = lrel + left_offset
+            if accept is not None:
+                keep = accept(lrel, right_orig)
+                lrel, right_orig, sep = lrel[keep], right_orig[keep], sep[keep]
+                if lrel.numel() == 0:
+                    continue
             if find == "best":
                 lrel, right_orig, sep = _best_hits(lrel, right_orig, sep)
             left_hits.append(lrel)
@@ -929,13 +950,25 @@ def _crossmatch_sky_strips(
     right_chunk_size: int,
     find: str = "best",
     return_stats: bool = False,
+    radius_right: Tensor | None = None,
+    accept: Callable[[Tensor, Tensor], Tensor] | None = None,
 ) -> CrossmatchResult | tuple[CrossmatchResult, _CrossmatchStats]:
-    """Exact crossmatch via declination strips x sorted right ascension."""
+    """Exact crossmatch via declination strips x sorted right ascension.
+
+    A pair matches when ``sep <= radius_arcsec[left] + radius_right[right]``
+    (and ``accept(left_rows, right_rows)`` holds, when given).
+    """
     device = left_ra.device
     stats = _CrossmatchStats(
         left_points=int(left_ra.numel()), right_points=int(right_ra.numel())
     )
-    index = _DecStripIndex(right_ra, right_dec, float(radius_arcsec.max().item()))
+    right_max = 0.0 if radius_right is None else float(radius_right.max().item())
+    index = _DecStripIndex(
+        right_ra,
+        right_dec,
+        float(radius_arcsec.max().item()) + right_max,
+        radius_right,
+    )
     left_hits: list[Tensor] = []
     right_hits: list[Tensor] = []
     sep_hits: list[Tensor] = []
@@ -958,6 +991,7 @@ def _crossmatch_sky_strips(
             right_hits=right_hits,
             sep_hits=sep_hits,
             stats=stats,
+            accept=accept,
         )
     result = _finalize_crossmatch(
         left_hits,
@@ -978,29 +1012,168 @@ def _crossmatch_sky_strips(
     return result
 
 
+def _error_radii(
+    value: float | Tensor | None, n: int, device: torch.device, name: str
+) -> Tensor | None:
+    """Per-row error radii (arcsec): finite and ``>= 0``; ``None`` stays ``None``."""
+    if value is None:
+        return None
+    err = torch.as_tensor(value, dtype=_work_dtype(device), device=device)
+    err = err.reshape(1).expand(n).clone() if err.ndim == 0 else err.reshape(-1)
+    if int(err.numel()) != n:
+        raise ValueError(f"{name} must be a scalar or have one entry per row")
+    if n and not bool(torch.isfinite(err).all() & (err >= 0.0).all()):
+        raise ValueError(f"{name} must be finite and non-negative")
+    return err
+
+
+def _distance_filter(
+    left_distance: Tensor | None,
+    right_distance: Tensor | None,
+    distance_tol: float | None,
+    n_left: int,
+    n_right: int,
+    device: torch.device,
+) -> Callable[[Tensor, Tensor], Tensor] | None:
+    if left_distance is None and right_distance is None and distance_tol is None:
+        return None
+    if left_distance is None or right_distance is None or distance_tol is None:
+        raise ValueError(
+            "left_distance, right_distance and distance_tol are given together"
+        )
+    if not distance_tol >= 0.0:
+        raise ValueError("distance_tol must be non-negative")
+    dtype = _work_dtype(device)
+    dl = torch.as_tensor(left_distance, dtype=dtype, device=device).reshape(-1)
+    dr = torch.as_tensor(right_distance, dtype=dtype, device=device).reshape(-1)
+    if int(dl.numel()) != n_left or int(dr.numel()) != n_right:
+        raise ValueError("distance arrays must have one entry per catalogue row")
+    tol = float(distance_tol)
+    # NaN distance compares False, so rows without a distance never match.
+    return lambda lrows, rrows: (dl[lrows] - dr[rrows]).abs() <= tol
+
+
+def sky_pairs(
+    left_ra: Tensor,
+    left_dec: Tensor,
+    right_ra: Tensor,
+    right_dec: Tensor,
+    *,
+    radius_left: Tensor,
+    radius_right: Tensor | None = None,
+    find: str = "best1",
+    accept: Callable[[Tensor, Tensor], Tensor] | None = None,
+    left_chunk_size: int = 65536,
+    right_chunk_size: int = 65536,
+) -> CrossmatchResult:
+    """Strip-index pairs with ``sep <= radius_left + radius_right`` for any ``find``.
+
+    ``best2`` and ``symmetric`` are derived without an ``N * M`` step:
+    ``best2`` swaps the roles so the streamed best-hit path still applies, and
+    ``symmetric`` resolves the (``K`` pair) candidate list greedily.
+    """
+    from ._pairs import select_pairs
+
+    device = left_ra.device
+    if left_ra.numel() == 0 or right_ra.numel() == 0:
+        return _empty_crossmatch(device)
+    if find == "best2":
+        zeros = torch.zeros_like(right_ra)
+        swapped_accept = None if accept is None else (lambda r, l_: accept(l_, r))
+        res = sky_pairs(
+            right_ra,
+            right_dec,
+            left_ra,
+            left_dec,
+            radius_left=zeros if radius_right is None else radius_right,
+            radius_right=radius_left,
+            find="best1",
+            accept=swapped_accept,
+            left_chunk_size=left_chunk_size,
+            right_chunk_size=right_chunk_size,
+        )
+        lidx, ridx, sep = select_pairs(
+            res.right_index, res.left_index, res.separation_arcsec, "all"
+        )
+        return CrossmatchResult(lidx, ridx, sep)
+    strip_find = "best" if find == "best1" else "all"
+    res = cast(
+        CrossmatchResult,
+        _crossmatch_sky_strips(
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
+            radius_arcsec=radius_left,
+            radius_right=radius_right,
+            accept=accept,
+            left_chunk_size=left_chunk_size,
+            right_chunk_size=right_chunk_size,
+            find=strip_find,
+        ),
+    )
+    if find == "symmetric":
+        res = CrossmatchResult(
+            *select_pairs(
+                res.left_index, res.right_index, res.separation_arcsec, "symmetric"
+            )
+        )
+    return res
+
+
 def crossmatch_sky(
     left_ra_deg: Tensor,
     left_dec_deg: Tensor,
     right_ra_deg: Tensor,
     right_dec_deg: Tensor,
     *,
-    radius_arcsec: float | Tensor,
+    radius_arcsec: float | Tensor | None = None,
     left_chunk_size: int = 65536,
     right_chunk_size: int = 65536,
     find: str = "best",
     right_index: HealpixIndex | None = None,
     device: torch.device | str | None = None,
+    left_err_arcsec: float | Tensor | None = None,
+    right_err_arcsec: float | Tensor | None = None,
+    left_distance: Tensor | None = None,
+    right_distance: Tensor | None = None,
+    distance_tol: float | None = None,
 ) -> CrossmatchResult:
-    """Chunked angular crossmatch on one in-memory tile.
+    """Chunked exact angular crossmatch on one in-memory tile.
 
-    ``find="best"`` returns the nearest right-catalog row per left row.
-    ``find="all"`` returns every pair within the radius, ordered by left
-    index, separation, then right index.
+    Matchers (choose one radius rule):
 
-    ``radius_arcsec`` may be a positive scalar or a per-left-row tensor.
-    HEALPix covering uses the per-group maximum; the exact GC test uses the
-    per-row radius. Pass ``right_index`` to reuse a nested ``HealpixIndex``.
-    ``device`` moves inputs onto that device when given.
+    - **sky**: ``radius_arcsec`` (scalar or per-left-row), pair kept when
+      ``separation <= radius``.
+    - **skyerr**: ``left_err_arcsec`` / ``right_err_arcsec`` (scalar or per
+      row, either side optional, missing side = 0), pair kept when
+      ``separation <= err_left[i] + err_right[j]``. Candidate windows use
+      ``max(err_left) + max(err_right)``; the exact test uses each pair's sum.
+    - **sky + distance** (STILTS ``sky`` with a 1-d cut): also pass
+      ``left_distance``, ``right_distance`` and ``distance_tol``; a pair must
+      additionally satisfy ``|d_left - d_right| <= distance_tol`` (NaN never
+      matches).
+
+    ``find`` selects which pairs are returned:
+
+    - ``"best"`` / ``"best1"``: nearest right row per left row (right rows may
+      repeat); ties go to the lowest right index.
+    - ``"best2"``: nearest left row per right row (left rows may repeat); ties
+      go to the lowest left index.
+    - ``"symmetric"``: STILTS ``find=best``. One-to-one, greedy by ascending
+      separation, ties by lowest left then lowest right index; every row is
+      used at most once.
+    - ``"all"``: every pair inside the threshold.
+
+    ``"all"`` is ordered by left index, separation, then right index; the other
+    modes by left index, then right index. Use
+    :func:`~torchsky.catalogs.join_rows` for join semantics with unmatched rows.
+
+    ``radius_arcsec`` may be a positive scalar or a per-left-row tensor. Pass
+    ``right_index`` to reuse a nested ``HealpixIndex`` (``find`` best1/all and
+    sky matcher only). ``device`` moves inputs onto that device when given.
+    On MPS the work dtype is float32, so thresholds below the float32 position
+    resolution are not meaningful there.
 
     Args:
         left_ra_deg: Left-catalog right ascensions in degrees.
@@ -1010,9 +1183,14 @@ def crossmatch_sky(
         radius_arcsec: Scalar or per-left-row match radius in arcseconds.
         left_chunk_size: Maximum left rows processed per outer chunk.
         right_chunk_size: Maximum candidate right rows processed per chunk.
-        find: ``"best"`` for one nearest match or ``"all"`` for all matches.
+        find: ``"best"``, ``"best1"``, ``"best2"``, ``"symmetric"`` or ``"all"``.
         right_index: Reusable nested HEALPix index for the right catalog.
         device: Optional compute device.
+        left_err_arcsec: Per-left-row error radius (skyerr matcher).
+        right_err_arcsec: Per-right-row error radius (skyerr matcher).
+        left_distance: Per-left-row distance for the distance cut.
+        right_distance: Per-right-row distance for the distance cut.
+        distance_tol: Largest allowed distance difference.
 
     Returns:
         Matching row indices and great-circle separations in arcseconds.
@@ -1024,6 +1202,8 @@ def crossmatch_sky(
         >>> result.right_index.tolist()
         [0]
     """
+    from ._pairs import normalize_find
+
     raw_left_ra = torch.as_tensor(left_ra_deg).reshape(-1)
     work_device = torch.device(device) if device is not None else raw_left_ra.device
     work_dtype = _work_dtype(work_device)
@@ -1037,33 +1217,52 @@ def crossmatch_sky(
     right_dec = torch.as_tensor(
         right_dec_deg, dtype=work_dtype, device=work_device
     ).reshape(-1)
-    radius_left, _ = _normalize_radius_arcsec(
-        radius_arcsec, int(left_ra.numel()), work_device
-    )
+    n_left, n_right = int(left_ra.numel()), int(right_ra.numel())
+    find = normalize_find(find)
     if left_chunk_size <= 0 or right_chunk_size <= 0:
         raise ValueError("chunk sizes must be positive")
-    if find not in ("best", "all"):
-        raise ValueError("find must be 'best' or 'all'")
     if left_ra.shape != left_dec.shape:
         raise ValueError("left_ra_deg and left_dec_deg must have the same shape")
     if right_ra.shape != right_dec.shape:
         raise ValueError("right_ra_deg and right_dec_deg must have the same shape")
+    has_err = left_err_arcsec is not None or right_err_arcsec is not None
+    if radius_arcsec is None and not has_err:
+        raise ValueError("pass radius_arcsec or left_err_arcsec/right_err_arcsec")
+    if radius_arcsec is not None and has_err:
+        raise ValueError(
+            "radius_arcsec and left_err_arcsec/right_err_arcsec are alternatives"
+        )
+    radius_right: Tensor | None = None
+    if has_err:
+        radius_left = _error_radii(left_err_arcsec, n_left, work_device, "left_err")
+        if radius_left is None:
+            radius_left = torch.zeros(n_left, dtype=work_dtype, device=work_device)
+        radius_right = _error_radii(right_err_arcsec, n_right, work_device, "right_err")
+    else:
+        radius_left, _ = _normalize_radius_arcsec(radius_arcsec, n_left, work_device)  # type: ignore[arg-type]
+    accept = _distance_filter(
+        left_distance, right_distance, distance_tol, n_left, n_right, work_device
+    )
     if right_ra.numel() == 0 or left_ra.numel() == 0:
         return _empty_crossmatch(work_device)
 
+    advanced = has_err or accept is not None or find in ("best2", "symmetric")
+    if right_index is not None and advanced:
+        raise ValueError(
+            "right_index supports only the sky matcher with find='best' or 'all'"
+        )
     if right_index is None:
-        return cast(
-            CrossmatchResult,
-            _crossmatch_sky_strips(
-                left_ra,
-                left_dec,
-                right_ra,
-                right_dec,
-                radius_arcsec=radius_left,
-                left_chunk_size=left_chunk_size,
-                right_chunk_size=right_chunk_size,
-                find=find,
-            ),
+        return sky_pairs(
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
+            radius_left=radius_left,
+            radius_right=radius_right,
+            find=find,
+            accept=accept,
+            left_chunk_size=left_chunk_size,
+            right_chunk_size=right_chunk_size,
         )
     return cast(
         CrossmatchResult,
@@ -1075,7 +1274,7 @@ def crossmatch_sky(
             radius_arcsec=radius_left,
             left_chunk_size=left_chunk_size,
             right_chunk_size=right_chunk_size,
-            find=find,
+            find="best" if find == "best1" else find,
             right_index=right_index,
         ),
     )
