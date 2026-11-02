@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Sequence
+from typing import Any, Mapping
 
 from torch import Tensor
 
@@ -31,8 +32,13 @@ def validate_image_plane_2d(image: Tensor) -> Tensor:
     return image
 
 
+def image_shape_hw(shape: Sequence[int]) -> tuple[int, int]:
+    """Trailing ``(height, width)`` of an image shape."""
+    return int(shape[-2]), int(shape[-1])
+
+
 def target_shape_from_header(
-    header: Mapping[str, object],
+    header: Mapping[str, Any],
     *,
     fallback: tuple[int, int],
 ) -> tuple[int, int]:

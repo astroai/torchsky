@@ -1257,7 +1257,7 @@ def _build_ring_grouping(
     counts: dict[int, int] = {}
     for nph in lengths_list:
         counts[nph] = counts.get(nph, 0) + 1
-    common_len = max(counts, key=counts.get)
+    common_len = max(counts, key=lambda length: counts[length])
     common_rings = [i for i, nph in enumerate(lengths_list) if nph == common_len]
 
     common_block: tuple[int, int, int, int, int] | None = None
@@ -3587,14 +3587,13 @@ def _map2alm_spin_single_pass(
                     and p_plus.dtype == torch.complex128
                     and (not p_plus.requires_grad)
                 )
+                fused_pair: tuple[Tensor, Tensor] | None = None
                 if use_fused_cpp:
                     y_plus, y_minus = _ring_spin_basis_concat(
                         int(nside), int(lmax), int(mmax), int(spin_i)
                     )
-                    if y_plus.device.type != "cpu":
-                        use_fused_cpp = False
-                    else:
-                        c_plus, c_minus = _native_ops.spectral_spin_map2alm_ring_concat(
+                    if y_plus.device.type == "cpu":
+                        fused_pair = _native_ops.spectral_spin_map2alm_ring_concat(
                             p_plus.contiguous(),
                             starts_cpu.contiguous(),
                             lengths_cpu.contiguous(),
@@ -3605,7 +3604,7 @@ def _map2alm_spin_single_pass(
                             int(mmax),
                             float(pix_w),
                         )
-                if not use_fused_cpp:
+                if fused_pair is None:
                     s_plus, s_minus = _ring_fourier_modes_spin_conj(
                         p_plus,
                         starts_cpu=starts_cpu,
@@ -3629,6 +3628,8 @@ def _map2alm_spin_single_pass(
                         spin=int(spin_i),
                         pix_w=float(pix_w),
                     )
+                else:
+                    c_plus, c_minus = fused_pair
             else:
                 s_plus, s_minus = _ring_fourier_modes_spin_conj(
                     p_plus,

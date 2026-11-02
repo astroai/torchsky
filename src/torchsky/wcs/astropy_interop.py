@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+from torch import Tensor
 
 from .catalog_state import CatalogState
 from .frames import canonical_celestial_frame
@@ -72,6 +73,7 @@ def catalog_state_to_astropy(state: CatalogState) -> SkyCoord:
     )
     if icrs.epoch_format is None or icrs.epoch_scale is None:
         raise RuntimeError("catalog epoch metadata was not initialized")
+    assert isinstance(icrs.epoch, Tensor)  # normalised by CatalogState.__post_init__
     if icrs.epoch_scale == "gps":
         raise ValueError("Astropy Time does not define GPS as a time scale")
     kwargs: dict[str, object] = {

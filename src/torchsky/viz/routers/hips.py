@@ -11,10 +11,11 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, PlainTextResponse
+from torch import Tensor
 
 from ..renderers.hips_tile import (
     render_hips_tile,
@@ -24,6 +25,9 @@ from ..renderers.hips_tile import (
 )
 from ..renderers.image import zscale_limits
 from ._safe_path import resolve_under_root
+
+if TYPE_CHECKING:
+    from ...wcs import WCS
 
 router = APIRouter()
 
@@ -39,8 +43,8 @@ class SurveyInfo:
     vmax: Optional[float]
     image_shape: tuple[int, int]
     max_order: int
-    wcs: object  # torchsky.WCS
-    image: object  # cached Tensor (ref, not copied)
+    wcs: WCS
+    image: Tensor  # cached (ref, not copied)
 
 
 def _survey_id(

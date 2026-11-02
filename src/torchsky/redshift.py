@@ -13,7 +13,7 @@ Dimming conventions are named because they are not interchangeable:
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
 import torch
 from torch import Tensor
@@ -37,6 +37,10 @@ _V_KIND_MAP = {
 }
 
 
+@overload
+def require_one_plus_z(one_plus_z: Tensor) -> Tensor: ...
+@overload
+def require_one_plus_z(one_plus_z: float) -> float: ...
 def require_one_plus_z(one_plus_z: float | Tensor) -> float | Tensor:
     """Reject non-finite or non-positive ``(1+z)`` factors."""
     if isinstance(one_plus_z, Tensor):

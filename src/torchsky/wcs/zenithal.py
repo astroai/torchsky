@@ -401,7 +401,7 @@ def deproject_zenithal(
                 w = (90.0 - theta) * D2R
                 rev_c = torch.flip(coeffs, dims=(0,))
                 c0 = rev_c[0]
-                val = torch.full_like(w, c0)
+                val = torch.full_like(w, c0.item())
                 for c in rev_c[1:]:
                     val.mul_(w).add_(c)
                 r = val * R2D

@@ -267,16 +267,18 @@ def adaptive_reprojection_response(
         raise TypeError(
             "adaptive reprojection supports float32 and float64 response dtypes"
         )
-    source_shape = tuple(int(value) for value in source_shape)
-    target_shape = tuple(int(value) for value in target_shape)
+    source_dims = tuple(int(value) for value in source_shape)
+    target_dims = tuple(int(value) for value in target_shape)
     if (
-        len(source_shape) != 2
-        or len(target_shape) != 2
-        or any(value <= 0 for value in (*source_shape, *target_shape))
+        len(source_dims) != 2
+        or len(target_dims) != 2
+        or any(value <= 0 for value in (*source_dims, *target_dims))
     ):
         raise ValueError(
             "source_shape and target_shape must contain two positive dimensions"
         )
+    source_shape = (source_dims[0], source_dims[1])
+    target_shape = (target_dims[0], target_dims[1])
     resolved_device = torch.device(
         getattr(source_wcs, "device", "cpu") if device is None else device
     )

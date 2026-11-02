@@ -260,3 +260,17 @@ def test_catalog_from_arrow_roundtrip() -> None:
     torch.testing.assert_close(cat.lon, ra)
     torch.testing.assert_close(cat.lat, dec)
     torch.testing.assert_close(cat.columns["mag"], mag)
+
+
+def test_unified_crossmatch_streamed_dispatches_to_streamed_matcher() -> None:
+    from torchsky.catalogs import crossmatch
+
+    left_ra, left_dec = _random_ra_dec(100, seed=10)
+    right_ra, right_dec = _random_ra_dec(200, seed=20)
+    expected = crossmatch_sky(left_ra, left_dec, right_ra, right_dec, radius_arcsec=5.0)
+    batches = [(left_ra[:60], left_dec[:60]), (left_ra[60:], left_dec[60:])]
+    got = crossmatch(batches, (right_ra, right_dec), 5.0, streamed=True)
+    assert torch.equal(expected.left_index, got.left_index)
+    assert torch.equal(expected.right_index, got.right_index)
+    with pytest.raises(ValueError, match="find='best'"):
+        crossmatch(batches, (right_ra, right_dec), 5.0, streamed=True, find="all")

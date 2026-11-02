@@ -25,6 +25,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from .base import NoiseOp
+from .image_grid import image_shape_hw
 
 
 VAR_POISSON: Final[str] = "VAR_POISSON"
@@ -1630,7 +1631,7 @@ class StructuredDetectorNoise(nn.Module):
         safe_residual = torch.where(support, residual, torch.zeros_like(residual))
         safe_variance = torch.where(support, variance, torch.ones_like(variance))
         amp = (
-            self.default_amplifier_index(tuple(residual.shape), residual.device)
+            self.default_amplifier_index(image_shape_hw(residual.shape), residual.device)
             if amplifier_index is None
             else amplifier_index.to(device=residual.device)
         )
@@ -1693,7 +1694,7 @@ class StructuredDetectorNoise(nn.Module):
         safe_residual = torch.where(support, residual, torch.zeros_like(residual))
         safe_variance = torch.where(support, variance, torch.ones_like(variance))
         amp = (
-            self.default_amplifier_index(tuple(residual.shape), residual.device)
+            self.default_amplifier_index(image_shape_hw(residual.shape), residual.device)
             if amplifier_index is None
             else amplifier_index.to(device=residual.device)
         )

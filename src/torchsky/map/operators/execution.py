@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Callable, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 
 import torch
 from torch import Tensor
@@ -27,10 +27,19 @@ from .geometry_drizzle import exact_point_drizzle_project, exact_square_drizzle_
 from ..sky.corrector import CrossExposureSkyCorrector
 
 
-LoadWeightMapFn = Callable[[object, Tensor, torch.device], Tensor]
-ApplyCalibrationFn = Callable[[object, Tensor, Tensor], tuple[Tensor, Tensor]]
-ResampleToTargetFn = Callable[..., tuple[Tensor, Tensor]]
-ForwardProjectFn = Callable[..., tuple[Tensor, Tensor]]
+class LoadWeightMapFn(Protocol):
+    def __call__(self, obs: Any, image: Tensor, *, device: torch.device) -> Tensor: ...
+
+
+class ApplyCalibrationFn(Protocol):
+    def __call__(
+        self, obs: Any, image: Tensor, source_weight: Tensor, /
+    ) -> tuple[Tensor, Tensor]: ...
+
+
+_WeightedProjection = tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]
+ResampleToTargetFn = Callable[..., _WeightedProjection]
+ForwardProjectFn = Callable[..., _WeightedProjection]
 
 _MEDIAN_SCRATCH_BYTES_PER_SAMPLE = 5
 _MEDIAN_WORKING_MEMORY_BYTES = 64 * 1024 * 1024

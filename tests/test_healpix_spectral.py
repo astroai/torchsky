@@ -186,3 +186,21 @@ def test_sample_spin_alm_on_image_header_spectral_matches_spin_harmonic_bridge()
         lmax=lmax,
     )
     torch.testing.assert_close(direct, harmonic, atol=2e-2, rtol=5e-2)
+
+
+def test_resample_healpix_harmonic_method_matches_direct_sampler() -> None:
+    from torchsky.map import resample_healpix
+
+    nside = 8
+    lmax = 6
+    size = 16
+    hdr = _tan_header(size)
+    alm = torch.zeros(alm_size(lmax), dtype=torch.complex128)
+    alm[0] = 1.0 + 0.0j
+    alm[1] = 0.1 + 0.0j
+    hp_map = alm2map(alm, nside=nside, lmax=lmax).to(torch.float32)
+    direct = sample_healpix_map_on_image_header_harmonic(
+        hp_map, nside=nside, nest=False, target_header=hdr
+    )
+    result = resample_healpix(hp_map, hdr, method="harmonic")
+    torch.testing.assert_close(result.data, direct.to(torch.float32))

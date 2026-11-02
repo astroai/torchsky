@@ -201,18 +201,25 @@ class AxisSpec:
         object.__setattr__(self, "name", str(self.name))
         object.__setattr__(self, "unit", unit)
 
+    @property
+    def unit_spec(self) -> UnitSpec:
+        """The unit as a :class:`UnitSpec` (strings are normalised on construction)."""
+        unit = self.unit
+        assert isinstance(unit, UnitSpec)
+        return unit
+
     def compatible_with(self, other: AxisSpec, *, require_unit: bool = True) -> bool:
         if self.physical_type is not None and other.physical_type is not None:
             if self.physical_type != other.physical_type:
                 return False
-        if self.unit.dimension != other.unit.dimension:
+        if self.unit_spec.dimension != other.unit_spec.dimension:
             return False
         return not require_unit or self.unit == other.unit
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "unit": self.unit.to_dict(),
+            "unit": self.unit_spec.to_dict(),
             "physical_type": self.physical_type,
             "domain": None if self.domain is None else self.domain.to_dict(),
             "wrap": self.wrap,

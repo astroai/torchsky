@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import torch
 from torch import Tensor
@@ -156,7 +156,8 @@ class _IcrsWorldView:
             to_frame=self._wcs.celestial_frame,
             to_equinox=self._wcs.celestial_equinox,
         )
-        return self._wcs.world_to_pixel(lon, lat)
+        # The two-argument form on a 2D WCS returns the (x, y) pair.
+        return cast("tuple[Tensor, Tensor]", self._wcs.world_to_pixel(lon, lat))
 
 
 def _icrs_view(wcs: WCS) -> Any:
@@ -480,7 +481,7 @@ def resample_healpix(
     )
     if method == "harmonic":
         data_2d = sample_healpix_map_on_image_header_harmonic(
-            map_t, header_dict, nest=nest
+            map_t, nside=resolved_nside, nest=nest, target_header=header_dict
         ).to(device=map_device, dtype=torch.float32)
         w_2d = torch.isfinite(data_2d).to(dtype=torch.float32)
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)

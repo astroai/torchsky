@@ -161,7 +161,7 @@ class Catalog:
             parallax_mas=_move(self.parallax_mas),
             radial_velocity_km_s=_move(self.radial_velocity_km_s),
             valid=_move(self.valid),
-            columns={name: _move(col) for name, col in self.columns.items()},
+            columns={name: col.to(device=device_t) for name, col in self.columns.items()},
         )
 
     @property
@@ -190,6 +190,7 @@ class Catalog:
     def from_state(
         cls, state: CatalogState, *, columns: dict[str, Tensor] | None = None
     ) -> Catalog:
+        assert isinstance(state.epoch, Tensor)  # normalised by CatalogState.__post_init__
         return cls(
             lon=state.lon,
             lat=state.lat,

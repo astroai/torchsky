@@ -84,7 +84,7 @@ def _run_match(args: argparse.Namespace) -> int:
     return 0
 
 
-def register_sky_parsers(subparsers: argparse.Action) -> None:
+def register_sky_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = subparsers.add_parser(
         "sky",
         help="Sky background estimation and multi-exposure matching.",

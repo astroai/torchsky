@@ -106,13 +106,13 @@ class SIP:
 
     def _parse_coeffs(
         self, header: Dict[str, Any], prefix: str, order: int
-    ) -> Dict[str, float]:
+    ) -> Dict[tuple[int, int], float]:
         """
         Parse coefficients for a given prefix and order.
         Example: A_2_0, A_0_2, etc.
         Returns a dictionary {(p, q): value}
         """
-        coeffs = {}
+        coeffs: Dict[tuple[int, int], float] = {}
         for p in range(order + 1):
             for q in range(order + 1):
                 if p + q > order:
@@ -240,7 +240,7 @@ class SIP:
         if not grid:
             return torch.zeros_like(u)
         inplace = not (torch.is_grad_enabled() and (u.requires_grad or v.requires_grad))
-        out = None
+        out: Tensor | None = None
         for row in reversed(grid):
             inner = torch.full_like(v, row[-1])
             for c in reversed(row[:-1]):
@@ -256,6 +256,7 @@ class SIP:
                 out.mul_(u).add_(inner)
             else:
                 out = out * u + inner
+        assert out is not None  # grid is non-empty
         return out
 
     def _horner_grids(self) -> "dict[str, list[list[float]]]":

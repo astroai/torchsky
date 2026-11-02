@@ -139,10 +139,12 @@ def _interpolate_dense(
     for k in range(4):
         term = nodes_padded[:, iy[:, k], :] * wy[:, k].reshape(1, -1, 1)
         rows = term if rows is None else rows + term
+    assert rows is not None
     out = None
     for k in range(4):
         term = rows[:, :, ix[:, k]] * wx[:, k].reshape(1, 1, -1)
         out = term if out is None else out + term
+    assert out is not None
     return out
 
 

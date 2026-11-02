@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
@@ -18,7 +19,7 @@ def _resolve(root: Path, path: str) -> Path:
     return resolve_under_root(root, path)
 
 
-def _resolve_ra_dec_keys(data: object, ra_col: str, dec_col: str) -> tuple[str, str]:
+def _resolve_ra_dec_keys(data: Any, ra_col: str, dec_col: str) -> tuple[str, str]:
     """Pick RA/Dec column names using the same candidate lists as the viz UI."""
     ra_candidates = [ra_col, "RA", "ra", "Alpha", "ALPHA", "alpha", "RAJ2000"]
     dec_candidates = [dec_col, "DEC", "dec", "Delta", "DELTA", "delta", "DEJ2000"]

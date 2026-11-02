@@ -9,7 +9,7 @@ from .map_command import register_map_parser
 from .sky_command import register_sky_parsers
 
 
-def _register_viz_parser(subparsers: argparse.Action) -> None:
+def _register_viz_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = subparsers.add_parser(
         "viz",
         help="Start the torchsky web visualization server.",

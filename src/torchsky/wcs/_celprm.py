@@ -104,13 +104,13 @@ def native_to_celestial_matrix(
     return _matmul(rz0, _matmul(a, rz2))
 
 
-def _matmul(a, b):
+def _matmul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
     return [
         [sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)
     ]
 
 
-def transpose(m):
+def transpose(m: list[list[float]]) -> list[list[float]]:
     return [[m[j][i] for j in range(3)] for i in range(3)]
 
 

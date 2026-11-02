@@ -436,7 +436,11 @@ class AstrometricMatchGraph:
         )
         source_ids = torch.unique(all_ids, sorted=True)
         row_source = torch.cat(
-            [torch.searchsorted(source_ids, item.source_ids) for item in items]
+            [
+                torch.searchsorted(source_ids, ids)
+                for item in items
+                if (ids := item.source_ids) is not None  # all present (checked above)
+            ]
         )
         row_exposure = torch.cat(
             [

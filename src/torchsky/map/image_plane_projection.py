@@ -36,6 +36,7 @@ from .operators.execution import (
 from .operators.geometry import ForwardSplatGeometryOp
 from .operators.image_grid import (
     headers_equivalent_for_direct_copy,
+    image_shape_hw,
     validate_image_plane_2d,
 )
 from .operators.pixel_area import (
@@ -503,7 +504,7 @@ def _resample_weighted_to_target(
     elif value_semantics == "flux":
         source_area_sr = pixel_area_sr_map(
             source_wcs,
-            tuple(image.shape),
+            image_shape_hw(image.shape),
             device=image.device,
         )
         weighted_image = image * source_weight * source_area_sr
@@ -512,7 +513,7 @@ def _resample_weighted_to_target(
     elif target_representative_area_sr is not None:
         source_area_sr = representative_pixel_area_sr(
             source_wcs,
-            tuple(image.shape),
+            image_shape_hw(image.shape),
             device=image.device,
         )
         info_density = source_weight / max(source_area_sr, 1e-20)
@@ -618,15 +619,19 @@ def _resample_weighted_to_target(
                 "fft_diagonal_affine could not infer a separable diagonal affine pixel map "
                 "between source and target WCS"
             ) from exc
-        aff_kw = {
-            "scale_x_pix": float(d_sx),
-            "shift_x_pix": float(d_bx),
-            "scale_y_pix": float(d_sy),
-            "shift_y_pix": float(d_by),
-        }
-        sampled_numer = resample_diagonal_affine_fft2d(weighted_image, **aff_kw)
-        sampled_weight = resample_diagonal_affine_fft2d(weighted_weight, **aff_kw)
-        sampled_support = resample_diagonal_affine_fft2d(periodic_support, **aff_kw)
+
+        def _diagonal_affine(plane: Tensor) -> Tensor:
+            return resample_diagonal_affine_fft2d(
+                plane,
+                scale_x_pix=float(d_sx),
+                shift_x_pix=float(d_bx),
+                scale_y_pix=float(d_sy),
+                shift_y_pix=float(d_by),
+            )
+
+        sampled_numer = _diagonal_affine(weighted_image)
+        sampled_weight = _diagonal_affine(weighted_weight)
+        sampled_support = _diagonal_affine(periodic_support)
         sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
@@ -935,6 +940,7 @@ def _resample_weighted_to_target(
         if _requires_roundtrip_validity_check(source_wcs) and valid_mask is not None:
             in_bounds = in_bounds & valid_mask
         elif _requires_roundtrip_validity_check(source_wcs):
+            assert flat_ra is not None and flat_dec is not None  # needed for the round trip
             in_bounds = in_bounds & _roundtrip_validity_mask(
                 source_wcs,
                 x_src=x_src,
@@ -1057,6 +1063,7 @@ def _resample_weighted_to_target(
         value_semantics=value_semantics,
     ):
         if target.ra_deg is not None:
+            assert target.dec_deg is not None  # stored together with ra_deg
             return _sample_on_world_grid(target.ra_deg, target.dec_deg)
         h_tgt, w_tgt = int(target.shape[0]), int(target.shape[1])
         if not _requires_roundtrip_validity_check(source_wcs):
@@ -1117,7 +1124,7 @@ def _resample_weighted_to_target(
         x_src_b, y_src_b, valid = _interpolated_source_pixels(
             source_wcs,
             target.wcs,
-            tuple(target.shape),
+            image_shape_hw(target.shape),
             (h_src, w_src),
             device=image.device,
             offsets=tuple((ox, oy) for oy in (-half, half) for ox in (-half, half)),
@@ -1246,7 +1253,7 @@ def _forward_project_weighted_to_target(
     if value_semantics == "flux":
         source_area_sr = pixel_area_sr_map(
             source_wcs,
-            tuple(image.shape),
+            image_shape_hw(image.shape),
             device=image.device,
         )
         weighted_image = image * source_weight * source_area_sr
@@ -1255,7 +1262,7 @@ def _forward_project_weighted_to_target(
     elif target.representative_pixel_area_sr is not None:
         source_area_sr = representative_pixel_area_sr(
             source_wcs,
-            tuple(image.shape),
+            image_shape_hw(image.shape),
             device=image.device,
         )
         info_density = source_weight / max(source_area_sr, 1e-20)
@@ -1551,9 +1558,10 @@ def _project_observation_to_target_chunk(
     else:
         if prepared_target is None:
             raise RuntimeError("prepared_target is required for reprojection")
+        assert source_wcs is not None  # built above whenever direct_copy is False
         prepared_target_view, target_window = _window_large_tan_target(
             source_wcs=source_wcs,
-            source_shape=tuple(image.shape),
+            source_shape=image_shape_hw(image.shape),
             target=prepared_target,
             value_semantics=value_semantics,
             resampling_kernel=resampling_kernel,

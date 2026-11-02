@@ -513,3 +513,37 @@ def test_soft_bounds_have_unit_gradient_at_zero_and_nonzero_far_out():
     assert x.grad[0] == 1.0 and x.grad[1] == 1.0
     assert (x.grad[2:] > 0).all()
     assert y.abs().max() < 20.0
+
+
+def test_astrometric_shifts_call_current_dcr_and_ephemeris_api():
+    """DCR and moving-target shifts must call the live ``wcs.iau2006`` signatures."""
+    from torchsky.map.image_plane_coadd import _apply_observation_astrometric_shifts
+
+    n = 8
+    hdr = _hdr(n, crpix=4.5, cdelt=1.0e-4)
+    base = ImageObservation(data=torch.ones(n, n, dtype=torch.float64), header=hdr)
+    plain = _apply_observation_astrometric_shifts([base], "cpu")[0]
+    assert plain.header["CRVAL1"] == pytest.approx(150.0)
+
+    dcr = ImageObservation(
+        data=torch.ones(n, n, dtype=torch.float64),
+        header=dict(hdr),
+        wavelength=4000.0,
+        dcr_zenith_deg=45.0,
+        dcr_parallactic_deg=30.0,
+    )
+    shifted = _apply_observation_astrometric_shifts([dcr], "cpu")[0]
+    moved = (shifted.header["CRVAL1"] - 150.0, shifted.header["CRVAL2"] - 2.0)
+    assert moved != (0.0, 0.0)
+
+    moving = ImageObservation(
+        data=torch.ones(n, n, dtype=torch.float64),
+        header=dict(hdr),
+        tracking_rate=(36.0, 0.0),
+        mjd_obs=60000.5,
+        reference_mjd=60000.0,
+    )
+    shifted = _apply_observation_astrometric_shifts([moving], "cpu")[0]
+    # Comoving frame subtracts 36 arcsec/hr * 12 hr = 0.12 deg of motion in RA*cos(dec).
+    expected = 150.0 - 0.12 / math.cos(math.radians(2.0))
+    assert shifted.header["CRVAL1"] == pytest.approx(expected, abs=1e-9)

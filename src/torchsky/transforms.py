@@ -316,7 +316,7 @@ class RandomRotation:
             batched = batched.unsqueeze(0).unsqueeze(0)
         grid = torch.nn.functional.affine_grid(
             rotation.expand(batched.size(0), -1, -1),
-            batched.size(),
+            list(batched.size()),
             align_corners=False,
         )
         rotated = torch.nn.functional.grid_sample(

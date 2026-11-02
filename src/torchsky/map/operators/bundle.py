@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
-from typing import Iterable
+from typing import Iterable, TypeVar
 
 from ..provenance import PlanFingerprint, plan_fingerprint
 
@@ -170,7 +170,10 @@ def spherical_spectral_operator_bundle(
     )
 
 
-def _merge_operator_slot(values: Iterable[object | None]) -> object | None:
+_SlotT = TypeVar("_SlotT")
+
+
+def _merge_operator_slot(values: Iterable[_SlotT | None]) -> _SlotT | None:
     selected = None
     for value in values:
         if value is None:

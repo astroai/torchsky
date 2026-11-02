@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 
 MapResamplingKernel = Literal[
@@ -88,21 +88,21 @@ def validate_map_resampling_kernel(resampling_kernel: str) -> MapResamplingKerne
     """Validate and return a map resampling kernel name."""
     if resampling_kernel not in MAP_RESAMPLING_KERNELS:
         raise ValueError(f"resampling_kernel must be one of {MAP_RESAMPLING_KERNELS}")
-    return resampling_kernel
+    return cast(MapResamplingKernel, resampling_kernel)  # membership checked above
 
 
 def validate_map_value_semantics(value_semantics: str) -> MapValueSemantics:
     """Validate and return a map value-semantics mode."""
     if value_semantics not in MAP_VALUE_SEMANTICS:
         raise ValueError(f"value_semantics must be one of {MAP_VALUE_SEMANTICS}")
-    return value_semantics
+    return cast(MapValueSemantics, value_semantics)  # membership checked above
 
 
 def validate_map_stacking_method(stacking_method: str) -> MapStackingMethod:
     """Validate and return a map stacking method."""
     if stacking_method not in MAP_STACKING_METHODS:
         raise ValueError(f"stacking_method must be one of {MAP_STACKING_METHODS}")
-    return stacking_method
+    return cast(MapStackingMethod, stacking_method)  # membership checked above
 
 
 __all__ = [

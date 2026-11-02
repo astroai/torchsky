@@ -126,8 +126,10 @@ def _observation_spectral_columns(
     )
 
 
-def _validated_spectral_bin_edges(edges: Tensor, *, n_band: int) -> Tensor:
-    values = edges.to(dtype=torch.float64)
+def _validated_spectral_bin_edges(
+    edges: Sequence[float] | Tensor, *, n_band: int
+) -> Tensor:
+    values = torch.as_tensor(edges).to(dtype=torch.float64)
     if values.ndim != 1 or values.numel() != n_band + 1:
         raise ValueError("spectral_bin_edges must have length n_band + 1")
     if not bool(torch.isfinite(values).all()):

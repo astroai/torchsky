@@ -20,6 +20,12 @@ from ._graph import _UnionFind
 MissingColorPolicy = Literal["error", "zero", "drop"]
 
 
+def _normalized(value: Tensor | float | None) -> Tensor:
+    # ``PhotometricMeasurementBlock.__post_init__`` replaces optional fields with tensors.
+    assert isinstance(value, Tensor)
+    return value
+
+
 def _finite(value: Tensor, name: str) -> None:
     if not bool(torch.isfinite(value).all().detach().cpu().item()):
         raise ValueError(f"{name} must contain only finite values")
@@ -411,7 +417,7 @@ class CoupledCalibrationGraph:
             stop = start + block.count
             block_slices.append(slice(start, stop))
             start = stop
-            max_star_flat = max(max_star_flat, int(block.star_flat_basis.shape[1]))
+            max_star_flat = max(max_star_flat, int(_normalized(block.star_flat_basis).shape[1]))
         if sed_basis is None:
             basis = torch.eye(len(bands), dtype=dtype, device=device)
         else:
@@ -442,15 +448,15 @@ class CoupledCalibrationGraph:
         self.max_star_flat = max_star_flat
         self.flux = torch.cat([block.flux for block in blocks])
         self.log_flux = torch.log(self.flux)
-        self.weights = torch.cat([block.weights for block in blocks])
-        self.base_fit_mask = torch.cat([block.fit_mask for block in blocks])
-        self.extinction_basis = torch.cat([block.extinction_basis for block in blocks])
-        self.cloud_basis = torch.cat([block.cloud_basis for block in blocks])
+        self.weights = torch.cat([_normalized(block.weights) for block in blocks])
+        self.base_fit_mask = torch.cat([_normalized(block.fit_mask) for block in blocks])
+        self.extinction_basis = torch.cat([_normalized(block.extinction_basis) for block in blocks])
+        self.cloud_basis = torch.cat([_normalized(block.cloud_basis) for block in blocks])
         star_flat_rows = []
         for block in blocks:
-            padding = max_star_flat - int(block.star_flat_basis.shape[1])
+            padding = max_star_flat - int(_normalized(block.star_flat_basis).shape[1])
             star_flat_rows.append(
-                torch.nn.functional.pad(block.star_flat_basis, (0, padding))
+                torch.nn.functional.pad(_normalized(block.star_flat_basis), (0, padding))
             )
         self.star_flat_basis = torch.cat(star_flat_rows)
         self.log_covariance = tuple(
@@ -936,14 +942,16 @@ class _PhotometrySolver:
             atol=0.0,
             projection=lambda value: value * active,
         )
-        if result.diagnostics is None or result.diagnostics.breakdown is not None:
-            message = (
-                "missing diagnostics"
-                if result.diagnostics is None
-                else result.diagnostics.breakdown.message
+        diagnostics = result.diagnostics
+        if diagnostics is None:
+            raise RuntimeError(
+                "photometric calibration solve failed: missing diagnostics"
             )
-            raise RuntimeError(f"photometric calibration solve failed: {message}")
-        return result.solution * active, result.diagnostics.iterations
+        if diagnostics.breakdown is not None:
+            raise RuntimeError(
+                f"photometric calibration solve failed: {diagnostics.breakdown.message}"
+            )
+        return result.solution * active, diagnostics.iterations
 
     def _solve_source(
         self,
@@ -1363,6 +1371,7 @@ class _CoupledSolver:
                 photometric_step = math.inf
                 color_step = math.inf
             else:
+                assert previous_colors is not None  # assigned together with previous_global
                 photometric_step = float(
                     (
                         torch.linalg.vector_norm(current_global - previous_global)

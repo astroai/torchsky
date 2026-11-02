@@ -96,7 +96,7 @@ def _fits_info_sync(request: Request, path: str, hdu: int) -> JSONResponse:
                     "name": getattr(h, "name", f"HDU{i}"),
                     "type": type(h).__name__,
                 }
-                for i, h in enumerate(hdul)
+                for i, h in ((i, hdul[i]) for i in range(len(hdul)))
             ]
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found")

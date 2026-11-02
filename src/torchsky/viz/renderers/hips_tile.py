@@ -94,6 +94,7 @@ def _tile_lon_lat(
     start = pix * (tile_size * tile_size)
     sub_pix = torch.arange(start, start + tile_size * tile_size, dtype=torch.int64)
 
+    assert _healpix is not None  # bound by _lazy_import()
     lon, lat = _healpix.pix2ang(nside_sub, sub_pix, nest=True, lonlat=True)
     lon = lon.reshape(tile_size, tile_size)
     lat = lat.reshape(tile_size, tile_size)
@@ -109,7 +110,7 @@ def _world_to_sample_grid(
     wcs,
     image_h: int,
     image_w: int,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     """
     Project (lon, lat) → normalized grid sample coordinates [-1, 1].
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from typing import Protocol
+from typing import Protocol, cast
 
 import torch
 from torch import Tensor
@@ -245,7 +245,7 @@ class CrossExposureSkyCorrector:
     def fit_offsets(
         self,
         images: list[Tensor],
-        masks: list[Tensor | None] | None = None,
+        masks: Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         """Return overlap-derived additive offsets relative to observation zero."""
         if not images:
@@ -272,7 +272,7 @@ class CrossExposureSkyCorrector:
     def fit_planes(
         self,
         images: list[Tensor],
-        masks: list[Tensor | None] | None = None,
+        masks: Sequence[Tensor | None] | None = None,
     ) -> Tensor:
         """Return (N, 3) Chebyshev order-1 plane coefficients [c0, cx, cy] relative to obs 0."""
         if not images:
@@ -341,12 +341,12 @@ class CrossExposureSkyCorrector:
         render_window = getattr(model, "render_window", None)
         if not callable(render_window):
             raise ValueError("compact overlap model must render bounded windows")
-        return model
+        return cast(_CompactDifferenceModel, model)  # render_window verified above
 
     def correct(
         self,
         images: list[Tensor],
-        masks: list[Tensor | None] | None = None,
+        masks: Sequence[Tensor | None] | None = None,
     ) -> list[Tensor]:
         """Subtract smooth overlap-difference corrections from all exposures."""
         if not images:
@@ -391,7 +391,7 @@ class CrossExposureSkyCorrector:
     def fit_corrections(
         self,
         images: list[Tensor],
-        masks: list[Tensor | None] | None = None,
+        masks: Sequence[Tensor | None] | None = None,
     ) -> list[Tensor]:
         """Return additive 2D sky correction maps for each exposure."""
         if not images:

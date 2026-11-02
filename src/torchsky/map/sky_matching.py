@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import torch
 import torch.nn.functional as F
@@ -61,6 +61,50 @@ def _load_existing_observation_valid_mask(
     if mask.dtype == torch.bool:
         return mask.to(device=device, dtype=torch.bool)
     return mask.to(device=device, dtype=torch.float32) > 0.0
+
+
+@overload
+def detect_outliers(
+    observations: Sequence[Observation],
+    coadd_result: MapResult | None = None,
+    *,
+    config: OutlierConfig | None = None,
+    snr_primary: float | None = None,
+    snr_neighbor: float | None = None,
+    scale_primary: float | None = None,
+    scale_neighbor: float | None = None,
+    min_floor: float | None = None,
+    grow: int | None = None,
+    kernel: Literal[
+        "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
+    ]
+    | None = None,
+    update_masks: bool = True,
+    return_logs: Literal[False] = False,
+    device: torch.device | str | None = None,
+) -> tuple[list[Tensor], list[Observation]]: ...
+
+
+@overload
+def detect_outliers(
+    observations: Sequence[Observation],
+    coadd_result: MapResult | None = None,
+    *,
+    config: OutlierConfig | None = None,
+    snr_primary: float | None = None,
+    snr_neighbor: float | None = None,
+    scale_primary: float | None = None,
+    scale_neighbor: float | None = None,
+    min_floor: float | None = None,
+    grow: int | None = None,
+    kernel: Literal[
+        "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
+    ]
+    | None = None,
+    update_masks: bool = True,
+    return_logs: Literal[True],
+    device: torch.device | str | None = None,
+) -> tuple[list[Tensor], list[Observation], tuple[dict[str, int], ...]]: ...
 
 
 def detect_outliers(

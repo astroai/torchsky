@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor
+from types import EllipsisType
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Dict,
+    cast,
     Mapping,
     Optional,
     Sequence,
@@ -202,19 +204,29 @@ class DistortionLookupTable:
     ) -> "DistortionLookupTable":
         if component_axis not in (0, 1):
             raise ValueError("component_axis must be 0 or 1")
-        rebased_crval = tuple(
-            1.0 + (self.crval[axis] - 1.0 - starts[axis]) / steps[axis]
-            for axis in range(2)
+        rebased_crval = (
+            1.0 + (self.crval[0] - 1.0 - starts[0]) / steps[0],
+            1.0 + (self.crval[1] - 1.0 - starts[1]) / steps[1],
         )
-        rebased_cdelt = tuple(
-            self.cdelt[axis] / steps[axis] for axis in range(2)
-        )
+        rebased_cdelt = (self.cdelt[0] / steps[0], self.cdelt[1] / steps[1])
         return DistortionLookupTable(
             self.data / steps[component_axis],
             self.crpix,
             rebased_crval,
             rebased_cdelt,
         )
+
+
+def _bound_cpp(fn: Callable[..., Any] | None) -> Callable[..., Any]:
+    # Direct-dispatch kinds are only selected when the matching binding exists.
+    assert fn is not None
+    return fn
+
+
+def _require_distortion_lookup_table(table: Any) -> DistortionLookupTable:
+    coerced = _coerce_distortion_lookup_table(table)
+    assert coerced is not None  # ``table`` is not None
+    return coerced
 
 
 def _coerce_distortion_lookup_table(
@@ -289,9 +301,9 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             header: FITS header dictionary (or similar object behaving like dict)
             **kwargs: Manual override for WCS keywords (CRVAL, CRPIX, CD, etc.)
         """
-        self.wcs_params = {}
-        self.sip = None
-        self.tpv = None
+        self.wcs_params: dict[str, Any] = {}
+        self.sip: SIP | None = None
+        self.tpv: TPV | None = None
         self.cpdis1: DistortionLookupTable | None = _coerce_distortion_lookup_table(cpdis1)
         self.cpdis2: DistortionLookupTable | None = _coerce_distortion_lookup_table(cpdis2)
         self.det2im1: DistortionLookupTable | None = _coerce_distortion_lookup_table(det2im1)
@@ -925,6 +937,11 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         if tabular is None:
             return self._apply_spectral_algorithm_world_to_pixel(world, axis)
         return tabular.world_to_pixel(world)
+
+    def _require_tpv(self) -> TPV:
+        tpv = self.tpv
+        assert tpv is not None  # callers check ``_is_tpv`` first
+        return tpv
 
     def _wcs_coord_dtype(self, device: torch.device) -> torch.dtype:
         # MPS has no float64; CPU/CUDA keep the WCS compute dtype.
@@ -1664,22 +1681,22 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         self._fused_proj_code = "TAN" if self._is_tpv else self._proj_code
         self._fused_pv2_1 = self._projection_params.get("PV2_1", 1.0)
         self._fused_tpv_idx1 = (
-            self.tpv.idx1
+            self._require_tpv().idx1
             if self._is_tpv
             else torch.empty((0, 3), dtype=torch.long, device="cpu")
         )
         self._fused_tpv_c1 = (
-            self.tpv.c1
+            self._require_tpv().c1
             if self._is_tpv
             else torch.empty(0, dtype=torch.float64, device="cpu")
         )
         self._fused_tpv_idx2 = (
-            self.tpv.idx2
+            self._require_tpv().idx2
             if self._is_tpv
             else torch.empty((0, 3), dtype=torch.long, device="cpu")
         )
         self._fused_tpv_c2 = (
-            self.tpv.c2
+            self._require_tpv().c2
             if self._is_tpv
             else torch.empty(0, dtype=torch.float64, device="cpu")
         )
@@ -1808,22 +1825,22 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             and abs((self._phi_p_native % 360.0)) < 1e-12
             and self._celestial_postrot is None
         )
-        self._cpp_zenithal_project = None
-        self._cpp_zpn_project = None
-        self._cpp_zenithal_deproject = None
-        self._cpp_cylindrical_project = None
-        self._cpp_cylindrical_deproject = None
-        self._cpp_center_pixel_to_world = None
-        self._cpp_center_world_to_pixel = None
-        self._cpp_ait_project = None
-        self._cpp_ait_deproject = None
-        self._cpp_mol_project = None
-        self._cpp_mol_deproject = None
-        self._cpp_hpx_project = None
-        self._cpp_hpx_deproject = None
-        self._cpp_inverse_spherical_rotation_pole = None
-        self._cpp_spherical_rotation_pole = None
-        self._cpp_tan_intermediate_from_radec = None
+        self._cpp_zenithal_project: Callable[..., Any] | None = None
+        self._cpp_zpn_project: Callable[..., Any] | None = None
+        self._cpp_zenithal_deproject: Callable[..., Any] | None = None
+        self._cpp_cylindrical_project: Callable[..., Any] | None = None
+        self._cpp_cylindrical_deproject: Callable[..., Any] | None = None
+        self._cpp_center_pixel_to_world: Callable[..., Any] | None = None
+        self._cpp_center_world_to_pixel: Callable[..., Any] | None = None
+        self._cpp_ait_project: Callable[..., Any] | None = None
+        self._cpp_ait_deproject: Callable[..., Any] | None = None
+        self._cpp_mol_project: Callable[..., Any] | None = None
+        self._cpp_mol_deproject: Callable[..., Any] | None = None
+        self._cpp_hpx_project: Callable[..., Any] | None = None
+        self._cpp_hpx_deproject: Callable[..., Any] | None = None
+        self._cpp_inverse_spherical_rotation_pole: Callable[..., Any] | None = None
+        self._cpp_spherical_rotation_pole: Callable[..., Any] | None = None
+        self._cpp_tan_intermediate_from_radec: Callable[..., Any] | None = None
         self._cpp_direct_static_ok = (
             self._celestial_postrot is None
             and self.sip is None
@@ -1929,7 +1946,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             and not self._is_gls
             and not self._has_paper4_lut()
             and not self._is_sin_slant
-            and (not self._is_tpv or not self.tpv._invert_trace_enabled)
+            and (not self._is_tpv or not self._require_tpv()._invert_trace_enabled)
             and (
                 self._proj_code
                 in (
@@ -1965,7 +1982,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
     def _setup_projection_dispatch(self) -> None:
         """Bind pixel->world projection dispatch once per WCS instance."""
         if self._is_zpx:
-            self._project_native_fn = None
+            self._project_native_fn: Callable[..., Tuple[Tensor, Tensor]] | None = None
             self._project_native_kind = "zpx"
             self._project_native_type = "pole"
             return
@@ -2210,15 +2227,15 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
     ) -> Tuple[Tensor, Tensor]:
         """Direct C++ projection dispatch used by pixel->world fast path."""
         if cpp_kind == "ait":
-            return self._cpp_ait_project(xi, eta)
+            return _bound_cpp(self._cpp_ait_project)(xi, eta)
         if cpp_kind == "mol":
-            return self._cpp_mol_project(xi, eta)
+            return _bound_cpp(self._cpp_mol_project)(xi, eta)
         if cpp_kind == "hpx":
-            return self._cpp_hpx_project(xi, eta, self._hpx_h, self._hpx_k)
+            return _bound_cpp(self._cpp_hpx_project)(xi, eta, self._hpx_h, self._hpx_k)
         if cpp_kind == "zenithal":
-            return self._cpp_zenithal_project(xi, eta, self._proj_code)
+            return _bound_cpp(self._cpp_zenithal_project)(xi, eta, self._proj_code)
         if cpp_kind == "zpn":
-            return self._cpp_zpn_project(xi, eta, self._zpn_coeffs_cpu)
+            return _bound_cpp(self._cpp_zpn_project)(xi, eta, self._zpn_coeffs_cpu)
         raise RuntimeError("unsupported_cpp_direct_projection")
 
     def _cpp_deproject_direct_w2p(
@@ -2226,11 +2243,11 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
     ) -> Tuple[Tensor, Tensor]:
         """Direct C++ deprojection dispatch used by world->pixel fast path."""
         if cpp_kind == "ait":
-            return self._cpp_ait_deproject(phi_w, theta)
+            return _bound_cpp(self._cpp_ait_deproject)(phi_w, theta)
         if cpp_kind == "hpx":
-            return self._cpp_hpx_deproject(phi_w, theta, self._hpx_h, self._hpx_k)
+            return _bound_cpp(self._cpp_hpx_deproject)(phi_w, theta, self._hpx_h, self._hpx_k)
         if cpp_kind == "zenithal":
-            return self._cpp_zenithal_deproject(phi_w, theta, self._proj_code)
+            return _bound_cpp(self._cpp_zenithal_deproject)(phi_w, theta, self._proj_code)
         raise RuntimeError("unsupported_cpp_direct_projection")
 
     def _local_uvw_from_radec(
@@ -2303,14 +2320,16 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
         # 3. TPV / Special distortions
         zpx_native = False
+        # Every projection branch below rebinds phi/theta; this keeps them bound for the checker.
+        phi, theta = xi, eta
         if self._is_tpv:
             if self._tpv_uses_pixel_intermediate:
                 lon_scale = self.cdelt[self._celestial_lon_axis]
                 lat_scale = self.cdelt[self._celestial_lat_axis]
-                xi, eta = self.tpv.distort(xi / lon_scale, eta / lat_scale)
+                xi, eta = self._require_tpv().distort(xi / lon_scale, eta / lat_scale)
                 xi, eta = xi * lon_scale, eta * lat_scale
             else:
-                xi, eta = self.tpv.distort(xi, eta)
+                xi, eta = self._require_tpv().distort(xi, eta)
         elif self._is_tnx:
             xi, eta = project_tnx(
                 xi, eta, self._projection_params, self.wat_data
@@ -2475,7 +2494,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         return ra, dec
 
     def _pixel_to_world_2d_fast(
-        self, x: Tensor, y: Tensor, origin: int = 0
+        self, x: Tensor, y: Tensor, origin: float = 0
     ) -> Tuple[Tensor, Tensor]:
         """Fast path for common 2D separate-argument pixel->world calls."""
         if x.shape != y.shape:
@@ -2494,7 +2513,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         if finite_center_input and self._use_cpp_center_pixel_to_world_small_n(
             x, y, device_ok=device_ok, dtype_ok=dtype_ok
         ):
-            return self._cpp_center_pixel_to_world(
+            return _bound_cpp(self._cpp_center_pixel_to_world)(
                 x,
                 y,
                 float(origin),
@@ -2542,6 +2561,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             rel_x = x + (1.0 - origin) - self._crpix0
             rel_y = y + (1.0 - origin) - self._crpix1
             xi, eta = self._apply_cd_2d(rel_x, rel_y)
+            phi, theta = xi, eta  # rebound by the direct projection below
             if self._cpp_direct_p2w_verified:
                 phi, theta = self._cpp_project_direct_p2w(xi, eta, cpp_kind)
             else:
@@ -2859,10 +2879,10 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             lat_scale = self.cdelt[self._celestial_lat_axis]
             if self._tpv_uses_pixel_intermediate:
                 xi, eta = xi / lon_scale, eta / lat_scale
-            if self.tpv._affine_only:
-                xi, eta = self.tpv.invert_affine_exact(xi, eta)
+            if self._require_tpv()._affine_only:
+                xi, eta = self._require_tpv().invert_affine_exact(xi, eta)
             else:
-                xi, eta = self.tpv.invert(xi, eta)
+                xi, eta = self._require_tpv().invert(xi, eta)
             if self._tpv_uses_pixel_intermediate:
                 xi, eta = xi * lon_scale, eta * lat_scale
         if self._is_tnx:
@@ -2888,7 +2908,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         return torch.stack((px, py), dim=-1)
 
     def _world_to_pixel_2d_fast(
-        self, ra: Tensor, dec: Tensor, iterative: bool = True, origin: int = 0
+        self, ra: Tensor, dec: Tensor, iterative: bool = True, origin: float = 0
     ) -> Tuple[Tensor, Tensor]:
         """Fast path for common 2D separate-argument world->pixel calls."""
         if ra.shape != dec.shape:
@@ -2936,7 +2956,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         ):
             # Gated by _use_cpp_center_world_to_pixel_small_n (binding present,
             # supported projection, CPU float64, no autograd); errors propagate.
-            return self._cpp_center_world_to_pixel(
+            return _bound_cpp(self._cpp_center_world_to_pixel)(
                 ra,
                 dec,
                 self._crpix0,
@@ -3016,7 +3036,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 (not ra.requires_grad and not dec.requires_grad)
                 or (self._enable_cpp_dispatcher and _ops.has_wcs_dispatcher())
             )
-            and (not self._is_tpv or not self.tpv._invert_trace_enabled)
+            and (not self._is_tpv or not self._require_tpv()._invert_trace_enabled)
         )
         if use_fused:
             ra_flat = ra.reshape(-1)
@@ -3104,7 +3124,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         Args:
             **kwargs: Arguments passed to torch.compile (e.g., mode, options).
         """
-        compile_kwargs = {"mode": "reduce-overhead"}
+        compile_kwargs: dict[str, Any] = {"mode": "reduce-overhead"}
         compile_kwargs.update(kwargs)
         transform_core = self._transform_optimized
         pixel_core = self._pixel_to_world_2d_core
@@ -3187,7 +3207,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 setattr(
                     self,
                     lut_attr,
-                    _coerce_distortion_lookup_table(lut_obj).to(self.device),
+                    _require_distortion_lookup_table(lut_obj).to(self.device),
                 )
         tabular_dtype = torch.float32 if self.device.type == "mps" else torch.float64
         self.tabular_axes = {
@@ -3199,6 +3219,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 device=self.device, dtype=tabular_dtype
             )
         if self._pixel_affine_matrix is not None:
+            assert self._pixel_affine_offset is not None
             self._set_pixel_affine(self._pixel_affine_matrix, self._pixel_affine_offset)
         return self
 
@@ -4254,7 +4275,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
     def slice(
         self,
-        view: "slice | int | tuple[slice | int | type(Ellipsis), ...]",
+        view: "slice | int | tuple[slice | int | EllipsisType, ...]",
         *,
         numpy_order: bool = True,
     ) -> "WCS":
@@ -4266,8 +4287,9 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         fix one pixel coordinate and drop the corresponding uncoupled WCS axis.
         """
         pixel_items = self._normalize_wcs_slice(view, numpy_order=numpy_order)
-        if all(isinstance(item, slice) for item in pixel_items):
-            return self._slice_preserve_axes(pixel_items)
+        only_slices = tuple(item for item in pixel_items if isinstance(item, slice))
+        if len(only_slices) == len(pixel_items):
+            return self._slice_preserve_axes(only_slices)
 
         fixed_axes: list[int] = []
         slice_items: list[slice] = []
@@ -4680,14 +4702,14 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
     def _normalize_wcs_slice(
         self,
-        view: "slice | int | tuple[slice | int | type(Ellipsis), ...]",
+        view: "slice | int | tuple[slice | int | EllipsisType, ...]",
         *,
         numpy_order: bool,
     ) -> "tuple[slice | int, ...]":
         if isinstance(view, (slice, int)) and not isinstance(view, bool):
-            items: tuple[slice | int | type(Ellipsis), ...] = (view,)
+            items: tuple[slice | int | EllipsisType, ...] = (view,)
         else:
-            items = tuple(view)
+            items = tuple(cast("tuple[slice | int | EllipsisType, ...]", view))
         if items.count(Ellipsis) > 1:
             raise ValueError("slice view may contain at most one ellipsis")
         if Ellipsis in items:
@@ -4708,7 +4730,8 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         ):
             raise TypeError("WCS.slice items must be slices, integers, or ellipsis")
         pixel_items = tuple(reversed(items)) if numpy_order else items
-        return tuple(pixel_items)
+        # Ellipsis entries were expanded above, so only slices and ints remain.
+        return cast("tuple[slice | int, ...]", tuple(pixel_items))
 
     @staticmethod
     def _normalize_axis_slice(
@@ -4812,7 +4835,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         self,
         keep_axes: list[int],
         *,
-        fixed_rel_by_axis: dict[int, Tensor] | None = None,
+        fixed_rel_by_axis: dict[int, Tensor | float] | None = None,
     ) -> "WCS":
         if len(keep_axes) == 0:
             raise ValueError("at least one WCS axis must be kept")
@@ -4868,10 +4891,10 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                     + self.crpix[fixed_axis]
                     - 1.0
                 )
-            world_ref = self.pixel_to_world(ref.unsqueeze(0), origin=0)
-            if isinstance(world_ref, tuple):
-                world_ref = torch.stack(world_ref, dim=-1)
-            world_ref = world_ref.reshape(-1, self.naxis)[0]
+            world_ref_raw = self.pixel_to_world(ref.unsqueeze(0), origin=0)
+            if isinstance(world_ref_raw, tuple):
+                world_ref_raw = torch.stack(world_ref_raw, dim=-1)
+            world_ref = world_ref_raw.reshape(-1, self.naxis)[0]
             # Local d(world)/d(pixel) on the kept axes at the bake-in point.
             eps = 1.0e-3
             jac_cols = []
@@ -5085,14 +5108,14 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             if self._is_tpv:
                 if self._tpv_uses_pixel_intermediate:
                     pc_intermediate = torch.matmul(rel, self.pc_full.T)
-                    xi, eta = self.tpv.distort(
+                    xi, eta = self._require_tpv().distort(
                         pc_intermediate[:, self._celestial_lon_axis],
                         pc_intermediate[:, self._celestial_lat_axis],
                     )
                     xi = xi * self.cdelt[self._celestial_lon_axis]
                     eta = eta * self.cdelt[self._celestial_lat_axis]
                 else:
-                    xi, eta = self.tpv.distort(xi, eta)
+                    xi, eta = self._require_tpv().distort(xi, eta)
             if self._is_gls:
                 lon, lat = self._gls_forward(xi, eta)
             elif (

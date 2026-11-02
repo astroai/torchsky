@@ -289,6 +289,7 @@ def _slice_prepared_target(
     )
     ra_slice = dec_slice = None
     if target.ra_deg is not None:
+        assert target.dec_deg is not None  # stored together with ra_deg
         ra_slice = target.ra_deg[y0:y1, x0:x1]
         dec_slice = target.dec_deg[y0:y1, x0:x1]
     return _PreparedImagePlaneTarget(
@@ -563,6 +564,7 @@ def _weight_map_to_moc(
         return MOC(torch.empty((0,), dtype=torch.int64))
     nside = 1 << int(max_order)
     if target.ra_deg is not None:
+        assert target.dec_deg is not None  # stored together with ra_deg
         ra_deg, dec_deg = target.ra_deg, target.dec_deg
     else:
         ra_deg, dec_deg = _build_target_world_grid(

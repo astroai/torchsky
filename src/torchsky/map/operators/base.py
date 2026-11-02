@@ -90,7 +90,7 @@ class AutogradMapping:
         return torch.func.jvp(self.mapping, (value,), (tangent,))[1]
 
     def vjp(self, value: Tensor, cotangent: Tensor) -> Tensor:
-        output, pullback = torch.func.vjp(self.mapping, value)
+        output, pullback = torch.func.vjp(self.mapping, value)[:2]
         if output.shape != cotangent.shape:
             raise ValueError("VJP cotangent shape must match the mapping output")
         return pullback(cotangent)[0]

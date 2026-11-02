@@ -118,3 +118,18 @@ def test_display_limits_accept_mps_tensors() -> None:
     assert _limits([image.to("mps")], (1.0, 99.0)) == pytest.approx(
         _limits([image], (1.0, 99.0))
     )
+
+
+def test_plot_pseudo_rgb_creates_its_own_themed_axes() -> None:
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    from matplotlib import pyplot
+
+    L, H, W = 6, 8, 8
+    cube = torch.rand(L, H, W)
+    axis = SpectralAxis(
+        values=torch.linspace(4000, 7000, L), unit="Angstrom", type="WAVE"
+    )
+    ax = viz.plot_pseudo_rgb(cube, axis, theme="paper")
+    assert ax.figure is not None
+    pyplot.close(ax.figure)

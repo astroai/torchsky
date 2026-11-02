@@ -1125,6 +1125,7 @@ def _tile_catalog_to_parquet(
                 )
                 if writer is None:
                     writer = pq.ParquetWriter(str(path), pixel_batch.schema)
+                assert writer is not None  # pyarrow has no type stubs
                 writer.write_batch(pixel_batch)
                 n_rows += len(pixel_batch)
                 pixel_to_rgs.setdefault(int(pix_sorted[start]), []).append(rg_idx)

@@ -651,14 +651,47 @@ class TestSpectralReader:
         mock_axis.values = torch.ones(10)
         mock_spectral_axis.return_value = (mock_axis, 0)
 
-        # Make WCS.from_header raise an exception
-        mock_wcs_class.from_header.side_effect = Exception("WCS Error")
+        # Make WCS construction raise an exception
+        mock_wcs_class.side_effect = Exception("WCS Error")
 
         # Should not raise exception
         cube = SpectralReader.read_data_cube("fake_path.fits")
 
         assert isinstance(cube, DataCube)
         assert cube.spatial_wcs is None
+
+    def test_read_data_cube_populates_spatial_wcs(self):
+        """The cube reader builds a real WCS from the header (not a missing classmethod)."""
+        from torchsky.wcs import WCS
+
+        shape = (5, 8, 8)
+        with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
+            path = f.name
+        try:
+            torchfits.write(
+                path,
+                torch.zeros(shape, dtype=torch.float32),
+                header={
+                    "CTYPE1": "RA---TAN",
+                    "CTYPE2": "DEC--TAN",
+                    "CTYPE3": "WAVE",
+                    "CRVAL1": 150.0,
+                    "CRVAL2": 2.0,
+                    "CRVAL3": 4000.0,
+                    "CRPIX1": 4.5,
+                    "CRPIX2": 4.5,
+                    "CRPIX3": 1.0,
+                    "CDELT1": -1.0e-4,
+                    "CDELT2": 1.0e-4,
+                    "CDELT3": 30.0,
+                    "CUNIT3": "Angstrom",
+                },
+                overwrite=True,
+            )
+            cube = SpectralReader.read_data_cube(path)
+            assert isinstance(cube.spatial_wcs, WCS)
+        finally:
+            os.unlink(path)
 
     def test_read_data_cube(self):
         """Test reading 3D data cube from FITS image."""

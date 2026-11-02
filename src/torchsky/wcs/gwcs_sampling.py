@@ -355,6 +355,7 @@ class IFUSliceWCS:
             torch.arange(w, dtype=dt, device=dev),
             indexing="ij",
         )
+        spec: Any
         for slice_idx, item in enumerate(slice_list):
             if isinstance(item, dict):
                 mask = item["mask"]
@@ -369,6 +370,7 @@ class IFUSliceWCS:
                         _lam: Any = wave_spec,
                     ) -> tuple[Tensor, Tensor, Tensor]:
                         r_s, d_s = _w.pixel_to_world(x_pts, y_pts)
+                        l_s: Any
                         if callable(_lam):
                             l_s = _lam(x_pts, y_pts)
                         else:
@@ -376,7 +378,7 @@ class IFUSliceWCS:
                             l_s = l_t[m] if l_t.shape == (h, w) else l_t
                         return r_s, d_s, l_s
 
-                    spec: Any = _eval_dict_slice
+                    spec = _eval_dict_slice
                 else:
                     spec = (item["ra"], item["dec"], item["wavelength"])
             else:
@@ -387,7 +389,8 @@ class IFUSliceWCS:
             if not bool(m.any()):
                 continue
             if callable(spec):
-                r_s, d_s, lam_s = spec(xx[m], yy[m])
+                sampled: Any = spec(xx[m], yy[m])
+                r_s, d_s, lam_s = sampled
                 ra_full[m] = torch.as_tensor(r_s, dtype=dt, device=dev)
                 dec_full[m] = torch.as_tensor(d_s, dtype=dt, device=dev)
                 wave_full[m] = torch.as_tensor(lam_s, dtype=dt, device=dev)

@@ -14,7 +14,7 @@ import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Sequence, cast
+from typing import Any, Literal, Mapping, Sequence, cast
 
 import torch
 
@@ -22,16 +22,11 @@ from ..device import default_compute_device
 from torchfits import read
 from torchfits import read_header
 from torchfits.hdu import HDUList, TensorHDU
-from ..map.field import (
-    FieldObservation,
-    FieldSpatialSampling,
-    estimate_field_domain,
-    fit_field_model,
-    get_field_model_preset,
-    load_field_artifact,
-    make_field_model,
-    save_field_artifact,
-)
+from ..map.field.artifacts import load_field_artifact, save_field_artifact
+from ..map.field.core import estimate_field_domain, make_field_model
+from ..map.field.presets import get_field_model_preset
+from ..map.field.training import fit_field_model
+from ..map.field.types import FieldObservation, FieldSpatialSampling
 from ..map.observation import (
     ImageObservation,
 )
@@ -52,6 +47,7 @@ from ..map.sky import CrossExposureSkyCorrector, MeshSkyEstimator, PolynomialSky
 from ..spectrophotometry import Passband
 
 from ..filter_profiles import field_observation_spectral_kwargs, resolve_field_bandpass
+from ..filter_profiles.field_bandpass import FieldSpectralSource
 from ..instrument import NIRCAM_UPDEC_BANDS, nircam_imaging_band
 
 # Offline fallback when FITS headers lack spectral metadata (Angstrom).
@@ -249,18 +245,20 @@ def _field_spectral_kwargs(args: argparse.Namespace, band: str) -> dict:
     """Spectral keyword args for :class:`FieldObservation`."""
     try:
         raw = resolve_field_bandpass(
-            source=str(args.field_spectral_source),
+            source=cast(FieldSpectralSource, str(args.field_spectral_source)),
             band_name=str(band).strip().upper(),
             builtin_table=_FIELD_BAND_TABLE,
             svo_facility=str(args.svo_facility),
             svo_instrument=str(args.svo_instrument),
             svo_filter_id=args.svo_filter_id,
-            svo_prefer=str(args.svo_prefer),
+            svo_prefer=cast(Literal["classic", "2025", "any"], str(args.svo_prefer)),
             svo_cache_dir=getattr(args, "svo_cache_dir", None),
             svo_use_cache=not getattr(args, "no_svo_cache", False),
             transmission_path=args.field_transmission,
             transmission_dir=args.field_transmission_dir,
-            transmission_unit=str(args.field_transmission_unit),
+            transmission_unit=cast(
+                Literal["angstrom", "nm"], str(args.field_transmission_unit)
+            ),
             gaussian_lambda_eff=args.field_gaussian_lambda_eff,
             gaussian_lambda_min=args.field_gaussian_lambda_min,
             gaussian_lambda_max=args.field_gaussian_lambda_max,
@@ -298,7 +296,8 @@ def _probe_image_hdus(path: str) -> tuple[int, ...]:
     try:
         with HDUList.fromfile(path) as hdul:
             indices: list[int] = []
-            for i, h in enumerate(hdul):
+            for i in range(len(hdul)):
+                h = hdul[i]
                 if not isinstance(h, TensorHDU):
                     continue
                 naxis_raw = h.header.get("NAXIS", "0")
@@ -689,7 +688,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
         None
         if replay_tile_hw is None and hasattr(args, "_plan_tile_hw")
         else (
-            tuple(int(value) for value in replay_tile_hw)
+            (int(replay_tile_hw[0]), int(replay_tile_hw[1]))
             if replay_tile_hw is not None
             else _compute_spatial_tile_hw(
                 product.shape,
@@ -847,6 +846,7 @@ def _run_coadd(args: argparse.Namespace) -> int:
         requested_planes=getattr(args, "output_planes", ("SCI",)),
         overwrite=bool(getattr(args, "overwrite", True)),
     )
+    assert result.weight is not None  # coadd products always carry weights
     print(
         f"wrote {args.output} shape={tuple(result.data.shape)} "
         f"mean_weight={float(result.weight.mean().item()):.4f} "
@@ -1337,7 +1337,7 @@ def _run_field_single(args: argparse.Namespace) -> int:
     )
     domain = estimate_field_domain(fields, coord_mode="sphere_xyz")
     loaded_artifact = None
-    input_identities = (
+    input_identities: list[Mapping[str, Any]] | None = (
         [
             build_map_input_identity(path, hdu=hdu)
             for path, hdu in zip(field_paths, field_hdus)

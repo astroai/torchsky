@@ -63,6 +63,7 @@ from .operators.execution import (
 )
 from .operators.image_grid import (
     headers_equivalent_for_direct_copy,
+    image_shape_hw,
     normalized_header_for_shape,
     target_shape_from_header,
     validate_image_plane_2d,
@@ -187,7 +188,7 @@ class _PreparedTargetTileCache:
         self._coordinate_dtype = str(
             torch.float32 if device.type == "mps" else torch.float64
         )
-        self._value_semantics = value_semantics
+        self._value_semantics: MapValueSemantics = value_semantics
         self._representative_pixel_area_sr = representative_pixel_area_sr
         self._entries: OrderedDict[tuple[Any, ...], _PreparedImagePlaneTarget] = (
             OrderedDict()
@@ -1103,6 +1104,8 @@ def _coadd_image_plane_spatial_tiles(
     (full_context,) = _restore_to_compute_device(
         device, [full_context], label="context words"
     )
+    # None entries stay None and tensors stay tensors across the restore.
+    assert full_data is not None and full_weight is not None
     result = MapResult(
         data=full_data,
         weight=full_weight,
@@ -1403,7 +1406,7 @@ def coadd_image_plane(
     if target_header is not None and "CRVAL1" in target_header:
         target_shape = target_shape_from_header(
             target_header,
-            fallback=tuple(first_image.shape[-2:]),
+            fallback=image_shape_hw(first_image.shape),
         )
         header_dict = normalized_header_for_shape(
             dict(target_header),
@@ -1413,12 +1416,12 @@ def coadd_image_plane(
     else:
         header_dict = normalized_header_for_shape(
             dict(first_header),
-            tuple(first_image.shape[-2:]),
+            image_shape_hw(first_image.shape),
             overrides=target_header,
         )
         target_shape = target_shape_from_header(
             header_dict,
-            fallback=tuple(first_image.shape[-2:]),
+            fallback=image_shape_hw(first_image.shape),
         )
     device = map_device
     tile_plan: SpatialTilePlan | None = None
@@ -1766,6 +1769,7 @@ def coadd_image_plane(
             if projected.variance_weight is None:
                 variance_available = False
             elif variance_available:
+                assert variance_weight is not None  # allocated whenever variance is available
                 _accumulate_variance_weight(
                     variance_weight,
                     projected.variance_weight,
@@ -1895,6 +1899,7 @@ def coadd_image_plane(
     inverse_variance = None
     correlation_factor = None
     if stacking_method != "median" and variance_available:
+        assert variance_weight is not None  # variance_available implies accumulated weights
         inverse_variance = _linear_inverse_variance(
             normalization,
             variance_weight,
@@ -2015,6 +2020,7 @@ def _propagate_aperture_uncertainty(
         raise ValueError(
             "finite-aperture covariance requires MapResult execution provenance"
         )
+    assert provenance is not None  # ``execution`` was read from it
     try:
         recorded_pixfrac = float(execution["drizzle_pixfrac"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -2303,9 +2309,15 @@ class ImagePlaneMapMaker:
         cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
     ) -> None:
         self.target_header = target_header
-        self.resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
-        self.value_semantics = _validated_map_value_semantics(value_semantics)
-        self.stacking_method = _validated_map_stacking_method(stacking_method)
+        self.resampling_kernel: MapResamplingKernel = _validated_map_resampling_kernel(
+            resampling_kernel
+        )
+        self.value_semantics: MapValueSemantics = _validated_map_value_semantics(
+            value_semantics
+        )
+        self.stacking_method: MapStackingMethod = _validated_map_stacking_method(
+            stacking_method
+        )
         self.drizzle_pixfrac = _validated_drizzle_pixfrac(drizzle_pixfrac)
         self.clip_sigma = float(clip_sigma)
         self.clip_iterations = int(clip_iterations)
@@ -2359,8 +2371,8 @@ def coadd_image_plane_cube(
     value_semantics: MapValueSemantics = "surface_brightness",
     stacking_method: MapStackingMethod = "weighted_mean",
     drizzle_pixfrac: float = 1.0,
-    spectral_axis: SpectralAxis | None = None,
-    spectral_bin_edges: Tensor | None = None,
+    spectral_axis: SpectralAxis | Sequence[float] | Tensor | None = None,
+    spectral_bin_edges: Sequence[float] | Tensor | None = None,
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
     reference_index: int = 0,
@@ -2867,7 +2879,7 @@ def resample(
         vp, vr, vf = _propagate_observation_variance_components(
             [obs],
             target_header=res.header,
-            target_shape=tuple(res.data.shape),
+            target_shape=image_shape_hw(res.data.shape),
             resampling_kernel=resolved_kernel,
             drizzle_pixfrac=resolved_pixfrac,
             value_semantics=resolved_semantics,
@@ -3086,10 +3098,10 @@ def _apply_observation_astrometric_shifts(
                 ra0,
                 dec0,
                 float(obs.wavelength),
-                zenith_angle_deg=float(obs.dcr_zenith_deg),
-                parallactic_angle_deg=float(obs.dcr_parallactic_deg),
-                reference_wavelength_angstrom=float(obs.dcr_ref_wavelength),
-                pressure_hpa=float(obs.dcr_pressure_hpa),
+                zenith_deg=float(obs.dcr_zenith_deg),
+                parallactic_deg=float(obs.dcr_parallactic_deg),
+                ref_wavelength_angstrom=float(obs.dcr_ref_wavelength),
+                pressure_mbar=float(obs.dcr_pressure_hpa),
                 temperature_c=float(obs.dcr_temperature_c),
             )
         if (
@@ -3100,10 +3112,10 @@ def _apply_observation_astrometric_shifts(
             ra0, dec0 = apply_ephemeris_offset(
                 ra0,
                 dec0,
-                d_ra_cosdec_arcsec_per_hr=float(obs.tracking_rate[0]),
-                d_dec_arcsec_per_hr=float(obs.tracking_rate[1]),
+                dra_cosdec_arcsec_per_hr=float(obs.tracking_rate[0]),
+                ddec_arcsec_per_hr=float(obs.tracking_rate[1]),
                 mjd_obs=float(obs.mjd_obs),
-                mjd_ref=float(obs.reference_mjd),
+                reference_mjd=float(obs.reference_mjd),
             )
         hdr_copy["CRVAL1"] = float(ra0.item())
         hdr_copy["CRVAL2"] = float(dec0.item())
@@ -3295,7 +3307,7 @@ def coadd(
         vp, vr, vf = _propagate_observation_variance_components(
             obs_to_stack,
             target_header=result.header,
-            target_shape=tuple(result.data.shape),
+            target_shape=image_shape_hw(result.data.shape),
             resampling_kernel=resolved_kernel,
             drizzle_pixfrac=resolved_pixfrac,
             value_semantics=resolved_semantics,

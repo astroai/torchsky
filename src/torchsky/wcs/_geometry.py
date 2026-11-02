@@ -4,14 +4,40 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
 from torch import Tensor
 
+if TYPE_CHECKING:
+    from .sip import SIP
+    from .tabular import TabularAxis
+
 
 class _GeometryMixin:
+    if TYPE_CHECKING:
+        # State and methods supplied by :class:`torchsky.wcs.WCS`.
+        device: torch.device
+        naxis: int
+        crpix: Tensor
+        cd_full: Tensor
+        _is_spatial: bool
+        _pixel_shape: tuple[int, ...] | None
+        _celestial_lon_axis: int
+        _celestial_lat_axis: int
+        _celestial_axes: tuple[int, ...]
+        tabular_axes: dict[int, TabularAxis]
+        coupled_tabular_axes: tuple[int, ...]
+        coupled_tabular_pixel_axes: tuple[int, ...]
+
+        @property
+        def pixel_n_dim(self) -> int: ...
+        @property
+        def world_n_dim(self) -> int: ...
+        def _wcs_coord_dtype(self, device: torch.device) -> torch.dtype: ...
+        def pixel_to_world(self, *args: Any, **kwargs: Any) -> Any: ...
+
     @property
     def pixel_bounds(self) -> list[tuple[float, float]] | None:
         """Inclusive 0-based pixel bounds from ``NAXISi`` keywords."""
@@ -209,6 +235,24 @@ class _GeometryMixin:
 
 
 class _HeaderIOMixin:
+    if TYPE_CHECKING:
+        # State supplied by :class:`torchsky.wcs.WCS`.
+        naxis: int
+        wcs_key: str
+        wcs_params: dict[str, Any]
+        sip: SIP | None
+        crpix: Tensor
+        crval: Tensor
+        cdelt: Tensor
+        cd_full: Tensor
+        pc_full: Tensor
+        _pixel_shape: tuple[int, ...] | None
+        _celestial_axes: tuple[int, ...]
+        _is_tpv: bool
+        _tpv_uses_pixel_intermediate: bool
+        _pixel_affine_matrix: Tensor | None
+        _pixel_affine_offset: Tensor | None
+
     def to_header(
         self,
         *,

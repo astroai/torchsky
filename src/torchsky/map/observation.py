@@ -386,7 +386,7 @@ class PlannedImagePlaneTarget:
             hdr = src.to_header(relax=True, include_naxis=True)
             inferred_shape = src.array_shape
         elif hasattr(src, "to_header"):
-            hdr = dict(src.to_header())
+            hdr = dict(getattr(src, "to_header")())
             inferred_shape = getattr(src, "array_shape", None)
         else:
             hdr = dict(src)
@@ -488,11 +488,11 @@ class CubeTarget:
                 raise ValueError(
                     "CubeTarget shape is required when WCS has no array shape"
                 )
-            target_shape = (
-                (int(shape[0]), int(shape[1]))
-                if shape is not None
-                else (int(inferred[0]), int(inferred[1]))
-            )
+            if shape is not None:
+                target_shape = (int(shape[0]), int(shape[1]))
+            else:
+                assert inferred is not None  # rejected above
+                target_shape = (int(inferred[0]), int(inferred[1]))
         edges = torch.as_tensor(spectral_bin_edges)
         if edges.ndim != 1 or edges.numel() < 2 or not edges.is_floating_point():
             raise ValueError(

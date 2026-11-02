@@ -93,7 +93,8 @@ def _cell_centres(width: int, height: int) -> tuple[Tensor, Tensor]:
     """Return ``(lon, lat)`` cell centres in degrees, shape ``(height, width)``."""
     lon = (torch.arange(width, dtype=torch.float64) + 0.5) * (360.0 / width) - 180.0
     lat = (torch.arange(height, dtype=torch.float64) + 0.5) * (180.0 / height) - 90.0
-    return torch.meshgrid(lon, lat, indexing="xy")
+    grid_lon, grid_lat = torch.meshgrid(lon, lat, indexing="xy")
+    return grid_lon, grid_lat
 
 
 def _empty_buffers(
@@ -972,9 +973,9 @@ def plot_sky_grid(
     handles: list[Any] = []
     created = ax is None
     if created:
-        figsize = tuple(figsize) if figsize is not None else _auto_figsize(projection)
+        figsize = (figsize[0], figsize[1]) if figsize is not None else _auto_figsize(projection)
         layout = _layout(
-            figsize,  # type: ignore[arg-type]
+            figsize,
             aspect=1.0 if polar else _GEO_ASPECT[projection],
             title=bool(title),
             subtitle=bool(subtitle),

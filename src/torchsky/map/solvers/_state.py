@@ -292,6 +292,11 @@ class SurveyInstrumentComponentMixer(nn.Module):
 
     _VALID_ROLES = ("shared", "survey", "instrument", "interaction")
 
+    shared_mask: Tensor
+    survey_mask: Tensor
+    instrument_mask: Tensor
+    interaction_mask: Tensor
+
     def __init__(
         self,
         *,

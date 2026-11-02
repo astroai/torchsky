@@ -7,7 +7,8 @@ native-type flag) and are shared by every projection path.
 from __future__ import annotations
 
 import math
-from typing import Tuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Tuple
 
 import torch
 from torch import Tensor
@@ -16,6 +17,33 @@ from ._math import _sincos, _wrap_lon180, _wrap_lon360
 
 
 class _RotationMixin:
+    if TYPE_CHECKING:
+        # State supplied by :class:`torchsky.wcs.WCS`.
+        alpha0: float
+        delta0: float
+        crval: Tensor
+        _phi_p_native: float
+        _phi_p_rad: float
+        _use_center_equator_fast: bool
+        _celestial_postrot: list[list[float]] | None
+        _east_x: float
+        _east_y: float
+        _north_x: float
+        _north_y: float
+        _north_z: float
+        _radial_x: float
+        _radial_y: float
+        _radial_z: float
+        _pole_east_x: float
+        _pole_east_y: float
+        _pole_north_x: float
+        _pole_north_y: float
+        _pole_north_z: float
+        _pole_radial_x: float
+        _pole_radial_y: float
+        _pole_radial_z: float
+        _cpp_spherical_rotation_pole: Callable[..., Any] | None
+        _cpp_inverse_spherical_rotation_pole: Callable[..., Any] | None
     def _project_tan(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Gnomonic (TAN) projection: intermediate (deg) -> spherical (deg).
@@ -384,6 +412,7 @@ class _RotationMixin:
     ) -> Tuple[Tensor, Tensor]:
         """Apply the exact residual LONPOLE/LATPOLE rotation (Paper II) to (ra, dec)."""
         m = self._celestial_postrot
+        assert m is not None  # callers only invoke this when a residual rotation exists
         d2r = 0.017453292519943295
         r2d = 57.29577951308232
         sin_dec, cos_dec = _sincos(dec * d2r)

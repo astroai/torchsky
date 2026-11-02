@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
-from typing import Literal, Protocol, TYPE_CHECKING
+from typing import Any, Literal, Protocol, TYPE_CHECKING
 
 import torch
 from torch import Tensor
@@ -890,7 +890,7 @@ class RegionAreaEstimate:
 
 
 def _parse_nside_ladder(nsides: tuple[int, ...] | list[int]) -> tuple[int, ...]:
-    ladder = tuple(nsides)
+    ladder: tuple[int, ...] = tuple(nsides)
     if len(ladder) == 0:
         raise ValueError("nsides ladder must contain at least one nside")
     for i, n in enumerate(ladder):
@@ -908,6 +908,7 @@ def _estimate_area_from_query(
     nest: bool,
 ) -> RegionAreaEstimate:
     ladder = _parse_nside_ladder(nsides)
+    n_levels = len(ladder)
     area_by_nside_sr: dict[str, float] = {}
     pixels_by_nside: dict[str, int] = {}
     prev_area = None
@@ -923,7 +924,7 @@ def _estimate_area_from_query(
 
     assert prev_area is not None
     convergence_rel = None
-    if len(ladder) >= 2:
+    if n_levels >= 2:
         a_prev = area_by_nside_sr[str(ladder[-2])]
         convergence_rel = abs(prev_area - a_prev) / max(abs(prev_area), 1e-15)
     return RegionAreaEstimate(
@@ -1512,7 +1513,7 @@ def _strip_closed_np(
 
 
 def _numpy_sg_contains_lonlat_bulk(
-    sg_poly: object, lon_deg: "np.ndarray", lat_deg: "np.ndarray"
+    sg_poly: Any, lon_deg: "np.ndarray", lat_deg: "np.ndarray"
 ) -> "np.ndarray":
     """Bulk ``(lon, lat)`` containment using ``spherical_geometry`` vector APIs when available.
 
@@ -1824,7 +1825,7 @@ class NativeApproximateSphericalRegion:
 class ExactSphericalRegion:
     """Exact spherical region wrapper backed by optional `spherical-geometry`."""
 
-    _sg_poly: object
+    _sg_poly: Any  # spherical_geometry polygon (optional, untyped dependency)
 
     @property
     def is_empty(self) -> bool:

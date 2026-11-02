@@ -948,7 +948,7 @@ class MOC:
         return cls(uniq)
 
     @classmethod
-    def from_region(cls, region: object, max_order: int | None = None) -> "MOC":
+    def from_region(cls, region: Any, max_order: int | None = None) -> "MOC":
         """Create a MOC from a torchsky spherical region or PixelizedRegion.
 
         Pixelized regions preserve their current resolution by default. Other

@@ -447,6 +447,7 @@ class SourceCatalogScene(SceneRepresentation):
                 "support_uniq and support_slices must be supplied together"
             )
         if self.support_slices is not None:
+            assert self.support_uniq is not None  # supplied together (checked above)
             if self.support_slices.shape != (count, 2):
                 raise ValueError("support_slices must have shape (components, 2)")
             if (

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import torch
 from torch import Tensor
@@ -1257,6 +1257,10 @@ def _as_tab_coordinate_array(
     return _extract_separable_tab_axis(tensor, name, tab_axis_number)
 
 
+@overload
+def _default_tab_axis_number(value: int) -> int: ...
+@overload
+def _default_tab_axis_number(value: None) -> None: ...
 def _default_tab_axis_number(value: int | None) -> int | None:
     if value is None:
         return None

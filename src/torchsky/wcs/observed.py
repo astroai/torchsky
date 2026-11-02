@@ -250,6 +250,7 @@ def observed_altaz(
     )
     lon_rad = site.lon_deg.to(device=device, dtype=dtype) * D2R
     lat_rad = site.lat_deg.to(device=device, dtype=dtype) * D2R
+    assert isinstance(site.height_m, Tensor)  # normalised by the site's __post_init__
     height = site.height_m.to(device=device, dtype=dtype)
     if not bool(torch.isfinite(height).all()):
         raise ValueError("site.height_m must be finite WGS84 ellipsoidal height")

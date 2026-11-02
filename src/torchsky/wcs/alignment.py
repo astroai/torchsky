@@ -129,8 +129,8 @@ class TangentPlaneFrame:
             x * sin_c,
             rho * cos_dec0 * cos_c - y * sin_dec0 * sin_c,
         )
-        ra_rad = torch.where(rho <= 1e-30, torch.full_like(ra_rad, ra0_rad), ra_rad)
-        dec_rad = torch.where(rho <= 1e-30, torch.full_like(dec_rad, dec0_rad), dec_rad)
+        ra_rad = torch.where(rho <= 1e-30, torch.full_like(ra_rad, ra0_rad.item()), ra_rad)
+        dec_rad = torch.where(rho <= 1e-30, torch.full_like(dec_rad, dec0_rad.item()), dec_rad)
         return torch.remainder(ra_rad * r2d, 360.0), dec_rad * r2d
 
 

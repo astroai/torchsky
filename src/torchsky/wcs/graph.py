@@ -13,6 +13,7 @@ from .mapping import (
     SerialMapping,
     UnsupportedInverseError,
     _deserialize_mapping,
+    _mapping_list,
     _serialize_mapping,
 )
 from .semantics import AxisSpec, Epoch, FrameSpec, TimeSpec
@@ -89,7 +90,7 @@ class TransformGraph(nn.Module):
         self.frames: dict[str, FrameSpec] = {}
         self._sources: list[str] = []
         self._targets: list[str] = []
-        self.mappings = nn.ModuleList()
+        self.mappings = _mapping_list()
         for frame in frames:
             self.add_frame(frame)
         for edge in transforms:
@@ -334,7 +335,7 @@ class GeneralizedWCS(nn.Module):
     @property
     def world_axis_units(self) -> tuple[str, ...]:
         return tuple(
-            axis.unit.symbol for axis in self.graph.frames[self.output_frame].axes
+            axis.unit_spec.symbol for axis in self.graph.frames[self.output_frame].axes
         )
 
     @property

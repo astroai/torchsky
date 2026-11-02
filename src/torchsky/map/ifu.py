@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 import math
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import torch
 from torch import Tensor
@@ -160,7 +160,8 @@ def _target_centers(
         indexing="ij",
     )
     wcs = target.spatial_wcs.to(device)
-    return wcs.pixel_to_world(x, y)
+    # The two-argument form on a 2D WCS returns the (lon, lat) pair.
+    return cast("tuple[Tensor, Tensor]", wcs.pixel_to_world(x, y))
 
 
 def _target_pixel_scale_arcsec(
@@ -412,6 +413,7 @@ def plan_ifu_cube_response(
                         and supplied_footprint.shape[-1] == 3
                     )
                     if world_footprint:
+                        assert supplied_footprint is not None
                         world_vertices = supplied_footprint[row, column].to(
                             device=resolved_device, dtype=dtype
                         )
@@ -463,7 +465,7 @@ def plan_ifu_cube_response(
                             mapped - spatial_center
                         )
                     polygon = [
-                        tuple(map(float, point))
+                        (float(point[0]), float(point[1]))
                         for point in mapped.detach().cpu().tolist()
                     ]
                     spatial_area = _polygon_area(polygon)

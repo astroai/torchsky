@@ -529,6 +529,7 @@ class SpectralTransform:
                     rest_wavelength=self.restwav,
                 )
                 X_tensor.backward()
+                assert s_tensor.grad is not None  # populated by backward()
                 self.dXdS_si = float(s_tensor.grad.item())
             except RuntimeError:
                 # Not autograd-differentiable: use a central finite difference.

@@ -347,8 +347,10 @@ class ResidualModeDesign:
 
     @property
     def widths(self) -> tuple[int, int, int]:
-        return tuple(
-            int(value.shape[2]) for value in (self.stable, self.drift, self.local)
+        return (
+            int(self.stable.shape[2]),
+            int(self.drift.shape[2]),
+            int(self.local.shape[2]),
         )
 
     @property
@@ -857,6 +859,8 @@ class ExperimentalConditionalResidual(nn.Module):
     """Experimental compact-support conditional neural process for reference context."""
 
     experimental = True
+    support_lower: Tensor
+    support_upper: Tensor
 
     def __init__(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, is_dataclass
 import hashlib
 import json
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Any, Mapping, Protocol, cast, runtime_checkable
 
 import torch
 from torch import Tensor
@@ -51,7 +51,7 @@ def _canonical(value: object) -> object:
     if isinstance(value, torch.dtype):
         return str(value)
     if is_dataclass(value):
-        return _canonical(asdict(value))
+        return _canonical(asdict(cast(Any, value)))  # instances only in practice
     if isinstance(value, Mapping):
         return {
             str(key): _canonical(item)

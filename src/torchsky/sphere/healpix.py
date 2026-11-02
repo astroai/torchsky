@@ -69,7 +69,7 @@ def _as_float64(x: Tensor | float | list[float]) -> Tensor:
     return t.to(dtype=_float_dtype_for_device(t.device))
 
 
-def _as_int64(x: Tensor | int | list[int]) -> Tensor:
+def _as_int64(x: Tensor | float | Sequence[int]) -> Tensor:
     return torch.as_tensor(x, dtype=torch.int64)
 
 
@@ -100,9 +100,10 @@ def _cap_ring_starts(nside: int, device: torch.device) -> Tensor:
 def _isqrt(v: Tensor) -> Tensor:
     v = v.to(torch.int64)
     # Use native integer sqrt when available, fallback to corrected float path.
-    if hasattr(torch, "isqrt"):
+    native_isqrt = getattr(torch, "isqrt", None)  # absent from older torch builds
+    if native_isqrt is not None:
         try:
-            return torch.isqrt(v)
+            return native_isqrt(v)
         except RuntimeError:
             pass
     f_dtype = _float_dtype_for_device(v.device)
@@ -629,7 +630,11 @@ def nside2resol(nside: int, arcmin: bool = False) -> float:
 
 
 def ang2pix(
-    nside: int, theta: Tensor, phi: Tensor, nest: bool = False, lonlat: bool = False
+    nside: int,
+    theta: Tensor | float,
+    phi: Tensor | float,
+    nest: bool = False,
+    lonlat: bool = False,
 ) -> Tensor:
     """
     Convert angles to pixel indices.

@@ -30,7 +30,8 @@ coupling so they can be used directly inside external forward models.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 import math
 
 import torch
@@ -190,13 +191,11 @@ class ConditionedKernelPSF(nn.Module):
             kernel_size=kernel_size,
             init_fwhm_pix=init_fwhm_pix,
         )
-        self.mixer = nn.Sequential(
-            nn.Linear(encoder.output_dim, int(hidden_dim)),
-            nn.GELU(),
-            nn.Linear(int(hidden_dim), int(n_basis)),
-        )
-        nn.init.zeros_(self.mixer[-1].weight)
-        nn.init.zeros_(self.mixer[-1].bias)
+        input_layer = nn.Linear(encoder.output_dim, int(hidden_dim))
+        output_layer = nn.Linear(int(hidden_dim), int(n_basis))
+        self.mixer = nn.Sequential(input_layer, nn.GELU(), output_layer)
+        nn.init.zeros_(output_layer.weight)
+        nn.init.zeros_(output_layer.bias)
 
     @property
     def kernel_size(self) -> int:
@@ -222,7 +221,9 @@ class ConditionedKernelPSF(nn.Module):
         gate_weight: float = 1.0,
         scale_shift_weight: float = 1.0,
     ) -> Tensor:
-        regularization = getattr(self.encoder, "regularization", None)
+        regularization: Callable[..., Tensor] | None = getattr(
+            self.encoder, "regularization", None
+        )
         if not callable(regularization):
             return self.kernel_basis.raw_kernels.sum() * 0.0
         return regularization(
@@ -295,6 +296,8 @@ class ExtendedResidualKernelPSF(nn.Module):
     Baseline and effective kernels are image-shaped unit-source stamps.
     """
 
+    baseline_kernel: Tensor
+
     def __init__(
         self,
         encoder: SpatioSpectralTemporalEncoder
@@ -356,13 +359,11 @@ class ExtendedResidualKernelPSF(nn.Module):
             kernel_size=self.kernel_size,
             init_fwhm_pix=float(core_fwhm_pix),
         )
-        self.mixer = nn.Sequential(
-            nn.Linear(encoder.output_dim, int(hidden_dim)),
-            nn.GELU(),
-            nn.Linear(int(hidden_dim), int(n_residual_basis)),
-        )
-        nn.init.zeros_(self.mixer[-1].weight)
-        nn.init.zeros_(self.mixer[-1].bias)
+        input_layer = nn.Linear(encoder.output_dim, int(hidden_dim))
+        output_layer = nn.Linear(int(hidden_dim), int(n_residual_basis))
+        self.mixer = nn.Sequential(input_layer, nn.GELU(), output_layer)
+        nn.init.zeros_(output_layer.weight)
+        nn.init.zeros_(output_layer.bias)
         ratio = float(residual_fraction_init) / float(residual_fraction_max)
         self.raw_residual_fraction = nn.Parameter(
             torch.tensor(math.log(ratio / (1.0 - ratio)), dtype=torch.float32)
@@ -415,7 +416,9 @@ class ExtendedResidualKernelPSF(nn.Module):
         gate_weight: float = 1.0,
         scale_shift_weight: float = 1.0,
     ) -> Tensor:
-        regularization = getattr(self.encoder, "regularization", None)
+        regularization: Callable[..., Tensor] | None = getattr(
+            self.encoder, "regularization", None
+        )
         penalty = self.residual_fraction.square()
         if callable(regularization):
             penalty = penalty + regularization(
@@ -897,6 +900,10 @@ class LowRankChromaticPSF(nn.Module):
     ``base_sigma_pix``.
     """
 
+    extent_pix: Tensor
+    node_uvw: Tensor
+    wavelength_range_um: Tensor
+
     def __init__(
         self,
         *,
@@ -1004,10 +1011,10 @@ class LowRankChromaticPSF(nn.Module):
         ``(u_pix, lam_norm)`` and get stacked ``(sigma_x, sigma_y, rho)``.
         """
         if spatial_x is not None or "image" in kwargs:
-            image = kwargs.get("image", args[0] if args else None)
+            image: Any = kwargs.get("image", args[0] if args else None)
             sx = spatial_x if spatial_x is not None else kwargs["spatial_x"]
             sy = spatial_y if spatial_y is not None else kwargs["spatial_y"]
-            wl = wavelength if wavelength is not None else kwargs.get("wavelength")
+            wl: Any = wavelength if wavelength is not None else kwargs.get("wavelength")
             return self.filter_image(image=image, spatial_x=sx, spatial_y=sy, wavelength=wl)
         u_pix = args[0] if args else kwargs["u_pix"]
         lam_norm = args[1] if len(args) > 1 else kwargs["lam_norm"]

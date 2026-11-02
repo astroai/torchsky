@@ -24,6 +24,7 @@ from __future__ import annotations
 import threading
 import webbrowser
 from pathlib import Path
+from typing import Any
 
 from .allsky import SkyGrid as SkyGrid
 from .allsky import healpix_sky_grid as healpix_sky_grid
@@ -108,7 +109,7 @@ def serve_background(
 
     Returns the thread so callers can check liveness.
     """
-    kw = dict(root=root, port=port, host=host, open_browser=False, cache_mb=cache_mb)
+    kw: dict[str, Any] = dict(root=root, port=port, host=host, open_browser=False, cache_mb=cache_mb)
     kw.update(kwargs)
     t = threading.Thread(
         target=serve,

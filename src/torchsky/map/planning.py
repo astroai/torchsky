@@ -26,7 +26,11 @@ from .spectral_projection import (
     _validated_spectral_axis,
     _validated_spectral_bin_edges,
 )
-from .operators.image_grid import normalized_header_for_shape, target_shape_from_header
+from .operators.image_grid import (
+    image_shape_hw,
+    normalized_header_for_shape,
+    target_shape_from_header,
+)
 from .operators.subdivision import bounded_subdivide_boundary
 from .image_plane_common import (
     _convert_world_between_wcs,
@@ -563,7 +567,11 @@ def plan_image_plane_target(
     ref = observations[reference_index]
     read_dev = str(_resolve_map_device(device, observations))
     image, header = load_observation_image_and_header(ref, device=read_dev)
-    shape_out = tuple(image.shape) if shape is None else (int(shape[0]), int(shape[1]))
+    shape_out = (
+        image_shape_hw(image.shape)
+        if shape is None
+        else (int(shape[0]), int(shape[1]))
+    )
     shape_out = target_shape_from_header(header_overrides or {}, fallback=shape_out)
     normalized_header = normalized_header_for_shape(
         dict(header),
@@ -578,8 +586,8 @@ def plan_image_plane_cube_target(
     *,
     reference_index: int | None = 0,
     header_overrides: dict | None = None,
-    spectral_axis: SpectralAxis | None = None,
-    spectral_bin_edges: Tensor | None = None,
+    spectral_axis: SpectralAxis | Sequence[float] | Tensor | None = None,
+    spectral_bin_edges: Sequence[float] | Tensor | None = None,
     spectral_unit: str = "Angstrom",
     spectral_type: str = "WAVE",
     device: torch.device | str | None = None,

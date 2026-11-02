@@ -18,9 +18,14 @@ from ..quality import DQPolicy
 
 @runtime_checkable
 class ResponsePlan(Protocol):
-    source: DomainSpec
-    target: DomainSpec
-    fingerprint: PlanFingerprint
+    @property
+    def source(self) -> DomainSpec: ...
+
+    @property
+    def target(self) -> DomainSpec: ...
+
+    @property
+    def fingerprint(self) -> PlanFingerprint: ...
 
     def apply(self, value: Tensor, *, chunk_size: int | None = None) -> Tensor: ...
 

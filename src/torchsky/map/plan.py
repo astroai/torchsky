@@ -179,7 +179,7 @@ def _validate_input(item: Mapping[str, Any], *, method: str) -> None:
         _require_string(value.get("band"), "inputs[].band")
 
 
-def _validate_target(target: Mapping[str, Any]) -> None:
+def _validate_target(target: Any) -> None:
     value = _require_mapping(target, "target")
     shape = value.get("shape")
     if (
@@ -222,7 +222,7 @@ def _validate_target(target: Mapping[str, Any]) -> None:
         )
 
 
-def _validate_execution(execution: Mapping[str, Any], method: str) -> None:
+def _validate_execution(execution: Any, method: str) -> None:
     value = _require_mapping(execution, "execution")
     if "workflow" in value:
         _require_choice(value["workflow"], "execution.workflow", _PLAN_WORKFLOWS)
@@ -344,7 +344,7 @@ def _validate_execution(execution: Mapping[str, Any], method: str) -> None:
             )
 
 
-def _validate_runtime(runtime: Mapping[str, Any]) -> None:
+def _validate_runtime(runtime: Any) -> None:
     value = _require_mapping(runtime, "runtime")
     _require_choice(value.get("dtype"), "runtime.dtype", _PLAN_DTYPES)
     device = value.get("device")

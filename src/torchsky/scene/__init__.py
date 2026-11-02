@@ -12,13 +12,10 @@ from typing import Any
 
 from torch import Tensor, nn
 
-from ..map.field import (
-    FieldObservation,
-    ForwardContext,
-    PSFSpec,
-    predict_observation_mean,
-)
+from ..map.field.implicit_forward import predict_observation_mean
+from ..map.field.types import FieldObservation, ForwardContext, PSFSpec
 from ..map.observation import ImageObservation
+from ..map.operators.config import MapValueSemantics
 from ..map.operators.resampling import sample_image_plane_batched_channels
 from ..map.product import BandpassSpec, ProductSpec
 from ..map.scenes import (
@@ -108,7 +105,7 @@ def product_spec(
     *,
     target_header: dict[str, Any],
     bands: tuple[BandpassSpec, ...],
-    value_semantics: str = "surface_brightness",
+    value_semantics: MapValueSemantics = "surface_brightness",
     footprint_order: int | None = None,
 ) -> ProductSpec:
     """Construct a map product specification using scene vocabulary."""

@@ -67,7 +67,7 @@ def apply_stretch(
     arr: Tensor,
     vmin: float,
     vmax: float,
-    stretch: StretchName = "linear",
+    stretch: str = "linear",  # one of StretchName; validated below
     asinh_a: float = 0.1,
     power_gamma: float = 0.5,
 ) -> Tensor:

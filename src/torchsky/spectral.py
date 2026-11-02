@@ -1030,9 +1030,8 @@ class DataCube:
     def spatial_shape(self) -> Tuple[int, int]:
         """Get spatial dimensions (y, x)."""
         shape = self.data.shape
-        return tuple(
-            shape[index] for index in range(3) if index != self.spectral_axis_index
-        )
+        spatial = [shape[index] for index in range(3) if index != self.spectral_axis_index]
+        return spatial[0], spatial[1]
 
     def extract_spectrum(self, y: int, x: int) -> "Spectrum1D":
         """Extract 1D spectrum at spatial position (y, x)."""
@@ -1157,7 +1156,7 @@ class SpectralReader:
         from torchfits import open as open_fits
 
         with open_fits(filepath) as hdul:
-            table_hdu = hdul[hdu]
+            table_hdu: Any = hdul[hdu]  # table-like HDU (torchfits union is wider)
 
             # Read required columns
             flux = table_hdu.data[flux_col]
@@ -1196,7 +1195,7 @@ class SpectralReader:
         from torchfits import open as open_fits
 
         with open_fits(filepath) as hdul:
-            image_hdu = hdul[hdu]
+            image_hdu: Any = hdul[hdu]  # image-like HDU (torchfits union is wider)
             data = image_hdu.to_tensor()
             header = dict(image_hdu.header)
 
@@ -1209,7 +1208,7 @@ class SpectralReader:
             # Create spatial WCS if available
             spatial_wcs = None
             try:
-                spatial_wcs = WCS.from_header(header)
+                spatial_wcs = WCS(header)
             except Exception:
                 pass  # WCS creation failed, continue without it
 

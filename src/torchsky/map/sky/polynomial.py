@@ -8,6 +8,9 @@ from torch import Tensor
 
 from .stats import huber_location, tukey_location
 
+# The torch stubs omit this public name (it exists at runtime).
+_LinAlgError = torch.linalg.LinAlgError  # pyright: ignore[reportPrivateImportUsage]
+
 
 def _chebyshev_basis_2d(
     H: int,
@@ -346,7 +349,7 @@ class PolynomialSkyModel:
             rhs.add_(weighted_basis.T @ weighted_values)
         try:
             coefficients = torch.linalg.solve(normal, rhs)
-        except torch.linalg.LinAlgError:
+        except _LinAlgError:
             coefficients = torch.linalg.lstsq(normal, rhs, driver="gelsd").solution
         return CompactPolynomialSkyModel(
             coefficients=coefficients,
@@ -419,7 +422,7 @@ class PolynomialSkyModel:
         Xty = Xw.T @ yw
         try:
             theta = torch.linalg.solve(XtX, Xty)
-        except torch.linalg.LinAlgError:
+        except _LinAlgError:
             theta = torch.linalg.lstsq(XtX, Xty, driver="gelsd").solution
         return theta, w
 

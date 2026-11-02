@@ -20,6 +20,7 @@ type StateTree = (
 )
 
 StateT = TypeVar("StateT", bound=StateTree)
+ImageT = TypeVar("ImageT", bound=StateTree)
 
 
 class TerminationReason(str, Enum):
@@ -625,9 +626,9 @@ def conjugate_gradient(
 
 
 def lsqr(
-    operator: Callable[[StateT], StateTree],
-    adjoint: Callable[[StateTree], StateT],
-    rhs: StateTree,
+    operator: Callable[[StateT], ImageT],
+    adjoint: Callable[[ImageT], StateT],
+    rhs: ImageT,
     *,
     initial_solution: StateT | None = None,
     max_iterations: int = 100,
@@ -655,7 +656,8 @@ def lsqr(
     def apply_adjoint(data: StateTree) -> StateT:
         nonlocal adjoint_applications
         adjoint_applications += 1
-        result = adjoint(data)
+        # ``data`` is always a range-space tree with the structure of ``rhs``.
+        result = adjoint(cast(ImageT, data))
         return _project(projection, result)
 
     if initial_solution is None:

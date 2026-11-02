@@ -22,7 +22,7 @@ from .frames import (
     propagate_space_motion,
     radec_to_unit,
 )
-from .semantics import Epoch, TimeSpec
+from .semantics import Epoch, TimeFormat, TimeScale, TimeSpec
 
 Representation = Literal["lonlat_deg", "unit_xyz", "barycentric_au"]
 
@@ -59,8 +59,8 @@ class CatalogState:
     lat: Tensor
     frame: str = "ICRS"
     epoch: Tensor | float | Epoch = 2000.0
-    epoch_scale: str | None = None
-    epoch_format: str | None = None
+    epoch_scale: TimeScale | None = None
+    epoch_format: TimeFormat | None = None
     pm_lon_coslat_mas_yr: Tensor | None = None
     pm_lat_mas_yr: Tensor | None = None
     parallax_mas: Tensor | None = None

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any, cast
 
 import torch
 from torch import Tensor, nn
@@ -21,6 +23,8 @@ class AdaptiveAxisFeatures(nn.Module):
     input axis. Learned gates select useful bands, while one bounded continuous
     dilation shifts the ordered log-spaced bank without crossing either bound.
     """
+
+    base_log_lengths: Tensor
 
     def __init__(
         self,
@@ -347,7 +351,7 @@ class AdaptiveAxisFeatures(nn.Module):
 
     def set_extra_state(
         self,
-        state: dict[str, float | int | tuple[float, float]],
+        state: Mapping[str, Any],
     ) -> None:
         center = float(state["center"])
         reference_scale = float(state["reference_scale"])
@@ -467,14 +471,18 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
                 raise ValueError("spatial_scale must be scalar or contain x and y")
             spatial_scales = (float(spatial_scale[0]), float(spatial_scale[1]))
         if isinstance(spatial_length_bounds[0], (int, float)):
-            x_length_bounds = spatial_length_bounds
-            y_length_bounds = spatial_length_bounds
+            # A single (lower, upper) pair shared by both axes.
+            x_length_bounds = y_length_bounds = cast(
+                "tuple[float, float]", spatial_length_bounds
+            )
         else:
             if len(spatial_length_bounds) != 2:
                 raise ValueError(
                     "spatial_length_bounds must be one pair or separate x/y pairs"
                 )
-            x_length_bounds, y_length_bounds = spatial_length_bounds
+            x_length_bounds, y_length_bounds = cast(
+                "tuple[tuple[float, float], tuple[float, float]]", spatial_length_bounds
+            )
         self.x_axis = AdaptiveAxisFeatures(
             center=float(spatial_center[0]),
             reference_scale=spatial_scales[0],

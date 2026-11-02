@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
+from torch import Tensor
 
 from ..renderers.validation import (
     residual_panel_pngs,
@@ -37,9 +38,9 @@ class ValidationPair(BaseModel):
 
 @dataclass
 class ValidationReg:
-    truth: object  # Tensor
-    model: object
-    sigma: Optional[object]
+    truth: Tensor
+    model: Tensor
+    sigma: Optional[Tensor]
     pair: ValidationPair
 
 
@@ -77,7 +78,7 @@ def _register_pair_sync(request: Request, pair: ValidationPair) -> JSONResponse:
     ]
     if pair.sigma_path:
         requested.append(("sigma", pair.sigma_path, pair.sigma_hdu))
-    loaded: dict[str, object] = {}
+    loaded: dict[str, Tensor] = {}
     try:
         for label, rel, hdu_i in requested:
             _, shape = read_shape(str(abs_path(rel)), hdu=hdu_i)

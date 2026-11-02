@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping as TypingMapping, Sequence
+from collections.abc import Iterable, MutableSequence
+from typing import Any, Callable, Mapping as TypingMapping, Sequence, cast
 
 import torch
 from torch import Tensor, nn
@@ -12,6 +13,11 @@ from .semantics import AxisSpec, DomainSpec, UnitSpec, axes_domain
 
 class UnsupportedInverseError(RuntimeError):
     pass
+
+
+def _mapping_list(items: Iterable[Mapping] = ()) -> MutableSequence[Mapping]:
+    """``nn.ModuleList`` of mappings, typed by its element type."""
+    return cast("MutableSequence[Mapping]", nn.ModuleList(items))
 
 
 class Mapping(nn.Module, ABC):
@@ -150,6 +156,9 @@ class IdentityMapping(Mapping):
 
 
 class AffineMapping(Mapping):
+    matrix: Tensor
+    offset: Tensor
+
     def __init__(
         self,
         matrix: Tensor,
@@ -197,6 +206,8 @@ class AffineMapping(Mapping):
 
 
 class UnitConversionMapping(Mapping):
+    factors: Tensor
+
     def __init__(
         self, input_axes: Sequence[AxisSpec], output_axes: Sequence[AxisSpec]
     ) -> None:
@@ -211,7 +222,7 @@ class UnitConversionMapping(Mapping):
                     f"incompatible unit-conversion axes {input_axis.name!r} and "
                     f"{output_axis.name!r}"
                 )
-            factors.append(input_axis.unit.conversion_factor_to(output_axis.unit))
+            factors.append(input_axis.unit_spec.conversion_factor_to(output_axis.unit_spec))
         super().__init__(source, destination, domain=axes_domain(source))
         self.register_buffer("factors", torch.tensor(factors, dtype=torch.float64))
 
@@ -259,8 +270,8 @@ def _validate_serial_axes(left: Mapping, right: Mapping) -> None:
     for source, destination in zip(left.output_axes, right.input_axes, strict=True):
         if not source.compatible_with(destination):
             raise ValueError(
-                f"serial axis mismatch {source.name!r} ({source.unit.symbol}) -> "
-                f"{destination.name!r} ({destination.unit.symbol})"
+                f"serial axis mismatch {source.name!r} ({source.unit_spec.symbol}) -> "
+                f"{destination.name!r} ({destination.unit_spec.symbol})"
             )
 
 
@@ -281,7 +292,7 @@ class SerialMapping(Mapping):
             flattened[-1].output_axes,
             domain=flattened[0].domain,
         )
-        self.mappings = nn.ModuleList(flattened)
+        self.mappings = _mapping_list(flattened)
 
     def _evaluate(self, inputs: Tensor) -> Tensor:
         result = inputs
@@ -318,11 +329,11 @@ class ParallelMapping(Mapping):
                 tuple(flags for item in domains if item is not None for flags in item.closed),
             )
         super().__init__(input_axes, output_axes, domain=domain)
-        self.mappings = nn.ModuleList(mappings_tuple)
+        self.mappings = _mapping_list(mappings_tuple)
         self._input_sizes = tuple(mapping.n_inputs for mapping in mappings_tuple)
 
     def _evaluate(self, inputs: Tensor) -> Tensor:
-        chunks = torch.split(inputs, self._input_sizes, dim=-1)
+        chunks = torch.split(inputs, list(self._input_sizes), dim=-1)
         return torch.cat(
             [mapping(chunk) for mapping, chunk in zip(self.mappings, chunks, strict=True)],
             dim=-1,
@@ -387,7 +398,7 @@ class PortRoutingMapping(Mapping):
             raise ValueError("every route output port must be assigned exactly once")
         super().__init__(input_axes_tuple, output_axes_tuple, domain=domain)
         self.routes = routes_tuple
-        self.route_mappings = nn.ModuleList(route.mapping for route in routes_tuple)
+        self.route_mappings = _mapping_list(route.mapping for route in routes_tuple)
 
     def _evaluate(self, inputs: Tensor) -> Tensor:
         outputs: list[Tensor | None] = [None] * self.n_outputs
@@ -422,6 +433,8 @@ class NumericalInverseResult:
 
 
 class NumericalInverseMapping(Mapping):
+    initial: Tensor
+
     def __init__(
         self,
         mapping: Mapping,

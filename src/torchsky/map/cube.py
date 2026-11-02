@@ -190,10 +190,10 @@ def _coadd_ifu_3d_cube(
                 ra_d,
                 dec_d,
                 lam_d,
-                zenith_angle_deg=float(obs.dcr_zenith_deg),
-                parallactic_angle_deg=float(obs.dcr_parallactic_deg),
-                reference_wavelength_angstrom=float(obs.dcr_ref_wavelength),
-                pressure_hpa=float(obs.dcr_pressure_hpa),
+                zenith_deg=float(obs.dcr_zenith_deg),
+                parallactic_deg=float(obs.dcr_parallactic_deg),
+                ref_wavelength_angstrom=float(obs.dcr_ref_wavelength),
+                pressure_mbar=float(obs.dcr_pressure_hpa),
                 temperature_c=float(obs.dcr_temperature_c),
             )
         if (
@@ -204,10 +204,10 @@ def _coadd_ifu_3d_cube(
             ra_d, dec_d = apply_ephemeris_offset(
                 ra_d,
                 dec_d,
-                d_ra_cosdec_arcsec_per_hr=float(obs.tracking_rate[0]),
-                d_dec_arcsec_per_hr=float(obs.tracking_rate[1]),
+                dra_cosdec_arcsec_per_hr=float(obs.tracking_rate[0]),
+                ddec_arcsec_per_hr=float(obs.tracking_rate[1]),
                 mjd_obs=float(obs.mjd_obs),
-                mjd_ref=float(obs.reference_mjd),
+                reference_mjd=float(obs.reference_mjd),
             )
 
         xt, yt = target_wcs.world_to_pixel(ra_d, dec_d)
@@ -516,7 +516,10 @@ def coadd_cube(
             device=device,
         )
 
-    obs_shifted = _apply_observation_astrometric_shifts(observations, device)
+    # IFU inputs returned above; the mixed case was rejected, so these are image observations.
+    obs_shifted = _apply_observation_astrometric_shifts(
+        cast(Sequence[Observation], observations), device
+    )
     if (
         isinstance(target, PlannedImagePlaneCubeTarget)
         and spectral_axis is None

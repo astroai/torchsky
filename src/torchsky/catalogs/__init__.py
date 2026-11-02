@@ -93,9 +93,12 @@ def crossmatch(
             raise ValueError(
                 "radius_arcsec is required when 4 coordinate arrays are passed"
             )
+        # Not the Catalog pair handled above: these are coordinate arrays.
+        left_lon: Any = left
+        right_lon: Any = right
         return crossmatch_sky(
-            left,
-            right,
+            left_lon,
+            right_lon,
             radius_arcsec_or_right_lon,
             right_lat,
             radius_arcsec=rad,
@@ -126,8 +129,12 @@ def crossmatch(
     if rad is None:
         raise ValueError("radius_arcsec is required")
     if streamed:
+        if find != "best":
+            raise ValueError("streamed crossmatch supports find='best' only")
+        left_batches: Any = left
+        right_ra, right_dec = right
         return crossmatch_sky_streamed(
-            left, right, radius_arcsec=float(rad), find=find, **kwargs
+            left_batches, right_ra, right_dec, radius_arcsec=float(rad), **kwargs
         )
     return crossmatch_sky_from_arrow(
         left, right, radius_arcsec=float(rad), find=find, **kwargs

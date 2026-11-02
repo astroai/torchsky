@@ -346,7 +346,7 @@ def a_lambda(
 
 def ccm89(
     wave_angstrom: Tensor,
-    a_v: Tensor,
+    a_v: Tensor | float,
     r_v: Tensor | float | None = None,
     *,
     wavelength_unit: WavelengthUnit = "angstrom",

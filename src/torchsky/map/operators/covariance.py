@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 import math
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 import torch
 from torch import Tensor
@@ -333,7 +333,10 @@ class NuisancePrecisionAdapter:
         action = getattr(nuisance, "apply", None)
         if not callable(action):
             raise TypeError("nuisance object must expose apply")
-        return cls(action, getattr(nuisance, "logdet_covariance_correction", None))
+        return cls(
+            cast(Callable[[Tensor], Tensor], action),
+            getattr(nuisance, "logdet_covariance_correction", None),
+        )
 
     def apply_precision(self, value: Tensor) -> Tensor:
         result = self.action(value)

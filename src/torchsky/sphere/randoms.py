@@ -125,7 +125,7 @@ def _prepare_sparse_random_sampler(
         if weights == "values":
             w_raw = footprint.values
         elif footprint.column_names and weights in footprint.column_names:
-            w_raw = footprint[weights].values
+            w_raw = footprint.get_column(weights).values
         else:
             raise ValueError(f"unknown weights specification: {weights!r}")
     elif isinstance(weights, SparseHealpixMap):

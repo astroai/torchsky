@@ -9,6 +9,7 @@ added; the axes styling is left to the caller.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -59,7 +60,7 @@ def _limits(images: list[Tensor], percentile: tuple[float, float]) -> tuple[floa
 
 
 def _band_labels(
-    labels: list[tuple[int, int]], wave: Tensor, unit: str
+    labels: Sequence[Sequence[int] | Tensor], wave: Tensor, unit: str
 ) -> list[str]:
     names = ("B", "G", "R")
     out = []
@@ -161,8 +162,7 @@ def plot_pseudo_rgb(
         fig, ax = plt.subplots(figsize=(7.6, 7.0), dpi=dpi)
         _theme.apply_figure_theme(fig, theme)
         _theme.title_block(fig, title, subtitle, theme)
-        folio = _theme.theme_tokens(theme)
-        _theme.apply_axes_theme(ax, folio, grid=False)
+        _theme.apply_axes_theme(ax, theme, grid=False)
         fig.subplots_adjust(top=0.80 if (title or subtitle) else 0.94)
 
     tokens = _theme.theme_tokens(theme)

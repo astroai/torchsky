@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import overload
 
 import torch
 import torch.nn.functional as F
@@ -462,6 +463,28 @@ def _column_weights(coefficients: Tensor, channels: int, with_variance: bool) ->
     )
 
 
+@overload
+def _separable_sample_chunked(
+    planes: Tensor,
+    variance: Tensor | None,
+    x: Tensor,
+    y: Tensor,
+    *,
+    kernel: MapResamplingKernel,
+    require_finite: bool,
+    chunk_size: int | None,
+) -> tuple[Tensor, Tensor | None]: ...
+@overload
+def _separable_sample_chunked(
+    planes: None,
+    variance: Tensor | None,
+    x: Tensor,
+    y: Tensor,
+    *,
+    kernel: MapResamplingKernel,
+    require_finite: bool,
+    chunk_size: int | None,
+) -> tuple[None, Tensor | None]: ...
 def _separable_sample_chunked(
     planes: Tensor | None,
     variance: Tensor | None,
@@ -529,7 +552,9 @@ def _separable_sample_chunked(
                 table = torch.cat([table, variance_column], dim=0)
             table = table.t().contiguous()
         elif planes is None and table is None:
-            table = variance_column.t().contiguous()  # type: ignore[union-attr]
+            assert variance_column is not None  # planes and variance are never both None
+            table = variance_column.t().contiguous()
+        assert table is not None
         for start in range(0, count, chunk):
             stop = min(start + chunk, count)
             xc = x[b, start:stop].to(dtype=dtype)
@@ -556,6 +581,7 @@ def _separable_sample_chunked(
                         row = gathered * x_w[tx]
                     else:
                         row.addcmul_(gathered, x_w[tx])
+                assert row is not None
                 if acc is None:
                     acc = row * y_w[ty]
                 else:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 from torch import Tensor
 
@@ -296,7 +298,7 @@ def _world_to_native(
     ) * _R2D
 
 
-def _wcs_reference(direction: str, *args: object) -> tuple[Tensor, Tensor]:
+def _wcs_reference(direction: str, *args: Any) -> tuple[Tensor, Tensor]:
     first, second = args[:2]
     assert isinstance(first, Tensor) and isinstance(second, Tensor)
     (

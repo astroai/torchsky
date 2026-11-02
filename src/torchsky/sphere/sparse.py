@@ -326,7 +326,7 @@ class SparseHealpixMap:
 
     def __getitem__(
         self, key: str | int | Tensor | list[str] | tuple[str, ...]
-    ) -> "SparseHealpixMap" | Tensor:
+    ) -> SparseHealpixMap | Tensor:
         if isinstance(key, str):
             return self.get_column(key)
         if isinstance(key, (list, tuple)) and all(isinstance(k, str) for k in key):
@@ -1353,7 +1353,7 @@ class SparseHealpixMap:
         power: float | None,
         fv: Any,
         out_nside_coverage: int | None,
-    ) -> "SparseHealpixMap" | None:
+    ) -> SparseHealpixMap | None:
         """Degrade using fill-block layout. None means use the pixel-list path.
 
         Floating maps only, and only when coverage nside is unchanged so each
@@ -1703,9 +1703,14 @@ class SparseHealpixMap:
     ) -> None:
         from torchfits import insert_hdu, write
 
-        nside_cov = int(
+        resolved_coverage = (
             self.nside_coverage if nside_coverage is None else nside_coverage
         )
+        if resolved_coverage is None:
+            raise ValueError(
+                "nside_coverage is required when the map has no hierarchical coverage"
+            )
+        nside_cov = int(resolved_coverage)
         cov_map, sparse = _encode_healsparse_images(
             self.pixels,
             self.values,
