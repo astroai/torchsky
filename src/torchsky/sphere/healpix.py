@@ -1,5 +1,5 @@
 import math
-from typing import Callable, Sequence, Tuple
+from typing import Sequence, Tuple
 
 import torch
 
@@ -7,110 +7,52 @@ from .. import _ops
 from .._dtype import work_dtype as _float_dtype_for_device
 from torch import Tensor
 
+from ._healpix_scheme import (  # noqa: F401
+    _CAP_START_CACHE,
+    _FACE_CONST_CACHE,
+    _JPLL,
+    _JRLL,
+    _MAX_PIXEL_RADIUS_CACHE,
+    _NB_FACEARRAY,
+    _NB_SWAPARRAY,
+    _NB_XOFFSET,
+    _NB_YOFFSET,
+    _as_float64,
+    _as_int64,
+    _cap_ring_starts,
+    _face_consts,
+    _isqrt,
+    _nest2xyf,
+    _pix2thetaphi_ring,
+    _ring2xyf,
+    _validate_lonlat,
+    _validate_nside,
+    _xyf2nest,
+    _xyf2ring,
+)
+from ._healpix_query_support import (  # noqa: F401
+    _CELL_RADIUS_CACHE,
+    _CELL_RADIUS_EXACT_LEVELS,
+    _cell_radius_bound,
+    _get_ring_info2,
+    _nest_ranges_by_descent,
+    _normalize_order,
+    _normalize_xyz,
+    _pixel_range_chunks,
+    _query_disc_nest_ranges,
+    _ranges_to_sorted_pixels,
+    _resolve_dtype,
+    _ring_above,
+    _ring_pixels_colatitude_band,
+    _strip_nest_pixels,
+)
+
 try:
     from torch.func import vmap
 except ImportError:
     vmap = None
 
-_JRLL = torch.tensor([2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4], dtype=torch.int64)
-_JPLL = torch.tensor([1, 3, 5, 7, 0, 2, 4, 6, 1, 3, 5, 7], dtype=torch.int64)
-_FACE_CONST_CACHE: dict[tuple[str, int], tuple[Tensor, Tensor]] = {}
-_CAP_START_CACHE: dict[tuple[str, int, int], Tensor] = {}
-_MAX_PIXEL_RADIUS_CACHE: dict[int, float] = {}
-_NB_XOFFSET = torch.tensor([-1, -1, 0, 1, 1, 1, 0, -1], dtype=torch.int64)
-_NB_YOFFSET = torch.tensor([0, 1, 1, 1, 0, -1, -1, -1], dtype=torch.int64)
-_NB_FACEARRAY = torch.tensor(
-    [
-        [8, 9, 10, 11, -1, -1, -1, -1, 10, 11, 8, 9],
-        [5, 6, 7, 4, 8, 9, 10, 11, 9, 10, 11, 8],
-        [-1, -1, -1, -1, 5, 6, 7, 4, -1, -1, -1, -1],
-        [4, 5, 6, 7, 11, 8, 9, 10, 11, 8, 9, 10],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-        [1, 2, 3, 0, 0, 1, 2, 3, 5, 6, 7, 4],
-        [-1, -1, -1, -1, 7, 4, 5, 6, -1, -1, -1, -1],
-        [3, 0, 1, 2, 3, 0, 1, 2, 4, 5, 6, 7],
-        [2, 3, 0, 1, -1, -1, -1, -1, 0, 1, 2, 3],
-    ],
-    dtype=torch.int64,
-)
-_NB_SWAPARRAY = torch.tensor(
-    [
-        [0, 0, 3],
-        [0, 0, 6],
-        [0, 0, 0],
-        [0, 0, 5],
-        [0, 0, 0],
-        [5, 0, 0],
-        [0, 0, 0],
-        [6, 0, 0],
-        [3, 0, 0],
-    ],
-    dtype=torch.int64,
-)
 UNSEEN = -1.6375e30
-
-
-def _validate_nside(nside: int) -> None:
-    if nside <= 0 or (nside & (nside - 1)) != 0:
-        raise ValueError("nside must be a positive power of two")
-    if nside > (1 << 29):
-        raise ValueError("nside must be <= 2**29 (HEALPix order 29)")
-
-
-def _validate_lonlat(lon: Tensor, lat: Tensor) -> None:
-    if not bool(torch.isfinite(lon).all()) or not bool(torch.isfinite(lat).all()):
-        raise ValueError("longitude and latitude must be finite")
-    if bool(torch.any((lat < -90.0) | (lat > 90.0))):
-        raise ValueError("latitude must be in [-90, 90]")
-
-
-def _as_float64(x: Tensor | float | list[float]) -> Tensor:
-    t = torch.as_tensor(x)
-    return t.to(dtype=_float_dtype_for_device(t.device))
-
-
-def _as_int64(x: Tensor | float | Sequence[int]) -> Tensor:
-    return torch.as_tensor(x, dtype=torch.int64)
-
-
-def _face_consts(device: torch.device) -> Tuple[Tensor, Tensor]:
-    idx = -1 if device.index is None else int(device.index)
-    key = (device.type, idx)
-    cached = _FACE_CONST_CACHE.get(key)
-    if cached is not None:
-        return cached
-    jrll = _JRLL.to(device=device)
-    jpll = _JPLL.to(device=device)
-    _FACE_CONST_CACHE[key] = (jrll, jpll)
-    return jrll, jpll
-
-
-def _cap_ring_starts(nside: int, device: torch.device) -> Tensor:
-    idx = -1 if device.index is None else int(device.index)
-    key = (device.type, idx, nside)
-    cached = _CAP_START_CACHE.get(key)
-    if cached is not None:
-        return cached
-    ir = torch.arange(1, nside + 1, dtype=torch.int64, device=device)
-    starts = 2 * ir * (ir - 1)
-    _CAP_START_CACHE[key] = starts
-    return starts
-
-
-def _isqrt(v: Tensor) -> Tensor:
-    v = v.to(torch.int64)
-    # Use native integer sqrt when available, fallback to corrected float path.
-    native_isqrt = getattr(torch, "isqrt", None)  # absent from older torch builds
-    if native_isqrt is not None:
-        try:
-            return native_isqrt(v)
-        except RuntimeError:
-            pass
-    f_dtype = _float_dtype_for_device(v.device)
-    r = torch.floor(torch.sqrt(v.to(f_dtype))).to(torch.int64)
-    r = torch.where((r + 1) * (r + 1) <= v, r + 1, r)
-    r = torch.where(r * r > v, r - 1, r)
-    return r
 
 
 def spread_bits(x: Tensor) -> Tensor:
@@ -133,119 +75,6 @@ def compact_bits(x: Tensor) -> Tensor:
     x = (x | (x >> 8)) & 0x0000FFFF0000FFFF
     x = (x | (x >> 16)) & 0x00000000FFFFFFFF
     return x
-
-
-def _xyf2nest(nside: int, ix: Tensor, iy: Tensor, face_num: Tensor) -> Tensor:
-    npface = nside * nside
-    return face_num * npface + spread_bits(ix) + (spread_bits(iy) << 1)
-
-
-def _nest2xyf(nside: int, pix: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-    npface = nside * nside
-    face_num = pix // npface
-    ipf = pix % npface
-    ix = compact_bits(ipf)
-    iy = compact_bits(ipf >> 1)
-    return ix, iy, face_num
-
-
-def _xyf2ring(nside: int, ix: Tensor, iy: Tensor, face_num: Tensor) -> Tensor:
-    nl4 = 4 * nside
-    ncap = 2 * nside * (nside - 1)
-    npix = 12 * nside * nside
-    jrll, jpll = _face_consts(face_num.device)
-    jr = jrll[face_num] * nside - ix - iy - 1
-
-    north = jr < nside
-    south = jr > (3 * nside)
-    equat = ~(north | south)
-
-    nr_south = nl4 - jr
-    nr = torch.where(
-        north, jr, torch.where(south, nr_south, torch.full_like(jr, nside))
-    )
-    n_before_north = 2 * nr * (nr - 1)
-    n_before_south = npix - 2 * (nr + 1) * nr
-    n_before_equat = ncap + (jr - nside) * nl4
-    n_before = torch.where(
-        north, n_before_north, torch.where(south, n_before_south, n_before_equat)
-    )
-    kshift = torch.where(equat, (jr - nside) & 1, torch.zeros_like(jr))
-
-    jp = (jpll[face_num] * nr + ix - iy + 1 + kshift) // 2
-    jp = torch.where(jp > nl4, jp - nl4, jp)
-    jp = torch.where(jp < 1, jp + nl4, jp)
-
-    return n_before + jp - 1
-
-
-def _ring2xyf(nside: int, pix: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-    ncap = 2 * nside * (nside - 1)
-    npix = 12 * nside * nside
-    nl2 = 2 * nside
-    pix = pix.to(torch.int64)
-    jrll, jpll = _face_consts(pix.device)
-    starts = _cap_ring_starts(nside, pix.device)
-
-    iring = torch.empty_like(pix)
-    iphi = torch.empty_like(pix)
-    kshift = torch.empty_like(pix)
-    nr = torch.empty_like(pix)
-    face_num = torch.empty_like(pix)
-
-    north = pix < ncap
-    equat = (pix >= ncap) & (pix < (npix - ncap))
-    south = ~(north | equat)
-
-    if north.any():
-        p = pix[north]
-        ir = torch.bucketize(p, starts, right=True)
-        iph = (p + 1) - 2 * ir * (ir - 1)
-        iring[north] = ir
-        iphi[north] = iph
-        kshift[north] = 0
-        nr[north] = ir
-        face_num[north] = (iph - 1) // ir
-
-    if equat.any():
-        p = pix[equat]
-        ip = p - ncap
-        ir = (ip // (4 * nside)) + nside
-        iph = (ip % (4 * nside)) + 1
-        ks = (ir + nside) & 1
-        ire = ir - nside + 1
-        irm = nl2 + 2 - ire
-        ifm = (iph - (ire // 2) + nside - 1) // nside
-        ifp = (iph - (irm // 2) + nside - 1) // nside
-        f = torch.where(ifp == ifm, ifp | 4, torch.where(ifp < ifm, ifp, ifm + 8))
-
-        iring[equat] = ir
-        iphi[equat] = iph
-        kshift[equat] = ks
-        nr[equat] = nside
-        face_num[equat] = f
-
-    if south.any():
-        p = pix[south]
-        ip = npix - p
-        irs = torch.bucketize(ip - 1, starts, right=True)
-        iph = 4 * irs + 1 - (ip - 2 * irs * (irs - 1))
-        ir = 2 * nl2 - irs
-        f = 8 + (iph - 1) // irs
-
-        iring[south] = ir
-        iphi[south] = iph
-        kshift[south] = 0
-        nr[south] = irs
-        face_num[south] = f
-
-    irt = iring - jrll[face_num] * nside + 1
-    ipt = 2 * iphi - jpll[face_num] * nr - kshift - 1
-    ipt = torch.where(ipt >= nl2, ipt - 8 * nside, ipt)
-
-    ix = torch.div(ipt - irt, 2, rounding_mode="floor")
-    iy = torch.div(-(ipt + irt), 2, rounding_mode="floor")
-    return ix, iy, face_num
 
 
 def ang2pix_ring(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
@@ -317,63 +146,6 @@ def ang2pix_ring(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
         pix[pol] = ppix
 
     return pix
-
-
-def _pix2thetaphi_ring(nside: int, pix: Tensor) -> tuple[Tensor, Tensor]:
-    """Convert HEALPix RING indices to (theta, phi) in radians."""
-    _validate_nside(nside)
-    pix_t = _as_int64(pix)
-    f_dtype = _float_dtype_for_device(pix_t.device)
-
-    ncap = 2 * nside * (nside - 1)
-    npix = 12 * nside * nside
-    if torch.any((pix_t < 0) | (pix_t >= npix)):
-        raise ValueError("pixel index out of range for nside")
-
-    fact2 = 4.0 / npix
-
-    z = torch.empty_like(pix_t, dtype=f_dtype)
-    theta = torch.empty_like(pix_t, dtype=f_dtype)
-    phi = torch.empty_like(pix_t, dtype=f_dtype)
-
-    north = pix_t < ncap
-    equat = (pix_t >= ncap) & (pix_t < (npix - ncap))
-    south = ~(north | equat)
-
-    if north.any():
-        p = pix_t[north]
-        iring = (1 + _isqrt(1 + 2 * p)) >> 1
-        iphi = (p + 1) - 2 * iring * (iring - 1)
-        tmp = torch.square(iring.to(f_dtype)) * fact2
-        z[north] = 1.0 - tmp
-        sint = torch.sqrt(torch.clamp(tmp * (2.0 - tmp), min=0.0))
-        theta[north] = torch.atan2(sint, z[north])
-        phi[north] = (iphi.to(f_dtype) - 0.5) * ((math.pi / 2.0) / iring.to(f_dtype))
-
-    if equat.any():
-        p = pix_t[equat]
-        fact1 = (2 * nside) * fact2
-        ip = p - ncap
-        iring = (ip // (4 * nside)) + nside
-        iphi = (ip % (4 * nside)) + 1
-        fodd = torch.where(((iring + nside) & 1).bool(), 1.0, 0.5)
-        z[equat] = (2 * nside - iring).to(f_dtype) * fact1
-        theta[equat] = torch.acos(torch.clamp(z[equat], -1.0, 1.0))
-        phi[equat] = (iphi.to(f_dtype) - fodd) * (math.pi / (2 * nside))
-
-    if south.any():
-        p = pix_t[south]
-        ip = npix - p
-        iring = (1 + _isqrt(2 * ip - 1)) >> 1
-        iphi = 4 * iring + 1 - (ip - 2 * iring * (iring - 1))
-        tmp = torch.square(iring.to(f_dtype)) * fact2
-        z[south] = -1.0 + tmp
-        sint = torch.sqrt(torch.clamp(tmp * (2.0 - tmp), min=0.0))
-        theta[south] = math.pi - torch.atan2(sint, 1.0 - tmp)
-        phi[south] = (iphi.to(f_dtype) - 0.5) * ((math.pi / 2.0) / iring.to(f_dtype))
-
-    phi = torch.remainder(phi, 2.0 * math.pi)
-    return theta, phi
 
 
 def pix2ang_ring(nside: int, pix: Tensor) -> Tuple[Tensor, Tensor]:
@@ -1246,128 +1018,6 @@ def get_interp_val(
     return out
 
 
-def _normalize_xyz(
-    x: Tensor, y: Tensor, z: Tensor, eps: float = 1.0e-15
-) -> tuple[Tensor, Tensor, Tensor]:
-    scale = torch.maximum(
-        torch.maximum(torch.abs(x), torch.abs(y)), torch.abs(z)
-    ).clamp_min(eps)
-    xs = x / scale
-    ys = y / scale
-    zs = z / scale
-    n = torch.sqrt(xs * xs + ys * ys + zs * zs)
-    return xs / n, ys / n, zs / n
-
-
-def _pixel_range_chunks(
-    npix: int, chunk_size: int = 1_000_000
-) -> list[tuple[int, int]]:
-    if chunk_size <= 0:
-        raise ValueError("chunk_size must be positive")
-    out: list[tuple[int, int]] = []
-    start = 0
-    while start < npix:
-        end = min(npix, start + chunk_size)
-        out.append((start, end))
-        start = end
-    return out
-
-
-def _ring_above(nside: int, z: Tensor) -> Tensor:
-    """Vectorized HEALPix ring_above(z) helper."""
-    zf = _as_float64(z)
-    az = torch.abs(zf)
-    eq = az <= (2.0 / 3.0)
-
-    ir_eq = torch.floor(nside * (2.0 - 1.5 * zf)).to(torch.int64)
-    ir_p = torch.floor(nside * torch.sqrt(torch.clamp(3.0 * (1.0 - az), min=0.0))).to(
-        torch.int64
-    )
-    ir = torch.where(eq, ir_eq, torch.where(zf > 0.0, ir_p, 4 * nside - ir_p - 1))
-    return ir
-
-
-def _get_ring_info2(nside: int, ring: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    """Vectorized get_ring_info2 helper for interpolation."""
-    r = torch.as_tensor(ring, dtype=torch.int64)
-    fd = _float_dtype_for_device(r.device)
-    npix = nside2npix(nside)
-    ncap = 2 * nside * (nside - 1)
-    fact2 = 4.0 / float(npix)
-    fact1 = (2.0 * float(nside)) * fact2
-
-    northr = torch.where(r > 2 * nside, 4 * nside - r, r)
-    northf = northr.to(fd)
-    polar = northr < nside
-
-    tmp = northf * northf * fact2
-    costheta_p = 1.0 - tmp
-    sintheta_p = torch.sqrt(torch.clamp(tmp * (2.0 - tmp), min=0.0))
-    theta_p = torch.atan2(sintheta_p, costheta_p)
-    ringpix_p = 4 * northr
-    shifted_p = torch.ones_like(polar, dtype=torch.bool)
-    startpix_p = 2 * northr * (northr - 1)
-
-    theta_e = torch.acos(torch.clamp((2.0 * float(nside) - northf) * fact1, -1.0, 1.0))
-    ringpix_e = torch.full_like(r, 4 * nside)
-    shifted_e = ((northr - nside) & 1) == 0
-    startpix_e = ncap + (northr - nside) * ringpix_e
-
-    theta = torch.where(polar, theta_p, theta_e)
-    ringpix = torch.where(polar, ringpix_p, ringpix_e)
-    shifted = torch.where(polar, shifted_p, shifted_e)
-    startpix = torch.where(polar, startpix_p, startpix_e)
-
-    south = northr != r
-    theta = torch.where(south, math.pi - theta, theta)
-    startpix = torch.where(south, npix - startpix - ringpix, startpix)
-
-    return startpix, ringpix, theta, shifted
-
-
-def _ring_pixels_colatitude_band(
-    nside: int,
-    theta_lo: float,
-    theta_hi: float,
-    *,
-    nest: bool,
-) -> Tensor:
-    """RING indices for pixels whose ring colatitude lies in ``[theta_lo, theta_hi]``.
-
-    Colatitude is radians from the north pole (0 at pole, ``pi`` at south pole), matching
-    ``theta = deg2rad(90 - lat)`` from ``pix2ang(..., lonlat=True)``.
-
-    Cost is **O(nside)** ring metadata plus **O(output)** index materialization.
-    """
-    _validate_nside(nside)
-    lo = min(theta_lo, theta_hi)
-    hi = max(theta_lo, theta_hi)
-    if hi < 0.0 or lo > math.pi:
-        return torch.empty((0,), dtype=torch.int64)
-    lo = max(0.0, lo)
-    hi = min(math.pi, hi)
-
-    if 4 * nside <= 1:
-        return torch.empty((0,), dtype=torch.int64)
-
-    rings = torch.arange(1, 4 * nside, dtype=torch.int64)
-    startpix, ringpix, theta, _shifted = _get_ring_info2(nside, rings)
-    mask = (theta >= lo) & (theta <= hi)
-    idx = torch.nonzero(mask, as_tuple=False).flatten()
-    if idx.numel() == 0:
-        return torch.empty((0,), dtype=torch.int64)
-
-    parts: list[Tensor] = []
-    for j in idx:
-        sp = int(startpix[j].item())
-        rp = int(ringpix[j].item())
-        parts.append(torch.arange(sp, sp + rp, dtype=torch.int64))
-    ring_out = torch.cat(parts, dim=0)
-    if nest:
-        return ring2nest(nside, ring_out)
-    return ring_out
-
-
 def max_pixel_radius(nside: int, degrees: bool = False) -> float:
     """
     Return a conservative maximum center-to-corner radius for pixels at `nside`.
@@ -1555,66 +1205,6 @@ def query_disc(
     return torch.cat(selected, dim=0)
 
 
-def _query_disc_nest_ranges(
-    nside: int,
-    vec: Tensor | Sequence[float],
-    radius: float,
-    *,
-    inclusive: bool = False,
-    fact: int = 4,
-) -> Tensor | None:
-    """NESTED half-open ``(N, 2)`` pixel ranges of :func:`query_disc`.
-
-    Hierarchical quadtree descent: cells inside the disc become one range
-    without visiting their pixels, so the cost is ``O(nside + ranges)`` rather
-    than ``O(pixels)``. Returns ``None`` when the native kernel is unavailable
-    (MPS or no extension); callers then compress ``query_disc`` output.
-    """
-    _validate_nside(nside)
-    radius = float(radius)
-    if not math.isfinite(radius) or radius < 0.0 or radius > math.pi:
-        raise ValueError("radius must be finite and in [0, pi]")
-    fact_i = int(fact)
-    if fact_i < 1:
-        raise ValueError("fact must be a positive integer")
-    if fact_i & (fact_i - 1) != 0:
-        raise ValueError("for nest ordering, fact must be a power of two")
-    v_any = torch.as_tensor(vec).reshape(-1)
-    if v_any.numel() != 3:
-        raise ValueError("vec must be length-3 Cartesian vector")
-    out_device = v_any.device
-    if not bool(torch.isfinite(v_any).all()):
-        raise ValueError("vec must contain exactly 3 finite values")
-    if not bool(torch.any(v_any != 0)):
-        raise ValueError("vec norm must be positive")
-    if out_device.type == "mps" or not _ops.has_fixed_dispatcher():
-        return None
-    if inclusive and fact_i != 4:
-        nside_hi = int(nside) * fact_i
-        _validate_nside(nside_hi)
-        hi = _query_disc_nest_ranges(nside_hi, v_any, radius, inclusive=True, fact=4)
-        if hi is None or hi.numel() == 0:
-            return hi
-        block = fact_i * fact_i
-        starts = torch.div(hi[:, 0], block, rounding_mode="floor")
-        ends = torch.div(hi[:, 1] + (block - 1), block, rounding_mode="floor")
-        run_end = torch.cummax(ends, dim=0).values
-        new_group = torch.ones_like(starts, dtype=torch.bool)
-        new_group[1:] = starts[1:] > run_end[:-1]
-        first = torch.nonzero(new_group).reshape(-1)
-        last = torch.cat((first[1:] - 1, first.new_full((1,), starts.numel() - 1)))
-        return torch.stack((starts[first], run_end[last]), dim=1)
-    v64 = v_any.detach().to(device="cpu").to(dtype=torch.float64).reshape(-1)
-    radius_eff = min(
-        math.pi,
-        radius + (max_pixel_radius(nside, degrees=False) if inclusive else 0.0),
-    )
-    out = torch.ops.torchsky.sphere_query_disc_nest_ranges(
-        int(nside), v64.contiguous(), float(math.cos(radius_eff))
-    )
-    return out if out_device.type == "cpu" else out.to(device=out_device)
-
-
 def query_circle(
     nside: int,
     lon: Tensor | float,
@@ -1669,95 +1259,6 @@ def query_circle_vec(
     )
 
 
-_CELL_RADIUS_EXACT_LEVELS = 5
-_CELL_RADIUS_CACHE: dict[int, float] = {}
-
-
-def _cell_radius_bound(level: int) -> float:
-    """Upper bound (rad) on the centre-to-boundary distance of order-``level`` cells.
-
-    Exhaustive over corners and edge midpoints up to ``nside = 32``, then the
-    self-similar ``1 / nside`` law with 8% slack (the native disc kernel uses the
-    same construction).
-    """
-    exact = _CELL_RADIUS_EXACT_LEVELS
-    if level > exact:
-        return _cell_radius_bound(exact) * 2.0 ** (exact - level) * 1.08
-    cached = _CELL_RADIUS_CACHE.get(level)
-    if cached is None:
-        ns = 1 << level
-        pix = torch.arange(12 * ns * ns, dtype=torch.int64)
-        cx, cy, cz = pix2vec(ns, pix, nest=True)
-        centre = torch.stack((cx, cy, cz), dim=-1).unsqueeze(-1)  # (N, 3, 1)
-        pts = boundaries(ns, pix, step=2, nest=True)  # (N, 3, 8)
-        cross = torch.cross(centre.expand_as(pts), pts, dim=1).norm(dim=1)
-        dot = (centre * pts).sum(dim=1)
-        cached = float(torch.atan2(cross, dot).max()) * 1.02 + 1.0e-12
-        _CELL_RADIUS_CACHE[level] = cached
-    return cached
-
-
-def _nest_ranges_by_descent(
-    nside: int,
-    classify: Callable[[Tensor, float], tuple[Tensor, Tensor]],
-    leaf_keep: Callable[[Tensor], Tensor],
-) -> Tensor:
-    """Hierarchical NESTED range query: sorted disjoint half-open ``(N, 2)`` ranges.
-
-    ``classify(centres, radius)`` returns ``(inside, outside)`` masks for cells
-    whose centre-to-boundary distance is at most ``radius`` (conservative: a cell
-    is ``inside``/``outside`` only if every point of it is). Inside cells emit
-    their contiguous NESTED range, outside cells vanish, and ambiguous cells split
-    into four children down to pixels, where ``leaf_keep(pixels)`` decides exactly.
-    Work is ``O(boundary cells)`` per level; interior pixels are never visited.
-    """
-    levels = int(nside).bit_length() - 1
-    cells = torch.arange(12, dtype=torch.int64)
-    starts: list[Tensor] = []
-    ends: list[Tensor] = []
-    for level in range(levels + 1):
-        if cells.numel() == 0:
-            break
-        ns_j = 1 << level
-        x, y, z = pix2vec(ns_j, cells, nest=True)
-        inside, outside = classify(
-            torch.stack((x, y, z), dim=-1), _cell_radius_bound(level)
-        )
-        shift = 2 * (levels - level)
-        if bool(inside.any()):
-            c = cells[inside]
-            starts.append(c << shift)
-            ends.append((c + 1) << shift)
-        boundary = cells[~(inside | outside)]
-        if level == levels:
-            if boundary.numel() > 0:
-                keep = boundary[leaf_keep(boundary)]
-                starts.append(keep)
-                ends.append(keep + 1)
-            break
-        boundary = boundary.unsqueeze(1) * 4 + torch.arange(4, dtype=torch.int64)
-        cells = boundary.reshape(-1)
-    if not starts:
-        return torch.empty((0, 2), dtype=torch.int64)
-    st = torch.cat(starts)
-    en = torch.cat(ends)
-    if st.numel() == 0:
-        return torch.empty((0, 2), dtype=torch.int64)
-    order = torch.argsort(st)
-    st = st[order]
-    en = en[order]
-    run_end = torch.cummax(en, dim=0).values
-    new_group = torch.ones_like(st, dtype=torch.bool)
-    new_group[1:] = st[1:] > run_end[:-1]
-    first = torch.nonzero(new_group).reshape(-1)
-    last = torch.cat((first[1:] - 1, first.new_full((1,), st.numel() - 1)))
-    return torch.stack((st[first], run_end[last]), dim=1)
-
-
-def _ranges_to_sorted_pixels(ranges: Tensor) -> Tensor:
-    return pixel_ranges_to_pixels(ranges, inclusive=False)
-
-
 def query_strip(
     nside: int,
     theta1: float,
@@ -1784,39 +1285,6 @@ def query_strip(
     if nest:
         return _strip_nest_pixels(nside, lo, hi)
     return _ring_pixels_colatitude_band(nside, lo, hi, nest=False)
-
-
-def _strip_nest_pixels(nside: int, lo: float, hi: float) -> Tensor:
-    """NESTED pixels of the rings with centre colatitude in ``[lo, hi]`` (ascending).
-
-    Hierarchical: cells whose colatitude interval lies inside the band emit one
-    range; only cells straddling a band edge are refined, and pixels are decided by
-    their ring's colatitude exactly as the ring-ordered band query does.
-    """
-    if hi < 0.0 or lo > math.pi or 4 * nside <= 1:
-        return torch.empty((0,), dtype=torch.int64)
-    rings = torch.arange(1, 4 * nside, dtype=torch.int64)
-    startpix, _ringpix, theta, _shifted = _get_ring_info2(nside, rings)
-    ring_in = (theta >= lo) & (theta <= hi)
-    margin = 1.0e-9
-
-    def _classify(centres: Tensor, radius: float) -> tuple[Tensor, Tensor]:
-        colat = torch.atan2(torch.hypot(centres[:, 0], centres[:, 1]), centres[:, 2])
-        inside = ((colat - radius) >= (lo + margin)) & (
-            (colat + radius) <= (hi - margin)
-        )
-        outside = ((colat + radius) < (lo - margin)) | (
-            (colat - radius) > (hi + margin)
-        )
-        return inside, outside
-
-    def _leaf(pix: Tensor) -> Tensor:
-        ring_pix = nest2ring(nside, pix)
-        ring_idx = torch.searchsorted(startpix, ring_pix, right=True) - 1
-        return ring_in[ring_idx]
-
-    ranges = _nest_ranges_by_descent(nside, _classify, _leaf)
-    return _ranges_to_sorted_pixels(ranges)
 
 
 def query_polygon(
@@ -2391,38 +1859,6 @@ def mask_bad(
             return torch.zeros_like(t, dtype=torch.bool)
     bad = torch.tensor(float(badval), dtype=t.dtype, device=t.device)
     return (~torch.isfinite(t)) | torch.isclose(t, bad, rtol=rtol, atol=atol)
-
-
-def _normalize_order(order: str | None) -> str:
-    if order is None:
-        raise ValueError("order must be provided")
-    s = str(order).upper()
-    if s.startswith("RING"):
-        return "RING"
-    if s.startswith("NEST"):
-        return "NEST"
-    raise ValueError("order must be 'RING' or 'NEST'")
-
-
-def _resolve_dtype(dtype: object | None, fallback: torch.dtype) -> torch.dtype:
-    if dtype is None:
-        return fallback
-    if isinstance(dtype, torch.dtype):
-        return dtype
-    name = str(dtype).lower()
-    if "float16" in name:
-        return torch.float16
-    if "float32" in name:
-        return torch.float32
-    if "float64" in name or "double" in name:
-        return torch.float64
-    if "int16" in name:
-        return torch.int16
-    if "int32" in name:
-        return torch.int32
-    if "int64" in name or "int" in name:
-        return torch.int64
-    return fallback
 
 
 def _ud_grade_core_nested(

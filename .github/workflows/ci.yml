@@ -154,31 +154,31 @@ jobs:
       matrix:
         include:
         - shard: fundamentals
-          tests: tests/test_map_adjoints.py tests/test_map_background_ops.py tests/test_map_fft_affine_ldu.py tests/test_map_fft_resample.py tests/test_map_image_plane.py tests/test_map_operator_bundle.py tests/test_map_operator_execution.py tests/test_map_periodic_affine.py tests/test_map_product.py tests/test_map_solvers.py
+          tests: tests/test_map_adjoints.py tests/test_map_background_ops.py tests/test_map_fft_affine_ldu.py tests/test_map_fft_resample.py tests/test_map_image_plane_tiling.py tests/test_map_image_plane_stacking.py tests/test_map_image_plane_uncertainty.py tests/test_map_image_plane_kernels.py tests/test_map_image_plane_products.py tests/test_map_operator_bundle.py tests/test_map_operator_execution.py tests/test_map_periodic_affine.py tests/test_map_product.py tests/test_map_solvers.py
           pytest_args: ''
         - shard: field-components
-          tests: tests/test_map_field.py
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
           pytest_args: -k component
         - shard: field-training-sampling
-          tests: tests/test_map_field.py
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
           pytest_args: -k 'not component and fit_field_model and (training or pretraining)'
         - shard: field-training-core
-          tests: tests/test_map_field.py
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
           pytest_args: -k 'not component and fit_field_model and not training and not pretraining'
         - shard: field-model-fits-base
-          tests: tests/test_map_field.py
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
           pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and not hashgrid and not sky_encoder and not feature_atlas'
         - shard: field-model-feature-atlas
-          tests: tests/test_map_field.py
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
           pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and feature_atlas'
         - shard: field-model-sky-encoder
-          tests: tests/test_map_field.py
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
           pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and sky_encoder'
         - shard: field-model-hashgrid
-          tests: tests/test_map_field.py
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
           pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and hashgrid'
         - shard: field-contracts
-          tests: tests/test_map_field.py
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
           pytest_args: -k 'not component and not fit and not training and not pretraining'
         - shard: field-auxiliary
           tests: tests/test_map_field_render_scale.py tests/test_map_field_strainer.py tests/test_map_learned_ops.py tests/test_map_scene_representations.py tests/test_map_target_render_spec.py
