@@ -20,14 +20,13 @@ license-files = [
     "LICENSE",
     "src/torchsky/cpp_src/third_party/pocketfft.LICENSE.md",
 ]
-keywords = ["fits", "astronomy", "pytorch", "tensor", "wcs", "machine-learning"]
+keywords = ["astronomy", "pytorch", "tensor", "wcs", "healpix", "mapmaking", "coadd", "differentiable", "machine-learning"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering :: Astronomy",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -46,6 +45,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/astroai/torchsky"
 Repository = "https://github.com/astroai/torchsky"
+Documentation = "https://astroai.github.io/torchsky/"
+Changelog = "https://astroai.github.io/torchsky/changelog/"
+Issues = "https://github.com/astroai/torchsky/issues"
 
 [project.scripts]
 torchsky = "torchsky.cli:main"
@@ -132,6 +134,28 @@ wheel.packages = ["src/torchsky"]
 # recompile those, leading to much faster iteration times.
 build-dir = "build/{wheel_tag}"
 
+# The sdist carries sources, C++ kernels, tests, and licenses; repository
+# tooling, docs sources, and agent guidance stay out.
+[tool.scikit-build.sdist]
+include = ["src/torchsky/cpp_src/**", "LICENSE", "README.md", "CMakeLists.txt"]
+exclude = [
+    ".github/**",
+    ".pixi/**",
+    ".cache/**",
+    ".pytest_cache/**",
+    ".ruff_cache/**",
+    "notes/**",
+    "docs/**",
+    "examples/**",
+    "overrides/**",
+    "site/**",
+    "build/**",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "pixi.lock",
+    "zensical.toml",
+]
+
 [[tool.scikit-build.overrides]]
 if.platform-system = "^darwin"
 cmake.define.CMAKE_OSX_DEPLOYMENT_TARGET = "11.0"
@@ -147,6 +171,12 @@ markers = [
     "integration: integration tests across multiple modules",
 ]
 
-[tool.ruff.lint.per-file-ignores]
-"tests/test_map_smacs0723_stackers.py" = ["E402"]
-"tests/test_map_smacs0723_stackers_band_sweep.py" = ["E402"]
+[tool.pyright]
+include = ["src/torchsky"]
+exclude = ["**/__pycache__", "src/torchsky/cpp_src"]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+pythonPlatform = "All"
+reportMissingImports = "warning"
+reportMissingTypeStubs = "none"
+useLibraryCodeForTypes = false

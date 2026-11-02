@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose a new capability or improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow
+      description: What are you trying to do, and at what data scale?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: API sketch, references, or comparable behavior in other libraries.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

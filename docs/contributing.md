@@ -123,10 +123,9 @@ behavior belongs in `docs/`.
   ordering live in `docs/reference/_registry.toml`.
 - `docs/changelog.md`: release notes.
 - `docs/examples.md` and `docs/evaluation/benchmarks.md`: operational guides.
-- `notes/planned.md`: the single tracked plan for work that is committed for a
-  future release.
-- Untracked research, reviews, archives, and brainstorming stay outside git
-  (ignored under `notes/`); implemented behavior belongs in `docs/`, not notes.
+- `docs/roadmap.md`: planned and in-flight work.
+- Untracked research and brainstorming stay outside git; implemented behavior
+  belongs in `docs/`.
 
 Build and verify docs with Pixi:
 
@@ -142,32 +141,15 @@ If a PR changes a public API, update the relevant namespace guide and
 snippet conventions. FITS I/O documentation and benchmarks belong in
 `torchfits`; update only the cross-package contract here.
 
-## Release Checklist (Maintainers)
-
-Use `docs/release.md` as the canonical runbook.
-
-Release and package validation:
-
-1. Run `pixi run preflight-push` and the targeted tests for changed behavior.
-   Run `pixi run typecheck` when Python types or public signatures change.
-2. Ensure `docs/changelog.md` is final and versions are synced in:
-   - `pyproject.toml`
-   - `pixi.toml`
-   - `src/torchsky/__init__.py`
-3. Ensure GitHub package CI is green and build artifacts as required by the
-   release workflow. Full local test gates are opt-in under `AGENTS.md`.
-
-For performance claims, record an appropriately scoped harness run and link its
-subject revision, harness revision, and scorecard in the PR. Do not make
-scientific campaigns implicit core release gates.
-
 ## PR guidelines
 
 - Keep PRs focused on a single concern.
 - Include tests for behavior changes.
-- Run `pixi run lint` and fix issues before submitting.
+- Run `pixi run preflight-push` and fix issues before submitting.
 - Do not commit local scratch files, benchmark artifacts, or `.env` files.
 
 ## Release process
 
-See [release.md](release.md) for the maintainer checklist.
+Maintainers: see [release.md](release.md) for the canonical runbook. For
+performance claims, record a harness run and link its subject revision,
+harness revision, and scorecard in the PR.

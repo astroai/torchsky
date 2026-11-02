@@ -1,4 +1,5 @@
 import os
+import tempfile
 
 import numpy as np
 import torch
@@ -154,7 +155,11 @@ def _show_spectral_temporal_samples() -> None:
 
 
 def main() -> None:
-    data_dir = "data_wcs_examples"
+    with tempfile.TemporaryDirectory(prefix="torchsky-wcs-example-") as data_dir:
+        _run(data_dir)
+
+
+def _run(data_dir: str) -> None:
     create_test_files(data_dir)
 
     paths = [

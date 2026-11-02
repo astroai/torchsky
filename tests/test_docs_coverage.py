@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
-TIER1 = DOCS / "tier1.txt"
+TIER1 = DOCS / "data" / "tier1.txt"
 
 
 def _tier1_names() -> list[str]:

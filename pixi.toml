@@ -99,15 +99,7 @@ api-manifest = "pixi run -e test -- python scripts/api_manifest.py --write docs/
 api-manifest-check = "pixi run -e test -- python scripts/api_manifest.py --check docs/api-manifest.json"
 setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
-
-
-
-
-# Test phases for development workflow
-test-phase1 = "pixi run -e default -- python -c 'import sys; sys.path.insert(0, \"src\"); import torchsky; print(\"Phase 1 COMPLETE: All core features implemented\")'"
 test-transforms = "pixi run -e default -- pytest tests/test_transforms.py -v"
-test-dataloader = "pixi run -e default -- pytest tests/test_dataloader.py -v"
-
 
 [feature.prod]
 platforms = ["osx-arm64-14", "linux-64"]

@@ -11,7 +11,7 @@ copyright = "Copyright &copy; 2026 torchsky contributors"
 exclude_docs = """
 reference/_registry.toml
 evaluation/_benchmarks_template.md
-tier1.txt
+data/tier1.txt
 """
 
 extra_css = [

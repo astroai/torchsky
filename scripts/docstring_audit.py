@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 MANIFEST = ROOT / "docs" / "api-manifest.json"
-TIER1 = ROOT / "docs" / "tier1.txt"
+TIER1 = ROOT / "docs" / "data" / "tier1.txt"
 BASELINE = ROOT / "docs" / "data" / "docstring-baseline.json"
 REGISTRY = ROOT / "docs" / "reference" / "_registry.toml"
 SECTION = re.compile(r"^\s*(Args|Arguments|Parameters|Returns|Yields|Raises|Example|Examples):\s*$", re.M)

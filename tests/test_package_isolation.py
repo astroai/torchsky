@@ -305,8 +305,7 @@ def test_no_legacy_cfitsio_vendoring() -> None:
     repo = PACKAGE_ROOT.parents[1]
     assert not (repo / "extern" / "vendor.sh").exists()
     assert not (repo / "extern" / "cfitsio").exists()
-    manifest = (repo / "MANIFEST.in").read_text()
-    assert "extern/" not in manifest
+    assert not (repo / "MANIFEST.in").exists()
     for workflow in (repo / ".github" / "workflows").glob("*.yml"):
         text = workflow.read_text()
         assert "extern/vendor.sh" not in text, workflow
@@ -314,13 +313,13 @@ def test_no_legacy_cfitsio_vendoring() -> None:
 
 def test_pocketfft_notices_are_included_in_source_distributions() -> None:
     repo = PACKAGE_ROOT.parents[1]
-    manifest = (repo / "MANIFEST.in").read_text()
+    pyproject = (repo / "pyproject.toml").read_text()
     license_text = (
         PACKAGE_ROOT / "cpp_src" / "third_party" / "pocketfft.LICENSE.md"
     ).read_text()
 
-    assert "recursive-include src/torchsky/cpp_src" in manifest
-    assert "*.md" in manifest
+    assert "pocketfft.LICENSE.md" in pyproject  # license-files ships it
+    assert "src/torchsky/cpp_src/**" in pyproject  # sdist.include
     assert "Copyright (C) 2010-2024 Max-Planck-Society" in license_text
     assert "Copyright (C) 2019-2020 Peter Bell" in license_text
     assert "Copyright (C) 2024 Cris Luengo" in license_text

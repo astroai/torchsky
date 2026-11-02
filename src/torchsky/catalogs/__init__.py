@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from torch import Tensor
+from typing import TYPE_CHECKING
 
 from .index import HealpixIndex
 from .index import cap_covering_pixels
@@ -17,6 +15,13 @@ from .core import (
     crossmatch_sky_from_arrow,
     crossmatch_sky_streamed,
 )
+
+if TYPE_CHECKING:
+    from typing import Any
+
+    from torch import Tensor
+
+del TYPE_CHECKING
 
 _PHOTOMETRY_EXPORTS = {
     "BackgroundModel",

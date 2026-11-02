@@ -87,3 +87,33 @@ boundary while focused upstream PRs are reviewed and released.
   likelihood) promoted out of the experimental tier as gates land.
 - GPU/CUDA validation on a pinned runner.
 - Additional guides, examples, and gallery material for real survey workflows.
+
+---
+
+## Open items carried over from the retired planning notes
+
+Release 0.4.0:
+
+- Review `torchsky.viz` (FastAPI server, routers, frontend, cache, renderer) for
+  obsolete endpoints and untested branches; decide whether it stays an optional
+  extra or is split out.
+- Clarify or rename the experimental field surfaces (`native_physical`,
+  `joint_native`, `neural_inverse`, lensing/magnification operators) so public
+  names state what they do; drop any without a demonstrated consumer.
+- Keep a single canonical trusted-publishing workflow for `v*` tags, merging the
+  useful verification steps of any overlapping workflow.
+
+Calibrated-field work (post-0.4.0 unless promoted):
+
+- Adaptive chromatic response, physical radiometric/flat calibration, and
+  photon/charge/read additive-stage renderer integration.
+- End-to-end observation lineage and nuisance propagation across field/coadd
+  callers; query/UQ reports and calibration lifecycle across solvers.
+- Broader CUDA/MPS device evidence; skipped device tests are not validation.
+
+Engineering backlog:
+
+- Legacy band-grid MPS footprint-bound issue.
+- Conservative NLL derivative-order/device contract before widening its range.
+- Keep observed curvature distinct from expected Fisher information, and
+  calibration uncertainty distinct from fixed product scaling.

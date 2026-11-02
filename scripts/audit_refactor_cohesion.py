@@ -31,7 +31,6 @@ REQUIRED_FILES = (
     "docs/scene.md",
     "docs/native-likelihood.md",
     "docs/field-formulation.md",
-    "notes/planned.md",
 )
 
 DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://astroai.github.io/torchsky/
+    about: Guides, API reference, and examples.
+  - name: FITS I/O issues
+    url: https://github.com/astroai/torchfits/issues
+    about: FITS reading and writing belongs to torchfits.

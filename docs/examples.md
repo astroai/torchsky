@@ -106,26 +106,6 @@ API: `sphere`
 
 ## Mapmaking
 
-### [`example_image.py`](published-examples/example_image.py)
-
-**Write and read a small image through the torchsky/torchfits boundary.**
-
-### [`example_image_cube.py`](published-examples/example_image_cube.py)
-
-**Example image cube.**
-
-### [`example_image_cutouts.py`](published-examples/example_image_cutouts.py)
-
-**Example image cutouts.**
-
-### [`example_image_dataset.py`](published-examples/example_image_dataset.py)
-
-**Example image dataset.**
-
-### [`example_image_mef.py`](published-examples/example_image_mef.py)
-
-**Read the image and table extensions of a small torchfits MEF file.**
-
 ### [`example_map_drizzle_flagship.py`](published-examples/example_map_drizzle_flagship.py)
 
 **Coadd bounded synthetic detector observations with exact square drizzle.** This deterministic, network-free flagship renders two compact detector images onto one declared target WCS, uses the native ``drizzle_square`` kernel with flux semantics, and validates total flux, centroid, and non-empty bounded support without importing...
@@ -231,27 +211,11 @@ API: `AchromaticPixelResponse`, `GaussianPixelResponse`, `LinearDetectorResponse
 
 ## I/O boundary
 
-### [`example_polars.py`](published-examples/example_polars.py)
-
-**Example: Polars Integration for Efficient Data Analysis.** This example demonstrates how to use torchsky with Polars for high-performance tabular data analysis, leveraging Apache Arrow for zero-copy (or near-zero-copy) data transfer.
-
 ### [`example_sphere_flagship.py`](published-examples/example_sphere_flagship.py)
 
 **Run a compact native sphere workflow from catalog points to harmonics.** This deterministic, network-free flagship builds a MOC footprint and checks containment, bins a synthetic catalog into matching sparse and dense nested HEALPix maps, degrades hit counts with explicitly sum-preserving semantics, and reconstructs a low-order...
 
 API: `MOC`, `SparseHealpixMap`, `alm2map`, `alm_index`, `alm_size`, `ang2pix`, `map2alm`, `nest2uniq` (+2 more)
-
-### [`example_table.py`](published-examples/example_table.py)
-
-**Example table.**
-
-### [`example_table_interop.py`](published-examples/example_table_interop.py)
-
-**Example table interop.**
-
-### [`example_table_recipes.py`](published-examples/example_table_recipes.py)
-
-**Example: Recommended FITS table workflow using Arrow scanner, Polars, and DuckDB.**
 
 
 ## Visualization

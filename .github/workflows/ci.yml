@@ -49,7 +49,7 @@ jobs:
         pixi-version: latest
     - name: "Install Pixi env (test \u2014 pyright + built package)"
       run: pixi install --frozen -e test
-    - name: Pyright (scoped allowlist in pyrightconfig.json)
+    - name: Pyright (config in pyproject.toml)
       env:
         PYTHONPATH: ${{ github.workspace }}/src
       run: pixi run -e test -- pyright --verbose
