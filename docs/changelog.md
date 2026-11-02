@@ -114,6 +114,12 @@ owned by `torchfits`.
   variance pass; data, weight, overlap and context are unchanged.
 
 ### Changed
+- `map2alm`/`alm2map` at `lmax >= 1024` no longer fall back to a dense basis (the native
+  Legendre seed overflowed to NaN); they match healpy to ~1e-11 up to `lmax = 3*nside-1`. The
+  non-native SHT path uses a chunked, exponent-scaled recurrence (memory O(chunk x nring)).
+- `MOC` normalisation, union, intersection, difference, `degrade` and `from_circle` run as
+  vectorised sweeps over sorted range tensors (5-120x faster, identical results); `MOC.area`
+  is exact integer arithmetic; MOC operations work on MPS.
 - `crossmatch_sky` generates candidates from declination strips with sorted RA (exact
   great-circle verification) instead of HEALPix neighbour rings: a 10^6 x 10^6 all-sky match
   drops from ~31 s to ~0.5 s per mode on CPU (astropy: 1.4 s / 0.9 s), results identical to

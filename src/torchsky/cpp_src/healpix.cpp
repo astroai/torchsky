@@ -2956,6 +2956,7 @@ torch::Tensor healpix_get_interp_val_nested_cpu(
 struct WignerDCoeffs {
     int num_terms;
     double coeff[4];
+    double log_abs_coeff[4];
     int p_ct[4];
     int p_st[4];
 };
@@ -3001,6 +3002,7 @@ static WignerDCoeffs get_wigner_d_coeffs(int64_t l, int64_t m, int64_t mp) {
 
         res.p_ct[res.num_terms] = (int)(2 * l + m - mp - 2 * k);
         res.p_st[res.num_terms] = (int)(mp - m + 2 * k);
+        res.log_abs_coeff[res.num_terms] = log_pref - log_denom;
         res.coeff[res.num_terms] = sign * std::exp(log_pref - log_denom);
         res.num_terms++;
     }
@@ -3012,12 +3014,31 @@ static inline double eval_wigner_d_half(
 ) {
     if (coeffs.num_terms == 0) return 0.0;
 
+    // The explicit-power form overflows (coeff ~ 2^l) or underflows (sin^m) for
+    // large l, m, which yields inf*0 = NaN. Evaluate in log space whenever any
+    // factor leaves the comfortably representable range; the direct product is
+    // kept elsewhere because it is more accurate for moderate degrees.
+    constexpr double kSafeLog = 600.0;
+    const double log_c = std::log(cos_half);
+    const double log_s = std::log(sin_half);
     double sum = 0.0;
     for (int i = 0; i < coeffs.num_terms; ++i) {
-        double term = coeffs.coeff[i];
-        if (coeffs.p_ct[i] > 0) term *= fast_pow(cos_half, coeffs.p_ct[i]);
-        if (coeffs.p_st[i] > 0) term *= fast_pow(sin_half, coeffs.p_st[i]);
-        sum += term;
+        const double pc = coeffs.p_ct[i];
+        const double ps = coeffs.p_st[i];
+        const double lc = (pc > 0) ? pc * log_c : 0.0;
+        const double ls = (ps > 0) ? ps * log_s : 0.0;
+        const bool direct = std::fabs(coeffs.log_abs_coeff[i]) < kSafeLog && lc > -kSafeLog && ls > -kSafeLog;
+        if (direct) {
+            double term = coeffs.coeff[i];
+            if (coeffs.p_ct[i] > 0) term *= fast_pow(cos_half, coeffs.p_ct[i]);
+            if (coeffs.p_st[i] > 0) term *= fast_pow(sin_half, coeffs.p_st[i]);
+            sum += term;
+        } else {
+            const double lt = coeffs.log_abs_coeff[i] + lc + ls;
+            // exp underflow to 0 is the correct limit (classically forbidden region)
+            const double mag = std::isnan(lt) ? 0.0 : std::exp(lt);
+            sum += (coeffs.coeff[i] < 0.0 || std::signbit(coeffs.coeff[i])) ? -mag : mag;
+        }
     }
     return sum;
 }

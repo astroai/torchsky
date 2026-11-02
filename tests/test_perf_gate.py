@@ -138,3 +138,66 @@ def test_gate_crossmatch_sky_scales_with_candidates_not_pairs() -> None:
 
     max_s = float(os.environ.get("TORCHSKY_PERF_GATE_CROSSMATCH_S", "5.0"))
     assert _median_seconds(run, iters=1) < max_s
+
+
+def test_gate_moc_range_algebra_scales_with_ranges() -> None:
+    """MOC union/intersection/difference are sort+sweep merges, not per-cell loops.
+
+    Cell count grows ~14x between the two sizes; a Python loop over cells took
+    ~10-50 ms at the small size alone (see the CHANGELOG).
+    """
+    from torchsky.sphere import MOC
+
+    def pair(radius: float, order: int):
+        return (
+            MOC.from_circle(30.0, 20.0, radius, order),
+            MOC.from_circle(30.0 + 0.8 * radius, 20.0 + 0.5 * radius, radius, order),
+        )
+
+    a, b = pair(10.0, 10)  # ~1.4k cells
+    big_a, big_b = pair(2.0, 16)  # ~18k cells
+    assert big_a.uniq.numel() > 10 * a.uniq.numel()
+
+    def run_small() -> None:
+        a.union(b), a.intersection(b), a.difference(b)
+
+    def run_big() -> None:
+        big_a.union(big_b), big_a.intersection(big_b), big_a.difference(big_b)
+
+    assert _median_seconds(run_small) < float(
+        os.environ.get("TORCHSKY_PERF_GATE_MOC_OPS_S", "0.25")
+    )
+    assert _median_seconds(run_big) < float(
+        os.environ.get("TORCHSKY_PERF_GATE_MOC_OPS_BIG_S", "1.0")
+    )
+
+
+def test_gate_moc_from_circle_hierarchical() -> None:
+    from torchsky.sphere import MOC
+
+    def run() -> None:
+        MOC.from_circle(30.0, 20.0, 40.0, 10)
+
+    max_s = float(os.environ.get("TORCHSKY_PERF_GATE_MOC_CIRCLE_S", "1.0"))
+    assert _median_seconds(run) < max_s
+
+
+def test_gate_sht_scalable_at_two_and_three_nside() -> None:
+    """map2alm/alm2map at lmax=2*nside and 3*nside-1 stay on the ring path."""
+    from torchsky.sphere import alm2map, map2alm
+
+    nside = 128
+    g = torch.Generator().manual_seed(0)
+    m = torch.randn(12 * nside * nside, generator=g, dtype=torch.float64)
+    for lmax in (2 * nside, 3 * nside - 1):
+        alm: torch.Tensor | None = None
+
+        def run() -> None:
+            nonlocal alm
+            alm = map2alm(m, nside=nside, lmax=lmax)
+            alm2map(alm, nside=nside, lmax=lmax)
+
+        assert _median_seconds(run, iters=1) < float(
+            os.environ.get("TORCHSKY_PERF_GATE_SHT_S", "5.0")
+        )
+        assert alm is not None and bool(torch.isfinite(alm).all())

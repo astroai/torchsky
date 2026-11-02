@@ -2,7 +2,6 @@
 
 import json
 import math
-from bisect import bisect_right
 from typing import Any, Literal
 
 import torch
@@ -109,77 +108,160 @@ def _max_order_from_uniq(uniq: Tensor) -> int:
     return int(_order_from_uniq(uniq.max()).item())
 
 
+def _merge_sorted_ranges(starts: Tensor, ends: Tensor) -> tuple[Tensor, Tensor]:
+    """Coalesce overlapping or touching half-open ranges sorted by start."""
+    n = int(starts.numel())
+    if n == 0:
+        return starts, ends
+    run_end = torch.cummax(ends, dim=0).values
+    new_group = torch.ones(n, dtype=torch.bool, device=starts.device)
+    new_group[1:] = starts[1:] > run_end[:-1]
+    first = torch.nonzero(new_group).reshape(-1)
+    last = torch.cat((first[1:] - 1, first.new_full((1,), n - 1)))
+    return starts[first], run_end[last]
+
+
+def _merge_ranges(starts: Tensor, ends: Tensor) -> tuple[Tensor, Tensor]:
+    """Sort and coalesce arbitrary half-open ranges."""
+    if starts.numel() == 0:
+        return starts, ends
+    order = torch.argsort(starts)
+    return _merge_sorted_ranges(starts[order], ends[order])
+
+
+def _uniq_to_range_tensors(uniq: Tensor, max_order: int) -> tuple[Tensor, Tensor]:
+    """Sorted disjoint ``[start, end)`` NESTED ranges at ``max_order`` for UNIQ cells."""
+    u = _as_int64_exact(uniq, name="uniq").reshape(-1)
+    if u.numel() == 0:
+        empty = torch.empty((0,), dtype=torch.int64, device=u.device)
+        return empty, empty
+    orders = _order_from_uniq(u)
+    pix = u - torch.bitwise_left_shift(torch.ones_like(u), 2 * orders + 2)
+    delta = 2 * (int(max_order) - orders)
+    up = delta.clamp_min(0)
+    down = (-delta).clamp_min(0)
+    pix = torch.bitwise_right_shift(pix, down)
+    return _merge_ranges(
+        torch.bitwise_left_shift(pix, up), torch.bitwise_left_shift(pix + 1, up)
+    )
+
+
+def _range_tensors_to_uniq(starts: Tensor, ends: Tensor, max_order: int) -> Tensor:
+    """Maximal aligned UNIQ cells covering disjoint ranges, ordered by position.
+
+    Each range ``[s, e)`` splits into the cells that trim it to 4**(k+1)
+    alignment at every level ``k``; the work is ``O(max_order)`` vector passes
+    plus the output size, with no per-cell Python.
+    """
+    device = starts.device
+    if starts.numel() == 0:
+        return torch.empty((0,), dtype=torch.int64, device=device)
+    order = int(max_order)
+    s = starts.clone()
+    e = ends.clone()
+    cell_start: list[Tensor] = []
+    cell_uniq: list[Tensor] = []
+
+    def emit(first: Tensor, count: Tensor, k: int, cap: int) -> None:
+        # At most ``cap`` equal cells per range side: a (n, cap) grid + mask
+        # avoids data-dependent repeat/scan passes.
+        offs = torch.arange(cap, device=device)
+        valid = offs[None, :] < count[:, None]
+        pos = (first[:, None] + (offs[None, :] << (2 * k)))[valid]
+        if pos.numel() == 0:
+            return
+        cell_start.append(pos)
+        cell_uniq.append((pos >> (2 * k)) + (4 << (2 * (order - k))))
+
+    for k in range(order + 1):
+        if k == order:
+            emit(s, ((e - s).clamp_min(0)) >> (2 * k), k, 12)
+            break
+        block = 1 << (2 * (k + 1))
+        s_up = (s + (block - 1)) & ~(block - 1)
+        e_dn = e & ~(block - 1)
+        single = s_up > e_dn  # no whole 4**(k+1) block: finish at this level
+        head_end = torch.where(single, e, s_up)
+        emit(s, ((head_end - s).clamp_min(0)) >> (2 * k), k, 3)
+        tail_start = torch.where(single, e, e_dn)
+        emit(tail_start, ((e - tail_start).clamp_min(0)) >> (2 * k), k, 3)
+        s = torch.where(single, e, s_up)
+        e = torch.where(single, e, e_dn)
+        # Ranges that finished (typically most of them, at low levels) drop out,
+        # so later levels touch geometrically fewer elements.
+        live = s < e
+        if not bool(live.any()):
+            break
+        s = s[live]
+        e = e[live]
+    if not cell_uniq:
+        return torch.empty((0,), dtype=torch.int64, device=device)
+    uniq = torch.cat(cell_uniq)
+    return uniq[torch.argsort(torch.cat(cell_start))]
+
+
+def _combine_range_tensors(
+    a: tuple[Tensor, Tensor], b: tuple[Tensor, Tensor], op: str
+) -> tuple[Tensor, Tensor]:
+    """Boolean algebra of two disjoint range sets by sweeping coverage counts.
+
+    ``a`` contributes weight 1 and ``b`` weight 2, so the running sum is
+    1 (a only), 2 (b only) or 3 (both) between consecutive sorted endpoints.
+    """
+    pos = torch.cat((a[0], a[1], b[0], b[1]))
+    if pos.numel() == 0:
+        return pos, pos
+    weight = torch.cat(
+        (
+            torch.ones_like(a[0]),
+            -torch.ones_like(a[1]),
+            2 * torch.ones_like(b[0]),
+            -2 * torch.ones_like(b[1]),
+        )
+    )
+    order = torch.argsort(pos)
+    pos = pos[order]
+    cover = torch.cumsum(weight[order], dim=0)[:-1]
+    if op == "union":
+        keep = cover > 0
+    elif op == "intersection":
+        keep = cover == 3
+    elif op == "difference":
+        keep = cover == 1
+    else:
+        raise ValueError(f"unknown range operation {op!r}")
+    keep = keep & (pos[:-1] < pos[1:])
+    return _merge_sorted_ranges(pos[:-1][keep], pos[1:][keep])
+
+
 def _uniq_to_ranges(uniq: Tensor, max_order: int) -> list[tuple[int, int]]:
-    if uniq.numel() == 0:
-        return []
+    starts, ends = _uniq_to_range_tensors(uniq, max_order)
+    return list(zip(starts.tolist(), ends.tolist(), strict=True))
 
-    _, pix_nested = uniq2nest(uniq)
-    orders = _order_from_uniq(uniq)
-    up_shifts = (2 * (max_order - orders)).clamp_min(0)
-    down_shifts = (2 * (orders - max_order)).clamp_min(0)
-    pix_at_order = pix_nested >> down_shifts
-    starts = pix_at_order << up_shifts
-    ends = (pix_at_order + 1) << up_shifts
 
-    sort_idx = torch.argsort(starts)
-    starts = starts[sort_idx]
-    ends = ends[sort_idx]
-
-    merged: list[tuple[int, int]] = []
-    cur_start = int(starts[0].item())
-    cur_end = int(ends[0].item())
-    for start_t, end_t in zip(starts[1:], ends[1:], strict=False):
-        start = int(start_t.item())
-        end = int(end_t.item())
-        if start <= cur_end:
-            cur_end = max(cur_end, end)
-            continue
-        merged.append((cur_start, cur_end))
-        cur_start, cur_end = start, end
-    merged.append((cur_start, cur_end))
-    return merged
+def _ranges_to_tensors(
+    ranges: list[tuple[int, int]], device: torch.device | None = None
+) -> tuple[Tensor, Tensor]:
+    if not ranges:
+        empty = torch.empty((0,), dtype=torch.int64, device=device)
+        return empty, empty
+    arr = torch.tensor(ranges, dtype=torch.int64, device=device)
+    return arr[:, 0].contiguous(), arr[:, 1].contiguous()
 
 
 def _union_ranges(
     left: list[tuple[int, int]], right: list[tuple[int, int]]
 ) -> list[tuple[int, int]]:
     """Merge two sorted half-open range lists."""
-    i = j = 0
-    out: list[tuple[int, int]] = []
-    while i < len(left) or j < len(right):
-        if j >= len(right) or (i < len(left) and left[i][0] <= right[j][0]):
-            start, end = left[i]
-            i += 1
-        else:
-            start, end = right[j]
-            j += 1
-        if not out or start > out[-1][1]:
-            out.append((start, end))
-            continue
-        out[-1] = (out[-1][0], max(out[-1][1], end))
-    return out
+    s, e = _combine_range_tensors(
+        _ranges_to_tensors(left), _ranges_to_tensors(right), "union"
+    )
+    return list(zip(s.tolist(), e.tolist(), strict=True))
 
 
 def _ranges_to_uniq(ranges: list[tuple[int, int]], max_order: int) -> Tensor:
-    uniqs: list[Tensor] = []
-    for start, end in ranges:
-        curr = int(start)
-        while curr < end:
-            k = 0
-            while (
-                curr + (4 ** (k + 1)) <= end
-                and curr % (4 ** (k + 1)) == 0
-                and k < max_order
-            ):
-                k += 1
-            order = max_order - k
-            uniqs.append(
-                nest2uniq(1 << order, curr >> (2 * k)).reshape(1).to(torch.int64)
-            )
-            curr += 4**k
-    if not uniqs:
-        return torch.empty((0,), dtype=torch.int64)
-    return torch.cat(uniqs)
+    starts, ends = _ranges_to_tensors(ranges)
+    return _range_tensors_to_uniq(starts, ends, max_order)
 
 
 def _normalize_moc(uniq: Tensor) -> Tensor:
@@ -187,10 +269,10 @@ def _normalize_moc(uniq: Tensor) -> Tensor:
     if uniq.numel() == 0:
         return uniq
 
-    u = torch.unique(_as_int64_exact(uniq, name="uniq"))
+    u = _as_int64_exact(uniq, name="uniq").reshape(-1)
     max_order = _max_order_from_uniq(u)
-    ranges = _uniq_to_ranges(u, max_order)
-    return _ranges_to_uniq(ranges, max_order)
+    starts, ends = _uniq_to_range_tensors(u, max_order)
+    return _range_tensors_to_uniq(starts, ends, max_order)
 
 
 def _normalize_bmoc(uniq: Tensor, flag: Tensor) -> tuple[Tensor, Tensor]:
@@ -203,35 +285,29 @@ def _normalize_bmoc(uniq: Tensor, flag: Tensor) -> tuple[Tensor, Tensor]:
     if uniq.numel() == 0:
         return uniq, flag
 
-    _order_from_uniq(uniq)
-    max_order = _max_order_from_uniq(uniq)
-    _, pixels = uniq2nest(uniq)
     orders = _order_from_uniq(uniq)
+    max_order = int(orders.max().item())
+    pixels = uniq - torch.bitwise_left_shift(torch.ones_like(uniq), 2 * orders + 2)
     shifts = 2 * (max_order - orders)
     starts = pixels << shifts
     ends = (pixels + 1) << shifts
-    indices = sorted(
-        range(uniq.numel()),
-        key=lambda i: (int(starts[i].item()), -int(ends[i].item())),
+    # Sort by (start ascending, end descending): parents precede descendants.
+    by_end = torch.argsort(-ends, stable=True)
+    by_start = torch.argsort(starts[by_end], stable=True)
+    idx = by_end[by_start]
+    s = starts[idx]
+    e = ends[idx]
+    prev_end = torch.cummax(e, dim=0).values
+    top = torch.ones(s.numel(), dtype=torch.bool, device=s.device)
+    top[1:] = s[1:] >= prev_end[:-1]
+    group = torch.cumsum(top.to(torch.int64), dim=0) - 1
+    ngroups = int(group[-1].item()) + 1
+    group_flag = torch.full((ngroups,), 255, dtype=torch.int64, device=s.device)
+    group_flag = group_flag.scatter_reduce(
+        0, group, flag.to(s.device)[idx].to(torch.int64), reduce="amin"
     )
-
-    kept_indices: list[int] = []
-    kept_flags: list[int] = []
-    current_end = -1
-    for index in indices:
-        start = int(starts[index].item())
-        end = int(ends[index].item())
-        value = int(flag[index].item())
-        if start < current_end:
-            kept_flags[-1] = min(kept_flags[-1], value)
-            continue
-        kept_indices.append(index)
-        kept_flags.append(value)
-        current_end = end
-
-    index_t = torch.tensor(kept_indices, dtype=torch.int64, device=uniq.device)
-    normalized_uniq = uniq[index_t]
-    normalized_flag = torch.tensor(kept_flags, dtype=torch.uint8, device=flag.device)
+    normalized_uniq = uniq[idx[top]]
+    normalized_flag = group_flag.to(device=flag.device, dtype=torch.uint8)
     order = torch.argsort(normalized_uniq)
     return normalized_uniq[order], normalized_flag[order]
 
@@ -253,11 +329,17 @@ def _hierarchical_disc_bmoc(
     lon0 = torch.as_tensor(lon_deg, device=device)
     lat0 = torch.as_tensor(lat_deg, device=device)
     radius = float(radius_deg)
+    v_center = lonlat_to_unit_xyz(lon0, lat0)
     r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
     while True:
         nside = 1 << order
         lon_p, lat_p = _healpix.pix2ang(nside, pix, nest=True, lonlat=True)
-        dist = great_circle_distance(lon0, lat0, lon_p, lat_p, degrees=True)
+        v_p = lonlat_to_unit_xyz(lon_p, lat_p)
+        cross = torch.linalg.norm(
+            torch.cross(v_center.expand_as(v_p), v_p, dim=-1), dim=-1
+        )
+        dot = torch.clamp((v_center * v_p).sum(dim=-1), -1.0, 1.0)
+        dist = torch.rad2deg(torch.atan2(cross, dot))
         r_pix = _healpix.max_pixel_radius(nside, degrees=True)
         fully_in = dist + r_pix <= radius
         fully_out = dist - r_pix > (radius + r_leaf if inclusive else radius)
@@ -528,11 +610,24 @@ class MOC:
     def full(cls) -> "MOC":
         return cls(nest2uniq(1, torch.arange(12, dtype=torch.int64)))
 
+    def _cache(self) -> dict:
+        """Per-instance memo (max order, range tensors), reset if ``uniq`` changes."""
+        u = self.uniq
+        key = (id(u), u._version, int(u.numel()))
+        memo = self.__dict__.get("_memo")
+        if memo is None or memo[0] != key:
+            memo = (key, {})
+            self.__dict__["_memo"] = memo
+        return memo[1]
+
     @property
     def max_order(self) -> int:
         if self.uniq.numel() == 0:
             return 0
-        return int(_order_from_uniq(self.uniq.max()).item())
+        cache = self._cache()
+        if "max_order" not in cache:
+            cache["max_order"] = int(_order_from_uniq(self.uniq.max()).item())
+        return cache["max_order"]
 
     def contains(self, lon_deg: Tensor | float, lat_deg: Tensor | float) -> Tensor:
         """Check if points are contained in the MOC."""
@@ -577,15 +672,9 @@ class MOC:
         if not nest and pix_nest.numel() > 0:
             pix_nest = _healpix.ring2nest(int(nside), pix_nest)
 
-        ranges = self._to_ranges(order)
-        if not ranges:
-            return torch.zeros(shape, dtype=torch.bool, device=pix.device)
-        starts = torch.tensor(
-            [r[0] for r in ranges], device=pix.device, dtype=torch.int64
-        )
-        ends = torch.tensor(
-            [r[1] for r in ranges], device=pix.device, dtype=torch.int64
-        )
+        starts, ends = self._range_tensors(order)
+        starts = starts.to(pix.device)
+        ends = ends.to(pix.device)
 
         idx = torch.searchsorted(starts, pix_nest, right=True) - 1
         in_range = idx >= 0
@@ -606,13 +695,9 @@ class MOC:
             return torch.zeros(shape, dtype=fraction_dtype, device=query.device)
 
         max_order = max(self.max_order, int(query_orders.max().item()))
-        ranges = self._to_ranges(max_order)
-        starts = torch.tensor(
-            [start for start, _ in ranges], dtype=torch.int64, device=query.device
-        )
-        ends = torch.tensor(
-            [end for _, end in ranges], dtype=torch.int64, device=query.device
-        )
+        starts, ends = self._range_tensors(max_order)
+        starts = starts.to(query.device)
+        ends = ends.to(query.device)
         lengths = ends - starts
         cumulative = torch.cat(
             (
@@ -659,12 +744,12 @@ class MOC:
         """Total area covered by the MOC in steradians."""
         if self.uniq.numel() == 0:
             return 0.0
-        nsides, _ = uniq2nest(self.uniq)
-        # Area of a pixel at nside is 4pi / (12 * nside^2)
-        # Performance: avoid **2 on tensors
-        nsides_f64 = nsides.to(torch.float64)
-        pix_areas = (4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))
-        return float(pix_areas.sum().item())
+        # Exact and device-independent: count cells at the deepest order in
+        # integer arithmetic (no float64 tensors, which MPS lacks), then scale.
+        order = self.max_order
+        starts, ends = self._range_tensors(order)
+        n_cells = int((ends - starts).sum().item())
+        return n_cells * (4.0 * math.pi) / (12.0 * float(4**order))
 
     @property
     def area_sq_deg(self) -> float:
@@ -681,95 +766,30 @@ class MOC:
         """Return whether two footprint MOCs have non-empty intersection."""
         return bool(self.intersection(other))
 
+    def _binary_op(self, other: "MOC", op: str) -> "MOC":
+        max_o = max(self.max_order, other.max_order)
+        device = self.uniq.device
+        left = self._range_tensors(max_o)
+        right = tuple(t.to(device) for t in other._range_tensors(max_o))
+        return MOC._from_range_tensors(
+            *_combine_range_tensors(left, right, op),  # type: ignore[arg-type]
+            max_o,
+        )
+
     def union(self, other: "MOC") -> "MOC":
         if self.uniq.numel() == 0:
             return MOC(other.uniq)
         if other.uniq.numel() == 0:
             return MOC(self.uniq)
-        max_o = max(self.max_order, other.max_order)
-        return MOC._from_ranges(
-            _union_ranges(self._to_ranges(max_o), other._to_ranges(max_o)),
-            max_o,
-        )
+        return self._binary_op(other, "union")
 
     def intersection(self, other: "MOC") -> "MOC":
-        # Hierarchical intersection:
-        # A pixel is in intersection if:
-        # 1. It is in both.
-        # 2. It is in A and a descendant is in B (then the descendant is in intersection).
-        # 3. It is in B and a descendant is in A (then the descendant is in intersection).
-
-        # Implementation via max-order ranges:
-        # Intersection of two sets of ranges.
-        max_o = max(self.max_order, other.max_order)
-        r1 = self._to_ranges(max_o)
-        r2 = other._to_ranges(max_o)
-
-        # Range intersection
-        # This is a classic algorithm.
-        # For simplicity, we can do it via a loop or vectorized if ranges are few.
-        i, j = 0, 0
-        new_ranges = []
-        while i < len(r1) and j < len(r2):
-            s1, e1 = r1[i]
-            s2, e2 = r2[j]
-
-            s_int = max(s1, s2)
-            e_int = min(e1, e2)
-
-            if s_int < e_int:
-                new_ranges.append((s_int, e_int))
-
-            if e1 < e2:
-                i += 1
-            else:
-                j += 1
-        return MOC._from_ranges(new_ranges, max_o)
+        """Cells covered by both MOCs (range sweep at the finer ``max_order``)."""
+        return self._binary_op(other, "intersection")
 
     def difference(self, other: "MOC") -> "MOC":
         """Subtract other MOC from this MOC."""
-        max_o = max(self.max_order, other.max_order)
-        r1 = self._to_ranges(max_o)
-        r2 = other._to_ranges(max_o)
-
-        # Range difference: R1 \ R2
-        new_ranges = []
-        i, j = 0, 0
-        curr_s, curr_e = r1[0] if r1 else (0, 0)
-
-        while i < len(r1):
-            if j >= len(r2):
-                new_ranges.append((curr_s, curr_e))
-                i += 1
-                if i < len(r1):
-                    curr_s, curr_e = r1[i]
-                continue
-
-            s2, e2 = r2[j]
-
-            if e2 <= curr_s:
-                j += 1
-                continue
-            if s2 >= curr_e:
-                new_ranges.append((curr_s, curr_e))
-                i += 1
-                if i < len(r1):
-                    curr_s, curr_e = r1[i]
-                continue
-
-            # Overlap!
-            if s2 > curr_s:
-                new_ranges.append((curr_s, s2))
-
-            if e2 < curr_e:
-                curr_s = e2
-                j += 1
-            else:
-                i += 1
-                if i < len(r1):
-                    curr_s, curr_e = r1[i]
-
-        return MOC._from_ranges(new_ranges, max_o)
+        return self._binary_op(other, "difference")
 
     def __or__(self, other: "MOC") -> "MOC":
         return self.union(other)
@@ -790,34 +810,50 @@ class MOC:
         if order >= self.max_order:
             return type(self)(self.uniq)
         nsides, pix = uniq2nest(self.uniq)
-        cell_orders = torch.log2(nsides.to(torch.float64)).to(torch.int64)
+        cell_orders = _order_from_uniq(self.uniq)
         delta = (cell_orders - order).clamp(min=0)
         pix_d = pix >> (2 * delta)
         nside_d = torch.where(delta > 0, torch.full_like(nsides, 1 << order), nsides)
         return type(self)(nest2uniq(nside_d, pix_d))
 
+    def _range_tensors(self, max_order: int) -> tuple[Tensor, Tensor]:
+        cache = self._cache()
+        key = ("ranges", int(max_order))
+        if key not in cache:
+            cache[key] = _uniq_to_range_tensors(self.uniq, max_order)
+        return cache[key]
+
     def _to_ranges(self, max_order: int) -> list[tuple[int, int]]:
         return _uniq_to_ranges(self.uniq, max_order)
 
     @classmethod
-    def _from_ranges(cls, ranges: list[tuple[int, int]], max_order: int) -> "MOC":
+    def _from_range_tensors(cls, starts: Tensor, ends: Tensor, max_order: int) -> "MOC":
         """Convert merged ranges to UNIQ cells without a second normalize pass."""
         moc = cls.__new__(cls)
-        moc.uniq = _ranges_to_uniq(ranges, max_order)
+        moc.uniq = _range_tensors_to_uniq(starts, ends, max_order)
+        # The ranges are already the canonical merged form: chain operations
+        # without converting the UNIQ cells back.
+        moc._cache()[("ranges", int(max_order))] = (starts, ends)
         return moc
+
+    @classmethod
+    def _from_ranges(cls, ranges: list[tuple[int, int]], max_order: int) -> "MOC":
+        """Convert merged ranges to UNIQ cells without a second normalize pass."""
+        return cls._from_range_tensors(*_ranges_to_tensors(ranges), max_order)
 
     def _flat_pixels(self, nside: int) -> Tensor:
         max_o = _order_from_nside(nside)
         if max_o < self.max_order:
             raise ValueError("nside must be at least the MOC maximum order resolution")
-        ranges = self._to_ranges(max_o)
-        if not ranges:
+        starts, ends = self._range_tensors(max_o)
+        counts = ends - starts
+        total = int(counts.sum().item())
+        if total == 0:
             return torch.empty((0,), dtype=torch.int64, device=self.uniq.device)
-        chunks = [
-            torch.arange(start, end, dtype=torch.int64, device=self.uniq.device)
-            for start, end in ranges
-        ]
-        return torch.cat(chunks)
+        offs = torch.cumsum(counts, dim=0) - counts
+        return torch.arange(total, device=starts.device) + torch.repeat_interleave(
+            starts - offs, counts
+        )
 
     def to_sparse_map(
         self,
@@ -873,18 +909,11 @@ class MOC:
             pix = _healpix.ring2nest(smap.nside_sparse, pix)
 
         pix = torch.sort(pix)[0]
-        # Find contiguous chunks
-        diffs = torch.diff(pix)
-        breaks = torch.where(diffs > 1)[0]
-
-        ranges = []
-        start_idx = 0
-        for b in breaks:
-            ranges.append((int(pix[start_idx].item()), int(pix[b].item()) + 1))
-            start_idx = int(b.item()) + 1
-        ranges.append((int(pix[start_idx].item()), int(pix[-1].item()) + 1))
-
-        return cls._from_ranges(ranges, max_order)
+        # Contiguous runs: break wherever consecutive sorted pixels leave a gap.
+        breaks = torch.nonzero(torch.diff(pix) > 1).reshape(-1)
+        starts = pix[torch.cat((breaks.new_zeros(1), breaks + 1))]
+        ends = pix[torch.cat((breaks, breaks.new_full((1,), pix.numel() - 1)))] + 1
+        return cls._from_range_tensors(starts, ends, max_order)
 
     @classmethod
     def from_lonlat(
@@ -1079,7 +1108,7 @@ class MOC:
         quant_scale = 1.0e12
 
         def _key(v: Tensor) -> tuple[int, int, int]:
-            vals = torch.round(v.to(torch.float64).cpu() * quant_scale).to(torch.int64)
+            vals = torch.round(v.cpu().to(torch.float64) * quant_scale).to(torch.int64)
             return int(vals[0].item()), int(vals[1].item()), int(vals[2].item())
 
         vertex_xyz: dict[tuple[int, int, int], Tensor] = {}
@@ -1090,7 +1119,7 @@ class MOC:
         for poly in corners_xyz:
             keys = [_key(poly[i]) for i in range(poly.shape[0])]
             for key, xyz in zip(keys, poly, strict=False):
-                vertex_xyz[key] = xyz.to(torch.float64).cpu()
+                vertex_xyz[key] = xyz.cpu().to(torch.float64)
             for i in range(poly.shape[0]):
                 a = keys[i]
                 b = keys[(i + 1) % poly.shape[0]]
@@ -1145,7 +1174,9 @@ class MOC:
         if self.uniq.numel() == 0:
             return ""
         nsides, pix_nested = uniq2nest(self.uniq)
-        orders = torch.log2(nsides.to(torch.float64)).to(torch.int64)
+        orders = (
+            torch.log2(nsides.to(torch.float32)).round().to(torch.int64)
+        )  # exact: nside is a power of two
 
         unique_orders = torch.unique(orders, sorted=True)
         parts = []
@@ -1188,7 +1219,9 @@ class MOC:
             return "{}"
 
         nsides, pix_nested = uniq2nest(self.uniq)
-        orders = torch.log2(nsides.to(torch.float64)).to(torch.int64)
+        orders = (
+            torch.log2(nsides.to(torch.float32)).round().to(torch.int64)
+        )  # exact: nside is a power of two
 
         unique_orders = torch.unique(orders, sorted=True)
         data = {}
@@ -1341,69 +1374,63 @@ def _wcs_perimeter_lonlat(
     return ra.reshape(-1), dec.reshape(-1), H, W
 
 
-def _bmoc_ranges(
-    bmoc: "BMOC", max_order: int
-) -> tuple[list[int], list[int], list[int]]:
+def _bmoc_ranges(bmoc: "BMOC", max_order: int) -> tuple[Tensor, Tensor, Tensor]:
+    """Start-sorted ``(starts, ends, flags)`` tensors of a BMOC at ``max_order``."""
     if bmoc.uniq.numel() == 0:
-        return [], [], []
+        empty = torch.empty((0,), dtype=torch.int64, device=bmoc.uniq.device)
+        return empty, empty, empty
     _, pixels = uniq2nest(bmoc.uniq)
     orders = _order_from_uniq(bmoc.uniq)
     shifts = 2 * (max_order - orders)
-    starts_t = pixels << shifts
-    ends_t = (pixels + 1) << shifts
-    indices = torch.argsort(starts_t)
-    return (
-        [int(value) for value in starts_t[indices].tolist()],
-        [int(value) for value in ends_t[indices].tolist()],
-        [int(value) for value in bmoc.flag[indices].tolist()],
-    )
+    starts = pixels << shifts
+    ends = (pixels + 1) << shifts
+    indices = torch.argsort(starts)
+    return starts[indices], ends[indices], bmoc.flag.to(torch.int64)[indices]
 
 
 def _combine_bmoc(left: "BMOC", right: "BMOC", operation: str) -> "BMOC":
     max_order = max(left.max_order, right.max_order)
-    left_starts, left_ends, left_flags = _bmoc_ranges(left, max_order)
-    right_starts, right_ends, right_flags = _bmoc_ranges(right, max_order)
-    endpoints = sorted(set(left_starts + left_ends + right_starts + right_ends))
-    if len(endpoints) < 2:
+    device = left.uniq.device if left.uniq.numel() > 0 else right.uniq.device
+    l_s, l_e, l_f = (t.to(device) for t in _bmoc_ranges(left, max_order))
+    r_s, r_e, r_f = (t.to(device) for t in _bmoc_ranges(right, max_order))
+    endpoints = torch.unique(torch.cat((l_s, l_e, r_s, r_e)))
+    if endpoints.numel() < 2:
         return BMOC.empty()
+    seg_start = endpoints[:-1]
+    seg_end = endpoints[1:]
 
-    def state_at(
-        position: int, starts: list[int], ends: list[int], flags: list[int]
-    ) -> int:
-        index = bisect_right(starts, position) - 1
-        if index < 0 or position >= ends[index]:
-            return -1
-        return flags[index]
+    def state_at(starts: Tensor, ends: Tensor, flags: Tensor) -> Tensor:
+        if starts.numel() == 0:
+            return torch.full_like(seg_start, -1)
+        index = torch.searchsorted(starts, seg_start, right=True) - 1
+        safe = index.clamp_min(0)
+        valid = (index >= 0) & (seg_start < ends[safe])
+        return torch.where(valid, flags[safe], torch.full_like(flags[safe], -1))
 
-    segments: list[tuple[int, int, int]] = []
-    for start, end in zip(endpoints[:-1], endpoints[1:], strict=True):
-        left_state = state_at(start, left_starts, left_ends, left_flags)
-        right_state = state_at(start, right_starts, right_ends, right_flags)
-        if operation == "union":
-            state = max(left_state, right_state)
-        elif operation == "intersection":
-            state = (
-                min(left_state, right_state)
-                if min(left_state, right_state) >= 0
-                else -1
-            )
-        else:
-            state = left_state if left_state >= 0 and right_state < 0 else -1
-        if state < 0:
-            continue
-        if segments and segments[-1][1] == start and segments[-1][2] == state:
-            segments[-1] = (segments[-1][0], end, state)
-        else:
-            segments.append((start, end, state))
+    left_state = state_at(l_s, l_e, l_f)
+    right_state = state_at(r_s, r_e, r_f)
+    minus_one = torch.full_like(left_state, -1)
+    if operation == "union":
+        state = torch.maximum(left_state, right_state)
+    elif operation == "intersection":
+        lo = torch.minimum(left_state, right_state)
+        state = torch.where(lo >= 0, lo, minus_one)
+    else:
+        state = torch.where(
+            (left_state >= 0) & (right_state < 0), left_state, minus_one
+        )
 
     uniq_parts: list[Tensor] = []
     flag_parts: list[Tensor] = []
-    device = left.uniq.device if left.uniq.numel() > 0 else right.uniq.device
-    for start, end, state in segments:
-        cells = _ranges_to_uniq([(start, end)], max_order).to(device=device)
+    for value in (0, 1):
+        sel = state == value
+        if not bool(sel.any()):
+            continue
+        starts, ends = _merge_sorted_ranges(seg_start[sel], seg_end[sel])
+        cells = _range_tensors_to_uniq(starts, ends, max_order)
         uniq_parts.append(cells)
         flag_parts.append(
-            torch.full((cells.numel(),), state, dtype=torch.uint8, device=device)
+            torch.full((cells.numel(),), value, dtype=torch.uint8, device=device)
         )
     if not uniq_parts:
         return BMOC.empty()
@@ -1471,7 +1498,7 @@ class BMOC:
         if self.uniq.numel() == 0:
             return 0.0
         nsides, _ = uniq2nest(self.uniq)
-        nsides_f64 = nsides.to(torch.float64)
+        nsides_f64 = nsides.cpu().to(torch.float64)
         return float(
             ((4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))).sum().item()
         )
@@ -1487,7 +1514,7 @@ class BMOC:
         if ins.numel() == 0:
             return 0.0
         nsides, _ = uniq2nest(ins)
-        nsides_f64 = nsides.to(torch.float64)
+        nsides_f64 = nsides.cpu().to(torch.float64)
         return float(
             ((4.0 * math.pi) / (12.0 * (nsides_f64 * nsides_f64))).sum().item()
         )

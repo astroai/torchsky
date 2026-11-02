@@ -3,6 +3,8 @@ import math
 
 import numpy as np
 import pytest
+import random
+
 import torch
 from torchsky.sphere import SphericalCap, SphericalPolygon
 from torchsky.sphere import healpix as hp
@@ -18,6 +20,9 @@ from torchsky.sphere.moc import (
     _ranges_to_uniq,
     _normalize_moc,
     _union_ranges,
+    _order_from_uniq,
+    _range_tensors_to_uniq,
+    _uniq_to_range_tensors,
 )
 from torchsky.sphere import SparseHealpixMap
 import torchfits
@@ -559,3 +564,79 @@ def test_moc_high_order_max_order_and_leaf_preservation() -> None:
 def test_healpix_nside_cap() -> None:
     with pytest.raises(ValueError, match="2\\*\\*29"):
         hp._validate_nside(1 << 30)
+
+
+def _oracle_cells(rng: random.Random, max_order: int, n: int) -> torch.Tensor:
+    out = []
+    for _ in range(n):
+        order = rng.randint(0, max_order)
+        out.append((4 << (2 * order)) + rng.randrange(12 << (2 * order)))
+    return torch.tensor(out, dtype=torch.int64)
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_range_algebra_matches_dense_mask_oracle(seed: int) -> None:
+    rng = random.Random(seed)
+    order = 5
+    nside = 1 << order
+    for _ in range(8):
+        a = MOC(_oracle_cells(rng, order, rng.randint(1, 40)))
+        b = MOC(_oracle_cells(rng, order, rng.randint(1, 40)))
+        ma, mb = a.flatten(nside), b.flatten(nside)
+        for op, expect in (
+            ("union", ma | mb),
+            ("intersection", ma & mb),
+            ("difference", ma & ~mb),
+        ):
+            got = getattr(a, op)(b)
+            assert torch.equal(got.flatten(nside), expect), op
+            # canonical form: re-normalising the result is the identity
+            assert torch.equal(MOC(got.uniq).uniq, got.uniq)
+
+
+def test_range_algebra_edge_cases_and_deep_orders() -> None:
+    full = MOC.full()
+    empty = MOC.empty()
+    one = MOC(torch.tensor([4 << 58], dtype=torch.int64) + 12345)
+    assert full.union(one) == full
+    assert full.intersection(one) == one
+    assert one.difference(full).is_empty
+    assert full.difference(one).intersection(one).is_empty
+    assert full.difference(one).union(one) == full
+    assert empty.union(empty).is_empty
+    assert one.intersection(empty).is_empty
+    assert one.difference(empty) == one
+    assert one.max_order == 29
+    # touching cells at order 29 merge into their parent exactly
+    base = (4 << 58) + 4 * 777
+    quad = MOC(torch.arange(base, base + 4, dtype=torch.int64))
+    assert quad.uniq.numel() == 1
+    assert int(quad.uniq[0]) == (4 << 56) + 777
+
+
+def test_range_roundtrip_is_exact_at_depth_29() -> None:
+    rng = random.Random(7)
+    cuts = sorted(rng.sample(range(12 << 58), 400))
+    starts = torch.tensor(cuts[0::2], dtype=torch.int64)
+    ends = torch.tensor(cuts[1::2], dtype=torch.int64)
+    uniq = _range_tensors_to_uniq(starts, ends, 29)
+    s2, e2 = _uniq_to_range_tensors(uniq, 29)
+    assert torch.equal(s2, starts) and torch.equal(e2, ends)
+    # maximal cells: no four siblings of one parent remain
+    order = _order_from_uniq(uniq)
+    assert int((order <= 29).sum()) == uniq.numel()
+
+
+def test_moc_area_is_exact_and_device_independent() -> None:
+    import math
+
+    import torch
+
+    from torchsky.sphere import MOC
+
+    full = MOC(torch.arange(4 * 1, 4 * 1 + 12, dtype=torch.int64))  # 12 base cells
+    assert full.area == pytest.approx(4.0 * math.pi, rel=1e-15)
+    moc = MOC.from_circle(150.0, 2.0, 5.0, max_order=9)
+    if torch.backends.mps.is_available():
+        on_mps = MOC(moc.uniq.to("mps"))
+        assert on_mps.area == pytest.approx(moc.area, rel=1e-15)

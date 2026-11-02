@@ -2021,6 +2021,140 @@ def _m_per_alm_cached(lmax: int, mmax: int) -> Tensor:
     return _M_PER_ALM_CACHE.get_or_build(key, build)
 
 
+_LEGENDRE_SCAN_MAX_ELEMS = 1 << 22
+
+
+def _scalar_legendre_chunks(theta_ring: Tensor, mmax: int) -> list[tuple[int, int]]:
+    """Split ``0..mmax`` into m-chunks so a chunk holds ~``2**22`` (m, ring) values."""
+    nrings = max(int(theta_ring.numel()), 1)
+    width = max(1, _LEGENDRE_SCAN_MAX_ELEMS // nrings)
+    return [
+        (m0, min(m0 + width, int(mmax) + 1)) for m0 in range(0, int(mmax) + 1, width)
+    ]
+
+
+def _scan_device(device: torch.device) -> torch.device:
+    """float64 recurrence device: MPS has no float64, so scan on the host."""
+    return torch.device("cpu") if device.type == "mps" else device
+
+
+def _scalar_legendre_scan(
+    theta_ring: Tensor,
+    *,
+    m0: int,
+    m1: int,
+    lmax: int,
+    device: torch.device,
+):
+    """
+    Yield ``(l, k, lam)`` with ``lam[i, r] = lambda_{l, m0+i}(theta_r)`` for the
+    ``k = min(l, m1 - 1) - m0 + 1`` rows with ``m <= l``.
+
+    Orthonormal Legendre three-term recurrence in ``l``, vectorised over a chunk
+    of m and all rings; memory is ``O((m1 - m0) * nrings)``, never the dense
+    ``(nalm, nrings)`` basis. The sectoral seed is formed in log space and every
+    (m, ring) carries an integer power-of-``2**S`` exponent, so the recurrence
+    neither overflows nor underflows at any degree (underflowed values lie below
+    ``2**-2S`` relative to O(1) and are dropped, as in libsharp).
+    """
+    nm = m1 - m0
+    dtype = torch.float64
+    scale_bits = 256
+    ln_scale = scale_bits * math.log(2.0)
+    thr = 2.0 ** (scale_bits // 2)
+    inv = 2.0 ** (-scale_bits)
+
+    th = theta_ring.to(device="cpu", dtype=torch.float64)
+    ct = torch.cos(th).to(device=device, dtype=dtype)
+    log_sin = torch.log(torch.clamp(torch.sin(th), min=1e-300))
+    mv = torch.arange(m0, m1, dtype=torch.float64)
+    log_c = 0.5 * (
+        torch.log(2 * mv + 1)
+        - math.log(4.0 * math.pi)
+        + torch.lgamma(2 * mv + 1)
+        - 2 * (mv * math.log(2.0) + torch.lgamma(mv + 1))
+    )
+    seed_log = log_c[:, None] + mv[:, None] * log_sin[None, :]
+    ex64 = torch.clamp(torch.floor(seed_log / ln_scale), max=0.0)
+    mant = torch.exp(seed_log - ex64 * ln_scale)
+    sign = torch.where(mv % 2 == 0, 1.0, -1.0)
+    mant = (mant * sign[:, None]).to(device=device, dtype=dtype)
+    ex = ex64.to(device=device, dtype=dtype)
+
+    lam1 = torch.zeros((nm, ct.numel()), dtype=dtype, device=device)
+    lam2 = torch.zeros_like(lam1)
+    for ell in range(m0, int(lmax) + 1):
+        kp = min(ell - 1, m1 - 1) - m0 + 1
+        new = torch.zeros_like(lam1)
+        if kp > 0:
+            ms = mv[:kp]
+            l2 = float(ell) * float(ell)
+            den = l2 - ms * ms
+            a = torch.sqrt((4.0 * l2 - 1.0) / den)
+            b = torch.sqrt(
+                (2.0 * ell + 1.0)
+                / (2.0 * ell - 3.0 if ell > 1 else 1.0)
+                * (((ell - 1.0) ** 2) - ms * ms)
+                / den
+            )
+            a_t = a.to(device=device, dtype=dtype)[:, None]
+            b_t = b.to(device=device, dtype=dtype)[:, None]
+            new[:kp] = a_t * ct[None, :] * lam1[:kp] - b_t * lam2[:kp]
+        if ell < m1:
+            new[ell - m0] = mant[ell - m0]
+        big = new.abs() > thr
+        new = torch.where(big, new * inv, new)
+        lam1 = torch.where(big, lam1 * inv, lam1)
+        ex = ex + big.to(dtype)
+        k = min(ell, m1 - 1) - m0 + 1
+        yield ell, k, new[:k] * torch.exp2(scale_bits * ex[:k])
+        lam2, lam1 = lam1, new
+
+
+def _scalar_ring_legendre_integrate(
+    s_all: Tensor, theta_ring: Tensor, *, lmax: int, mmax: int, pix_w: float
+) -> Tensor:
+    """alm[b, (l,m)] = pix_w * sum_r s_all[b, m, r] lambda_lm(theta_r); chunked scan."""
+    nmaps = int(s_all.shape[0])
+    device = s_all.device
+    real_dtype = s_all.real.dtype
+    s_ri = torch.view_as_real(s_all.contiguous())
+    out = torch.zeros((nmaps, alm_size(lmax, mmax), 2), dtype=real_dtype, device=device)
+    marr = torch.arange(int(mmax) + 1, dtype=torch.int64)
+    base = (marr * (lmax + 1) - marr * (marr - 1) // 2 - marr).to(device)
+    for m0, m1 in _scalar_legendre_chunks(theta_ring, mmax):
+        s_c = s_ri[:, m0:m1]
+        for ell, k, lam in _scalar_legendre_scan(
+            theta_ring, m0=m0, m1=m1, lmax=lmax, device=_scan_device(device)
+        ):
+            lam = lam.to(device=device, dtype=real_dtype)
+            coef = torch.einsum("bmrc,mr->bmc", s_c[:, :k], lam)
+            out[:, base[m0 : m0 + k] + ell] = coef * pix_w
+    return torch.view_as_complex(out.contiguous())
+
+
+def _scalar_ring_legendre_synthesize(
+    alm: Tensor, theta_ring: Tensor, *, lmax: int, mmax: int
+) -> Tensor:
+    """f[b, m, r] = sum_l alm[b, (l,m)] lambda_lm(theta_r); chunked scan."""
+    nmaps = int(alm.shape[0])
+    device = alm.device
+    real_dtype = alm.real.dtype
+    nrings = int(theta_ring.numel())
+    a_ri = torch.view_as_real(alm.contiguous())
+    f = torch.zeros((nmaps, mmax + 1, nrings, 2), dtype=real_dtype, device=device)
+    marr = torch.arange(int(mmax) + 1, dtype=torch.int64)
+    base = (marr * (lmax + 1) - marr * (marr - 1) // 2 - marr).to(device)
+    for m0, m1 in _scalar_legendre_chunks(theta_ring, mmax):
+        for ell, k, lam in _scalar_legendre_scan(
+            theta_ring, m0=m0, m1=m1, lmax=lmax, device=_scan_device(device)
+        ):
+            lam = lam.to(device=device, dtype=real_dtype)
+            coef = a_ri[:, base[m0 : m0 + k] + ell]
+            f[:, m0 : m0 + k] += coef[:, :, None, :] * lam[None, :, :, None]
+    return torch.view_as_complex(f.contiguous())
+
+
 def _scalar_alm2map_ring_torch(
     rows: Tensor,
     *,
@@ -2034,7 +2168,6 @@ def _scalar_alm2map_ring_torch(
     dtype_cplx = _preferred_complex_dtype(device)
 
     nmaps = int(rows.shape[0])
-    nrings = int(lengths_cpu.numel())
 
     use_cpp_recurrence = (
         _SCALAR_INTERP_CPP_ENABLE
@@ -2063,27 +2196,18 @@ def _scalar_alm2map_ring_torch(
             c_all = c_all.clone()
             c_all[:, 1:, :] = 2.0 * c_all[:, 1:, :]
     else:
-        # Batched Legendre interpolation (no Python m-loop)
-        Y = _ring_scalar_basis_concat(int(nside), int(lmax), int(mmax)).to(
-            device=device, dtype=dtype_cplx
+        # Chunked Legendre recurrence scan: O(chunk * nrings) memory.
+        _, _, theta_ring_cpu, _ = _ring_layout_for_nside(int(nside))
+        f_m_ring = _scalar_ring_legendre_synthesize(
+            rows.to(dtype=dtype_cplx),
+            theta_ring_cpu,
+            lmax=int(lmax),
+            mmax=int(mmax),
         )
-        m_idx = _m_per_alm_cached(int(lmax), int(mmax)).to(device=device)
 
         phi0_phase = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1).to(
             device=device, dtype=dtype_cplx
         )
-
-        # alm_weighted: (nmaps, nalm, nrings) = alm[:, j] * Y[j, r]
-        alm_cplx = rows.to(dtype=dtype_cplx)
-        alm_weighted = alm_cplx.unsqueeze(-1) * Y.unsqueeze(0)  # broadcast
-
-        # Scatter-sum into per-m Fourier modes using m_idx
-        f_m_ring = torch.zeros(
-            (nmaps, mmax + 1, nrings), dtype=dtype_cplx, device=device
-        )
-        m_expand = m_idx.unsqueeze(0).unsqueeze(-1).expand_as(alm_weighted)
-        f_m_ring = _accumulate_add(f_m_ring, 1, m_expand, alm_weighted, scatter=True)
-
         # Apply phi0 phase per m
         f_m_ring = f_m_ring * phi0_phase.unsqueeze(0)
 
@@ -2150,20 +2274,10 @@ def _scalar_map2alm_ring_torch(
             out_alms.append(alm)
         return torch.stack(out_alms, dim=0)
 
-    # Batched Legendre integration (no Python m-loop)
-    Y = _ring_scalar_basis_concat(int(nside), int(lmax), int(mmax)).to(
-        device=device, dtype=dtype_cplx
+    _, _, theta_ring_cpu, _ = _ring_layout_for_nside(int(nside))
+    return _scalar_ring_legendre_integrate(
+        s_all, theta_ring_cpu, lmax=int(lmax), mmax=int(mmax), pix_w=pix_w
     )
-    m_idx = _m_per_alm_cached(int(lmax), int(mmax)).to(device=device)
-
-    # Expand s_all from (nmaps, mmax+1, nrings) to (nmaps, nalm, nrings)
-    # using m_idx to select the correct m for each alm
-    s_expanded = torch.index_select(s_all, 1, m_idx)  # (nmaps, nalm, nrings)
-
-    # Single batched einsum: alm[b, j] = sum_r(s_expanded[b, j, r] * conj(Y[j, r])) * pix_w
-    out = torch.einsum("bnr,nr->bn", s_expanded, Y) * pix_w
-
-    return out
 
 
 def _ring_fourier_synthesis(
