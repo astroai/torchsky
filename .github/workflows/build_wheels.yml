@@ -78,6 +78,8 @@ jobs:
             pixi-environment: test-py312
           - python-version: '3.13'
             pixi-environment: test-py313
+          - python-version: '3.14'
+            pixi-environment: test-py314
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

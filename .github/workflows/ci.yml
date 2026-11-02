@@ -106,6 +106,12 @@ jobs:
         - os: ubuntu-latest
           python-version: '3.13'
           pixi-environment: test-py313
+        - os: ubuntu-latest
+          python-version: '3.14'
+          pixi-environment: test-py314
+        - os: macos-15
+          python-version: '3.14'
+          pixi-environment: test-py314
     steps:
     - uses: actions/checkout@v4
     - name: Install system dependencies (Ubuntu)

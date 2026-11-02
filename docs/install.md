@@ -20,6 +20,20 @@ dependency for FITS file and table I/O and installs together with torchsky.
 pip install "torchsky @ file:///path/to/torchsky-0.5.0rc1-*.whl"   # a wheel you built
 ```
 
+### Supported lanes (0.5)
+
+| | Supported and tested |
+|---|---|
+| Python | 3.12, 3.13, 3.14 (CI runs the full suite on each) |
+| PyTorch | 2.14 (`>=2.14,<2.15`) |
+| GPU | CUDA 13 and newer (PyTorch `cu130` builds; NVIDIA driver supporting CUDA 13), Apple MPS (float64-only paths raise) |
+| OS / architecture | Linux x86_64 (manylinux_2_28), macOS 14+ arm64 |
+| torchfits | 1.3.1 or newer |
+
+The extension is CPU-only C++; GPU work runs through PyTorch, so one Linux wheel
+serves CPU and every CUDA build of PyTorch 2.14. Other platforms build from the
+sdist.
+
 Release wheels target Linux x86_64 (manylinux_2_28) and macOS arm64 (macOS 14.0 or newer) on CPython 3.12, 3.13, and 3.14;
 building from source works on the platforms in `pyproject.toml`. Package metadata
 requires Python >=3.12 and [PyTorch](https://pytorch.org/) >=2.14,<2.15 (PyTorch

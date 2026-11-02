@@ -118,6 +118,9 @@ python = "3.12.*"
 [feature.py313.dependencies]
 python = "3.13.*"
 
+[feature.py314.dependencies]
+python = "3.14.*"
+
 # Test feature with comparison libraries
 [feature.test.dependencies]
 astropy = ">=5.0"
@@ -172,6 +175,7 @@ default = { features = ["prod", "py313"], solve-group = "default" }
 test = { features = ["prod", "test", "py313"], solve-group = "default" }
 test-py312 = { features = ["prod", "test", "py312"], solve-group = "py312" }
 test-py313 = { features = ["prod", "test", "py313"], solve-group = "default" }
+test-py314 = { features = ["prod", "test", "py314"], solve-group = "py314" }
 cuda-bench = { features = ["cuda"], no-default-feature = true, solve-group = "cuda" }
 astrometry = { features = ["prod", "astrometry", "py313"], solve-group = "default" }
 docs = { features = ["prod", "docs", "py313"], solve-group = "default" }
