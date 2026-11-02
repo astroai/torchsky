@@ -179,6 +179,21 @@ assert qu_back.shape == qu.shape
 print(float(alm_p.abs().max()))
 ```
 
+## Bandlimit, precision, and devices
+
+`lmax` up to `3 * nside - 1` is supported at every `nside` (checked against
+healpy at `nside` 512, 1024 and 2048, `lmax = 6143`). The scalar Legendre
+recurrence carries a per-(m, ring) power-of-`2**256` exponent, so the sectoral
+seed `sin(theta)**m` never underflows float64 (it did for `lmax` above about
+1900 when `mmax` was large); rings in the classically forbidden region
+`m > lmax * sin(theta) + margin` are skipped with a WKB-derived margin (the
+dropped weight is below `e**-90`). The torch path used on other devices applies
+the same scaling in chunks.
+
+MPS has no float64: the Legendre recurrence of the spin-weighted transforms
+(`map2alm_spin`, `alm2map_spin`, and the `pol=True` paths) runs on the host in
+float64 and returns float32/complex64 tensors on the MPS device.
+
 ## Least-squares analysis
 
 `map2alm_lsq(map_values, lmax, mmax=None, *, nside=None, pol=True, tol=1e-10,

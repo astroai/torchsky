@@ -2117,3 +2117,33 @@ def test_alm2map_der1_matches_spin1_sqrt_ell() -> None:
     qu = alm2map_spin((alm_e, alm_b), nside, 1, lmax=lmax)
     torch.testing.assert_close(d_theta, qu[0], atol=1e-12, rtol=0.0)
     torch.testing.assert_close(d_phi, qu[1], atol=1e-12, rtol=0.0)
+
+
+@pytest.mark.parametrize("spin", [1, 2])
+def test_spin_transform_mps_matches_cpu(spin: int) -> None:
+    """MPS has no float64: the spin recurrence runs on the host and must agree."""
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS unavailable")
+    from torchsky.sphere import alm2map_spin, map2alm_spin
+
+    nside, lmax = 16, 24
+    g = torch.Generator().manual_seed(spin)
+    maps = torch.randn(2, 12 * nside * nside, generator=g, dtype=torch.float64)
+    ref = map2alm_spin(maps.float().double(), spin, nside=nside, lmax=lmax)
+    got = map2alm_spin(maps.float().to("mps"), spin, nside=nside, lmax=lmax)
+    for a, b in zip(got, ref, strict=True):
+        assert a.device.type == "mps"
+        torch.testing.assert_close(
+            a.cpu().to(torch.complex128), b, rtol=1e-5, atol=1e-5 * float(b.abs().max())
+        )
+    ref_map = alm2map_spin(ref, nside, spin, lmax=lmax)
+    got_map = alm2map_spin(
+        tuple(x.to(torch.complex64).to("mps") for x in ref), nside, spin, lmax=lmax
+    )
+    assert got_map.device.type == "mps"
+    torch.testing.assert_close(
+        got_map.cpu().double(),
+        ref_map,
+        rtol=1e-5,
+        atol=1e-5 * float(ref_map.abs().max()),
+    )

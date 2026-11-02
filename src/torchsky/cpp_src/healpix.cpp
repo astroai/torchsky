@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <fstream>
 #include <functional>
@@ -1751,27 +1752,18 @@ torch::Tensor healpix_ring_fourier_modes_cpu(
             ++ring;
         }
         const int64_t run_ring_count = ring - run_start_ring;
-        if (run_ring_count == 1) {
-            polar_r.push_back(run_start_ring);
-            polar_pix0.push_back(run_pix_start);
+        // Every ring is an independent FFT; rings are parallelised below
+        // (the batched ATen FFT plus transposed copy was single-pass and
+        // memory bound).
+        for (int64_t k = 0; k < run_ring_count; ++k) {
+            polar_r.push_back(run_start_ring + k);
+            polar_pix0.push_back(run_pix_start + k * nph);
             polar_nph.push_back(static_cast<int>(nph));
-            if (nph > max_polar_nph) {
-                max_polar_nph = static_cast<int>(nph);
-            }
-            continue;
+        }
+        if (nph > max_polar_nph) {
+            max_polar_nph = static_cast<int>(nph);
         }
 
-        auto block = rows_c.narrow(1, run_pix_start, run_ring_count * nph).view({nrows, run_ring_count, nph});
-        auto fft_block = at::fft_fft(block, std::nullopt, -1, std::nullopt);
-
-        torch::Tensor fft_sel;
-        if (nph > mmax) {
-            fft_sel = fft_block.narrow(2, 0, mcount);
-        } else {
-            const auto idx = g_ring_alias_idx_cache.plus(nph, mcount);
-            fft_sel = fft_block.index_select(2, *idx);
-        }
-        out.narrow(2, run_start_ring, run_ring_count).copy_(fft_sel.permute({0, 2, 1}));
     }
 
     const int64_t npolar = static_cast<int64_t>(polar_r.size());
@@ -2042,44 +2034,17 @@ torch::Tensor healpix_ring_fourier_synthesis_cpu(
             ++ring;
         }
         const int64_t run_ring_count = ring - run_start_ring;
-        if (run_ring_count == 1) {
-            polar_r.push_back(run_start_ring);
-            polar_pix0.push_back(run_pix_start);
+        // Every ring is an independent inverse FFT, parallelised below.
+        for (int64_t k = 0; k < run_ring_count; ++k) {
+            polar_r.push_back(run_start_ring + k);
+            polar_pix0.push_back(run_pix_start + k * nph);
             polar_nph.push_back(static_cast<int>(nph));
-            if (nph > max_polar_nph) {
-                max_polar_nph = static_cast<int>(nph);
-            }
-            continue;
         }
-
-        auto spec = torch::zeros({nrows, run_ring_count, nph}, cplx_opts);
-        auto* spec_ptr = spec.data_ptr<c10::complex<double>>();
-        for (int64_t row = 0; row < nrows; ++row) {
-            const std::complex<double>* s_row = s_ptr + row * mcount * nrings;
-            for (int64_t ir = 0; ir < run_ring_count; ++ir) {
-                const int64_t r = run_start_ring + ir;
-                c10::complex<double>* dst =
-                    spec_ptr + ((row * run_ring_count + ir) * nph);
-                if (nph > mmax) {
-                    for (int64_t m = 0; m < mcount; ++m) {
-                        const auto z = s_row[m * nrings + r];
-                        dst[m] = c10::complex<double>(z.real(), z.imag());
-                    }
-                } else {
-                    for (int64_t m = 0; m < mcount; ++m) {
-                        const auto z = s_row[m * nrings + r];
-                        dst[m % nph] += c10::complex<double>(z.real(), z.imag());
-                    }
-                }
-            }
+        if (nph > max_polar_nph) {
+            max_polar_nph = static_cast<int>(nph);
         }
-        auto map_vals = at::fft_ifft(spec, std::nullopt, -1, std::nullopt);
-        map_vals.mul_(static_cast<double>(nph));
-        out.narrow(1, run_pix_start, run_ring_count * nph).copy_(
-            map_vals.reshape({nrows, run_ring_count * nph})
-        );
+        continue;
     }
-
     const int64_t npolar = static_cast<int64_t>(polar_r.size());
     if (npolar > 0) {
         const int64_t* polar_r_ptr = polar_r.data();
@@ -5396,6 +5361,8 @@ static inline void ishioka_k_reduce_rings(
 }
 #endif
 
+#include "sht_scalar_kernels.inc"
+
 static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
     const c10::complex<double>* alm0_ptr,
     const c10::complex<double>* alm1_ptr,
@@ -5446,10 +5413,11 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
         for (int64_t i = 0; i < n_eff; ++i) {
             const double cth = cos_theta_all[static_cast<size_t>(i)];
             const double sth = sin_theta_all[static_cast<size_t>(i)];
-            mlim_north[static_cast<size_t>(i)] = sharp_mlim_estimate(lmax_s, 0, sth, cth);
+            mlim_north[static_cast<size_t>(i)] = sht_scalar::spin_mlim_estimate(lmax_s, 0, sth, cth);
         }
     }
 
+    const sht_scalar::RingGeometry sgeom(th_ptr, nrings, lmax_s);
     parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
         if (m0 > mmax) {
             return;
@@ -5461,6 +5429,9 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
         std::vector<double> v_s0r(n_eff), v_s0i(n_eff), v_a0r(n_eff), v_a0i(n_eff);
         std::vector<double> v_s1r(n_eff), v_s1i(n_eff), v_a1r(n_eff), v_a1i(n_eff);
         std::vector<uint8_t> v_active(n_eff);
+        sht_scalar::SeedState seeds;
+        seeds.init(sgeom, m0, stride);
+        std::vector<sht_scalar::SpinSeedEvent> events;
         double* __restrict__ p = v_p.data();
         double* __restrict__ pold = v_pold.data();
         double* __restrict__ s0r = v_s0r.data();
@@ -5478,6 +5449,7 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
         const double* __restrict__ mu2_ptr = mu2_all.data();
 
         for (int64_t m = m0; m <= mmax; m += stride) {
+            seeds.advance_to(m);
             const IshiokaMCoeffs& pc = (*packs)[static_cast<size_t>(m)];
             recouple_spin_to_scalar_m(
                 alm0_ptr + alm_packed_index(m, m, lmax),
@@ -5499,7 +5471,7 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
             for (int i = 0; i < n_eff; ++i) {
                 const bool on = (m <= mlim_north[static_cast<size_t>(i)]);
                 active[i] = static_cast<uint8_t>(on);
-                p[i] = on ? seed * fast_pow(st_ptr[i], static_cast<int>(m)) : 0.0;
+                p[i] = 0.0;
                 pold[i] = 0.0;
                 s0r[i] = 0.0;
                 s0i[i] = 0.0;
@@ -5510,6 +5482,8 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
                 a1r[i] = 0.0;
                 a1i[i] = 0.0;
             }
+            spin_seed_rings(sgeom, seeds, seed, pc, mu2_ptr, active, p, pold, events);
+            size_t ev_pos = 0;
             int pair0 = 0;
             int n_run = 0;
             spin_active_pair_span(active, static_cast<int>(n_pairs), pair0, n_run);
@@ -5522,6 +5496,11 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
             };
 
             for (int64_t k = 0; k <= pc.kmax; ++k) {
+                while (ev_pos < events.size() && events[ev_pos].k == k) {
+                    p[events[ev_pos].i] = events[ev_pos].p;
+                    pold[events[ev_pos].i] = events[ev_pos].pold;
+                    ++ev_pos;
+                }
                 const int64_t n_even = m + 2 * k;
                 const double e1 = pc.eps[static_cast<size_t>(n_even + 1)];
                 c10::complex<double> t0 = s_at(sc0, n_even) * e1;
@@ -5687,10 +5666,11 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
         for (int64_t i = 0; i < n_eff; ++i) {
             const double cth = cos_theta_all[static_cast<size_t>(i)];
             const double sth = sin_theta_all[static_cast<size_t>(i)];
-            mlim_north[static_cast<size_t>(i)] = sharp_mlim_estimate(lmax_s, 0, sth, cth);
+            mlim_north[static_cast<size_t>(i)] = sht_scalar::spin_mlim_estimate(lmax_s, 0, sth, cth);
         }
     }
 
+    const sht_scalar::RingGeometry sgeom(th_ptr, nrings, lmax_s);
     parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
         if (m0 > mmax) {
             return;
@@ -5702,6 +5682,9 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
         std::vector<double> v_s0r(n_eff), v_s0i(n_eff), v_a0r(n_eff), v_a0i(n_eff);
         std::vector<double> v_s1r(n_eff), v_s1i(n_eff), v_a1r(n_eff), v_a1i(n_eff);
         std::vector<uint8_t> v_active(n_eff);
+        sht_scalar::SeedState seeds;
+        seeds.init(sgeom, m0, stride);
+        std::vector<sht_scalar::SpinSeedEvent> events;
         double* __restrict__ p = v_p.data();
         double* __restrict__ pold = v_pold.data();
         double* __restrict__ s0r = v_s0r.data();
@@ -5719,6 +5702,7 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
         const double* __restrict__ mu2_ptr = mu2_all.data();
 
         for (int64_t m = m0; m <= mmax; m += stride) {
+            seeds.advance_to(m);
             const IshiokaMCoeffs& pc = (*packs)[static_cast<size_t>(m)];
             const int64_t n_s = lmax_s - m + 1;
             std::fill(v_s0.begin(), v_s0.begin() + n_s, c10::complex<double>(0.0, 0.0));
@@ -5734,7 +5718,7 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
                 const bool on = (m <= mlim_north[static_cast<size_t>(i)]);
                 active[i] = static_cast<uint8_t>(on);
                 any_active = any_active || on;
-                p[i] = on ? seed * fast_pow(st_ptr[i], static_cast<int>(m)) : 0.0;
+                p[i] = 0.0;
                 pold[i] = 0.0;
                 if (!on) {
                     s0r[i] = s0i[i] = a0r[i] = a0i[i] = 0.0;
@@ -5773,11 +5757,18 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
             if (!any_active) {
                 continue;
             }
+            spin_seed_rings(sgeom, seeds, seed, pc, mu2_ptr, active, p, pold, events);
+            size_t ev_pos = 0;
             int pair0 = 0;
             int n_run = 0;
             spin_active_pair_span(active, static_cast<int>(n_pairs), pair0, n_run);
 
             for (int64_t k = 0; k <= pc.kmax; ++k) {
+                while (ev_pos < events.size() && events[ev_pos].k == k) {
+                    p[events[ev_pos].i] = events[ev_pos].p;
+                    pold[events[ev_pos].i] = events[ev_pos].pold;
+                    ++ev_pos;
+                }
                 const int64_t n_even = m + 2 * k;
                 const double e1 = pc.eps[static_cast<size_t>(n_even + 1)];
                 const bool do_odd = (k <= pc.kmax_odd);
@@ -5963,142 +5954,18 @@ torch::Tensor healpix_scalar_integrate_recurrence_cpu(
     if (nrings > 0 && weight_c.numel() == 0) {
         throw std::runtime_error(std::string(function_name) + " weight cannot be empty for non-empty rings");
     }
-    auto sm_a = sm_f.accessor<c10::complex<double>, 2>();
-    auto th_ptr = theta_c.data_ptr<double>();
-    auto w_ptr = weight_c.data_ptr<double>();
-    const bool w_scalar = weight_c.numel() == 1;
-
-    int64_t n_eff = nrings / 2 + nrings % 2;
-    int64_t n_pairs = nrings / 2;
-    bool has_equator = (nrings % 2 != 0);
-    const auto l_factors = get_l_factors(lmax);
-    const auto m_factors = get_m_factors(mmax);
-    (void)m_factors;
-
     auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
     torch::Tensor alms = torch::zeros({nalm}, options);
-    auto alm_out = alms.data_ptr<c10::complex<double>>();
-
-    // Build scalar recurrence LUT
-    std::vector<int64_t> m_offsets(mmax + 1);
-    int64_t current_lut_off = 0;
-    for (int64_t m = 0; m <= mmax; ++m) {
-        m_offsets[m] = current_lut_off;
-        int64_t l0 = m;  // spin=0
-        if (lmax >= l0 + 2) {
-            current_lut_off += (lmax - (l0 + 2) + 1);
-        }
-    }
-    const auto lut = g_scalar_recurrence_cache.get_coeffs(lmax, mmax);
-
-    std::vector<double> cos_theta_all(n_eff);
-    std::vector<double> sin_theta_all(n_eff);
-    for (int i = 0; i < n_eff; ++i) {
-        cos_theta_all[i] = std::cos(th_ptr[i]);
-        sin_theta_all[i] = std::sin(th_ptr[i]);
-    }
-
-    parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
-        std::vector<double> v_lam2(n_eff), v_lam1(n_eff), v_lamc(n_eff);
-        double * __restrict__ lam2 = v_lam2.data();
-        double * __restrict__ lam1 = v_lam1.data();
-        double * __restrict__ lamc = v_lamc.data();
-
-        // North/South data buffers
-        std::vector<double> vNr(n_eff), vNi(n_eff), vSr(n_eff), vSi(n_eff);
-        std::vector<double> v_weightsN(n_eff), v_weightsS(n_eff);
-        double * __restrict__ Nr = vNr.data(); double * __restrict__ Ni = vNi.data();
-        double * __restrict__ Sr = vSr.data(); double * __restrict__ Si = vSi.data();
-        double * __restrict__ weightsN = v_weightsN.data();
-        double * __restrict__ weightsS = v_weightsS.data();
-        const double * __restrict__ ct_ptr = cos_theta_all.data();
-        const double * __restrict__ st_ptr = sin_theta_all.data();
-
-        for (int64_t m = m0; m <= mmax; m += stride) {
-            int64_t l0 = m;
-            int64_t idx_base = m * (lmax + 1) - (m * (m - 1)) / 2;
-            const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
-            const auto* lut_ptr = lut->empty()
-                ? nullptr
-                : lut->data() + static_cast<size_t>(m_offsets[m]);
-
-            // Load Fourier modes and weights for north/south rings
-            for (int i = 0; i < n_eff; ++i) {
-                weightsN[i] = w_scalar ? w_ptr[0] : w_ptr[i];
-                Nr[i] = sm_a[m][i].real();
-                Ni[i] = sm_a[m][i].imag();
-                if (i < n_pairs) {
-                    int64_t idx_S = nrings - 1 - i;
-                    weightsS[i] = w_scalar ? w_ptr[0] : w_ptr[idx_S];
-                    Sr[i] = sm_a[m][idx_S].real();
-                    Si[i] = sm_a[m][idx_S].imag();
-                }
-            }
-
-            // Seed using eval_wigner_d (matches spin kernel convention)
-            WignerDCoeffs coeffs_c1 = get_wigner_d_coeffs(l0, m, 0);
-            for (int i = 0; i < n_eff; ++i) {
-                lam1[i] = eval_wigner_d(coeffs_c1, th_ptr[i]);
-                lam2[i] = 0.0;
-            }
-
-            auto accumulate_l = [&](int64_t l, const double* __restrict__ lam) {
-                double r_alm = 0, i_alm = 0;
-                const double parity = ((l + m) % 2 == 0) ? 1.0 : -1.0;
-                #pragma clang loop vectorize(enable)
-                for (int i = 0; i < n_pairs; ++i) {
-                    double d_val = lam[i];
-                    r_alm += (Nr[i] * weightsN[i] * d_val + Sr[i] * weightsS[i] * d_val * parity);
-                    i_alm += (Ni[i] * weightsN[i] * d_val + Si[i] * weightsS[i] * d_val * parity);
-                }
-                if (has_equator) {
-                    int i = n_pairs;
-                    r_alm += Nr[i] * weightsN[i] * lam[i];
-                    i_alm += Ni[i] * weightsN[i] * lam[i];
-                }
-                const double sc = pre_phase * (*l_factors)[static_cast<size_t>(l)];
-                alm_out[idx_base + (l - m)] = c10::complex<double>(r_alm * sc, i_alm * sc);
-            };
-
-            accumulate_l(l0, lam1);
-
-            if (l0 < lmax) {
-                WignerDCoeffs coeffs_cc = get_wigner_d_coeffs(l0 + 1, m, 0);
-                for (int i = 0; i < n_eff; ++i) {
-                    lamc[i] = eval_wigner_d(coeffs_cc, th_ptr[i]);
-                }
-                accumulate_l(l0 + 1, lamc);
-                { auto t = lam2; lam2 = lam1; lam1 = lamc; lamc = t; }
-
-                // Main recurrence loop l = l0+2 ... lmax
-                for (int64_t l = l0 + 2; l <= lmax; ++l) {
-                    const auto& c = lut_ptr[l - (l0 + 2)];
-                    const double c1 = c.c1, c3 = c.c3;
-                    const double parity = ((l + m) % 2 == 0) ? 1.0 : -1.0;
-                    double r_alm = 0, i_alm = 0;
-
-                    #pragma clang loop vectorize(enable)
-                    for (int i = 0; i < n_pairs; ++i) {
-                        const double d_val = c1 * ct_ptr[i] * lam1[i] + c3 * lam2[i];
-                        lamc[i] = d_val;
-                        r_alm += (Nr[i] * weightsN[i] * d_val + Sr[i] * weightsS[i] * d_val * parity);
-                        i_alm += (Ni[i] * weightsN[i] * d_val + Si[i] * weightsS[i] * d_val * parity);
-                    }
-                    if (has_equator) {
-                        int i = n_pairs;
-                        const double d_val = c1 * ct_ptr[i] * lam1[i] + c3 * lam2[i];
-                        lamc[i] = d_val;
-                        r_alm += Nr[i] * weightsN[i] * d_val;
-                        i_alm += Ni[i] * weightsN[i] * d_val;
-                    }
-                    const double sc = pre_phase * (*l_factors)[static_cast<size_t>(l)];
-                    alm_out[idx_base + (l - m)] = c10::complex<double>(r_alm * sc, i_alm * sc);
-                    { auto t = lam2; lam2 = lam1; lam1 = lamc; lamc = t; }
-                }
-            }
-        }
-    });
-
+    sht_scalar::integrate(
+        sm_f.data_ptr<c10::complex<double>>(),
+        theta_c.data_ptr<double>(),
+        weight_c.data_ptr<double>(),
+        weight_c.numel() == 1,
+        nrings,
+        lmax,
+        mmax,
+        alms.data_ptr<c10::complex<double>>()
+    );
     return alms;
 }
 
@@ -6119,191 +5986,40 @@ torch::Tensor healpix_scalar_interpolate_recurrence_cpu(
     if (alm_f.numel() != nalm) {
         throw std::runtime_error(std::string(function_name) + " alm length does not match lmax/mmax");
     }
-    auto alm_a = alm_f.data_ptr<c10::complex<double>>();
-    auto th_ptr = theta_c.data_ptr<double>();
-
-    int64_t nrings = theta_c.size(0);
-    int64_t n_eff = nrings / 2 + nrings % 2;
-    int64_t n_pairs = nrings / 2;
-    bool has_equator = (nrings % 2 != 0);
-    const auto l_factors = get_l_factors(lmax);
-    const auto m_factors = get_m_factors(mmax);
-    (void)m_factors;
-
+    const int64_t nrings = theta_c.size(0);
     auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
     torch::Tensor s_modes = torch::zeros({mmax + 1, nrings}, options);
-    auto sm_a = s_modes.accessor<c10::complex<double>, 2>();
-
-    // Build scalar recurrence LUT
-    std::vector<int64_t> m_offsets(mmax + 1);
-    int64_t current_lut_off = 0;
-    for (int64_t m = 0; m <= mmax; ++m) {
-        m_offsets[m] = current_lut_off;
-        int64_t l0 = m;
-        if (lmax >= l0 + 2) {
-            current_lut_off += (lmax - (l0 + 2) + 1);
-        }
-    }
-    const auto lut = g_scalar_recurrence_cache.get_coeffs(lmax, mmax);
-
-    std::vector<double> cos_theta_all(n_eff);
-    std::vector<double> sin_theta_all(n_eff);
-    for (int i = 0; i < n_eff; ++i) {
-        cos_theta_all[i] = std::cos(th_ptr[i]);
-        sin_theta_all[i] = std::sin(th_ptr[i]);
-    }
-
-    parallel_m_ranges(mmax, [&](int64_t m0, int64_t stride) {
-        std::vector<double> v_lam2(n_eff), v_lam1(n_eff), v_lamc(n_eff);
-        double * __restrict__ lam2 = v_lam2.data();
-        double * __restrict__ lam1 = v_lam1.data();
-        double * __restrict__ lamc = v_lamc.data();
-
-        std::vector<double> v_rN(n_eff), v_iN(n_eff), v_rS(n_eff), v_iS(n_eff);
-        double * __restrict__ rN = v_rN.data(); double * __restrict__ iN = v_iN.data();
-        double * __restrict__ rS = v_rS.data(); double * __restrict__ iS = v_iS.data();
-        const double * __restrict__ ct_ptr = cos_theta_all.data();
-        const double * __restrict__ st_ptr = sin_theta_all.data();
-
-        for (int64_t m = m0; m <= mmax; m += stride) {
-            int64_t l0 = m;
-            int64_t idx_base = m * (lmax + 1) - (m * (m - 1)) / 2;
-            const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
-            const auto* lut_ptr = lut->empty()
-                ? nullptr
-                : lut->data() + static_cast<size_t>(m_offsets[m]);
-
-            // Zero accumulators
-            for (int i = 0; i < n_eff; ++i) {
-                rN[i] = 0; iN[i] = 0;
-                rS[i] = 0; iS[i] = 0;
-            }
-
-            // Seed using eval_wigner_d (matches spin kernel convention)
-            WignerDCoeffs coeffs_c1 = get_wigner_d_coeffs(l0, m, 0);
-            for (int i = 0; i < n_eff; ++i) {
-                lam1[i] = eval_wigner_d(coeffs_c1, th_ptr[i]);
-                lam2[i] = 0.0;
-            }
-
-            auto update_block = [&](int64_t l, const double* __restrict__ lam) {
-                const c10::complex<double> a = alm_a[idx_base + (l - m)];
-                const double sc = pre_phase * (*l_factors)[static_cast<size_t>(l)];
-                const double r0 = a.real() * sc, i0 = a.imag() * sc;
-                const double parity = ((l + m) % 2 == 0) ? 1.0 : -1.0;
-
-                #pragma clang loop vectorize(enable)
-                for (int i = 0; i < n_pairs; ++i) {
-                    rN[i] += r0 * lam[i];
-                    iN[i] += i0 * lam[i];
-                    rS[i] += r0 * lam[i] * parity;
-                    iS[i] += i0 * lam[i] * parity;
-                }
-                if (has_equator) {
-                    int i = n_pairs;
-                    rN[i] += r0 * lam[i];
-                    iN[i] += i0 * lam[i];
-                }
-            };
-
-            update_block(l0, lam1);
-
-            if (l0 < lmax) {
-                WignerDCoeffs coeffs_cc = get_wigner_d_coeffs(l0 + 1, m, 0);
-                for (int i = 0; i < n_eff; ++i) {
-                    lamc[i] = eval_wigner_d(coeffs_cc, th_ptr[i]);
-                }
-                update_block(l0 + 1, lamc);
-                { auto t = lam2; lam2 = lam1; lam1 = lamc; lamc = t; }
-
-                for (int64_t l = l0 + 2; l <= lmax; ++l) {
-                    const auto& c = lut_ptr[l - (l0 + 2)];
-                    const c10::complex<double> a = alm_a[idx_base + (l - m)];
-                    const double sc = pre_phase * (*l_factors)[static_cast<size_t>(l)];
-                    const double r0 = a.real() * sc, i0 = a.imag() * sc;
-                    const double parity = ((l + m) % 2 == 0) ? 1.0 : -1.0;
-                    const double c1 = c.c1, c3 = c.c3;
-
-                    #pragma clang loop vectorize(enable)
-                    for (int i = 0; i < n_pairs; ++i) {
-                        const double d_val = c1 * ct_ptr[i] * lam1[i] + c3 * lam2[i];
-                        lamc[i] = d_val;
-                        rN[i] += r0 * d_val;
-                        iN[i] += i0 * d_val;
-                        rS[i] += r0 * d_val * parity;
-                        iS[i] += i0 * d_val * parity;
-                    }
-                    if (has_equator) {
-                        int i = n_pairs;
-                        const double d_val = c1 * ct_ptr[i] * lam1[i] + c3 * lam2[i];
-                        lamc[i] = d_val;
-                        rN[i] += r0 * d_val;
-                        iN[i] += i0 * d_val;
-                    }
-                    { auto t = lam2; lam2 = lam1; lam1 = lamc; lamc = t; }
-                }
-            }
-
-            for (int i = 0; i < n_eff; ++i) {
-                sm_a[m][i] = c10::complex<double>(rN[i], iN[i]);
-                if (i < n_pairs) {
-                    int64_t idx_S = nrings - 1 - i;
-                    sm_a[m][idx_S] = c10::complex<double>(rS[i], iS[i]);
-                }
-            }
-        }
-    });
-
+    sht_scalar::synthesize(
+        alm_f.data_ptr<c10::complex<double>>(),
+        theta_c.data_ptr<double>(),
+        nrings,
+        lmax,
+        mmax,
+        s_modes.data_ptr<c10::complex<double>>()
+    );
     return s_modes;
 }
 
-torch::Tensor healpix_query_disc_cpu(
+struct DiscRange {
+    int64_t start;
+    int64_t len;
+};
 
+// Ring-order pixel ranges of the pixels whose centres satisfy dot(v, c) >= cos_lim
+// (cos_lim > -1; v unit). Cost O(nside + ranges).
+static std::vector<DiscRange> disc_ring_ranges(
     int64_t nside,
-    const torch::Tensor& vec_xyz,
-    double cos_lim,
-    bool nest
+    const HealpixLayout& layout,
+    double vx,
+    double vy,
+    double vz,
+    double cos_lim
 ) {
     constexpr const char* function_name = "healpix_query_disc_cpu";
-    const auto layout = validate_healpix_layout(nside, function_name);
-    if (!std::isfinite(cos_lim) || cos_lim < -1.0 || cos_lim > 1.0) {
-        throw std::runtime_error("cos_lim must be finite and in [-1, 1]");
-    }
-    if (!vec_xyz.device().is_cpu() || vec_xyz.scalar_type() != torch::kDouble) {
-        throw std::runtime_error("healpix_query_disc_cpu expects float64 CPU vec");
-    }
-    auto vec = vec_xyz.contiguous().reshape({-1});
-    if (vec.numel() != 3) {
-        throw std::runtime_error("vec must have length 3");
-    }
-
-    double vx = vec.data_ptr<double>()[0];
-    double vy = vec.data_ptr<double>()[1];
-    double vz = vec.data_ptr<double>()[2];
-    if (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(vz)) {
-        throw std::runtime_error("vec must contain exactly 3 finite values");
-    }
-    const double vnorm = std::hypot(vx, vy, vz);
-    if (!std::isfinite(vnorm) || !(vnorm > 0.0)) {
-        throw std::runtime_error("vec norm must be finite and positive");
-    }
-    vx /= vnorm;
-    vy /= vnorm;
-    vz /= vnorm;
-
-    const int64_t npix = layout.npix;
-    if (cos_lim <= -1.0) {
-        checked_allocation_count(npix, sizeof(int64_t), function_name);
-        return torch::arange(npix, torch::TensorOptions().dtype(torch::kInt64));
-    }
     const double vxy = std::sqrt(std::max(0.0, vx * vx + vy * vy));
     const double phi0 = wrap_rad_2pi(std::atan2(vy, vx));
     const double eps = 1.0e-14;
-    struct Range {
-        int64_t start;
-        int64_t len;
-    };
-    std::vector<Range> ranges;
+    std::vector<DiscRange> ranges;
     ranges.reserve(static_cast<size_t>(std::min<int64_t>(layout.nl4, 4096)));
 
     auto append_range = [&](int64_t startpix, int64_t ringpix, int64_t k0, int64_t k1) {
@@ -6332,7 +6048,7 @@ torch::Tensor healpix_query_disc_cpu(
                 return;
             }
         }
-        ranges.push_back(Range{start, len});
+        ranges.push_back(DiscRange{start, len});
     };
 
     for (int64_t ring = 1; ring < layout.nl4; ++ring) {
@@ -6414,10 +6130,269 @@ torch::Tensor healpix_query_disc_cpu(
         }
     }
 
+    return ranges;
+}
+
+// ---------------------------------------------------------------------------
+// Hierarchical NESTED disc query: quadtree descent from the 12 base cells.
+// A cell inside the disc (centre distance + cell radius <= r - margin) emits
+// one contiguous NESTED range without visiting its pixels; a cell outside is
+// dropped; boundary cells are refined down to pixels, where membership is
+// decided exactly as the ring-range query does (pixel-centre criterion).
+// Work is O(nside) cells plus the output ranges.
+// ---------------------------------------------------------------------------
+
+static void cell_unit_vector(
+    int64_t nside, int64_t face, double x, double y, double& ux, double& uy, double& uz
+) {
+    const double jr = static_cast<double>(JRLL[face] * nside) - x - y;
+    const double n = static_cast<double>(nside);
+    double nr;
+    double z;
+    if (jr < n) {
+        nr = jr;
+        z = 1.0 - nr * nr / (3.0 * n * n);
+    } else if (jr > 3.0 * n) {
+        nr = 4.0 * n - jr;
+        z = nr * nr / (3.0 * n * n) - 1.0;
+    } else {
+        nr = n;
+        z = (2.0 * n - jr) * 2.0 / (3.0 * n);
+    }
+    z = std::min(1.0, std::max(-1.0, z));
+    double phi = 0.0;
+    if (nr > 1.0e-15) {
+        phi = PI * (static_cast<double>(JPLL[face]) * nr + x - y) / (4.0 * nr);
+    }
+    const double st = std::sqrt(std::max(0.0, 1.0 - z * z));
+    ux = st * std::cos(phi);
+    uy = st * std::sin(phi);
+    uz = z;
+}
+
+static inline double unit_angle(
+    double ax, double ay, double az, double bx, double by, double bz
+) {
+    const double cx = ay * bz - az * by;
+    const double cy = az * bx - ax * bz;
+    const double cz = ax * by - ay * bx;
+    return std::atan2(std::sqrt(cx * cx + cy * cy + cz * cz), ax * bx + ay * by + az * bz);
+}
+
+// Upper bound on the angular distance from a cell centre to any boundary point
+// (corners and edge midpoints), per level. Exhaustive for nside_level <= 32,
+// then scaled by the self-similar 1/nside law with 8% slack.
+static double cell_radius_bound(int level) {
+    constexpr int kExactLevels = 5;
+    static std::mutex mutex;
+    static double exact[kExactLevels + 1];
+    static bool ready = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!ready) {
+            for (int j = 0; j <= kExactLevels; ++j) {
+                const int64_t ns = int64_t{1} << j;
+                const int64_t npf = ns * ns;
+                double best = 0.0;
+                for (int64_t face = 0; face < 12; ++face) {
+                    for (int64_t c = 0; c < npf; ++c) {
+                        int64_t ix, iy, f;
+                        nest_to_xyf(npf, face * npf + c, ix, iy, f);
+                        double cx, cy, cz;
+                        cell_unit_vector(ns, face, ix + 0.5, iy + 0.5, cx, cy, cz);
+                        for (int k = 0; k < 8; ++k) {
+                            const double px = ix + (k == 0 || k == 3 || k == 4 ? 0.0 : (k == 1 || k == 2 || k == 6 ? 1.0 : 0.5));
+                            const double py = iy + (k == 0 || k == 1 || k == 5 ? 0.0 : (k == 2 || k == 3 || k == 7 ? 1.0 : 0.5));
+                            double ex, ey, ez;
+                            cell_unit_vector(ns, face, px, py, ex, ey, ez);
+                            best = std::max(best, unit_angle(cx, cy, cz, ex, ey, ez));
+                        }
+                    }
+                }
+                exact[j] = best * 1.02 + 1.0e-12;
+            }
+            ready = true;
+        }
+    }
+    if (level <= kExactLevels) {
+        return exact[level];
+    }
+    return exact[kExactLevels] * std::ldexp(1.0, kExactLevels - level) * 1.08;
+}
+
+torch::Tensor healpix_query_disc_nest_ranges_cpu(
+    int64_t nside,
+    const torch::Tensor& vec_xyz,
+    double cos_lim
+) {
+    constexpr const char* function_name = "healpix_query_disc_nest_ranges_cpu";
+    const auto layout = validate_healpix_layout(nside, function_name);
+    if (!std::isfinite(cos_lim) || cos_lim < -1.0 || cos_lim > 1.0) {
+        throw std::runtime_error("cos_lim must be finite and in [-1, 1]");
+    }
+    if (!vec_xyz.device().is_cpu() || vec_xyz.scalar_type() != torch::kDouble) {
+        throw std::runtime_error("healpix_query_disc_nest_ranges_cpu expects float64 CPU vec");
+    }
+    auto vec = vec_xyz.contiguous().reshape({-1});
+    if (vec.numel() != 3) {
+        throw std::runtime_error("vec must have length 3");
+    }
+    double vx = vec.data_ptr<double>()[0];
+    double vy = vec.data_ptr<double>()[1];
+    double vz = vec.data_ptr<double>()[2];
+    if (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(vz)) {
+        throw std::runtime_error("vec must contain exactly 3 finite values");
+    }
+    const double vnorm = std::hypot(vx, vy, vz);
+    if (!std::isfinite(vnorm) || !(vnorm > 0.0)) {
+        throw std::runtime_error("vec norm must be finite and positive");
+    }
+    vx /= vnorm;
+    vy /= vnorm;
+    vz /= vnorm;
+
+    auto make = [](const std::vector<std::pair<int64_t, int64_t>>& out) {
+        auto t = torch::empty({static_cast<int64_t>(out.size()), 2}, torch::TensorOptions().dtype(torch::kInt64));
+        auto* p = t.data_ptr<int64_t>();
+        for (size_t i = 0; i < out.size(); ++i) {
+            p[2 * i] = out[i].first;
+            p[2 * i + 1] = out[i].second;
+        }
+        return t;
+    };
+    std::vector<std::pair<int64_t, int64_t>> out;
+    if (cos_lim <= -1.0) {
+        out.emplace_back(0, layout.npix);
+        return make(out);
+    }
+    const std::vector<DiscRange> ring_ranges = disc_ring_ranges(nside, layout, vx, vy, vz, cos_lim);
+    if (ring_ranges.empty()) {
+        return make(out);
+    }
+    const int64_t nlevel = ilog2_pow2(nside);
+    const double radius = std::atan2(std::sqrt(std::max(0.0, 1.0 - cos_lim * cos_lim)), cos_lim);
+    constexpr double kMargin = 1.0e-9;
+    std::vector<double> rho(static_cast<size_t>(nlevel + 1));
+    for (int64_t j = 0; j <= nlevel; ++j) {
+        rho[static_cast<size_t>(j)] = cell_radius_bound(static_cast<int>(j));
+    }
+    auto emit = [&](int64_t lo, int64_t hi) {
+        if (!out.empty() && out.back().second == lo) {
+            out.back().second = hi;
+        } else {
+            out.emplace_back(lo, hi);
+        }
+    };
+    struct Cell {
+        int64_t level;
+        int64_t index;
+    };
+    std::vector<Cell> stack;
+    stack.reserve(static_cast<size_t>(64 + 8 * nlevel));
+    for (int64_t b = 11; b >= 0; --b) {
+        stack.push_back({0, b});
+    }
+    while (!stack.empty()) {
+        const Cell cell = stack.back();
+        stack.pop_back();
+        const int64_t ns_j = int64_t{1} << cell.level;
+        const int64_t npf_j = ns_j * ns_j;
+        int64_t ix, iy, face;
+        nest_to_xyf(npf_j, cell.index, ix, iy, face);
+        double cx, cy, cz;
+        cell_unit_vector(ns_j, face, static_cast<double>(ix) + 0.5, static_cast<double>(iy) + 0.5, cx, cy, cz);
+        const double d = unit_angle(cx, cy, cz, vx, vy, vz);
+        const double rj = rho[static_cast<size_t>(cell.level)];
+        if (d - rj >= radius + kMargin) {
+            continue;
+        }
+        const int64_t shift = 2 * (nlevel - cell.level);
+        if (d + rj <= radius - kMargin) {
+            emit(cell.index << shift, (cell.index + 1) << shift);
+            continue;
+        }
+        if (cell.level == nlevel) {
+            const int64_t pr = xyf_to_ring(nside, layout.ncap, layout.npix, layout.nl4, ix, iy, face);
+            auto it = std::upper_bound(
+                ring_ranges.begin(), ring_ranges.end(), pr,
+                [](int64_t v, const DiscRange& r) { return v < r.start; }
+            );
+            if (it != ring_ranges.begin()) {
+                --it;
+                if (pr < it->start + it->len) {
+                    emit(cell.index, cell.index + 1);
+                }
+            }
+            continue;
+        }
+        for (int64_t k = 3; k >= 0; --k) {
+            stack.push_back({cell.level + 1, 4 * cell.index + k});
+        }
+    }
+    return make(out);
+}
+
+torch::Tensor healpix_query_disc_cpu(
+
+    int64_t nside,
+    const torch::Tensor& vec_xyz,
+    double cos_lim,
+    bool nest
+) {
+    constexpr const char* function_name = "healpix_query_disc_cpu";
+    const auto layout = validate_healpix_layout(nside, function_name);
+    if (!std::isfinite(cos_lim) || cos_lim < -1.0 || cos_lim > 1.0) {
+        throw std::runtime_error("cos_lim must be finite and in [-1, 1]");
+    }
+    if (!vec_xyz.device().is_cpu() || vec_xyz.scalar_type() != torch::kDouble) {
+        throw std::runtime_error("healpix_query_disc_cpu expects float64 CPU vec");
+    }
+    auto vec = vec_xyz.contiguous().reshape({-1});
+    if (vec.numel() != 3) {
+        throw std::runtime_error("vec must have length 3");
+    }
+
+    double vx = vec.data_ptr<double>()[0];
+    double vy = vec.data_ptr<double>()[1];
+    double vz = vec.data_ptr<double>()[2];
+    if (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(vz)) {
+        throw std::runtime_error("vec must contain exactly 3 finite values");
+    }
+    const double vnorm = std::hypot(vx, vy, vz);
+    if (!std::isfinite(vnorm) || !(vnorm > 0.0)) {
+        throw std::runtime_error("vec norm must be finite and positive");
+    }
+    vx /= vnorm;
+    vy /= vnorm;
+    vz /= vnorm;
+
+    const int64_t npix = layout.npix;
+    if (cos_lim <= -1.0) {
+        checked_allocation_count(npix, sizeof(int64_t), function_name);
+        return torch::arange(npix, torch::TensorOptions().dtype(torch::kInt64));
+    }
+    if (nest) {
+        const torch::Tensor nr = healpix_query_disc_nest_ranges_cpu(nside, vec, cos_lim);
+        const int64_t nrange = nr.size(0);
+        const int64_t* rp = nr.data_ptr<int64_t>();
+        int64_t total = 0;
+        for (int64_t i = 0; i < nrange; ++i) {
+            total = checked_nonnegative_add(total, rp[2 * i + 1] - rp[2 * i], function_name);
+        }
+        checked_allocation_count(total, sizeof(int64_t), function_name);
+        auto nest_out = torch::empty({total}, torch::TensorOptions().dtype(torch::kInt64));
+        auto* optr = nest_out.data_ptr<int64_t>();
+        int64_t off = 0;
+        for (int64_t i = 0; i < nrange; ++i) {
+            std::iota(optr + off, optr + off + (rp[2 * i + 1] - rp[2 * i]), rp[2 * i]);
+            off += rp[2 * i + 1] - rp[2 * i];
+        }
+        return nest_out;
+    }
+    std::vector<DiscRange> ranges = disc_ring_ranges(nside, layout, vx, vy, vz, cos_lim);
     if (ranges.empty()) {
         return torch::empty({0}, torch::TensorOptions().dtype(torch::kInt64));
     }
-
     int64_t total = 0;
     for (const auto& r : ranges) {
         total = checked_nonnegative_add(total, r.len, function_name);
@@ -6430,43 +6405,7 @@ torch::Tensor healpix_query_disc_cpu(
         std::iota(ptr + off, ptr + off + r.len, r.start);
         off = checked_nonnegative_add(off, r.len, function_name);
     }
-    if (!nest) {
-        return ring_out;
-    }
-    const int64_t npface = layout.npface;
-    const int64_t ncap = layout.ncap;
-    const int64_t nl2 = layout.nl2;
-    const int64_t nside_shift = ilog2_pow2(nside);
-    const int64_t four_nside_shift = nside_shift + 2;
-    const int64_t four_nside_mask = layout.nl4 - 1;
-
-    std::vector<int64_t> nest_pix(static_cast<size_t>(total));
-    for (int64_t i = 0; i < total; ++i) {
-        const int64_t p = ptr[i];
-        int64_t ix;
-        int64_t iy;
-        int64_t face_num;
-        ring_to_xyf(
-            nside,
-            ncap,
-            npix,
-            nl2,
-            nside_shift,
-            four_nside_shift,
-            four_nside_mask,
-            p,
-            ix,
-            iy,
-            face_num
-        );
-        nest_pix[static_cast<size_t>(i)] = xyf_to_nest(npface, ix, iy, face_num);
-    }
-    std::sort(nest_pix.begin(), nest_pix.end());
-    return torch::from_blob(
-        nest_pix.data(),
-        {total},
-        torch::TensorOptions().dtype(torch::kInt64)
-    ).clone();
+    return ring_out;
 }
 
 torch::Tensor healpix_spin_map2alm_ring_recurrence_cpu(

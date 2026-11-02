@@ -88,6 +88,16 @@ print(disc.numel(), ellipse.numel(), polygon.numel())
 touch the shape. `convex_polygon_contains` and `spherical_polygon_contains`
 test points directly without pixelizing.
 
+With `nest=True`, `query_disc`, `query_polygon`, and `query_strip` descend the
+NESTED quadtree: a coarse cell wholly inside the shape contributes one contiguous
+pixel range and only cells crossing the boundary are refined, so the work is
+`O(nside)` cells plus the output, never a scan of the interior. The membership
+rule for boundary pixels is unchanged (pixel centres; `inclusive` and `fact` as
+in healpy), and results equal the RING query mapped to NESTED. The healpy-shaped
+`compat.query_circle(..., nest=True, return_pixel_ranges=True)` returns the ranges
+directly (at `nside=4096`, radius 179 degrees: 215 ranges in about 2 ms instead
+of enumerating 2e8 pixels).
+
 ## Spherical regions
 
 `SphericalPolygon`, `SphericalCap`, and `SphericalMultiPolygon` are

@@ -166,6 +166,11 @@ torch::Tensor healpix_scalar_interpolate_recurrence_cpu(
     int64_t lmax,
     int64_t mmax
 );
+torch::Tensor healpix_query_disc_nest_ranges_cpu(
+    int64_t nside,
+    const torch::Tensor& vec_xyz,
+    double cos_lim
+);
 torch::Tensor healpix_query_disc_cpu(
     int64_t nside,
     const torch::Tensor& vec_xyz,

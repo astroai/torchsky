@@ -3520,6 +3520,27 @@ def map2alm_spin(
     Input `maps` shape must be `(2, npix)`.
     """
     maps_t = torch.as_tensor(maps)
+    if maps_t.device.type == "mps":
+        # MPS has no float64/complex128: run the spin recurrence on the host in
+        # float64 (as the scalar scan does) and return float32/complex64 on MPS.
+        host = map2alm_spin(
+            maps_t.to(device="cpu").to(dtype=torch.float64),
+            spin,
+            nside=nside,
+            lmax=lmax,
+            mmax=mmax,
+            nest=nest,
+            iter=iter,
+            use_weights=use_weights,
+            use_pixel_weights=use_pixel_weights,
+            gal_cut=gal_cut,
+            datapath=datapath,
+        )
+        cdt = _preferred_complex_dtype(maps_t.device)
+        return (
+            host[0].to(dtype=cdt).to(device=maps_t.device),
+            host[1].to(dtype=cdt).to(device=maps_t.device),
+        )
     maps_t = maps_t.to(dtype=_preferred_real_dtype(maps_t.device))
     _require_sht_device(maps_t, what="map2alm_spin")
     if maps_t.ndim != 2 or maps_t.shape[0] != 2:
@@ -3877,6 +3898,20 @@ def alm2map_spin(
     """
     alm1 = torch.as_tensor(alms[0])
     alm2 = torch.as_tensor(alms[1])
+    if alm1.device.type == "mps" or alm2.device.type == "mps":
+        mps_dev = alm1.device if alm1.device.type == "mps" else alm2.device
+        host = alm2map_spin(
+            (
+                alm1.to(device="cpu").to(dtype=torch.complex128),
+                alm2.to(device="cpu").to(dtype=torch.complex128),
+            ),
+            nside,
+            spin,
+            lmax=lmax,
+            mmax=mmax,
+            nest=nest,
+        )
+        return host.to(dtype=_preferred_real_dtype(mps_dev)).to(device=mps_dev)
     cdt = _preferred_complex_dtype(alm1.device)
     alm1 = alm1.to(dtype=cdt)
     alm2 = alm2.to(dtype=cdt)

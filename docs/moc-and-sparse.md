@@ -105,6 +105,12 @@ different orders. Operators `|`, `&`, and `-` are aliases for the method calls.
 `degrade` drops fine cells onto nested parents, and `flatten` realizes a dense
 boolean mask at a chosen `nside`.
 
+On CPU, the set operations, UNIQ-to-range conversion, and `degrade` run in small
+native kernels over sorted half-open pixel ranges (microseconds for footprints of
+thousands of cells; the torch implementation remains the path for CUDA/MPS and
+the parity oracle in the tests). Results are identical to the torch path and to
+mocpy.
+
 <!-- docs: run -->
 ```python
 import torch

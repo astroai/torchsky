@@ -215,6 +215,21 @@ def query_circle(
 ) -> Tensor:
     if return_pixel_ranges and not nest:
         raise ValueError("return_pixel_ranges is only supported with nest=True")
+    if return_pixel_ranges:
+        lon_t = _healpix._as_float64(lon)
+        lat_t = _healpix._as_float64(lat)
+        if lon_t.ndim != 0 or lat_t.ndim != 0:
+            raise ValueError("lon and lat must be scalar center coordinates")
+        x, y, z = _healpix.lonlat_to_xyz(lon_t, lat_t)
+        ranges = _healpix._query_disc_nest_ranges(
+            nside,
+            torch.stack((x, y, z)),
+            math.radians(radius) if degrees else radius,
+            inclusive=inclusive,
+            fact=fact,
+        )
+        if ranges is not None:
+            return ranges
     pix = _healpix.query_circle(
         nside,
         lon,
@@ -242,6 +257,12 @@ def query_circle_vec(
 ) -> Tensor:
     if return_pixel_ranges and not nest:
         raise ValueError("return_pixel_ranges is only supported with nest=True")
+    if return_pixel_ranges:
+        ranges = _healpix._query_disc_nest_ranges(
+            nside, vec, radius, inclusive=inclusive, fact=fact
+        )
+        if ranges is not None:
+            return ranges
     pix = _healpix.query_circle_vec(
         nside,
         vec,

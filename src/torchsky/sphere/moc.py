@@ -7,6 +7,7 @@ from typing import Any, Literal
 import torch
 from torch import Tensor
 
+from .. import _ops
 from .._dtype import work_dtype as _work_dtype
 from . import healpix as _healpix
 from .core import great_circle_distance, lonlat_to_unit_xyz
@@ -102,10 +103,22 @@ def uniq2nest(uniq: int | Tensor) -> tuple[Tensor, Tensor]:
     return nside, pix
 
 
+def _order_of_uniq_scalar(value: int) -> int:
+    """Order of one UNIQ value by exact integer bit length (validating)."""
+    if value >= 4:
+        order = (value.bit_length() - 3) >> 1
+        if order <= _MAX_HEALPIX_ORDER and value - (4 << (2 * order)) < (
+            12 << (2 * order)
+        ):
+            return order
+    # Invalid value: the tensor path raises the descriptive error.
+    return int(_order_from_uniq(torch.tensor(value, dtype=torch.int64)).item())
+
+
 def _max_order_from_uniq(uniq: Tensor) -> int:
     if uniq.numel() == 0:
         return 0
-    return int(_order_from_uniq(uniq.max()).item())
+    return _order_of_uniq_scalar(int(uniq.max().item()))
 
 
 def _merge_sorted_ranges(starts: Tensor, ends: Tensor) -> tuple[Tensor, Tensor]:
@@ -129,7 +142,7 @@ def _merge_ranges(starts: Tensor, ends: Tensor) -> tuple[Tensor, Tensor]:
     return _merge_sorted_ranges(starts[order], ends[order])
 
 
-def _uniq_to_range_tensors(uniq: Tensor, max_order: int) -> tuple[Tensor, Tensor]:
+def _uniq_to_range_tensors_torch(uniq: Tensor, max_order: int) -> tuple[Tensor, Tensor]:
     """Sorted disjoint ``[start, end)`` NESTED ranges at ``max_order`` for UNIQ cells."""
     u = _as_int64_exact(uniq, name="uniq").reshape(-1)
     if u.numel() == 0:
@@ -146,7 +159,9 @@ def _uniq_to_range_tensors(uniq: Tensor, max_order: int) -> tuple[Tensor, Tensor
     )
 
 
-def _range_tensors_to_uniq(starts: Tensor, ends: Tensor, max_order: int) -> Tensor:
+def _range_tensors_to_uniq_torch(
+    starts: Tensor, ends: Tensor, max_order: int
+) -> Tensor:
     """Maximal aligned UNIQ cells covering disjoint ranges, ordered by position.
 
     Each range ``[s, e)`` splits into the cells that trim it to 4**(k+1)
@@ -200,7 +215,7 @@ def _range_tensors_to_uniq(starts: Tensor, ends: Tensor, max_order: int) -> Tens
     return uniq[torch.argsort(torch.cat(cell_start))]
 
 
-def _combine_range_tensors(
+def _combine_range_tensors_torch(
     a: tuple[Tensor, Tensor], b: tuple[Tensor, Tensor], op: str
 ) -> tuple[Tensor, Tensor]:
     """Boolean algebra of two disjoint range sets by sweeping coverage counts.
@@ -232,6 +247,80 @@ def _combine_range_tensors(
         raise ValueError(f"unknown range operation {op!r}")
     keep = keep & (pos[:-1] < pos[1:])
     return _merge_sorted_ranges(pos[:-1][keep], pos[1:][keep])
+
+
+_NATIVE_COMBINE_OPS = {"union": 0, "intersection": 1, "difference": 2}
+
+
+def _native_moc_op(name: str) -> Any:
+    """Native CPU range kernel (``torchsky::moc_*``) or None when unavailable."""
+    return (
+        getattr(torch.ops.torchsky, name, None) if _ops.has_fixed_dispatcher() else None
+    )
+
+
+def _native_ok(*tensors: Tensor) -> bool:
+    return all(
+        t.device.type == "cpu" and t.dtype == torch.int64 and t.ndim == 1
+        for t in tensors
+    )
+
+
+def _uniq_to_range_tensors(uniq: Tensor, max_order: int) -> tuple[Tensor, Tensor]:
+    """Sorted disjoint ``[start, end)`` NESTED ranges at ``max_order`` for UNIQ cells.
+
+    CPU int64 inputs run the native kernel; invalid UNIQ values and every other
+    device/dtype use the torch implementation (which raises the descriptive errors).
+    """
+    op = _native_moc_op("moc_uniq_to_ranges")
+    if op is not None and _native_ok(uniq):
+        try:
+            return op(uniq.contiguous(), int(max_order))
+        except RuntimeError:
+            pass
+    return _uniq_to_range_tensors_torch(uniq, max_order)
+
+
+def _range_tensors_to_uniq(starts: Tensor, ends: Tensor, max_order: int) -> Tensor:
+    """Maximal aligned UNIQ cells covering disjoint ranges, ordered by position."""
+    op = _native_moc_op("moc_ranges_to_uniq")
+    if op is not None and _native_ok(starts, ends):
+        try:
+            return op(starts.contiguous(), ends.contiguous(), int(max_order))
+        except RuntimeError:
+            pass
+    return _range_tensors_to_uniq_torch(starts, ends, max_order)
+
+
+def _combine_range_tensors(
+    a: tuple[Tensor, Tensor], b: tuple[Tensor, Tensor], op: str
+) -> tuple[Tensor, Tensor]:
+    """Union / intersection / difference of two sorted disjoint range sets."""
+    native = _native_moc_op("moc_combine_ranges")
+    if native is not None and op in _NATIVE_COMBINE_OPS and _native_ok(*a, *b):
+        return native(
+            a[0].contiguous(),
+            a[1].contiguous(),
+            b[0].contiguous(),
+            b[1].contiguous(),
+            _NATIVE_COMBINE_OPS[op],
+        )
+    return _combine_range_tensors_torch(a, b, op)
+
+
+def _complement_range_tensors(
+    starts: Tensor, ends: Tensor, max_order: int
+) -> tuple[Tensor, Tensor]:
+    """Complement of sorted disjoint ranges within ``[0, 12 * 4**max_order)``."""
+    total = 12 << (2 * int(max_order))
+    native = _native_moc_op("moc_complement_ranges")
+    if native is not None and _native_ok(starts, ends):
+        return native(starts.contiguous(), ends.contiguous(), total)
+    full = (
+        torch.zeros((1,), dtype=torch.int64, device=starts.device),
+        torch.full((1,), total, dtype=torch.int64, device=starts.device),
+    )
+    return _combine_range_tensors_torch(full, (starts, ends), "difference")
 
 
 def _uniq_to_ranges(uniq: Tensor, max_order: int) -> list[tuple[int, int]]:
@@ -626,7 +715,7 @@ class MOC:
             return 0
         cache = self._cache()
         if "max_order" not in cache:
-            cache["max_order"] = int(_order_from_uniq(self.uniq.max()).item())
+            cache["max_order"] = _order_of_uniq_scalar(int(self.uniq.max().item()))
         return cache["max_order"]
 
     def contains(self, lon_deg: Tensor | float, lat_deg: Tensor | float) -> Tensor:
@@ -809,6 +898,9 @@ class MOC:
             return type(self).empty()
         if order >= self.max_order:
             return type(self)(self.uniq)
+        native = _native_moc_op("moc_degrade_uniq")
+        if native is not None and _native_ok(self.uniq):
+            return type(self)(native(self.uniq.contiguous(), order))
         nsides, pix = uniq2nest(self.uniq)
         cell_orders = _order_from_uniq(self.uniq)
         delta = (cell_orders - order).clamp(min=0)

@@ -181,6 +181,7 @@ set(SOURCES
     geom.cpp
     healpix.cpp
     ishioka_scalar.cpp
+    sphere_ranges.cpp
     operators/drizzle_cpu.cpp
     operators/fixed_cpu.cpp
     operators/fixed_schemas.cpp
