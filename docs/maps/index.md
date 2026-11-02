@@ -1,81 +1,126 @@
 # Images and maps: overview
-<!-- TODO(0.5.0 docs): intro -->
 
+This area turns many calibrated exposures into one sky product: an image on a
+chosen grid, a spectral cube, or a HEALPix map. `torchsky.map` plans the
+target grid, resamples each exposure onto it, and stacks the results with
+explicit weights, masks, and outlier rejection. Use it when the unit of work is
+a requested product rather than a single image.
 
-`torchsky.map` is the mapmaking facade: it plans a target grid, projects
-calibrated exposures onto it, and stacks them into a declared product. It also
-covers [spectral cubes](cubes.md) and [HEALPix maps](healpix-mapmaking.md). SWarp,
-Montage, STScI drizzle, and `reproject` are comparators, never runtime
-dependencies.
+## The Core Idea: Plan, Resample, Stack
 
-Use it when the unit of work is a requested sky product rather than a single
-image. Continuous fields live in [`torchsky.field`](../models/fields.md).
+```mermaid
+flowchart LR
+    O["Observations<br/>data + WCS + weight/mask"] --> P["plan<br/>target grid"]
+    P --> T["Target<br/>WCS + shape"]
+    O --> R["resample<br/>kernel: bilinear,<br/>Lanczos, drizzle, …"]
+    T --> R
+    R --> S["stack<br/>weights, sky match,<br/>outlier rejection"]
+    S --> M["MapResult<br/>data, weight, header,<br/>uncertainty, provenance"]
+```
 
-## Core Concepts
+- An **observation** ([`Observation`](../reference/map.md#torchsky.map.Observation))
+  is one calibrated exposure: pixel data, a WCS header, and optionally a weight
+  or variance map, a data-quality (DQ) mask, a photometric scale, a background
+  offset, or a wavelength.
+- A **target** is the output grid: WCS, shape, and bands.
+  [`plan`](../reference/map.md#torchsky.map.plan) builds one that covers the
+  inputs.
+- **Resampling** moves pixel values from one grid to another with a declared
+  kernel. Interpolating kernels (bilinear, bicubic, Lanczos) sample the input
+  at each output pixel. Drizzle instead drops each input pixel, shrunk by
+  `pixfrac`, onto the output grid and shares its flux by overlap area; it
+  preserves flux and handles undersampled, dithered data.
+- **Stacking** combines the resampled exposures with their weights, optional
+  sky matching, and sigma-clipping or median rejection.
 
-- **`Observation`** is one calibrated input: pixel data (a tensor or a path), a
-  WCS header, and optional weight or variance maps, a DQ mask (`mask`,
-  `good_bits`), photometric scale, background offset, IFU wavelength map, DCR
-  parameters, or a moving-target `tracking_rate`.
-- **Target** (`plan`, `Target`, `CubeTarget`, `ProductSpec`) is the output grid:
-  WCS, shape, and bands.
+## Choose a Page
+
+| Task | Page | Entry point |
+|---|---|---|
+| Put one image on another grid; choose a kernel; drizzle | [Resampling](resampling.md) | [`resample`](../reference/map.md#torchsky.map.resample), [`ResampleConfig`](../reference/map.md#torchsky.map.ResampleConfig) |
+| Coadd exposures, propagate uncertainty, bound memory | [Coadds](coadds.md) | [`coadd`](../reference/map.md#torchsky.map.coadd), [`plan`](../reference/map.md#torchsky.map.plan) |
+| Build a cube from filter images or IFU frames | [Cubes and IFU](cubes.md) | [`coadd_cube`](../reference/map.md#torchsky.map.coadd_cube) |
+| Coadd images onto HEALPix, or project HEALPix onto an image | [HEALPix mapmaking](healpix-mapmaking.md) | [`coadd_healpix`](../reference/map.md#torchsky.map.coadd_healpix), [`resample_healpix`](../reference/map.md#torchsky.map.resample_healpix) |
+| Run the same workflows from the shell | [CLI](../introduction/cli.md) | `torchsky map` |
+
+## A Weighted Coadd
+
+Two exposures, offset on the sky, with inverse-variance weights 1 and 3. Where
+they overlap, the coadd is the weighted mean.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.map import Observation, coadd, plan
+
+header = {
+    "NAXIS": 2, "NAXIS1": 48, "NAXIS2": 48,
+    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+    "CRPIX1": 24.5, "CRPIX2": 24.5, "CRVAL1": 150.0, "CRVAL2": 2.0,
+    "CDELT1": -1e-4, "CDELT2": 1e-4,
+}
+exposures = [
+    Observation(
+        data=torch.full((48, 48), level),
+        wcs={**header, "CRVAL1": 150.0 + offset},
+        weight_map=torch.full((48, 48), ivar),
+        weight_is_inverse_variance=True,
+    )
+    for level, offset, ivar in ((3.0, 0.0, 1.0), (5.0, 0.0012, 3.0))
+]
+target = plan(exposures, projection="TAN")
+result = coadd(exposures, target, kernel="lanczos3")
+
+assert result.data.shape == target.shape
+overlap = result.weight > 3.5
+torch.testing.assert_close(result.data[overlap].mean(), torch.tensor(4.5), atol=1e-3, rtol=0.0)
+```
+
+## Conventions and Pitfalls
+
+- **Value semantics.** A product is either surface brightness (the default:
+  values per unit area, unchanged by resampling to a finer grid) or flux (values
+  per pixel, scaled by pixel area). Choose before comparing with another stack;
+  differences with SWarp or Montage usually trace to value semantics, pixel-area
+  treatment, mask policy, or weights.
 - **Weights.** `weight` always controls the coadd denominator. It is treated as
-  detector inverse variance only with `weight_is_inverse_variance=True`.
-  Default, support, and mask-only weights produce no uncertainty object.
-  `torchsky.quality.build_weight_product` attaches the inverse-variance,
-  confidence, and mask-polarity semantics when you build masks yourself.
-- **Value semantics.** `surface_brightness` and `flux` products use different
-  area-scaling rules. Choose before comparing against another stack; mismatches
-  with SWarp or Montage usually trace to value semantics, pixel-area treatment,
-  mask policy, or weights, not I/O.
-- **Kernel** is explicit configuration (`ResampleConfig(kernel=...)`) with
-  different support, interpolation, and flux behaviour. See the
-  [kernel table](resampling.md#kernels).
+  inverse variance, and an uncertainty product is attached, only with
+  `weight_is_inverse_variance=True`.
+  [`build_weight_product`](../reference/quality.md#torchsky.quality.build_weight_product)
+  attaches inverse-variance, confidence, and mask-polarity semantics when you
+  build masks yourself.
+- **Kernels are configuration.** `ResampleConfig(kernel=...)` sets support,
+  interpolation, and flux behaviour; nothing switches kernels behind your back.
+  See the [kernel table](resampling.md#kernels).
+- **Memory.** Large mosaics are tiled and chunked by configuration
+  (`tile_size`, `response_chunk_size`); the [scaling guide](../performance/scaling.md)
+  lists the knobs.
 
-## Namespace Map
+## Device Placement
 
-| Concept | Names |
-|---|---|
-| Inputs and targets | `Observation`, `ImageObservation`, `IFUObservation`, `Target`, `CubeTarget`, `ProductSpec`, `BandpassSpec` |
-| Configuration | `ResampleConfig`, `SkyConfig`, `OutlierConfig`, `StackConfig` |
-| Planning | `plan`, `plan_cube`, `plan_product` |
-| Operations | `resample`, `resample_healpix`, `blot`, `detect_outliers`, `match_sky`, `coadd`, `coadd_multiband`, `coadd_cube`, `coadd_healpix`, `coadd_image_plane`, `aperture_uncertainty`, `stack_product` |
-| Results | `MapResult`, `CubeResult`, `MultibandResult`, `HealpixResult`, `ApertureUncertainty`, `ProductResult`, `UncertaintyProduct` |
+Map APIs compute and return on the device of their tensor inputs; CPU tensors
+stay on CPU even when CUDA is available. An explicit `device=` always wins, and
+tensors on different devices without it raise `ValueError`. When observations
+are file paths, `torchsky.device.default_compute_device()` applies. Float64-only
+kernels (exact drizzle, conservative polygon and splat projection, spectral
+resamplers) raise `NotImplementedError` on MPS. The general rules are in
+[Concepts](../introduction/concepts.md#device-follows-the-input).
 
-Reusable observation operators live in `torchsky.map.operators`: an
-`ObservationOperatorBundle` is the shared observation law for image-plane and
-field paths, and constrained learned instrument effects use
-`ConstrainedKernelPSF`, `AffineRadiometry`, `SubPixelShift`, and
-`LearnedInstrumentOperator`. Continuous fields live in `torchsky.field`. The full signatures are in the
-[`torchsky.map` reference](../reference/map.md).
+## Connections
 
-## Device placement
+Every observation and target carries a [WCS](../coordinates/index.md).
+[HEALPix mapmaking](healpix-mapmaking.md) writes to the
+[celestial sphere](../sphere/index.md), and cubes connect to
+[spectral axes](../spectra/spectral-axes.md). The observation operators that
+resample and convolve here are the same ones the experimental
+[models](../models/index.md) differentiate through.
 
-Map APIs compute and return on the device of their tensor inputs (for example
-`Observation(data=tensor)`); CPU tensors stay on CPU even when CUDA is
-available. An explicit `device=` always wins, and tensors on different devices
-without an explicit `device=` raise `ValueError`. Only when there is no tensor
-to follow (observations given as file paths) does
-`torchsky.device.default_compute_device()` apply: CUDA when available, or
-`TORCHSKY_DEVICE`. Float64-only kernels (exact drizzle, conservative polygon
-and splat projection, spectral resamplers, encoder field models) raise
-`NotImplementedError` on MPS, which has no float64; run them on CPU or CUDA.
-
-## Evaluation And Examples
-
-Truth metrics, uncertainty scoring, comparator protocols, and evaluation reports
-belong to [`torchsky-harness`](https://github.com/astroai/torchsky-harness); this
-repository keeps bounded product, gradient, adjoint, and device-contract tests.
-The [speed evidence](../performance/highlights.md) and
-[parity summary](../performance/parity.md) link back to it. Methodology is in the
-[harness benchmark guide](https://github.com/astroai/torchsky-harness/blob/main/docs/benchmarks.md).
-
-Example scripts:
-
-- [Dithered SIP coadd](../published-examples/coadd_dithered_sip.py)
-- [Drizzle flagship](../published-examples/drizzle_flagship.py)
-- [Coadd to HEALPix](../published-examples/coadd_to_healpix.py)
-- [Sphere image inverse solve](../published-examples/sphere_image_inverse.py)
-- [Survey split](../published-examples/survey_split.py)
-
-See [Examples](../examples/index.md) for the full index.
+Resampling and coadds are compared with SWarp, Montage, STScI drizzle, and
+reproject in [torchsky-harness](https://github.com/astroai/torchsky-harness);
+see [performance highlights](../performance/highlights.md) and the
+[parity page](../performance/parity.md). Examples:
+[dithered SIP coadd](../published-examples/coadd_dithered_sip.py),
+[drizzle](../published-examples/drizzle_flagship.py),
+[coadd to HEALPix](../published-examples/coadd_to_healpix.py), and the
+[examples index](../examples/index.md).

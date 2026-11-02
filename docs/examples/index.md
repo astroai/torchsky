@@ -2,21 +2,169 @@
 
 # Examples
 
-Curated, runnable scripts that show what torchsky does and how to use it. Each one
-builds its own deterministic inputs, uses only public torchsky APIs, prints a short
-result summary, saves at most one figure to a temporary directory (or `--out`), and
-finishes in under 30 seconds on a CPU. Scripts that take `--device` run on CUDA when
-it is available. All of them are smoke-run by `pixi run examples`.
+Curated, runnable scripts that show what torchsky does and how to use it. The
+first group works on real public data (Gaia, Planck, SDSS, Chandra, CFHT and more);
+each script fetches a small sample once into `~/.cache/torchsky/samples`
+(`TORCHSKY_SAMPLE_CACHE` overrides it), is deterministic, uses only public torchsky
+APIs, prints a short quantitative result, saves at most one figure to a temporary
+directory (or `--out`), and finishes in under a minute on a CPU once its data is
+cached. Scripts that take `--device` run on CUDA when it is available. With
+`TORCHSKY_EXAMPLE_FAST=1` (set under CI) downloads are forbidden and a script
+whose data is not cached exits with status 77, which `pixi run examples` reports
+as SKIP. The synthetic examples at the end isolate one mechanism and need no network.
 
 ```bash
-pixi run -e test -- python examples/wcs_tour.py --out ./figures
+pixi run fetch-example-samples            # cache every small sample
+pixi run -e test -- python examples/planck_power_spectrum.py --out ./figures
 pixi run -e test -- python examples/coadd_dithered_sip.py --device cuda
 ```
 
-Scientific campaigns, real-data notebooks, and parity scorecards live in
+Scientific campaigns, large real-data runs, and parity scorecards live in
 [`torchsky-harness`](https://github.com/astroai/torchsky-harness).
 
-## Coordinates, frames and WCS
+## Gaia, 2MASS and AllWISE catalogues
+
+Crossmatching public survey catalogues, fetched from TAP services.
+
+### Gaia DR3 x 2MASS x AllWISE in the field of M67
+
+![Gaia DR3 x 2MASS x AllWISE in the field of M67](../assets/gallery/examples/crossmatch_gaia_2mass_allwise.png)
+
+Crossmatch Gaia DR3, 2MASS and AllWISE in the field of the open cluster M67. *Runtime: about 2 s on CPU once the cones are cached.*
+
+Script: [`examples/crossmatch_gaia_2mass_allwise.py`](https://github.com/astroai/torchsky/blob/main/examples/crossmatch_gaia_2mass_allwise.py) · [site copy](../published-examples/crossmatch_gaia_2mass_allwise.py)
+
+```text
+cone r=0.25 deg at (132.825, 11.8): Gaia 2086, 2MASS 1330, AllWISE 2806 rows
+Gaia x 2MASS within 2.0 arcsec: best1 1330 pairs (3 ms), mutual 1301 pairs (4 ms), median separation 0.083 arcsec
+skyerr (3 x catalogue errors): 1275 pairs (2 ms), 1275 shared with the fixed radius
+Gaia x AllWISE skyerr: 1249 pairs (2 ms), median separation 0.138 arcsec
+brute-force check on 300 Gaia rows: 180 matches, identical = True
+crossmatch_many group (2.5 arcsec, 7 ms): 3383 groups; groups with 1/2/3 catalogues: 1764/436/1183
+```
+
+## Planck
+
+All-sky HEALPix maps, masks and power spectra.
+
+### Masked power spectrum of the Commander synchrotron map
+
+![Masked power spectrum of the Commander synchrotron map](../assets/gallery/examples/planck_power_spectrum.png)
+
+Power spectrum of the Planck Commander synchrotron map on a masked sky. *Runtime: about 5 s on CPU once the map (9 MB) is cached.*
+
+Script: [`examples/planck_power_spectrum.py`](https://github.com/astroai/torchsky/blob/main/examples/planck_power_spectrum.py) · [site copy](../published-examples/planck_power_spectrum.py)
+
+```text
+COMP-MAP-Synchrotron: nside 256, 786432 pixels, unit uK_RJ, median 1.65e+07
+mask |b| > 20 deg: f_sky = 0.6576 (pixels), 0.6576 (MOC area), analytic 0.6580
+full-sky spectrum: C_ell ~ ell^-1.77 over ell 10-150
+band          masked/fsky vs full (data)   masked/fsky vs full (simulation)
+ell  10- 30      0.109                        1.086
+ell  30-100      0.083                        0.973
+ell 100-250      0.027                        1.019
+```
+
+## SDSS
+
+Calibrated spectra, rest frames, dust and synthetic photometry.
+
+### A quasar spectrum: rest frame, dust and ugriz magnitudes
+
+![A quasar spectrum: rest frame, dust and ugriz magnitudes](../assets/gallery/examples/sdss_spectrum_photometry.png)
+
+Rest frame, dust correction and synthetic ugriz photometry of an SDSS spectrum. *Runtime: about 2 s on CPU once the files are cached.*
+
+Script: [`examples/sdss_spectrum_photometry.py`](https://github.com/astroai/torchsky/blob/main/examples/sdss_spectrum_photometry.py) · [site copy](../published-examples/sdss_spectrum_photometry.py)
+
+```text
+plate 751 MJD 52251 fibre 160: class QSO, z = 0.04559 (v = 13356 km/s), 3840/3841 good pixels, 3799-9198 A
+[OIII]4960: rest-frame centroid 4960.38 A -> +5 km/s from the pipeline redshift
+[OIII]5008: rest-frame centroid 5008.47 A -> +14 km/s from the pipeline redshift
+band  coverage  torchsky AB  SDSS synthetic  diff    dust-corrected  A_lambda(pivot)
+  u     0.12      invalid         18.237
+  g     1.00       17.470         17.496  -0.027          17.213         0.263
+  r     1.00       16.776         16.764  +0.012          16.597         0.180
+  i     1.00       16.370         16.374  -0.004          16.236         0.134
+  z     0.69      invalid         16.125
+rms difference to the SDSS synthetic magnitudes (griz): 0.017 mag; dust-corrected g-r = 0.616
+```
+
+## DSS photographic plates
+
+A WCS from a real header, frames, footprints and reprojection.
+
+### Horsehead Nebula: WCS, footprint and reprojection
+
+![Horsehead Nebula: WCS, footprint and reprojection](../assets/gallery/examples/horsehead_wcs_tour.png)
+
+Pixel to sky on a real photographic-plate image: the Horsehead Nebula. *Runtime: about 4 s on CPU once the 1.6 MB file is cached.*
+
+Script: [`examples/horsehead_wcs_tour.py`](https://github.com/astroai/torchsky/blob/main/examples/horsehead_wcs_tour.py) · [site copy](../published-examples/horsehead_wcs_tour.py)
+
+```text
+horsehead.fits: 891 x 893 px, RA---TAN/DEC--TAN, ICRS
+pixel -> world -> pixel round trip: max |dpix| = 6.8e-11
+pixel scale 1.009 x 1.007 arcsec, field 15.0 x 15.0 arcmin, rotation +0.065 deg
+footprint centre l, b = 206.97, -16.75 deg; exact polygon area 225 arcmin^2
+Horsehead at pixel (549.0, 445.8), Galactic l, b = 206.96, -16.78 deg
+MOC order 15: 674 cells, area 229 arcmin^2 (1.020 x polygon)
+rotated TAN grid (1219, 1219), CAR grid (895, 893); original -> CAR -> original residual rms = 0.015 of the image std
+mean surface brightness: original 9831.5, CAR 9832.0 (ratio 1.0001)
+```
+
+## Chandra
+
+Photon event lists placed on the sphere.
+
+### Sgr A* events as a sparse HEALPix map and MOC
+
+![Sgr A* events as a sparse HEALPix map and MOC](../assets/gallery/examples/chandra_events_on_sphere.png)
+
+Chandra ACIS events of Sgr A* as a sparse HEALPix counts map and a MOC. *Runtime: about 6 s on CPU once the 31 MB file is cached.*
+
+Script: [`examples/chandra_events_on_sphere.py`](https://github.com/astroai/torchsky/blob/main/examples/chandra_events_on_sphere.py) · [site copy](../published-examples/chandra_events_on_sphere.py)
+
+```text
+ObsID 5950 (Sgr A*, 48.5 ks): 483964 events, 323657 in 0.5-7 keV; field centre 266.401, -28.987 deg
+sparse map nside 16384 (12.9 arcsec cells): 8105 occupied cells of 3.22e+09, 323657 events conserved, peak 26512 counts/cell
+MOC order 12: 132 cells, 420 arcmin^2 (five chips, edges inflated by the 51 arcsec cells); contains 323657/323657 events
+smoothed 6 steps (sigma ~ 26 arcsec): 12236 cells, counts 323657.0 (conserved: True)
+brightest smoothed cell (2266 counts) lies 10.0 arcmin from Sgr A*, a point source; the cell at Sgr A* holds 367 counts
+```
+
+## CFHT MegaCam (MegaPipe)
+
+Mosaicking independent stacks with different projections.
+
+### Four MegaPipe cutouts coadded with Lanczos3 and drizzle
+
+![Four MegaPipe cutouts coadded with Lanczos3 and drizzle](../assets/gallery/examples/megapipe_mosaic.png)
+
+Mosaic four overlapping CFHT MegaPipe cutouts with Lanczos3 and drizzle. *Runtime: about 10 s on CPU once the four 1 MB cutouts are cached.*
+
+Script: [`examples/megapipe_mosaic.py`](https://github.com/astroai/torchsky/blob/main/examples/megapipe_mosaic.py) · [site copy](../published-examples/megapipe_mosaic.py)
+
+```text
+tile 712.165: CRVAL (359.072, -7.500), exposure 240 s, noise 1.76 counts/px
+tile 711.165: CRVAL (358.568, -7.500), exposure 240 s, noise 1.62 counts/px
+tile 712.166a: CRVAL (358.673, -7.000), exposure 1224 s, noise 1.43 counts/px
+tile 712.166b: CRVAL (358.673, -7.000), exposure 1224 s, noise 1.46 counts/px
+common TAN grid: (712, 868) px
+lanczos3: pairwise overlaps (interior, 8 px eroded)
+  712.165 - 711.165: 152896 px, median offset -0.000, rms 0.25 (noise-only 2.39, ratio 0.10)
+  712.165 - 712.166a: 127221 px, median offset -0.002, rms 0.56 (noise-only 2.26, ratio 0.25)
+  712.165 - 712.166b:  47861 px, median offset -0.002, rms 0.69 (noise-only 2.29, ratio 0.30)
+  711.165 - 712.166a: 125550 px, median offset -0.002, rms 0.52 (noise-only 2.16, ratio 0.24)
+  711.165 - 712.166b: 112216 px, median offset -0.002, rms 0.47 (noise-only 2.19, ratio 0.22)
+  coadd: 554955 covered px; pixels seen by 1/2/3/4 cutouts: 250638/178767/77689/47861
+```
+
+## Mechanisms with synthetic data
+
+Each example below builds its own inputs to isolate one mechanism.
+
+## Coordinates, frames and WCS (synthetic)
 
 Pixel/world geometry and celestial frames, differentiable end to end.
 
@@ -47,7 +195,7 @@ LMC      az= 188.90 alt=  -1.54
 device=cpu
 ```
 
-## Sphere, HEALPix and spherical harmonics
+## Sphere, HEALPix and spherical harmonics (synthetic)
 
 Pixelization, regions and MOCs, power spectra, and inverse problems on the sphere.
 
@@ -95,7 +243,7 @@ Joint temperature and polarization (T/E/B) inverse from flat cutouts. *Runtime: 
 
 Script: [`examples/polarization_teb.py`](https://github.com/astroai/torchsky/blob/main/examples/polarization_teb.py) · [site copy](../published-examples/polarization_teb.py)
 
-## Catalogs at survey scale
+## Catalogs at survey scale (synthetic)
 
 Indexed, chunked catalogue operations that stay near-linear in N.
 
@@ -105,7 +253,7 @@ Crossmatch two large synthetic catalogues (1e6 x 1e6 by default). *Runtime: abou
 
 Script: [`examples/crossmatch_million.py`](https://github.com/astroai/torchsky/blob/main/examples/crossmatch_million.py) · [site copy](../published-examples/crossmatch_million.py)
 
-## Mapmaking: coadds, drizzle and cubes
+## Mapmaking: coadds, drizzle and cubes (synthetic)
 
 Resample many exposures onto one grid, a HEALPix map, or a spectral cube.
 
@@ -150,13 +298,7 @@ cube shape (20, 16, 16) (wave, y, x); spectral range 5002-5078 A
 line peak at 5038 A (truth 5040); continuum 1.000 (truth 1.0); moment-0 centroid (6.01, 8.99) (truth 6.0, 9.0)
 ```
 
-### Real survey cutouts, opt-in
-
-Coadd overlapping pieces of a real CFHT MegaPipe cutout onto one TAN grid. *Runtime: a few seconds.*
-
-Script: [`examples/real_data_cutout.py`](https://github.com/astroai/torchsky/blob/main/examples/real_data_cutout.py) · [site copy](../published-examples/real_data_cutout.py)
-
-## Spectra, photometry and cosmology
+## Spectra, photometry and cosmology (synthetic)
 
 From a rest-frame SED to observed magnitudes.
 
@@ -179,7 +321,7 @@ band dust dimming [mag]: {'g': 0.36, 'r': 0.275, 'i': 0.211, 'z': 0.159}  CCM89 
 g-r: 0.11 at z=0.02, peaks at 0.85 (z=0.41) as the 4000 A break crosses g and r
 ```
 
-## Continuous fields and observation operators (experimental)
+## Continuous fields and observation operators (experimental) (synthetic)
 
 Field-like models and native forward models; these APIs are still evolving.
 
@@ -203,7 +345,7 @@ Native observation operators: detector moments, field response, pixel likelihood
 
 Script: [`examples/native_operators.py`](https://github.com/astroai/torchsky/blob/main/examples/native_operators.py) · [site copy](../published-examples/native_operators.py)
 
-## Visualization
+## Visualization (synthetic)
 
 Presentation-quality figures from tensors.
 
@@ -214,6 +356,38 @@ Presentation-quality figures from tensors.
 Render slide-ready all-sky figures with ``torchsky.viz``. *Runtime: about 15 s.*
 
 Script: [`examples/allsky_figures.py`](https://github.com/astroai/torchsky/blob/main/examples/allsky_figures.py) · [site copy](../published-examples/allsky_figures.py)
+
+## Sample data sources
+
+Samples are validated (size, magic bytes, sha256 where the server file is
+immutable) on every cache hit. Catalogue cones use the TAP services of the Gaia
+archive and IRSA, with a `COUNT(*)` check against truncation.
+
+| Sample | Size | Description | Credit and licence |
+|---|---|---|---|
+| `horsehead` | 1.7 MB | Horsehead Nebula DSS image with a TAN WCS (astropy tutorial). | astropy-data tutorial file; DSS credit STScI/DSS |
+| `chandra_events` | 31.1 MB | Chandra ACIS event list (binary table). | astropy-data tutorial file; Chandra X-ray Center public data |
+| `sdss_spectrum` | 0.6 MB | SDSS DR16 optical spectrum, plate 0751 MJD 52251 fiber 0160. | SDSS public data (CC BY-style; cite SDSS DR16) |
+| `cadc_megapipe_cutout` | 1.1 MB | 512x512 g-band cutout (pixels 8000:8511, 4000:4511) of the CFHT MegaPipe stack MegaPipe.712.165 from the CADC cutout service; TAN WCS, float32. | CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC |
+| `megapipe_mosaic_a` | 1.1 MB | 512x512 g-band cutout of the CFHT MegaPipe stack, pixels 9489:10000 x 9489:10000 (the north-west corner on the sky) of tile 712.165. The four cutouts share one sky window near RA 358.82, Dec -7.25 where tiles 712.165, 711.165 and 712.166 overlap (each tile has its own TAN reference point). | CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC |
+| `megapipe_mosaic_b` | 1.1 MB | 512x512 g-band cutout of the CFHT MegaPipe stack, pixels 1:512 x 9489:10000 of tile 711.165, the western neighbour of tile 712.165 in the same row. The four cutouts share one sky window near RA 358.82, Dec -7.25 where tiles 712.165, 711.165 and 712.166 overlap (each tile has its own TAN reference point). | CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC |
+| `megapipe_mosaic_c` | 1.1 MB | 512x512 g-band cutout of the CFHT MegaPipe stack, pixels 1930:2442 x 1:512 of tile 712.166, the next row north (the rows are staggered in RA). The four cutouts share one sky window near RA 358.82, Dec -7.25 where tiles 712.165, 711.165 and 712.166 overlap (each tile has its own TAN reference point). | CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC |
+| `megapipe_mosaic_d` | 1.1 MB | 512x512 g-band cutout of the CFHT MegaPipe stack, pixels 2186:2697 x 1:512 of tile 712.166, shifted 256 px from the previous cutout of the same stack. The four cutouts share one sky window near RA 358.82, Dec -7.25 where tiles 712.165, 711.165 and 712.166 overlap (each tile has its own TAN reference point). | CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC |
+| `svo_sdss_u` | 0.0 MB | SDSS u-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010 |
+| `svo_sdss_g` | 0.0 MB | SDSS g-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010 |
+| `svo_sdss_r` | 0.0 MB | SDSS r-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010 |
+| `svo_sdss_i` | 0.0 MB | SDSS i-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010 |
+| `svo_sdss_z` | 0.0 MB | SDSS z-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010 |
+| `healpy_full_weights_256` | 0.4 MB | HEALPix ring-weight file for nside=256 (healpy-data). | healpy-data repository (healpy licence) |
+| `planck_commander_sync_256` | 9.5 MB | Planck PR2 Commander synchrotron component, HEALPix nside=256. | Planck Legacy Archive (ESA); cite Planck Collaboration 2015 X |
+| `planck_commander_dust_256` | 28.3 MB | Planck PR2 Commander thermal dust component, HEALPix nside=256. | Planck Legacy Archive (ESA); cite Planck Collaboration 2015 X |
+| `planck_smica_1024` (opt-in) | 176.2 MB | Planck PR2 SMICA CMB I/Q/U, nside=1024 (smallest official CMB map; the PR3 SMICA map is 2 GB at nside=2048). | Planck Legacy Archive (ESA); cite Planck Collaboration 2015 IX |
+| `manga_logcube` (opt-in) | 212.0 MB | SDSS-IV MaNGA DR17 LOGCUBE, plate-IFU 7443-12703. | SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015) |
+
+```bash
+pixi run fetch-example-samples                  # all small samples
+pixi run fetch-example-samples -- --with-large  # also the opt-in ones
+```
 
 ## Applications and evaluation
 

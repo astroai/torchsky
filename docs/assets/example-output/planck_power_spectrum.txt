@@ -1,0 +1,7 @@
+COMP-MAP-Synchrotron: nside 256, 786432 pixels, unit uK_RJ, median 1.65e+07
+mask |b| > 20 deg: f_sky = 0.6576 (pixels), 0.6576 (MOC area), analytic 0.6580
+full-sky spectrum: C_ell ~ ell^-1.77 over ell 10-150
+band          masked/fsky vs full (data)   masked/fsky vs full (simulation)
+ell  10- 30      0.109                        1.086
+ell  30-100      0.083                        0.973
+ell 100-250      0.027                        1.019

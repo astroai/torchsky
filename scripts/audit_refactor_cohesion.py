@@ -26,7 +26,7 @@ REQUIRED_TASKS: Mapping[str, tuple[str, ...]] = {
 REQUIRED_FILES = (
     "docs/introduction/concepts.md",
     "docs/performance/benchmarks.md",
-    "docs/maps/index.md",
+    "docs/models/index.md",
     "docs/models/fields.md",
     "docs/models/scenes.md",
     "docs/models/likelihoods.md",
@@ -38,7 +38,7 @@ DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
         "torchsky-harness",
         "Torchsky retains production implementations",
     ),
-    "docs/maps/index.md": (
+    "docs/models/index.md": (
         "ObservationOperatorBundle",
         "LearnedInstrumentOperator",
         "ConstrainedKernelPSF",

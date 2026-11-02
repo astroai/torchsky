@@ -30,6 +30,8 @@ CONNECT_TIMEOUT_S = 30.0
 DOWNLOAD_ATTEMPTS = 3
 _FITS = (b"SIMPLE  =",)
 _GZIP = (b"\x1f\x8b",)
+_ASCII = tuple(str(d).encode() for d in range(10))
+_SVO = "http://svo2.cab.inta-csic.es/theory/fps/getdata.php?format=ascii&id="
 _CADC = "https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/data/pub/CFHTSG"
 _PLA = "https://irsa.ipac.caltech.edu/data/Planck/release_2/all-sky-maps/maps/component-maps"
 
@@ -92,6 +94,125 @@ SAMPLES: dict[str, dict[str, Any]] = {
             "TAN WCS, float32."
         ),
         "license": "CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC",
+    },
+    "megapipe_mosaic_a": {
+        "url": (
+            f"{_CADC}/MegaPipe.712.165.G.MP9401.fits"
+            "?SUB=%5B0%5D%5B9489:10000,9489:10000%5D"
+        ),
+        "bytes": 1056960,
+        "sha256": None,
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "512x512 g-band cutout of the CFHT MegaPipe stack, pixels 9489:10000 x 9489:10000 (the north-west corner on the sky) of tile 712.165. "
+            "The four cutouts share one sky window near RA 358.82, Dec -7.25 "
+            "where tiles 712.165, 711.165 and 712.166 overlap (each tile has "
+            "its own TAN reference point)."
+        ),
+        "license": "CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC",
+    },
+    "megapipe_mosaic_b": {
+        "url": (
+            f"{_CADC}/MegaPipe.711.165.G.MP9401.fits?SUB=%5B0%5D%5B1:512,9489:10000%5D"
+        ),
+        "bytes": 1056960,
+        "sha256": None,
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "512x512 g-band cutout of the CFHT MegaPipe stack, pixels 1:512 x 9489:10000 of tile 711.165, the western neighbour of tile 712.165 in the same row. "
+            "The four cutouts share one sky window near RA 358.82, Dec -7.25 "
+            "where tiles 712.165, 711.165 and 712.166 overlap (each tile has "
+            "its own TAN reference point)."
+        ),
+        "license": "CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC",
+    },
+    "megapipe_mosaic_c": {
+        "url": (
+            f"{_CADC}/MegaPipe.712.166.G.MP9401.fits?SUB=%5B0%5D%5B1930:2442,1:512%5D"
+        ),
+        "bytes": 1056960,
+        "sha256": None,
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "512x512 g-band cutout of the CFHT MegaPipe stack, pixels 1930:2442 x 1:512 of tile 712.166, the next row north (the rows are staggered in RA). "
+            "The four cutouts share one sky window near RA 358.82, Dec -7.25 "
+            "where tiles 712.165, 711.165 and 712.166 overlap (each tile has "
+            "its own TAN reference point)."
+        ),
+        "license": "CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC",
+    },
+    "megapipe_mosaic_d": {
+        "url": (
+            f"{_CADC}/MegaPipe.712.166.G.MP9401.fits?SUB=%5B0%5D%5B2186:2697,1:512%5D"
+        ),
+        "bytes": 1056960,
+        "sha256": None,
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "512x512 g-band cutout of the CFHT MegaPipe stack, pixels 2186:2697 x 1:512 of tile 712.166, shifted 256 px from the previous cutout of the same stack. "
+            "The four cutouts share one sky window near RA 358.82, Dec -7.25 "
+            "where tiles 712.165, 711.165 and 712.166 overlap (each tile has "
+            "its own TAN reference point)."
+        ),
+        "license": "CFHT/CADC MegaPipe (Gwyn 2008), open data; cite CFHT and CADC",
+    },
+    "svo_sdss_u": {
+        "url": f"{_SVO}SLOAN/SDSS.u",
+        "bytes": 940,
+        "sha256": "008fafdbc2a65b897fd56627142d266269275caa0d28622ac79c57a39ce24cfa",
+        "magic": _ASCII,
+        "suffix": ".dat",
+        "large": False,
+        "description": "SDSS u-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service.",
+        "license": "SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010",
+    },
+    "svo_sdss_g": {
+        "url": f"{_SVO}SLOAN/SDSS.g",
+        "bytes": 1780,
+        "sha256": "1efa583c9ba880e3e793b4b42bd2ba7c69d70f7c9aae49a9e6a13a2997413f42",
+        "magic": _ASCII,
+        "suffix": ".dat",
+        "large": False,
+        "description": "SDSS g-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service.",
+        "license": "SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010",
+    },
+    "svo_sdss_r": {
+        "url": f"{_SVO}SLOAN/SDSS.r",
+        "bytes": 1500,
+        "sha256": "269e13371b9b65376345d0ebe4ba6b5455ef1aba2a71b310966f1a1c2b662316",
+        "magic": _ASCII,
+        "suffix": ".dat",
+        "large": False,
+        "description": "SDSS r-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service.",
+        "license": "SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010",
+    },
+    "svo_sdss_i": {
+        "url": f"{_SVO}SLOAN/SDSS.i",
+        "bytes": 1780,
+        "sha256": "8a2a6ce51d9c56f657ff7e4d846cbcae51fdda7b6619fb487b0e52569983a622",
+        "magic": _ASCII,
+        "suffix": ".dat",
+        "large": False,
+        "description": "SDSS i-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service.",
+        "license": "SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010",
+    },
+    "svo_sdss_z": {
+        "url": f"{_SVO}SLOAN/SDSS.z",
+        "bytes": 2870,
+        "sha256": "8caaaf3777e9d4a7a6337cd48800a0bbfcaae8bf63b89dd9124689a84b3078ee",
+        "magic": _ASCII,
+        "suffix": ".dat",
+        "large": False,
+        "description": "SDSS z-band filter transmission (wavelength [A], photon response) from the SVO Filter Profile Service.",
+        "license": "SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); cite SVO and Doi et al. 2010",
     },
     "healpy_full_weights_256": {
         "url": (

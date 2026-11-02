@@ -1,27 +1,51 @@
 # Coordinates and WCS: overview
-<!-- TODO(0.5.0 docs): intro -->
 
+This area turns detector pixels into sky positions and sky positions into other
+frames. Its centre is the world coordinate system (WCS): the FITS standard that
+describes, in header keywords, how a pixel maps to a position on the sky, a
+wavelength, or a time. `torchsky.wcs` implements FITS-WCS in torch, and
+`torchsky.coords` converts between celestial frames, propagates stellar motion,
+and computes observed place.
 
-`torchsky.wcs` is a torch-native implementation of FITS-WCS: celestial
-projections with distortions, spectral and temporal axes, lookup-table axes, and
-the alignment helpers that sit on top. Astropy and WCSLIB are parity oracles in
-tests, never runtime fallbacks.
+## How a Celestial WCS Works
 
-## Core Concepts
+A celestial WCS is a chain of simple steps, each set by header keywords:
 
-- A `WCS` is built from a plain header mapping, the same dict `torchfits`
-  returns. File decoding belongs to `torchfits`; the WCS never opens a file.
-- Pixels are 0-based and celestial world values are degrees, unless a method
-  says otherwise (`pixel_to_world_values(..., origin=1)` keeps the FITS
-  convention).
-- Dtype and device follow your tensors. `wcs.to("cuda")` moves cached tables
-  with the pixels. CUDA and CPU run float64; MPS runs float32 (see
-  [MPS precision](projections.md#mps-precision)).
-- Invalid projection domains and singular inverses return NaN instead of
-  raising, so a batch never fails because of one bad point.
-- Geometry is differentiable (see [Jacobians](#jacobians-and-gradients)).
+```mermaid
+flowchart LR
+    P["pixel (x, y)<br/>0-based"] -->|"subtract CRPIX<br/>+ SIP distortion"| O["pixel offsets"]
+    O -->|"CD or PC × CDELT<br/>+ TPV distortion"| I["intermediate<br/>coordinates (deg)"]
+    I -->|"projection<br/>TAN, SIN, ZEA, …"| N["native sphere"]
+    N -->|"rotate to CRVAL"| C["ICRS (RA, Dec)"]
+    C -->|"frames, epochs"| G["Galactic, ecliptic,<br/>FK5, …"]
+    C -->|"observed place"| A["alt/az"]
+```
 
-## Pixel To World And Back
+- `CRPIX` is the reference pixel, `CRVAL` its sky position, and the `CD` (or
+  `PC` with `CDELT`) matrix sets scale, rotation, and skew.
+- The projection code in `CTYPE` (`RA---TAN`, `GLON-ZEA`, …) flattens the
+  sphere onto the plane. The zenithal, cylindrical, conic, polyconic,
+  HEALPix, and quadcube families of FITS Paper II are supported.
+- Distortions describe what a linear model cannot: SIP (Simple Imaging
+  Polynomial, used by HST and JWST) adds polynomials in pixel offsets; TPV
+  (used by SCAMP and CFHT MegaCam) adds polynomials in intermediate
+  coordinates. Lookup-table axes (`-TAB`) cover the rest.
+
+Every arrow is differentiable, and every step is batched over any tensor shape.
+
+## Choose a Page
+
+| Task | Page | Entry point |
+|---|---|---|
+| Map pixels to sky and back, footprints, pixel scales | This page, [Projections](projections.md) | [`WCS`](../reference/wcs.md#torchsky.wcs.WCS) |
+| Read SIP, TPV, or `-TAB` distortions; refine a WCS against reference stars | [Distortions](distortions.md) | [`WCS`](../reference/wcs.md#torchsky.wcs.WCS), [`fit_sky_affine`](../reference/wcs.md#torchsky.wcs.fit_sky_affine) |
+| Convert ICRS, Galactic, ecliptic, FK5; propagate proper motion | [Frames and time](frames.md) | [`transform`](../reference/coords.md#torchsky.coords.transform), [`CatalogState`](../reference/coords.md#torchsky.coords.CatalogState) |
+| Alt/az, refraction, and aberration for a site and time | [Observed place](observed-place.md) | [`observed_altaz`](../reference/coords.md#torchsky.coords.observed_altaz) |
+| Spectral axes as free functions | [Spectral axes](../spectra/spectral-axes.md) | [`SpectralAxis`](../reference/spectral.md#torchsky.spectral.SpectralAxis) |
+
+## Pixel to World and Back
+
+Build a `WCS` from the header dict torchfits returns, then transform tensors.
 
 <!-- docs: run -->
 ```python
@@ -48,7 +72,10 @@ torch.testing.assert_close(y_back, y, atol=1e-7, rtol=0.0)
 assert wcs.footprint(shape=(512, 512)).shape == (4, 2)
 ```
 
-## Alternate Keys, Slicing, And Compiled Paths
+`footprint`, `pixel_scales`, `pixel_area`, and `position_angle` describe the
+grid itself. `wcs.to("cuda")` moves the cached parameters with your tensors.
+
+## Alternate Keys, Slicing, and Compiled Paths
 
 `WCS(header, key="A")` selects an alternate WCS. `slice`, `sub`, `dropaxis`, and
 `celestial` derive new objects with the CRPIX/CD bookkeeping already updated.
@@ -81,25 +108,11 @@ torch.testing.assert_close(full_ra, cut_ra)
 torch.testing.assert_close(full_dec, cut_dec)
 ```
 
-## Jacobians And Gradients
+## Jacobians and Gradients
 
 `jacobian` returns the local `d(world)/d(pixel)` matrix per point, and the
-`*_differentiable` variants keep the autograd graph for geometry fitting.
-
-At the reference point (CRPIX) the native longitude is undefined for zenithal
-projections (the pole) and `cot(theta)` is singular for `PCO`. There the
-Jacobian is analytic rather than differenced. For zenithal projections it is
-`J = W K^-1 CD`, where `K = d(xi, eta)/dt` and `W = d(lon, lat)/dt` follow
-`t = 90 - theta` along two native longitudes, so `K` carries the projection's own
-`R'(theta_0)`; `PCO` uses the identity native Jacobian. The inverse direction uses
-the matrix inverse. Elsewhere ordinary autograd is exact at CRPIX. The Hessian
-on those reference rows is not defined by this construction (zero).
-
-`XPH` and `QSC` have a genuine kink at CRPIX: the derivative depends on the
-direction of approach and is undefined there. The WCS returns one defined
-subgradient, the autograd Jacobian of the branch entered along `(+1, +0.371)`
-pixels, evaluated 1e-4 pixel from CRPIX (about 1e-4 relative accuracy), and the
-world-to-pixel Jacobian is its exact inverse, so the two directions are consistent.
+`*_differentiable` variants keep the autograd graph in pure torch for geometry
+fitting.
 
 <!-- docs: run -->
 ```python
@@ -120,28 +133,56 @@ assert jac.shape == (2, 2, 2)
 assert torch.isfinite(jac).all()
 ```
 
-## Spectral And Temporal Axes
+At the reference point (CRPIX) the native longitude is undefined for zenithal
+projections (the pole) and `cot(theta)` is singular for `PCO`. There the
+Jacobian is analytic rather than differenced: for zenithal projections it is
+`J = W K^-1 CD`, where `K = d(xi, eta)/dt` and `W = d(lon, lat)/dt` follow
+`t = 90 - theta` along two native longitudes, so `K` carries the projection's own
+`R'(theta_0)`; `PCO` uses the identity native Jacobian. The inverse direction
+uses the matrix inverse. The Hessian on those reference rows is not defined by
+this construction (zero).
 
-Spectral WCS covers linear axes, `-LOG`, reciprocal compounds (`WAVE-F2W`,
-`FREQ-W2F`), velocity compounds (`WAVE-V2W`), and the grism algorithms `GRI` and
-`GRA`. Air wavelengths use the WCSLIB Edlen form. Temporal helpers convert
-UTC/TAI/TT/GPS and apply a local Keplerian light-time correction; ephemeris-grade
-apparent place is outside the runtime contract.
+`XPH` and `QSC` have a genuine kink at CRPIX: the derivative depends on the
+direction of approach. The WCS returns one defined subgradient, the autograd
+Jacobian of the branch entered along `(+1, +0.371)` pixels, evaluated 1e-4 pixel
+from CRPIX (about 1e-4 relative accuracy), and the world-to-pixel Jacobian is
+its exact inverse, so the two directions are consistent.
 
-## Where Things Live
+## Spectral and Temporal Axes
 
-| Need | Use |
-|---|---|
-| Frames, proper motion, observed place | [Coordinate frames and motion](frames.md) |
-| Spectral axes as free functions | [Spectra](../spectra/index.md) |
-| IFU slice WCS, tabular axes | `IFUSliceWCS`, `TabularAxis`, `TabularLookupWCS` in the [reference](../reference/wcs.md) |
-| Footprints and pixel scales | `footprint`, `pixel_scales`, `pixel_area`, `position_angle` |
-| Resampling images with a WCS | [Coadds and resampling](../maps/index.md) |
+The same `WCS` handles non-celestial axes. Spectral WCS covers linear axes,
+`-LOG`, reciprocal compounds (`WAVE-F2W`, `FREQ-W2F`), velocity compounds
+(`WAVE-V2W`), and the grism algorithms `GRI` and `GRA`. Air wavelengths use the
+WCSLIB Edlen form. Temporal helpers convert UTC/TAI/TT/GPS and apply a local
+Keplerian light-time correction; ephemeris-grade apparent place is outside the
+runtime contract.
 
-## Validation
+## Conventions and Pitfalls
 
-Core tests cover bounded transform, round-trip, gradient, and device contracts.
+- **Pixels are 0-based.** FITS keywords are 1-based (`CRPIX1 = 1` is the
+  first pixel); `pixel_to_world` subtracts that for you. Use
+  `pixel_to_world_values(..., origin=1)` if your pixel values come from a
+  1-based tool.
+- **World values are degrees** for celestial axes. Spectral and time axes keep
+  the units in the header.
+- **Out-of-domain points return NaN.** A pixel beyond a projection's valid
+  region, or a singular inverse, yields NaN for that row rather than an error.
+- **MPS is float32.** Expect arcsecond-class error; a
+  [`PrecisionWarning`](../reference/wcs.md#torchsky.wcs.PrecisionWarning) tells
+  you when it reaches half a pixel. See [MPS precision](projections.md#mps-precision).
+- **Frames are explicit.** A WCS reports positions in the frame its header
+  declares (`RADESYS`, `EQUINOX`); conversion to another frame is a separate
+  [`transform`](../reference/coords.md#torchsky.coords.transform) call.
+
+## Connections
+
+A `WCS` is the input to almost everything else: [catalogs](../catalogs/index.md)
+use sky positions, [maps](../maps/index.md) resample between two WCS grids,
+[HEALPix mapmaking](../maps/healpix-mapmaking.md) projects a WCS image onto the
+[sphere](../sphere/index.md), and [models](../models/index.md) render through
+the WCS of each exposure.
+
 Exhaustive Astropy/WCSLIB parity and throughput are measured in
-[`torchsky-harness`](https://github.com/astroai/torchsky-harness); the summary is
-in [Parity evidence](../performance/parity.md). Related example:
+[torchsky-harness](https://github.com/astroai/torchsky-harness) and summarized
+on the [parity page](../performance/parity.md). Example:
 [WCS tour](../published-examples/wcs_tour.py).
