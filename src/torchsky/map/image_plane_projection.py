@@ -34,6 +34,7 @@ from .operators.execution import (
     project_image_observation_geometry,
 )
 from .operators.geometry import ForwardSplatGeometryOp
+from .operators.geometry_drizzle import _accumulate_quadrilateral_overlaps
 from .operators.image_grid import (
     headers_equivalent_for_direct_copy,
     image_shape_hw,
@@ -1205,20 +1206,18 @@ def _drizzle_separable_1d_weight(
     )
 
 
-def _forward_box_target_widths(
+def _forward_box_jacobian(
     source_wcs: WCS,
     target_wcs: WCS,
     x_src: Tensor,
     y_src: Tensor,
     x_tgt: Tensor,
     y_tgt: Tensor,
-    footprint: float,
-) -> tuple[Tensor, Tensor]:
-    """Target-pixel extent of a ``footprint``-wide source-pixel box along x and y.
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Local Jacobian ``(dxt/dxs, dxt/dys, dyt/dxs, dyt/dys)`` of the source -> target map.
 
-    The local Jacobian ``d(x_t, y_t) / d(x_s, y_s)`` comes from one-pixel forward
-    differences (exact for affine maps); the box spans ``footprint`` times the length
-    of each target axis' source-pixel row of the Jacobian.
+    One-pixel forward differences from the float64 image ``(x_tgt, y_tgt)`` of the source
+    pixel centres (exact for affine maps).
     """
     n = int(x_src.numel())
     xs = torch.cat([x_src + 1.0, x_src])
@@ -1226,13 +1225,43 @@ def _forward_box_target_widths(
     ra, dec = source_wcs.pixel_to_world(xs, ys)
     ra, dec = _convert_world_between_wcs(ra, dec, source_wcs, target_wcs)
     xt, yt = target_wcs.world_to_pixel(ra, dec)
-    xt = xt.to(dtype=torch.float32)
-    yt = yt.to(dtype=torch.float32)
-    dxdx, dxdy = xt[:n] - x_tgt, xt[n:] - x_tgt
-    dydx, dydy = yt[:n] - y_tgt, yt[n:] - y_tgt
-    width_x = footprint * torch.hypot(dxdx, dxdy)
-    width_y = footprint * torch.hypot(dydx, dydy)
-    return width_x, width_y
+    xt = xt.to(dtype=torch.float64)
+    yt = yt.to(dtype=torch.float64)
+    return xt[:n] - x_tgt, xt[n:] - x_tgt, yt[:n] - y_tgt, yt[n:] - y_tgt
+
+
+def _forward_box_axis_aligned(jac: tuple[Tensor, Tensor, Tensor, Tensor]) -> Tensor:
+    """True where the Jacobian maps source axes onto target axes (up to a swap).
+
+    Then the image of a source-pixel box is an axis-aligned target box whose widths are
+    the Jacobian row lengths, and the separable box overlap is exact.  The mathematical
+    condition is a signed-permutation-times-diagonal Jacobian, checked to the float32
+    resolution of the accumulated maps; every other sample is a rotated/sheared
+    parallelogram and goes through the exact polygon overlap.
+    """
+    a, b, c, d = jac
+    scale = torch.maximum(
+        torch.maximum(a.abs(), b.abs()), torch.maximum(c.abs(), d.abs())
+    )
+    tol = torch.finfo(torch.float32).eps * scale
+    diagonal = (b.abs() <= tol) & (c.abs() <= tol)
+    swapped = (a.abs() <= tol) & (d.abs() <= tol)
+    return diagonal | swapped
+
+
+def _forward_box_target_widths(
+    jac: tuple[Tensor, Tensor, Tensor, Tensor], footprint: float
+) -> tuple[Tensor, Tensor]:
+    """Target-pixel extent of a ``footprint``-wide source-pixel box along x and y.
+
+    The box spans ``footprint`` times the length of each target axis' source-pixel row
+    of the Jacobian (exact when :func:`_forward_box_axis_aligned` holds).
+    """
+    dxdx, dxdy, dydx, dydy = jac
+    return (
+        (footprint * torch.hypot(dxdx, dxdy)).to(torch.float32),
+        (footprint * torch.hypot(dydx, dydy)).to(torch.float32),
+    )
 
 
 def _forward_project_weighted_to_target(
@@ -1281,7 +1310,11 @@ def _forward_project_weighted_to_target(
         weighted_weight = source_weight
         source_numerator_variance = source_weight
 
-    valid = torch.isfinite(weighted_weight) & (weighted_weight > 0.0)
+    valid = (
+        torch.isfinite(weighted_weight)
+        & torch.isfinite(weighted_image)
+        & (weighted_weight > 0.0)
+    )
     if not bool(valid.any()):
         zeros = torch.zeros(target.shape, dtype=torch.float32, device=image.device)
         if return_variance_weight:
@@ -1322,15 +1355,17 @@ def _forward_project_weighted_to_target(
         ra_deg, dec_deg = _convert_world_between_wcs(
             ra_deg, dec_deg, source_wcs, target.wcs
         )
-        x_tgt, y_tgt = target.wcs.world_to_pixel(ra_deg, dec_deg)
-        x_tgt = x_tgt.to(dtype=torch.float32)
-        y_tgt = y_tgt.to(dtype=torch.float32)
+        x_tgt64, y_tgt64 = target.wcs.world_to_pixel(ra_deg, dec_deg)
+        x_tgt = x_tgt64.to(dtype=torch.float32)
+        y_tgt = y_tgt64.to(dtype=torch.float32)
         finite = torch.isfinite(x_tgt) & torch.isfinite(y_tgt)
         if not bool(finite.any()):
             continue
 
         x_tgt = x_tgt[finite]
         y_tgt = y_tgt[finite]
+        x_tgt64 = x_tgt64.to(torch.float64)[finite]
+        y_tgt64 = y_tgt64.to(torch.float64)[finite]
         x_chunk = x_chunk[finite]
         y_chunk = y_chunk[finite]
         numer_chunk = numer_chunk[finite]
@@ -1415,22 +1450,60 @@ def _forward_project_weighted_to_target(
                         )
             continue
 
-        # Box footprint: pixfrac source pixels wide, scaled to target pixels by the
-        # local Jacobian, then overlapped exactly with the target pixel grid.
+        # Box footprint: pixfrac source pixels wide.  Axis-aligned Jacobians scale it to
+        # target pixels and overlap it exactly with the separable box taps; rotated or
+        # sheared ones overlap the exact projected square (parallelogram) polygon.
         footprint = max(float(drizzle_pixfrac), 1e-6)
-        width_x, width_y = _forward_box_target_widths(
-            source_wcs, target.wcs, x_chunk, y_chunk, x_tgt, y_tgt, footprint
+        jac = _forward_box_jacobian(
+            source_wcs, target.wcs, x_chunk, y_chunk, x_tgt64, y_tgt64
         )
-        ok = torch.isfinite(width_x) & torch.isfinite(width_y)
-        if not bool(ok.all()):
-            # Footprints with a non-finite Jacobian are skipped, like non-finite centres.
-            x_tgt, y_tgt = x_tgt[ok], y_tgt[ok]
-            width_x, width_y = width_x[ok], width_y[ok]
-            numer_chunk, weight_chunk = numer_chunk[ok], weight_chunk[ok]
+        aligned = _forward_box_axis_aligned(jac)
+        ok = (
+            torch.isfinite(x_tgt)
+            & torch.isfinite(y_tgt)
+            & torch.isfinite(jac[0] + jac[1] + jac[2] + jac[3])
+        )
+        polygon = ok & ~aligned
+        if bool(polygon.any()):
+            half = 0.5 * footprint
+            px = x_chunk[polygon]
+            py = y_chunk[polygon]
+            cx = torch.stack((px - half, px + half, px + half, px - half), dim=1)
+            cy = torch.stack((py - half, py - half, py + half, py + half), dim=1)
+            c_ra, c_dec = source_wcs.pixel_to_world(cx.reshape(-1), cy.reshape(-1))
+            c_ra, c_dec = _convert_world_between_wcs(
+                c_ra, c_dec, source_wcs, target.wcs
+            )
+            qx, qy = target.wcs.world_to_pixel(c_ra, c_dec)
+            poly_weight = weight_chunk[polygon]
+            poly_variance = None
             if variance_chunk is not None:
-                variance_chunk = variance_chunk[ok]
+                poly_variance = variance_chunk[polygon]
+                if bool(torch.equal(poly_variance, poly_weight)):
+                    poly_variance = None
+            _accumulate_quadrilateral_overlaps(
+                qx.reshape(-1, 4).to(dtype=torch.float64),
+                qy.reshape(-1, 4).to(dtype=torch.float64),
+                numer_chunk[polygon],
+                poly_weight,
+                width=width,
+                height=height,
+                flat_numer=flat_numer,
+                flat_weight=flat_weight,
+                flat_variance_weight=flat_variance_weight,
+                quad_variance=poly_variance,
+            )
+        keep = ok & aligned
+        if not bool(keep.all()):
+            # Footprints with a non-finite Jacobian are skipped, like non-finite centres.
+            x_tgt, y_tgt = x_tgt[keep], y_tgt[keep]
+            jac = (jac[0][keep], jac[1][keep], jac[2][keep], jac[3][keep])
+            numer_chunk, weight_chunk = numer_chunk[keep], weight_chunk[keep]
+            if variance_chunk is not None:
+                variance_chunk = variance_chunk[keep]
             if x_tgt.numel() == 0:
                 continue
+        width_x, width_y = _forward_box_target_widths(jac, footprint)
         first_x, taps_x = box_overlap_taps(x_tgt, width_x)
         first_y, taps_y = box_overlap_taps(y_tgt, width_y)
         for ky in range(taps_y.shape[0]):

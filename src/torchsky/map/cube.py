@@ -165,61 +165,117 @@ def _coadd_ifu_3d_cube(
         w_v = cal_w[yy, xx].to(dtype=torch.float32)
 
         w_dtype = torch.float32 if map_device.type == "mps" else torch.float64
+        if ifu_obj is None and obs.wavelength_map is None and obs.wavelength is None:
+            raise ValueError(
+                "Observation must define ifu_wcs, wavelength_map, or wavelength"
+            )
+
+        def make_detector_to_cube(dev: torch.device, dtype: torch.dtype):
+            """Detector pixel -> fractional cube indices ``(x, y, z)`` on ``dev``.
+
+            ``ix, iy`` are the integer detector indices used for per-pixel wavelength
+            map lookups.
+            """
+            ifu_on_dev = ifu_obj.to(dev) if ifu_obj is not None else None
+            if ifu_obj is None:
+                obs_wcs = (
+                    obs.wcs
+                    if isinstance(obs.wcs, WCS)
+                    else WCS(obs.wcs if isinstance(obs.wcs, dict) else hdr_obs)
+                ).to(dev)
+            tgt_wcs = target_wcs.to(dev)
+            centers = wave_centers.to(dev)
+
+            def detector_to_cube(
+                xd: Tensor, yd: Tensor, ix: Tensor, iy: Tensor
+            ) -> tuple[Tensor, Tensor, Tensor]:
+                if ifu_on_dev is not None:
+                    ra_d, dec_d, lam_d = ifu_on_dev.pixel_to_world(xd, yd)
+                else:
+                    ra_d, dec_d = obs_wcs.pixel_to_world(xd, yd)
+                    if obs.wavelength_map is not None:
+                        lam_d = obs.wavelength_map.to(device=dev, dtype=dtype)[iy, ix]
+                    else:
+                        assert obs.wavelength is not None
+                        lam_d = torch.full_like(ra_d, float(obs.wavelength))
+                if obs.dcr_zenith_deg is not None:
+                    ra_d, dec_d = apply_dcr(
+                        ra_d,
+                        dec_d,
+                        lam_d,
+                        zenith_deg=float(obs.dcr_zenith_deg),
+                        parallactic_deg=float(obs.dcr_parallactic_deg),
+                        ref_wavelength_angstrom=float(obs.dcr_ref_wavelength),
+                        pressure_mbar=float(obs.dcr_pressure_hpa),
+                        temperature_c=float(obs.dcr_temperature_c),
+                    )
+                if (
+                    obs.tracking_rate is not None
+                    and obs.mjd_obs is not None
+                    and obs.reference_mjd is not None
+                ):
+                    ra_d, dec_d = apply_ephemeris_offset(
+                        ra_d,
+                        dec_d,
+                        dra_cosdec_arcsec_per_hr=float(obs.tracking_rate[0]),
+                        ddec_arcsec_per_hr=float(obs.tracking_rate[1]),
+                        mjd_obs=float(obs.mjd_obs),
+                        reference_mjd=float(obs.reference_mjd),
+                    )
+                xt_, yt_ = tgt_wcs.world_to_pixel(ra_d, dec_d)
+                zt_ = _spectral_fractional_index(centers, lam_d.to(torch.float32))
+                return xt_.to(dtype), yt_.to(dtype), zt_.to(dtype)
+
+            return detector_to_cube
+
         x_det = xx.to(dtype=w_dtype)
         y_det = yy.to(dtype=w_dtype)
-        if ifu_obj is not None:
-            ra_d, dec_d, lam_d = ifu_obj.to(map_device).pixel_to_world(x_det, y_det)
-        else:
-            obs_wcs = (
-                obs.wcs
-                if isinstance(obs.wcs, WCS)
-                else WCS(obs.wcs if isinstance(obs.wcs, dict) else hdr_obs)
-            ).to(map_device)
-            ra_d, dec_d = obs_wcs.pixel_to_world(x_det, y_det)
-            if obs.wavelength_map is not None:
-                lam_d = obs.wavelength_map.to(device=map_device, dtype=w_dtype)[yy, xx]
-            elif obs.wavelength is not None:
-                lam_d = torch.full_like(ra_d, float(obs.wavelength))
-            else:
-                raise ValueError(
-                    "Observation must define ifu_wcs, wavelength_map, or wavelength"
-                )
-
-        if obs.dcr_zenith_deg is not None:
-            ra_d, dec_d = apply_dcr(
-                ra_d,
-                dec_d,
-                lam_d,
-                zenith_deg=float(obs.dcr_zenith_deg),
-                parallactic_deg=float(obs.dcr_parallactic_deg),
-                ref_wavelength_angstrom=float(obs.dcr_ref_wavelength),
-                pressure_mbar=float(obs.dcr_pressure_hpa),
-                temperature_c=float(obs.dcr_temperature_c),
+        xt, yt, zt = make_detector_to_cube(map_device, w_dtype)(x_det, y_det, xx, yy)
+        jac = None
+        if spectral_kernel == "drizzle":
+            # Local detector -> cube Jacobian by one-pixel differences (exact for affine
+            # maps); the step turns backward on the last row/column so that integer
+            # wavelength-map lookups stay in range.  Differences are formed in float64
+            # (on the CPU when the map device has no float64, e.g. MPS) because the
+            # float32 world coordinates are coarser than a voxel footprint.
+            jdev, jdtype = (
+                (torch.device("cpu"), torch.float64)
+                if map_device.type == "mps"
+                else (map_device, w_dtype)
             )
-        if (
-            obs.tracking_rate is not None
-            and obs.mjd_obs is not None
-            and obs.reference_mjd is not None
-        ):
-            ra_d, dec_d = apply_ephemeris_offset(
-                ra_d,
-                dec_d,
-                dra_cosdec_arcsec_per_hr=float(obs.tracking_rate[0]),
-                ddec_arcsec_per_hr=float(obs.tracking_rate[1]),
-                mjd_obs=float(obs.mjd_obs),
-                reference_mjd=float(obs.reference_mjd),
-            )
-
-        xt, yt = target_wcs.world_to_pixel(ra_d, dec_d)
-        xt = xt.to(dtype=torch.float32)
-        yt = yt.to(dtype=torch.float32)
-        lam_f = lam_d.to(dtype=torch.float32)
-        zt = _spectral_fractional_index(wave_centers, lam_f)
-
+            mapper = make_detector_to_cube(jdev, jdtype)
+            xxj, yyj = xx.to(jdev), yy.to(jdev)
+            xj, yj = xxj.to(jdtype), yyj.to(jdtype)
+            step_x = torch.where(xxj + 1 < raw_img.shape[1], 1, -1)
+            step_y = torch.where(yyj + 1 < raw_img.shape[0], 1, -1)
+            x0, y0, z0_ = mapper(xj, yj, xxj, yyj)
+            xp, yp, zp = mapper(xj + step_x.to(jdtype), yj, xxj + step_x, yyj)
+            xq, yq, zq = mapper(xj, yj + step_y.to(jdtype), xxj, yyj + step_y)
+            sx, sy = step_x.to(jdtype), step_y.to(jdtype)
+            jac = torch.stack(
+                [
+                    torch.stack([(xp - x0) / sx, (xq - x0) / sy]),
+                    torch.stack([(yp - y0) / sx, (yq - y0) / sy]),
+                    torch.stack([(zp - z0_) / sx, (zq - z0_) / sy]),
+                ]
+            ).to(
+                device=map_device, dtype=torch.float32
+            )  # (cube axis, detector axis, n)
+        xt, yt, zt = (v.to(torch.float32) for v in (xt, yt, zt))
         ok = torch.isfinite(xt) & torch.isfinite(yt) & torch.isfinite(zt)
         if not bool(ok.any()):
             continue
         xt, yt, zt, val_v, w_v = xt[ok], yt[ok], zt[ok], val_v[ok], w_v[ok]
+        if jac is not None:
+            jac = jac[..., ok]
+            finite_jac = torch.isfinite(jac).all(dim=(0, 1))
+            if not bool(finite_jac.all()):
+                # Footprints with a non-finite Jacobian are skipped, like non-finite centres.
+                xt, yt, zt = xt[finite_jac], yt[finite_jac], zt[finite_jac]
+                val_v, w_v = val_v[finite_jac], w_v[finite_jac]
+                jac = jac[..., finite_jac]
+                if xt.numel() == 0:
+                    continue
         obs_hit_mask = torch.zeros_like(flat_denom, dtype=torch.bool)
 
         if spectral_kernel == "nearest":
@@ -290,10 +346,15 @@ def _coadd_ifu_3d_cube(
                 else 1.0
             )
             if spectral_kernel == "drizzle":
-                # Exact box/voxel overlap; footprints are in output voxels.
-                x0, wxs = box_overlap_taps(xt, pf_xy)
-                y0, wys = box_overlap_taps(yt, pf_xy)
-                z0, wzs = box_overlap_taps(zt, pf_z)
+                # Exact box/voxel overlap.  The footprint is the detector pixel scaled by
+                # the local detector -> cube Jacobian: ``pixfrac`` (spatial) or
+                # ``spectral_pixfrac`` detector pixels times the length of each cube
+                # axis' row of the Jacobian, in output voxels.
+                assert jac is not None
+                row_len = torch.linalg.vector_norm(jac, dim=1).to(torch.float32)
+                x0, wxs = box_overlap_taps(xt, pf_xy * row_len[0])
+                y0, wys = box_overlap_taps(yt, pf_xy * row_len[1])
+                z0, wzs = box_overlap_taps(zt, pf_z * row_len[2])
             else:
                 # Trilinear splat.
                 x0, y0, z0 = (torch.floor(v).to(torch.int64) for v in (xt, yt, zt))

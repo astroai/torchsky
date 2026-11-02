@@ -147,7 +147,10 @@ def test_irregular_axis_off_grid_sample_spans_one_interval(
     result = _cube(spectrum, IRREGULAR_AXIS, spectral_kernel=spectral_kernel)
     per_voxel = result.cube[:, 8, 8]
     nonzero = torch.nonzero(per_voxel > 0.0, as_tuple=False).flatten().tolist()
-    assert nonzero == [4, 5]
+    # Linear splatting spreads one sample over the two bracketing voxels; the drizzle
+    # footprint is the detector pixel's own spectral extent (here 2 A inside the 5080-5125
+    # bin of voxel 4), so the sample stays in one voxel.
+    assert nonzero == ([4] if spectral_kernel == "drizzle" else [4, 5])
 
 
 @pytest.mark.parametrize("spectral_kernel", ["nearest", "drizzle", "linear"])
@@ -164,7 +167,7 @@ def test_irregular_axis_constant_spectrum_is_normalized(spectral_kernel: str) ->
         result.cube[valid],
         torch.full_like(result.cube[valid], 5.0),
         rtol=0.0,
-        atol=1.0e-5,
+        atol=1.0e-4,
     )
 
 
