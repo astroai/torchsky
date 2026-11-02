@@ -19,7 +19,7 @@ tests assert the important ones.
   Python/Torch kernels run with identical semantics and lower throughput. Set
   `TORCHSKY_DISABLE_CPP=1` to force the fallback when diagnosing a native crash;
   do not publish native performance numbers from such a run. See
-  [installation](../install.md).
+  [installation](../introduction/install.md).
 
 ## Coordinates and pixels
 
@@ -58,7 +58,7 @@ tests assert the important ones.
   (`var_poisson`, `var_rnoise`, `var_flat`) stay separate.
 - `ResampleConfig.spectral_kernel` defaults to `"linear"`; cube workflows also
   accept `"drizzle"`, `"emsm"`, `"msm"`, and `"nearest"`.
-- See [`torchsky.map`](map.md) and the [map guide](../map.md).
+- See [`torchsky.map`](map.md) and the [map guide](../maps/index.md).
 
 ## Quality and masks
 

@@ -2,11 +2,11 @@
 
 # `torchsky.transforms`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Display stretches, normalisation, cropping, and augmentation transforms.
 
-**Guides:** [encoders](../encoders.md)
+**Guides:** [encoders](../models/encoders.md)
 
 ---
 

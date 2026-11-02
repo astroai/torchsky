@@ -29,7 +29,7 @@ tensors, on whatever device you ask for.
     Tensor-native FITS WCS: analytic and distorted projections, SIP/TPV,
     spectral and time axes, frames, alignment, and compiled small-N paths.
 
-    [:octicons-arrow-right-24: WCS guide](wcs.md)
+    [:octicons-arrow-right-24: WCS guide](coordinates/index.md)
 
 -   :material-globe-model:{ .lg .middle } **Sphere and HEALPix**
 
@@ -38,7 +38,7 @@ tensors, on whatever device you ask for.
     HEALPix indexing, neighbours and interpolation, MOC, sparse maps, vector
     geometry, and harmonic transforms.
 
-    [:octicons-arrow-right-24: Sphere guide](sphere.md)
+    [:octicons-arrow-right-24: Sphere guide](sphere/index.md)
 
 -   :material-image-filter-center-focus:{ .lg .middle } **Mapmaking**
 
@@ -47,7 +47,7 @@ tensors, on whatever device you ask for.
     Plan target grids, project exposures, coadd images, spectral cubes, and
     HEALPix maps with explicit value semantics and memory bounds.
 
-    [:octicons-arrow-right-24: Map guide](map.md)
+    [:octicons-arrow-right-24: Map guide](maps/index.md)
 
 -   :material-math-integral:{ .lg .middle } **Fields and scenes**
 
@@ -56,7 +56,7 @@ tensors, on whatever device you ask for.
     Composable observation operators, differentiable field models, rendering,
     and calibration-set fitting behind an experimental facade.
 
-    [:octicons-arrow-right-24: Field guide](field.md)
+    [:octicons-arrow-right-24: Field guide](models/fields.md)
 
 </div>
 
@@ -206,37 +206,37 @@ tensors, on whatever device you ask for.
 
     ---
 
-    [Install](install.md) · [Quick start](quickstart.md) ·
-    [Concepts](concepts.md) · [Examples](examples.md)
+    [Install](introduction/install.md) · [Quick start](introduction/quickstart.md) ·
+    [Concepts](introduction/concepts.md) · [Examples](examples/index.md)
 
 -   **User guide**
 
     ---
 
-    [WCS](wcs.md) · [Sphere](sphere.md) · [Catalogs](catalogs.md) ·
-    [Coadds](map.md) · [Spectra](spectral.md) · [Fields](field.md)
+    [WCS](coordinates/index.md) · [Sphere](sphere/index.md) · [Catalogs](catalogs/index.md) ·
+    [Coadds](maps/index.md) · [Spectra](spectra/index.md) · [Fields](models/fields.md)
 
 -   **Performance**
 
     ---
 
-    [Highlights](evaluation/highlights.md) ·
-    [Scaling and tuning](evaluation/scaling.md) ·
-    [Parity evidence](evaluation/parity.md)
+    [Highlights](performance/highlights.md) ·
+    [Scaling and tuning](performance/scaling.md) ·
+    [Parity evidence](performance/parity.md)
 
 -   **Project**
 
     ---
 
-    [API reference](reference/index.md) · [Changelog](changelog.md) ·
-    [Roadmap](roadmap.md) · [Contributing](contributing.md)
+    [API reference](reference/index.md) · [Changelog](project/changelog.md) ·
+    [Roadmap](project/roadmap.md) · [Contributing](project/contributing.md)
 
 </div>
 
 ---
 
 torchsky 0.5.0rc1 is a GitHub pre-release (not on PyPI until 0.5.0);
-[Install](install.md) covers source builds. Coming from Astropy, healpy, or
-reproject? See [the porting guide](coming-from.md).
+[Install](introduction/install.md) covers source builds. Coming from Astropy, healpy, or
+reproject? See [the porting guide](introduction/coming-from.md).
 
 </div>

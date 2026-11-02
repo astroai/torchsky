@@ -3,7 +3,7 @@
 Thanks for your interest. torchsky is a torch-native astronomy stack (WCS,
 HEALPix, mapmaking, observation operators, field models). Please read the
 [Code of Conduct](CODE_OF_CONDUCT.md) first. The full guide is
-[docs/contributing.md](docs/contributing.md); repository policy for coding
+[docs/project/contributing.md](docs/project/contributing.md); repository policy for coding
 agents and maintainers is in [AGENTS.md](AGENTS.md).
 
 ## Setup
@@ -46,6 +46,6 @@ Run the targeted tests for what you changed; CI runs the full suite.
   and `docs/api-manifest.json` (`pixi run api-manifest`).
 - Keep FITS I/O in [torchfits](https://github.com/astroai/torchfits); never
   import `astropy.io.fits` or `fitsio`.
-- Add a line to `docs/changelog.md` for user-visible changes.
+- Add a line to `docs/project/changelog.md` for user-visible changes.
 
-Maintainers: see [docs/release.md](docs/release.md) for releases.
+Maintainers: see [docs/project/release.md](docs/project/release.md) for releases.

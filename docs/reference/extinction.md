@@ -2,11 +2,11 @@
 
 # `torchsky.extinction`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Milky Way dust laws (CCM89 / O'Donnell94) on torch tensors.
 
-**Guides:** [extinction](../extinction.md), [spectral](../spectral.md)
+**Guides:** [extinction](../spectra/extinction.md), [spectral-axes](../spectra/spectral-axes.md)
 
 ---
 

@@ -2,11 +2,11 @@
 
 # `torchsky.spectral`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Spectral and data cube support for torchsky.
 
-**Guides:** [spectral](../spectral.md)
+**Guides:** [spectral-axes](../spectra/spectral-axes.md)
 
 ---
 

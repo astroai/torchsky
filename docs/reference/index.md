@@ -10,22 +10,22 @@ reference pages carry the contracts.
 
 | Goal | Entry point | Guide |
 |---|---|---|
-| Transform pixels and sky coordinates | [`torchsky.wcs.WCS`](wcs.md#torchsky.wcs.WCS) | [wcs](../wcs.md) |
-| Use catalog frames and space motion | [`torchsky.coords.transform`](coords.md#torchsky.coords.transform) | [coordinates](../coordinates.md) |
-| Crossmatch catalogs at scale | [`torchsky.catalogs.crossmatch_sky`](catalogs.md#torchsky.catalogs.crossmatch_sky) | [catalogs](../catalogs.md) |
-| HEALPix indexing, queries, regions, MOC | [`torchsky.sphere.ang2pix`](sphere.md#torchsky.sphere.ang2pix) | [sphere](../sphere.md) |
-| Spherical harmonic transforms | [`torchsky.sphere.anafast`](sphere.md#torchsky.sphere.anafast) | [sht](../sht.md) |
-| Plan and coadd images | [`torchsky.map.coadd`](map.md#torchsky.map.coadd) | [map](../map.md) |
-| Build spectral cubes | [`torchsky.map.coadd_cube`](map.md#torchsky.map.coadd_cube) | [cubes](../cubes.md) |
-| Compose scenes and operator bundles | [`torchsky.scene.render`](scene.md#torchsky.scene.render) | [scene](../scene.md) |
-| Fit continuous field models | [`torchsky.field.fit`](field.md#torchsky.field.fit) | [field](../field.md) |
-| Spectral axes, cubes, Doppler shifts | [`torchsky.spectral.SpectralAxis`](spectral.md#torchsky.spectral.SpectralAxis) | [spectral](../spectral.md) |
-| Synthetic photometry and dust laws | [`torchsky.spectrophotometry.synthetic_photometry`](spectrophotometry.md#torchsky.spectrophotometry.synthetic_photometry) | [spectrophotometry](../spectrophotometry.md) |
-| FLRW distances and AP scaling | [`torchsky.cosmology.comoving_distance`](cosmology.md#torchsky.cosmology.comoving_distance) | [cosmology](../cosmology.md) |
-| Display and training transforms | [`torchsky.transforms.Compose`](transforms.md#torchsky.transforms.Compose) | [encoders](../encoders.md) |
-| Quality and inverse-variance contracts | [`torchsky.quality.build_weight_product`](quality.md#torchsky.quality.build_weight_product) | [map](../map.md) |
-| Native likelihood and forced photometry | [`torchsky.map.likelihood.GaussianLikelihoodFactor`](map-likelihood.md#torchsky.map.likelihood.GaussianLikelihoodFactor) | [native-likelihood](../native-likelihood.md) |
-| Browser viewer | [`torchsky.viz.serve`](viz.md#torchsky.viz.serve) | [viz](../viz.md) |
+| Transform pixels and sky coordinates | [`torchsky.wcs.WCS`](wcs.md#torchsky.wcs.WCS) | [coordinates](../coordinates/index.md) |
+| Use catalog frames and space motion | [`torchsky.coords.transform`](coords.md#torchsky.coords.transform) | [frames](../coordinates/frames.md) |
+| Crossmatch catalogs at scale | [`torchsky.catalogs.crossmatch_sky`](catalogs.md#torchsky.catalogs.crossmatch_sky) | [crossmatch](../catalogs/crossmatch.md) |
+| HEALPix indexing, queries, regions, MOC | [`torchsky.sphere.ang2pix`](sphere.md#torchsky.sphere.ang2pix) | [healpix](../sphere/healpix.md) |
+| Spherical harmonic transforms | [`torchsky.sphere.anafast`](sphere.md#torchsky.sphere.anafast) | [sht](../sphere/sht.md) |
+| Plan and coadd images | [`torchsky.map.coadd`](map.md#torchsky.map.coadd) | [coadds](../maps/coadds.md) |
+| Build spectral cubes | [`torchsky.map.coadd_cube`](map.md#torchsky.map.coadd_cube) | [cubes](../maps/cubes.md) |
+| Compose scenes and operator bundles | [`torchsky.scene.render`](scene.md#torchsky.scene.render) | [scenes](../models/scenes.md) |
+| Fit continuous field models | [`torchsky.field.fit`](field.md#torchsky.field.fit) | [fields](../models/fields.md) |
+| Spectral axes, cubes, Doppler shifts | [`torchsky.spectral.SpectralAxis`](spectral.md#torchsky.spectral.SpectralAxis) | [spectral-axes](../spectra/spectral-axes.md) |
+| Synthetic photometry and dust laws | [`torchsky.spectrophotometry.synthetic_photometry`](spectrophotometry.md#torchsky.spectrophotometry.synthetic_photometry) | [photometry](../spectra/photometry.md) |
+| FLRW distances and AP scaling | [`torchsky.cosmology.comoving_distance`](cosmology.md#torchsky.cosmology.comoving_distance) | [cosmology](../spectra/cosmology.md) |
+| Display and training transforms | [`torchsky.transforms.Compose`](transforms.md#torchsky.transforms.Compose) | [encoders](../models/encoders.md) |
+| Quality and inverse-variance contracts | [`torchsky.quality.build_weight_product`](quality.md#torchsky.quality.build_weight_product) | [coadds](../maps/coadds.md) |
+| Native likelihood and forced photometry | [`torchsky.map.likelihood.GaussianLikelihoodFactor`](map-likelihood.md#torchsky.map.likelihood.GaussianLikelihoodFactor) | [likelihoods](../models/likelihoods.md) |
+| Browser viewer | [`torchsky.viz.serve`](viz.md#torchsky.viz.serve) | [viz](../introduction/viz.md) |
 
 ## Namespaces
 
@@ -75,4 +75,4 @@ reference pages carry the contracts.
 Every public name in these namespaces is listed exactly once. The
 `api-manifest.json` artifact is the frozen name-level contract checked in CI.
 
-See also: [errors and exceptions](exceptions.md), [runtime contract](runtime-contract.md), and [concepts](../concepts.md).
+See also: [errors and exceptions](exceptions.md), [runtime contract](runtime-contract.md), and [concepts](../introduction/concepts.md).

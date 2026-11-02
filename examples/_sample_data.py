@@ -250,7 +250,9 @@ def fetch_sample(
     last: Exception | None = None
     for attempt in range(DOWNLOAD_ATTEMPTS):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "torchsky-examples"})
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "torchsky-examples"}
+            )
             with urllib.request.urlopen(req, timeout=CONNECT_TIMEOUT_S) as response:  # noqa: S310 - registry URLs
                 with tmp.open("wb") as fh:
                     shutil.copyfileobj(response, fh)

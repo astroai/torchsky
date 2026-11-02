@@ -59,7 +59,12 @@ def _registry(url, **over):
 
 
 def test_builtin_registry_is_well_formed(sd):
-    assert {"horsehead", "sdss_spectrum", "cadc_megapipe_cutout", "manga_logcube"} <= set(sd.SAMPLES)
+    assert {
+        "horsehead",
+        "sdss_spectrum",
+        "cadc_megapipe_cutout",
+        "manga_logcube",
+    } <= set(sd.SAMPLES)
     for name, spec in sd.SAMPLES.items():
         assert spec["url"].startswith(("http://", "https://")), name
         assert spec["magic"] and spec["description"] and spec["license"], name
@@ -85,7 +90,9 @@ def test_download_then_cache_hit(sd, server):
 def test_file_url_supported(sd, tmp_path):
     src = tmp_path / "src.fits"
     src.write_bytes(PAYLOAD)
-    assert sd.fetch_sample("t", registry=_registry(src.as_uri())).read_bytes() == PAYLOAD
+    assert (
+        sd.fetch_sample("t", registry=_registry(src.as_uri())).read_bytes() == PAYLOAD
+    )
 
 
 def test_corrupt_cache_is_evicted_and_refetched(sd, server):
@@ -156,12 +163,16 @@ def test_tap_cone_count_check_and_manifest(sd, monkeypatch):
         return b"source_id,ra,dec\n1,10.0,5.0\n2,10.1,5.1\n3,10.2,5.2\n"
 
     monkeypatch.setattr(tap, "_post_csv", fake_post)
-    table = tap.fetch_cone("gaia_dr3", 10.0, 5.0, 0.1, columns=("source_id", "ra", "dec"))
+    table = tap.fetch_cone(
+        "gaia_dr3", 10.0, 5.0, 0.1, columns=("source_id", "ra", "dec")
+    )
     assert table.num_rows == 3 and len(calls) == 2
     manifest = tap._read_manifest()
     (entry,) = manifest.values()
     assert entry["rows"] == 3 and len(entry["sha256"]) == 64
-    again = tap.fetch_cone("gaia_dr3", 10.0, 5.0, 0.1, columns=("source_id", "ra", "dec"))
+    again = tap.fetch_cone(
+        "gaia_dr3", 10.0, 5.0, 0.1, columns=("source_id", "ra", "dec")
+    )
     assert again.num_rows == 3 and len(calls) == 2  # served from cache
     monkeypatch.setenv("TORCHSKY_EXAMPLE_FAST", "1")
     with pytest.raises(sd.SampleUnavailable):

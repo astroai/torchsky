@@ -9,7 +9,7 @@
 
 Exact moments for one linear, integrated photon-counting exposure.
 
-**Guides:** [native-likelihood](../native-likelihood.md)
+**Guides:** [likelihoods](../models/likelihoods.md)
 
 ---
 

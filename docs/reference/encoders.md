@@ -2,11 +2,11 @@
 
 # `torchsky.encoders`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Coordinate-aware encoders for implicit sky models.
 
-**Guides:** [encoders](../encoders.md)
+**Guides:** [encoders](../models/encoders.md)
 
 ---
 

@@ -9,7 +9,7 @@
 
 Small, fixed linear queries on native Gaussian likelihood factors.
 
-**Guides:** [native-likelihood](../native-likelihood.md)
+**Guides:** [likelihoods](../models/likelihoods.md)
 
 ---
 

@@ -10,7 +10,7 @@ copyright = "Copyright &copy; 2026 torchsky contributors"
 # Authoring inputs that live beside the pages but are not published.
 exclude_docs = """
 reference/_registry.toml
-evaluation/_benchmarks_template.md
+performance/_benchmarks_template.md
 data/tier1.txt
 """
 
@@ -25,39 +25,63 @@ extra_javascript = [
 
 nav = [
   {"Home" = "index.md"},
-  {"Get Started" = [
-    "install.md",
-    "quickstart.md",
-    "concepts.md",
-    "coming-from.md",
+  {"Introduction" = [
+    "introduction/index.md",
+    "introduction/install.md",
+    "introduction/quickstart.md",
+    "introduction/concepts.md",
+    "introduction/coming-from.md",
+    {"Tools" = ["introduction/cli.md", "introduction/viz.md"]},
   ]},
-  {"User Guide" = [
-    {"Coordinates and WCS" = ["wcs.md", "coordinates.md"]},
-    {"Sphere and HEALPix" = ["sphere.md", "moc-and-sparse.md", "sht.md"]},
-    "catalogs.md",
-    {"Mapmaking" = ["map.md", "healpix-maps.md", "cubes.md"]},
-    {"Spectra and Photometry" = [
-      "spectral.md",
-      "spectrophotometry.md",
-      "extinction.md",
-      "cosmology.md",
-    ]},
-    {"Fields and Forward Models (Experimental)" = [
-      "field.md",
-      "scene.md",
-      "native-likelihood.md",
-      "psf-response-conventions.md",
-      "encoders.md",
-    ]},
-    "cli.md",
-    "viz.md",
+  {"Coordinates and WCS" = [
+    "coordinates/index.md",
+    "coordinates/projections.md",
+    "coordinates/distortions.md",
+    "coordinates/frames.md",
+    "coordinates/observed-place.md",
   ]},
-  {"Examples" = ["examples.md", "gallery.md"]},
+  {"Celestial Sphere" = [
+    "sphere/index.md",
+    "sphere/healpix.md",
+    "sphere/moc.md",
+    "sphere/sht.md",
+    "sphere/sparse-maps.md",
+  ]},
+  {"Catalogs" = [
+    "catalogs/index.md",
+    "catalogs/crossmatch.md",
+    "catalogs/containers.md",
+  ]},
+  {"Images and Maps" = [
+    "maps/index.md",
+    "maps/resampling.md",
+    "maps/coadds.md",
+    "maps/cubes.md",
+    "maps/healpix-mapmaking.md",
+  ]},
+  {"Spectra and Photometry" = [
+    "spectra/index.md",
+    "spectra/spectral-axes.md",
+    "spectra/kinematics.md",
+    "spectra/photometry.md",
+    "spectra/extinction.md",
+    "spectra/cosmology.md",
+  ]},
+  {"Models (Experimental)" = [
+    "models/index.md",
+    "models/fields.md",
+    "models/scenes.md",
+    "models/likelihoods.md",
+    "models/psf-conventions.md",
+    "models/encoders.md",
+    "models/formulation.md",
+  ]},
+  {"Examples" = ["examples/index.md", "examples/gallery.md"]},
   {"Performance" = [
-    "evaluation/highlights.md",
-    "evaluation/scaling.md",
-    "evaluation/benchmarks.md",
-    "evaluation/parity.md",
+    "performance/highlights.md",
+    "performance/scaling.md",
+    "performance/benchmarks.md",
+    "performance/parity.md",
   ]},
   {"API Reference" = [
     "reference/index.md",
@@ -104,11 +128,10 @@ nav = [
     "reference/exceptions.md",
     "reference/runtime-contract.md",
   ]},
-  {"Background" = ["field-formulation.md"]},
   {"Project" = [
-    "changelog.md",
-    "roadmap.md",
-    {"Contributing" = ["contributing.md", "authoring.md", "release.md"]},
+    "project/changelog.md",
+    "project/roadmap.md",
+    {"Contributing" = ["project/contributing.md", "project/authoring.md", "project/release.md"]},
   ]},
 ]
 

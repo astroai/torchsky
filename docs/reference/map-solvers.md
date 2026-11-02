@@ -9,7 +9,7 @@
 
 Matrix-free linear solvers and bound observation operators for discrete inverse mapmaking: harmonic and T/E/B prior operators, operator composition, diagonal preconditioners, and spherical-harmonic solver hooks. Experimental: signatures may change between minor releases.
 
-**Guides:** [map](../map.md), [sht](../sht.md)
+**Guides:** [coadds](../maps/coadds.md), [sht](../sphere/sht.md)
 
 ---
 

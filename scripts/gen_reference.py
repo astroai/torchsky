@@ -50,7 +50,7 @@ MKDO_OPTIONS = (
 TIER_TEXT = {
     "core": (
         "**Stability: core.** Names on this page follow the deprecation policy in "
-        "[contributing](../contributing.md)."
+        "[contributing](../project/contributing.md)."
     ),
     "compatibility": (
         "**Stability: compatibility.** This page mirrors a familiar upstream API on "
@@ -125,6 +125,13 @@ def _resolve(namespace: str, names: list[str]) -> list[tuple[str, object]]:
     return resolved
 
 
+def _guide_label(target: str) -> str:
+    """Link text for a guide path; ``area/index.md`` is labelled by its area."""
+    path = Path(target)
+    name = path.parent.name if path.stem == "index" and path.parent.name else path.stem
+    return name.replace("_", " ")
+
+
 def _page_head(
     *,
     namespace: str,
@@ -140,8 +147,7 @@ def _page_head(
         lines.extend([intro, ""])
     if related:
         links = ", ".join(
-            f"[{Path(target).stem.replace('_', ' ')}](../{target})"
-            for target in related
+            f"[{_guide_label(target)}](../{target})" for target in related
         )
         lines.extend([f"**Guides:** {links}", ""])
     lines.extend(["---", "", body_intro, ""])
@@ -436,7 +442,7 @@ def _render_index(
         entry = row["entry"]
         lines.append(
             f"| {row['goal']} | [`{entry}`]({row['page']}.md#{entry}) | "
-            f"[{Path(row['guide']).stem}](../{row['guide']}) |"
+            f"[{_guide_label(row['guide'])}](../{row['guide']}) |"
         )
     lines.extend(
         [
@@ -477,7 +483,7 @@ def _render_index(
             "`api-manifest.json` artifact is the frozen name-level contract checked in CI.",
             "",
             "See also: [errors and exceptions](exceptions.md), "
-            "[runtime contract](runtime-contract.md), and [concepts](../concepts.md).",
+            "[runtime contract](runtime-contract.md), and [concepts](../introduction/concepts.md).",
             "",
         ]
     )

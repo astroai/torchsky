@@ -2,11 +2,11 @@
 
 # `torchsky.spectrophotometry`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Unit-explicit passbands and deterministic synthetic photometry.
 
-**Guides:** [spectrophotometry](../spectrophotometry.md), [spectral](../spectral.md)
+**Guides:** [photometry](../spectra/photometry.md), [spectral-axes](../spectra/spectral-axes.md)
 
 ---
 

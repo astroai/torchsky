@@ -29,7 +29,7 @@ pip install .
 ```
 
 torchsky supports Python 3.12 to 3.14 with PyTorch 2.14. The
-[installation guide](https://astroai.github.io/torchsky/install/) covers CUDA,
+[installation guide](https://astroai.github.io/torchsky/introduction/install/) covers CUDA,
 Pixi, and troubleshooting.
 
 ## Quick start
@@ -73,17 +73,17 @@ Lanczos-3 coadd takes 14.3 s on 8 CPU threads and 5.2 s on a GPU slice, against
 30.1 s for SWarp. Its drizzle matches STScI drizzle to better than 2e-6 sigma. A
 280-CCD UNIONS tile coadd fell from 2292 s to 711 s on CPU. Hardware, versions,
 and evidence are on the
-[performance highlights](https://astroai.github.io/torchsky/evaluation/highlights/)
+[performance highlights](https://astroai.github.io/torchsky/performance/highlights/)
 page.
 
 ## Documentation
 
-- [Quick start](https://astroai.github.io/torchsky/quickstart/) and
+- [Quick start](https://astroai.github.io/torchsky/introduction/quickstart/) and
   [examples](https://astroai.github.io/torchsky/examples/)
 - [User guide and API reference](https://github.com/astroai/torchsky/blob/main/docs/index.md)
   (rendered at [astroai.github.io/torchsky](https://astroai.github.io/torchsky/))
-- [Coming from Astropy, healpy, or reproject](https://astroai.github.io/torchsky/coming-from/)
-- [Changelog](https://astroai.github.io/torchsky/changelog/)
+- [Coming from Astropy, healpy, or reproject](https://astroai.github.io/torchsky/introduction/coming-from/)
+- [Changelog](https://astroai.github.io/torchsky/project/changelog/)
 
 ## Contributing
 

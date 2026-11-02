@@ -105,7 +105,7 @@ class DetectorToSkyTransform(Protocol):
 
 @dataclass(frozen=True)
 class ForwardContext:
-    """Exposure / instrument context ``c`` (see ``docs/field.md``).
+    """Exposure / instrument context ``c`` (see ``docs/models/fields.md``).
 
     Rendering passes this to ``nn.Module.forward`` or ``render_bandpass`` **only when**
     the model declares a ``forward_context`` keyword parameter. Otherwise it is ignored

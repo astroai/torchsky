@@ -46,7 +46,13 @@ SERVICES: dict[str, tuple[str, str, str, str]] = {
 }
 DEFAULT_COLUMNS: dict[str, tuple[str, ...]] = {
     "gaia_dr3": (
-        "source_id", "ra", "dec", "parallax", "pmra", "pmdec", "phot_g_mean_mag",
+        "source_id",
+        "ra",
+        "dec",
+        "parallax",
+        "pmra",
+        "pmdec",
+        "phot_g_mean_mag",
     ),
     "twomass": ("designation", "ra", "dec", "j_m", "h_m", "k_m"),
     "allwise": ("designation", "ra", "dec", "w1mpro", "w2mpro"),
@@ -139,7 +145,9 @@ def fetch_cone(
             f"TAP cone {service} ({ra}, {dec}, r={radius_deg}) is not cached and "
             "downloads are disabled (TORCHSKY_EXAMPLE_FAST)"
         )
-    n_expected = int(next(csv.DictReader(io.StringIO(_post_csv(url, count).decode())))["n"])
+    n_expected = int(
+        next(csv.DictReader(io.StringIO(_post_csv(url, count).decode())))["n"]
+    )
     body = _post_csv(url, select)
     table_ = pacsv.read_csv(io.BytesIO(body))
     if table_.num_rows != n_expected:

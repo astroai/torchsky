@@ -9,7 +9,7 @@
 
 Continuous-position pixel-integrated responses and Gaussian stamp profiling.
 
-**Guides:** [psf-response-conventions](../psf-response-conventions.md)
+**Guides:** [psf-conventions](../models/psf-conventions.md)
 
 ---
 

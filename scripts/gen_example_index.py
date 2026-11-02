@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ``docs/examples.md``, the curated example gallery.
+"""Generate ``docs/examples/index.md``, the curated example gallery.
 
 Examples are grouped by science scenario (``SCENARIOS`` below). Descriptions and
 runtimes come from each script's docstring (first line and the sentence
@@ -27,7 +27,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "examples"
 DOCS = ROOT / "docs"
-PAGE = DOCS / "examples.md"
+PAGE = DOCS / "examples" / "index.md"
 OUTPUTS = DOCS / "assets" / "example-output"
 THUMBS = DOCS / "assets" / "gallery" / "examples"
 GITHUB = "https://github.com/astroai/torchsky/blob/main/examples"
@@ -174,7 +174,7 @@ def render() -> str:
             summary, runtime = _docstring(path)
             lines.extend([f"### {title}", ""])
             if (THUMBS / f"{name}.png").is_file():
-                lines.extend([f"![{title}](assets/gallery/examples/{name}.png)", ""])
+                lines.extend([f"![{title}](../assets/gallery/examples/{name}.png)", ""])
             text = f"{summary}."
             if runtime:
                 text += f" *Runtime: {runtime}.*"
@@ -182,7 +182,7 @@ def render() -> str:
             lines.extend(
                 [
                     f"Script: [`examples/{name}.py`]({GITHUB}/{name}.py)"
-                    f" · [site copy](published-examples/{name}.py)",
+                    f" · [site copy](../published-examples/{name}.py)",
                     "",
                 ]
             )
@@ -196,7 +196,7 @@ def render() -> str:
             "- [`examples/applications/catalogue_photoz.py`]"
             "(https://github.com/astroai/torchsky/blob/main/examples/applications/catalogue_photoz.py):"
             " a CLI photometric-redshift pilot that needs an external catalogue and checkpoint;"
-            " it is not part of the smoke gate. See [Encoders and ML](encoders.md).",
+            " it is not part of the smoke gate. See [Encoders and ML](../models/encoders.md).",
             "- [Synthetic field fit](https://github.com/astroai/torchsky-harness/blob/main/notebooks/01_field_fit_synthetic.ipynb)",
             "- [Multiband hyperspectral reconstruction](https://github.com/astroai/torchsky-harness/blob/main/notebooks/02_multiband_hyperspectral_synthetic.ipynb)",
             "- [SMACS0723 real-data mini-cutout](https://github.com/astroai/torchsky-harness/blob/main/notebooks/03_smacs0723_real_minicutout.ipynb)",
@@ -270,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     text = render()
     if args.check:
         if not PAGE.is_file() or PAGE.read_text(encoding="utf-8") != text:
-            print("docs/examples.md is stale; run `pixi run docs-examples`.")
+            print("docs/examples/index.md is stale; run `pixi run docs-examples`.")
             return 1
         print("Example index is current.")
         return 0

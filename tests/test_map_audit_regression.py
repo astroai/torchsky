@@ -148,7 +148,7 @@ def test_cube_drizzle_pixfrac_exact_box_overlap(pixfrac):
 
 
 def test_coadd_cube_accepts_cube_target_for_ifu_frames():
-    """The IFU recipe in docs/cubes.md: Observation(ifu_wcs=...) + CubeTarget."""
+    """The IFU recipe in docs/maps/cubes.md: Observation(ifu_wcs=...) + CubeTarget."""
     from torchsky.map import CubeTarget, Observation, ResampleConfig, coadd_cube
     from torchsky.wcs import WCS
     from torchsky.wcs.gwcs_sampling import IFUSliceWCS

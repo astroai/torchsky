@@ -2,11 +2,11 @@
 
 # `torchsky.map`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Lean mapmaking facade.
 
-**Guides:** [map](../map.md), [cubes](../cubes.md), [healpix-maps](../healpix-maps.md)
+**Guides:** [coadds](../maps/coadds.md), [cubes](../maps/cubes.md), [healpix-mapmaking](../maps/healpix-mapmaking.md)
 
 ---
 

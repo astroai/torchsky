@@ -2,11 +2,11 @@
 
 # `torchsky.log_lambda`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Unit-integral Gaussian convolution on a uniformly spaced ln λ grid.
 
-**Guides:** [spectral](../spectral.md)
+**Guides:** [spectral-axes](../spectra/spectral-axes.md)
 
 ---
 

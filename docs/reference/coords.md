@@ -2,11 +2,11 @@
 
 # `torchsky.coords`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Sky geometry facade. Kernels live in `torchsky.wcs`.
 
-**Guides:** [coordinates](../coordinates.md), [wcs](../wcs.md)
+**Guides:** [frames](../coordinates/frames.md), [coordinates](../coordinates/index.md)
 
 ---
 

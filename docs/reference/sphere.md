@@ -2,11 +2,11 @@
 
 # `torchsky.sphere`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Torch-native spherical geometry plus healpy-shaped HEALPix compatibility APIs.
 
-**Guides:** [sphere](../sphere.md), [sht](../sht.md), [moc-and-sparse](../moc-and-sparse.md)
+**Guides:** [healpix](../sphere/healpix.md), [sht](../sphere/sht.md), [moc](../sphere/moc.md)
 
 ---
 

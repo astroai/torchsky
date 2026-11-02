@@ -2,11 +2,11 @@
 
 # `torchsky.redshift`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Sample-wise redshift, velocity kinds, and named spectral dimming.
 
-**Guides:** [spectral](../spectral.md)
+**Guides:** [spectral-axes](../spectra/spectral-axes.md)
 
 ---
 

@@ -24,32 +24,32 @@ REQUIRED_TASKS: Mapping[str, tuple[str, ...]] = {
 }
 
 REQUIRED_FILES = (
-    "docs/concepts.md",
-    "docs/evaluation/benchmarks.md",
-    "docs/map.md",
-    "docs/field.md",
-    "docs/scene.md",
-    "docs/native-likelihood.md",
-    "docs/field-formulation.md",
+    "docs/introduction/concepts.md",
+    "docs/performance/benchmarks.md",
+    "docs/maps/index.md",
+    "docs/models/fields.md",
+    "docs/models/scenes.md",
+    "docs/models/likelihoods.md",
+    "docs/models/formulation.md",
 )
 
 DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
-    "docs/evaluation/benchmarks.md": (
+    "docs/performance/benchmarks.md": (
         "torchsky-harness",
         "Torchsky retains production implementations",
     ),
-    "docs/map.md": (
+    "docs/maps/index.md": (
         "ObservationOperatorBundle",
         "LearnedInstrumentOperator",
         "ConstrainedKernelPSF",
     ),
-    "docs/field.md": (
+    "docs/models/fields.md": (
         "field.fit",
         "field.render",
         "field.sample",
         "operator_constrained",
     ),
-    "docs/concepts.md": ("scene", "world", "io"),
+    "docs/introduction/concepts.md": ("scene", "world", "io"),
 }
 
 REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {

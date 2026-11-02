@@ -1,4 +1,4 @@
-"""Extract the release-notes body for one version from docs/changelog.md.
+"""Extract the release-notes body for one version from docs/project/changelog.md.
 
 Used by .github/workflows/build_wheels.yml (github_release job) so the
 GitHub Release page carries the curated changelog section instead of only
@@ -20,7 +20,7 @@ import re
 import sys
 from pathlib import Path
 
-CHANGELOG = Path(__file__).resolve().parents[1] / "docs" / "changelog.md"
+CHANGELOG = Path(__file__).resolve().parents[1] / "docs" / "project" / "changelog.md"
 
 
 def _section(text: str, heading_re: str) -> str | None:
@@ -63,10 +63,10 @@ def main(argv: list[str] | None = None) -> int:
 
     label, body = extract(CHANGELOG.read_text(encoding="utf-8"), args.version)
     header = (
-        f"<!-- sourced from docs/changelog.md section [{args.version}] "
+        f"<!-- sourced from docs/project/changelog.md section [{args.version}] "
         f"(found: {label}; fallback) -->\n"
         if label == "Unreleased"
-        else f"<!-- sourced from docs/changelog.md section [{args.version}] -->\n"
+        else f"<!-- sourced from docs/project/changelog.md section [{args.version}] -->\n"
     )
     payload = header + body + "\n"
     if args.out:

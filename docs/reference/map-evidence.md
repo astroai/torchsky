@@ -9,7 +9,7 @@
 
 Declared fixed-model dependencies, without tensor copies or content hashes.
 
-**Guides:** [native-likelihood](../native-likelihood.md)
+**Guides:** [likelihoods](../models/likelihoods.md)
 
 ---
 

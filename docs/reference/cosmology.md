@@ -2,11 +2,11 @@
 
 # `torchsky.cosmology`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Differentiable FLRW distance and protected geometry primitives.
 
-**Guides:** [cosmology](../cosmology.md), [spectral](../spectral.md)
+**Guides:** [cosmology](../spectra/cosmology.md), [spectral-axes](../spectra/spectral-axes.md)
 
 ---
 

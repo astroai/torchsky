@@ -9,7 +9,7 @@
 
 torchsky.viz — astronomy visualization: browser server and slide figures.
 
-**Guides:** [viz](../viz.md), [cli](../cli.md)
+**Guides:** [viz](../introduction/viz.md), [cli](../introduction/cli.md)
 
 ---
 
