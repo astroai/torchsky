@@ -7,10 +7,8 @@ documented in ``docs/compatibility.md``; healpy-shaped entry points live in
 
 from . import compat
 from .core import (
-    chord_radius,
     fit_monopole_dipole,
     great_circle_distance,
-    interpolate_wavelength_axis,
     lonlat_to_unit_xyz,
     pairwise_angular_distance,
     remove_monopole_dipole,
@@ -221,13 +219,11 @@ __all__ = [
     "sample_healpix_map",
     "sample_multiband_healpix",
     "sample_multiwavelength_healpix",
-    "interpolate_wavelength_axis",
     "lonlat_to_unit_xyz",
     "unit_xyz_to_lonlat",
     "wrap_longitude",
     "great_circle_distance",
     "pairwise_angular_distance",
-    "chord_radius",
     "slerp_lonlat",
     "fit_monopole_dipole",
     "remove_monopole_dipole",

@@ -54,7 +54,7 @@ def unit_xyz_to_lonlat(
     return wrap_longitude(lon, center_deg=wrap_center_deg), lat
 
 
-def chord_radius(angle_rad: Tensor | float) -> Tensor:
+def _chord_radius(angle_rad: Tensor | float) -> Tensor:
     """Unit-sphere Euclidean chord length ``2 * sin(theta / 2)``.
 
     A Euclidean ball of this radius on unit vectors is exactly the spherical
@@ -246,7 +246,7 @@ def sample_multiband_healpix(
     )
 
 
-def interpolate_wavelength_axis(
+def _interpolate_wavelength_axis(
     values: Tensor,
     source_wavelength: Tensor | list[float],
     target_wavelength: Tensor | list[float],
@@ -324,7 +324,7 @@ def sample_multiwavelength_healpix(
     lat_t = _as_float_tensor(lat_deg)
     coord_ndim = torch.broadcast_tensors(lon_t, lat_t)[0].ndim
     spectral_axis = sampled.ndim - coord_ndim - 1
-    return interpolate_wavelength_axis(
+    return _interpolate_wavelength_axis(
         sampled,
         source_wavelength=source_wavelength,
         target_wavelength=target_wavelength,
@@ -453,10 +453,8 @@ def sample_map(
 
 
 __all__ = [
-    "chord_radius",
     "fit_monopole_dipole",
     "great_circle_distance",
-    "interpolate_wavelength_axis",
     "lonlat_to_unit_xyz",
     "pairwise_angular_distance",
     "remove_monopole_dipole",

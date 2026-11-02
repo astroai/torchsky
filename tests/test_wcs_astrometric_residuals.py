@@ -10,7 +10,6 @@ from torchsky.wcs import (
     AstrometricResidualLadder,
     BayesianModeState,
     CorrectionEnvelope,
-    ExperimentalConditionalResidual,
     ResidualComponentInput,
     ResidualModeDesign,
     ResidualSupport,
@@ -20,8 +19,11 @@ from torchsky.wcs import (
     fit_sparse_gp_residual,
     interpretable_residual_modes,
     predict_bayesian_modes,
-    shadow_update_bayesian_modes,
     update_bayesian_modes,
+)
+from torchsky.wcs.residuals import (
+    ExperimentalConditionalResidual,
+    shadow_update_bayesian_modes,
 )
 
 

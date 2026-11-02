@@ -95,13 +95,9 @@ pixels and cached parameters are on CPU.
 Identity TPV uses `PV1_1=1` and `PV2_1=1` (axis 2 is swapped: `PV2_1` is the
 linear `v` term). A header with `PV2_2=1` and no `PV2_1` is rank-deficient;
 inverse is then a particular solution, not a unique preimage.
-Low-level callers can invoke the fused kernels directly through
-`torchsky.wcs.pixel_to_world_fused` and `torchsky.wcs.world_to_pixel_fused`.
-They take the cached projection/rotation scalars plus optional TPV coefficient
-tensors, run through the same dispatcher contracts as `WCS.pixel_to_world` /
-`WCS.world_to_pixel`, and return NaNs for invalid projection domains or
-singular inverses instead of raising. Most users should keep to the `WCS`
-methods; these functions exist for compiled and batched call sites.
+The fused kernels are internal: `WCS.pixel_to_world` and `WCS.world_to_pixel`
+run through the same dispatcher, return NaNs for invalid projection domains or
+singular inverses instead of raising, and are the supported entry points.
 
 
 Air wavelengths (`AWAV`, `FREQ-GRA`) use the WCSLIB Edlén form so spectral

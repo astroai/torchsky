@@ -103,7 +103,6 @@ namespace `torchsky.field` unless the group text says otherwise.
         - field_observations_from_bin_centers
         - field_observations_from_bin_edges
         - field_observations_from_ifu_cube
-        - ifu_cube_spectral_to_leading
         - make_tangent_plane_header
       heading_level: 3
       show_root_heading: false
@@ -184,9 +183,9 @@ namespace `torchsky.field` unless the group text says otherwise.
     options:
       members:
         - Domain
+        - FieldObservation
         - FitResult
         - ForwardContext
-        - Observation
         - PSFSpec
         - SpectralDataBudget
         - SpectralModelCapacityHints

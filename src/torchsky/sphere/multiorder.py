@@ -15,6 +15,12 @@ from .sparse import SparseHealpixMap
 
 @runtime_checkable
 class UniqValueMapProtocol(Protocol):
+    """Typing protocol for ``mhealpy``-style maps (``uniq`` and ``data``).
+
+    Accepted by :meth:`MultiOrderHealpixMap.from_mhealpy`; not meant to be
+    subclassed or instantiated.
+    """
+
     @property
     def uniq(self) -> Any: ...
 

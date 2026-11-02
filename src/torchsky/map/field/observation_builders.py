@@ -56,7 +56,7 @@ def make_tangent_plane_header(
     }
 
 
-def ifu_cube_spectral_to_leading(datacube: Tensor, *, spectral_axis: int = 0) -> Tensor:
+def _ifu_cube_spectral_to_leading(datacube: Tensor, *, spectral_axis: int = 0) -> Tensor:
     """Move the spectral axis to index 0 so the tensor is ``(L, H, W)``."""
     return datacube.movedim(int(spectral_axis), 0)
 
@@ -431,7 +431,7 @@ def field_observations_from_ifu_cube(
     After moving that axis to the front, the array must be exactly ``(L, H, W)``.
     For a batch of cubes, slice to one field before calling.
     """
-    cube = ifu_cube_spectral_to_leading(datacube, spectral_axis=spectral_axis)
+    cube = _ifu_cube_spectral_to_leading(datacube, spectral_axis=spectral_axis)
     if cube.ndim != 3:
         raise ValueError(
             "datacube with spectral_axis moved to 0 must be 3D (L, H, W); "

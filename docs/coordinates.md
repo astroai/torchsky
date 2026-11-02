@@ -30,7 +30,7 @@ never runs unless Earth orientation is supplied.
   as SOFA `pnm06a`). Stellar aberration is Keplerian Earth barycentric velocity and
   is off unless requested. Saemundsson/Meeus refraction is off unless
   `refraction=True` with `site.pressure_mbar` and `site.temperature_c`.
-  `icrs_to_itrs_xyz` returns unit ITRS directions. IERS values are never
+  IERS values are never
   inferred. Site `height_m` is WGS84 ellipsoidal height (metres); it does not
   change stellar (infinite-distance) azimuth and altitude.
 - Thin façade: `torchsky.wcs.transform(lon, lat, from_frame=..., to_frame=...)`

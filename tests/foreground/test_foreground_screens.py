@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from torchsky.foreground import (
+from torchsky._foreground import (
     DIB_REST_ANGSTROM,
     a_v_at_distance,
     apply_dib_transmission,

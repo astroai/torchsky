@@ -11,8 +11,6 @@ Use this namespace for:
 - `scene.ProductSpec` and `scene.BandpassSpec`
 - `scene.SceneRepresentation` plus tensor, HEALPix, harmonic, and field-model adapters
 - `scene.ObservationOperatorAdapter`, `scene.operator_bundle_for_observation(...)`, and image-plane operator-set binding
-- `scene.sample_image_plane_batched_channels(...)` and
-  `scene.splat_to_native(...)` for differentiable native-frame query/deposit
 
 The intent is that users can describe an observation, a target product, and a scene representation without needing to know which lower-level map module owns the current implementation.
 

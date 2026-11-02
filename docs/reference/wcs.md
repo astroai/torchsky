@@ -14,17 +14,6 @@ This reference is generated from the package source. Names are grouped by
 the module that defines them; import every name from the public
 namespace `torchsky.wcs` unless the group text says otherwise.
 
-## Top-level namespace
-
-::: torchsky.wcs
-    options:
-      members:
-        - SPEED_OF_LIGHT
-      heading_level: 3
-      show_root_heading: false
-      show_root_toc_entry: false
-      filters: []
-
 ## Alignment
 
 ::: torchsky.wcs
@@ -159,7 +148,6 @@ namespace `torchsky.wcs` unless the group text says otherwise.
     options:
       members:
         - CelestialFrameBiasWarning
-        - canonical_celestial_frame
         - convert_celestial
         - ecliptic_of_date_to_icrs
         - ecliptic_to_icrs
@@ -176,18 +164,6 @@ namespace `torchsky.wcs` unless the group text says otherwise.
         - propagate_proper_motion_with_jacobian
         - propagate_space_motion
         - propagate_space_motion_with_jacobian
-      heading_level: 3
-      show_root_heading: false
-      show_root_toc_entry: false
-      filters: []
-
-## Functional
-
-::: torchsky.wcs
-    options:
-      members:
-        - pixel_to_world_fused
-        - world_to_pixel_fused
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false
@@ -270,8 +246,6 @@ namespace `torchsky.wcs` unless the group text says otherwise.
       members:
         - EarthOrientation
         - Site
-        - icrs_to_itrs_xyz
-        - itrs_xyz_to_lonlat_deg
         - observed_altaz
       heading_level: 3
       show_root_heading: false
@@ -289,13 +263,11 @@ namespace `torchsky.wcs` unless the group text says otherwise.
         - BayesianModeState
         - ConditionalResidualPrediction
         - CorrectionEnvelope
-        - ExperimentalConditionalResidual
         - ResidualComponentInput
         - ResidualComponentResult
         - ResidualLadderPrediction
         - ResidualModeDesign
         - ResidualSupport
-        - ShadowUpdateResult
         - SparseGPResidual
         - SparseGPResidualPrediction
         - TangentPlaneGauge
@@ -304,7 +276,6 @@ namespace `torchsky.wcs` unless the group text says otherwise.
         - fit_sparse_gp_residual
         - interpretable_residual_modes
         - predict_bayesian_modes
-        - shadow_update_bayesian_modes
         - update_bayesian_modes
       heading_level: 3
       show_root_heading: false
@@ -333,7 +304,6 @@ namespace `torchsky.wcs` unless the group text says otherwise.
     options:
       members:
         - air_wavelength_to_vacuum
-        - canonical_spectral_type
         - convert_spectral
         - frequency_to_spectral
         - rest_frequency_from_header
@@ -356,6 +326,17 @@ namespace `torchsky.wcs` unless the group text says otherwise.
         - from_coupled_tabular
         - from_tabular
         - tabular_axes_from_fits
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
+## Temporal
+
+::: torchsky.wcs
+    options:
+      members:
+        - TemporalWCS
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false

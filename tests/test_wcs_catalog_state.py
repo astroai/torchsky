@@ -9,11 +9,11 @@ from torchsky.wcs import (
     Epoch,
     Site,
     TimeSpec,
-    icrs_to_itrs_xyz,
     observed_altaz,
     transform,
 )
 from torchsky.wcs.observed import (
+    _icrs_to_itrs_xyz,
     _era_rad_from_ut1_mjd,
     _gmst_deg_from_ut1_mjd,
     _wgs84_itrs_m,
@@ -305,7 +305,7 @@ def test_aberration_and_refraction_are_opt_in() -> None:
 def test_icrs_to_itrs_roundtrip_unit() -> None:
     state = CatalogState(lon=30.0, lat=10.0)
     eop = EarthOrientation(dut1_s=0.0)
-    xyz = icrs_to_itrs_xyz(state, obstime_mjd_utc=60000.0, eop=eop)
+    xyz = _icrs_to_itrs_xyz(state, obstime_mjd_utc=60000.0, eop=eop)
     torch.testing.assert_close(
         torch.linalg.vector_norm(xyz),
         torch.tensor(1.0, dtype=torch.float64),
@@ -404,7 +404,7 @@ def test_iau2006_and_transform_stay_on_accelerator() -> None:
     az_cpu, alt_cpu = observed_altaz(
         state_cpu, obstime_mjd_utc=utc, site=site, eop=eop, pn="iau2006"
     )
-    xyz_cpu = icrs_to_itrs_xyz(state_cpu, obstime_mjd_utc=utc, eop=eop, pn="iau2006")
+    xyz_cpu = _icrs_to_itrs_xyz(state_cpu, obstime_mjd_utc=utc, eop=eop, pn="iau2006")
     lon_cpu, lat_cpu = transform(10.0, 20.0, from_frame="ICRS", to_frame="GALACTIC")
     for device in devices:
         state = CatalogState(
@@ -427,7 +427,7 @@ def test_iau2006_and_transform_stay_on_accelerator() -> None:
             torch.remainder(az.cpu().to(torch.float64) - az_cpu + 180.0, 360.0) - 180.0
         )
         torch.testing.assert_close(daz, torch.zeros_like(daz), atol=atol, rtol=0.0)
-        xyz = icrs_to_itrs_xyz(
+        xyz = _icrs_to_itrs_xyz(
             state, obstime_mjd_utc=_on_accel(utc, device), eop=eop, pn="iau2006"
         )
         assert xyz.device.type == device

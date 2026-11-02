@@ -25,7 +25,6 @@ from ..map.field.observation_builders import (
     field_observations_from_bin_centers,
     field_observations_from_bin_edges,
     field_observations_from_ifu_cube,
-    ifu_cube_spectral_to_leading,
     make_tangent_plane_header,
 )
 from ..map.field.presets import (
@@ -73,7 +72,7 @@ from ..map.field.types import (
     FieldDomain as Domain,
     FieldFitResult as FitResult,
     FieldModelKind,
-    FieldObservation as Observation,
+    FieldObservation,
     ForwardContext,
     PSFSpec,
     SpectralCapacityProfile,
@@ -93,7 +92,7 @@ def preset(name: str, domain: Domain, **overrides: _Any) -> _nn.Module:
 @_overload
 def render(
     field_model: _nn.Module,
-    observation: Observation,
+    observation: FieldObservation,
     *,
     target: _Literal["observation"] = "observation",
     **kwargs: _Any,
@@ -103,7 +102,7 @@ def render(
 @_overload
 def render(
     field_model: _nn.Module,
-    observation: Observation,
+    observation: FieldObservation,
     *,
     target: _Literal["samples"],
     ra_deg: _Tensor,
@@ -115,7 +114,7 @@ def render(
 @_overload
 def render(
     field_model: _nn.Module,
-    observation: Observation | None = None,
+    observation: FieldObservation | None = None,
     *,
     target: _Literal["cube", "healpix", "cube_via_healpix"],
     **kwargs: _Any,
@@ -124,7 +123,7 @@ def render(
 
 def render(
     field_model: _nn.Module,
-    observation: Observation | None = None,
+    observation: FieldObservation | None = None,
     *,
     target: RenderTarget = "observation",
     **kwargs: _Any,
@@ -166,7 +165,7 @@ def render(
 
 def sample(
     field_model: _nn.Module,
-    observation: Observation,
+    observation: FieldObservation,
     *,
     ra_deg: _Tensor,
     dec_deg: _Tensor,
@@ -184,7 +183,7 @@ def sample(
 
 def distribution(
     field_model: _nn.Module,
-    observation: Observation,
+    observation: FieldObservation,
     *,
     target: _Literal["observation", "samples"] = "observation",
     **kwargs: _Any,
@@ -209,7 +208,7 @@ __all__ = [
     "FitResult",
     "ForwardContext",
     "LoadedArtifact",
-    "Observation",
+    "FieldObservation",
     "PSFSpec",
     "PresetName",
     "RenderTarget",
@@ -230,7 +229,6 @@ __all__ = [
     "fit_hybrid",
     "fit_noise_crossfit",
     "get_field_model_preset",
-    "ifu_cube_spectral_to_leading",
     "is_recommended_field_model",
     "load_artifact",
     "make_tangent_plane_header",

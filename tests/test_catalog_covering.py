@@ -9,12 +9,13 @@ from torchsky.catalogs.index import (
     candidate_coarse_pixels_for_left_pixel,
     nested_neighbor_rings,
 )
-from torchsky.sphere import chord_radius, great_circle_distance
+from torchsky.sphere import great_circle_distance
+from torchsky.sphere.core import _chord_radius
 from torchsky.sphere import healpix as _healpix
 
 
 def test_chord_radius_right_angle() -> None:
-    chord = chord_radius(0.5 * math.pi)
+    chord = _chord_radius(0.5 * math.pi)
     torch.testing.assert_close(chord, torch.tensor(math.sqrt(2.0), dtype=chord.dtype))
 
 

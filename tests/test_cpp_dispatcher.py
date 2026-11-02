@@ -12,7 +12,8 @@ from torch._subclasses.fake_tensor import FakeTensorMode, is_fake
 
 from torchsky import _ops
 from torchsky._native import cpp
-from torchsky.wcs import WCS, pixel_to_world_fused, world_to_pixel_fused
+from torchsky.wcs import WCS
+from torchsky.wcs.functional import _pixel_to_world_fused, _world_to_pixel_fused
 import torchsky.wcs.core as wcs_core
 
 
@@ -56,7 +57,7 @@ def _functional(
     parameters = _parameters(direction)
     parameters.update(overrides)
     function = (
-        pixel_to_world_fused if direction == "pixel_to_world" else world_to_pixel_fused
+        _pixel_to_world_fused if direction == "pixel_to_world" else _world_to_pixel_fused
     )
     return function(first, second, **parameters)
 
@@ -394,7 +395,7 @@ def test_public_wcs_does_not_swallow_dispatcher_kernel_errors(
     def fail(*args: Any, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor]:
         raise RuntimeError("dispatcher numerical failure")
 
-    monkeypatch.setattr(wcs_core, "pixel_to_world_fused", fail)
+    monkeypatch.setattr(wcs_core, "_pixel_to_world_fused", fail)
     values = torch.tensor([0.0, 1.0], dtype=torch.float64)
     with pytest.raises(RuntimeError, match="dispatcher numerical failure"):
         wcs.pixel_to_world(values, values)
@@ -421,7 +422,7 @@ def test_public_wcs_dispatcher_rollback_flag_uses_python_path(
     def fail(*args: Any, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor]:
         raise AssertionError("dispatcher wrapper called while disabled")
 
-    monkeypatch.setattr(wcs_core, "pixel_to_world_fused", fail)
+    monkeypatch.setattr(wcs_core, "_pixel_to_world_fused", fail)
     values = torch.tensor([0.0, 1.0], dtype=torch.float64)
     result = WCS(header).pixel_to_world(values, values)
     assert all(torch.isfinite(value).all() for value in result)

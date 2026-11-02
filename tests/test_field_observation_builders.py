@@ -5,11 +5,11 @@ from __future__ import annotations
 import torch
 from pytest import approx
 
+from torchsky.map.field.observation_builders import _ifu_cube_spectral_to_leading
 from torchsky.map.field import (
     field_observations_from_bin_centers,
     field_observations_from_bin_edges,
     field_observations_from_ifu_cube,
-    ifu_cube_spectral_to_leading,
     make_tangent_plane_header,
     spectral_data_budget,
 )
@@ -141,6 +141,6 @@ def test_spectral_budget_on_built_observations() -> None:
 
 def test_ifu_cube_spectral_to_leading_is_noop_when_already_first() -> None:
     x = torch.randn(5, 2, 2)
-    y = ifu_cube_spectral_to_leading(x, spectral_axis=0)
+    y = _ifu_cube_spectral_to_leading(x, spectral_axis=0)
     assert y.shape == x.shape
     assert torch.equal(y, x)

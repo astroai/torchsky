@@ -19,12 +19,10 @@ namespace `torchsky.encoders` unless the group text says otherwise.
 ::: torchsky.encoders
     options:
       members:
-        - SineLayer
         - SirenImplicitField
         - SkyCoordinateEncoder
         - harmonic_sky_encoding
         - log_spectral_encoding
-        - sky_encoder_fourier_min_frequency
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false

@@ -12,7 +12,7 @@ CONTRACT_VERSION = "torchsky.quality.v1"
 MASK_POLARITY = "set_means_flagged"
 INVERSE_VARIANCE_SEMANTICS = "inverse_variance_per_pixel"
 CONFIDENCE_SEMANTICS = "normalized_weight_0_to_1"
-MAX_CONFIDENCE_SAMPLES = 100_000
+_MAX_CONFIDENCE_SAMPLES = 100_000
 
 
 class QualityBit(IntFlag):
@@ -109,7 +109,7 @@ def build_weight_product(
         # Striding bounds the quantile's working set; the percentile is a
         # display statistic, not a calibration claim.
         step = max(
-            1, (positive.numel() + MAX_CONFIDENCE_SAMPLES - 1) // MAX_CONFIDENCE_SAMPLES
+            1, (positive.numel() + _MAX_CONFIDENCE_SAMPLES - 1) // _MAX_CONFIDENCE_SAMPLES
         )
         normalization = torch.quantile(positive[::step], confidence_percentile / 100.0)
         if bool(torch.isfinite(normalization) & (normalization > 0)):
@@ -153,7 +153,6 @@ __all__ = [
     "DEFAULT_ZERO_WEIGHT_BITS",
     "INVERSE_VARIANCE_SEMANTICS",
     "MASK_POLARITY",
-    "MAX_CONFIDENCE_SAMPLES",
     "QualityBit",
     "WeightProduct",
     "build_weight_product",

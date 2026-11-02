@@ -38,10 +38,10 @@ _V_KIND_MAP = {
 
 
 @overload
-def require_one_plus_z(one_plus_z: Tensor) -> Tensor: ...
+def _require_one_plus_z(one_plus_z: Tensor) -> Tensor: ...
 @overload
-def require_one_plus_z(one_plus_z: float) -> float: ...
-def require_one_plus_z(one_plus_z: float | Tensor) -> float | Tensor:
+def _require_one_plus_z(one_plus_z: float) -> float: ...
+def _require_one_plus_z(one_plus_z: float | Tensor) -> float | Tensor:
     """Reject non-finite or non-positive ``(1+z)`` factors."""
     if isinstance(one_plus_z, Tensor):
         if not bool(torch.isfinite(one_plus_z).all()) or bool((one_plus_z <= 0).any()):
@@ -53,7 +53,7 @@ def require_one_plus_z(one_plus_z: float | Tensor) -> float | Tensor:
     return value
 
 
-def normalize_v_kind(kind: Any) -> int:
+def _normalize_v_kind(kind: Any) -> int:
     """Normalize a velocity-kind name or code to its integer code."""
     if kind is None:
         return V_KIND_KMS
@@ -125,8 +125,8 @@ def convert_velocity_kind(  # noqa: PLR0911
     value: Tensor, from_kind: Any, to_kind: Any, relativistic: bool = True
 ) -> Tensor:
     """Convert values among km/s, redshift, and dimensionless ``v / c``."""
-    from_code = normalize_v_kind(from_kind)
-    to_code = normalize_v_kind(to_kind)
+    from_code = _normalize_v_kind(from_kind)
+    to_code = _normalize_v_kind(to_kind)
     if from_code == to_code:
         return value
     if from_code == V_KIND_KMS:
@@ -149,7 +149,7 @@ def convert_velocity_kind(  # noqa: PLR0911
 
 def one_plus_z_from_kind(value: Tensor, kind: Any, relativistic: bool = True) -> Tensor:
     """Convert values of the specified velocity kind to ``1 + z``."""
-    kind_code = normalize_v_kind(kind)
+    kind_code = _normalize_v_kind(kind)
     if kind_code == V_KIND_KMS:
         return one_plus_z_from_velocity_kms(value, relativistic=relativistic)
     if kind_code == V_KIND_REDSHIFT:
@@ -167,7 +167,7 @@ def one_plus_z_from_codes(
     relativistic: bool = True,
 ) -> Tensor:
     """Convert per-sample velocity kinds without device-synchronizing branches."""
-    default_code = normalize_v_kind(default_kind)
+    default_code = _normalize_v_kind(default_kind)
     codes = kind_codes.to(device=value.device, dtype=torch.long)
     while codes.ndim < value.ndim:
         codes = codes.unsqueeze(-1)
@@ -187,7 +187,7 @@ def one_plus_z_from_codes(
 
 def shift_wavelength(lambda_rest: Tensor, one_plus_z: Tensor | float) -> Tensor:
     """``λ_obs = λ_rest * (1+z)``."""
-    factor = require_one_plus_z(
+    factor = _require_one_plus_z(
         torch.as_tensor(one_plus_z).to(device=lambda_rest.device)
     )
     return lambda_rest * factor
@@ -196,7 +196,7 @@ def shift_wavelength(lambda_rest: Tensor, one_plus_z: Tensor | float) -> Tensor:
 def zeta_from_redshift(z: Tensor | float) -> Tensor:
     """Rapidity ``ζ = ln(1+z)``. ``z=0`` is zero."""
     z_t = torch.as_tensor(z)
-    return torch.log(require_one_plus_z(1.0 + z_t))
+    return torch.log(_require_one_plus_z(1.0 + z_t))
 
 
 def zeta_from_beta(beta: Tensor | float) -> Tensor:
@@ -274,13 +274,13 @@ def zeta_berv_from_sky(ra_deg: float, dec_deg: float, tt_mjd: float) -> float:
 
 def dimming_f_lambda(one_plus_z: Tensor | float) -> Tensor:
     """``F_λ`` density dimming ``1 / (1+z)``."""
-    factor = require_one_plus_z(torch.as_tensor(one_plus_z))
+    factor = _require_one_plus_z(torch.as_tensor(one_plus_z))
     return 1.0 / factor
 
 
 def dimming_tolman_sb(one_plus_z: Tensor | float) -> Tensor:
     """Tolman surface-brightness dimming ``(1+z)**-4``."""
-    factor = require_one_plus_z(torch.as_tensor(one_plus_z))
+    factor = _require_one_plus_z(torch.as_tensor(one_plus_z))
     return torch.pow(factor, -4.0)
 
 
@@ -290,7 +290,7 @@ def apply_redshift_f_lambda(
     one_plus_z: Tensor | float,
 ) -> tuple[Tensor, Tensor]:
     """Shift a sampled ``F_λ`` spectrum: ``λ' = λ(1+z)``, ``F' = F / (1+z)``."""
-    factor = require_one_plus_z(
+    factor = _require_one_plus_z(
         torch.as_tensor(one_plus_z).to(device=flux_rest.device, dtype=flux_rest.dtype)
     )
     if isinstance(factor, Tensor) and factor.ndim == flux_rest.ndim - 1:
@@ -347,7 +347,6 @@ __all__ = [
     "dimming_tolman_sb",
     "earth_barycentric_velocity_icrs",
     "los_barycentric_beta",
-    "normalize_v_kind",
     "one_plus_z_from_beta",
     "one_plus_z_from_codes",
     "one_plus_z_from_kind",
@@ -355,7 +354,6 @@ __all__ = [
     "one_plus_z_from_velocity_kms",
     "one_plus_z_from_zeta",
     "redshift_from_velocity_kms",
-    "require_one_plus_z",
     "shift_ln_wavelength",
     "shift_wavelength",
     "velocity_kms_from_redshift",

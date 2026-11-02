@@ -12,6 +12,16 @@ owned by `torchfits`.
 
 ## [Unreleased]
 
+### Public API
+- `torchsky.map.coadd_image_plane`, `torchsky.map.ImageObservation` and `torchsky.wcs.TemporalWCS`
+  are exported from their documented namespaces.
+- Internal helpers are no longer exported: WCS fused kernels and ITRS helpers, `wcs.SPEED_OF_LIGHT`,
+  `canonical_*`, shadow-update and experimental residual types; `sphere.chord_radius`,
+  `sphere.interpolate_wavelength_axis`; scene re-exports of map kernels; `field.Observation` (use
+  `FieldObservation`); `encoders.SineLayer`; redshift validation helpers; `torchsky.foreground`.
+  See the 0.5 section of the migration guide.
+- `cosmology.comoving_distance(n_steps=...)` is deprecated (ignored; removal in 0.6).
+
 ### Added
 - `torchsky.filter_profiles.photon_quadrature`: photon-weighted equal-mass
   quadrature nodes of a bandpass for band-integrated forward models.

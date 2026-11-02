@@ -52,7 +52,7 @@ from .frames import (
     convert_celestial as _convert_celestial,
     precess_fk5 as _precess_fk5,
 )
-from .functional import pixel_to_world_fused, world_to_pixel_fused
+from .functional import _pixel_to_world_fused, _world_to_pixel_fused
 
 if TYPE_CHECKING:
     from .mapping import WCSMapping
@@ -2624,7 +2624,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
             x_native = (x_flat + (1.0 - origin)).contiguous()
             y_native = (y_flat + (1.0 - origin)).contiguous()
-            ra, dec = pixel_to_world_fused(
+            ra, dec = _pixel_to_world_fused(
                 x_native,
                 y_native,
                 crpix0=self._crpix0,
@@ -3057,7 +3057,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
             ra_native = ra_flat.contiguous()
             dec_native = dec_flat.contiguous()
-            px, py = world_to_pixel_fused(
+            px, py = _world_to_pixel_fused(
                 ra_native,
                 dec_native,
                 crpix0=self._crpix0,

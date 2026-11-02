@@ -29,7 +29,7 @@ domain = field.estimate_domain(field_observations, coord_mode="sphere_xyz")
 model = field.model("sky_encoder_mlp", domain)
 ```
 
-`field_observations` should be a sequence of `torchsky.field.Observation`
+`field_observations` should be a sequence of `torchsky.field.FieldObservation`
 objects, not `torchsky.map.observation.ImageObservation` objects from the image-plane coadd
 API.
 

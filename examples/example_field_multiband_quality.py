@@ -41,7 +41,7 @@ def main() -> None:
     torch.manual_seed(7)
     size = 24
     header = _tan_header(size)
-    observations: list[field.Observation] = []
+    observations: list[field.FieldObservation] = []
     for name, wavelength, noise_sigma in (
         ("blue", 5000.0, 0.025),
         ("green", 5600.0, 0.020),
@@ -54,7 +54,7 @@ def main() -> None:
         mask[-2:, :] = False
         weight = torch.full_like(image, 1.0 / (noise_sigma * noise_sigma))
         observations.append(
-            field.Observation(
+            field.FieldObservation(
                 image=image,
                 header=dict(header),
                 weight=weight,

@@ -186,12 +186,15 @@ that bias matters. Non-increasing axes are rejected.
 
 Promoted flat `torchsky.map` names:
 
-- `Observation`, `Target`, `CubeTarget`
+- `Observation`, `ImageObservation`, `IFUObservation`, `Target`, `CubeTarget`
 - `ResampleConfig`, `SkyConfig`, `OutlierConfig`, `StackConfig`
 - `plan(...)`, `plan_cube(...)`, `plan_product(...)`
 - `resample(...)`, `resample_healpix(...)`, `blot(...)`
 - `detect_outliers(...)`, `match_sky(...)`
 - `coadd(...)`, `coadd_multiband(...)`, `coadd_cube(...)`, `coadd_healpix(...)`
+- `coadd_image_plane(...)`: the operator-level image-plane coadd over
+  `ImageObservation` objects (the engine behind `coadd`; use it for tiling,
+  `output_path`, and `propagate_variance` controls)
 - `aperture_uncertainty(...)`
 - `stack_product(...)`
 - `MapResult`, `CubeResult`, `MultibandResult`, `HealpixResult`, `ApertureUncertainty`
@@ -211,7 +214,7 @@ the `torchsky.map` runtime API.
 Experimental continuous-field layer (tutorial: [field.md](field.md), losses/context:
 [implicit_forward.md](implicit_forward.md)):
 
-- `torchsky.field.Observation`, `torchsky.field.Domain`, `torchsky.field.fit(...)`
+- `torchsky.field.FieldObservation`, `torchsky.field.Domain`, `torchsky.field.fit(...)`
 - `ObservationOperatorBundle` as the shared observation-law substrate across
   image-plane and field paths.
 - `torchsky.field.render(...)`, `torchsky.field.sample(...)`

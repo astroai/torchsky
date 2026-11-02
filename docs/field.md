@@ -18,7 +18,7 @@ conditional response, nuisance, rank and sampling-uncertainty contracts.
 
 ## Core workflow
 
-1. Build one **`field.Observation`** per band (or per exposure): image tensor, FITS-like **`header`** dict (WCS), spectral limits or tabulated throughput, optional **`weight`** / **`mask`**, optional **`PSFSpec`**.
+1. Build one **`field.FieldObservation`** per band (or per exposure): image tensor, FITS-like **`header`** dict (WCS), spectral limits or tabulated throughput, optional **`weight`** / **`mask`**, optional **`PSFSpec`**.
 2. Call **`field.estimate_domain(observations)`** to get a **`field.Domain`** (sky center, spatial scale, wavelength center/scale) unless you set the domain by hand.
 3. Construct a model explicitly with **`field.model(kind, domain, **kwargs)`**, or use the small convenience **`field.preset(name, domain, **kwargs)`** when a default recipe is enough.
 4. **`field.fit(observations, model, ...)`** runs the built-in optimizer loop, or compose your own loop with **`field.render(...)`** / **`field.sample(...)`**.
@@ -39,7 +39,7 @@ Runnable references:
 - [SMACS campaign notebooks and tools](https://github.com/astroai/torchsky-harness/tree/main/notebooks)
 - [hyperspectral fusion onboarding](https://github.com/astroai/torchsky-harness/blob/main/docs/projects/hyperspectral-fusion.md)
 
-## `field.Observation`
+## `field.FieldObservation`
 
 Defined in [`types.py`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/types.py). Important fields:
 
@@ -571,7 +571,7 @@ header = {
     "CDELT1": -0.05 / 3600.0,
     "CDELT2": 0.05 / 3600.0,
 }
-obs = field.Observation(
+obs = field.FieldObservation(
     image=torch.zeros(32, 32),
     header=header,
     spectral_min=5000.0,
@@ -586,7 +586,7 @@ pred = field.render(model, obs)
 
 ## Multi-band / hyperspectral notes
 
-- Each band is usually its own **`field.Observation`** with distinct spectral metadata; **`field.fit`** aggregates losses across all of them.
+- Each band is usually its own **`field.FieldObservation`** with distinct spectral metadata; **`field.fit`** aggregates losses across all of them.
 - Tabulated throughput (`transmission_wavelength`, `transmission_throughput`) is preferred when combining HST/JWST filters with different shapes.
 - Build a classical baseline first with **`coadd_multiband`** so INR residuals can be interpreted against a conventional WCS-aligned stack. It is a comparator, not an initializer for the native-exposure production fit.
 - For a drizzle-like baseline, use **`coadd_cube(...,

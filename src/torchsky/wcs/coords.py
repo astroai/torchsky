@@ -13,9 +13,9 @@ from .observed import (
     Site,
     icrs_to_cirs_xyz,
     icrs_to_gcrs_xyz,
-    icrs_to_itrs_xyz,
+    _icrs_to_itrs_xyz,
     icrs_to_tete_xyz,
-    itrs_xyz_to_lonlat_deg,
+    _itrs_xyz_to_lonlat_deg,
     observed_altaz,
 )
 
@@ -80,7 +80,7 @@ def transform(
         if obstime_mjd_utc is None or eop is None:
             raise ValueError(f"{dest} requires obstime_mjd_utc and eop")
         if dest == "ITRS":
-            xyz = icrs_to_itrs_xyz(
+            xyz = _icrs_to_itrs_xyz(
                 state,
                 obstime_mjd_utc=obstime_mjd_utc,
                 eop=eop,
@@ -108,7 +108,7 @@ def transform(
                 eop=eop,
                 aberration=aberration,
             )
-        return itrs_xyz_to_lonlat_deg(xyz)
+        return _itrs_xyz_to_lonlat_deg(xyz)
     if dest == "ECLIPTIC_OF_DATE":
         if obstime_mjd_utc is None:
             raise ValueError("ECLIPTIC_OF_DATE requires obstime_mjd_utc (TT MJD)")

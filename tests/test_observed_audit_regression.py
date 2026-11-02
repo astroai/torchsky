@@ -152,7 +152,7 @@ def test_cirs_tete_itrs_match_erfa() -> None:
     np.testing.assert_allclose(cirs, v @ erfa.c2i06a(2400000.5, tt).T, atol=1e-12)
     tete = obs.icrs_to_tete_xyz(state, obstime_mjd_utc=MJD, eop=eop).numpy()
     np.testing.assert_allclose(tete, v @ erfa.pnm06a(2400000.5, tt).T, atol=1e-12)
-    itrs = obs.icrs_to_itrs_xyz(state, obstime_mjd_utc=MJD, eop=eop).numpy()
+    itrs = obs._icrs_to_itrs_xyz(state, obstime_mjd_utc=MJD, eop=eop).numpy()
     rot = erfa.c2tcio(erfa.c2i06a(2400000.5, tt), erfa.era00(2400000.5, MJD), np.eye(3))
     np.testing.assert_allclose(itrs, v @ rot.T, atol=1e-12)
 

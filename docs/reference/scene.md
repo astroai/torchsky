@@ -95,17 +95,6 @@ namespace `torchsky.scene` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
-## Resampling
-
-::: torchsky.scene
-    options:
-      members:
-        - sample_image_plane_batched_channels
-      heading_level: 3
-      show_root_heading: false
-      show_root_toc_entry: false
-      filters: []
-
 ## Scenes
 
 ::: torchsky.scene
@@ -142,7 +131,6 @@ namespace `torchsky.scene` unless the group text says otherwise.
     options:
       members:
         - SplatDiagnostics
-        - splat_to_native
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false
@@ -161,29 +149,13 @@ namespace `torchsky.scene` unless the group text says otherwise.
 
 ## Types
 
-<a id="torchsky.scene.FieldObservation"></a>
-
-::: torchsky.map.field.types.FieldObservation
+::: torchsky.scene
     options:
+      members:
+        - FieldObservation
+        - ForwardContext
+        - PSFSpec
       heading_level: 3
-      show_root_heading: true
-      show_root_toc_entry: true
-      filters: []
-
-<a id="torchsky.scene.ForwardContext"></a>
-
-::: torchsky.map.field.types.ForwardContext
-    options:
-      heading_level: 3
-      show_root_heading: true
-      show_root_toc_entry: true
-      filters: []
-
-<a id="torchsky.scene.PSFSpec"></a>
-
-::: torchsky.map.field.types.PSFSpec
-    options:
-      heading_level: 3
-      show_root_heading: true
-      show_root_toc_entry: true
+      show_root_heading: false
+      show_root_toc_entry: false
       filters: []

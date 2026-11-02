@@ -222,7 +222,10 @@ are stored as `uint8` with `BOOLMAP`. Pixel-list maps without coverage still use
 a PIXEL/VALUE table. Sentinel values are not valid pixels on the image path.
 `from_healsparse(...)` and `to_healsparse()` provide optional CPU-host
 interchange when `healsparse` is installed; the production implementation does
-not import or delegate computation to HealSparse.
+not import or delegate computation to HealSparse. `HealSparseHostProtocol` and
+`UniqValueMapProtocol` (for `MultiOrderHealpixMap.from_mhealpy`) are typing
+protocols describing the host-map attributes those adapters read; use them for
+annotations only.
 
 ### `WideBitMask` / `SkyMaskPipe`
 

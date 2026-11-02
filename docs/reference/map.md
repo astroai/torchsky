@@ -68,6 +68,7 @@ namespace `torchsky.map` unless the group text says otherwise.
         - aperture_uncertainty
         - blot
         - coadd
+        - coadd_image_plane
         - coadd_multiband
         - resample
       heading_level: 3
@@ -85,6 +86,7 @@ namespace `torchsky.map` unless the group text says otherwise.
         - CubeTarget
         - HealpixResult
         - IFUObservation
+        - ImageObservation
         - MapResult
         - MultibandResult
         - Observation

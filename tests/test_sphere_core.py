@@ -6,7 +6,7 @@ import torch
 from torchsky.sphere.core import (
     fit_monopole_dipole,
     great_circle_distance,
-    interpolate_wavelength_axis,
+    _interpolate_wavelength_axis,
     pairwise_angular_distance,
     remove_monopole_dipole,
     sample_healpix_map,
@@ -199,7 +199,7 @@ def test_interpolate_wavelength_axis_linear() -> None:
     values = torch.tensor(
         [[10.0, 20.0, 30.0], [100.0, 200.0, 300.0]], dtype=torch.float64
     )
-    out = interpolate_wavelength_axis(
+    out = _interpolate_wavelength_axis(
         values,
         source_wavelength=[1.0, 2.0, 3.0],
         target_wavelength=[1.5, 2.5],
@@ -229,7 +229,7 @@ def test_sample_multiwavelength_resampling_matches_manual() -> None:
         interpolation="nearest",
     )
     base = sample_multiband_healpix(cube, nside, lon, lat, interpolation="nearest")
-    expected = interpolate_wavelength_axis(base, src, tgt, axis=0)
+    expected = _interpolate_wavelength_axis(base, src, tgt, axis=0)
     torch.testing.assert_close(got, expected, atol=1e-12, rtol=0.0)
 
 

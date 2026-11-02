@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class HealSparseHostProtocol(Protocol):
+    """Typing protocol for ``healsparse``-style host maps.
+
+    Accepted by :meth:`SparseHealpixMap.from_healsparse`; not meant to be
+    subclassed or instantiated.
+    """
+
     nside_sparse: int
     nside_coverage: int
     sentinel: Any

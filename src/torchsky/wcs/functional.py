@@ -395,7 +395,7 @@ def _tpv_tensors(
     return tpv_idx1, tpv_c1, tpv_idx2, tpv_c2
 
 
-def pixel_to_world_fused(
+def _pixel_to_world_fused(
     x: Tensor,
     y: Tensor,
     *,
@@ -466,7 +466,7 @@ def pixel_to_world_fused(
     )
 
 
-def world_to_pixel_fused(
+def _world_to_pixel_fused(
     ra: Tensor,
     dec: Tensor,
     *,

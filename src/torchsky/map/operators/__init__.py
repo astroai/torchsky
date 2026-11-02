@@ -1,6 +1,7 @@
 """Internal observation-operator scaffolding for mapmaking and INR paths."""
 
 from importlib import import_module
+from typing import Any
 
 from .adaptive_axes import (
     AdaptiveAxisFeatures,
@@ -284,7 +285,7 @@ _LAZY_EXPORTS = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name not in _LAZY_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attr_name = _LAZY_EXPORTS[name]

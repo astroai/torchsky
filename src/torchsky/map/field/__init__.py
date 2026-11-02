@@ -14,6 +14,8 @@ Submodules
 ``implicit_forward``
     Forward-model shell (context ``c``, kinematics ``ζ``, modular survey losses); see ``docs/implicit_forward.md``."""
 
+from typing import Any
+
 # Lazy facade: importing the package must not pull in core/foam/training.
 # Each name maps to the submodule that defines it; attributes are resolved on
 # first access and cached in the module globals.
@@ -215,10 +217,6 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
         ".observation_builders",
         "field_observations_from_ifu_cube",
     ),
-    "ifu_cube_spectral_to_leading": (
-        ".observation_builders",
-        "ifu_cube_spectral_to_leading",
-    ),
     "make_tangent_plane_header": (".observation_builders", "make_tangent_plane_header"),
     "FIELD_MODEL_PRESET_NAMES": (".presets", "FIELD_MODEL_PRESET_NAMES"),
     "FIELD_MODEL_PRESETS": (".presets", "FIELD_MODEL_PRESETS"),
@@ -393,7 +391,6 @@ __all__ = [
     "solve_linear_band_grid_cg",
     "solve_linear_band_grid_lsqr",
     "is_recommended_field_model",
-    "ifu_cube_spectral_to_leading",
     "make_tangent_plane_header",
     "FourierMLPField",
     "DiffuseFoamHybridField",
@@ -493,7 +490,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     try:
         module_name, attribute = _EXPORTS[name]
     except KeyError as exc:
@@ -506,5 +503,5 @@ def __getattr__(name: str):
     return value
 
 
-def __dir__():
+def __dir__() -> list[str]:
     return sorted(set(globals()) | set(__all__))

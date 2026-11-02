@@ -7,7 +7,7 @@ It does **not** replace [`field.fit`](field.md); use that for full training loop
 ## 1. Scene and rendering
 
 - **Scene:** any `torch.nn.Module` that implements the field API expected by [`field.render`](field.md) (same contract as [`field.model`](field.md)).
-- **Observation:** [`field.Observation`](field.md) — 2D image tensor, FITS-like `header` dict for WCS, spectral band limits or tabulated throughput, optional `weight`, `mask`, `PSFSpec`, backgrounds.
+- **Observation:** [`field.FieldObservation`](field.md) — 2D image tensor, FITS-like `header` dict for WCS, spectral band limits or tabulated throughput, optional `weight`, `mask`, `PSFSpec`, backgrounds.
 
 Rendering usually goes through `field.render(model, observation, ...)`; the implicit-forward helpers call the same observation renderer internally.
 
@@ -36,7 +36,7 @@ When **`rest_frame_scene=True`** in [`predict_observation_mean`](https://github.
 [`SurveyDataTerm`](https://github.com/astroai/torchsky/blob/main/src/torchsky/map/field/implicit_forward.py) groups:
 
 - **`name`** — label for logging.
-- **`observations`** — tuple of `field.Observation`.
+- **`observations`** — tuple of `field.FieldObservation`.
 - **`loss_weight`** — scalar \(w_s\) multiplying that term’s contribution.
 - **`kinematics_per_observation`** — optional per-row `KinematicState | None` (same length as `observations`).
 - **`forward_context_per_observation`** — optional per-row `ForwardContext | None`.
@@ -68,5 +68,5 @@ For plain MSE or hooks inside `field.fit`, see [field.md](field.md).
 
 ## See also
 
-- [field.md](field.md) — `field.Observation`, fitting, rendering cubes.
+- [field.md](field.md) — `field.FieldObservation`, fitting, rendering cubes.
 - [map.md](map.md) — map products and field exports.

@@ -50,13 +50,11 @@ from .residuals import (
     BayesianModeState,
     ConditionalResidualPrediction,
     CorrectionEnvelope,
-    ExperimentalConditionalResidual,
     ResidualComponentInput,
     ResidualComponentResult,
     ResidualLadderPrediction,
     ResidualModeDesign,
     ResidualSupport,
-    ShadowUpdateResult,
     SparseGPResidual,
     SparseGPResidualPrediction,
     TangentPlaneGauge,
@@ -65,7 +63,6 @@ from .residuals import (
     fit_sparse_gp_residual,
     interpretable_residual_modes,
     predict_bayesian_modes,
-    shadow_update_bayesian_modes,
     update_bayesian_modes,
 )
 from .core import DistortionLookupTable as DistortionLookupTable, WCS as WCS
@@ -101,10 +98,10 @@ from .mapping import (
     WCSMapping,
     TransformMapping,
 )
+from .temporal import TemporalWCS
 from .semantics import AxisSpec, DomainSpec, Epoch, FrameSpec, TimeSpec, UnitSpec
 from .frames import (
     CelestialFrameBiasWarning,
-    canonical_celestial_frame,
     convert_celestial,
     ecliptic_to_icrs,
     galactic_to_icrs,
@@ -122,11 +119,8 @@ from .frames import (
     propagate_space_motion,
     propagate_space_motion_with_jacobian,
 )
-from .functional import pixel_to_world_fused, world_to_pixel_fused
 from .spectral import (
-    SPEED_OF_LIGHT,
     air_wavelength_to_vacuum,
-    canonical_spectral_type,
     convert_spectral,
     frequency_to_spectral,
     rest_frequency_from_header,
@@ -159,8 +153,6 @@ from .iau2006 import (
 from .observed import (
     EarthOrientation,
     Site,
-    icrs_to_itrs_xyz,
-    itrs_xyz_to_lonlat_deg,
     observed_altaz,
 )
 
@@ -170,7 +162,6 @@ sample_gwcs = sample_gwcs_detector_to_tangent
 sample_gwcs_epochs = sample_gwcs_detector_epochs
 
 __all__ = [
-    "SPEED_OF_LIGHT",
     "AffineMapping",
     "AffineFitResult",
     "AffineFreeResidualGrid2D",
@@ -213,7 +204,6 @@ __all__ = [
     "DomainSpec",
     "EarthOrientation",
     "Epoch",
-    "ExperimentalConditionalResidual",
     "FrameSpec",
     "FrozenDetectorEpochTables",
     "GWCSGridSamplingResult",
@@ -239,7 +229,6 @@ __all__ = [
     "SampledTransformValidation",
     "SerialMapping",
     "Site",
-    "ShadowUpdateResult",
     "SkyAffineFitResult",
     "TangentPlaneFrame",
     "TangentPlaneAffine",
@@ -247,6 +236,7 @@ __all__ = [
     "TabularAxis",
     "TabularBoundsMode",
     "TabularLookupWCS",
+    "TemporalWCS",
     "TimeSpec",
     "TransformEdge",
     "TransformGraph",
@@ -259,9 +249,7 @@ __all__ = [
     "WCSMapping",
     "air_wavelength_to_vacuum",
     "CelestialFrameBiasWarning",
-    "canonical_celestial_frame",
     "convert_celestial",
-    "canonical_spectral_type",
     "convert_spectral",
     "ecliptic_to_icrs",
     "frequency_to_spectral",
@@ -290,13 +278,10 @@ __all__ = [
     "apply_refraction",
     "apply_stellar_aberration",
     "dcr_offset",
-    "icrs_to_itrs_xyz",
-    "itrs_xyz_to_lonlat_deg",
     "interpretable_residual_modes",
     "observed_altaz",
     "transform",
     "precess_fk5",
-    "pixel_to_world_fused",
     "photometric_log_residuals",
     "propagate_proper_motion",
     "propagate_proper_motion_with_jacobian",
@@ -307,7 +292,6 @@ __all__ = [
     "solve_astrometry",
     "solve_with_astrometry_net",
     "solve_coupled_calibration",
-    "shadow_update_bayesian_modes",
     "SparseGPResidual",
     "SparseGPResidualPrediction",
     "spectral_to_frequency",
@@ -317,5 +301,4 @@ __all__ = [
     "update_bayesian_modes",
     "vacuum_wavelength_to_air",
     "validate_sampled_transform",
-    "world_to_pixel_fused",
 ]

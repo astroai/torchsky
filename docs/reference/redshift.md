@@ -32,7 +32,6 @@ namespace `torchsky.redshift` unless the group text says otherwise.
         - dimming_f_lambda
         - dimming_tolman_sb
         - los_barycentric_beta
-        - normalize_v_kind
         - one_plus_z_from_beta
         - one_plus_z_from_codes
         - one_plus_z_from_kind
@@ -40,7 +39,6 @@ namespace `torchsky.redshift` unless the group text says otherwise.
         - one_plus_z_from_velocity_kms
         - one_plus_z_from_zeta
         - redshift_from_velocity_kms
-        - require_one_plus_z
         - shift_ln_wavelength
         - shift_wavelength
         - velocity_kms_from_redshift

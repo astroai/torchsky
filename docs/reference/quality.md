@@ -24,7 +24,6 @@ namespace `torchsky.quality` unless the group text says otherwise.
         - DEFAULT_ZERO_WEIGHT_BITS
         - INVERSE_VARIANCE_SEMANTICS
         - MASK_POLARITY
-        - MAX_CONFIDENCE_SAMPLES
         - QualityBit
         - WeightProduct
         - build_weight_product

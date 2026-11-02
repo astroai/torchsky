@@ -18,7 +18,7 @@ from .photometry import (
 )
 
 
-def sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:
+def _sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:
     """Minimum ``min_frequency`` for :func:`~torchsky.sphere.healpix.spherical_fourier_features`.
 
     Maps approximately one oscillation across an angular patch whose typical extent is
@@ -98,7 +98,7 @@ def log_spectral_encoding(
     return torch.cat([coord.unsqueeze(-1), fourier_feats], dim=-1)
 
 
-class SineLayer(nn.Module):
+class _SineLayer(nn.Module):
     """SIREN sine layer with the reference ``U(-bound, bound)`` init."""
 
     def __init__(self, in_features: int, out_features: int, *, omega_0: float = 30.0):
@@ -131,9 +131,9 @@ class SirenImplicitField(nn.Module):
             raise ValueError("hidden_layers must be at least one")
         if min(in_features, hidden_features, out_features) < 1:
             raise ValueError("layer widths must be positive")
-        layers: list[nn.Module] = [SineLayer(in_features, hidden_features)]
+        layers: list[nn.Module] = [_SineLayer(in_features, hidden_features)]
         for _ in range(hidden_layers - 1):
-            layers.append(SineLayer(hidden_features, hidden_features))
+            layers.append(_SineLayer(hidden_features, hidden_features))
         layers.append(nn.Linear(hidden_features, out_features))
         self.net = nn.Sequential(*layers)
 
@@ -202,10 +202,8 @@ __all__ = [
     "MaskedSetFusion",
     "PhotometryEncoder",
     "SkyCoordinateEncoder",
-    "SineLayer",
     "SirenImplicitField",
     "harmonic_sky_encoding",
     "log_spectral_encoding",
     "marginalize_association_logits",
-    "sky_encoder_fourier_min_frequency",
 ]

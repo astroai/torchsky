@@ -75,7 +75,7 @@ def test_zscale_limits_matches_transform_zscale() -> None:
 
 def test_extinction_and_foreground_batch_broadcasting() -> None:
     from torchsky.extinction import a_lambda, f99_a_lambda
-    from torchsky.foreground import dib_optical_depth
+    from torchsky._foreground import dib_optical_depth
 
     wave = torch.tensor([4000.0, 5500.0, 7000.0], dtype=torch.float64)
     a_v = torch.tensor([[0.31], [0.62]], dtype=torch.float64)

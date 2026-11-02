@@ -16,7 +16,6 @@ from ..map.field.implicit_forward import predict_observation_mean
 from ..map.field.types import FieldObservation, ForwardContext, PSFSpec
 from ..map.observation import ImageObservation
 from ..map.operators.config import MapValueSemantics
-from ..map.operators.resampling import sample_image_plane_batched_channels
 from ..map.product import BandpassSpec, ProductSpec
 from ..map.scenes import (
     ContinuousFieldModel,
@@ -28,7 +27,7 @@ from ..map.scenes import (
     as_scene_representation,
     target_to_field_observation,
 )
-from ..map.splat import SplatDiagnostics, splat_to_native
+from ..map.splat import SplatDiagnostics
 from ..map.target import TargetRenderSpec
 from .operators import (
     ObservationOperatorAdapter,
@@ -183,8 +182,6 @@ __all__ = [
     "predict",
     "product_spec",
     "render",
-    "sample_image_plane_batched_channels",
-    "splat_to_native",
     "target_from_header",
     "target_from_product",
     "target_to_field_observation",

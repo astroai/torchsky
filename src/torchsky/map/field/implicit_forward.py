@@ -23,7 +23,7 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from torchsky.redshift import require_one_plus_z
+from torchsky.redshift import _require_one_plus_z
 
 from ..operators.bundle import ObservationOperatorBundle
 from .core import render_field_observation
@@ -49,7 +49,7 @@ class KinematicState:
         z = self.one_plus_z
         if z is None:
             return 1.0
-        return float(require_one_plus_z(z))
+        return float(_require_one_plus_z(z))
 
 
 @dataclass(frozen=True)

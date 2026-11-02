@@ -271,7 +271,7 @@ def observed_altaz(
     return az, alt
 
 
-def icrs_to_itrs_xyz(
+def _icrs_to_itrs_xyz(
     state: CatalogState,
     *,
     obstime_mjd_utc: Any,
@@ -286,7 +286,7 @@ def icrs_to_itrs_xyz(
     )
 
 
-def itrs_xyz_to_lonlat_deg(xyz: Tensor) -> tuple[Tensor, Tensor]:
+def _itrs_xyz_to_lonlat_deg(xyz: Tensor) -> tuple[Tensor, Tensor]:
     """ITRS unit/vector to geocentric lon/lat in degrees."""
     norm = torch.linalg.vector_norm(xyz, dim=-1).clamp_min(1.0e-15)
     x = xyz[..., 0] / norm

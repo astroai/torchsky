@@ -37,6 +37,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     # Public facade: one entry per name in ``__all__``.
     "Observation": ("torchsky.map.observation", "Observation"),
     "IFUObservation": ("torchsky.map.observation", "IFUObservation"),
+    "ImageObservation": ("torchsky.map.observation", "ImageObservation"),
     "Target": ("torchsky.map.observation", "Target"),
     "CubeTarget": ("torchsky.map.observation", "CubeTarget"),
     "ResampleConfig": ("torchsky.map.observation", "ResampleConfig"),
@@ -70,6 +71,7 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "match_sky": ("torchsky.map.sky_matching", "match_sky"),
     "coadd": ("torchsky.map.image_plane_coadd", "coadd"),
     "coadd_multiband": ("torchsky.map.image_plane_coadd", "coadd_multiband"),
+    "coadd_image_plane": ("torchsky.map.image_plane_coadd", "coadd_image_plane"),
     "coadd_cube": ("torchsky.map.cube", "coadd_cube"),
     "plan_ifu_cube_response": ("torchsky.map.ifu", "plan_ifu_cube_response"),
     "build_ifu_cube": ("torchsky.map.ifu", "build_ifu_cube"),
@@ -130,6 +132,7 @@ if TYPE_CHECKING:
         aperture_uncertainty as aperture_uncertainty,
         blot as blot,
         coadd as coadd,
+        coadd_image_plane as coadd_image_plane,
         coadd_multiband as coadd_multiband,
         resample as resample,
     )
@@ -139,6 +142,7 @@ if TYPE_CHECKING:
         CubeTarget as CubeTarget,
         HealpixResult as HealpixResult,
         IFUObservation as IFUObservation,
+        ImageObservation as ImageObservation,
         MapResult as MapResult,
         MultibandResult as MultibandResult,
         Observation as Observation,
@@ -177,6 +181,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Observation",
     "IFUObservation",
+    "ImageObservation",
     "Target",
     "CubeTarget",
     "ResampleConfig",
@@ -207,6 +212,7 @@ __all__ = [
     "match_sky",
     "coadd",
     "coadd_multiband",
+    "coadd_image_plane",
     "coadd_cube",
     "plan_ifu_cube_response",
     "build_ifu_cube",

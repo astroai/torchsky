@@ -17,7 +17,7 @@ from torchsky.redshift import (
     one_plus_z_from_beta,
     one_plus_z_from_velocity_kms,
     one_plus_z_from_zeta,
-    require_one_plus_z,
+    _require_one_plus_z,
     shift_ln_wavelength,
     shift_wavelength,
     zeta_from_beta,
@@ -90,7 +90,7 @@ def test_shift_wavelength_and_require() -> None:
         shift_wavelength(torch.tensor([100.0]), 2.0), torch.tensor([200.0])
     )
     with pytest.raises(ValueError, match="positive"):
-        require_one_plus_z(0.0)
+        _require_one_plus_z(0.0)
 
 
 def test_z_zero_rapidity_is_identity() -> None:

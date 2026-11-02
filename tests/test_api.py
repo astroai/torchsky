@@ -55,6 +55,7 @@ def test_map_root_keeps_workflow_api_small() -> None:
     assert set(torchsky.map.__all__) == {
         "Observation",
         "IFUObservation",
+        "ImageObservation",
         "Target",
         "CubeTarget",
         "ResampleConfig",
@@ -86,6 +87,7 @@ def test_map_root_keeps_workflow_api_small() -> None:
         "match_sky",
         "coadd",
         "coadd_multiband",
+        "coadd_image_plane",
         "coadd_cube",
         "build_ifu_cube",
         "coadd_healpix",
@@ -150,7 +152,7 @@ def test_field_namespace_uses_short_composable_verbs() -> None:
 
     assert isinstance(model, SineImplicitField)
     assert isinstance(field.preset("fast", domain), SkyEncoderMLPField)
-    obs = field.Observation(
+    obs = field.FieldObservation(
         image=torch.zeros((3, 4)),
         header={
             "NAXIS": 2,

@@ -19,10 +19,8 @@ namespace `torchsky.sphere` unless the group text says otherwise.
 ::: torchsky.sphere
     options:
       members:
-        - chord_radius
         - fit_monopole_dipole
         - great_circle_distance
-        - interpolate_wavelength_axis
         - lonlat_to_unit_xyz
         - pairwise_angular_distance
         - remove_monopole_dipole
