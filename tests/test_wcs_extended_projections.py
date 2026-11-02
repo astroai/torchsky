@@ -12,6 +12,7 @@ from astropy.wcs import Prjprm
 from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
+from torchsky.wcs import quadcube
 from torchsky.wcs.zenithal import deproject_zenithal, project_zenithal
 
 
@@ -227,3 +228,27 @@ def test_paper2_cuda_matches_cpu(
     x_g, y_g = gpu.world_to_pixel(ra_v.cuda(), dec_v.cuda(), origin=0)
     np.testing.assert_allclose(x_g.cpu().numpy(), x_c.numpy(), atol=parity_atol)
     np.testing.assert_allclose(y_g.cpu().numpy(), y_c.numpy(), atol=parity_atol)
+
+
+def test_csc_forward_poly_is_independent_of_tensor_length():
+    # Fused vs unfused addcmul differed between the vectorised body and scalar
+    # tail of the CPU kernel (len 7 vs len 64 prefix disagreed in 1 ulp).
+    g = torch.Generator().manual_seed(1)
+    c = torch.rand(200_000, generator=g, dtype=torch.float64) * 1.6 - 0.8
+    p = torch.rand(200_000, generator=g, dtype=torch.float64) * 1.6 - 0.8
+    full = quadcube._csc_forward_poly(c, p)
+    for n in (7, 13, 1001):
+        assert torch.equal(quadcube._csc_forward_poly(c[:n], p[:n]), full[:n])
+
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+def test_csc_s2x_x2s_cuda_bitwise_matches_cpu():
+    g = torch.Generator().manual_seed(2)
+    phi = torch.rand(50_000, generator=g, dtype=torch.float64) * 360 - 180
+    th = torch.rand(50_000, generator=g, dtype=torch.float64) * 180 - 90
+    for fn in (quadcube._csc_s2x, quadcube._csc_x2s):
+        cpu = fn(phi, th)
+        gpu = fn(phi.cuda(), th.cuda())
+        for a, b in zip(cpu, gpu):
+            assert torch.equal(a, b.cpu())

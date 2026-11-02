@@ -82,18 +82,30 @@ _CSC_INV_Z4 = (_CSC_P04, _CSC_P14, _CSC_P24)
 _CSC_INV_Z5 = (_CSC_P05, _CSC_P15)
 
 
+def _madd(acc: Tensor, a: Tensor, b: Tensor) -> Tensor:
+    """``acc + a * b`` as two separately rounded float32 kernels.
+
+    WCSLIB's quad-cube polynomials are evaluated without contraction. A fused
+    ``torch.addcmul`` is device dependent: the CPU kernel rounds the product,
+    while the CUDA kernel is contracted to a hardware FMA by nvcc, giving
+    one-ulp (~8 mas) differences. Two eager ops cannot be contracted, so every
+    device gives the same bits.
+    """
+    return acc + a * b
+
+
 def _horner_addcmul(x: Tensor, coeffs: tuple[float, ...]) -> Tensor:
-    """Float32 Horner via addcmul so FMA matches WCSLIB/C ``a + x*b``."""
+    """Float32 Horner, ``a + x*b`` per step, rounded like WCSLIB/C."""
     acc = x.new_tensor(coeffs[-1])
     for coeff in reversed(coeffs[:-1]):
-        acc = torch.addcmul(x.new_tensor(coeff), x, acc)
+        acc = _madd(x.new_tensor(coeff), x, acc)
     return acc
 
 
 def _horner_addcmul_terms(x: Tensor, terms: tuple[Tensor, ...]) -> Tensor:
     acc = terms[-1]
     for term in reversed(terms[:-1]):
-        acc = torch.addcmul(term, x, acc)
+        acc = _madd(term, x, acc)
     return acc
 
 
@@ -356,7 +368,7 @@ def _tsc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
 # ---------------------------------------------------------------------------
 
 def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
-    # WCSLIB cscs2x evaluates this polynomial in float32 with FMA Horner.
+    # WCSLIB cscs2x evaluates this polynomial in float32 (uncontracted Horner).
     chi_f = chi.to(dtype=torch.float32)
     psi_f = psi.to(dtype=torch.float32)
     chi2 = chi_f * chi_f
@@ -368,30 +380,30 @@ def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
     psi4 = torch.where(psi2 > 1.0e-16, psi2 * psi2, torch.zeros_like(psi2))
     chipsi = (chi_f * psi_f).abs()
     chi2psi2 = torch.where(chipsi > 1.0e-16, chi2 * psi2, torch.zeros_like(chi2))
-    inner = torch.addcmul(
-        torch.addcmul(chi2.new_tensor(_CSC_C00), chi2.new_tensor(_CSC_C10), chi2),
+    inner = _madd(
+        _madd(chi2.new_tensor(_CSC_C00), chi2.new_tensor(_CSC_C10), chi2),
         chi2.new_tensor(_CSC_C01),
         psi2,
     )
-    inner = torch.addcmul(inner, chi2.new_tensor(_CSC_C11), chi2psi2)
-    inner = torch.addcmul(inner, chi2.new_tensor(_CSC_C20), chi4)
-    inner = torch.addcmul(inner, chi2.new_tensor(_CSC_C02), psi4)
-    mid = torch.addcmul(
-        torch.addcmul(
+    inner = _madd(inner, chi2.new_tensor(_CSC_C11), chi2psi2)
+    inner = _madd(inner, chi2.new_tensor(_CSC_C20), chi4)
+    inner = _madd(inner, chi2.new_tensor(_CSC_C02), psi4)
+    mid = _madd(
+        _madd(
             chi2.new_tensor(_CSC_GAMMA) * chi2co, chi2.new_tensor(_CSC_M), chi2
         ),
         psi2co,
         inner,
     )
-    omega = chi2.new_tensor(_CSC_OMEGA1) - chi2co * torch.addcmul(
+    omega = chi2.new_tensor(_CSC_OMEGA1) - chi2co * _madd(
         chi2.new_tensor(_CSC_D0), chi2.new_tensor(_CSC_D1), chi2
     )
-    gterm = torch.addcmul(
-        torch.addcmul(chi2.new_tensor(_CSC_GSTAR), psi2, mid),
+    gterm = _madd(
+        _madd(chi2.new_tensor(_CSC_GSTAR), psi2, mid),
         chi2,
         omega,
     )
-    out = chi_f * torch.addcmul(chi2, chi2co, gterm)
+    out = chi_f * _madd(chi2, chi2co, gterm)
     return out.to(dtype=chi.dtype)
 
 
@@ -408,7 +420,7 @@ def _csc_inverse_poly(xf: Tensor, yf: Tensor) -> Tensor:
     z5 = _horner_addcmul(xx, _CSC_INV_Z5)
     chi = _horner_addcmul_terms(yy, (z0, z1, z2, z3, z4, z5, xx.new_tensor(_CSC_P06)))
     one_minus_xx = xx.new_tensor(1.0) - xx
-    return torch.addcmul(xf_f, xf_f * one_minus_xx, chi)
+    return _madd(xf_f, xf_f * one_minus_xx, chi)
 
 
 def _csc_cpp_pair(
