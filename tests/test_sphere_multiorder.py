@@ -234,3 +234,24 @@ def test_cdshealpix_interchange_optional() -> None:
     back = MultiOrderHealpixMap.from_cdshealpix(multi.to_cdshealpix())
     torch.testing.assert_close(back.uniq, multi.uniq)
     torch.testing.assert_close(back.values, multi.values)
+
+
+def test_from_mhealpy_reads_density_method_not_its_truthiness() -> None:
+    import torch
+
+    from torchsky.sphere import MultiOrderHealpixMap
+
+    class _MhealpyLike:
+        """mhealpy exposes ``density`` as a method, which is always truthy."""
+
+        def __init__(self, density: bool) -> None:
+            self._flag = density
+            self.uniq = torch.tensor([4, 5, 6, 7], dtype=torch.int64).numpy()
+            self.data = torch.ones(4, dtype=torch.float64).numpy()
+
+        def density(self) -> bool:
+            return self._flag
+
+    for flag in (False, True):
+        back = MultiOrderHealpixMap.from_mhealpy(_MhealpyLike(flag))
+        assert back.values_are_densities is flag

@@ -257,7 +257,9 @@ class MultiOrderHealpixMap:
 
     @classmethod
     def from_mhealpy(cls, map_obj: UniqValueMapProtocol) -> MultiOrderHealpixMap:
-        density = bool(getattr(map_obj, "density", getattr(map_obj, "_density", False)))
+        # mhealpy exposes ``density`` as a method; older objects carry ``_density``.
+        flag = getattr(map_obj, "density", getattr(map_obj, "_density", False))
+        density = bool(flag() if callable(flag) else flag)
         metadata: dict[str, Any] = {}
         for name in ("coordsys", "unit"):
             value = getattr(map_obj, name, None)

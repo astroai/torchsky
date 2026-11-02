@@ -247,3 +247,44 @@ def test_synfast_returns_on_the_spectrum_device_and_is_seed_stable() -> None:
     sky = sphere.synfast(cl.cuda(), nside=8, lmax=16)
     assert sky.device.type == "cuda"
     assert sphere.anafast(sky, lmax=16).device.type == "cuda"
+
+
+def test_stacked_wcs_forms_report_device_mismatch_clearly() -> None:
+    import torch
+
+    from torchsky.wcs import WCS
+
+    accel = (
+        "cuda"
+        if torch.cuda.is_available()
+        else ("mps" if torch.backends.mps.is_available() else None)
+    )
+    if accel is None:
+        pytest.skip("no CUDA or MPS")
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 64,
+        "NAXIS2": 64,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 32.0,
+        "CRPIX2": 32.0,
+        "CRVAL1": 150.0,
+        "CRVAL2": 2.0,
+        "CDELT1": -1e-4,
+        "CDELT2": 1e-4,
+    }
+    wcs = WCS(header)
+    pix = torch.rand(8, 2, device=accel) * 64
+    # Differentiable forms keep WCS parameters in the graph: mismatch is an error.
+    for call in (wcs.pixel_to_world_differentiable, wcs.world_to_pixel_differentiable):
+        with pytest.raises(ValueError, match="wcs.to"):
+            call(pix)
+    # Plain forms follow the coordinates' device, stacked or not, and agree.
+    ra, dec = wcs.pixel_to_world(pix[:, 0], pix[:, 1])
+    stacked = wcs.pixel_to_world(pix)
+    assert ra.device.type == accel and stacked.device.type == accel
+    torch.testing.assert_close(stacked[:, 0], ra)
+    torch.testing.assert_close(stacked[:, 1], dec)
+    assert wcs.world_to_pixel(stacked).device.type == accel
+    assert wcs.to(accel).pixel_to_world(pix).device.type == accel

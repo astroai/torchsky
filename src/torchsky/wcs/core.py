@@ -5019,8 +5019,27 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             det2im2=self.det2im2 if identity_axes else None,
         )
 
+    def _require_wcs_device(self, value: Tensor, name: str) -> Tensor:
+        """Differentiable forms need the WCS on the coordinates' device.
+
+        The plain forms follow accelerator inputs; the differentiable forms keep
+        WCS parameters in the graph (WCS fitting), so a device mismatch is
+        reported here instead of moving parameters or failing inside torch.
+        """
+        if (
+            isinstance(self.device, torch.device)
+            and value.device.type != self.device.type
+        ):
+            raise ValueError(
+                f"{name} are on {value.device} but this WCS is on {self.device}; "
+                f"call wcs.to({str(value.device)!r}) first (the non-differentiable "
+                "pixel_to_world/world_to_pixel follow the input device)"
+            )
+        return value
+
     def _coerce_stacked_coord(self, value: Any, name: str) -> Tensor:
         tensor = self._as_wcs_coord(value)
+        self._require_wcs_device(tensor, name)
         if tensor.shape == ():
             raise ValueError(f"{name} must have trailing dimension {self.naxis}")
         if tensor.shape[-1] != self.naxis:
@@ -5044,6 +5063,17 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
         if len(args) == 1:
             pixels = self._as_wcs_coord(args[0])
+            if (
+                self.naxis == 2
+                and isinstance(self.device, torch.device)
+                and pixels.device.type != self.device.type
+                and pixels.shape[-1:] == (2,)
+            ):
+                # Follow the coordinates' device like the two-argument form does.
+                lon, lat = self.pixel_to_world(
+                    pixels[..., 0], pixels[..., 1], origin=origin
+                )
+                return torch.stack([lon, lat], dim=-1)
         else:
             coordinates = torch.broadcast_tensors(
                 *(self._as_wcs_coord(a) for a in args)
