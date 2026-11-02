@@ -142,7 +142,8 @@ assert bool((altaz.lat.abs() <= 90.0).all())
 
 Opt-in extras are never imported by `torchsky.wcs`: `astropy_interop`
 (`from_astropy`, `to_astropy`), `ephemeris.get_body` (`jplephem` and a DE
-kernel), `tle.catalog_state_from_tle` (`sgp4`, frame `TEME`), and
+kernel; the small DE440s kernel covers the Sun, Moon and inner planets, Mars and the
+outer planets need the full DE440), `tle.catalog_state_from_tle` (`sgp4`, frame `TEME`), and
 `gwcs_live.freeze_live_gwcs`. Astropy and ERFA are the oracles for geometric
 frames and space motion; observed-place parity is only meaningful once both
 sides pin the same EOP values.

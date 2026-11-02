@@ -22,7 +22,7 @@ boundary with `torchfits` and the comparator packages, see
 | `astropy.table.Table` | [`torchfits.table`](concepts.md#file-boundary) | Arrow/table batches; torchsky consumes tensors. |
 | `astropy.cosmology` | [`torchsky.cosmology`](reference/cosmology.md) | Differentiable FLRW container, no parameter priors. |
 | `astropy extinction laws` | [`torchsky.extinction`](reference/extinction.md) | Unit-explicit dust laws on tensors. |
-| `specutils` Doppler/rebin | [`torchsky.spectral`](spectral.md) | Axis objects and flux-conserving rebin. |
+| `specutils` Doppler/rebin | [`torchsky.spectral`](spectral.md) | Spectral axes, flux-conserving rebin and relativistic Doppler shifts (parity-tested); not spectrum I/O or cube readers. |
 
 ## WCS
 
