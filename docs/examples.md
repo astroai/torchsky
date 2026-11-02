@@ -152,7 +152,7 @@ line peak at 5038 A (truth 5040); continuum 1.000 (truth 1.0); moment-0 centroid
 
 ### Real survey cutouts, opt-in
 
-Coadd real survey cutouts (opt-in; skips cleanly when no data is present). *Runtime: a few seconds for small cutouts.*
+Coadd overlapping pieces of a real CFHT MegaPipe cutout onto one TAN grid. *Runtime: a few seconds.*
 
 Script: [`examples/real_data_cutout.py`](https://github.com/astroai/torchsky/blob/main/examples/real_data_cutout.py) · [site copy](published-examples/real_data_cutout.py)
 

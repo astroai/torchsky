@@ -10,15 +10,14 @@ tracks the package's own direction, not experiment queues.
 
 ## Current focus: 0.5
 
-0.5 is the first public release of the package under the name `torchsky`. It is
-distributed as a GitHub pre-release (0.5.0rc1) and is not uploaded to PyPI; `pip install
-torchsky` works from 0.5.0, which ships when the goals below are met.
+0.5 is the first public release of the package under the name `torchsky`. The
+goals below define what it ships.
 
 | Goal | What "done" means |
 |---|---|
 | Correct | Full package suite green; analytic and reference-comparison gates in the harness pass on the declared cases |
 | Fast | Measured against reference implementations on the same machine; hot paths stay tensor-native, with no NumPy/Astropy round trips inside loops |
-| Lean and clean API | One name per concept; no legacy or duplicate surfaces; the public manifest and docs match the code |
+| Lean and clean API | One name per concept; no duplicate surfaces; the public manifest and docs match the code |
 | Clean structure | Implementations live where the API says they do; the largest modules (`wcs/core.py`, `sphere/spectral.py`, `map/image_plane_coadd.py`, ...) are split into cohesive units |
 | Documented | Every public namespace has a guide, runnable examples, and a built documentation site |
 | Harnessed | Correctness, parity, and performance evidence recorded with provenance in `torchsky-harness` |
@@ -122,7 +121,7 @@ Calibrated-field work (post-0.5 unless promoted):
 
 Engineering backlog:
 
-- Legacy band-grid MPS footprint-bound issue.
+- MPS footprint-bound issue on band-grid detectors.
 - Conservative NLL derivative-order/device contract before widening its range.
 - Keep observed curvature distinct from expected Fisher information, and
   calibration uncertainty distinct from fixed product scaling.

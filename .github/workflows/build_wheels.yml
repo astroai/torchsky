@@ -162,7 +162,7 @@ jobs:
         run: python scripts/release_lane.py --print-pins 2>/dev/null >> "$GITHUB_ENV"
       - name: Pin the build-time torch to the lane
         run: |
-          echo "CIBW_BEFORE_BUILD=python -m pip install --only-binary=:all: 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=2.1,<2.4' 'torch${TORCH_PIN}'" >> "$GITHUB_ENV"
+          echo "CIBW_BEFORE_BUILD=python -m pip install --only-binary=:all: 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=2.4.6' 'torch${TORCH_PIN}'" >> "$GITHUB_ENV"
       - name: Build wheels
         uses: pypa/cibuildwheel@61a6d5d56175ad7cc8478df487b849cd7b85e0ce
       - name: Check wheel contents and linkage
@@ -206,7 +206,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/sdist-smoke"
           PY="$RUNNER_TEMP/sdist-smoke/bin/python"
           "$PY" -m pip install --upgrade pip
-          "$PY" -m pip install --only-binary=:all: --extra-index-url https://download.pytorch.org/whl/cpu 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=2.1,<2.4' "torch${TORCH_PIN}" "torchfits${TORCHFITS_PIN}"
+          "$PY" -m pip install --only-binary=:all: --extra-index-url https://download.pytorch.org/whl/cpu 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=2.4.6' "torch${TORCH_PIN}" "torchfits${TORCHFITS_PIN}"
           "$PY" -m pip wheel --no-deps --no-build-isolation --wheel-dir "$RUNNER_TEMP/sdist-wheel" dist/*.tar.gz
           "$PY" -m pip install --no-deps "$RUNNER_TEMP"/sdist-wheel/*.whl
           "$PY" scripts/smoke_installed_wheel.py

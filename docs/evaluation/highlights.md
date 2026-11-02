@@ -34,11 +34,11 @@ Wall clock including reads. SWarp receives the SIP distortion converted to TPV.
 | 5025 x 5025 | 144 s | 221 s / 65 s | 245 s | 149 s / 148 s |
 
 What the table says honestly: on the small grid torchsky is faster than both
-legacy codes on CPU and much faster on a GPU slice; on the 5025 x 5025 grid
+SWarp and STScI drizzle on CPU and much faster on a GPU slice; on the 5025 x 5025 grid
 torchsky Lanczos-3 on CPU (221 s) is slower than SWarp (144 s), while the GPU
 run (65 s) is faster, and drizzle is faster on CPU and about equal on GPU.
 
-Outputs agree with the legacy codes:
+Outputs agree with SWarp and STScI drizzle:
 
 - torchsky drizzle matches STScI drizzle to better than 2e-6 sigma.
 - torchsky Lanczos-3 against SWarp: median difference below 0.1 sigma, scatter
@@ -99,7 +99,6 @@ the method is described in [Field formulation](../field-formulation.md).
 
 Job scripts and launchers live under `campaigns/adass2026/jobs` in the harness.
 The harness records that some jobs install torchsky from a source tarball and use
-`astropy.io.fits` for legacy-code inputs; migration to torchfits and Pixi
-environments is pending, so treat them as evidence of the reported numbers rather
-than as a release gate. Harness methodology:
+`astropy.io.fits` to prepare comparator inputs, so treat them as evidence of the
+reported numbers rather than as a release gate. Harness methodology:
 [benchmark guide](https://github.com/astroai/torchsky-harness/blob/main/docs/benchmarks.md).

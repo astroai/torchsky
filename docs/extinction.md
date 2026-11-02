@@ -27,7 +27,7 @@ or when building spectral models ([spectral.md](spectral.md)). The reference is
 | `law` | Reference | Notes |
 |---|---|---|
 | `"ccm89"` | Cardelli, Clayton & Mathis (1989) | IR power law, optical and UV polynomials; IR extrapolated below `x=1/λ_µm = 0.3`; far-UV frozen at `x=10`. |
-| `"odonnell94"` (`"odonnell"`) | O'Donnell (1994) | Replaces the CCM89 optical polynomials only; UV and IR follow CCM89. |
+| `"odonnell94"` (`"odonnell"`) | O'Donnell (1994) | Substitutes for the CCM89 optical polynomials only; UV and IR follow CCM89. |
 | `"f99"` (`"fitzpatrick99"`) | Fitzpatrick (1999) | FM90 UV plus a natural cubic spline through the F99 knots; calibrated over the knot range, extrapolation outside it is not a claim. |
 | `"calzetti"` | Calzetti (2000) | Starburst law for `0.12–2.20 µm`; wavelengths outside that interval are clamped. |
 

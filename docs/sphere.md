@@ -169,7 +169,7 @@ functions are also grouped under `torchsky.sphere.spectral`.
 `torchsky.sphere.compat` exposes healpy- and hpgeom-shaped entry points
 (`ang2pix`, `query_disc`, `get_all_neighbours`, `ud_grade`, `map2alm`,
 `anafast`, `synfast`, `smoothing`, `pixwin`, and more) on top of the native
-kernels, with tensor inputs and outputs. Removed ignored keywords are rejected
+kernels, with tensor inputs and outputs. Keywords that have no effect are rejected
 instead of silently accepted. These labels describe intended semantics, not an
 exhaustive parity certificate; measured agreement with healpy is summarized in
 [Parity evidence](evaluation/parity.md), and the porting table is in

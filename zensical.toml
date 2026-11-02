@@ -107,7 +107,6 @@ nav = [
   {"Background" = ["field-formulation.md"]},
   {"Project" = [
     "changelog.md",
-    "migration.md",
     "roadmap.md",
     {"Contributing" = ["contributing.md", "authoring.md", "release.md"]},
   ]},

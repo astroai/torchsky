@@ -1,6 +1,6 @@
 """
 **HEALPix / healpy compatibility layer** (one slice of torchsky’s broader ecosystem
-compatibility story). torchsky also documents migration paths vs **Astropy**,
+compatibility story). torchsky also documents call mappings from **Astropy**,
 **spherical_geometry**, and other common packages at their respective API layers; see
 ``docs/coming-from.md``.
 
@@ -21,7 +21,7 @@ This module implements healpy’s NumPy-oriented HEALPix API with
 
 Top-level :mod:`torchsky.sphere` exposes the same spectral helpers as the *native*
 API. This module is the *healpy-shaped compatibility* surface: names and signatures
-aligned with healpy for migration and tests. Use
+aligned with healpy for porting and tests. Use
 ``import torchsky.sphere.compat as hp`` when porting healpy code. Other ecosystem
 mirrors (WCS, FITS tables, polygon semantics, etc.) live in their own subpackages.
 

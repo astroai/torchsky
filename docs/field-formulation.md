@@ -240,7 +240,7 @@ m_{np}w_{np}\left(y_{np}-\mu_{np}(\theta,\psi)\right)^2.
 
 If the weights are true inverse variances, this is a \(\chi^2/2\) objective.
 If they have been rescaled or clipped, it remains a weighted least-squares
-objective but no longer has an automatic probabilistic calibration. Robust
+objective but has no automatic probabilistic calibration. Robust
 Charbonnier or Huber losses can reduce sensitivity to unmasked outliers. A
 Poisson-Gaussian likelihood is preferable when working close to raw counts.
 Likewise, a soft mask is an analysis weight rather than missing-data

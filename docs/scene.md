@@ -117,7 +117,7 @@ Every solve is checked against the actual normal action and an inadequate or
 non-finite solve raises instead of returning an uncertainty. Caveats worth
 internalizing:
 
-- The method name is historical: this is inverse curvature, not automatically a
+- The method name is a misnomer: this is inverse curvature, not automatically a
   posterior variance. A sampling-covariance reading needs an estimable,
   explicitly gauge-fixed subspace and the declared noise assumptions; with a
   penalty \(P\) the estimator covariance is \((H+P)^{-1}H(H+P)^{-1}\).

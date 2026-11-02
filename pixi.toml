@@ -74,6 +74,7 @@ release-lane-check = "pixi run -e default -- python scripts/release_lane.py --ch
 release-lane-pins = "pixi run -e default -- python scripts/release_lane.py --print-pins"
 # Run every example script as a bounded smoke gate.
 examples = "pixi run -e test python examples/test_examples.py"
+fetch-example-samples = "pixi run -e test python scripts/fetch_example_samples.py"
 # Documentation site (Zensical + Material theme). See zensical.toml.
 docs-build = "pixi run docs-reference-check && bash scripts/sync_docs_examples.sh && pixi run -e docs zensical build --clean --strict"
 docs-reference = "pixi run -e docs python scripts/gen_reference.py --write"
