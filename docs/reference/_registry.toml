@@ -142,6 +142,13 @@ tier = "experimental"
 related = ["native-likelihood.md"]
 
 [[namespace]]
+name = "torchsky.map.solvers"
+slug = "map-solvers"
+tier = "experimental"
+related = ["map.md", "sht.md"]
+intro = "Matrix-free linear solvers and bound observation operators for discrete inverse mapmaking: harmonic and T/E/B prior operators, operator composition, diagonal preconditioners, and spherical-harmonic solver hooks. Experimental: signatures may change between minor releases."
+
+[[namespace]]
 name = "torchsky.map.evidence"
 slug = "map-evidence"
 tier = "experimental"

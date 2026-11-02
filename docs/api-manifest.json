@@ -115,6 +115,7 @@
   ],
   "torchsky.field": [
     "ArtifactManifest",
+    "ComponentAnchorTerm",
     "Domain",
     "FIELD_MODEL_KINDS",
     "FIELD_MODEL_PRESET_NAMES",
@@ -281,6 +282,26 @@
   "torchsky.map.query": [
     "LinearQueryResult",
     "fit_linear_query"
+  ],
+  "torchsky.map.solvers": [
+    "BoundObservationOperator",
+    "BoundObservationOperatorSet",
+    "SolverDiagnostics",
+    "SolverHooks",
+    "SolverResult",
+    "build_harmonic_cl_prior_operator",
+    "build_harmonic_degree_prior_operator",
+    "build_harmonic_dense_prior_operator",
+    "build_spherical_harmonic_solver_hooks",
+    "build_spherical_spin_harmonic_solver_hooks",
+    "build_state_identity_operator",
+    "build_state_subspace_operator",
+    "build_teb_cls_prior_operator",
+    "compose_bound_operators",
+    "conjugate_gradient",
+    "harmonic_dense_covariance",
+    "lsqr",
+    "make_diagonal_preconditioner"
   ],
   "torchsky.quality": [
     "CONFIDENCE_SEMANTICS",

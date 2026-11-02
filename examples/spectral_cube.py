@@ -24,8 +24,7 @@ import matplotlib.pyplot as plt
 import torch
 
 from torchsky.map import CubeTarget, Observation, ResampleConfig, coadd_cube
-from torchsky.wcs import WCS
-from torchsky.wcs.gwcs_sampling import IFUSliceWCS
+from torchsky.wcs import WCS, IFUSliceWCS
 
 N_SLICE, N_WAVE, N_EXP = 16, 40, 16
 PIX = 0.001  # deg

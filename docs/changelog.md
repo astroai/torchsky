@@ -19,6 +19,11 @@ owned by `torchfits`.
 > 0.3.1 split FITS I/O out of this package. Upgrading from 0.3.x: see
 > [Migrating to 0.5](migration.md#migrating-to-05).
 
+### Supported lanes
+- Python 3.12, 3.13 and 3.14 (full CI suite on each, plus macOS for 3.14); PyTorch 2.14;
+  CUDA 13 and newer (PyTorch `cu130`), validated on an NVIDIA H100; Apple MPS; Linux x86_64
+  and macOS 14+ arm64 wheels; torchfits 1.3.1 or newer.
+
 ### Architecture
 - **FITS I/O ownership moved to `torchfits`**: FITS images, HDUs, headers,
   compression, checksums, file caches, tables, Arrow scans, and I/O benchmarks
@@ -33,6 +38,8 @@ owned by `torchfits`.
   imported from `torchfits.data`.
 
 ### Public API
+- `torchsky.map.solvers` is a documented experimental namespace (minimal `__all__`);
+  `torchsky.field.ComponentAnchorTerm` is exported.
 - `torchsky.map.coadd_image_plane`, `torchsky.map.ImageObservation` and `torchsky.wcs.TemporalWCS`
   are exported from their documented namespaces.
 - Internal helpers are no longer exported: WCS fused kernels and ITRS helpers, `wcs.SPEED_OF_LIGHT`,
@@ -107,6 +114,10 @@ owned by `torchfits`.
   variance pass; data, weight, overlap and context are unchanged.
 
 ### Changed
+- `crossmatch_sky` generates candidates from declination strips with sorted RA (exact
+  great-circle verification) instead of HEALPix neighbour rings: a 10^6 x 10^6 all-sky match
+  drops from ~31 s to ~0.5 s per mode on CPU (astropy: 1.4 s / 0.9 s), results identical to
+  before and to astropy. Passing `right_index=` keeps the HEALPix index path.
 - Device follows the input: map, field-fitting and IFU APIs now compute and
   return on the device of their tensor inputs when no `device=` is given
   (CPU tensors stay on CPU even with CUDA available); mixed-device inputs raise

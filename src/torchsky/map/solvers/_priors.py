@@ -63,6 +63,12 @@ def build_harmonic_degree_prior_operator(
     include_monopole: bool = True,
     apply_noise: ApplyNoiseFn | None = None,
 ) -> BoundObservationOperator:
+    """Bind a power-law harmonic prior ``amplitude * (l + ell_offset) ** -power``.
+
+    Whitens spherical-harmonic coefficients by the inverse square root of the
+    degree-dependent variance. ``reference_state`` fixes the coefficient layout
+    and dtype; ``include_monopole`` controls the ``l = 0`` mode.
+    """
     state = torch.as_tensor(reference_state)
     if state.ndim == 1:
         diagonal = harmonic_degree_diagonal(
@@ -108,6 +114,12 @@ def harmonic_dense_covariance(
     dtype: torch.dtype = torch.float64,
     device: torch.device | None = None,
 ) -> Tensor:
+    """Dense squared-exponential covariance over harmonic coefficient index.
+
+    Entries are ``amplitude * exp(-0.5 * (dl / ell_correlation_length) ** 2)``
+    plus ``diagonal_jitter`` on the diagonal, for coefficients up to ``lmax``
+    and ``mmax``. Returns a ``(nalm, nalm)`` tensor.
+    """
     ll = int(lmax)
     mm = int(ll if mmax is None else mmax)
     if ll < 0:
@@ -169,6 +181,11 @@ def build_harmonic_dense_prior_operator(
     apply_noise: ApplyNoiseFn | None = None,
     jitter: float = 1.0e-8,
 ) -> BoundObservationOperator:
+    """Bind a Gaussian harmonic prior from a dense coefficient covariance.
+
+    The precision ``(covariance + jitter * I) ** -1`` is factorised once by
+    Cholesky and applied as a matrix operator on the flattened coefficients.
+    """
     state = torch.as_tensor(reference_state)
     covariance_t = torch.as_tensor(covariance)
     if state.ndim == 1:
@@ -218,6 +235,13 @@ def build_harmonic_cl_prior_operator(
     min_variance: float = 1.0e-8,
     apply_noise: ApplyNoiseFn | None = None,
 ) -> BoundObservationOperator:
+    """Bind a Gaussian harmonic prior with a per-multipole angular power spectrum.
+
+    The returned operator whitens spherical-harmonic coefficients by
+    ``1/sqrt(C_l)`` (optionally times a beam transfer function), for use as a
+    regulariser in a joint solve. ``reference_state`` fixes the coefficient
+    layout and dtype; ``min_variance`` floors the per-mode variance.
+    """
     state = torch.as_tensor(reference_state)
     if state.ndim == 1:
         diagonal = harmonic_cl_diagonal(
@@ -430,6 +454,12 @@ def build_teb_cls_prior_operator(
     jitter: float = 1.0e-8,
     apply_noise: ApplyNoiseFn | None = None,
 ) -> BoundObservationOperator:
+    """Bind a joint T/E/B Gaussian prior from auto and cross spectra.
+
+    ``reference_state`` has shape ``(3, nalm)``. The per-multipole 3x3 spectra
+    ``C_l`` (``cls_tt``, ``cls_ee``, ``cls_bb`` and optional cross terms) are
+    converted to precision factors; ``jitter`` regularises singular blocks.
+    """
     state = torch.as_tensor(reference_state)
     if state.ndim != 2 or int(state.shape[0]) != 3:
         raise ValueError("TEB Cl prior requires reference_state shape (3, nalm)")

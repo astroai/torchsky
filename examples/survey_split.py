@@ -14,20 +14,18 @@ from __future__ import annotations
 
 import torch
 
-from torchsky.map.field import (
-    FieldComponentAnchorTerm,
+from torchsky import field
+from torchsky.field import (
+    ComponentAnchorTerm,
+    Domain,
     FieldComponentDecomposition,
-    FieldDomain,
     FieldObservation,
     ForwardContext,
-    fit_field_component_decomposition,
-    make_field_component_decomposition,
-    render_field_observation,
 )
 
 
 class ConstantField(torch.nn.Module):
-    def __init__(self, domain: FieldDomain, value: float) -> None:
+    def __init__(self, domain: Domain, value: float) -> None:
         super().__init__()
         self.domain = domain
         self.value = torch.nn.Parameter(torch.tensor(float(value), dtype=torch.float32))
@@ -73,7 +71,7 @@ def _blank_observation() -> FieldObservation:
 
 def main() -> None:
     torch.manual_seed(11)
-    domain = FieldDomain(
+    domain = Domain(
         center_ra_deg=150.0,
         center_dec_deg=2.0,
         spatial_scale_deg=0.05,
@@ -103,7 +101,7 @@ def main() -> None:
     observation_templates = (_blank_observation(), _blank_observation())
     observations = []
     for template, context in zip(observation_templates, contexts, strict=True):
-        rendered = render_field_observation(
+        rendered = field.render(
             truth_model,
             template,
             num_spectral_samples=1,
@@ -120,7 +118,7 @@ def main() -> None:
             )
         )
 
-    fit_model = make_field_component_decomposition(
+    fit_model = field.component_decomposition(
         component_roles=roles,
         domain=domain,
         component_models=[
@@ -135,7 +133,7 @@ def main() -> None:
         fit_model.mixer.survey_weights[1, 1] = 0.2
         fit_model.mixer.survey_weights[2, 1] = -0.2
 
-    shared_anchor = FieldComponentAnchorTerm(
+    shared_anchor = ComponentAnchorTerm(
         observation=_blank_observation(),
         target_values=torch.tensor([3.0], dtype=torch.float32),
         roles="shared",
@@ -146,7 +144,7 @@ def main() -> None:
         forward_context=contexts[0],
         loss_weight=1.0,
     )
-    result = fit_field_component_decomposition(
+    result = field.fit_component_decomposition(
         observations,
         component_roles=roles,
         model=fit_model,
@@ -167,13 +165,13 @@ def main() -> None:
         calibration_anchor_model=truth_model,
         calibration_anchor_roles="shared",
     )
-    pred_a = render_field_observation(
+    pred_a = field.render(
         result.model,
         observations[0],
         num_spectral_samples=1,
         forward_context=contexts[0],
     )
-    pred_b = render_field_observation(
+    pred_b = field.render(
         result.model,
         observations[1],
         num_spectral_samples=1,

@@ -46,7 +46,7 @@ reference pages carry the contracts.
 | `torchsky.sphere` | core | 134 | [reference](sphere.md) |
 | `torchsky.transforms` | core | 20 | [reference](transforms.md) |
 | `torchsky.wcs` | core | 139 | [reference](wcs.md) |
-| `torchsky.field` | experimental | 51 | [reference](field.md) |
+| `torchsky.field` | experimental | 52 | [reference](field.md) |
 | `torchsky.filter_profiles` | experimental | 6 | [reference](filter-profiles.md) |
 | `torchsky.map.evidence` | experimental | 1 | [reference](map-evidence.md) |
 | `torchsky.map.field.chromatic` | experimental | 4 | [reference](map-field-chromatic.md) |
@@ -61,6 +61,7 @@ reference pages carry the contracts.
 | `torchsky.map.operators.nuisance` | experimental | 2 | [reference](map-operators-nuisance.md) |
 | `torchsky.map.operators.pixel_calibration` | experimental | 1 | [reference](map-operators-pixel-calibration.md) |
 | `torchsky.map.query` | experimental | 2 | [reference](map-query.md) |
+| `torchsky.map.solvers` | experimental | 18 | [reference](map-solvers.md) |
 | `torchsky.scene` | experimental | 36 | [reference](scene.md) |
 | `torchsky.viz` | experimental | 10 | [reference](viz.md) |
 

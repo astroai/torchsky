@@ -1,13 +1,13 @@
-"""Crossmatch two large synthetic catalogues (1e6 x 1e6 with ``--n 1000000``).
+"""Crossmatch two large synthetic catalogues (1e6 x 1e6 by default).
 
 Left catalogue: N uniformly distributed sky positions. Right catalogue:
 for half of them a counterpart with 0.3 arcsec Gaussian astrometric scatter,
 plus uniformly distributed unrelated sources, N rows in total. ``find="best"``
 returns the nearest counterpart within 1 arcsec; ``find="all"`` returns every
-pair. Results are checked against the injected truth. HEALPix-indexed, so the
-cost is near linear in N rather than O(N*M). Default N is 300 000 on CPU
-(about 10 s) and 1 000 000 on CUDA; ``--n 1000000`` on CPU takes about
-30 s per mode.
+pair. Results are checked against the injected truth. Candidates come from
+declination strips x sorted right ascension with an exact great-circle
+verification, so the cost is O((N + M) log M) rather than O(N*M).
+Runtime about 3 s on CPU (about 0.5 s per mode for the match itself).
 
     pixi run -e test -- python examples/crossmatch_million.py [--n N] [--device cuda]
 """
@@ -34,7 +34,7 @@ def main() -> None:
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     g = torch.Generator().manual_seed(11)
-    n = args.n or (1_000_000 if args.device.startswith("cuda") else 300_000)
+    n = args.n or 1_000_000
     n_true = n // 2
 
     ra_l, dec_l = uniform_sky(n, g)

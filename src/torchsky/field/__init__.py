@@ -69,6 +69,7 @@ from ..map.field.training import (
     fit_structured_noise_crossfit as fit_noise_crossfit,
 )
 from ..map.field.types import (
+    FieldComponentAnchorTerm as ComponentAnchorTerm,
     FieldDomain as Domain,
     FieldFitResult as FitResult,
     FieldModelKind,
@@ -201,6 +202,7 @@ __all__ = [
     "FIELD_MODEL_PRESET_NAMES",
     "RECOMMENDED_FIELD_MODEL_KINDS",
     "ArtifactManifest",
+    "ComponentAnchorTerm",
     "Domain",
     "FieldComponentDecomposition",
     "FieldModelKind",

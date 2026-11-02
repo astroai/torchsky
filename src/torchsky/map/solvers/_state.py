@@ -82,6 +82,11 @@ def build_state_identity_operator(
     *,
     apply_noise: ApplyNoiseFn | None = None,
 ) -> BoundObservationOperator:
+    """Bind the identity map on a flattened scene state.
+
+    Useful as a ridge or anchor term when composing with data operators via
+    :func:`compose_bound_operators`.
+    """
     state = torch.as_tensor(reference_state)
     target = TargetRenderSpec(
         header={
@@ -125,6 +130,11 @@ def build_state_subspace_operator(
     base_operator: BoundObservationOperator | BoundObservationOperatorSet,
     selector: int | slice | Sequence[int] | Tensor,
 ) -> BoundObservationOperator | BoundObservationOperatorSet:
+    """Restrict ``base_operator`` to a subset of the leading state axis.
+
+    ``selector`` picks rows of the state (index, slice, sequence, or tensor);
+    the adjoint embeds results back into a zero state of the original shape.
+    """
     state = torch.as_tensor(reference_state)
     indices, squeeze = _canonical_subspace_indices(state, selector)
 

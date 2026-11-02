@@ -145,6 +145,7 @@ def _inner_product(lhs: Tensor, rhs: Tensor) -> Tensor:
 
 
 def make_diagonal_preconditioner(diagonal: Tensor) -> DiagonalPreconditioner:
+    """Wrap a diagonal as a Jacobi-style :class:`DiagonalPreconditioner`."""
     return DiagonalPreconditioner(diagonal)
 
 
@@ -1014,6 +1015,12 @@ def compose_bound_operators(
     *parts: BoundObservationOperator | BoundObservationOperatorSet,
     exposure_chunk_size: int = 1,
 ) -> BoundObservationOperatorSet:
+    """Concatenate bound operators and operator sets into one set.
+
+    Data operators and prior operators are stacked so a single normal-equation
+    solve sees all of them; ``exposure_chunk_size`` bounds how many are applied
+    at once.
+    """
     operators: list[BoundObservationOperator] = []
     for part in parts:
         if isinstance(part, BoundObservationOperator):

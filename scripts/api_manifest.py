@@ -39,6 +39,7 @@ NAMESPACES = (
     "torchsky.filter_profiles",
     "torchsky.map.likelihood",
     "torchsky.map.query",
+    "torchsky.map.solvers",
     "torchsky.map.evidence",
     "torchsky.map.operators.nuisance",
     "torchsky.map.operators.continuous_response",

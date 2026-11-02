@@ -182,6 +182,7 @@ namespace `torchsky.field` unless the group text says otherwise.
 ::: torchsky.field
     options:
       members:
+        - ComponentAnchorTerm
         - Domain
         - FieldObservation
         - FitResult

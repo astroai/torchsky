@@ -51,7 +51,7 @@ def test_solver_package_reexports_historical_callable_aliases() -> None:
         "PreconditionerFn",
     }
 
-    assert aliases <= set(solver_api.__all__)
+    # Importable for compatibility; deliberately not in the experimental __all__.
     assert all(hasattr(solver_api, name) for name in aliases)
 
 

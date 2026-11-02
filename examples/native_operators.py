@@ -31,26 +31,32 @@ from torchsky.map.field.native_response import (
     bind_native_field_likelihood,
     render_native_field_observation,
 )
-from torchsky.map.field.types import FieldObservation
 from torchsky.map.likelihood import GaussianLikelihoodFactor, GaussianLikelihoodSystem
-from torchsky.map.operators import (
+from torchsky.map.operators.continuous_response import (
     AchromaticPixelResponse,
-    AdditiveProcessingState,
-    CalibratedNuisancePrecision,
-    GaussianPixelResponse,
-    LinearDetectorResponse,
     NativeQuadratureResponseOp,
-    ObservationOperatorBundle,
-    PixelCalibrationOp,
+)
+from torchsky.map.operators.detector_response import (
+    LinearDetectorResponse,
     integrated_detector_moments,
     integrated_photoelectron_mean,
+)
+from torchsky.map.operators.epsf import (
+    GaussianPixelResponse,
     native_pixel_stamp,
     profile_native_star,
 )
+from torchsky.map.operators.nuisance import CalibratedNuisancePrecision
+from torchsky.map.operators.pixel_calibration import PixelCalibrationOp
 from torchsky.map.query import fit_linear_query
-from torchsky.map.scenes import DiscreteTargetImage, SceneRepresentation
 from torchsky.map.solvers import BoundObservationOperator
-from torchsky.map.target import TargetRenderSpec
+from torchsky.scene import (
+    DiscreteTargetImage,
+    FieldObservation,
+    ObservationOperatorBundle,
+    SceneRepresentation,
+    TargetRenderSpec,
+)
 
 
 def detector_moments() -> None:
@@ -156,7 +162,7 @@ def field_response() -> None:
         band_name="example-band",
         value_unit="ADU",
         value_semantics="surface_brightness",
-        processing_state=AdditiveProcessingState.CALIBRATED_IMAGE,
+        processing_state="calibrated_image",
         detector_law="gaussian",
     )
     sky = Sky()

@@ -98,3 +98,42 @@ def test_gate_wcs_tan_world_to_pixel_bulk() -> None:
 
     max_s = float(os.environ.get("TORCHSKY_PERF_GATE_WCS_W2P_S", "2.0"))
     assert _median_seconds(run) < max_s
+
+
+def test_gate_crossmatch_sky_scales_with_candidates_not_pairs() -> None:
+    """Uniform all-sky crossmatch prunes to ~O(N) candidates and stays fast."""
+    from torchsky.catalogs import core as catalogs_core
+    from torchsky.catalogs import crossmatch_sky
+
+    n = 200_000
+    g = torch.Generator().manual_seed(5)
+    ra_l = torch.rand(n, generator=g, dtype=torch.float64) * 360.0
+    dec_l = torch.rad2deg(
+        torch.asin(2.0 * torch.rand(n, generator=g, dtype=torch.float64) - 1.0)
+    )
+    ra_r = (ra_l + torch.randn(n, generator=g, dtype=torch.float64) * 1e-4) % 360.0
+    dec_r = (dec_l + torch.randn(n, generator=g, dtype=torch.float64) * 1e-4).clamp(
+        -90.0, 90.0
+    )
+    radius = torch.full((n,), 1.0, dtype=torch.float64)
+
+    _, stats = catalogs_core._crossmatch_sky_strips(
+        ra_l,
+        dec_l,
+        ra_r,
+        dec_r,
+        radius_arcsec=radius,
+        left_chunk_size=65536,
+        right_chunk_size=65536,
+        find="all",
+        return_stats=True,
+    )
+    # The candidate area per left row is ~6 r^2, so a few candidates per row at
+    # most; an O(N*M) or per-pixel ring path would be orders of magnitude above.
+    assert stats.pairs_evaluated < 20 * n
+
+    def run() -> None:
+        crossmatch_sky(ra_l, dec_l, ra_r, dec_r, radius_arcsec=1.0, find="best")
+
+    max_s = float(os.environ.get("TORCHSKY_PERF_GATE_CROSSMATCH_S", "5.0"))
+    assert _median_seconds(run, iters=1) < max_s

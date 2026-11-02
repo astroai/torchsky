@@ -101,7 +101,7 @@ Indexed, chunked catalogue operations that stay near-linear in N.
 
 ### Crossmatch of two million-source catalogues
 
-Crossmatch two large synthetic catalogues (1e6 x 1e6 with ``--n 1000000``).
+Crossmatch two large synthetic catalogues (1e6 x 1e6 by default). *Runtime: about 3 s on CPU (about 0.5 s per mode for the match itself).*
 
 Script: [`examples/crossmatch_million.py`](https://github.com/astroai/torchsky/blob/main/examples/crossmatch_million.py) · [site copy](published-examples/crossmatch_million.py)
 

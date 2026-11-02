@@ -86,6 +86,7 @@ nav = [
       "reference/map-likelihood.md",
       "reference/map-query.md",
       "reference/map-evidence.md",
+      "reference/map-solvers.md",
       "reference/map-operators-continuous-response.md",
       "reference/map-operators-detector-response.md",
       "reference/map-operators-epsf.md",

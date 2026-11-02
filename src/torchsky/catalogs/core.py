@@ -776,6 +776,210 @@ def _crossmatch_sky_coarse_indexed(
     return result
 
 
+_RA_KEY_BITS = 32
+_RA_KEY_SCALE = float(1 << _RA_KEY_BITS)
+_MAX_STRIPS = 1 << 30
+_MIN_CANDIDATE_PAIRS = 1 << 21
+
+
+class _DecStripIndex:
+    """Right catalogue sorted by (declination strip, right ascension).
+
+    Strips have height ``>= radius_max``, so the match cap of any left row
+    touches a few adjacent strips, and within each strip the cap is a
+    contiguous right-ascension interval (two when it wraps through 0/360,
+    the full circle when it contains a pole). Candidates are found with
+    ``searchsorted`` on one int64 key ``strip << 32 | quantised RA``; the
+    exact great-circle test then runs on those candidates only. Cost is
+    ``O((N + M) log M + K)`` for ``K`` candidate pairs (about ``6 r^2``
+    of sky area per left row), with no per-pixel Python loop.
+    """
+
+    def __init__(self, right_ra: Tensor, right_dec: Tensor, radius_max_arcsec: float):
+        device = right_ra.device
+        self.device = device
+        self.dtype = right_ra.dtype
+        self.strip_height = max(radius_max_arcsec / 3600.0, 180.0 / _MAX_STRIPS)
+        self.n_strips = int(math.ceil(180.0 / self.strip_height)) + 1
+        strip = self._strip_of(right_dec)
+        key = (strip << _RA_KEY_BITS) | self._ra_key(right_ra)
+        order = torch.argsort(key, stable=True)
+        self.order = order
+        self.key = key[order]
+        self.ra = right_ra[order]
+        self.dec = right_dec[order]
+
+    def _strip_of(self, dec: Tensor) -> Tensor:
+        idx = torch.floor((dec + 90.0) / self.strip_height).to(torch.int64)
+        return idx.clamp_(0, self.n_strips - 1)
+
+    @staticmethod
+    def _ra_key(ra_deg: Tensor) -> Tensor:
+        wrapped = torch.remainder(ra_deg, 360.0)
+        key = torch.floor(wrapped * (_RA_KEY_SCALE / 360.0)).to(torch.int64)
+        return key.clamp_(0, (1 << _RA_KEY_BITS) - 1)
+
+    def _segments(
+        self, left_ra: Tensor, left_dec: Tensor, radius_deg: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Per (left row, strip, wrap piece): ``(left row, start, stop)`` in sorted order."""
+        dtype = left_ra.dtype
+        eps = torch.finfo(dtype).eps
+        pad_dec = 8.0 * eps * 90.0
+        pad_ra = 8.0 * eps * 360.0
+        lo_strip = self._strip_of(left_dec - radius_deg - pad_dec)
+        hi_strip = self._strip_of(left_dec + radius_deg + pad_dec)
+        n_extra = int((hi_strip - lo_strip).max().item())
+
+        # Half-width in RA of the cap; the full circle when it holds a pole.
+        sin_r = torch.sin(torch.deg2rad(radius_deg))
+        cos_d = torch.cos(torch.deg2rad(left_dec))
+        ratio = sin_r / cos_d.clamp(min=torch.finfo(dtype).tiny)
+        full = ratio * (1.0 + 8.0 * eps) >= 1.0
+        dra = torch.rad2deg(torch.asin(ratio.clamp(max=1.0))) + pad_ra
+        full = full | (dra >= 180.0)
+        ra = torch.remainder(left_ra, 360.0)
+        lo = torch.where(full, torch.zeros_like(ra), ra - dra)
+        hi = torch.where(full, torch.full_like(ra, 360.0), ra + dra)
+        # Pieces: [lo, hi] clipped to [0, 360], plus the wrapped remainders.
+        a_lo, a_hi = lo.clamp(min=0.0), hi.clamp(max=360.0)
+        b_lo = torch.where(lo < 0.0, lo + 360.0, torch.ones_like(lo))
+        b_hi = torch.where(lo < 0.0, torch.full_like(lo, 360.0), torch.zeros_like(lo))
+        c_lo = torch.zeros_like(lo)
+        c_hi = torch.where(hi > 360.0, hi - 360.0, -torch.ones_like(hi))
+        piece_lo = torch.stack((a_lo, b_lo, c_lo), dim=1)
+        piece_hi = torch.stack((a_hi, b_hi, c_hi), dim=1)
+        valid_piece = piece_lo <= piece_hi
+        scale = _RA_KEY_SCALE / 360.0
+        top = (1 << _RA_KEY_BITS) - 1
+        klo = torch.floor(piece_lo * scale).to(torch.int64).clamp(0, top)
+        khi = torch.floor(piece_hi * scale).to(torch.int64).clamp(0, top)
+
+        offsets = torch.arange(n_extra + 1, dtype=torch.int64, device=left_ra.device)
+        strip = lo_strip.unsqueeze(1) + offsets.unsqueeze(0)  # [n, S]
+        valid_strip = strip <= hi_strip.unsqueeze(1)
+        base = strip << _RA_KEY_BITS
+        # [n, S, 3]
+        key_lo = base.unsqueeze(2) + klo.unsqueeze(1)
+        key_hi = base.unsqueeze(2) + khi.unsqueeze(1)
+        valid = valid_strip.unsqueeze(2) & valid_piece.unsqueeze(1)
+        start = torch.searchsorted(self.key, key_lo.reshape(-1), right=False)
+        stop = torch.searchsorted(self.key, key_hi.reshape(-1), right=True)
+        count = (stop - start) * valid.reshape(-1)
+        rows = torch.nonzero(count > 0, as_tuple=True)[0]
+        per_row = (n_extra + 1) * 3
+        return rows // per_row, start[rows], start[rows] + count[rows]
+
+    def query(
+        self,
+        left_ra: Tensor,
+        left_dec: Tensor,
+        radius_arcsec: Tensor,
+        *,
+        left_offset: int,
+        find: str,
+        max_pairs: int,
+        left_hits: list[Tensor],
+        right_hits: list[Tensor],
+        sep_hits: list[Tensor],
+        stats: _CrossmatchStats | None,
+    ) -> None:
+        radius_deg = radius_arcsec / 3600.0
+        seg_left, starts, stops = self._segments(left_ra, left_dec, radius_deg)
+        if stats is not None:
+            stats.candidate_rows_considered += int((stops - starts).sum().item())
+        for seg_rel, right_sorted in _ragged_candidate_batches(
+            starts, stops, max_pairs=max_pairs
+        ):
+            if stats is not None:
+                stats.candidate_groups += 1
+                stats.pairs_evaluated += int(seg_rel.numel())
+            lrel = seg_left[seg_rel]
+            sep = (
+                great_circle_distance(
+                    left_ra[lrel],
+                    left_dec[lrel],
+                    self.ra[right_sorted],
+                    self.dec[right_sorted],
+                    degrees=True,
+                )
+                * 3600.0
+            )
+            mask = sep <= radius_arcsec[lrel]
+            lrel, right_sorted, sep = lrel[mask], right_sorted[mask], sep[mask]
+            if lrel.numel() == 0:
+                continue
+            right_orig = self.order[right_sorted]
+            lrel = lrel + left_offset
+            if find == "best":
+                lrel, right_orig, sep = _best_hits(lrel, right_orig, sep)
+            left_hits.append(lrel)
+            right_hits.append(right_orig)
+            sep_hits.append(sep)
+
+
+def _crossmatch_sky_strips(
+    left_ra: Tensor,
+    left_dec: Tensor,
+    right_ra: Tensor,
+    right_dec: Tensor,
+    *,
+    radius_arcsec: Tensor,
+    left_chunk_size: int,
+    right_chunk_size: int,
+    find: str = "best",
+    return_stats: bool = False,
+) -> CrossmatchResult | tuple[CrossmatchResult, _CrossmatchStats]:
+    """Exact crossmatch via declination strips x sorted right ascension."""
+    device = left_ra.device
+    stats = _CrossmatchStats(
+        left_points=int(left_ra.numel()), right_points=int(right_ra.numel())
+    )
+    index = _DecStripIndex(right_ra, right_dec, float(radius_arcsec.max().item()))
+    left_hits: list[Tensor] = []
+    right_hits: list[Tensor] = []
+    sep_hits: list[Tensor] = []
+    max_pairs = max(int(right_chunk_size), _MIN_CANDIDATE_PAIRS)
+    for start, ra_c, dec_c, rad_c in zip(
+        range(0, int(left_ra.numel()), left_chunk_size),
+        left_ra.split(left_chunk_size),
+        left_dec.split(left_chunk_size),
+        radius_arcsec.split(left_chunk_size),
+        strict=True,
+    ):
+        index.query(
+            ra_c,
+            dec_c,
+            rad_c,
+            left_offset=start,
+            find=find,
+            max_pairs=max_pairs,
+            left_hits=left_hits,
+            right_hits=right_hits,
+            sep_hits=sep_hits,
+            stats=stats,
+        )
+    result = _finalize_crossmatch(
+        left_hits,
+        right_hits,
+        sep_hits,
+        device=device,
+        stats=stats,
+        sort_within_left=find == "all",
+    )
+    if find == "best" and result.left_index.numel() > 1:
+        # A left row's segments may fall in different candidate batches.
+        result = CrossmatchResult(
+            *_best_hits(
+                result.left_index, result.right_index, result.separation_arcsec
+            )
+        )
+        stats.matched_rows = int(result.left_index.numel())
+    if return_stats:
+        return result, stats
+    return result
+
+
 def crossmatch_sky(
     left_ra_deg: Tensor,
     left_dec_deg: Tensor,
@@ -851,6 +1055,20 @@ def crossmatch_sky(
     if right_ra.numel() == 0 or left_ra.numel() == 0:
         return _empty_crossmatch(work_device)
 
+    if right_index is None:
+        return cast(
+            CrossmatchResult,
+            _crossmatch_sky_strips(
+                left_ra,
+                left_dec,
+                right_ra,
+                right_dec,
+                radius_arcsec=radius_left,
+                left_chunk_size=left_chunk_size,
+                right_chunk_size=right_chunk_size,
+                find=find,
+            ),
+        )
     return cast(
         CrossmatchResult,
         _crossmatch_sky_coarse_indexed(
