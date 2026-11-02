@@ -5,46 +5,70 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact existing stable v-prefixed tag to build
+        required: true
+        type: string
+      publish:
+        description: Publish validated artifacts
+        required: true
+        default: false
+        type: boolean
 
 permissions:
+  actions: read
   contents: read
 
-jobs:
-  validate_release:
-    name: Validate release identity
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-        with:
-          python-version: '3.12'
-      - name: Validate version sources and tag
-        run: |
-          python - <<'PY'
-          import ast
-          import os
-          from pathlib import Path
-          import tomllib
+concurrency:
+  group: wheels-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
-          pyproject = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
-          pixi = tomllib.loads(Path("pixi.toml").read_text())["package"]["version"]
-          module = ast.parse(Path("src/torchsky/__init__.py").read_text())
-          runtime = next(
-              ast.literal_eval(node.value)
-              for node in module.body
-              if isinstance(node, ast.Assign)
-              and any(isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets)
-          )
-          assert pyproject == pixi == runtime, (pyproject, pixi, runtime)
-          if os.environ["GITHUB_EVENT_NAME"] == "push":
-              tag = os.environ["GITHUB_REF_NAME"]
-              assert tag == f"v{pyproject}", f"tag {tag} does not match version {pyproject}"
-          print("release version:", pyproject)
-          PY
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  release_gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      release_kind: ${{ steps.validate_tag.outputs.release_kind }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Validate exact release tag and version sources
+        id: validate_tag
+        run: |
+          RELEASE_KIND="$(python scripts/check_release_tag.py --tag "$RELEASE_TAG" --event "$GITHUB_EVENT_NAME")"
+          echo "release_kind=$RELEASE_KIND" >> "$GITHUB_OUTPUT"
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n1 "$RELEASE_TAG")"
+          python scripts/release_lane.py --check
+          python scripts/release_lane.py --print-pins 2>/dev/null | tee "$RUNNER_TEMP/pins.env"
+          grep -qx "VERSION=${RELEASE_TAG#v}" "$RUNNER_TEMP/pins.env"
+      - name: Require the latest successful equivalent release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            RC_TAG="$(python scripts/check_release_rc.py --version "$VERSION" --print-tag)"
+            RC_SHA="$(git rev-list -n1 "$RC_TAG")"
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow build_wheels.yml --branch "$RC_TAG" --event push --limit 100 --json conclusion,event,headBranch,headSha | python scripts/check_release_run.py --tag "$RC_TAG" --sha "$RC_SHA"
+          else
+            python scripts/check_release_rc.py --version "$VERSION"
+          fi
 
   tests:
     name: Tests (Ubuntu, Python ${{ matrix.python-version }})
-    needs: validate_release
+    needs: release_gate
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -55,7 +79,9 @@ jobs:
           - python-version: '3.13'
             pixi-environment: test-py313
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -74,11 +100,13 @@ jobs:
 
   map_tests:
     name: Complete map suite (Ubuntu, Python 3.13)
-    needs: validate_release
+    needs: release_gate
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -95,7 +123,7 @@ jobs:
 
   build_wheels:
     name: Build wheels on ${{ matrix.os }} (${{ matrix.arch }})
-    needs: [tests, map_tests]
+    needs: [release_gate, tests, map_tests]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -103,10 +131,10 @@ jobs:
         include:
           - os: ubuntu-latest
             arch: x86_64
-          - os: macos-latest
+          - os: macos-15
             arch: arm64
     env:
-      CIBW_BUILD: cp312-* cp313-*
+      CIBW_BUILD: cp312-* cp313-* cp314-*
       CIBW_SKIP: pp* *-musllinux_* *-manylinux_i686 *-win32
       CIBW_ARCHS: ${{ matrix.arch }}
       CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
@@ -114,106 +142,186 @@ jobs:
       CIBW_TEST_SOURCES: scripts/smoke_installed_wheel.py
       CIBW_TEST_COMMAND: python {project}/scripts/smoke_installed_wheel.py
       CIBW_BUILD_FRONTEND: "pip; args: --no-build-isolation"
-      CIBW_BEFORE_BUILD: "python -m pip install --only-binary=:all: 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=2.1,<2.4' 'torch==2.14.0'"
       CIBW_ENVIRONMENT_LINUX: PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
+      # torch 2.14 and torchfits 1.3.1 ship macosx_14_0 arm64 wheels only.
+      CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=14.0
       CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --exclude libtorch_python.so --exclude libtorch_cpu.so --exclude libtorch.so --exclude libc10.so -w {dest_dir} {wheel}"
       CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} --ignore-missing-dependencies --exclude libtorch_python.dylib --exclude libtorch_cpu.dylib --exclude libtorch.dylib --exclude libc10.dylib --exclude libshm.dylib --exclude libasiodrv.dylib"
-
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-
-      - name: Build wheels
-        uses: pypa/cibuildwheel@9fcee9dd00ea649310eaae4735325d2b417226ae
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          python-version: '3.12'
-
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      # The wheel ABI lane is whatever the committed tree tracks
+      # (scripts/torch_lanes.json); never hard-code a torch pin here.
+      - name: Resolve release lane pins
+        run: python scripts/release_lane.py --print-pins 2>/dev/null >> "$GITHUB_ENV"
+      - name: Pin the build-time torch to the lane
+        run: |
+          echo "CIBW_BEFORE_BUILD=python -m pip install --only-binary=:all: 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=2.1,<2.4' 'torch${TORCH_PIN}'" >> "$GITHUB_ENV"
+      - name: Build wheels
+        uses: pypa/cibuildwheel@61a6d5d56175ad7cc8478df487b849cd7b85e0ce
       - name: Check wheel contents and linkage
         run: |
           python -m pip install twine
           for wheel in wheelhouse/*.whl; do
             python scripts/check_distribution.py --wheel "$wheel"
           done
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - name: Validate macOS wheel tag and native floor
+        if: runner.os == 'macOS'
+        run: python scripts/check_macos_wheel_floor.py wheelhouse/*.whl
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          name: cibw-wheels-${{ matrix.os }}-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
 
   build_sdist:
     name: Build source distribution
-    needs: [tests, map_tests]
+    needs: [release_gate, tests, map_tests]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          python-version: '3.12'
-
-      - name: Build sdist
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Resolve release lane pins
+        run: python scripts/release_lane.py --print-pins 2>/dev/null >> "$GITHUB_ENV"
+      # The sdist never compiles the extension, so it needs only the PEP 517
+      # backend; isolated mode would install the multi-GB torch build
+      # requirement.
+      - name: Build and validate sdist
         run: |
-          python -m pip install build twine
-          python -m build --sdist
-
-      - name: Check source distribution
-        run: python scripts/check_distribution.py --sdist dist/*.tar.gz
-
+          python -m pip install --upgrade pip build twine scikit-build-core nanobind
+          python -m build --sdist --no-isolation --skip-dependency-check
+          python scripts/validate_release_sdist.py dist/*.tar.gz --version "${RELEASE_TAG#v}"
+          python scripts/check_distribution.py --sdist dist/*.tar.gz
       - name: Build and smoke-test from source distribution
         run: |
-          python -m venv /tmp/torchsky-sdist-smoke
-          /tmp/torchsky-sdist-smoke/bin/python -m pip install --upgrade pip
-          /tmp/torchsky-sdist-smoke/bin/python -m pip install --only-binary=:all: --extra-index-url https://download.pytorch.org/whl/cpu 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=2.1,<2.4' 'torch==2.14.0' 'torchfits>=1.3.1'
-          /tmp/torchsky-sdist-smoke/bin/python -m pip wheel --no-deps --no-build-isolation --wheel-dir /tmp/torchsky-sdist-wheel dist/*.tar.gz
-          /tmp/torchsky-sdist-smoke/bin/python -m pip install --no-deps /tmp/torchsky-sdist-wheel/*.whl
-          /tmp/torchsky-sdist-smoke/bin/python scripts/smoke_installed_wheel.py
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+          python -m venv "$RUNNER_TEMP/sdist-smoke"
+          PY="$RUNNER_TEMP/sdist-smoke/bin/python"
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install --only-binary=:all: --extra-index-url https://download.pytorch.org/whl/cpu 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=2.1,<2.4' "torch${TORCH_PIN}" "torchfits${TORCHFITS_PIN}"
+          "$PY" -m pip wheel --no-deps --no-build-isolation --wheel-dir "$RUNNER_TEMP/sdist-wheel" dist/*.tar.gz
+          "$PY" -m pip install --no-deps "$RUNNER_TEMP"/sdist-wheel/*.whl
+          "$PY" scripts/smoke_installed_wheel.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: cibw-sdist
           path: dist/*.tar.gz
 
+  validate_release:
+    name: Validate release artifacts
+    needs: [release_gate, build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: cibw-wheels-*
+          path: dist/wheels
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: cibw-sdist
+          path: dist/sdist
+      - name: Validate contents, metadata, tags, matrix, and Linux linkage
+        run: |
+          python -m pip install --upgrade auditwheel twine
+          for wheel in dist/wheels/*.whl; do
+            python scripts/check_distribution.py --wheel "$wheel" --skip-native-inspection
+          done
+          python scripts/validate_release_sdist.py dist/sdist/*.tar.gz --version "${RELEASE_TAG#v}"
+          python scripts/validate_release_wheels.py dist/wheels --version "${RELEASE_TAG#v}" --sdist dist/sdist/*.tar.gz --manifest dist/RELEASE-MANIFEST.sha256
+          for wheel in dist/wheels/*manylinux*.whl; do auditwheel show "$wheel"; done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: validated-release-artifacts
+          path: |
+            dist/wheels/*.whl
+            dist/sdist/*.tar.gz
+            dist/RELEASE-MANIFEST.sha256
+
   upload_pypi:
-    needs: [build_wheels, build_sdist]
+    name: Publish to PyPI
+    needs: [release_gate, validate_release]
     runs-on: ubuntu-latest
     environment: pypi
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # Stable releases publish only from a manual dispatch on the upstream
+    # repository after a green run for the matching rc tag. Release candidates
+    # never reach PyPI; forks have no trusted publisher.
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && needs.release_gate.outputs.release_kind == 'stable' && github.repository == 'astroai/torchsky'
     permissions:
       id-token: write
       contents: read
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          pattern: cibw-*
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: validated-release-artifacts
           path: dist
-          merge-multiple: true
-
-      - name: List files
-        run: ls -R dist
-
+      - name: Verify validated artifact manifest
+        run: |
+          python scripts/validate_release_sdist.py dist/sdist/*.tar.gz --version "${RELEASE_TAG#v}"
+          python scripts/validate_release_wheels.py dist/wheels --version "${RELEASE_TAG#v}" --sdist dist/sdist/*.tar.gz --verify-manifest dist/RELEASE-MANIFEST.sha256
+          mkdir dist/upload
+          cp dist/wheels/*.whl dist/sdist/*.tar.gz dist/upload/
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
         with:
-          packages-dir: dist
+          packages-dir: dist/upload
           verbose: true
 
   github_release:
     name: Create GitHub Release
-    needs: upload_pypi
+    needs: [release_gate, validate_release]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      ${{ github.repository == 'astroai/torchsky' &&
+          ((github.event_name == 'push' && needs.release_gate.outputs.release_kind == 'rc') ||
+           (github.event_name == 'workflow_dispatch' && inputs.publish && needs.release_gate.outputs.release_kind == 'stable')) }}
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          pattern: cibw-*
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Extract curated release notes from changelog
+        run: |
+          python scripts/release_notes.py \
+            --version "${RELEASE_TAG#v}" \
+            --out "${RUNNER_TEMP}/release_notes.md"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: validated-release-artifacts
           path: dist
-          merge-multiple: true
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+      - name: Verify validated artifact manifest
+        run: |
+          python scripts/validate_release_sdist.py dist/sdist/*.tar.gz --version "${RELEASE_TAG#v}"
+          python scripts/validate_release_wheels.py dist/wheels --version "${RELEASE_TAG#v}" --sdist dist/sdist/*.tar.gz --verify-manifest dist/RELEASE-MANIFEST.sha256
+      - uses: softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b
         with:
-          files: dist/*
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: |
+            dist/wheels/*.whl
+            dist/sdist/*.tar.gz
+            dist/RELEASE-MANIFEST.sha256
+          body_path: ${{ runner.temp }}/release_notes.md
           generate_release_notes: true
+          prerelease: ${{ needs.release_gate.outputs.release_kind == 'rc' }}

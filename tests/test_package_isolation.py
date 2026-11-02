@@ -163,7 +163,7 @@ def test_macos_source_wheels_target_the_portable_arm64_baseline() -> None:
         if override["if"]["platform-system"] == "^darwin"
     )
 
-    assert macos["cmake"]["define"]["CMAKE_OSX_DEPLOYMENT_TARGET"] == "11.0"
+    assert macos["cmake"]["define"]["CMAKE_OSX_DEPLOYMENT_TARGET"] == "14.0"
 
 
 def test_native_extension_rejects_mismatched_torch_runtime() -> None:

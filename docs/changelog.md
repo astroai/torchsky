@@ -10,7 +10,27 @@ Historical benchmark tables and comparative performance claims have moved to
 They are not current package status. FITS/table I/O performance evidence is
 owned by `torchfits`.
 
-## [Unreleased]
+## [0.5.0rc1] - Unreleased
+
+> **0.4.0 on PyPI is an unsupported stray upload.** A single macOS cp313 wheel
+> built against torch 2.13 was uploaded manually under that version; it is not
+> a torchsky release, matches no supported torch lane, and the version will not
+> be reused. 0.5.0 is the first supported torchsky release after torchfits
+> 0.3.1 split FITS I/O out of this package. Upgrading from 0.3.x: see
+> [Migrating to 0.5](migration.md#migrating-to-05).
+
+### Architecture
+- **FITS I/O ownership moved to `torchfits`**: FITS images, HDUs, headers,
+  compression, checksums, file caches, tables, Arrow scans, and I/O benchmarks
+  are no longer torchsky-owned surfaces.
+- Torchsky's active scope is WCS, sphere/HEALPix/MOC, catalog geometry,
+  observation operators, mapmaking, scenes, and field models.
+- **Breaking:** the root I/O aliases and the `torchsky.io`, `torchsky.table`,
+  `torchsky.hdu`, `torchsky.cache`, `torchsky.datasets`, `torchsky.dataloader`,
+  `torchsky.header_parser`, and `torchsky.core` compatibility modules were
+  removed. Use the public `torchfits` API at the FITS/table boundary.
+- `torchfits` is the required FITS/table runtime dependency; dataset classes are
+  imported from `torchfits.data`.
 
 ### Public API
 - `torchsky.map.coadd_image_plane`, `torchsky.map.ImageObservation` and `torchsky.wcs.TemporalWCS`
@@ -34,6 +54,41 @@ owned by `torchfits`.
   convert between FK5 (J2000) and ICRS, the ~20-30 mas frame bias. Survey
   headers often keep `RADECSYS = 'FK5'` while their astrometry was solved
   against Gaia (ICRS); set `RADESYS = 'ICRS'` on such headers.
+- **Flagship examples:** network-free WCS, sphere/HEALPix, and exact square
+  Drizzle workflows now run in the bounded example gate and report numerical
+  round-trip, harmonic reconstruction, flux, centroid, and support checks.
+- **Slide-ready all-sky figures**: `torchsky.viz.plot_healpix_sky` and
+  `plot_sky_grid` draw dense or sparse HEALPix maps and scattered samples on
+  Mollweide, Aitoff, Hammer and north-polar projections, with tensor-native
+  gridding, hour/degree tick rows, themed colorbars, MOC footprint and catalog
+  overlays, and `dark`/`paper` themes. `torchsky.viz.palettes` is now the shared
+  colormap source for both figures and PNG tiles, and matplotlib joined the
+  `viz` extra (imported lazily). See `docs/viz.md`.
+  - The polar view resamples onto an azimuth/radius raster with a cap-averaged
+    inner ring, so the pole no longer draws a starburst of converging columns.
+  - Overlay legends keep a reserved band under the map for every projection
+    instead of sitting on the rim, and declination labels carry background
+    halos so they stay legible over data.
+  - Colour-bar ticks are pinned to evenly spaced positions for `asinh`/`linear`
+    and to decades for `log` (falling back to even spacing when the range
+    straddles no decade), which also fixes the tick crowding and the many-decade
+    overflows of wide `log` displays.
+- **py.typed**: PEP 561 type-checker marker for downstream type inference.
+- Flux-conserving spectral rebinning and wavelength-aware relativistic Doppler
+  shifts with batched tensor, mask, and inverse-variance propagation.
+- **Experimental native response/likelihood**: native source-node response,
+  Gaussian likelihood evidence, small linear queries, evidence lifecycle guards,
+  continuous source/spectral quadrature, detector moments, pixel calibration,
+  profiled/calibrated nuisance precision, and the bounded Poisson–Gaussian law.
+  These remain experimental and do not establish calibrated real-sky response or
+  SOTA. See `docs/native-likelihood.md`.
+
+- **Non-uniform spectral axes in `coadd_cube`**: 3D IFU cube assembly now maps
+  each detector sample to the target axis with a per-interval fractional index
+  instead of a single uniform `d_lambda`, so irregular axes no longer misplace
+  samples into the wrong bins. Regular axes keep the previous behaviour.
+  Irregular axes remain an index-space interpolation with a recorded bias
+  envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
 
 ### Added (image-plane coadd)
 - `coadd_image_plane` tiles the target automatically when the single-pass working
@@ -75,125 +130,6 @@ owned by `torchfits`.
   selects the pure-torch path, which is also used for differentiable inputs and
   accelerators). Overlap areas are exact to float64 rounding in box-local
   coordinates; results agree with the previous implementation to one float32 ulp.
-
-### Fixed
-- Flux-semantics image-plane coadds evaluated the exact solid angle of every
-  source pixel (a spherical pixel polygon per pixel on distorted WCS) for each
-  target window an observation touched, and the target quadrature world grids
-  for the whole canvas tile; tiled runs paid both once per (tile, observation)
-  pair. The source area is now evaluated only on the window read by the kernel
-  taps (gather kernels with a bounded support; spectral/FFT kernels keep the
-  full map) and the quadrature grids are built on demand for the observation's
-  footprint window. Lanczos-3 flux coadds of 3 NIRCam exposures: 512^2 21.7 s
-  -> 5.5 s, 1200^2 27.6 s -> 13.1 s, 2500^2 (auto-tiled) 403 s -> 198 s on 4
-  CPU threads; results equal to float32 rounding (max 4e-6 of the image
-  scatter), identical coverage.
-- The exact diagonal variance of flux-quadrature samples (four points per
-  target pixel averaged as one operator) reduced the shared taps with a Python
-  scan over every sorted term. It now accumulates each axis's coefficients on
-  the small tap window the points share (sorted-run reduction when the points
-  spread over more source pixels than they have taps), in float64, without
-  atomics: 3.2x faster on a 600^2 Lanczos-3 batch, inverse variance equal to
-  6e-7 relative. With the source-area change, the Lanczos-3 flux coadds above
-  run in 4.1 s, 8.8 s and 119 s.
-- Tiled image-plane coadds keep the context bitmask on the host, so large
-  mosaics no longer exhaust small GPU slices on bookkeeping.
-- A tiled coadd on an accelerator returns its maps and context words on the
-  requested device, like an untiled coadd (they were host tensors). They are moved
-  back at the end; if they do not fit the free device memory (or the copy runs out
-  of memory) they stay on the host and a `RuntimeWarning` says so.
-- CUDA drizzle / conservative-polygon coadds are bitwise reproducible again: the
-  pure-torch overlap accumulation summed colliding pixels with `scatter_add_`
-  float atomics; on CUDA the pairs are stable-sorted by target pixel and summed
-  per pixel with `segment_reduce` (about +1% on the 36-exposure 512^2 drizzle).
-  The CPU native kernel and `scatter_add_` path are unchanged.
-- The interpolated target-to-source mapping returns coordinates on the image
-  device (the flux-quadrature path used the WCS device).
-- GPU Lanczos-3 coadds were slower with the lattice mapping on small windows
-  (launch-bound SIP Newton solves): lattice nodes and verification points now
-  share one evaluator call per level (CPU results bit-identical), and on
-  accelerators the default mapping switches to the lattice only for windows of
-  at least `interpolated_mapping.MAPPING_MIN_PIXELS_ACCELERATOR` (2^19) pixels,
-  where it measured faster than the exact inverse. An explicit `mapping=` and
-  the CPU behaviour are unchanged.
-
-### Performance
-- SIP forward, inverse and Jacobian use nested Horner evaluation instead of
-  materialized power stacks (JWST order-5 SIP, 4 M points: distort 15x,
-  Newton inverse 4x faster; results equal to 1e-12 px).
-- The SIP round-trip validity tolerance samples the source pixel scale on a
-  33 x 33 lattice instead of building a detector-sized pixel-area map per
-  observation. Lanczos-3 coadd of 135 NIRCam exposures onto 512^2 pixels:
-  213 s -> 24 s on 8 CPU threads, 217 s -> 6 s on a GPU slice; outputs
-  bit-identical. Evidence: torchsky-harness `campaigns/adass2026` speed bench.
-- Large output grids (same 135 NIRCam exposures, 566 Mpix, onto 5025 x 5018
-  pixels at 0.04", 8 CPU threads / H100 MIG 1g.12gb, wall clock with reads):
-  Lanczos-3 784 s -> 221 s on CPU (SWarp 2.41: 144 s), OOM -> 65 s on GPU;
-  exact square drizzle 1849 s -> 149 s on CPU, 584 s -> 148 s on GPU (STScI
-  drizzle 3.0: 245 s). 512^2 field: Lanczos-3 24 s -> 14 s CPU (SWarp 30 s),
-  5.2 s GPU; drizzle 124 s -> 71 s CPU (STScI 171 s), 27 s GPU. Outputs
-  unchanged: drizzle = STScI drizzle to 2e-6 sigma, CPU and GPU drizzle
-  bitwise identical, Lanczos-3 CPU vs GPU 1e-7 sigma.
-- UNIONS tile CFIS.000.229 r (280 MegaCam CCDs, TPV, onto 10k x 10k pixels,
-  Lanczos-3 flux, weighted mean, 16 CPU threads, automatic tiling): 2292 s
-  with 2500^2 tiles before this release cycle -> 711 s, and 660 s on an H100
-  MIG 1g.12gb slice (auto-tiled, no out-of-memory); photometry, astrometry and
-  pixel statistics against the official tile unchanged.
-
-## [0.4.0] - Unreleased
-
-### Architecture
-
-- **FITS I/O ownership moved to `torchfits`**: FITS images, HDUs, headers,
-  compression, checksums, file caches, tables, Arrow scans, and I/O benchmarks
-  are no longer torchsky-owned surfaces.
-- Torchsky's active scope is WCS, sphere/HEALPix/MOC, catalog geometry,
-  observation operators, mapmaking, scenes, and field models.
-- **Breaking:** the root I/O aliases and the `torchsky.io`, `torchsky.table`,
-  `torchsky.hdu`, `torchsky.cache`, `torchsky.datasets`, `torchsky.dataloader`,
-  `torchsky.header_parser`, and `torchsky.core` compatibility modules were
-  removed. Use the public `torchfits` API at the FITS/table boundary.
-- `torchfits` is the required FITS/table runtime dependency; dataset classes are
-  imported from `torchfits.data`.
-
-### Added
-- **Flagship examples:** network-free WCS, sphere/HEALPix, and exact square
-  Drizzle workflows now run in the bounded example gate and report numerical
-  round-trip, harmonic reconstruction, flux, centroid, and support checks.
-- **Slide-ready all-sky figures**: `torchsky.viz.plot_healpix_sky` and
-  `plot_sky_grid` draw dense or sparse HEALPix maps and scattered samples on
-  Mollweide, Aitoff, Hammer and north-polar projections, with tensor-native
-  gridding, hour/degree tick rows, themed colorbars, MOC footprint and catalog
-  overlays, and `dark`/`paper` themes. `torchsky.viz.palettes` is now the shared
-  colormap source for both figures and PNG tiles, and matplotlib joined the
-  `viz` extra (imported lazily). See `docs/viz.md`.
-  - The polar view resamples onto an azimuth/radius raster with a cap-averaged
-    inner ring, so the pole no longer draws a starburst of converging columns.
-  - Overlay legends keep a reserved band under the map for every projection
-    instead of sitting on the rim, and declination labels carry background
-    halos so they stay legible over data.
-  - Colour-bar ticks are pinned to evenly spaced positions for `asinh`/`linear`
-    and to decades for `log` (falling back to even spacing when the range
-    straddles no decade), which also fixes the tick crowding and the many-decade
-    overflows of wide `log` displays.
-- **py.typed**: PEP 561 type-checker marker for downstream type inference.
-- Flux-conserving spectral rebinning and wavelength-aware relativistic Doppler
-  shifts with batched tensor, mask, and inverse-variance propagation.
-- **Experimental native response/likelihood**: native source-node response,
-  Gaussian likelihood evidence, small linear queries, evidence lifecycle guards,
-  continuous source/spectral quadrature, detector moments, pixel calibration,
-  profiled/calibrated nuisance precision, and the bounded Poisson–Gaussian law.
-  These remain experimental and do not establish calibrated real-sky response or
-  SOTA. See `docs/native-likelihood.md`.
-
-- **Non-uniform spectral axes in `coadd_cube`**: 3D IFU cube assembly now maps
-  each detector sample to the target axis with a per-interval fractional index
-  instead of a single uniform `d_lambda`, so irregular axes no longer misplace
-  samples into the wrong bins. Regular axes keep the previous behaviour.
-  Irregular axes remain an index-space interpolation with a recorded bias
-  envelope; see `docs/map.md` and `tests/test_map_cube_spectral_axis.py`.
-
-### Changed
 - **Self-documenting CLI clean break:** every command and option now has inline
   help, mode constraints, defaults, and runnable examples; the generated CLI
   reference is checked against the parser. FITS-owned `torchsky info` and
@@ -237,7 +173,7 @@ owned by `torchfits`.
   field execution-plan keys now use `field_*` names throughout. Field plans
   written with the earlier `model`, `model_kwargs`, `steps`, `learning_rate`,
   sampling, or render keys are rejected instead of translated; regenerate them
-  with 0.4.0.
+  with 0.5.0.
 - **Sphere spectral operations split**: power-spectrum, pixel-window, beam,
   synthesis, and smoothing operations moved from `sphere/spectral.py` to
   `sphere/spectral_ops.py`; the SHT primitives are imported lazily so the
@@ -297,6 +233,33 @@ owned by `torchfits`.
   and duplicated field/atlas/Fourier/diagnostic helpers. `torchsky.map.field`
   is now a lazy facade (1 field module imported instead of 28). Public API
   names were not changed.
+- **Leaner spectral namespace**: `torchsky.spectral` no longer re-exports the
+  26 redshift/velocity helpers that `torchsky.redshift` (and
+  `torchsky.log_lambda`) own. The spectral namespace now declares only its data
+  containers, axis helpers, resampling, and its own Doppler shift; every
+  namespace has an explicit `__all__`, checked by
+  `tests/test_public_namespaces.py`.
+- **Breaking: experimental field/native module paths renamed** for clarity:
+  `map/field/native_physical.py` → `native_integrated_read.py`
+  (`NativeIntegratedReadLikelihood`), `joint_native.py` →
+  `joint_native_likelihood.py`, `neural_inverse.py` → `gauss_newton.py`
+  (`gauss_newton_pcg_step`), and `map/operators/lensing.py` →
+  `magnification.py`. The old module paths are gone; public entry points are
+  the `torchsky.map.field` facade names.
+- **Second lean-code pass (map, field, solvers, viz)**: removed the
+  undocumented `learned_optimizer` and `calibration_partitions` prototypes,
+  the unused `representative_pixel_area_fn` plumbing through the geometry
+  kernels, the no-op `estimate_normal_operator_diagonal(max_entries)` option,
+  unused parameters in cube/windowing/scanner helpers, the unused
+  `/api/validate/{pid}/dr_report` route, dead static-UI blocks (catalog
+  overlay controls, validation stats card, unused footer fields), and the
+  abandoned Vite shell. Registered the documented `bacon` frequency-adaptive
+  model kind in the factory and documented every reachable expert model kind.
+- **API manifest completed**: the frozen public-surface manifest now covers all
+  30 namespaces (adding spectral, spectrophotometry, redshift, log_lambda,
+  extinction, cosmology, transforms, quality, and viz) instead of a subset.
+- **CI**: Added `pyarrow` to build-test dependencies for table tests.
+- **pixi.toml**: Added `pyarrow` to `feature.test`; added `healsparse` to `feature.sphere-bench` for HealSparse parity tests.
 
 ### Removed
 - **Audited clean-break APIs:** removed the WCS `pix2world`, `world2pix`,
@@ -310,6 +273,20 @@ owned by `torchfits`.
   generated `extern/cfitsio` tree, the CI vendor steps, and the manifest entry
   are gone. The native extension builds only WCS/HEALPix/geometry kernels from
   `src/torchsky/cpp_src`; FITS I/O and CFITSIO belong to `torchfits`.
+- FITS image/table/checksum implementation tests and benchmarks now owned by
+  `torchfits`.
+- The root `read`, `write`, `open`, `get_header`, `get_wcs`, `Header`, `Card`,
+  `HDUList`, `TensorHDU`, and `TableHDU` aliases. Construct `WCS` from a
+  `torchfits.read_header(...)` mapping instead.
+- The `torchsky.io`, `torchsky.table`, `torchsky.hdu`, `torchsky.cache`,
+  `torchsky.datasets`, `torchsky.dataloader`, and `torchsky.header_parser`
+  modules.
+- The private WHERE parser fallback; table filtering delegates to the public
+  `torchfits.table` API.
+- The optional `torchsky.frame` / `pytorch-frame` adapter; Arrow and Polars are
+  the supported table interchange surfaces.
+- The index-based random `RedshiftShift` image transform; use the physical
+  `torchsky.spectral.relativistic_doppler_shift` API.
 
 ### Documentation and developer experience
 - **Published documentation site**: Zensical + Material build from `docs/` only
@@ -326,6 +303,45 @@ owned by `torchfits`.
   and the scripts are copied into the built site so their links work.
 
 ### Fixed
+- Flux-semantics image-plane coadds evaluated the exact solid angle of every
+  source pixel (a spherical pixel polygon per pixel on distorted WCS) for each
+  target window an observation touched, and the target quadrature world grids
+  for the whole canvas tile; tiled runs paid both once per (tile, observation)
+  pair. The source area is now evaluated only on the window read by the kernel
+  taps (gather kernels with a bounded support; spectral/FFT kernels keep the
+  full map) and the quadrature grids are built on demand for the observation's
+  footprint window. Lanczos-3 flux coadds of 3 NIRCam exposures: 512^2 21.7 s
+  -> 5.5 s, 1200^2 27.6 s -> 13.1 s, 2500^2 (auto-tiled) 403 s -> 198 s on 4
+  CPU threads; results equal to float32 rounding (max 4e-6 of the image
+  scatter), identical coverage.
+- The exact diagonal variance of flux-quadrature samples (four points per
+  target pixel averaged as one operator) reduced the shared taps with a Python
+  scan over every sorted term. It now accumulates each axis's coefficients on
+  the small tap window the points share (sorted-run reduction when the points
+  spread over more source pixels than they have taps), in float64, without
+  atomics: 3.2x faster on a 600^2 Lanczos-3 batch, inverse variance equal to
+  6e-7 relative. With the source-area change, the Lanczos-3 flux coadds above
+  run in 4.1 s, 8.8 s and 119 s.
+- Tiled image-plane coadds keep the context bitmask on the host, so large
+  mosaics no longer exhaust small GPU slices on bookkeeping.
+- A tiled coadd on an accelerator returns its maps and context words on the
+  requested device, like an untiled coadd (they were host tensors). They are moved
+  back at the end; if they do not fit the free device memory (or the copy runs out
+  of memory) they stay on the host and a `RuntimeWarning` says so.
+- CUDA drizzle / conservative-polygon coadds are bitwise reproducible again: the
+  pure-torch overlap accumulation summed colliding pixels with `scatter_add_`
+  float atomics; on CUDA the pairs are stable-sorted by target pixel and summed
+  per pixel with `segment_reduce` (about +1% on the 36-exposure 512^2 drizzle).
+  The CPU native kernel and `scatter_add_` path are unchanged.
+- The interpolated target-to-source mapping returns coordinates on the image
+  device (the flux-quadrature path used the WCS device).
+- GPU Lanczos-3 coadds were slower with the lattice mapping on small windows
+  (launch-bound SIP Newton solves): lattice nodes and verification points now
+  share one evaluator call per level (CPU results bit-identical), and on
+  accelerators the default mapping switches to the lattice only for windows of
+  at least `interpolated_mapping.MAPPING_MIN_PIXELS_ACCELERATOR` (2^19) pixels,
+  where it measured faster than the exact inverse. An explicit `mapping=` and
+  the CPU behaviour are unchanged.
 - **Native extension loader on PyPI torch wheels**: the compiled module was
   named `_cpp`, so `import torchsky._cpp` dlopened libtorch before torch had
   loaded it; conda environments hid this, PyPI torch wheels do not. The shared
@@ -363,50 +379,28 @@ owned by `torchfits`.
   reference-offset cases (`MER_OFF`, `CYP_OFF`, `AIT_OFF`, `HPX_OFF`, `SFL_OFF`,
   `XPH_OFF`, `BON_OFF`, `PAR_OFF`).
 
-### Changed
-- **Leaner spectral namespace**: `torchsky.spectral` no longer re-exports the
-  26 redshift/velocity helpers that `torchsky.redshift` (and
-  `torchsky.log_lambda`) own. The spectral namespace now declares only its data
-  containers, axis helpers, resampling, and its own Doppler shift; every
-  namespace has an explicit `__all__`, checked by
-  `tests/test_public_namespaces.py`.
-- **Breaking: experimental field/native module paths renamed** for clarity:
-  `map/field/native_physical.py` → `native_integrated_read.py`
-  (`NativeIntegratedReadLikelihood`), `joint_native.py` →
-  `joint_native_likelihood.py`, `neural_inverse.py` → `gauss_newton.py`
-  (`gauss_newton_pcg_step`), and `map/operators/lensing.py` →
-  `magnification.py`. The old module paths are gone; public entry points are
-  the `torchsky.map.field` facade names.
-- **Second lean-code pass (map, field, solvers, viz)**: removed the
-  undocumented `learned_optimizer` and `calibration_partitions` prototypes,
-  the unused `representative_pixel_area_fn` plumbing through the geometry
-  kernels, the no-op `estimate_normal_operator_diagonal(max_entries)` option,
-  unused parameters in cube/windowing/scanner helpers, the unused
-  `/api/validate/{pid}/dr_report` route, dead static-UI blocks (catalog
-  overlay controls, validation stats card, unused footer fields), and the
-  abandoned Vite shell. Registered the documented `bacon` frequency-adaptive
-  model kind in the factory and documented every reachable expert model kind.
-- **API manifest completed**: the frozen public-surface manifest now covers all
-  30 namespaces (adding spectral, spectrophotometry, redshift, log_lambda,
-  extinction, cosmology, transforms, quality, and viz) instead of a subset.
-
-### Removed
-- FITS image/table/checksum implementation tests and benchmarks now owned by
-  `torchfits`.
-- The root `read`, `write`, `open`, `get_header`, `get_wcs`, `Header`, `Card`,
-  `HDUList`, `TensorHDU`, and `TableHDU` aliases. Construct `WCS` from a
-  `torchfits.read_header(...)` mapping instead.
-- The `torchsky.io`, `torchsky.table`, `torchsky.hdu`, `torchsky.cache`,
-  `torchsky.datasets`, `torchsky.dataloader`, and `torchsky.header_parser`
-  modules.
-- The private WHERE parser fallback; table filtering delegates to the public
-  `torchfits.table` API.
-- The optional `torchsky.frame` / `pytorch-frame` adapter; Arrow and Polars are
-  the supported table interchange surfaces.
-- The index-based random `RedshiftShift` image transform; use the physical
-  `torchsky.spectral.relativistic_doppler_shift` API.
-
 ### Performance
+- SIP forward, inverse and Jacobian use nested Horner evaluation instead of
+  materialized power stacks (JWST order-5 SIP, 4 M points: distort 15x,
+  Newton inverse 4x faster; results equal to 1e-12 px).
+- The SIP round-trip validity tolerance samples the source pixel scale on a
+  33 x 33 lattice instead of building a detector-sized pixel-area map per
+  observation. Lanczos-3 coadd of 135 NIRCam exposures onto 512^2 pixels:
+  213 s -> 24 s on 8 CPU threads, 217 s -> 6 s on a GPU slice; outputs
+  bit-identical. Evidence: torchsky-harness `campaigns/adass2026` speed bench.
+- Large output grids (same 135 NIRCam exposures, 566 Mpix, onto 5025 x 5018
+  pixels at 0.04", 8 CPU threads / H100 MIG 1g.12gb, wall clock with reads):
+  Lanczos-3 784 s -> 221 s on CPU (SWarp 2.41: 144 s), OOM -> 65 s on GPU;
+  exact square drizzle 1849 s -> 149 s on CPU, 584 s -> 148 s on GPU (STScI
+  drizzle 3.0: 245 s). 512^2 field: Lanczos-3 24 s -> 14 s CPU (SWarp 30 s),
+  5.2 s GPU; drizzle 124 s -> 71 s CPU (STScI 171 s), 27 s GPU. Outputs
+  unchanged: drizzle = STScI drizzle to 2e-6 sigma, CPU and GPU drizzle
+  bitwise identical, Lanczos-3 CPU vs GPU 1e-7 sigma.
+- UNIONS tile CFIS.000.229 r (280 MegaCam CCDs, TPV, onto 10k x 10k pixels,
+  Lanczos-3 flux, weighted mean, 16 CPU threads, automatic tiling): 2292 s
+  with 2500^2 tiles before this release cycle -> 711 s, and 660 s on an H100
+  MIG 1g.12gb slice (auto-tiled, no out-of-memory); photometry, astrometry and
+  pixel statistics against the official tile unchanged.
 - **sphere/spectral.py**: O(1) `alm_size` via closed-form formula; precision fixes in harmonic primitives (`(ell-1)**2` → explicit multiplication).
 - **sphere/sparse.py**: Explicit `ratio * ratio` instead of `** 2` in `pixels_per_cov` and `_build_coverage_map` for precision consistency.
 - **wcs/legacy.py**: TNX regex patterns cached via `@functools.lru_cache(maxsize=16)`.
@@ -415,10 +409,6 @@ owned by `torchfits`.
 - **wcs/core.py**: `PV1_KEYS_SET`/`PV2_KEYS_SET` for efficient `has_pv` check.
 - **cpp_src/hardware.cpp**: macOS uses `sysctlbyname()` instead of `popen("sysctl -n ...")` for L3 cache and memory size detection.
 - **datasets.py**: Import hoisting in `_process_shard` (moved `read` and `logger` imports before loop).
-
-### Changed
-- **CI**: Added `pyarrow` to build-test dependencies for table tests.
-- **pixi.toml**: Added `pyarrow` to `feature.test`; added `healsparse` to `feature.sphere-bench` for HealSparse parity tests.
 
 ## [0.3.1] - 2026-03-07
 
@@ -532,4 +522,4 @@ Patch release. No user-visible changes.
 [0.2.1]: https://github.com/astroai/torchsky/releases/tag/v0.2.1
 [0.3.0]: https://github.com/astroai/torchsky/releases/tag/v0.3.0
 [0.3.1]: https://github.com/astroai/torchsky/releases/tag/v0.3.1
-[0.4.0]: https://github.com/astroai/torchsky/releases/tag/v0.4.0
+[0.5.0rc1]: https://github.com/astroai/torchsky/releases/tag/v0.5.0rc1

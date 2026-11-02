@@ -47,15 +47,61 @@ def test_no_local_task_can_publish_distributions() -> None:
 
 def test_wheel_workflow_matches_supported_artifact_matrix() -> None:
     workflow = (WORKFLOWS / "build_wheels.yml").read_text()
-    assert "CIBW_BUILD: cp312-* cp313-*" in workflow
+    assert "CIBW_BUILD: cp312-* cp313-* cp314-*" in workflow
     assert "arch: x86_64" in workflow
     assert "arch: arm64" in workflow
     assert "CIBW_ARCHS: ${{ matrix.arch }}" in workflow
+    assert "CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=14.0" in workflow
     assert "PYPI_API_TOKEN" not in workflow
-    assert "needs: upload_pypi" in workflow
-    assert "Validate version sources and tag" in workflow
     assert "Build and smoke-test from source distribution" in workflow
     assert "pixi-version: v0.82.0" in workflow
     refs = re.findall(r"uses:\s+\S+@([^\s]+)", workflow)
     assert refs
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in refs)
+
+
+def test_wheel_workflow_gates_publication() -> None:
+    workflow = (WORKFLOWS / "build_wheels.yml").read_text()
+    jobs = tomllib_free_job_names(workflow)
+    assert jobs == [
+        "release_gate",
+        "tests",
+        "map_tests",
+        "build_wheels",
+        "build_sdist",
+        "validate_release",
+        "upload_pypi",
+        "github_release",
+    ]
+    upload = workflow[
+        workflow.index("  upload_pypi:") : workflow.index("  github_release:")
+    ]
+    assert "github.event_name == 'workflow_dispatch'" in upload
+    assert "inputs.publish" in upload
+    assert "release_kind == 'stable'" in upload
+    assert "github.repository == 'astroai/torchsky'" in upload
+    assert "environment: pypi" in upload
+    assert "id-token: write" in upload
+    assert "--verify-manifest dist/RELEASE-MANIFEST.sha256" in upload
+    assert "needs: [release_gate, validate_release]" in upload
+    release = workflow[workflow.index("  github_release:") :]
+    assert "release_kind == 'rc'" in release
+    assert (
+        "prerelease: ${{ needs.release_gate.outputs.release_kind == 'rc' }}" in release
+    )
+    assert "id-token" not in release
+    gate = workflow[workflow.index("  release_gate:") : workflow.index("  tests:")]
+    for script in (
+        "check_release_tag.py",
+        "check_release_rc.py",
+        "check_release_run.py",
+        "release_lane.py --check",
+    ):
+        assert script in gate
+    assert "cancel-in-progress: false" in workflow
+    assert "tags:\n      - 'v*'" in workflow
+
+
+def tomllib_free_job_names(workflow: str) -> list[str]:
+    body = workflow[workflow.index("\njobs:\n") + len("\njobs:\n") :]
+    return re.findall(r"^  ([a-z_]+):$", body, flags=re.MULTILINE)
