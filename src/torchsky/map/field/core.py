@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...device import default_compute_device
+from ...device import resolve_device
 
 from ..solvers import SurveyInstrumentComponentMixer
 
@@ -189,9 +189,7 @@ def field_component_anchor_loss(
         ):
             ra_anchor, dec_anchor = _resolve_anchor_sample_world_coordinates(
                 term,
-                device=next(
-                    (p.device for p in model.parameters()), default_compute_device()
-                ),
+                device=resolve_device(None, model),
             )
             if isinstance(model, FieldComponentDecomposition):
                 prediction = model.render_component_samples(
@@ -307,9 +305,7 @@ def field_component_anchor_loss(
     if total is None:
         return torch.zeros(
             (),
-            device=next(
-                (p.device for p in model.parameters()), default_compute_device()
-            ),
+            device=resolve_device(None, model),
             dtype=torch.float32,
         )
     return total
@@ -384,9 +380,7 @@ def field_component_centroid_anchor_loss(
     if total is None:
         return torch.zeros(
             (),
-            device=next(
-                (p.device for p in model.parameters()), default_compute_device()
-            ),
+            device=resolve_device(None, model),
             dtype=torch.float32,
         )
     return total

@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ...device import default_compute_device
+from ...device import resolve_device
 from ...wcs import WCS
 
 if TYPE_CHECKING:
@@ -525,7 +525,7 @@ def pretrain_strainer_trunk_synthetic(
             )
         kinds = (noise_kind,)
     domain = model.domain
-    device = next((p.device for p in model.parameters()), default_compute_device())
+    device = resolve_device(None, model)
     trainable = [p for p in model.parameters() if p.requires_grad]
     if not trainable:
         raise ValueError("pretrain_strainer_trunk_synthetic: no trainable parameters")

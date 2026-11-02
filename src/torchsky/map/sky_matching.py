@@ -108,7 +108,7 @@ def detect_outliers(
 
     from .image_plane_coadd import _blot_spatial_derivative, blot, coadd_image_plane
 
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(device, observations, coadd_result)
     if coadd_result is None:
         coadd_result = coadd_image_plane(
             observations,
@@ -349,7 +349,7 @@ def match_sky(
     )
     from .image_plane_coadd import blot, resample
 
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(device, observations)
     read_dev = str(map_device)
 
     if raw_mode in ("per_exposure", "local"):

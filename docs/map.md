@@ -236,6 +236,18 @@ Experimental continuous-field layer (tutorial: [field.md](field.md), losses/cont
 Mismatch with SWarp/Montage-style products usually traces to value semantics,
 pixel-area treatment, mask policy, or weight maps rather than FITS I/O.
 
+## Device placement
+
+Map APIs compute and return on the device of their tensor inputs (for example
+`Observation(data=tensor)`); CPU tensors stay on CPU even when CUDA is
+available. An explicit `device=` always wins, and tensors on different devices
+without an explicit `device=` raise `ValueError`. Only when there is no tensor
+to follow (observations given as file paths) does
+`torchsky.device.default_compute_device()` apply: CUDA when available, or
+`TORCHSKY_DEVICE`. Float64-only kernels (exact drizzle, conservative polygon
+and splat projection, spectral resamplers, encoder field models) raise
+`NotImplementedError` on MPS, which has no float64; run them on CPU or CUDA.
+
 ## Scientific evaluation
 
 Truth metrics, frontier-region diagnostics, uncertainty scoring, comparator

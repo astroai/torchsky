@@ -13,6 +13,8 @@ import math
 import torch
 from torch import Tensor
 
+from ..device import require_float64
+
 from .spectral_affine import _center_embed_2d
 
 
@@ -40,6 +42,7 @@ def resample_nonuniform_spectral_2d(
         canvas_pad_factor: Zero-boundary canvas enlargement factor.
         chunk_size: Number of output samples per evaluation chunk.
     """
+    require_float64(image.device, what="nonuniform spectral resampling")
     if image.ndim != 2:
         raise ValueError("expected a 2D [H, W] tensor")
     if x_src.shape != y_src.shape:

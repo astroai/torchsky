@@ -11,7 +11,7 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
-from ..device import default_compute_device
+from ..device import resolve_device
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
 from ..spectrophotometry import Passband
@@ -816,10 +816,7 @@ def render_field_product(
     h, w = product.shape
     th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
     n_bands = product.n_bands
-    model_device = next(
-        (parameter.device for parameter in model.parameters()),
-        default_compute_device(),
-    )
+    model_device = resolve_device(None, model)
     data = torch.zeros((n_bands, h, w), dtype=torch.float32, device=model_device)
     has_distribution = field_model_has_predictive_distribution(model)
     detector_variance = torch.zeros_like(data) if has_distribution else None

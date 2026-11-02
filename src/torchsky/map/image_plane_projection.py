@@ -8,6 +8,7 @@ from collections.abc import Callable
 import torch
 from torch import Tensor
 
+from ..device import require_float64
 from ..sphere.moc import MOC
 from ..wcs import WCS
 from .box_overlap import box_overlap_taps
@@ -529,6 +530,10 @@ def _resample_weighted_to_target(
         if value_semantics == "flux"
         else None
     )
+    # Periodic/FFT resamplers spread round-off over the whole frame, so pixels
+    # outside the source footprint need an explicit coverage mask even when no
+    # flux support is tracked (cuFFT round-off is not exactly zero there).
+    periodic_support = (source_weight > 0.0).to(dtype=torch.float32)
     coefficient_variance_supported = resampling_kernel in {
         "nearest",
         "bilinear",
@@ -578,11 +583,7 @@ def _resample_weighted_to_target(
         shift_kw = {"shift_y_pix": float(sy), "shift_x_pix": float(sx)}
         sampled_numer = resample_translation_fft2d(weighted_image, **shift_kw)
         sampled_weight = resample_translation_fft2d(weighted_weight, **shift_kw)
-        sampled_support = (
-            resample_translation_fft2d(support_image, **shift_kw)
-            if support_image is not None
-            else None
-        )
+        sampled_support = resample_translation_fft2d(periodic_support, **shift_kw)
         sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
@@ -625,11 +626,7 @@ def _resample_weighted_to_target(
         }
         sampled_numer = resample_diagonal_affine_fft2d(weighted_image, **aff_kw)
         sampled_weight = resample_diagonal_affine_fft2d(weighted_weight, **aff_kw)
-        sampled_support = (
-            resample_diagonal_affine_fft2d(support_image, **aff_kw)
-            if support_image is not None
-            else None
-        )
+        sampled_support = resample_diagonal_affine_fft2d(periodic_support, **aff_kw)
         sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
@@ -679,11 +676,7 @@ def _resample_weighted_to_target(
         sampled_weight = resample_linear_affine_periodic_bilinear_2d(
             weighted_weight, **aff_kw
         )
-        sampled_support = (
-            resample_linear_affine_periodic_bilinear_2d(support_image, **aff_kw)
-            if support_image is not None
-            else None
-        )
+        sampled_support = resample_linear_affine_periodic_bilinear_2d(periodic_support, **aff_kw)
         sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
@@ -730,11 +723,7 @@ def _resample_weighted_to_target(
         try:
             sampled_numer = resample_fft_ldu_affine_2d(weighted_image, **aff_kw)
             sampled_weight = resample_fft_ldu_affine_2d(weighted_weight, **aff_kw)
-            sampled_support = (
-                resample_fft_ldu_affine_2d(support_image, **aff_kw)
-                if support_image is not None
-                else None
-            )
+            sampled_support = resample_fft_ldu_affine_2d(periodic_support, **aff_kw)
         except ValueError as exc:
             raise ValueError(
                 "fft_linear_affine failed (try periodic_linear_affine for arbitrary affines)"
@@ -785,11 +774,7 @@ def _resample_weighted_to_target(
         }
         sampled_numer = resample_linear_affine_spectral_2d(weighted_image, **aff_kw)
         sampled_weight = resample_linear_affine_spectral_2d(weighted_weight, **aff_kw)
-        sampled_support = (
-            resample_linear_affine_spectral_2d(support_image, **aff_kw)
-            if support_image is not None
-            else None
-        )
+        sampled_support = resample_linear_affine_spectral_2d(periodic_support, **aff_kw)
         sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
@@ -1254,6 +1239,7 @@ def _forward_project_weighted_to_target(
             f"forward projection only supports splat kernels, got {resampling_kernel!r}"
         )
 
+    require_float64(image.device, what="forward splat projection (drizzle)")
     image = validate_image_plane_2d(image).to(dtype=torch.float32)
     source_weight = validate_image_plane_2d(source_weight).to(dtype=torch.float32)
 

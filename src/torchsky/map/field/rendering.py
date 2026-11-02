@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...device import default_compute_device
+from ...device import resolve_device
 from ...spectral import SpectralAxis
 from ...sphere import healpix as _healpix_wcs
 
@@ -227,7 +227,7 @@ def iter_field_observation_tiles(
                 "tiled learned_lowrank PSF requires globally indexed cell geometry"
             )
         halo_y, halo_x = psf_support_radius(observation.psf_spec)
-    device = next((p.device for p in model.parameters()), default_compute_device())
+    device = resolve_device(None, model)
     if (
         render_kwargs.get("override_wavelengths") is None
         and render_kwargs.get("override_weights") is None
@@ -669,7 +669,7 @@ def render_field_observation_distribution(
         raise ValueError(
             "field model does not provide an explicit predictive distribution"
         )
-    device = next((p.device for p in model.parameters()), default_compute_device())
+    device = resolve_device(None, model)
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -953,7 +953,7 @@ def render_field_observation(
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
-    device = next((p.device for p in model.parameters()), default_compute_device())
+    device = resolve_device(None, model)
     spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
     center_coordinates: tuple[Tensor, Tensor] | None = None
     if spatial_sampling == "center":
@@ -1196,10 +1196,7 @@ def render_spectral_power_foam_observation_exact(
         raise TypeError(
             "model must provide normalized_spatial_coordinates and render_exact"
         )
-    device = next(
-        (parameter.device for parameter in model.parameters()),
-        default_compute_device(),
-    )
+    device = resolve_device(None, model)
     height, width = _header_shape(
         observation.header,
         fallback=(int(observation.image.shape[-2]), int(observation.image.shape[-1])),
@@ -1621,7 +1618,7 @@ def render_field_cube(
         if shape is None
         else shape
     )
-    device = next((p.device for p in model.parameters()), default_compute_device())
+    device = resolve_device(None, model)
     ra_deg, dec_deg = _coordinate_grid(target_header, shape=fallback, device=device)
     wavelengths = spectral_axis.to_wavelength().to(device=device, dtype=torch.float32)
     if wavelengths.ndim != 1:
@@ -1679,7 +1676,7 @@ def render_field_healpix(
     dev = (
         device
         if device is not None
-        else next((p.device for p in model.parameters()), default_compute_device())
+        else resolve_device(None, model)
     )
     wavelengths = spectral_axis.to_wavelength().to(device=dev, dtype=torch.float32)
     nw = int(wavelengths.shape[0])
@@ -1743,7 +1740,7 @@ def render_field_cube_via_healpix(
     dev = (
         device
         if device is not None
-        else next((p.device for p in model.parameters()), default_compute_device())
+        else resolve_device(None, model)
     )
     hp_cube = render_field_healpix(
         model,

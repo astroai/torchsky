@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 from torchfits import read
 
-from ..device import default_compute_device
+from ..device import resolve_device
 from ..sphere.moc import MOC
 from ..wcs import WCS
 from ..wcs.frames import warn_frame_bias_conversion
@@ -66,10 +66,11 @@ def load_observation_image_and_header(
     return _io_load_observation_image_and_header(obs, device, read_fn=read)
 
 
-def _resolve_map_device(device: torch.device | str | None) -> torch.device:
-    if device is not None:
-        return torch.device(device)
-    return default_compute_device()
+def _resolve_map_device(
+    device: torch.device | str | None, *sources: object
+) -> torch.device:
+    """Explicit device, else follow tensor ``sources``, else the default device."""
+    return resolve_device(device, *sources)
 
 
 @dataclass

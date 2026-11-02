@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from ...device import require_float64
 from ...wcs import WCS
 from ..exposure_pose import ExposurePose
 from ..operators.psf import psf_support_radius
@@ -480,6 +481,7 @@ def sample_observation_pixels(
             (sample_count,),
             generator=generator,
         )
+    require_float64(device, what="sample_observation_pixels")
     sampled = support_indices[sample_ids]
     y = sampled[:, 0].to(dtype=torch.float64, device=device)
     x = sampled[:, 1].to(dtype=torch.float64, device=device)

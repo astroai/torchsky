@@ -23,6 +23,7 @@ from ._core_helpers import (
 from .types import (
     FieldDomain,
 )
+from ...device import require_float64
 from ...wcs import WCS
 
 
@@ -420,6 +421,7 @@ class GaussianBasisField(_BaseFieldModel):
         if not self.splat:
             raise ValueError("product initialization requires splat=True")
         device, dtype = self.centers.device, self.centers.dtype
+        require_float64(device, what="GaussianBasisField.initialize_from_product")
         data = product.data.to(device=device, dtype=dtype)
         if data.ndim != 3 or not torch.isfinite(data).all():
             raise ValueError("splat initialization requires a finite band/image cube")
@@ -668,6 +670,7 @@ class SpectralBasisField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
+        require_float64(ra_deg.device, what="SpectralBasisField.forward")
         spatial = self._spatial_coords(
             ra_deg.to(dtype=torch.float64),
             dec_deg.to(dtype=torch.float64),
@@ -703,6 +706,7 @@ class SpectralBasisField(_BaseFieldModel):
         wavelengths: Tensor,
         weights: Tensor,
     ) -> Tensor:
+        require_float64(ra_deg.device, what="SpectralBasisField.render_bandpass")
         if (
             wavelengths.ndim != 1
             or weights.ndim != 1
@@ -971,6 +975,7 @@ class LearnedSpectralBasisField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
+        require_float64(ra_deg.device, what="LearnedSpectralBasisField.forward")
         spatial = self._spatial_coords(
             ra_deg.to(dtype=torch.float64),
             dec_deg.to(dtype=torch.float64),

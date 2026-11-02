@@ -93,7 +93,7 @@ def _coadd_ifu_3d_cube(
     from ..wcs.gwcs_sampling import IFUSliceWCS
     from ..wcs.iau2006 import apply_dcr, apply_ephemeris_offset
 
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(device, observations)
     read_dev = str(map_device)
 
     if isinstance(target, (PlannedImagePlaneCubeTarget, CubeTarget)):

@@ -36,7 +36,7 @@ from ..solvers import (
     _relative_norm,
     _subspace_leakage,
 )
-from ...device import default_compute_device
+from ...device import resolve_device
 
 
 if TYPE_CHECKING:
@@ -206,7 +206,7 @@ class FieldComponentDecomposition(_BaseFieldModel):
         image = base_observation.image
         if image.ndim != 2:
             raise ValueError("FieldObservation.image must be 2D")
-        device = next((p.device for p in self.parameters()), default_compute_device())
+        device = resolve_device(None, self)
         ra_deg, dec_deg = _coordinate_grid(
             base_observation,
             shape=tuple(image.shape),

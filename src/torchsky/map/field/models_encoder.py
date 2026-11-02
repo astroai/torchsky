@@ -12,6 +12,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from ...device import require_float64
+
 from ._core_helpers import (
     _BaseFieldModel,
     _fourier_features_vectorized,
@@ -121,6 +123,7 @@ class SkyEncoderBandpassField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelengths: Tensor,
     ) -> Tensor:
+        require_float64(ra_deg.device, what="SkyEncoderBandpassField._encoded_planes")
         encoded = []
         ra64 = ra_deg.to(dtype=torch.float64)
         dec64 = dec_deg.to(dtype=torch.float64)
@@ -168,6 +171,7 @@ class SkyEncoderBandpassField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
+        require_float64(ra_deg.device, what="SkyEncoderBandpassField.forward")
         dtype = self.output.weight.dtype
         ra64 = ra_deg.to(dtype=torch.float64)
         dec64 = dec_deg.to(dtype=torch.float64)
@@ -440,6 +444,7 @@ class SkyEncoderMLPField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
+        require_float64(ra_deg.device, what="SkyEncoderMLPField.forward")
         wavelength = torch.as_tensor(
             wavelength_angstrom,
             device=ra_deg.device,
@@ -522,6 +527,7 @@ class StrainerSkyEncoderMLPField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
+        require_float64(ra_deg.device, what="StrainerSkyEncoderMLPField.forward")
         wavelength = torch.as_tensor(
             wavelength_angstrom,
             device=ra_deg.device,
@@ -604,6 +610,7 @@ class SkyEncoderResMLPField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
+        require_float64(ra_deg.device, what="SkyEncoderResMLPField.forward")
         wavelength = torch.as_tensor(
             wavelength_angstrom,
             device=ra_deg.device,

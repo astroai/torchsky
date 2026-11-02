@@ -1394,7 +1394,7 @@ def coadd_image_plane(
             "yet supported; use background_mode='per-exposure'"
         )
 
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(device, observations)
     read_dev = str(map_device)
     first = observations[0]
     first_image, first_header = load_observation_image_and_header(
@@ -2066,7 +2066,9 @@ def _propagate_aperture_uncertainty(
     if tuple(inverse_variance.shape) != target_shape:
         raise ValueError("MapResult inverse variance must match its data shape")
 
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(
+        device, observations, result, aperture_weights
+    )
     aperture = aperture.to(device=map_device, dtype=torch.float32)
     map_weight = result.weight.to(device=map_device, dtype=torch.float32)
     inverse_variance = inverse_variance.to(device=map_device, dtype=torch.float32)
@@ -2383,7 +2385,7 @@ def coadd_image_plane_cube(
             "target is mutually exclusive with target_header, spectral_axis, "
             "spectral_bin_edges, and reference_index"
         )
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(device, observations)
     read_dev = str(map_device)
     resampling_kernel = _validated_map_resampling_kernel(resampling_kernel)
     value_semantics = _validated_map_value_semantics(value_semantics)
@@ -2936,7 +2938,7 @@ def blot(
         coadd_header = coerced
         blot_target = target
 
-    map_device = coadd_tensor.device if device is None else _resolve_map_device(device)
+    map_device = _resolve_map_device(device, coadd_tensor, source_or_target)
     coadd_img = coadd_tensor.to(device=map_device, dtype=torch.float32)
     coadd_wcs = WCS(coadd_header)
     coadd_shape = (int(coadd_img.shape[0]), int(coadd_img.shape[1]))
@@ -3064,7 +3066,7 @@ def _apply_observation_astrometric_shifts(
     if not needs_shift:
         return list(observations)
 
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(device, observations)
     read_dev = str(map_device)
     shifted: list[Observation] = []
     for obs in observations:

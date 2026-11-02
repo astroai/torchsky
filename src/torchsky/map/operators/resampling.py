@@ -1008,6 +1008,9 @@ def infer_diagonal_scale_shift_pixel_map(
     jx = jj.reshape(-1)
     ra, dec = target_wcs.pixel_to_world(jx, iy)
     xs, ys = source_wcs.world_to_pixel(ra, dec)
+    # The WCS may live on an accelerator; this small fit runs on the grid's device.
+    xs = xs.to(device=jx.device, dtype=jx.dtype)
+    ys = ys.to(device=jx.device, dtype=jx.dtype)
     ones = torch.ones_like(jx)
     ax = torch.stack([jx, iy, ones], dim=1)
     sol_x = torch.linalg.lstsq(ax, xs.unsqueeze(-1), rcond=None).solution.squeeze(-1)
@@ -1059,6 +1062,9 @@ def infer_linear_affine_pixel_map(
     jx = jj.reshape(-1)
     ra, dec = target_wcs.pixel_to_world(jx, iy)
     xs, ys = source_wcs.world_to_pixel(ra, dec)
+    # The WCS may live on an accelerator; this small fit runs on the grid's device.
+    xs = xs.to(device=jx.device, dtype=jx.dtype)
+    ys = ys.to(device=jx.device, dtype=jx.dtype)
     ones = torch.ones_like(jx)
     a_mat = torch.stack([jx, iy, ones], dim=1)
     sol_x = torch.linalg.lstsq(a_mat, xs.unsqueeze(-1), rcond=None).solution.squeeze(-1)

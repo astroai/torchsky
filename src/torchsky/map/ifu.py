@@ -10,6 +10,7 @@ from typing import Any, Literal
 import torch
 from torch import Tensor
 
+from ..device import resolve_device
 from ..domain import DomainSpec
 from ..wcs.spectral import canonical_spectral_type, spectral_unit_scale
 from .observation import (
@@ -328,7 +329,7 @@ def plan_ifu_cube_response(
     semantics = target.value_semantics
     if any(observation.value_semantics != semantics for observation in observations):
         raise ValueError("IFU observation and target value semantics must agree")
-    resolved_device = torch.device(device or observations[0].sci.device)
+    resolved_device = resolve_device(device, observations)
     dtype = observations[0].sci.dtype
     if resolved_device.type == "mps" and dtype == torch.float64:
         dtype = torch.float32

@@ -220,7 +220,7 @@ def coadd_healpix(
     nside_i = int(nside)
     npix = _hp.nside2npix(nside_i)
     order = nside_i.bit_length() - 1
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(device, observations)
     read_dev = str(map_device)
 
     obs_list = _apply_observation_astrometric_shifts(observations, map_device)
@@ -435,7 +435,7 @@ def resample_healpix(
     from ..sphere.sparse import SparseHealpixMap
     from .healpix_spectral import sample_healpix_map_on_image_header_harmonic
 
-    map_device = _resolve_map_device(device)
+    map_device = _resolve_map_device(device, healpix_map)
     raw_hdr = _coerce_target_header(target)
     if raw_hdr is None:
         raise ValueError("target must provide a 2D WCS or header")

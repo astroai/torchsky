@@ -561,7 +561,7 @@ def plan_image_plane_target(
         raise IndexError("reference_index is out of range")
 
     ref = observations[reference_index]
-    read_dev = str(_resolve_map_device(device))
+    read_dev = str(_resolve_map_device(device, observations))
     image, header = load_observation_image_and_header(ref, device=read_dev)
     shape_out = tuple(image.shape) if shape is None else (int(shape[0]), int(shape[1]))
     shape_out = target_shape_from_header(header_overrides or {}, fallback=shape_out)

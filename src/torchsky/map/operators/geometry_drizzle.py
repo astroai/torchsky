@@ -7,6 +7,8 @@ import os
 import torch
 from torch import Tensor
 
+from ...device import require_float64
+
 _DRIZZLE_BOUNDARY_EPS = 1.0e-4
 # Candidate (quad, box) pairs evaluated per tensor batch.  The CPU limit keeps the working
 # set of the ~100 elementwise passes inside the cache; accelerators amortise launches with
@@ -405,6 +407,7 @@ def exact_square_drizzle_project(
     chunk_pixels: int,
     return_variance_weight: bool = False,
 ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
+    require_float64(image.device, what="exact square drizzle")
     image = image.to(dtype=torch.float32)
     source_weight = source_weight.to(dtype=torch.float32)
     if value_semantics == "flux":
@@ -498,6 +501,7 @@ def exact_point_drizzle_project(
     pixel_area_sr_map_fn,
     chunk_pixels: int,
 ) -> tuple[Tensor, Tensor]:
+    require_float64(image.device, what="exact point drizzle")
     image = image.to(dtype=torch.float32)
     source_weight = source_weight.to(dtype=torch.float32)
     if value_semantics == "flux":

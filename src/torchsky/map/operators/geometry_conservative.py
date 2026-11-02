@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
+from ...device import require_float64
 from .geometry import ConservativePolygonRemapOp
 from .geometry_drizzle import (
     _accumulate_quadrilateral_overlaps,
@@ -24,6 +25,7 @@ def _exact_conservative_polygon_project(
     chunk_pixels: int,
     return_variance_weight: bool = False,
 ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
+    require_float64(image.device, what="exact conservative polygon projection")
     image = image.to(dtype=torch.float32)
     source_weight = source_weight.to(dtype=torch.float32)
     if value_semantics == "flux":

@@ -42,6 +42,14 @@ owned by `torchfits`.
   variance pass; data, weight, overlap and context are unchanged.
 
 ### Changed
+- Device follows the input: map, field-fitting and IFU APIs now compute and
+  return on the device of their tensor inputs when no `device=` is given
+  (CPU tensors stay on CPU even with CUDA available); mixed-device inputs raise
+  `ValueError`; `default_compute_device()` applies only to path-backed inputs.
+  New `torchsky.device.resolve_device`; `resolve_fit_device` follows it.
+- Float64-only paths (exact/point drizzle, conservative polygon, forward splat,
+  spectral resamplers, encoder/spectral-basis field models) raise
+  `NotImplementedError` up front on MPS via `torchsky.device.require_float64`.
 - Image-plane coadd: per-observation work is cropped to the source footprint for
   every target size and WCS type (bit-identical inside the window), and the
   target-to-source pixel mapping of SIP/TPV/non-TAN sources is evaluated on a
