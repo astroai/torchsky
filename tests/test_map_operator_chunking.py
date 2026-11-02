@@ -125,9 +125,7 @@ def test_seeded_posterior_variance_matches_small_dense_inverse() -> None:
         initial_solution=torch.zeros(3, dtype=torch.float32),
         iterations=3,
         damping=damping,
-        preconditioner=make_diagonal_preconditioner(
-            normal.diagonal() + damping
-        ),
+        preconditioner=make_diagonal_preconditioner(normal.diagonal() + damping),
     )
 
     variance = operator.estimate_posterior_variance_diagonal(

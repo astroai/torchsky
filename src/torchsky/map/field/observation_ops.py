@@ -5,12 +5,13 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from typing import Sequence
+from typing import Callable, Sequence, cast
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from ...device import require_float64
 from ...wcs import WCS
 from ..exposure_pose import ExposurePose
 from ..operators.psf import psf_support_radius
@@ -28,7 +29,8 @@ def observation_pixel_to_world(
 ) -> tuple[Tensor, Tensor]:
     """Map local observation pixels to sky, honoring a native detector model."""
     if observation.detector_to_sky is None:
-        return WCS(observation.header).pixel_to_world(x, y)
+        # ``WCS.pixel_to_world`` yields an (ra, dec) pair for 2-D celestial WCS.
+        return cast(tuple[Tensor, Tensor], WCS(observation.header).pixel_to_world(x, y))
     return observation.detector_to_sky.pixel_to_world(
         x + float(observation.detector_x0_pix),
         y + float(observation.detector_y0_pix),
@@ -97,11 +99,6 @@ def observation_weight_sum_scalar(observation: FieldObservation) -> float:
         support, torch.clamp(weight, min=0.0), torch.zeros_like(weight)
     )
     return float(weight.sum().item())
-
-
-def observation_support_count_scalar(observation: FieldObservation) -> int:
-    support = observation_support_mask(observation)
-    return int(torch.count_nonzero(support).item())
 
 
 def _coprime_stride(size: int, generator: torch.Generator) -> int:
@@ -189,6 +186,7 @@ def sample_observation_indices(
         # smaller than ``observations_per_step``).
         if full_coverage:
             return epoch_permutation(total, epoch=epoch).tolist()
+        assert observations_per_step is not None  # else full_coverage
         if int(step_in_epoch) < 0:
             raise ValueError("step_in_epoch must be non-negative")
         band_groups: dict[tuple[object, ...], list[int]] = {}
@@ -211,7 +209,9 @@ def sample_observation_indices(
         return order[start : min(start + target, total)]
     if full_coverage:
         return list(range(total))
+    assert observations_per_step is not None  # else full_coverage
     target = int(observations_per_step)
+
     if observation_sampling == "uniform":
         return torch.randperm(total, generator=generator)[:target].tolist()
     if observation_sampling != "band_balanced":
@@ -329,6 +329,10 @@ def crop_field_observation(
             if observation.detector_background is not None
             else None
         ),
+        additive_components=tuple(
+            replace(component, values=component.values[y_slice, x_slice])
+            for component in observation.additive_components
+        ),
         detector_x0_pix=float(observation.detector_x0_pix) + int(x0),
         detector_y0_pix=float(observation.detector_y0_pix) + int(y0),
     )
@@ -421,7 +425,8 @@ def crop_field_observation_to_shared_sky_patch(
                 "shared-sky cropping requires detector_to_sky.world_to_pixel for "
                 "non-reference native observations"
             )
-        px, py = inverse(ra_deg, dec_deg)
+        px, py = cast(Callable[..., tuple[Tensor, Tensor]], inverse)(ra_deg, dec_deg)
+
         px = px - float(observation.detector_x0_pix)
         py = py - float(observation.detector_y0_pix)
     if not (torch.isfinite(px).any() and torch.isfinite(py).any()):
@@ -476,6 +481,7 @@ def sample_observation_pixels(
             (sample_count,),
             generator=generator,
         )
+    require_float64(device, what="sample_observation_pixels")
     sampled = support_indices[sample_ids]
     y = sampled[:, 0].to(dtype=torch.float64, device=device)
     x = sampled[:, 1].to(dtype=torch.float64, device=device)
@@ -596,7 +602,6 @@ __all__ = [
     "observation_pixel_to_world",
     "header_shape",
     "observation_band_key",
-    "observation_support_count_scalar",
     "observation_support_mask",
     "observation_weight_sum_scalar",
     "sample_observation_indices",

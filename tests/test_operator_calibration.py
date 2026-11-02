@@ -156,7 +156,9 @@ def test_background_calibration_is_weighted_in_value_space() -> None:
     assert diagnostics["weighted_mae"] == 2.5
 
 
-def test_fit_operator_calibration_terms_reduces_training_loss_and_restores_mode() -> None:
+def test_fit_operator_calibration_terms_reduces_training_loss_and_restores_mode() -> (
+    None
+):
     torch.manual_seed(4)
     model = ConditionedBackgroundField(_encoder(), hidden_dim=4, hidden_layers=1)
     model.eval()
@@ -254,7 +256,12 @@ def test_identifiability_report_restores_gates_and_scores_output_jacobians() -> 
             ("time", encoder.temporal_axis),
         )
     }
-    saved_coordinates = (term.detector_x, term.detector_y, term.wavelength, term.time_mjd)
+    saved_coordinates = (
+        term.detector_x,
+        term.detector_y,
+        term.wavelength,
+        term.time_mjd,
+    )
     model.eval()
 
     report = cast(
@@ -291,16 +298,14 @@ def test_identifiability_report_restores_gates_and_scores_output_jacobians() -> 
         )
     )
 
-    test_term = BackgroundCalibrationTerm(
-        model, x, y, wavelength, time, target + 0.05
-    )
+    test_term = BackgroundCalibrationTerm(model, x, y, wavelength, time, target + 0.05)
     pruning = cast(
         dict[str, Any],
         operator_calibration_validation_pruning_report(term, test_term),
     )
-    assert pruning["pruned_validation_raw_loss"] <= pruning[
-        "initial_validation_raw_loss"
-    ]
+    assert (
+        pruning["pruned_validation_raw_loss"] <= pruning["initial_validation_raw_loss"]
+    )
     for name, axis in (
         ("x", encoder.x_axis),
         ("y", encoder.y_axis),
@@ -349,9 +354,7 @@ def test_registered_image_stamps_centres_fractional_sources() -> None:
 def test_field_training_stages_toggle_scene_background_psf_and_joint() -> None:
     scene = nn.Linear(2, 1)
     psf = ConditionedKernelPSF(_encoder(), n_basis=2, kernel_size=5)
-    background = ConditionedBackgroundField(
-        _encoder(), hidden_dim=4, hidden_layers=1
-    )
+    background = ConditionedBackgroundField(_encoder(), hidden_dim=4, hidden_layers=1)
     bundles = [
         ObservationOperatorBundle(
             psf=LearnedPSFOp(psf),
@@ -359,9 +362,7 @@ def test_field_training_stages_toggle_scene_background_psf_and_joint() -> None:
         )
     ]
 
-    stages: tuple[
-        tuple[FieldTrainingStage, tuple[bool, bool, bool]], ...
-    ] = (
+    stages: tuple[tuple[FieldTrainingStage, tuple[bool, bool, bool]], ...] = (
         ("scene", (True, False, False)),
         ("background", (False, True, False)),
         ("psf", (False, False, True)),

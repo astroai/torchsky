@@ -8,6 +8,7 @@ from typing import Optional
 import torch
 from torch import Tensor, nn
 
+from .._dtype import work_dtype
 from ..sphere.healpix import lonlat_to_xyz, spherical_fourier_features
 from .photometry import (
     BinnedRedshiftHead,
@@ -17,7 +18,7 @@ from .photometry import (
 )
 
 
-def sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:
+def _sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:
     """Minimum ``min_frequency`` for :func:`~torchsky.sphere.healpix.spherical_fourier_features`.
 
     Maps approximately one oscillation across an angular patch whose typical extent is
@@ -82,13 +83,9 @@ def log_spectral_encoding(
     if num_frequencies <= 0:
         raise ValueError("num_frequencies must be positive")
 
-    raw = wavelength if wavelength is not None else frequency
-    assert raw is not None
-    raw = torch.as_tensor(raw)
+    raw = torch.as_tensor(wavelength if wavelength is not None else frequency)
     if not raw.is_floating_point():
-        raw = raw.to(
-            dtype=torch.float32 if raw.device.type == "mps" else torch.float64
-        )
+        raw = raw.to(work_dtype(raw.device))
     coord = torch.log(torch.clamp(raw, min=torch.finfo(raw.dtype).tiny))
     scales = base ** torch.arange(
         num_frequencies, dtype=coord.dtype, device=coord.device
@@ -101,7 +98,9 @@ def log_spectral_encoding(
     return torch.cat([coord.unsqueeze(-1), fourier_feats], dim=-1)
 
 
-class SineLayer(nn.Module):
+class _SineLayer(nn.Module):
+    """SIREN sine layer with the reference ``U(-bound, bound)`` init."""
+
     def __init__(self, in_features: int, out_features: int, *, omega_0: float = 30.0):
         super().__init__()
         self.linear = nn.Linear(in_features, out_features)
@@ -118,6 +117,8 @@ class SineLayer(nn.Module):
 
 
 class SirenImplicitField(nn.Module):
+    """SIREN multilayer perceptron over precomputed features."""
+
     def __init__(
         self,
         in_features: int,
@@ -126,9 +127,13 @@ class SirenImplicitField(nn.Module):
         out_features: int = 1,
     ) -> None:
         super().__init__()
-        layers: list[nn.Module] = [SineLayer(in_features, hidden_features)]
+        if hidden_layers < 1:
+            raise ValueError("hidden_layers must be at least one")
+        if min(in_features, hidden_features, out_features) < 1:
+            raise ValueError("layer widths must be positive")
+        layers: list[nn.Module] = [_SineLayer(in_features, hidden_features)]
         for _ in range(hidden_layers - 1):
-            layers.append(SineLayer(hidden_features, hidden_features))
+            layers.append(_SineLayer(hidden_features, hidden_features))
         layers.append(nn.Linear(hidden_features, out_features))
         self.net = nn.Sequential(*layers)
 
@@ -137,6 +142,8 @@ class SirenImplicitField(nn.Module):
 
 
 class SkyCoordinateEncoder(nn.Module):
+    """Spherical polynomial + Fourier features, optionally with log-spectral ones."""
+
     def __init__(
         self,
         *,
@@ -146,6 +153,10 @@ class SkyCoordinateEncoder(nn.Module):
         min_frequency: float = 1.0,
     ) -> None:
         super().__init__()
+        if num_fourier_frequencies <= 0:
+            raise ValueError("num_fourier_frequencies must be positive")
+        if spectral_frequencies < 0:
+            raise ValueError("spectral_frequencies must be non-negative")
         self.num_fourier_frequencies = num_fourier_frequencies
         self.spectral_frequencies = spectral_frequencies
         self.include_degree2 = include_degree2
@@ -191,10 +202,8 @@ __all__ = [
     "MaskedSetFusion",
     "PhotometryEncoder",
     "SkyCoordinateEncoder",
-    "SineLayer",
     "SirenImplicitField",
     "harmonic_sky_encoding",
     "log_spectral_encoding",
     "marginalize_association_logits",
-    "sky_encoder_fourier_min_frequency",
 ]

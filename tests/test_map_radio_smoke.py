@@ -1,6 +1,6 @@
 """Smoke tests for radio-style FITS headers (TP / image-plane mosaic path).
 
-Uses **synthetic** FITS written at runtime via ``torchsky.write`` (no astropy/reproject).
+Uses **synthetic** FITS written at runtime via ``torchfits.write`` (no astropy/reproject).
 Exercises ``primary_beam_path`` weighting and ``ImageObservation.hdu=None`` auto payload
 behavior where applicable.
 """
@@ -13,10 +13,12 @@ import numpy as np
 import pytest
 import torch
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
-import torchsky  # noqa: E402
-from torchsky.map import ImageObservation, coadd_image_plane, plan_image_plane_target  # noqa: E402
+from torchsky.map.image_plane_coadd import coadd_image_plane
+from torchsky.map.planning import plan_image_plane_target
+from torchsky.map.observation import ImageObservation
+import torchfits
 
 
 def _radio_tp_header_dict(*, size: int = 24, crval2: float = -10.0) -> dict:
@@ -53,8 +55,8 @@ def test_radio_stokes_cube_header_write_read_roundtrip(tmp_path: Path) -> None:
     h["SPECSYS"] = "LSRK"
     cube = torch.ones(1, size, size, dtype=torch.float32)
     path = tmp_path / "stokes_i.fits"
-    torchsky.write(str(path), cube, header=h, overwrite=True)
-    back, hdr = torchsky.read(str(path), return_header=True)
+    torchfits.write(str(path), cube, header=h, overwrite=True)
+    back, hdr = torchfits.read(str(path), return_header=True)
     assert tuple(int(back.shape[i]) for i in range(back.ndim)) == (1, size, size)
     assert int(hdr.get("NAXIS", 0)) == 3
     assert float(hdr["RESTFRQ"]) == pytest.approx(1.420405752e9)
@@ -69,8 +71,8 @@ def test_coadd_synthetic_radio_pair_smoke(tmp_path: Path) -> None:
     h2 = _radio_tp_header_dict(size=size, crval2=-10.01)
     p1 = tmp_path / "tp_a.fits"
     p2 = tmp_path / "tp_b.fits"
-    torchsky.write(str(p1), torch.from_numpy(g), header=h1, overwrite=True)
-    torchsky.write(str(p2), torch.from_numpy(g * 0.9), header=h2, overwrite=True)
+    torchfits.write(str(p1), torch.from_numpy(g), header=h1, overwrite=True)
+    torchfits.write(str(p2), torch.from_numpy(g * 0.9), header=h2, overwrite=True)
 
     obs = [
         ImageObservation(path=str(p1), hdu=None, weight=1.0),
@@ -101,8 +103,8 @@ def test_primary_beam_multiplies_weights(tmp_path: Path) -> None:
     pb = np.exp(-((xx - size / 2) ** 2 + (yy - size / 2) ** 2) / 18.0).astype(
         np.float32
     )
-    torchsky.write(str(img_path), torch.from_numpy(flat), header=h, overwrite=True)
-    torchsky.write(str(pb_path), torch.from_numpy(pb), header=h, overwrite=True)
+    torchfits.write(str(img_path), torch.from_numpy(flat), header=h, overwrite=True)
+    torchfits.write(str(pb_path), torch.from_numpy(pb), header=h, overwrite=True)
 
     obs = [
         ImageObservation(

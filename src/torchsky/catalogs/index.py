@@ -8,16 +8,14 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from .._dtype import work_dtype as _work_dtype
 from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
+from ..sphere.moc import MOC, nest2uniq
 
 _MAX_NSIDE = 65536
 _TARGET_POINTS_PER_PIXEL = 64
 _BATCHED_RING_HOPS_MAX = 4
-
-
-def _work_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
 
 
 def nside_for_cap(radius_rad: float, *, max_nside: int = _MAX_NSIDE) -> int:
@@ -32,7 +30,7 @@ def nside_for_cap(radius_rad: float, *, max_nside: int = _MAX_NSIDE) -> int:
     _healpix._validate_nside(max_nside)
     nside = 1
     while nside < max_nside:
-        if _healpix.max_pixrad(nside, degrees=False) <= radius_rad:
+        if _healpix.max_pixel_radius(nside, degrees=False) <= radius_rad:
             return nside
         nside *= 2
     return max_nside
@@ -85,7 +83,7 @@ def cap_covering_pixels(
             return pix
         return _healpix.nest2ring(nside, pix)
 
-    pixrad = _healpix.max_pixrad(nside, degrees=False)
+    pixrad = _healpix.max_pixel_radius(nside, degrees=False)
     hops = max(1, int(math.ceil(radius_rad / max(pixrad, 1e-12)))) + 1
     if hops > 16:
         x, y, z = _healpix.lonlat_to_xyz(lon_t, lat_t)
@@ -195,6 +193,30 @@ def nested_neighbor_rings(nside: int, pix: Tensor, hops: int) -> Tensor:
         visited = _unique_ring_slots(torch.cat((visited, layer), dim=0))
         frontier = _unique_ring_slots(layer)
     return visited
+
+
+def _bucket_offsets(lengths: Tensor) -> tuple[Tensor, Tensor]:
+    """Expand ragged bucket sizes into ``(bucket_id, in-bucket offset)``.
+
+    Returns one entry per gathered row; callers index ``bucket_starts`` with
+    the bucket ids and add the offsets.
+    """
+    device = lengths.device
+    counts = lengths.to(torch.int64)
+    total = int(counts.sum().item())
+    group = torch.repeat_interleave(
+        torch.arange(counts.numel(), dtype=torch.int64, device=device), counts
+    )
+    offsets = torch.cat(
+        (
+            torch.zeros(1, dtype=torch.int64, device=device),
+            torch.cumsum(counts[:-1], dim=0),
+        )
+    )
+    intra = torch.arange(total, dtype=torch.int64, device=device) - (
+        torch.repeat_interleave(offsets, counts)
+    )
+    return group, intra
 
 
 @dataclass
@@ -308,28 +330,10 @@ class HealpixIndex:
 
         starts = self.bucket_starts[idx_safe[mask]]
         stops = self.bucket_stops[idx_safe[mask]]
-        lengths = (stops - starts).to(torch.int64)
-        total = int(lengths.sum().item())
-        if total == 0:
+        bucket, intra = _bucket_offsets(stops - starts)
+        if intra.numel() == 0:
             return self.order[:0]
-
-        device = self.order.device
-        bucket_ids = torch.repeat_interleave(
-            torch.arange(lengths.numel(), device=device, dtype=torch.int64),
-            lengths,
-        )
-        offsets = torch.cumsum(
-            torch.cat(
-                (
-                    torch.zeros(1, dtype=torch.int64, device=device),
-                    lengths[:-1],
-                )
-            ),
-            dim=0,
-        )
-        intra = torch.arange(total, device=device, dtype=torch.int64)
-        intra = intra - torch.repeat_interleave(offsets, lengths)
-        return self.order[starts[bucket_ids] + intra]
+        return self.order[starts[bucket] + intra]
 
     def expand(self, pixels: Tensor) -> tuple[Tensor, Tensor]:
         """Map per-query pixels ``[N]`` to ``(query_index, row_index)`` pairs."""
@@ -348,30 +352,38 @@ class HealpixIndex:
         match = (idx < n_uniq) & (self.unique_pixels[idx_safe] == pix) & (pix >= 0)
         if not bool(match.any()):
             return empty_q, empty_q
-        query = torch.arange(n_query, device=pix.device, dtype=torch.int64)[match]
+        query = torch.nonzero(match, as_tuple=False).squeeze(1)
         starts = self.bucket_starts[idx_safe[match]]
         stops = self.bucket_stops[idx_safe[match]]
         lengths = (stops - starts).to(torch.int64)
-        total = int(lengths.sum().item())
-        if total == 0:
+        bucket, intra = _bucket_offsets(lengths)
+        if intra.numel() == 0:
             return empty_q, empty_q
-        query_exp = torch.repeat_interleave(query, lengths)
-        bucket_ids = torch.repeat_interleave(
-            torch.arange(lengths.numel(), device=pix.device, dtype=torch.int64),
-            lengths,
-        )
-        offsets = torch.cumsum(
-            torch.cat(
-                (
-                    torch.zeros(1, dtype=torch.int64, device=pix.device),
-                    lengths[:-1],
-                )
-            ),
-            dim=0,
-        )
-        intra = torch.arange(total, device=pix.device, dtype=torch.int64)
-        intra = intra - torch.repeat_interleave(offsets, lengths)
-        return query_exp, self.order[starts[bucket_ids] + intra]
+        return torch.repeat_interleave(query, lengths), self.order[
+            starts[bucket] + intra
+        ]
+
+    def occupied_moc(self) -> MOC:
+        """Coverage of occupied catalog buckets as canonical NUNIQ cells."""
+        pixels = self.unique_pixels
+        if not self.nest and pixels.numel() > 0:
+            pixels = _healpix.ring2nest(self.nside, pixels)
+        return MOC(nest2uniq(self.nside, pixels))
+
+    def lookup_moc(self, footprint: MOC) -> Tensor:
+        """Rows inside a MOC using occupied buckets for candidate pruning."""
+        if self.unique_pixels.numel() == 0 or footprint.uniq.numel() == 0:
+            return self.order[:0]
+        bucket_pixels = self.unique_pixels
+        nested = bucket_pixels
+        if not self.nest:
+            nested = _healpix.ring2nest(self.nside, bucket_pixels)
+        bucket_uniq = nest2uniq(self.nside, nested)
+        candidates = self.lookup(bucket_pixels[footprint.intersects_uniq(bucket_uniq)])
+        if candidates.numel() == 0:
+            return candidates
+        inside = footprint.contains(self.lon[candidates], self.lat[candidates])
+        return torch.sort(candidates[inside]).values
 
     def query_disc(
         self, lon: Tensor | float, lat: Tensor | float, radius_deg: float
@@ -392,7 +404,7 @@ class HealpixIndex:
             self.nside, lon_t, lat_t, nest=True, lonlat=True
         ).to(torch.int64)
         candidate_radius_rad = math.radians(radius) + (
-            2.0 * _healpix.max_pixrad(self.nside, degrees=False)
+            2.0 * _healpix.max_pixel_radius(self.nside, degrees=False)
         )
         cand_nest = candidate_coarse_pixels_for_left_pixel(
             self.nside,

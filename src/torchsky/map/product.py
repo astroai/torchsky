@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
-import json
 import math
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Sequence
@@ -12,33 +11,30 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
-from ..device import default_compute_device
+from ..device import resolve_device
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
 from ..spectrophotometry import Passband
-from ..wcs import WCS
-from .image_plane import (
+from .observation import (
     BandMetadataTable,
+    CubeResult,
     ImageObservation,
-    MapResamplingKernel,
     MapResult,
-    MapStackingMethod,
-    MapValueSemantics,
     PlannedImagePlaneCubeTarget,
     PlannedImagePlaneTarget,
-    SpectralCubeMapResult,
-    coadd_image_plane,
-    coadd_image_plane_cube,
-    plan_image_plane_cube_target,
-    plan_image_plane_target,
 )
+from .quality import QualityProduct
+from .image_plane_coadd import coadd_image_plane, coadd_image_plane_cube
+from .planning import plan_image_plane_cube_target, plan_image_plane_target
 from .field.types import FieldSpatialSampling
 from .operators.config import (
+    MapResamplingKernel,
+    MapStackingMethod,
+    MapValueSemantics,
     validate_map_resampling_kernel,
     validate_map_stacking_method,
     validate_map_value_semantics,
 )
-from .operators.pixel_area import pixel_area_sr_map
 from .scenes import ContinuousFieldModel, SceneRepresentation, as_scene_representation
 from .sky import CrossExposureSkyCorrector
 from .solvers import SolverHooks
@@ -46,7 +42,7 @@ from .target import TargetRenderSpec
 
 
 @dataclass(frozen=True)
-class MapBandpassSpec:
+class BandpassSpec:
     label: str | None = None
     spectral_min: float | None = None
     spectral_max: float | None = None
@@ -60,17 +56,17 @@ class MapBandpassSpec:
 
 
 @dataclass(frozen=True)
-class MapProductSpec:
+class ProductSpec:
     target_header: dict[str, Any]
-    bands: tuple[MapBandpassSpec, ...]
+    bands: tuple[BandpassSpec, ...]
     value_semantics: MapValueSemantics = "surface_brightness"
     footprint_order: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.target_header, dict):
-            raise TypeError("MapProductSpec target_header must be a dict")
+            raise TypeError("ProductSpec target_header must be a dict")
         if not self.bands:
-            raise ValueError("MapProductSpec requires at least one band")
+            raise ValueError("ProductSpec requires at least one band")
         for band in self.bands:
             _coerce_band(band)
 
@@ -104,7 +100,7 @@ class MapProductSpec:
         else:
             per_band_psf = tuple(psf_specs)
             if len(per_band_psf) != len(self.bands):
-                raise ValueError("psf_specs must match MapProductSpec bands")
+                raise ValueError("psf_specs must match ProductSpec bands")
         return tuple(
             self.target_render_spec(
                 band_index=band_index, psf_spec=per_band_psf[band_index]
@@ -122,7 +118,7 @@ MapUncertaintyKind = Literal[
 
 
 @dataclass(frozen=True)
-class MapUncertaintyProduct:
+class UncertaintyProduct:
     """Labeled diagonal uncertainty without pretending it is full covariance."""
 
     variance: Tensor
@@ -184,17 +180,30 @@ class MapUncertaintyProduct:
 
 
 @dataclass
-class MapProductResult:
-    product: MapProductSpec
+class ProductResult:
+    product: ProductSpec
     data: Tensor
     weight: Tensor | None
     header: dict[str, Any]
     overlap_count: Tensor | None = None
     coverage_mocs: tuple[MOC | None, ...] | None = None
-    uncertainty: MapUncertaintyProduct | None = None
+    uncertainty: UncertaintyProduct | None = None
     mask: Tensor | None = None
     context: Tensor | None = None
     provenance: Mapping[str, Any] | None = None
+    quality: QualityProduct | None = None
+
+    @property
+    def dq(self) -> Tensor | None:
+        return None if self.quality is None else self.quality.dq
+
+    @property
+    def usability_mask(self) -> Tensor | None:
+        return None if self.quality is None else self.quality.usability_mask
+
+    @property
+    def rejection_log(self) -> tuple[Mapping[str, Any], ...]:
+        return () if self.quality is None else self.quality.rejection_log
 
     @property
     def n_bands(self) -> int:
@@ -222,50 +231,42 @@ class MapProductResult:
 MapUncertaintyMode = Literal["native_inverse_variance", "support_density_proxy"]
 
 
-def _coerce_band(value: MapBandpassSpec) -> MapBandpassSpec:
+def _coerce_band(value: BandpassSpec) -> BandpassSpec:
     if not isinstance(value.spectral_unit, str) or not value.spectral_unit.strip():
-        raise ValueError("MapBandpassSpec spectral_unit must be explicit")
+        raise ValueError("BandpassSpec spectral_unit must be explicit")
     if value.passband is not None:
         if value.spectral_unit.strip().lower() not in {"angstrom", "angstroms", "aa"}:
-            raise ValueError(
-                "Passband-backed MapBandpassSpec uses Angstrom coordinates"
-            )
+            raise ValueError("Passband-backed BandpassSpec uses Angstrom coordinates")
         if (
             value.transmission_center is not None
             or value.transmission_sigma is not None
         ):
             raise ValueError(
-                "MapBandpassSpec passband and Gaussian transmission are mutually exclusive"
+                "BandpassSpec passband and Gaussian transmission are mutually exclusive"
             )
     if value.spectral_min is not None and value.spectral_max is None:
-        raise ValueError(
-            "MapBandpassSpec requires spectral_max when spectral_min is set"
-        )
+        raise ValueError("BandpassSpec requires spectral_max when spectral_min is set")
     if value.spectral_max is not None and value.spectral_min is None:
-        raise ValueError(
-            "MapBandpassSpec requires spectral_min when spectral_max is set"
-        )
+        raise ValueError("BandpassSpec requires spectral_min when spectral_max is set")
     if value.spectral_min is not None and value.spectral_max is not None:
         lower = float(value.spectral_min)
         upper = float(value.spectral_max)
         if not math.isfinite(lower) or not math.isfinite(upper) or upper < lower:
-            raise ValueError(
-                "MapBandpassSpec spectral bounds must be finite and ordered"
-            )
+            raise ValueError("BandpassSpec spectral bounds must be finite and ordered")
     if value.transmission_center is not None and not math.isfinite(
         float(value.transmission_center)
     ):
-        raise ValueError("MapBandpassSpec transmission_center must be finite")
+        raise ValueError("BandpassSpec transmission_center must be finite")
     if value.transmission_sigma is not None:
         sigma = float(value.transmission_sigma)
         if not math.isfinite(sigma) or sigma <= 0.0:
             raise ValueError(
-                "MapBandpassSpec transmission_sigma must be finite and positive"
+                "BandpassSpec transmission_sigma must be finite and positive"
             )
     return value
 
 
-def _band_center(band: MapBandpassSpec) -> float:
+def _band_center(band: BandpassSpec) -> float:
     if band.passband is not None:
         return float(band.passband.effective_wavelength.item())
     if band.transmission_center is not None:
@@ -273,14 +274,14 @@ def _band_center(band: MapBandpassSpec) -> float:
     if band.spectral_min is not None and band.spectral_max is not None:
         return 0.5 * (float(band.spectral_min) + float(band.spectral_max))
     raise ValueError(
-        "MapBandpassSpec requires transmission_center or spectral bounds for product rendering"
+        "BandpassSpec requires transmission_center or spectral bounds for product rendering"
     )
 
 
 def _bands_from_cube_target(
     target: PlannedImagePlaneCubeTarget,
-) -> tuple[MapBandpassSpec, ...]:
-    bands: list[MapBandpassSpec] = []
+) -> tuple[BandpassSpec, ...]:
+    bands: list[BandpassSpec] = []
     metadata = target.band_metadata
     for idx in range(int(metadata.center.numel())):
         lower = float(metadata.lower[idx].item())
@@ -288,7 +289,7 @@ def _bands_from_cube_target(
         center = float(metadata.center[idx].item())
         is_interval = not math.isclose(lower, upper, rel_tol=0.0, abs_tol=1.0e-12)
         bands.append(
-            MapBandpassSpec(
+            BandpassSpec(
                 label=metadata.band_names[idx],
                 spectral_min=lower if is_interval else None,
                 spectral_max=upper if is_interval else None,
@@ -319,7 +320,7 @@ def plan_map_product(
     *,
     reference_index: int = 0,
     header_overrides: dict[str, Any] | None = None,
-    bands: Sequence[MapBandpassSpec] | None = None,
+    bands: Sequence[BandpassSpec] | None = None,
     spectral_axis: SpectralAxis | None = None,
     spectral_bin_edges: Tensor | None = None,
     spectral_unit: str = "Angstrom",
@@ -327,12 +328,12 @@ def plan_map_product(
     value_semantics: MapValueSemantics = "surface_brightness",
     footprint_order: int | None = None,
     union_footprint: bool = False,
-    footprint_padding: float = 1.05,
+    footprint_padding: float = 1.0,
     footprint_tolerance_px: float = 0.25,
     footprint_max_depth: int = 20,
     max_footprint_pixels: int | None = None,
     device: torch.device | str | None = None,
-) -> MapProductSpec:
+) -> ProductSpec:
     """Plan a map product from a sequence of image-plane observations.
 
     When ``union_footprint=True``, the target WCS is computed automatically from
@@ -363,8 +364,8 @@ def plan_map_product(
         )
         validated_bands = tuple(_coerce_band(band) for band in bands)
         if not validated_bands:
-            raise ValueError("MapProductSpec requires at least one band")
-        return MapProductSpec(
+            raise ValueError("ProductSpec requires at least one band")
+        return ProductSpec(
             target_header=spatial.header,
             bands=validated_bands,
             value_semantics=value_semantics,
@@ -390,7 +391,7 @@ def plan_map_product(
             footprint_max_depth=footprint_max_depth,
             max_footprint_pixels=max_footprint_pixels,
         )
-        return MapProductSpec(
+        return ProductSpec(
             target_header=target.header,
             bands=_bands_from_cube_target(target),
             value_semantics=value_semantics,
@@ -408,10 +409,10 @@ def plan_map_product(
         max_footprint_pixels=max_footprint_pixels,
     )
     reference = observations[reference_index]
-    return MapProductSpec(
+    return ProductSpec(
         target_header=spatial.header,
         bands=(
-            MapBandpassSpec(
+            BandpassSpec(
                 label=reference.band_name,
                 spectral_min=reference.spectral_min,
                 spectral_max=reference.spectral_max,
@@ -427,7 +428,7 @@ def plan_map_product(
 
 
 def _band_metadata_from_product(
-    product: MapProductSpec,
+    product: ProductSpec,
     spectral_axis: SpectralAxis,
     spectral_bin_edges: Tensor | None,
 ) -> BandMetadataTable:
@@ -450,14 +451,14 @@ def _band_metadata_from_product(
     )
 
 
-def _product_to_cube_target(product: MapProductSpec) -> PlannedImagePlaneCubeTarget:
+def _product_to_cube_target(product: ProductSpec) -> PlannedImagePlaneCubeTarget:
     centers = torch.tensor(
         [_band_center(band) for band in product.bands],
         dtype=torch.float64,
     )
     if centers.numel() > 1 and not bool(torch.all(centers[1:] > centers[:-1])):
         raise ValueError(
-            "MapProductSpec bands must be strictly increasing in spectral center"
+            "ProductSpec bands must be strictly increasing in spectral center"
         )
     interval_bands = [
         band
@@ -468,7 +469,7 @@ def _product_to_cube_target(product: MapProductSpec) -> PlannedImagePlaneCubeTar
     if interval_bands:
         if len(interval_bands) != len(product.bands):
             raise ValueError(
-                "MapProductSpec direct stacking requires all bands to define intervals or none"
+                "ProductSpec direct stacking requires all bands to define intervals or none"
             )
         lowers = [
             float(band.spectral_min)
@@ -495,7 +496,7 @@ def _product_to_cube_target(product: MapProductSpec) -> PlannedImagePlaneCubeTar
             )
         else:
             raise ValueError(
-                "MapProductSpec direct stacking currently supports only point bands or "
+                "ProductSpec direct stacking currently supports only point bands or "
                 "ordered contiguous interval bands"
             )
     spectral_axis = SpectralAxis(values=centers, unit="Angstrom", type="WAVE")
@@ -518,7 +519,7 @@ def _product_to_cube_target(product: MapProductSpec) -> PlannedImagePlaneCubeTar
     )
 
 
-def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductResult:
+def _wrap_map_result(result: MapResult, product: ProductSpec) -> ProductResult:
     coverage_mocs = None
     if result.coverage_moc is not None:
         coverage_mocs = (result.coverage_moc,)
@@ -530,7 +531,7 @@ def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductRe
             inverse_variance.reciprocal(),
             torch.zeros_like(inverse_variance),
         )
-        uncertainty = MapUncertaintyProduct(
+        uncertainty = UncertaintyProduct(
             variance=variance,
             kind="propagated_linear",
             components={"detector": variance},
@@ -540,7 +541,7 @@ def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductRe
                 else None
             ),
         )
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=result.data.unsqueeze(0),
         weight=result.weight.unsqueeze(0),
@@ -552,16 +553,30 @@ def _wrap_map_result(result: MapResult, product: MapProductSpec) -> MapProductRe
         ),
         coverage_mocs=coverage_mocs,
         uncertainty=uncertainty,
-        mask=(result.weight > 0.0).unsqueeze(0),
+        mask=(
+            result.usability_mask.unsqueeze(0)
+            if result.usability_mask is not None
+            else (result.weight > 0.0).unsqueeze(0)
+        ),
         context=(result.context.unsqueeze(0) if result.context is not None else None),
         provenance=result.provenance,
+        quality=(
+            QualityProduct(
+                dq=result.dq.unsqueeze(0),
+                usability_mask=result.usability_mask.unsqueeze(0),
+                rejection_log=result.rejection_log,
+                policy=result.dq_policy,
+            )
+            if result.dq is not None and result.usability_mask is not None
+            else None
+        ),
     )
 
 
 def _wrap_cube_result(
-    result: SpectralCubeMapResult,
-    product: MapProductSpec,
-) -> MapProductResult:
+    result: CubeResult,
+    product: ProductSpec,
+) -> ProductResult:
     uncertainty = None
     if result.inverse_variance is not None:
         variance = torch.where(
@@ -569,13 +584,13 @@ def _wrap_cube_result(
             result.inverse_variance.reciprocal(),
             torch.zeros_like(result.inverse_variance),
         )
-        uncertainty = MapUncertaintyProduct(
+        uncertainty = UncertaintyProduct(
             variance=variance,
             kind="propagated_linear",
             components={"detector": variance},
             correlation_factor=result.correlation_factor,
         )
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=result.data,
         weight=result.weight,
@@ -587,9 +602,9 @@ def _wrap_cube_result(
     )
 
 
-def stack_map_product(
+def stack_product(
     observations: Sequence[ImageObservation],
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     resampling_kernel: MapResamplingKernel = "bilinear",
     method: str = "coadd",
@@ -602,9 +617,10 @@ def stack_map_product(
     scratch_dir: str | Path | None = None,
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None,
     cross_exposure_sky_corrector: CrossExposureSkyCorrector | None = None,
-) -> MapProductResult:
+) -> ProductResult:
+    """Resample observations and stack them into a requested map product."""
     if method != "coadd":
-        raise ValueError("stack_map_product currently supports only method='coadd'")
+        raise ValueError("stack_product currently supports only method='coadd'")
     resampling_kernel = validate_map_resampling_kernel(resampling_kernel)
     stacking_method = validate_map_stacking_method(stacking_method)
     if len(product.bands) == 1:
@@ -653,16 +669,16 @@ def _coerce_product_plane(
     if rendered.ndim == 2:
         if tuple(rendered.shape) != shape:
             raise ValueError(
-                "scene render plane shape must match MapProductSpec target shape"
+                "scene render plane shape must match ProductSpec target shape"
             )
         return rendered
     if rendered.ndim == 3:
         if int(rendered.shape[0]) != n_bands:
-            raise ValueError("scene render cube must match MapProductSpec band count")
+            raise ValueError("scene render cube must match ProductSpec band count")
         plane = rendered[band_index]
         if tuple(plane.shape) != shape:
             raise ValueError(
-                "scene render cube plane shape must match MapProductSpec target shape"
+                "scene render cube plane shape must match ProductSpec target shape"
             )
         return plane
     raise ValueError("scene render result must be 2D or 3D")
@@ -670,11 +686,11 @@ def _coerce_product_plane(
 
 def render_scene_product(
     scene: SceneRepresentation | nn.Module | Tensor,
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     solver_hooks: SolverHooks | None = None,
     num_spectral_samples: int = 9,
-) -> MapProductResult:
+) -> ProductResult:
     scene_representation = as_scene_representation(scene)
     shape = (
         int(product.target_header["NAXIS2"]),
@@ -756,12 +772,12 @@ def render_scene_product(
     uncertainty = None
     if len(variance_planes) == len(planes):
         total_variance = torch.stack(variance_planes, dim=0)
-        uncertainty = MapUncertaintyProduct(
+        uncertainty = UncertaintyProduct(
             variance=total_variance,
             kind=uncertainty_kind or "model_predictive",
             components={"detector": total_variance},
         )
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=data,
         weight=None,
@@ -775,12 +791,12 @@ def render_scene_product(
 
 def render_field_product(
     model: nn.Module,
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     num_spectral_samples: int = 9,
     spatial_sampling: FieldSpatialSampling = "center",
     spatial_tile_hw: tuple[int, int] | None = None,
-) -> MapProductResult:
+) -> ProductResult:
     if spatial_tile_hw is None and spatial_sampling == "center":
         return render_scene_product(
             model,
@@ -800,10 +816,7 @@ def render_field_product(
     h, w = product.shape
     th, tw = int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
     n_bands = product.n_bands
-    model_device = next(
-        (parameter.device for parameter in model.parameters()),
-        default_compute_device(),
-    )
+    model_device = resolve_device(None, model)
     data = torch.zeros((n_bands, h, w), dtype=torch.float32, device=model_device)
     has_distribution = field_model_has_predictive_distribution(model)
     detector_variance = torch.zeros_like(data) if has_distribution else None
@@ -868,19 +881,17 @@ def render_field_product(
                         )
                 data[band_index, y0:y1, x0:x1] = tile_pred
                 if detector_variance is not None:
-                    detector_variance[band_index, y0:y1, x0:x1] = torch.exp(
-                        tile_logvar
-                    )
+                    detector_variance[band_index, y0:y1, x0:x1] = torch.exp(tile_logvar)
     uncertainty = (
         None
         if detector_variance is None
-        else MapUncertaintyProduct(
+        else UncertaintyProduct(
             variance=detector_variance,
             kind="model_predictive",
             components={"detector": detector_variance},
         )
     )
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=data,
         weight=None,
@@ -917,7 +928,9 @@ def _streaming_sample_variance(
     mean = torch.zeros_like(reference)
     m2 = torch.zeros_like(reference)
     for count, raw_sample in enumerate(samples, start=1):
-        sample = torch.as_tensor(raw_sample, device=reference.device, dtype=reference.dtype)
+        sample = torch.as_tensor(
+            raw_sample, device=reference.device, dtype=reference.dtype
+        )
         if sample.shape != reference.shape:
             raise ValueError(f"{label} draw shape must match the rendered product")
         if not bool(torch.isfinite(sample).all()):
@@ -931,7 +944,7 @@ def _streaming_sample_variance(
 @torch.no_grad()
 def render_field_ensemble_product(
     models: Sequence[nn.Module],
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     member_seeds: Sequence[int],
     calibration_draws: Sequence[Tensor] | None = None,
@@ -939,7 +952,7 @@ def render_field_ensemble_product(
     num_spectral_samples: int = 9,
     spatial_sampling: FieldSpatialSampling = "center",
     spatial_tile_hw: tuple[int, int] | None = None,
-) -> MapProductResult:
+) -> ProductResult:
     """Render a seeded ensemble with explicit uncertainty components.
 
     Between-member sample variance is epistemic. When every member supplies an
@@ -960,7 +973,7 @@ def render_field_ensemble_product(
     m2: Tensor | None = None
     detector_sum: Tensor | None = None
     has_detector: bool | None = None
-    reference_result: MapProductResult | None = None
+    reference_result: ProductResult | None = None
     for count, model in enumerate(members, start=1):
         result = render_field_product(
             model,
@@ -1035,14 +1048,14 @@ def render_field_ensemble_product(
         else list(resolved_calibration_seeds),
         "variance_estimator": "unbiased_sample",
     }
-    return MapProductResult(
+    return ProductResult(
         product=product,
         data=mean,
         weight=None,
         header=dict(product.target_header),
         overlap_count=reference_result.overlap_count,
         coverage_mocs=reference_result.coverage_mocs,
-        uncertainty=MapUncertaintyProduct(
+        uncertainty=UncertaintyProduct(
             variance=total_variance,
             kind="ensemble_predictive",
             components=components,
@@ -1061,267 +1074,6 @@ def _as_cube(tensor: Tensor) -> Tensor:
     raise ValueError("Map product evaluation expects 2D or 3D tensors")
 
 
-def evaluate_map_product(
-    prediction: MapProductResult | Tensor,
-    truth: MapProductResult | Tensor,
-    *,
-    weight: Tensor | None = None,
-    header: dict[str, Any] | None = None,
-    value_semantics: MapValueSemantics | None = None,
-) -> dict[str, float | list[float] | None]:
-    if isinstance(prediction, MapProductResult):
-        pred_data = prediction.data
-        if weight is not None:
-            pred_weight = _as_cube(weight)
-        elif prediction.weight is not None:
-            pred_weight = prediction.weight
-        elif prediction.mask is not None:
-            pred_weight = prediction.mask.to(dtype=torch.float32)
-        elif prediction.uncertainty is not None:
-            pred_weight = prediction.uncertainty.inverse_variance
-        else:
-            pred_weight = torch.isfinite(pred_data).to(dtype=torch.float32)
-        header = dict(prediction.header)
-        value_semantics = prediction.product.value_semantics
-    else:
-        pred_data = _as_cube(prediction)
-        pred_weight = (
-            _as_cube(weight) if weight is not None else torch.ones_like(pred_data)
-        )
-    if isinstance(truth, MapProductResult):
-        truth_data = truth.data
-        if header is None:
-            header = dict(truth.header)
-        if value_semantics is None:
-            value_semantics = truth.product.value_semantics
-    else:
-        truth_data = _as_cube(truth)
-    if header is None:
-        raise ValueError("evaluate_map_product requires a header")
-    if value_semantics is None:
-        raise ValueError("evaluate_map_product requires value_semantics")
-    pred_data = _as_cube(pred_data).to(dtype=torch.float32)
-    truth_data = _as_cube(truth_data).to(dtype=torch.float32, device=pred_data.device)
-    pred_weight = _as_cube(pred_weight).to(dtype=torch.float32, device=pred_data.device)
-    if pred_data.shape != truth_data.shape or pred_data.shape != pred_weight.shape:
-        raise ValueError(
-            "Prediction, truth, and weight tensors must share the same shape"
-        )
-    valid = pred_weight > 0.0
-    if not bool(valid.any()):
-        zeros: dict[str, float | list[float] | None] = {
-            "coverage_fraction": 0.0,
-            "zero_support_fraction": 1.0,
-            "mean_weight": float(pred_weight.mean().item()),
-            "reconstruction_rmse": 0.0,
-            "reconstruction_mae": 0.0,
-            "reconstruction_p95_abs_err": 0.0,
-            "reconstruction_max_abs_err": 0.0,
-            "signal_to_residual_ratio": 0.0,
-            "signal_to_residual_db": float("-inf"),
-            "band_reconstruction_rmse": [0.0 for _ in range(int(pred_data.shape[0]))],
-            "band_flux_relative_error_mean": 0.0,
-            "band_flux_relative_error_max": 0.0,
-            "band_flux_relative_error": [0.0 for _ in range(int(pred_data.shape[0]))],
-            "total_flux_truth": 0.0,
-            "total_flux_output": 0.0,
-            "total_flux_absolute_error": 0.0,
-            "total_flux_relative_error": 0.0,
-            "blue_red_flux_ratio_truth": None,
-            "blue_red_flux_ratio_output": None,
-            "blue_red_flux_ratio_absolute_error": None,
-            "mid_blue_flux_ratio_truth": None,
-            "mid_blue_flux_ratio_output": None,
-            "mid_blue_flux_ratio_absolute_error": None,
-        }
-        return zeros
-    residual = pred_data - truth_data
-    abs_err = torch.abs(residual)
-    band_rmse: list[Tensor] = []
-    for band_idx in range(int(pred_data.shape[0])):
-        band_valid = valid[band_idx]
-        if bool(band_valid.any()):
-            band_residual = residual[band_idx][band_valid]
-            band_rmse.append(torch.sqrt(torch.mean(torch.square(band_residual))))
-        else:
-            band_rmse.append(
-                torch.zeros((), dtype=torch.float32, device=pred_data.device)
-            )
-    band_rmse_tensor = torch.stack(band_rmse)
-    valid_flat = valid.reshape(-1)
-    signal_flat = truth_data.reshape(-1)[valid_flat]
-    residual_flat = residual.reshape(-1)[valid_flat]
-    abs_flat = abs_err.reshape(-1)[valid_flat]
-    signal_rms = float(torch.sqrt(torch.mean(torch.square(signal_flat))).item())
-    residual_rms = float(torch.sqrt(torch.mean(torch.square(residual_flat))).item())
-    snr_linear = signal_rms / max(residual_rms, 1.0e-12)
-    if value_semantics == "surface_brightness":
-        area_sr = pixel_area_sr_map(
-            WCS(header),
-            (int(pred_data.shape[-2]), int(pred_data.shape[-1])),
-            device=pred_data.device,
-        ).unsqueeze(0)
-        truth_flux = truth_data * area_sr
-        pred_flux = pred_data * area_sr
-    else:
-        truth_flux = truth_data
-        pred_flux = pred_data
-    valid_flux = valid.to(dtype=torch.float32)
-    band_flux_truth = torch.sum(truth_flux * valid_flux, dim=(1, 2))
-    band_flux_output = torch.sum(pred_flux * valid_flux, dim=(1, 2))
-    band_flux_rel_err = torch.abs(band_flux_output - band_flux_truth) / torch.clamp(
-        torch.abs(band_flux_truth),
-        min=1.0e-8,
-    )
-    metrics: dict[str, float | list[float] | None] = {
-        "coverage_fraction": float(valid.to(dtype=torch.float32).mean().item()),
-        "zero_support_fraction": float((~valid).to(dtype=torch.float32).mean().item()),
-        "mean_weight": float(pred_weight.mean().item()),
-        "reconstruction_rmse": float(
-            torch.sqrt(torch.mean(torch.square(residual_flat))).item()
-        ),
-        "reconstruction_mae": float(torch.mean(abs_flat).item()),
-        "reconstruction_p95_abs_err": float(torch.quantile(abs_flat, 0.95).item()),
-        "reconstruction_max_abs_err": float(torch.max(abs_flat).item()),
-        "signal_to_residual_ratio": snr_linear,
-        "signal_to_residual_db": 20.0 * math.log10(max(snr_linear, 1.0e-12)),
-        "band_reconstruction_rmse": [
-            float(value) for value in band_rmse_tensor.detach().cpu().tolist()
-        ],
-        "band_flux_relative_error_mean": float(torch.mean(band_flux_rel_err).item()),
-        "band_flux_relative_error_max": float(torch.max(band_flux_rel_err).item()),
-        "band_flux_relative_error": [
-            float(value) for value in band_flux_rel_err.detach().cpu().tolist()
-        ],
-        "band_reconstruction_rmse_mean": float(torch.mean(band_rmse_tensor).item()),
-        "band_reconstruction_rmse_max": float(torch.max(band_rmse_tensor).item()),
-        "total_flux_truth": float(band_flux_truth.sum().item()),
-        "total_flux_output": float(band_flux_output.sum().item()),
-        "total_flux_absolute_error": float(
-            torch.abs(band_flux_output.sum() - band_flux_truth.sum()).item()
-        ),
-        "total_flux_relative_error": float(
-            (
-                torch.abs(band_flux_output.sum() - band_flux_truth.sum())
-                / torch.clamp(torch.abs(band_flux_truth.sum()), min=1.0e-8)
-            ).item()
-        ),
-        "blue_red_flux_ratio_truth": None,
-        "blue_red_flux_ratio_output": None,
-        "blue_red_flux_ratio_absolute_error": None,
-        "mid_blue_flux_ratio_truth": None,
-        "mid_blue_flux_ratio_output": None,
-        "mid_blue_flux_ratio_absolute_error": None,
-    }
-    if int(pred_data.shape[0]) >= 2:
-        blue_red_truth = float(
-            (band_flux_truth[0] / torch.clamp(band_flux_truth[-1], min=1.0e-8)).item()
-        )
-        blue_red_output = float(
-            (band_flux_output[0] / torch.clamp(band_flux_output[-1], min=1.0e-8)).item()
-        )
-        metrics["blue_red_flux_ratio_truth"] = blue_red_truth
-        metrics["blue_red_flux_ratio_output"] = blue_red_output
-        metrics["blue_red_flux_ratio_absolute_error"] = abs(
-            blue_red_output - blue_red_truth
-        )
-    if int(pred_data.shape[0]) >= 3:
-        mid = int(pred_data.shape[0] // 2)
-        mid_blue_truth = float(
-            (band_flux_truth[mid] / torch.clamp(band_flux_truth[0], min=1.0e-8)).item()
-        )
-        mid_blue_output = float(
-            (
-                band_flux_output[mid] / torch.clamp(band_flux_output[0], min=1.0e-8)
-            ).item()
-        )
-        metrics["mid_blue_flux_ratio_truth"] = mid_blue_truth
-        metrics["mid_blue_flux_ratio_output"] = mid_blue_output
-        metrics["mid_blue_flux_ratio_absolute_error"] = abs(
-            mid_blue_output - mid_blue_truth
-        )
-    return metrics
-
-
-def evaluate_map_frontier_regions(
-    prediction: MapProductResult | Tensor,
-    truth: MapProductResult | Tensor,
-    *,
-    support_weight: Tensor,
-    overlap_count: Tensor | None = None,
-    fringe_kernel_size: int = 9,
-) -> dict[str, float]:
-    if fringe_kernel_size <= 0 or fringe_kernel_size % 2 == 0:
-        raise ValueError("fringe_kernel_size must be a positive odd integer")
-    pred_data = (
-        prediction.data if isinstance(prediction, MapProductResult) else prediction
-    )
-    truth_data = truth.data if isinstance(truth, MapProductResult) else truth
-    pred_cube = _as_cube(pred_data).to(dtype=torch.float32)
-    truth_cube = _as_cube(truth_data).to(dtype=torch.float32, device=pred_cube.device)
-    support_cube = _as_cube(support_weight).to(
-        dtype=torch.float32, device=pred_cube.device
-    )
-    if pred_cube.shape != truth_cube.shape or pred_cube.shape != support_cube.shape:
-        raise ValueError(
-            "prediction, truth, and support_weight must share the same shape"
-        )
-    residual = pred_cube - truth_cube
-    sq_residual = torch.square(residual)
-    support_mask = support_cube > 0.0
-    local_support = _mean_pool_cube(
-        support_mask.to(dtype=torch.float32),
-        kernel_size=fringe_kernel_size,
-    )
-    fringe_mask = (~support_mask) & (local_support > 0.0)
-    far_mask = (~support_mask) & (local_support <= 0.0)
-    metrics: dict[str, float] = {
-        "support_single_overlap_reconstruction_rmse": 0.0,
-        "support_multi_overlap_reconstruction_rmse": 0.0,
-        "fringe_extrapolated_reconstruction_rmse": 0.0,
-        "far_extrapolated_reconstruction_rmse": 0.0,
-        "support_single_overlap_fraction": 0.0,
-        "support_multi_overlap_fraction": 0.0,
-        "fringe_extrapolated_fraction": float(
-            fringe_mask.to(dtype=torch.float32).mean().item()
-        ),
-        "far_extrapolated_fraction": float(
-            far_mask.to(dtype=torch.float32).mean().item()
-        ),
-    }
-    if overlap_count is not None:
-        overlap_cube = _as_cube(overlap_count).to(
-            dtype=torch.float32, device=pred_cube.device
-        )
-        if overlap_cube.shape != pred_cube.shape:
-            raise ValueError("overlap_count must match prediction shape")
-        single_mask = support_mask & (overlap_cube <= 1.0)
-        multi_mask = support_mask & (overlap_cube >= 2.0)
-        metrics["support_single_overlap_fraction"] = float(
-            single_mask.to(dtype=torch.float32).mean().item()
-        )
-        metrics["support_multi_overlap_fraction"] = float(
-            multi_mask.to(dtype=torch.float32).mean().item()
-        )
-        if bool(single_mask.any()):
-            metrics["support_single_overlap_reconstruction_rmse"] = float(
-                torch.sqrt(torch.mean(sq_residual[single_mask])).item()
-            )
-        if bool(multi_mask.any()):
-            metrics["support_multi_overlap_reconstruction_rmse"] = float(
-                torch.sqrt(torch.mean(sq_residual[multi_mask])).item()
-            )
-    if bool(fringe_mask.any()):
-        metrics["fringe_extrapolated_reconstruction_rmse"] = float(
-            torch.sqrt(torch.mean(sq_residual[fringe_mask])).item()
-        )
-    if bool(far_mask.any()):
-        metrics["far_extrapolated_reconstruction_rmse"] = float(
-            torch.sqrt(torch.mean(sq_residual[far_mask])).item()
-        )
-    return metrics
-
-
 def _mean_pool_cube(cube: Tensor, *, kernel_size: int) -> Tensor:
     if kernel_size <= 1:
         return cube
@@ -1337,7 +1089,7 @@ def _mean_pool_cube(cube: Tensor, *, kernel_size: int) -> Tensor:
 
 
 def estimate_map_inverse_variance(
-    result: MapProductResult | Tensor,
+    result: ProductResult | Tensor,
     *,
     mode: MapUncertaintyMode = "native_inverse_variance",
     support_weight: Tensor | None = None,
@@ -1346,7 +1098,7 @@ def estimate_map_inverse_variance(
 ) -> Tensor:
     if min_inverse_variance <= 0.0:
         raise ValueError("min_inverse_variance must be positive")
-    if isinstance(result, MapProductResult):
+    if isinstance(result, ProductResult):
         if result.weight is not None:
             weight = _as_cube(result.weight).to(dtype=torch.float32)
         elif mode == "native_inverse_variance" and result.uncertainty is not None:
@@ -1389,337 +1141,3 @@ def estimate_map_inverse_variance(
     )
     inverse_variance = local_support * (0.25 + 0.75 * local_reference)
     return torch.clamp(inverse_variance, min=float(min_inverse_variance))
-
-
-def evaluate_map_uncertainty(
-    inverse_variance: Tensor,
-    prediction: MapProductResult | Tensor,
-    truth: MapProductResult | Tensor,
-    *,
-    support_weight: Tensor | None = None,
-) -> dict[str, float]:
-    pred_data = (
-        prediction.data if isinstance(prediction, MapProductResult) else prediction
-    )
-    truth_data = truth.data if isinstance(truth, MapProductResult) else truth
-    pred_cube = _as_cube(pred_data).to(dtype=torch.float32)
-    truth_cube = _as_cube(truth_data).to(dtype=torch.float32, device=pred_cube.device)
-    ivar_cube = _as_cube(inverse_variance).to(
-        dtype=torch.float32, device=pred_cube.device
-    )
-    if pred_cube.shape != truth_cube.shape or pred_cube.shape != ivar_cube.shape:
-        raise ValueError(
-            "inverse_variance, prediction, and truth must share the same shape"
-        )
-    sigma_cube = torch.rsqrt(torch.clamp(ivar_cube, min=1.0e-12))
-    abs_err_cube = torch.abs(pred_cube - truth_cube)
-    flat_sigma = sigma_cube.reshape(-1)
-    flat_abs_err = abs_err_cube.reshape(-1)
-    valid = torch.isfinite(flat_sigma) & torch.isfinite(flat_abs_err)
-    if not bool(valid.any()):
-        return {
-            "uncertainty_mean_sigma": 0.0,
-            "uncertainty_mean_inverse_variance": 0.0,
-            "uncertainty_error_corr": 0.0,
-            "uncertainty_top_quartile_abs_err": 0.0,
-            "uncertainty_bottom_quartile_abs_err": 0.0,
-            "uncertainty_top_bottom_abs_err_ratio": 0.0,
-            "uncertainty_support_mean_sigma": 0.0,
-            "uncertainty_extrapolated_mean_sigma": 0.0,
-            "uncertainty_support_mean_abs_err": 0.0,
-            "uncertainty_extrapolated_mean_abs_err": 0.0,
-        }
-    sigma = flat_sigma[valid]
-    abs_err = flat_abs_err[valid]
-    sigma_centered = sigma - torch.mean(sigma)
-    abs_centered = abs_err - torch.mean(abs_err)
-    denom = torch.sqrt(
-        torch.sum(torch.square(sigma_centered)) * torch.sum(torch.square(abs_centered))
-    )
-    corr = (
-        float(
-            torch.sum(sigma_centered * abs_centered).item()
-            / max(float(denom.item()), 1.0e-12)
-        )
-        if sigma.numel() > 1
-        else 0.0
-    )
-    q25 = torch.quantile(sigma, 0.25)
-    q75 = torch.quantile(sigma, 0.75)
-    top_mask = sigma >= q75
-    bottom_mask = sigma <= q25
-    top_abs_err = (
-        float(torch.mean(abs_err[top_mask]).item()) if bool(top_mask.any()) else 0.0
-    )
-    bottom_abs_err = (
-        float(torch.mean(abs_err[bottom_mask]).item())
-        if bool(bottom_mask.any())
-        else 0.0
-    )
-    metrics: dict[str, float] = {
-        "uncertainty_mean_sigma": float(torch.mean(sigma).item()),
-        "uncertainty_mean_inverse_variance": float(
-            torch.mean(ivar_cube.reshape(-1)[valid]).item()
-        ),
-        "uncertainty_error_corr": corr,
-        "uncertainty_top_quartile_abs_err": top_abs_err,
-        "uncertainty_bottom_quartile_abs_err": bottom_abs_err,
-        "uncertainty_top_bottom_abs_err_ratio": top_abs_err
-        / max(bottom_abs_err, 1.0e-12),
-        "uncertainty_support_mean_sigma": 0.0,
-        "uncertainty_extrapolated_mean_sigma": 0.0,
-        "uncertainty_support_mean_abs_err": 0.0,
-        "uncertainty_extrapolated_mean_abs_err": 0.0,
-    }
-    if support_weight is not None:
-        support_cube = _as_cube(support_weight).to(
-            dtype=torch.float32, device=pred_cube.device
-        )
-        if support_cube.shape != pred_cube.shape:
-            raise ValueError("support_weight must match prediction shape")
-        support_mask = support_cube > 0.0
-        extrap_mask = ~support_mask
-        if bool(support_mask.any()):
-            metrics["uncertainty_support_mean_sigma"] = float(
-                torch.mean(sigma_cube[support_mask]).item()
-            )
-            metrics["uncertainty_support_mean_abs_err"] = float(
-                torch.mean(abs_err_cube[support_mask]).item()
-            )
-        if bool(extrap_mask.any()):
-            metrics["uncertainty_extrapolated_mean_sigma"] = float(
-                torch.mean(sigma_cube[extrap_mask]).item()
-            )
-            metrics["uncertainty_extrapolated_mean_abs_err"] = float(
-                torch.mean(abs_err_cube[extrap_mask]).item()
-            )
-    return metrics
-
-
-def _row_duration_ms(row: Mapping[str, Any]) -> float | None:
-    value = row.get("fit_time_ms")
-    if value is None:
-        value = row.get("time_ms")
-    if value is None:
-        return None
-    return float(value)
-
-
-def _row_label(row: Mapping[str, Any]) -> str:
-    if row.get("type") == "field_recommendation":
-        return str(row.get("recommended_model"))
-    if row.get("library") == "torchsky_recommendation":
-        return str(row.get("recommended_variant"))
-    model = row.get("model_kind")
-    if model is not None:
-        return str(model)
-    method = row.get("method", row.get("library", "unknown"))
-    variant = row.get("variant")
-    if variant is None or variant == "" or variant == "default":
-        return str(method)
-    return f"{method}:{variant}"
-
-
-def build_map_benchmark_markdown(rows: Sequence[Mapping[str, Any]]) -> str:
-    cases = sorted({str(row["case"]) for row in rows if "case" in row})
-    lines = [
-        "| case | best accuracy | best support accuracy | best SNR | best flux conservation | fastest | recommended stack | recommended field |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    for case in cases:
-        case_rows = [
-            row
-            for row in rows
-            if str(row.get("case")) == case
-            and row.get("status", "OK") in {"OK", "INFO"}
-        ]
-        metric_rows = [
-            row
-            for row in case_rows
-            if row.get("reconstruction_rmse") is not None
-            and row.get("type") != "field_recommendation"
-        ]
-        best_accuracy = (
-            min(
-                metric_rows,
-                key=lambda row: float(row["reconstruction_rmse"]),
-            )
-            if metric_rows
-            else None
-        )
-        support_metric_rows = [
-            row
-            for row in metric_rows
-            if row.get("support_reconstruction_rmse") is not None
-        ]
-        best_support_accuracy = (
-            min(
-                support_metric_rows,
-                key=lambda row: float(row["support_reconstruction_rmse"]),
-            )
-            if support_metric_rows
-            else None
-        )
-        best_snr = (
-            max(
-                metric_rows,
-                key=lambda row: float(row["signal_to_residual_db"]),
-            )
-            if metric_rows
-            else None
-        )
-        best_flux = (
-            min(
-                metric_rows,
-                key=lambda row: float(row["total_flux_relative_error"]),
-            )
-            if metric_rows
-            else None
-        )
-        timed_rows = [row for row in metric_rows if _row_duration_ms(row) is not None]
-        fastest = (
-            min(timed_rows, key=lambda row: float(_row_duration_ms(row)))
-            if timed_rows
-            else None
-        )
-        stack_rec = next(
-            (
-                row
-                for row in case_rows
-                if row.get("library") == "torchsky_recommendation"
-                and row.get("profile") == "default_general"
-            ),
-            None,
-        )
-        field_rec = next(
-            (
-                row
-                for row in case_rows
-                if row.get("type") == "field_recommendation"
-                and row.get("profile") == "default_general"
-            ),
-            None,
-        )
-
-        def fmt_metric(row: Mapping[str, Any] | None, key: str) -> str:
-            if row is None:
-                return "n/a"
-            return f"{_row_label(row)} ({float(row[key]):.4g})"
-
-        def fmt_time(row: Mapping[str, Any] | None) -> str:
-            if row is None:
-                return "n/a"
-            duration = _row_duration_ms(row)
-            if duration is None:
-                return "n/a"
-            return f"{_row_label(row)} ({duration:.3f} ms)"
-
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    case,
-                    fmt_metric(best_accuracy, "reconstruction_rmse"),
-                    fmt_metric(best_support_accuracy, "support_reconstruction_rmse"),
-                    fmt_metric(best_snr, "signal_to_residual_db"),
-                    fmt_metric(best_flux, "total_flux_relative_error"),
-                    fmt_time(fastest),
-                    _row_label(stack_rec) if stack_rec is not None else "n/a",
-                    _row_label(field_rec) if field_rec is not None else "n/a",
-                ]
-            )
-            + " |"
-        )
-    return "\n".join(lines) + "\n"
-
-
-def map_benchmark_row_key(row: Mapping[str, Any]) -> str:
-    parts = [
-        str(row.get("case", "")),
-        str(row.get("library", "")),
-        str(row.get("type", "")),
-        str(row.get("method", "")),
-        str(row.get("variant", "")),
-        str(row.get("model_kind", "")),
-        str(row.get("profile", "")),
-    ]
-    return "|".join(parts)
-
-
-def check_map_benchmark_regressions(
-    rows: Sequence[Mapping[str, Any]],
-    baseline_rows: Sequence[Mapping[str, Any]],
-    *,
-    reconstruction_rmse_tolerance: float = 0.10,
-    signal_to_residual_db_tolerance: float = 0.10,
-    total_flux_relative_error_tolerance: float = 0.10,
-    time_tolerance: float = 0.15,
-) -> list[str]:
-    baseline_by_key = {map_benchmark_row_key(row): row for row in baseline_rows}
-    errors: list[str] = []
-    for row in rows:
-        key = map_benchmark_row_key(row)
-        baseline = baseline_by_key.get(key)
-        if baseline is None:
-            continue
-        current_status = str(row.get("status", "OK"))
-        baseline_status = str(baseline.get("status", "OK"))
-        if baseline_status == "OK" and current_status != "OK":
-            errors.append(f"{key}: status regressed from OK to {current_status}")
-            continue
-        if baseline_status != "OK":
-            continue
-
-        def compare_upper(metric: str, tolerance: float) -> None:
-            base_value = baseline.get(metric)
-            current_value = row.get(metric)
-            if base_value is None or current_value is None:
-                return
-            allowed = float(base_value) * (1.0 + tolerance)
-            if float(current_value) > allowed:
-                errors.append(
-                    f"{key}: {metric} regressed {float(current_value):.6g} > {allowed:.6g}"
-                )
-
-        def compare_lower(metric: str, tolerance: float) -> None:
-            base_value = baseline.get(metric)
-            current_value = row.get(metric)
-            if base_value is None or current_value is None:
-                return
-            floor = float(base_value) - abs(float(base_value)) * tolerance
-            if float(current_value) < floor:
-                errors.append(
-                    f"{key}: {metric} regressed {float(current_value):.6g} < {floor:.6g}"
-                )
-
-        compare_upper("reconstruction_rmse", reconstruction_rmse_tolerance)
-        compare_lower("signal_to_residual_db", signal_to_residual_db_tolerance)
-        compare_upper(
-            "total_flux_relative_error",
-            total_flux_relative_error_tolerance,
-        )
-        if not bool(baseline.get("skip_time_regression", False)):
-            if (
-                baseline.get("fit_time_ms") is not None
-                or row.get("fit_time_ms") is not None
-            ):
-                compare_upper("fit_time_ms", time_tolerance)
-            else:
-                compare_upper("time_ms", time_tolerance)
-    return errors
-
-
-def write_map_benchmark_artifacts(
-    rows: Sequence[Mapping[str, Any]],
-    *,
-    json_out: Path | None = None,
-    markdown_out: Path | None = None,
-) -> str:
-    markdown = build_map_benchmark_markdown(rows)
-    if json_out is not None:
-        json_out.parent.mkdir(parents=True, exist_ok=True)
-        json_out.write_text(json.dumps(list(rows), indent=2), encoding="utf-8")
-    if markdown_out is not None:
-        markdown_out.parent.mkdir(parents=True, exist_ok=True)
-        markdown_out.write_text(markdown, encoding="utf-8")
-    return markdown

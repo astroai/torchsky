@@ -4,14 +4,13 @@ import torch
 
 import torchsky
 from torchsky import scene
-from torchsky.map import ImageObservation, MapBandpassSpec, MapProductSpec
+from torchsky.map import BandpassSpec, ProductSpec
+from torchsky.map.observation import ImageObservation
 from torchsky.map.field import FieldObservation, PSFSpec
 from torchsky.map.operators.bundle import (
     field_observation_operator_bundle,
     image_observation_operator_bundle,
 )
-from torchsky.map.operators.resampling import sample_image_plane_batched_channels
-from torchsky.map.splat import splat_to_native
 from torchsky.map.target import TargetRenderSpec
 
 
@@ -52,12 +51,11 @@ def test_scene_facade_promotes_existing_concepts() -> None:
     assert torchsky.scene is scene
     assert scene.ImageObservation is ImageObservation
     assert scene.FieldObservation is FieldObservation
-    assert scene.MapProductSpec is MapProductSpec
+    assert scene.ProductSpec is ProductSpec
+    assert scene.BandpassSpec is BandpassSpec
     assert scene.TargetRenderSpec is TargetRenderSpec
-    assert (
-        scene.sample_image_plane_batched_channels is sample_image_plane_batched_channels
-    )
-    assert scene.splat_to_native is splat_to_native
+    assert not hasattr(scene, "sample_image_plane_batched_channels")
+    assert not hasattr(scene, "splat_to_native")
 
     target = scene.target_from_header(_simple_header(), value_semantics="flux")
     assert isinstance(target, TargetRenderSpec)
@@ -66,10 +64,10 @@ def test_scene_facade_promotes_existing_concepts() -> None:
 
     product = scene.product_spec(
         target_header=_simple_header(),
-        bands=(MapBandpassSpec(label="r", transmission_center=6500.0),),
+        bands=(BandpassSpec(label="r", transmission_center=6500.0),),
     )
     product_target = scene.target_from_product(product)
-    assert isinstance(product, MapProductSpec)
+    assert isinstance(product, ProductSpec)
     assert product_target.band_label == "r"
     assert product_target.transmission_center == 6500.0
 

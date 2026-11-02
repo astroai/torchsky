@@ -1,46 +1,22 @@
-"""Promoted scene, observation, and product facade.
+"""Experimental scene representation and operator facade.
 
-This namespace is an additive facade over the current map/field implementation.
-It gives users the mission-level vocabulary while the mature implementation
-continues to live under :mod:`torchsky.map`.
+This namespace is additive over the map/field implementation: it gives users
+scene-level vocabulary for representations, target specifications, and operator
+adapters. Production map verbs live in :mod:`torchsky.map`; field models and
+fit/render/sample verbs live in :mod:`torchsky.field`.
 """
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias
+from typing import Any
 
 from torch import Tensor, nn
 
-from ..map.field import (
-    ForwardContext,
-    KinematicState,
-    PSFSpec,
-    SurveyDataTerm,
-    FieldObservation,
-    field_observations_from_bin_centers,
-    field_observations_from_bin_edges,
-    field_observations_from_ifu_cube,
-    fit_field_model,
-    make_field_model,
-    multi_survey_charbonnier_loss,
-    observation_charbonnier_loss,
-    predict_observation_mean,
-    render_field_cube,
-    render_field_healpix,
-    render_field_observation,
-    render_field_observation_distribution,
-    scale_observation_for_rest_frame_scene,
-)
-from ..map.image_plane import ImageObservation
-from ..map.product import (
-    MapBandpassSpec,
-    MapProductResult,
-    MapProductSpec,
-    render_field_product,
-    stack_map_product,
-)
-from ..map.operators.resampling import sample_image_plane_batched_channels
-from ..map.splat import SplatDiagnostics, splat_to_native
+from ..map.field.implicit_forward import predict_observation_mean
+from ..map.field.types import FieldObservation, ForwardContext, PSFSpec
+from ..map.observation import ImageObservation
+from ..map.operators.config import MapValueSemantics
+from ..map.product import BandpassSpec, ProductSpec
 from ..map.scenes import (
     ContinuousFieldModel,
     DiscreteTargetImage,
@@ -51,6 +27,7 @@ from ..map.scenes import (
     as_scene_representation,
     target_to_field_observation,
 )
+from ..map.splat import SplatDiagnostics
 from ..map.target import TargetRenderSpec
 from .operators import (
     ObservationOperatorAdapter,
@@ -61,16 +38,33 @@ from .operators import (
     operator_bundle_for_observation,
     operator_bundles_for_observations,
 )
-
-Observation: TypeAlias = FieldObservation | ImageObservation
-Scene: TypeAlias = SceneRepresentation
-ProductSpec: TypeAlias = MapProductSpec
-BandpassSpec: TypeAlias = MapBandpassSpec
-Target: TypeAlias = TargetRenderSpec
+from .sources import (
+    GAUSSIAN_MORPHOLOGY,
+    POINT_MORPHOLOGY,
+    SERSIC_MORPHOLOGY,
+    TEMPLATE_MORPHOLOGY,
+    SourceCatalogScene,
+    SourceStamp,
+)
 
 
 def image_observation(*args: Any, **kwargs: Any) -> ImageObservation:
-    """Construct an image-plane observation for classical map products."""
+    """Construct an image-plane observation for classical map products.
+
+    Args:
+        *args: Positional ``ImageObservation`` constructor arguments.
+        **kwargs: Image data, WCS, calibration, mask, and weight metadata.
+
+    Returns:
+        Validated image-observation metadata.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.scene import image_observation
+        >>> observation = image_observation(data=torch.ones(2, 2), header={})
+        >>> tuple(observation.data.shape)
+        (2, 2)
+    """
     return ImageObservation(*args, **kwargs)
 
 
@@ -94,7 +88,7 @@ def target_from_header(
 
 
 def target_from_product(
-    product: MapProductSpec,
+    product: ProductSpec,
     *,
     band_index: int = 0,
     psf_spec: object | None = None,
@@ -110,12 +104,12 @@ def target_from_product(
 def product_spec(
     *,
     target_header: dict[str, Any],
-    bands: tuple[MapBandpassSpec, ...],
-    value_semantics: str = "surface_brightness",
+    bands: tuple[BandpassSpec, ...],
+    value_semantics: MapValueSemantics = "surface_brightness",
     footprint_order: int | None = None,
-) -> MapProductSpec:
+) -> ProductSpec:
     """Construct a map product specification using scene vocabulary."""
-    return MapProductSpec(
+    return ProductSpec(
         target_header=target_header,
         bands=bands,
         value_semantics=value_semantics,
@@ -128,7 +122,21 @@ def render(
     target: TargetRenderSpec,
     **kwargs: Any,
 ) -> Tensor:
-    """Render any supported scene representation to a target grid."""
+    """Render any supported scene representation to a target grid.
+
+    Args:
+        scene: Scene representation, field module, or target-aligned tensor.
+        target: Output grid and observing metadata.
+        **kwargs: Scene-specific rendering controls.
+
+    Returns:
+        Rendered tensor on the scene's execution device.
+
+    Examples:
+        >>> from torchsky.scene import render
+        >>> callable(render)
+        True
+    """
     return as_scene_representation(scene).render_to_target(target, **kwargs)
 
 
@@ -137,7 +145,7 @@ def predict(
     observation: FieldObservation,
     **kwargs: Any,
 ) -> Tensor:
-    """Predict one field observation using the current deterministic operator path."""
+    """Predict one field observation using the deterministic operator path."""
     return predict_observation_mean(model, observation, **kwargs)
 
 
@@ -148,52 +156,33 @@ __all__ = [
     "FieldObservation",
     "ForwardContext",
     "HarmonicAlmScene",
+    "GAUSSIAN_MORPHOLOGY",
     "HealpixMapScene",
     "ImageObservation",
-    "KinematicState",
-    "MapBandpassSpec",
-    "MapProductResult",
-    "MapProductSpec",
-    "Observation",
     "ObservationOperatorAdapter",
     "ObservationOperatorBundle",
     "ObservationOperatorBundleProtocol",
+    "POINT_MORPHOLOGY",
+    "SERSIC_MORPHOLOGY",
     "PSFSpec",
     "ProductSpec",
-    "Scene",
     "SceneRepresentation",
+    "SourceCatalogScene",
+    "SourceStamp",
     "SpinHarmonicAlmScene",
     "SplatDiagnostics",
-    "SurveyDataTerm",
-    "Target",
     "TargetRenderSpec",
+    "TEMPLATE_MORPHOLOGY",
     "as_scene_representation",
     "bind_image_plane_observations_to_target",
     "field_observation",
-    "field_observations_from_bin_centers",
-    "field_observations_from_bin_edges",
-    "field_observations_from_ifu_cube",
-    "fit_field_model",
     "image_observation",
-    "make_field_model",
-    "multi_survey_charbonnier_loss",
-    "observation_charbonnier_loss",
     "operator_adapter_for_observation",
     "operator_bundle_for_observation",
     "operator_bundles_for_observations",
     "predict",
-    "predict_observation_mean",
     "product_spec",
     "render",
-    "render_field_cube",
-    "render_field_healpix",
-    "render_field_observation",
-    "render_field_observation_distribution",
-    "render_field_product",
-    "scale_observation_for_rest_frame_scene",
-    "sample_image_plane_batched_channels",
-    "splat_to_native",
-    "stack_map_product",
     "target_from_header",
     "target_from_product",
     "target_to_field_observation",

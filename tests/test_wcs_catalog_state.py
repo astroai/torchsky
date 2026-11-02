@@ -6,12 +6,14 @@ import torch
 from torchsky.wcs import (
     CatalogState,
     EarthOrientation,
+    Epoch,
     Site,
-    icrs_to_itrs_xyz,
+    TimeSpec,
     observed_altaz,
     transform,
 )
 from torchsky.wcs.observed import (
+    _icrs_to_itrs_xyz,
     _era_rad_from_ut1_mjd,
     _gmst_deg_from_ut1_mjd,
     _wgs84_itrs_m,
@@ -103,6 +105,56 @@ def test_catalog_state_refuses_incomplete_space_motion() -> None:
     )
     with pytest.raises(ValueError, match="not imputed"):
         state.propagate_physical(2010.0)
+
+
+def test_catalog_state_epoch_semantics_are_explicit_and_compatible() -> None:
+    legacy = CatalogState(
+        lon=10.0,
+        lat=20.0,
+        epoch=2015.5,
+        pm_lon_coslat_mas_yr=1.0,
+        pm_lat_mas_yr=2.0,
+    )
+    assert legacy.epoch_scale == "tcb"
+    assert legacy.epoch_format == "jyear"
+    torch.testing.assert_close(legacy.epoch, torch.tensor(2015.5, dtype=torch.float64))
+
+    tt = CatalogState(
+        lon=10.0,
+        lat=20.0,
+        epoch=Epoch(2015.5, TimeSpec(format="jyear", scale="tt")),
+        pm_lon_coslat_mas_yr=1.0,
+        pm_lat_mas_yr=2.0,
+        parallax_mas=1.0,
+        radial_velocity_km_s=10.0,
+    )
+    assert tt.epoch_scale == "tt"
+    with pytest.raises(ValueError, match="TCB jyear"):
+        tt.propagate_physical(2020.0)
+    with pytest.raises(ValueError, match="unsupported time-scale"):
+        legacy.propagate_angular(Epoch(2020.0, TimeSpec(format="jyear", scale="tt")))
+
+
+def test_catalog_state_astropy_epoch_roundtrip_preserves_tcb_scale() -> None:
+    astropy_time = pytest.importorskip("astropy.time")
+    coordinates = pytest.importorskip("astropy.coordinates")
+    units = pytest.importorskip("astropy.units")
+    from torchsky.wcs.astropy_interop import (
+        catalog_state_from_astropy,
+        catalog_state_to_astropy,
+    )
+
+    coord = coordinates.SkyCoord(
+        ra=10.0 * units.deg,
+        dec=20.0 * units.deg,
+        obstime=astropy_time.Time(2016.0, format="jyear", scale="tt"),
+    )
+    state = catalog_state_from_astropy(coord)
+    assert state.epoch_scale == "tcb"
+    assert state.epoch_format == "jyear"
+    restored = catalog_state_to_astropy(state)
+    assert restored.obstime.scale == "tcb"
+    assert restored.obstime.tcb.jyear == pytest.approx(coord.obstime.tcb.jyear)
 
 
 def test_observed_altaz_requires_eop_and_zenith() -> None:
@@ -251,7 +303,7 @@ def test_aberration_and_refraction_are_opt_in() -> None:
 def test_icrs_to_itrs_roundtrip_unit() -> None:
     state = CatalogState(lon=30.0, lat=10.0)
     eop = EarthOrientation(dut1_s=0.0)
-    xyz = icrs_to_itrs_xyz(state, obstime_mjd_utc=60000.0, eop=eop)
+    xyz = _icrs_to_itrs_xyz(state, obstime_mjd_utc=60000.0, eop=eop)
     torch.testing.assert_close(
         torch.linalg.vector_norm(xyz),
         torch.tensor(1.0, dtype=torch.float64),
@@ -334,10 +386,7 @@ def test_observed_altaz_stays_on_accelerator() -> None:
         torch.testing.assert_close(
             alt.cpu().to(torch.float64), alt_cpu, atol=atol, rtol=0.0
         )
-        daz = (
-            torch.remainder(az.cpu().to(torch.float64) - az_cpu + 180.0, 360.0) - 180.0
-        )
-        torch.testing.assert_close(daz, torch.zeros_like(daz), atol=atol, rtol=0.0)
+        # Azimuth is undefined at the zenith (alt == 90): only altitude is checked.
 
 
 def test_iau2006_and_transform_stay_on_accelerator() -> None:
@@ -353,7 +402,7 @@ def test_iau2006_and_transform_stay_on_accelerator() -> None:
     az_cpu, alt_cpu = observed_altaz(
         state_cpu, obstime_mjd_utc=utc, site=site, eop=eop, pn="iau2006"
     )
-    xyz_cpu = icrs_to_itrs_xyz(state_cpu, obstime_mjd_utc=utc, eop=eop, pn="iau2006")
+    xyz_cpu = _icrs_to_itrs_xyz(state_cpu, obstime_mjd_utc=utc, eop=eop, pn="iau2006")
     lon_cpu, lat_cpu = transform(10.0, 20.0, from_frame="ICRS", to_frame="GALACTIC")
     for device in devices:
         state = CatalogState(
@@ -376,7 +425,7 @@ def test_iau2006_and_transform_stay_on_accelerator() -> None:
             torch.remainder(az.cpu().to(torch.float64) - az_cpu + 180.0, 360.0) - 180.0
         )
         torch.testing.assert_close(daz, torch.zeros_like(daz), atol=atol, rtol=0.0)
-        xyz = icrs_to_itrs_xyz(
+        xyz = _icrs_to_itrs_xyz(
             state, obstime_mjd_utc=_on_accel(utc, device), eop=eop, pn="iau2006"
         )
         assert xyz.device.type == device

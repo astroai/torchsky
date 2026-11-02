@@ -13,6 +13,8 @@ import math
 import torch
 from torch import Tensor
 
+from ..device import require_float64
+
 
 def resample_linear_affine_periodic_bilinear_2d(
     image: Tensor,
@@ -40,6 +42,7 @@ def resample_linear_affine_periodic_bilinear_2d(
         a00, a01, a10, a11: Affine part mapping ``(jx, iy) → (sx, sy)`` as above.
         bx, by: Translation in pixel units.
     """
+    require_float64(image.device, what="periodic affine resampling")
     if image.ndim != 2:
         raise ValueError("expected a 2D [H, W] tensor")
     h, w = int(image.shape[0]), int(image.shape[1])

@@ -1,102 +1,101 @@
 name: Comprehensive CI
-
-on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main, develop]
-  release:
-    types: [published]
-
 env:
-  FORCE_COLOR: 1
-  KMP_DUPLICATE_LIB_OK: TRUE
-  OMP_NUM_THREADS: 1
-  MKL_NUM_THREADS: 1
-  OPENBLAS_NUM_THREADS: 1
-  NUMEXPR_NUM_THREADS: 1
-
+  FORCE_COLOR: '1'
+  KMP_DUPLICATE_LIB_OK: 'TRUE'
+  OMP_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  NUMEXPR_NUM_THREADS: '1'
 jobs:
   pre-commit:
     name: Pre-commit (fail fast)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install pre-commit
-        run: pip install "pre-commit>=4,<5"
-      - name: Run pre-commit (all files)
-        env:
-          # Pyright runs in code-quality via Pixi; this job has no pixi on PATH.
-          SKIP: pyright
-        run: pre-commit run --all-files --show-diff-on-failure --color always
-
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+      with:
+        python-version: '3.12'
+    - name: Install pre-commit
+      run: pip install "pre-commit>=4,<5"
+    - name: Run pre-commit (all files)
+      env:
+        SKIP: pyright
+      run: pre-commit run --all-files --show-diff-on-failure --color always
   fast-lane:
     name: Fast lane (ruff + compile + operator smoke)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install ruff
-        run: pip install "ruff>=0.15.5,<0.16"
-      - name: Ruff (changed-relevant packages)
-        run: ruff check src/torchsky tests benchmarks
-      - name: Byte-compile package
-        run: python -m compileall -q src/torchsky
-      - name: Operator smoke (no heavy deps)
-        run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install "torchfits>=1.0.0"
-          python - <<'PY'
-          import sys
-          sys.path.insert(0, "src")
-          import torch
-          torch.set_default_dtype(torch.float64)
-          from torchsky.map.operators import LowRankChromaticPSF, apply_psf_spec, apply_learned_psf_spec_adjoint
-          from torchsky.map.field.types import PSFSpec
-          torch.manual_seed(5)
-          model = LowRankChromaticPSF(grid_side=2, spectral_degree=1,
-                                      base_sigma_pix=0.8, extent_pix=48., kernel_size=5)
-          H = W = 24
-          u = torch.stack(torch.meshgrid(torch.linspace(2,46,2),
-                            torch.linspace(2,46,2), indexing="ij"), dim=-1).reshape(-1,2)
-          spec = PSFSpec.learned(model, base_sigma_pix=0.8, cell_u_pix=u, cell_lam_norm=0.5)
-          x = torch.randn(H, W); y = apply_psf_spec(x, spec)
-          xa = torch.randn(H, W)
-          lhs = float((apply_psf_spec(xa, spec)*y).sum())
-          rhs = float((xa*apply_learned_psf_spec_adjoint(y, spec)).sum())
-          assert abs(lhs-rhs)/abs(lhs) < 1e-10
-          sx = torch.arange(W, dtype=torch.float64).unsqueeze(0).expand(H,W) + 12.0
-          sy = torch.arange(H, dtype=torch.float64).unsqueeze(1).expand(H,W) + 12.0
-          out = model(torch.randn(H,W), spatial_x=sx, spatial_y=sy, wavelength=torch.tensor(15000.))
-          assert out.shape == (H, W)
-          print("fast lane: learned-PSF forward/adjoint/renderer OK")
-          PY
-
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+      with:
+        python-version: '3.12'
+    - name: Install ruff
+      run: pip install "ruff>=0.15.5,<0.16"
+    - name: Ruff (changed-relevant packages)
+      run: ruff check src/torchsky tests
+    - name: Byte-compile package
+      run: python -m compileall -q src/torchsky
+    - name: Resolve release lane pins
+      run: python scripts/release_lane.py --print-pins 2>/dev/null >> "$GITHUB_ENV"
+    - name: Operator smoke (no heavy deps)
+      run: |
+        pip install torch --index-url https://download.pytorch.org/whl/cpu
+        pip install "torchfits${TORCHFITS_PIN}"
+        python scripts/ci_operator_smoke.py
   code-quality:
     name: Code Quality
     runs-on: ubuntu-latest
     needs: pre-commit
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: prefix-dev/setup-pixi@v0.8.0
-        with:
-          pixi-version: latest
-
-      - name: Install Pixi env (test — pyright + built package)
-        run: pixi install --frozen -e test
-
-      # Ruff is enforced in the pre-commit job; this job focuses on typecheck.
-      - name: Pyright (scoped allowlist in pyrightconfig.json)
-        env:
-          PYTHONPATH: ${{ github.workspace }}/src
-        run: pixi run -e test -- pyright --verbose
-
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+      with:
+        pixi-version: v0.82.0
+    - name: "Install Pixi env (test \u2014 pyright + built package)"
+      run: pixi install --frozen -e test
+    - name: Pyright (config in pyproject.toml)
+      env:
+        PYTHONPATH: ${{ github.workspace }}/src
+      run: pixi run -e test -- pyright --verbose
+    - name: Public API manifest
+      env:
+        PYTHONPATH: ${{ github.workspace }}/src
+      run: pixi run -e test -- python scripts/api_manifest.py --check docs/api-manifest.json
+  docs:
+    name: Docs (strict build + links + contract)
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+      with:
+        pixi-version: v0.82.0
+    - name: Install docs environment
+      run: pixi install --frozen -e docs
+    - name: Install test environment
+      run: pixi install --frozen -e test
+    - name: Docs contract (strict build, links, anchors, generated pages, snippets, tests)
+      run: pixi run docs-contract
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: torchsky-docs-site
+        path: site/
+  examples:
+    name: Examples (all runnable scripts)
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+      with:
+        pixi-version: v0.82.0
+    - name: Install test environment
+      run: pixi install --frozen -e test
+    - name: Build editable torchsky (C++ extension)
+      run: pixi run -e test -- pip install -e . --no-build-isolation
+    - name: Run every example script
+      run: pixi run examples
   build-test:
     name: Build & Test
     needs: pre-commit
@@ -104,58 +103,49 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.12"]
-
+        include:
+        - os: ubuntu-latest
+          python-version: '3.12'
+          pixi-environment: test-py312
+        - os: ubuntu-latest
+          python-version: '3.13'
+          pixi-environment: test-py313
+        - os: ubuntu-latest
+          python-version: '3.14'
+          pixi-environment: test-py314
+        - os: macos-15
+          python-version: '3.14'
+          pixi-environment: test-py314
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
-
-      - uses: prefix-dev/setup-pixi@v0.8.0
-        with:
-          pixi-version: latest
-
-      - name: Install test environment
-        run: pixi install --frozen -e test
-
-      - name: Build editable torchsky (C++ extension)
-        run: pixi run -e test -- pip install -e . --no-build-isolation
-
-      - name: Run full test suite
-        run: pixi run -e test -- pytest -n auto -v --tb=short --ignore-glob="tests/test_map_*.py"
-
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+      with:
+        pixi-version: v0.82.0
+    - name: Install test environment
+      run: pixi install --frozen -e ${{ matrix.pixi-environment }}
+    - name: Verify Python version
+      run: pixi run -e ${{ matrix.pixi-environment }} -- python -c 'import platform; assert platform.python_version().startswith("${{ matrix.python-version }}.")'
+    - name: Build editable torchsky (C++ extension)
+      run: pixi run -e ${{ matrix.pixi-environment }} -- pip install -e . --no-build-isolation
+    - name: Run full test suite
+      run: pixi run -e ${{ matrix.pixi-environment }} -- pytest -n auto -v --tb=short --ignore-glob="tests/test_map_*.py"
   sphere-spectral:
-    name: Sphere spectral (healpy)
+    name: Native sphere spectral contracts
     needs: pre-commit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies (Ubuntu)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
-
-      - uses: prefix-dev/setup-pixi@v0.8.0
-        with:
-          pixi-version: latest
-
-      - name: Install sphere-bench environment
-        run: pixi install --frozen -e sphere-bench
-
-      - name: Build editable torchsky (C++ extension)
-        run: pixi run -e sphere-bench -- pip install -e . --no-build-isolation
-
-      - name: Spin SHT parity vs healpy
-        run: pixi run -e sphere-bench -- pytest -n auto -v --tb=short tests/test_sphere_spectral.py tests/test_healpix_spectral.py tests/test_synalm_parity.py
-
-  map-mosaic-bench:
-    name: Map mosaic (${{ matrix.shard }})
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+      with:
+        pixi-version: v0.82.0
+    - name: Install test environment
+      run: pixi install --frozen -e test
+    - name: Build editable torchsky (C++ extension)
+      run: pixi run -e test -- pip install -e . --no-build-isolation
+    - name: Native spectral contracts
+      run: pixi run -e test -- pytest -n auto -v --tb=short tests/test_sphere_spectral.py tests/test_healpix_spectral.py
+  map-contracts:
+    name: Native map contracts (${{ matrix.shard }})
     runs-on: ubuntu-latest
     needs: pre-commit
     timeout-minutes: 45
@@ -163,157 +153,92 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - shard: fundamentals
-            tests: >-
-              tests/test_map_adjoints.py
-              tests/test_map_background_ops.py
-              tests/test_map_fft_affine_ldu.py
-              tests/test_map_fft_resample.py
-              tests/test_map_image_plane.py
-              tests/test_map_operator_bundle.py
-              tests/test_map_operator_execution.py
-              tests/test_map_periodic_affine.py
-              tests/test_map_product.py
-              tests/test_map_solvers.py
-            pytest_args: ""
-          - shard: field-components
-            tests: tests/test_map_field.py
-            pytest_args: -k component
-          - shard: field-training-sampling
-            tests: tests/test_map_field.py
-            pytest_args: -k 'not component and fit_field_model and (training or pretraining)'
-          - shard: field-training-core
-            tests: tests/test_map_field.py
-            pytest_args: -k 'not component and fit_field_model and not training and not pretraining'
-          - shard: field-model-fits-base
-            tests: tests/test_map_field.py
-            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and not hashgrid and not sky_encoder and not feature_atlas'
-          - shard: field-model-feature-atlas
-            tests: tests/test_map_field.py
-            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and feature_atlas'
-          - shard: field-model-sky-encoder
-            tests: tests/test_map_field.py
-            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and sky_encoder'
-          - shard: field-model-hashgrid
-            tests: tests/test_map_field.py
-            pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and hashgrid'
-          - shard: field-contracts
-            tests: tests/test_map_field.py
-            pytest_args: -k 'not component and not fit and not training and not pretraining'
-          - shard: field-auxiliary
-            tests: >-
-              tests/test_map_field_fit.py
-              tests/test_map_field_render_scale.py
-              tests/test_map_field_strainer.py
-              tests/test_map_learned_ops.py
-              tests/test_map_scene_representations.py
-              tests/test_map_target_render_spec.py
-            pytest_args: ""
-          - shard: sky-model
-            tests: >-
-              tests/test_map_sky.py
-              tests/test_map_sky_corrector.py
-              tests/test_map_sky_polynomial.py
-            pytest_args: ""
-          - shard: smacs-fit
-            tests: >-
-              tests/test_map_smacs0723_field_fit.py
-              tests/test_map_smacs0723_field_fit_band_sweep.py
-              tests/test_map_smacs0723_field_fit_joint.py
-            pytest_args: ""
-          - shard: smacs-reproduction
-            tests: >-
-              tests/test_map_smacs0723_real.py
-              tests/test_map_smacs0723_reproduce.py
-              tests/test_map_smacs0723_stackers.py
-              tests/test_map_smacs0723_stackers_band_sweep.py
-            pytest_args: ""
-          - shard: integration
-            tests: >-
-              tests/test_map_compat_bench.py
-              tests/test_map_conservative_external_parity.py
-              tests/test_map_dfreproject_parity.py
-              tests/test_map_drizzle_external_parity.py
-              tests/test_map_external_tools_smoke.py
-              tests/test_map_ground_truth.py
-              tests/test_map_healpix_coadd_bridge_smoke.py
-              tests/test_map_healpix_native_tan.py
-              tests/test_map_megapipe_scale.py
-              tests/test_map_multifield_truth.py
-              tests/test_map_radio_fixture.py
-              tests/test_map_radio_smoke.py
-              tests/test_map_reproject_fft_parity.py
-              tests/test_map_spectral_affine.py
-              tests/test_map_spectral_nonuniform.py
-              tests/test_map_spectral_nufft.py
-              tests/test_map_sphere_sh_map_smoke.py
-              tests/test_map_swarp_optional_parity.py
-            pytest_args: ""
+        - shard: fundamentals
+          tests: tests/test_map_adjoints.py tests/test_map_background_ops.py tests/test_map_fft_affine_ldu.py tests/test_map_fft_resample.py tests/test_map_image_plane_tiling.py tests/test_map_image_plane_stacking.py tests/test_map_image_plane_uncertainty.py tests/test_map_image_plane_kernels.py tests/test_map_image_plane_products.py tests/test_map_operator_bundle.py tests/test_map_operator_execution.py tests/test_map_periodic_affine.py tests/test_map_product.py tests/test_map_solvers.py
+          pytest_args: ''
+        - shard: field-components
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
+          pytest_args: -k component
+        - shard: field-training-sampling
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
+          pytest_args: -k 'not component and fit_field_model and (training or pretraining)'
+        - shard: field-training-core
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
+          pytest_args: -k 'not component and fit_field_model and not training and not pretraining'
+        - shard: field-model-fits-base
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
+          pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and not hashgrid and not sky_encoder and not feature_atlas'
+        - shard: field-model-feature-atlas
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
+          pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and feature_atlas'
+        - shard: field-model-sky-encoder
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
+          pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and sky_encoder'
+        - shard: field-model-hashgrid
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
+          pytest_args: -k 'not component and not fit_field_model and (fit or training or pretraining) and hashgrid'
+        - shard: field-contracts
+          tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
+          pytest_args: -k 'not component and not fit and not training and not pretraining'
+        - shard: field-auxiliary
+          tests: tests/test_map_field_render_scale.py tests/test_map_field_strainer.py tests/test_map_learned_ops.py tests/test_map_scene_representations.py tests/test_map_target_render_spec.py
+          pytest_args: ''
+        - shard: sky-model
+          tests: tests/test_map_sky.py tests/test_map_sky_corrector.py tests/test_map_sky_polynomial.py
+          pytest_args: ''
+        - shard: native-likelihood
+          tests: tests/test_native_epsf.py tests/test_native_field_response.py tests/test_field_gaussian_likelihood.py tests/test_gaussian_likelihood.py tests/test_joint_native_likelihood.py tests/test_linear_query.py tests/test_continuous_response.py tests/test_detector_response.py tests/test_pixel_calibration.py tests/test_nuisance_precision.py tests/test_nuisance_device_gradients.py tests/test_nuisance_spectral_device.py tests/test_query_spectral_device.py tests/test_evidence_lifecycle.py tests/test_calibration_evidence.py
+          pytest_args: ''
+        - shard: native-physical
+          tests: tests/test_poisson_gaussian_boundary.py tests/test_poisson_gaussian_positive_nll.py tests/test_additive_stage_contract.py tests/test_calibration_helpers.py
+          pytest_args: ''
+        - shard: integration
+          tests: tests/test_map_healpix_coadd_bridge_smoke.py tests/test_map_healpix_native_tan.py tests/test_map_radio_fixture.py tests/test_map_radio_smoke.py tests/test_map_spectral_affine.py tests/test_map_spectral_nonuniform.py tests/test_map_spectral_nufft.py tests/test_map_sphere_sh_map_smoke.py
+          pytest_args: ''
+        - shard: products-geometry
+          tests: tests/test_map_adaptive_reprojection.py tests/test_map_clean_api.py tests/test_map_cube_spectral_axis.py tests/test_map_dq_parity.py tests/test_map_geometry_scalability.py tests/test_map_healpix_coadd.py tests/test_map_ifu_cube.py tests/test_map_ifu_variance.py tests/test_map_plan.py
+          pytest_args: ''
+        - shard: operators-extra
+          tests: tests/test_map_operator_chunking.py tests/test_map_operator_coverage.py tests/test_map_operator_foundations.py tests/test_map_operator_noise.py
+          pytest_args: ''
+        - shard: field-foam
+          tests: tests/test_map_field_foam.py tests/test_map_field_foam_intersection.py tests/test_map_field_foam_model.py tests/test_map_field_foam_spectral.py
+          pytest_args: ''
+        - shard: field-render-extra
+          tests: tests/test_map_field_frequency_adaptive.py tests/test_map_field_gaussian.py tests/test_map_field_grid.py tests/test_map_field_losses.py tests/test_map_field_render_precision.py tests/test_map_field_render_tiling.py tests/test_map_field_streamed_tiles.py tests/test_map_scene_clean_breaks.py
+          pytest_args: ''
+        - shard: tiling-resampling
+          tests: tests/test_map_auto_tiling.py tests/test_map_drizzle_overlap.py tests/test_map_drizzle_semantics.py tests/test_map_field_chromatic.py tests/test_map_flux_area_window.py tests/test_map_footprint_window.py tests/test_map_interpolated_mapping.py tests/test_map_resampling_fused.py tests/test_map_audit_regression.py
+          pytest_args: ''
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies (Ubuntu)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
-
-      - uses: prefix-dev/setup-pixi@v0.8.0
-        with:
-          pixi-version: latest
-
-      - name: Install sphere-bench environment
-        run: pixi install --frozen -e sphere-bench
-
-      - name: Build editable torchsky (C++ extension)
-        run: pixi run -e sphere-bench -- pip install -e . --no-build-isolation
-
-      - name: Run map pytest (includes reproject + drizzle smoke)
-        run: |
-          pixi run -e sphere-bench -- pytest -n auto -v --tb=short \
-            ${{ matrix.tests }} ${{ matrix.pytest_args }} &
-          pytest_pid=$!
-          (while kill -0 "$pytest_pid" 2>/dev/null; do
-            sleep 60
-            kill -0 "$pytest_pid" 2>/dev/null && echo "torchsky map pytest is still running"
-          done) &
-          heartbeat_pid=$!
-          trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
-          wait "$pytest_pid"
-
-      - name: Map compat gate vs baseline (synthetic_shifted_wcs)
-        if: matrix.shard == 'integration'
-        run: |
-          pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_map_compat.py \
-            --size 32 --n-obs 2 --runs 1 \
-            --cases synthetic_shifted_wcs \
-            --torchsky-kernels bilinear \
-            --reproject-kernels bilinear \
-            --drizzle-kernels point \
-            --swarp-kernels bilinear \
-            --json-out benchmark_results/map_compat_ci.json \
-            --baseline-json benchmarks/baselines/map_compat_ci_gate.json
-
-      - name: Bench smoke — fft_shift on CRPIX translation case
-        if: matrix.shard == 'integration'
-        run: |
-          pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_map_compat.py \
-            --size 32 --n-obs 2 --runs 1 \
-            --cases upstream_drizzle_crpix_translation \
-            --torchsky-kernels fft_shift \
-            --reproject-kernels bilinear \
-            --drizzle-kernels point \
-            --swarp-kernels bilinear \
-            --json-out benchmark_results/map_compat_fft_shift_smoke.json
-
-      - name: Bench smoke — Strainer phase2 synthetic harness
-        if: matrix.shard == 'integration'
-        run: |
-          pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_strainer_phase2.py \
-            --fit-steps 12 --synthetic-pretrain-steps 24 \
-            --early-steps 1,4,8,12
-
-      - name: Bench smoke — SMACS Strainer transfer (ok or skipped without data)
-        if: matrix.shard == 'integration'
-        run: |
-          pixi run -e sphere-bench -- env PYTHONPATH=src:benchmarks python benchmarks/bench_map_smacs0723_strainer_transfer.py \
-            --steps 4 --synthetic-pretrain-steps 8
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+      with:
+        pixi-version: v0.82.0
+    - name: Install test environment
+      run: pixi install --frozen -e test
+    - name: Build editable torchsky (C++ extension)
+      run: pixi run -e test -- pip install -e . --no-build-isolation
+    - name: Run retained native map tests
+      run: |
+        pixi run -e test -- pytest -n auto -v --tb=short \
+          ${{ matrix.tests }} ${{ matrix.pytest_args }} &
+        pytest_pid=$!
+        (while kill -0 "$pytest_pid" 2>/dev/null; do
+          sleep 60
+          kill -0 "$pytest_pid" 2>/dev/null && echo "torchsky map pytest is still running"
+        done) &
+        heartbeat_pid=$!
+        trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
+        wait "$pytest_pid"
+'on':
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+  release:
+    types:
+    - published
+  workflow_dispatch:

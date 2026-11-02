@@ -9,11 +9,11 @@ import torch
 from torch import Tensor
 
 from ...wcs import WCS
-from ..image_plane import (
-    ImageObservation,
+from ..image_plane_projection import (
     _forward_project_weighted_to_target,
     _resample_weighted_to_target,
 )
+from ..observation import ImageObservation
 from ..io_utils import _observation_header_for_area_scaling
 from ..solvers import BoundObservationOperator, BoundObservationOperatorSet
 from ..target import TargetRenderSpec
@@ -24,9 +24,13 @@ from .execution import (
     project_image_observation_geometry,
     stack_inputs_from_projected_observation,
 )
-from .image_grid import target_shape_from_header, validate_image_plane_2d
+from .image_grid import (
+    image_shape_hw,
+    target_shape_from_header,
+    validate_image_plane_2d,
+)
 from .mask_weight import load_image_observation_weight_map
-from .pixel_area import pixel_area_sr_map, representative_pixel_area_sr
+from .pixel_area import pixel_area_sr_map
 
 
 def bind_image_plane_target_operator(
@@ -64,7 +68,7 @@ def bind_image_plane_target_operator(
         obs_wcs = WCS(header).to(device)
         obs_shape = target_shape_from_header(
             header,
-            fallback=tuple(scene_target.shape),
+            fallback=image_shape_hw(scene_target.shape),
         )
         prepared_observation = _prepare_target(
             header=header,
@@ -85,11 +89,10 @@ def bind_image_plane_target_operator(
             value_semantics=validate_map_value_semantics(semantics),
             drizzle_pixfrac=float(drizzle_pixfrac),
             pixel_area_sr_map_fn=pixel_area_sr_map,
-            representative_pixel_area_fn=representative_pixel_area_sr,
             chunk_pixels=int(chunk_pixels),
             resample_weighted_to_target_fn=_resample_weighted_to_target,
             forward_project_weighted_to_target_fn=_forward_project_weighted_to_target,
-        )
+        )[:2]
         predicted, _ = stack_inputs_from_projected_observation(
             projected_numer,
             projected_weight,
@@ -128,7 +131,7 @@ def bind_image_plane_target_operator(
         if tensor_t.ndim < 2:
             raise ValueError("inverse-noise input must have at least two image axes")
         device = tensor_t.device
-        shape = tuple(int(v) for v in tensor_t.shape[-2:])
+        shape = image_shape_hw(tensor_t.shape)
         cache_key = (device, shape)
         weight_map = noise_cache.get(cache_key)
         if weight_map is None:

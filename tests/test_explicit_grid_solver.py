@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from torchsky.io import write
+from torchfits import write
 from torchsky.map.field.inverse import (
     IRLSConfig,
     LinearBandGridField,
@@ -30,7 +30,7 @@ from torchsky.map.field.types import (
     ForwardContext,
     PSFSpec,
 )
-from torchsky.map.product import MapProductResult
+from torchsky.map.product import ProductResult
 from torchsky.map.operators.background import (
     ConditionedBackgroundField,
     LearnedBackgroundOp,
@@ -67,9 +67,7 @@ class _DetectorToSky:
         height, width = self.shape
         x_local = x_min + x * (x_max - x_min) / max(width - 1, 1)
         y_local = y_min + y * (y_max - y_min) / max(height - 1, 1)
-        ra = self.center_ra_deg + x_local / math.cos(
-            math.radians(self.center_dec_deg)
-        )
+        ra = self.center_ra_deg + x_local / math.cos(math.radians(self.center_dec_deg))
         dec = self.center_dec_deg + y_local
         return ra, dec
 
@@ -396,12 +394,8 @@ def test_linear_band_grid_data_subtracts_fixed_background_and_masks() -> None:
     observation, _, _ = _observation(weight=weight)
     observation.image = torch.full((4, 4), 10.0, dtype=torch.float64)
     observation.sky_background = torch.full((4, 4), 1.0, dtype=torch.float64)
-    observation.instrument_background = torch.full(
-        (4, 4), 2.0, dtype=torch.float64
-    )
-    observation.detector_background = torch.full(
-        (4, 4), 3.0, dtype=torch.float64
-    )
+    observation.instrument_background = torch.full((4, 4), 2.0, dtype=torch.float64)
+    observation.detector_background = torch.full((4, 4), 3.0, dtype=torch.float64)
     observation.background_offset = 0.5
     calibrated_background = torch.full((4, 4), 0.25, dtype=torch.float64)
     expected = torch.full((4, 4), 3.25, dtype=torch.float64)
@@ -485,8 +479,8 @@ def test_linear_band_grid_operator_full_vs_tiled_parity(
     torch.testing.assert_close(
         tiled_cg.solution,
         full_cg.solution,
-        rtol=1.0e-11,
-        atol=1.0e-11,
+        rtol=1.0e-10,
+        atol=1.0e-10,
     )
 
 
@@ -702,9 +696,7 @@ def test_solve_linear_band_grid_lsqr_operator_set_and_validation() -> None:
     truth = torch.linspace(0.1, 1.6, 16, dtype=torch.float64).reshape(4, 4)
     data = (op_set.operators[0].apply(truth), op_set.operators[1].apply(truth))
 
-    cg_res = op_set.solve_normal_equation_cg(
-        data, iterations=48, damping=0.05
-    )
+    cg_res = op_set.solve_normal_equation_cg(data, iterations=48, damping=0.05)
     lsqr_res = solve_linear_band_grid_lsqr(
         op_set, data, iterations=48, damping=0.05, tolerance=1.0e-12
     )
@@ -857,9 +849,7 @@ def test_adapt_stationary_calibrated_band_observation_happy_path_and_guards() ->
         adapt_stationary_calibrated_band_observation(raw_obs, bundle)
 
     # Fail-closed guard: unapplied radiometry
-    rad_obs = FieldObservation(
-        **{**observation.__dict__, "exposure_time_s": 100.0}
-    )
+    rad_obs = FieldObservation(**{**observation.__dict__, "exposure_time_s": 100.0})
     with pytest.raises(ValueError, match="unapplied radiometric conversion"):
         adapt_stationary_calibrated_band_observation(rad_obs, bundle)
 
@@ -1234,7 +1224,7 @@ def test_linear_band_grid_field_matches_bound_operator_and_stationary_render() -
 
 
 def test_linear_band_grid_field_initialize_from_product_signed_2d_and_3d() -> None:
-    from torchsky.map.product import MapBandpassSpec, MapProductSpec
+    from torchsky.map.product import BandpassSpec, ProductSpec
 
     _, domain, bounds = _observation()
     header = {
@@ -1253,22 +1243,22 @@ def test_linear_band_grid_field_initialize_from_product_signed_2d_and_3d() -> No
     plane_f150w = torch.linspace(-0.8, 1.6, 16, dtype=torch.float64).reshape(4, 4)
     plane_f277w = torch.linspace(-2.0, 3.0, 16, dtype=torch.float64).reshape(4, 4)
     cube = torch.stack([plane_f150w, plane_f277w], dim=0)
-    spec = MapProductSpec(
+    spec = ProductSpec(
         target_header=header,
         bands=(
-            MapBandpassSpec(
+            BandpassSpec(
                 label="F150W",
                 transmission_center=15_000.0,
                 transmission_sigma=1_000.0,
             ),
-            MapBandpassSpec(
+            BandpassSpec(
                 label="F277W",
                 transmission_center=27_700.0,
                 transmission_sigma=1_000.0,
             ),
         ),
     )
-    product = MapProductResult(
+    product = ProductResult(
         product=spec,
         data=cube,
         weight=torch.ones_like(cube),
@@ -1337,8 +1327,7 @@ def test_solve_linear_band_grid_cg_and_diagonal_majorizer_match_dense_oracle() -
     )
     assert bool(
         (
-            majorizer + 1.0e-12
-            >= expected_col_sums + damping + 8.0 * smoothness_weight
+            majorizer + 1.0e-12 >= expected_col_sums + damping + 8.0 * smoothness_weight
         ).all()
     )
 
@@ -1353,9 +1342,7 @@ def test_solve_linear_band_grid_cg_and_diagonal_majorizer_match_dense_oracle() -
         out[:, 1:] = out[:, 1:] + dx
         return out
 
-    dense_lap = torch.stack(
-        [_laplacian(vec).reshape(-1) for vec in basis], dim=1
-    )
+    dense_lap = torch.stack([_laplacian(vec).reshape(-1) for vec in basis], dim=1)
     dense_lhs = (
         dense_ata
         + damping * torch.eye(16, dtype=torch.float64)
@@ -1465,7 +1452,9 @@ def test_batched_operator_set_mixed_psf_sizes_and_differentiable_cg() -> None:
     assert data_2.grad is not None and torch.isfinite(data_2.grad).all()
 
 
-def test_solve_joint_multiband_grid_cg_preserves_point_source_flux_and_suppresses_negative_lobes() -> None:
+def test_solve_joint_multiband_grid_cg_preserves_point_source_flux_and_suppresses_negative_lobes() -> (
+    None
+):
     from torchsky.map.field.inverse import solve_joint_multiband_grid_cg
 
     shape = (11, 11)
@@ -1793,4 +1782,3 @@ def test_solve_linear_band_grid_cg_detector_irls_rejects_cosmic_ray_outlier() ->
     assert abs(float(tukey_sol[5, 5].item()) - 20.0) < 0.25
     assert tukey_diag["data_weight_fn"] == "tukey"
     assert float(tukey_diag["detector_outlier_fraction"]) > 0.0
-

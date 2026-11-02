@@ -81,7 +81,8 @@ def _tile_lon_lat(
 
     Uses the HEALPix NESTED subdivision: each tile at (order, pix)
     corresponds to NESTED sub-pixels at order+log2(tile_size).
-    Returns (lon, lat) tensors of shape (tile_size, tile_size), in degrees.
+    Returns (lon, lat) tensors of shape (tile_size, tile_size), in degrees,
+    in raster order: row 0 is the northern edge.
     """
     _lazy_import()
     nside_tile = 1 << order
@@ -93,12 +94,14 @@ def _tile_lon_lat(
     start = pix * (tile_size * tile_size)
     sub_pix = torch.arange(start, start + tile_size * tile_size, dtype=torch.int64)
 
+    assert _healpix is not None  # bound by _lazy_import()
     lon, lat = _healpix.pix2ang(nside_sub, sub_pix, nest=True, lonlat=True)
-    # Standard HiPS tile: reshape so rows run South→North, cols West→East
-    # The NESTED space-filling curve gives a specific 2D layout
     lon = lon.reshape(tile_size, tile_size)
     lat = lat.reshape(tile_size, tile_size)
-    return lon, lat
+    # NESTED order runs south -> north, but HiPS PNG/JPG tiles store scanlines
+    # top -> down (unlike FITS), so the raster array is flipped once: the first
+    # row of the encoded tile is the northern edge.
+    return lon.flip(0), lat.flip(0)
 
 
 def _world_to_sample_grid(
@@ -107,25 +110,21 @@ def _world_to_sample_grid(
     wcs,
     image_h: int,
     image_w: int,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     """
     Project (lon, lat) → normalized grid sample coordinates [-1, 1].
 
     Returns (grid_x, grid_y) ready for F.grid_sample, and a validity mask.
     """
-    #Project (lon, lat) -> 0-based pixel coordinates
+    # Project (lon, lat) -> 0-based pixel coordinates
     x_pix, y_pix = wcs.world_to_pixel(lon.reshape(-1), lat.reshape(-1), origin=0)
 
     # Normalize 0-based pixel centers [0, W-1] to [-1, 1] for grid_sample(align_corners=True)
     grid_x = (
-        x_pix / (image_w - 1) * 2.0 - 1.0
-        if image_w > 1
-        else torch.zeros_like(x_pix)
+        x_pix / (image_w - 1) * 2.0 - 1.0 if image_w > 1 else torch.zeros_like(x_pix)
     )
     grid_y = (
-        y_pix / (image_h - 1) * 2.0 - 1.0
-        if image_h > 1
-        else torch.zeros_like(y_pix)
+        y_pix / (image_h - 1) * 2.0 - 1.0 if image_h > 1 else torch.zeros_like(y_pix)
     )
 
     # Validity: pixels that fall inside the image
@@ -149,7 +148,8 @@ def render_hips_tile(
     wcs,
     order: int,
     pix: int,
-    stretch: str = "zscale",
+    stretch: str = "linear",
+    limit_policy: str = "zscale",
     cmap: str = "gray",
     vmin: float | None = None,
     vmax: float | None = None,
@@ -164,6 +164,7 @@ def render_hips_tile(
         order:   HiPS order (HEALPix nside = 2^order).
         pix:     HEALPix NESTED pixel index.
         stretch: Stretch algorithm name.
+        limit_policy: Display-limit policy, ``"zscale"`` or ``"minmax"``.
         cmap:    Colormap name.
         vmin/vmax: Display limits. If None, computed from a sample of the full image.
         tile_size: Output tile size in pixels (default 512).
@@ -171,6 +172,8 @@ def render_hips_tile(
     Returns:
         PNG bytes, or None if the tile is entirely outside the image footprint.
     """
+    if limit_policy not in {"zscale", "minmax"}:
+        raise ValueError(f"Unknown limit policy {limit_policy!r}")
     _lazy_import()
     image_h, image_w = image.shape[-2], image.shape[-1]
 
@@ -180,7 +183,12 @@ def render_hips_tile(
         sample = sample[torch.isfinite(sample)]
         if sample.numel() == 0:
             return None
-        _vmin, _vmax = zscale_limits(sample)
+        if limit_policy == "zscale":
+            _vmin, _vmax = zscale_limits(sample)
+        elif limit_policy == "minmax":
+            _vmin, _vmax = float(sample.min().item()), float(sample.max().item())
+        else:
+            raise ValueError(f"Unknown limit policy {limit_policy!r}")
         if vmin is None:
             vmin = _vmin
         if vmax is None:
@@ -216,7 +224,7 @@ def render_hips_tile(
         src, grid, mode="bilinear", align_corners=True, padding_mode="zeros"
     )
     # sampled: 1×1×(tile^2)×1
-    sampled = sampled.squeeze().reshape(tile_size, tile_size)
+    sampled = sampled.reshape(tile_size, tile_size)
 
     # Mask out-of-bounds pixels
     valid_2d = valid.to(device=image.device).reshape(tile_size, tile_size)
@@ -232,7 +240,8 @@ def render_hips_tile(
 def render_preview(
     image: Tensor,
     max_pixels: int = 1024,
-    stretch: str = "zscale",
+    stretch: str = "linear",
+    limit_policy: str = "zscale",
     cmap: str = "gray",
     vmin: float | None = None,
     vmax: float | None = None,
@@ -242,24 +251,37 @@ def render_preview(
 
     Used for quick previews and Aladin FITS image loading.
     """
+    if limit_policy not in {"zscale", "minmax"}:
+        raise ValueError(f"Unknown limit policy {limit_policy!r}")
     h, w = image.shape[-2], image.shape[-1]
     scale = min(1.0, max_pixels / max(h, w))
     if scale < 1.0:
         new_h = max(1, int(h * scale))
         new_w = max(1, int(w * scale))
-        img = F.interpolate(
-            image.float().unsqueeze(0).unsqueeze(0),
-            size=(new_h, new_w),
-            mode="bilinear",
-            align_corners=False,
-        ).squeeze()
+        img = (
+            F.interpolate(
+                image.float().unsqueeze(0).unsqueeze(0),
+                size=(new_h, new_w),
+                mode="bilinear",
+                align_corners=False,
+            )
+            .squeeze(0)
+            .squeeze(0)
+        )
     else:
         img = image.float()
 
     if vmin is None or vmax is None:
         sample = img.flatten()
         sample = sample[torch.isfinite(sample)]
-        _vmin, _vmax = zscale_limits(sample) if sample.numel() > 0 else (0.0, 1.0)
+        if sample.numel() == 0:
+            _vmin, _vmax = 0.0, 1.0
+        elif limit_policy == "zscale":
+            _vmin, _vmax = zscale_limits(sample)
+        elif limit_policy == "minmax":
+            _vmin, _vmax = float(sample.min().item()), float(sample.max().item())
+        else:
+            raise ValueError(f"Unknown limit policy {limit_policy!r}")
         if vmin is None:
             vmin = _vmin
         if vmax is None:

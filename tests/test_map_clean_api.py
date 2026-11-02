@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 
 import torchsky
-from torchsky.io import write
+from torchfits import write
 from torchsky.map import (
     Observation,
     OutlierConfig,
@@ -54,7 +54,11 @@ def test_in_memory_observation_and_plan_projections_and_frames() -> None:
     img1 = torch.ones((24, 24), dtype=torch.float32) * 3.0
     img2 = torch.ones((24, 24), dtype=torch.float32) * 5.0
 
-    obs1 = Observation(data=img1, wcs=hdr1, device="cpu") if False else Observation(data=img1, wcs=hdr1)
+    obs1 = (
+        Observation(data=img1, wcs=hdr1, device="cpu")
+        if False
+        else Observation(data=img1, wcs=hdr1)
+    )
     obs2 = Observation(data=img2, wcs=hdr2)
 
     for proj in ("TAN", "SIN", "ZEA", "ARC", "CEA", "CAR", "AIT", "MOL", "GLS"):
@@ -174,6 +178,56 @@ def test_new_kernels_and_stacking_modes() -> None:
     )
 
 
+def test_exact_square_drizzle_preserves_shifted_compact_source_flux() -> None:
+    target = _tan_header((32, 32), crval=(42.0, -12.0), cdelt=0.001)
+    y, x = torch.meshgrid(
+        torch.arange(32, dtype=torch.float32),
+        torch.arange(32, dtype=torch.float32),
+        indexing="ij",
+    )
+    for shifts in (
+        ((1.0, -1.0),),
+        ((0.25, -0.4),),
+        ((-0.25, 0.4), (0.25, -0.4)),
+    ):
+        observations = []
+        for dx, dy in shifts:
+            radius_squared = (x - (15.5 + dx)) ** 2 + (y - (15.5 + dy)) ** 2
+            image = torch.where(
+                radius_squared <= 16.0,
+                torch.exp(-0.5 * radius_squared / 1.4**2),
+                torch.zeros_like(radius_squared),
+            )
+            image = image / image.sum()
+            observations.append(
+                Observation(
+                    data=image,
+                    wcs=_tan_header(
+                        (32, 32),
+                        crval=(42.0, -12.0),
+                        cdelt=0.001,
+                        crpix=(16.5 + dx, 16.5 + dy),
+                    ),
+                    weight_map=torch.ones_like(image),
+                    weight_is_inverse_variance=True,
+                )
+            )
+
+        result = coadd(
+            observations,
+            target,
+            kernel="drizzle_square",
+            pixfrac=1.0,
+            semantics="flux",
+            method="weighted_mean",
+            device="cpu",
+        )
+
+        torch.testing.assert_close(
+            result.data.sum(), torch.tensor(1.0), atol=2.0e-6, rtol=0.0
+        )
+
+
 def test_blot_and_detect_outliers_cosmic_ray_rejection() -> None:
     hdr = _tan_header((24, 24), crval=(45.0, 0.0), cdelt=0.001)
     y, x = torch.meshgrid(
@@ -224,7 +278,9 @@ def test_blot_and_detect_outliers_cosmic_ray_rejection() -> None:
 
     blotted = blot(clean_coadd, obs_list[0], kernel="lanczos3", device="cpu")
     assert isinstance(blotted, torch.Tensor)
-    torch.testing.assert_close(blotted[4:-4, 4:-4], true_sky[4:-4, 4:-4], atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(
+        blotted[4:-4, 4:-4], true_sky[4:-4, 4:-4], atol=1e-2, rtol=1e-2
+    )
 
 
 def test_match_sky_constant_planar_and_per_exposure() -> None:
@@ -363,7 +419,9 @@ def test_variance_flux_semantics_photometric_scale_and_stcal_sky_modes() -> None
     ]
     cr_masks, updated_obs = detect_outliers(
         obs_cr,
-        config=OutlierConfig(snr=(5.0, 3.0), scale=(1.2, 0.7), grow=0, mode="weight_zero"),
+        config=OutlierConfig(
+            snr=(5.0, 3.0), scale=(1.2, 0.7), grow=0, mode="weight_zero"
+        ),
         device="cpu",
     )
     assert int(cr_masks[0].sum().item()) == 1
@@ -371,4 +429,3 @@ def test_variance_flux_semantics_photometric_scale_and_stcal_sky_modes() -> None
     assert not bool(updated_obs[0].mask[8, 8].item())
     assert updated_obs[0].weight_map is not None
     assert float(updated_obs[0].weight_map[8, 8].item()) == 0.0
-

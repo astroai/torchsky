@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Iterable
+from dataclasses import dataclass, fields, replace
+from typing import Iterable, TypeVar
+
+from ..provenance import PlanFingerprint, plan_fingerprint
 
 from .background import DetectorBackgroundOp
 from .base import (
@@ -53,6 +55,49 @@ class ObservationOperatorBundle:
     background: BackgroundOp | None = None
     mask_weight: MaskWeightOp | None = None
     noise: NoiseOp | None = None
+
+    @property
+    def fingerprint(self) -> PlanFingerprint:
+        payload: dict[str, object] = {}
+        for slot_name, operator in self.iter_slots():
+            if operator is None:
+                payload[slot_name] = None
+                continue
+            payload[slot_name] = {
+                "type": f"{type(operator).__module__}.{type(operator).__qualname__}",
+                "name": operator.name,
+                "learned": operator.learned,
+                "enabled": operator.enabled,
+                "frozen": operator.frozen,
+                "conditioning": {
+                    "detector_coordinates": operator.conditioning.detector_coordinates,
+                    "wavelength": operator.conditioning.wavelength,
+                    "time": operator.conditioning.time,
+                    "exposure_metadata_keys": operator.conditioning.exposure_metadata_keys,
+                },
+            }
+            details = payload[slot_name]
+            assert isinstance(details, dict)
+            parameters = {}
+            for descriptor in fields(operator):
+                if descriptor.name in {
+                    "name",
+                    "learned",
+                    "enabled",
+                    "frozen",
+                    "conditioning",
+                }:
+                    continue
+                value = getattr(operator, descriptor.name)
+                if isinstance(value, (str, int, float, bool, type(None))):
+                    parameters[descriptor.name] = value
+                elif isinstance(value, tuple) and all(
+                    isinstance(item, (str, int, float, bool, type(None)))
+                    for item in value
+                ):
+                    parameters[descriptor.name] = value
+            details["parameters"] = parameters
+        return plan_fingerprint("observation-operator-bundle", payload)
 
     def iter_slots(self):
         for slot_name in OPERATOR_BUNDLE_SLOT_NAMES:
@@ -125,7 +170,10 @@ def spherical_spectral_operator_bundle(
     )
 
 
-def _merge_operator_slot(values: Iterable[object | None]) -> object | None:
+_SlotT = TypeVar("_SlotT")
+
+
+def _merge_operator_slot(values: Iterable[_SlotT | None]) -> _SlotT | None:
     selected = None
     for value in values:
         if value is None:
@@ -175,25 +223,33 @@ def image_observation_operator_bundle(
         getattr(observation, name, None) is not None
         for name in ("sky_background", "instrument_background", "detector_background")
     )
-    has_radiometry = float(getattr(observation, "photometric_scale", 1.0)) != 1.0 or any(
+    has_radiometry = float(
+        getattr(observation, "photometric_scale", 1.0)
+    ) != 1.0 or any(
         getattr(observation, name, None) is not None
         for name in ("flux_scale_keyword", "exposure_time_keyword", "gain_keyword")
     )
-    has_mask_weight = float(getattr(observation, "weight", 1.0)) != 1.0 or any(
-        getattr(observation, name, None) is not None
-        for name in (
-            "weight_path",
-            "mask_path",
-            "primary_beam_path",
-            "weight_map",
-            "mask",
-            "primary_beam",
-            "var_poisson",
-            "var_rnoise",
-            "var_flat",
-            "weight_thresh",
+    has_mask_weight = (
+        float(getattr(observation, "weight", 1.0)) != 1.0
+        or any(
+            getattr(observation, name, None) is not None
+            for name in (
+                "weight_path",
+                "mask_path",
+                "dq_path",
+                "primary_beam_path",
+                "weight_map",
+                "mask",
+                "dq",
+                "primary_beam",
+                "var_poisson",
+                "var_rnoise",
+                "var_flat",
+                "weight_thresh",
+            )
         )
-    ) or str(getattr(observation, "weight_type", "weight")) != "weight"
+        or str(getattr(observation, "weight_type", "weight")) != "weight"
+    )
     has_noise = (
         getattr(observation, "weight_path", None) is not None
         or getattr(observation, "weight_map", None) is not None
@@ -201,7 +257,8 @@ def image_observation_operator_bundle(
         or getattr(observation, "var_rnoise", None) is not None
         or getattr(observation, "var_flat", None) is not None
         or bool(getattr(observation, "weight_is_inverse_variance", False))
-        or str(getattr(observation, "weight_type", "weight")) in {"ivm", "rms", "variance", "background"}
+        or str(getattr(observation, "weight_type", "weight"))
+        in {"ivm", "rms", "variance", "background"}
     )
     return ObservationOperatorBundle(
         geometry=geometry_op_for_kernel(resampling_kernel),

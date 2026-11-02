@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol, Sequence, runtime_checkable
 
 from torch import Tensor, nn
 
-from ..map.field import FieldObservation
+from ..map.field.types import FieldObservation
 from ..map.field.implicit_forward import predict_observation_mean as _predict_mean
-from ..map.image_plane import ImageObservation
+from ..map.observation import ImageObservation
+from ..map.operators.base import GeometryOp
 from ..map.operators.bundle import (
     ObservationOperatorBundle,
     field_observation_operator_bundle,
@@ -37,7 +39,7 @@ from ..map.target import TargetRenderSpec
 class ObservationOperatorBundleProtocol(Protocol):
     """Structural protocol for bundled observation-law components."""
 
-    geometry: object | None
+    geometry: GeometryOp | None
     spectral_response: object | None
     psf: object | None
     radiometry: object | None
@@ -45,7 +47,7 @@ class ObservationOperatorBundleProtocol(Protocol):
     mask_weight: object | None
     noise: object | None
 
-    def iter_enabled(self): ...
+    def iter_enabled(self) -> Iterator[Any]: ...
 
 
 @dataclass(frozen=True)
@@ -61,7 +63,7 @@ class ObservationOperatorAdapter:
         cls,
         observation: FieldObservation,
         *,
-        geometry: object | None = None,
+        geometry: GeometryOp | None = None,
     ) -> "ObservationOperatorAdapter":
         return cls(
             field_observation_operator_bundle(observation, geometry=geometry),
@@ -90,7 +92,7 @@ class ObservationOperatorAdapter:
         observation: FieldObservation | ImageObservation,
         *,
         resampling_kernel: str = "bilinear",
-        geometry: object | None = None,
+        geometry: GeometryOp | None = None,
     ) -> "ObservationOperatorAdapter":
         if isinstance(observation, FieldObservation):
             return cls.from_field_observation(observation, geometry=geometry)
@@ -103,15 +105,16 @@ class ObservationOperatorAdapter:
             "observation must be a scene.FieldObservation or scene.ImageObservation"
         )
 
-    def iter_enabled(self):
+    def iter_enabled(self) -> Iterator[Any]:
         return self.bundle.iter_enabled()
 
     def enabled_names(self) -> tuple[str, ...]:
         return tuple(op.name for op in self.iter_enabled())
 
     def has(self, slot: str) -> bool:
+        """Whether the named operator slot is populated and enabled."""
         op = getattr(self.bundle, slot)
-        return op is not None and bool(getattr(op, "enabled", False))
+        return op is not None and op.enabled
 
     def predict_observation_mean(
         self,
@@ -231,7 +234,7 @@ def operator_adapter_for_observation(
     observation: FieldObservation | ImageObservation,
     *,
     resampling_kernel: str = "bilinear",
-    geometry: object | None = None,
+    geometry: GeometryOp | None = None,
 ) -> ObservationOperatorAdapter:
     """Return the promoted scene adapter for an existing observation object."""
     return ObservationOperatorAdapter.from_observation(
@@ -245,7 +248,7 @@ def operator_bundle_for_observation(
     observation: FieldObservation | ImageObservation,
     *,
     resampling_kernel: str = "bilinear",
-    geometry: object | None = None,
+    geometry: GeometryOp | None = None,
 ) -> ObservationOperatorBundle:
     """Return the underlying current map operator bundle for one observation."""
     return operator_adapter_for_observation(
@@ -259,7 +262,7 @@ def operator_bundles_for_observations(
     observations: Sequence[FieldObservation | ImageObservation],
     *,
     resampling_kernel: str = "bilinear",
-    geometry: object | None = None,
+    geometry: GeometryOp | None = None,
 ) -> tuple[ObservationOperatorBundle, ...]:
     """Return one observation-operator bundle per observation, preserving order."""
     return tuple(

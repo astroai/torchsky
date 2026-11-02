@@ -56,7 +56,9 @@ def make_tangent_plane_header(
     }
 
 
-def ifu_cube_spectral_to_leading(datacube: Tensor, *, spectral_axis: int = 0) -> Tensor:
+def _ifu_cube_spectral_to_leading(
+    datacube: Tensor, *, spectral_axis: int = 0
+) -> Tensor:
     """Move the spectral axis to index 0 so the tensor is ``(L, H, W)``."""
     return datacube.movedim(int(spectral_axis), 0)
 
@@ -102,10 +104,11 @@ def _per_bin_background(
     height: int,
     width: int,
     device: torch.device,
+    dtype: torch.dtype,
 ) -> Tensor | None:
     if value is None:
         return None
-    tensor = torch.as_tensor(value, dtype=torch.float32, device=device)
+    tensor = torch.as_tensor(value, dtype=dtype, device=device)
     if tensor.ndim == 2:
         if tuple(tensor.shape) != (height, width):
             raise ValueError(
@@ -187,7 +190,7 @@ def _field_observations_from_per_bin_bounds(
     w_tensor: Tensor | None = None
     m_tensor: Tensor | None = None
     if weight is not None:
-        w_tensor = torch.as_tensor(weight, dtype=torch.float32, device=device)
+        w_tensor = torch.as_tensor(weight, dtype=dtype, device=device)
         if w_tensor.ndim == 2:
             if w_tensor.shape != (h, w):
                 raise ValueError(
@@ -221,6 +224,7 @@ def _field_observations_from_per_bin_bounds(
         height=h,
         width=w,
         device=device,
+        dtype=dtype,
     )
     inst_tensor = _per_bin_background(
         instrument_background,
@@ -229,6 +233,7 @@ def _field_observations_from_per_bin_bounds(
         height=h,
         width=w,
         device=device,
+        dtype=dtype,
     )
     det_tensor = _per_bin_background(
         detector_background,
@@ -237,6 +242,7 @@ def _field_observations_from_per_bin_bounds(
         height=h,
         width=w,
         device=device,
+        dtype=dtype,
     )
 
     observations: list[FieldObservation] = []
@@ -427,7 +433,7 @@ def field_observations_from_ifu_cube(
     After moving that axis to the front, the array must be exactly ``(L, H, W)``.
     For a batch of cubes, slice to one field before calling.
     """
-    cube = ifu_cube_spectral_to_leading(datacube, spectral_axis=spectral_axis)
+    cube = _ifu_cube_spectral_to_leading(datacube, spectral_axis=spectral_axis)
     if cube.ndim != 3:
         raise ValueError(
             "datacube with spectral_axis moved to 0 must be 3D (L, H, W); "

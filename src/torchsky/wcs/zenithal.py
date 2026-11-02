@@ -4,9 +4,10 @@ import torch
 from torch import Tensor
 from typing import Tuple, Optional
 
+from ._math import _sincos
+
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
-_HAS_TORCH_SINCOS = hasattr(torch, "sincos")
 
 
 def _pv_param(
@@ -20,12 +21,6 @@ def _pv_param(
     if params is None or idx >= int(params.numel()):
         return torch.as_tensor(default, dtype=like.dtype, device=like.device)
     return params[idx].to(dtype=like.dtype, device=like.device)
-
-
-def _sincos(x: Tensor) -> Tuple[Tensor, Tensor]:
-    if _HAS_TORCH_SINCOS:
-        return torch.sincos(x)
-    return torch.sin(x), torch.cos(x)
 
 
 def project_zenithal(
@@ -94,10 +89,15 @@ def project_zenithal(
             sqrt_disc = torch.sqrt(torch.clamp(disc, min=0.0))
             z = (-bb + sqrt_disc) / aa
             valid = valid & (z >= -1.0) & (z <= 1.0)
-            x_comp = x0 + a * z
-            y_comp = y0 + b * z
+            # 1 - z = r^2 / (aa + bb + sqrt(disc)) exactly (from the quadratic), which
+            # keeps the slant components and theta accurate as r -> 0, where
+            # asin(z) near 1 would lose half the digits.
+            omz = (x * x + y * y) / (aa + bb + sqrt_disc)
+            z = 1.0 - omz
+            x_comp = x - a * omz
+            y_comp = y - b * omz
             phi = torch.atan2(-x_comp, -y_comp) * R2D
-            theta = torch.asin(torch.clamp(z, -1.0, 1.0)) * R2D
+            theta = torch.atan2(z, torch.hypot(x_comp, y_comp)) * R2D
             theta = theta.masked_fill(~valid, float("nan"))
             phi = phi.masked_fill(~valid, float("nan"))
         else:
@@ -128,7 +128,11 @@ def project_zenithal(
         # Zenithal Equidistant
         # R = 90 - theta (linear distance)
         # theta = 90 - R
-        theta = 90.0 - r
+        valid = torch.isfinite(r) & (r <= math.nextafter(180.0, math.inf))
+        theta = 90.0 - torch.clamp(r, max=180.0)
+        nan = torch.full_like(theta, float("nan"))
+        phi = torch.where(valid, phi, nan)
+        theta = torch.where(valid, theta, nan)
 
     elif projection_code == "ZPN":
         if pv2 is None:
@@ -154,24 +158,38 @@ def project_zenithal(
                     if max_m == 1 and coeffs[1].abs() > 1e-15:
                         w = (r_rad_target - coeffs[0]) / coeffs[1]
                     else:
-                        w = r_rad_target.clone()
-
-                        # Newton-Raphson (Horner's method)
                         rev_c = torch.flip(coeffs, dims=(0,))
-                        c0 = rev_c[0]
-                        for _ in range(12):
-                            val = torch.full_like(w, c0)
-                            der = torch.zeros_like(w)
+
+                        def _poly_and_slope(wv: Tensor) -> Tuple[Tensor, Tensor]:
+                            val = torch.full_like(wv, rev_c[0].item())
+                            der = torch.zeros_like(wv)
                             for c in rev_c[1:]:
-                                der.mul_(w).add_(val)
-                                val.mul_(w).add_(c)
+                                der = der * wv + val
+                                val = val * wv + c
+                            return val, der
 
-                            diff = val.sub_(r_rad_target)
-
-                            mask_nz = der.abs() > 1e-15
-                            der.masked_fill_(~mask_nz, 1.0)
-                            diff.masked_fill_(~mask_nz, 0.0)
-                            w.sub_(diff.div_(der))
+                        # Newton-Raphson on a detached copy (no in-place updates, so
+                        # autograd never sees the iteration), then one differentiable
+                        # out-of-place Newton step: dw/dr = 1/P'(w) at the root.
+                        w0 = r_rad_target.detach().clone()
+                        for _ in range(12):
+                            val, der = _poly_and_slope(w0)
+                            safe = der.abs() > 1e-15
+                            step = torch.where(
+                                safe,
+                                (val - r_rad_target.detach())
+                                / torch.where(safe, der, torch.ones_like(der)),
+                                torch.zeros_like(der),
+                            )
+                            w0 = w0 - step
+                        val, der = _poly_and_slope(w0)
+                        safe = der.abs() > 1e-15
+                        w = w0 - torch.where(
+                            safe,
+                            (val - r_rad_target)
+                            / torch.where(safe, der, torch.ones_like(der)),
+                            torch.zeros_like(der),
+                        )
 
                     val = torch.zeros_like(w)
                     for c in torch.flip(coeffs, dims=(0,)):
@@ -218,7 +236,9 @@ def project_zenithal(
         theta = torch.where(a > b, a, b)
         valid = (r != 0.0) & torch.isfinite(theta) & (t_clamped.abs() <= 1.0 + 1e-13)
         theta = torch.where(r == 0.0, torch.full_like(r, 90.0), theta)
-        theta = torch.where(valid | (r == 0.0), theta, torch.full_like(theta, float("nan")))
+        theta = torch.where(
+            valid | (r == 0.0), theta, torch.full_like(theta, float("nan"))
+        )
         phi = torch.where(valid | (r == 0.0), phi, torch.full_like(phi, float("nan")))
 
     elif projection_code == "SZP":
@@ -229,7 +249,7 @@ def project_zenithal(
         theta_c = _pv_param(pv2, 3, 90.0, like=xi)
         inv_r0 = 1.0 / R2D
         zp = mu * torch.sin(theta_c * D2R) + 1.0
-        xp = -mu * torch.cos(theta_c * D2R) * torch.sin(phi_c * D2R)
+        xp = mu * torch.cos(theta_c * D2R) * torch.sin(phi_c * D2R)
         yp = mu * torch.cos(theta_c * D2R) * torch.cos(phi_c * D2R)
         # Torchsky zenithal convention: x_wcslib = -xi, so xr = -xi/r0
         xr = -xi * inv_r0
@@ -257,8 +277,12 @@ def project_zenithal(
         phi_small = torch.atan2(xr, -yr) * R2D
         theta = torch.where(r2 < 1e-10, theta_small, theta_val)
         phi_out = torch.where(r2 < 1e-10, phi_small, phi_val)
-        theta = torch.where(valid | (r2 < 1e-10), theta, torch.full_like(theta, float("nan")))
-        phi_out = torch.where(valid | (r2 < 1e-10), phi_out, torch.full_like(phi_out, float("nan")))
+        theta = torch.where(
+            valid | (r2 < 1e-10), theta, torch.full_like(theta, float("nan"))
+        )
+        phi_out = torch.where(
+            valid | (r2 < 1e-10), phi_out, torch.full_like(phi_out, float("nan"))
+        )
         phi = phi_out
 
     elif projection_code == "AIR":
@@ -283,51 +307,29 @@ def project_zenithal(
         # Small-r linear approximation: r ≈ xi when xi is small,
         # so for r < w5 the error is negligible.
         xi_small = r * w6
-        # Iterative solution for larger r: find cos(xi) such that
-        #   r = -(log(cosxi)/tanxi + w1*tanxi)
-        #   where tanxi = sqrt(1-cos²xi)/cosxi.
-        # The function r(cosxi) decreases monotonically from ∞ at cosxi→0
-        # to 0 at cosxi→1.  Bracket the root with x_lo=1 (r=0) and
-        # x_hi=0.1 (r≈5.2 ≫ any realistic pixel offset).
-        x_lo = torch.ones_like(r)
-        r_lo = torch.zeros_like(r)
-        x_hi = torch.full_like(r, 0.1)
-        # r at cosxi=0.1: tanxi = sqrt(0.99)/0.1 ≈ 9.95
-        tanxi_hi_val = math.sqrt(1.0 - 0.01) / 0.1
-        r_hi = torch.full_like(r, -(math.log(0.1) / tanxi_hi_val + w1 * tanxi_hi_val))
-        # Expand bracket outward from initial estimate if needed.
-        for _ in range(4):
-            need_expand = r > r_hi
-            x_hi_new = x_hi / 10.0
-            tanxi_hi_exp = torch.sqrt(torch.clamp(1.0 - x_hi_new * x_hi_new, min=0.0)) / torch.clamp(x_hi_new, min=1e-15)
-            r_hi_exp = -(torch.log(torch.clamp(x_hi_new, min=1e-15)) / tanxi_hi_exp + w1 * tanxi_hi_exp)
-            x_hi = torch.where(need_expand, x_hi_new, x_hi)
-            r_hi = torch.where(need_expand, r_hi_exp, r_hi)
-            if not bool(need_expand.any()):
-                break
-        cosxi = (x_lo + x_hi) * 0.5
-        for _ in range(60):
-            tanxi = torch.sqrt(torch.clamp(1.0 - cosxi * cosxi, min=0.0)) / torch.clamp(cosxi, min=1e-15)
-            rt = -(torch.log(torch.clamp(cosxi, min=1e-15)) / tanxi + w1 * tanxi)
-            # Regula falsi: shrink bracket toward the root.
-            converged_mask = torch.abs(rt - r) < 1e-10
-            if bool(converged_mask.all()):
-                break
-            lam = torch.clamp((r_hi - r) / torch.clamp(r_hi - r_lo, min=1e-12), 0.05, 0.95)
-            cosxi_new = x_hi - lam * (x_hi - x_lo)
-            x_lo = torch.where(rt < r, cosxi, x_lo)
-            r_lo = torch.where(rt < r, rt, r_lo)
-            x_hi = torch.where(rt >= r, cosxi, x_hi)
-            r_hi = torch.where(rt >= r, rt, r_hi)
-            cosxi = torch.where(converged_mask, cosxi, cosxi_new)
-        # Recompute residual from the final cosxi for convergence check
-        tanxi_f = torch.sqrt(torch.clamp(1.0 - cosxi * cosxi, min=0.0)) / torch.clamp(cosxi, min=1e-15)
-        rt_final = -(torch.log(torch.clamp(cosxi, min=1e-15)) / tanxi_f + w1 * tanxi_f)
-        xi_val = torch.acos(torch.clamp(cosxi, -1.0, 1.0)) * R2D
+        # Solve r = 0.5*log1p(t^2)/t - w1*t with t = tan(xi) by Newton.
+        # The direct r(xi) relation has no closed form; t is well conditioned
+        # near xi=0 and the derivative is analytic:
+        #   d/dt [0.5*log1p(t^2)/t - w1*t] = (t^2/(1+t^2) - 0.5*log1p(t^2))/t^2 - w1
+        # Start from the small-angle root t ~ r/w2 and use a fixed iteration
+        # count (no host-side convergence syncs).
+        t_val = torch.clamp(r / w2, min=1.0e-300)
+        for _ in range(8):
+            t2 = t_val * t_val
+            log1p_t = torch.log1p(t2)
+            value = 0.5 * log1p_t / t_val - w1 * t_val - r
+            derivative = (t2 / (1.0 + t2) - 0.5 * log1p_t) / t2 - w1
+            t_val = t_val - value / derivative
+        # Residual from the final iterate drives the validity mask.
+        t2_final = t_val * t_val
+        log1p_final = torch.log1p(t2_final)
+        rt_final = 0.5 * log1p_final / t_val - w1 * t_val - r
+        xi_val = torch.atan(t_val) * R2D
+
         xi_rad = torch.where(r < w5, xi_small, xi_val)
         theta = 90.0 - 2.0 * xi_rad
         # Valid: small-r path, or iterative path converged (residual small)
-        converged = torch.abs(rt_final - r) < 1e-10
+        converged = torch.abs(rt_final) < 1e-10
         valid = (r < w5) | converged
         theta = torch.where(valid, theta, torch.full_like(theta, float("nan")))
         phi = torch.where(valid, phi, torch.full_like(phi, float("nan")))
@@ -360,8 +362,17 @@ def deproject_zenithal(
         # theta in degrees.
         # cot(theta) = 1/tan(theta)
         tan_theta = torch.tan(theta * D2R)
-        # Mask zeros?
-        r = (1.0 / (tan_theta + 1e-12)) * R2D
+        valid = (
+            torch.isfinite(theta)
+            & (theta > 64.0 * torch.finfo(theta.dtype).eps * R2D)
+            & (theta <= 90.0 + 1e-12)
+        )
+        tan_safe = torch.where(valid, tan_theta, torch.ones_like(tan_theta))
+        r = torch.where(
+            valid,
+            R2D / tan_safe,
+            torch.full_like(theta, float("nan")),
+        )
 
     elif projection_code == "SIN":
         theta_rad = theta * D2R
@@ -376,7 +387,12 @@ def deproject_zenithal(
         return xi, eta
 
     elif projection_code == "ARC":
-        r = 90.0 - theta
+        valid = torch.isfinite(theta) & (theta >= -90.0) & (theta <= 90.0)
+        r = torch.where(
+            valid,
+            90.0 - theta,
+            torch.full_like(theta, float("nan")),
+        )
 
     elif projection_code == "ZEA":
         r = 2.0 * torch.sin((90.0 - theta) * (0.5 * D2R)) * R2D
@@ -400,7 +416,7 @@ def deproject_zenithal(
                 w = (90.0 - theta) * D2R
                 rev_c = torch.flip(coeffs, dims=(0,))
                 c0 = rev_c[0]
-                val = torch.full_like(w, c0)
+                val = torch.full_like(w, c0.item())
                 for c in rev_c[1:]:
                     val.mul_(w).add_(c)
                 r = val * R2D
@@ -417,7 +433,7 @@ def deproject_zenithal(
         cos_g = math.cos(float(gamma.item()) * D2R)
         sin_g = math.sin(float(gamma.item()) * D2R)
         w1 = sin_g / cos_g  # tan(gamma)
-        w2 = 1.0 / cos_g     # sec(gamma)
+        w2 = 1.0 / cos_g  # sec(gamma)
         phi_rad = phi * D2R
         sin_phi, cos_phi = _sincos(phi_rad)
         theta_rad = theta * D2R
@@ -441,8 +457,16 @@ def deproject_zenithal(
         theta_c = _pv_param(pv2, 3, 90.0, like=phi)
         r0 = R2D
         zp = float(mu.item()) * math.sin(float(theta_c.item()) * D2R) + 1.0
-        xp = -float(mu.item()) * math.cos(float(theta_c.item()) * D2R) * math.sin(float(phi_c.item()) * D2R)
-        yp = float(mu.item()) * math.cos(float(theta_c.item()) * D2R) * math.cos(float(phi_c.item()) * D2R)
+        xp = (
+            float(mu.item())
+            * math.cos(float(theta_c.item()) * D2R)
+            * math.sin(float(phi_c.item()) * D2R)
+        )
+        yp = (
+            float(mu.item())
+            * math.cos(float(theta_c.item()) * D2R)
+            * math.cos(float(phi_c.item()) * D2R)
+        )
         w4 = r0 * xp
         w5 = r0 * yp
         w6 = r0 * zp
@@ -479,21 +503,19 @@ def deproject_zenithal(
         w4 = 1e-4  # tolerance
         phi_rad = phi * D2R
         sin_phi, cos_phi = _sincos(phi_rad)
+        valid = torch.isfinite(theta) & (theta > -90.0) & (theta <= 90.0)
+        safe_theta = torch.where(valid, theta, torch.zeros_like(theta))
         # Compute r for each theta: xi_half = (90 - theta)/2 in radians
-        xi_half = (90.0 - theta) * 0.5 * D2R
+        xi_half = (90.0 - safe_theta) * 0.5 * D2R
         cos_xi = torch.cos(xi_half)
         tan_xi = torch.tan(xi_half)
         # Small-r approximation: r = xi_half * w3 (linear)
         r_small = xi_half * w3
         # Full formula: r = -w0 * (log(cos(xi))/tan(xi) + w1*tan(xi))
-        r_large = -(w0 * (
-            torch.log(torch.clamp(cos_xi, min=1e-15))
-            / torch.clamp(tan_xi.abs(), min=1e-15) * tan_xi.sign()
-            + w1 * tan_xi
-        ))
+        safe_tan = torch.where(tan_xi == 0.0, torch.ones_like(tan_xi), tan_xi)
+        r_large = -(w0 * (torch.log(cos_xi) / safe_tan + w1 * tan_xi))
         r = torch.where(xi_half.abs() < w4, r_small, r_large)
-        r = torch.where(theta == 90.0, torch.zeros_like(theta), r)
-        r = torch.where(theta <= -90.0, torch.zeros_like(theta), r)
+        r = torch.where(valid, r, torch.full_like(r, float("nan")))
         # Torchsky zenithal convention: xi = -x = -r*sin(phi)
         xi = -r * sin_phi
         eta = -r * cos_phi

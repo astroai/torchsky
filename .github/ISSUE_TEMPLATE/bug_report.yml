@@ -1,0 +1,37 @@
+name: Bug report
+description: Something is wrong or crashes
+labels: ["bug", "needs-triage"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Expected versus actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: A short, self-contained snippet (synthetic data preferred).
+      render: python
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: torchsky and torch versions
+      placeholder: "torchsky 0.5.0rc1, torch 2.14.x, Python 3.13, CUDA 13.0 / CPU / MPS"
+    validations:
+      required: true
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options: [CPU, CUDA, MPS]
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and Python version

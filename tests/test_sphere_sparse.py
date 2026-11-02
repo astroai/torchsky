@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 import torch
 
-from torchsky.sphere.sparse import SkyMaskPipe, SparseHealpixMap
+from torchsky.sphere.sparse import (
+    SkyMaskPipe,
+    SparseHealpixMap,
+    sum_intersection,
+    sum_union,
+)
 from torchsky.sphere import healpix as hp
 from torchsky.sphere import SphericalCap
 from torchsky.sphere.geom import PixelizedRegion
@@ -26,9 +31,7 @@ def test_sparse_from_pixels_canonicalizes_unsorted_duplicates() -> None:
     pixels = torch.tensor([5, 2, 5, 1], dtype=torch.int64)
     values = torch.tensor([50.0, 20.0, 55.0, 10.0], dtype=torch.float64)
 
-    sp = SparseHealpixMap.from_pixels(
-        pixels, values, nside_sparse=8, sentinel=-1.0
-    )
+    sp = SparseHealpixMap.from_pixels(pixels, values, nside_sparse=8, sentinel=-1.0)
 
     torch.testing.assert_close(sp.pixels, torch.tensor([1, 2, 5], dtype=torch.int64))
     torch.testing.assert_close(
@@ -41,8 +44,226 @@ def test_sparse_from_pixels_canonicalizes_unsorted_duplicates() -> None:
     )
     torch.testing.assert_close(
         sp.get_values(torch.tensor([[5, 2], [1, 7]], dtype=torch.int64)),
-        torch.tensor([55.0, 20.0, 10.0, -1.0], dtype=torch.float64),
+        torch.tensor([[55.0, 20.0], [10.0, -1.0]], dtype=torch.float64),
     )
+
+
+@pytest.mark.parametrize("pixel", [-1, 12])
+def test_sparse_rejects_pixels_outside_nside_domain(pixel: int) -> None:
+    with pytest.raises(ValueError, match="pixels must be in"):
+        SparseHealpixMap.from_pixels(
+            torch.tensor([pixel], dtype=torch.int64),
+            torch.tensor([1.0]),
+            nside_sparse=1,
+        )
+
+
+def test_sparse_rejects_invalid_nside() -> None:
+    with pytest.raises(ValueError, match="positive power of two"):
+        SparseHealpixMap.from_pixels(
+            torch.empty((0,), dtype=torch.int64),
+            torch.empty((0,)),
+            nside_sparse=3,
+        )
+
+
+def test_sparse_rejects_scalar_values() -> None:
+    with pytest.raises(ValueError, match="at least one dimension"):
+        SparseHealpixMap(
+            nside=1,
+            nest=True,
+            pixels=torch.empty((0,), dtype=torch.int64),
+            values=torch.tensor(1.0),
+        )
+
+
+@pytest.mark.parametrize(
+    ("values", "column_names", "message"),
+    [
+        (torch.ones((2, 1)), ("flux",), "leading dimension"),
+        (torch.ones((2, 1)), ("flux", "flux"), "unique"),
+        (torch.ones((1, 1, 1)), ("flux",), "only supported"),
+        (torch.ones((1,)), ("",), "non-empty"),
+    ],
+)
+def test_sparse_rejects_invalid_column_schema(
+    values: torch.Tensor, column_names: tuple[str, ...], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        SparseHealpixMap.from_pixels(
+            torch.tensor([0], dtype=torch.int64),
+            values,
+            nside_sparse=1,
+            column_names=column_names,
+        )
+
+
+@pytest.mark.parametrize("mask_shape", [(), (1,), (2, 12)])
+def test_sparse_from_dense_requires_exact_one_dimensional_valid_mask(
+    mask_shape: tuple[int, ...],
+) -> None:
+    dense = torch.arange(12, dtype=torch.float32)
+    valid_mask = torch.ones(mask_shape, dtype=torch.bool)
+    with pytest.raises(ValueError, match=r"valid_mask must have shape \(npix,\)"):
+        SparseHealpixMap.from_dense(dense, nside=1, valid_mask=valid_mask)
+
+
+def test_sparse_single_named_column_access_preserves_vector() -> None:
+    smap = SparseHealpixMap.from_pixels(
+        torch.tensor([5, 2], dtype=torch.int64),
+        torch.tensor([50.0, 20.0]),
+        nside_sparse=2,
+        nside_coverage=1,
+        column_names=("flux",),
+    )
+
+    column = smap["flux"]
+
+    assert isinstance(column, SparseHealpixMap)
+    assert column.column_names == ("flux",)
+    torch.testing.assert_close(column.pixels, torch.tensor([2, 5]))
+    torch.testing.assert_close(column.values, torch.tensor([20.0, 50.0]))
+    torch.testing.assert_close(
+        column.get_values(torch.tensor([2, 3, 5])),
+        torch.tensor([20.0, float(hp.UNSEEN), 50.0]),
+    )
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_sparse_get_values_preserves_arbitrary_noncontiguous_query_shape(
+    blocked: bool,
+) -> None:
+    smap = SparseHealpixMap.from_pixels(
+        torch.tensor([0, 2, 5], dtype=torch.int64),
+        torch.tensor([[1.0, 2.0, 5.0], [10.0, 20.0, 50.0]]),
+        nside_sparse=2,
+        nside_coverage=1 if blocked else None,
+        sentinel=-1.0,
+    )
+    query = torch.tensor([[0, 1, 2], [5, 4, 0]], dtype=torch.int64).t()
+    assert not query.is_contiguous()
+
+    got = smap.get_values(query)
+
+    assert got.shape == (2, 3, 2)
+    torch.testing.assert_close(
+        got,
+        torch.tensor(
+            [
+                [[1.0, 5.0], [-1.0, -1.0], [2.0, 1.0]],
+                [[10.0, 50.0], [-1.0, -1.0], [20.0, 10.0]],
+            ]
+        ),
+    )
+
+
+def test_sparse_get_values_preserves_scalar_and_empty_query_shapes() -> None:
+    smap = SparseHealpixMap.make_empty(1, 2, dtype=torch.float32, sentinel=-1.0)
+    scalar = smap.get_values(torch.tensor(0, dtype=torch.int64))
+    empty = smap.get_values(torch.empty((2, 0), dtype=torch.int64))
+    assert scalar.shape == ()
+    assert scalar.dtype == torch.float32
+    assert scalar.item() == -1.0
+    assert empty.shape == (2, 0)
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason="MPS not available"
+            ),
+        ),
+    ],
+)
+def test_sparse_get_values_preserves_query_shape_and_device(device: str) -> None:
+    smap = SparseHealpixMap.from_pixels(
+        torch.tensor([0, 2], dtype=torch.int64, device=device),
+        torch.tensor([1.0, 2.0], device=device),
+        nside_sparse=1,
+        sentinel=-1.0,
+    )
+    query = torch.tensor([[0], [1]], dtype=torch.int64, device=device)
+    got = smap.get_values(query)
+    assert got.shape == (2, 1)
+    assert got.device.type == device
+    torch.testing.assert_close(got.cpu(), torch.tensor([[1.0], [-1.0]]))
+
+
+def test_sparse_three_map_reductions_fold_result_dtype_pairwise() -> None:
+    maps = [
+        SparseHealpixMap.from_pixels(
+            torch.tensor([0, 1]),
+            torch.tensor([1, 2], dtype=torch.int16),
+            nside_sparse=1,
+            sentinel=-1,
+        ),
+        SparseHealpixMap.from_pixels(
+            torch.tensor([1, 2]),
+            torch.tensor([0.5, 1.5], dtype=torch.float32),
+            nside_sparse=1,
+            sentinel=-1,
+        ),
+        SparseHealpixMap.from_pixels(
+            torch.tensor([1, 3]),
+            torch.tensor([0.25, 2.25], dtype=torch.float64),
+            nside_sparse=1,
+            sentinel=-1,
+        ),
+    ]
+
+    union = sum_union(maps)
+    intersection = sum_intersection(maps)
+
+    assert union.values.dtype == torch.float64
+    assert intersection.values.dtype == torch.float64
+    torch.testing.assert_close(union.pixels, torch.tensor([0, 1, 2, 3]))
+    torch.testing.assert_close(
+        union.values, torch.tensor([1.0, 2.75, 1.5, 2.25], dtype=torch.float64)
+    )
+    torch.testing.assert_close(intersection.pixels, torch.tensor([1]))
+    torch.testing.assert_close(
+        intersection.values, torch.tensor([2.75], dtype=torch.float64)
+    )
+
+
+def test_sparse_empty_three_map_reductions_preserve_promoted_dtype() -> None:
+    maps = [
+        SparseHealpixMap.from_pixels(
+            torch.empty((0,), dtype=torch.int64),
+            torch.empty((0,), dtype=dtype),
+            nside_sparse=1,
+            sentinel=-1,
+        )
+        for dtype in (torch.int16, torch.float32, torch.float64)
+    ]
+    assert sum_union(maps).values.dtype == torch.float64
+    assert sum_intersection(maps).values.dtype == torch.float64
+
+
+def test_sparse_write_fits_rejects_multidimensional_values_before_output(
+    tmp_path,
+) -> None:
+    path = tmp_path / "multidimensional.fits"
+    smap = SparseHealpixMap.from_pixels(
+        torch.tensor([0, 1], dtype=torch.int64),
+        torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+        nside_sparse=1,
+        column_names=("flux", "weight"),
+    )
+
+    with pytest.raises(ValueError, match="only supports 1D"):
+        smap.write_fits(str(path), overwrite=True)
+    assert not path.exists()
 
 
 @pytest.mark.parametrize("nest", [True, False])
@@ -164,7 +385,9 @@ def test_sparse_ud_grade_coverage_blocks_match_pixel_list(
         torch.testing.assert_close(got.to_dense(), exp.to_dense(), atol=1e-12, rtol=0.0)
         assert got.nside_coverage == min(32, nside_out)
         q = torch.arange(0, hp.nside2npix(nside_out), 17, dtype=torch.int64)
-        torch.testing.assert_close(got.get_values(q), exp.get_values(q), atol=1e-12, rtol=0.0)
+        torch.testing.assert_close(
+            got.get_values(q), exp.get_values(q), atol=1e-12, rtol=0.0
+        )
 
 
 def test_sparse_ud_grade_coverage_blocks_multiband_match_pixel_list() -> None:
@@ -203,9 +426,7 @@ def test_sparse_from_pixels_canonicalizes_multiband_values() -> None:
         dtype=torch.float64,
     )
 
-    sp = SparseHealpixMap.from_pixels(
-        pixels, values, nside_sparse=8, sentinel=-1.0
-    )
+    sp = SparseHealpixMap.from_pixels(pixels, values, nside_sparse=8, sentinel=-1.0)
 
     torch.testing.assert_close(sp.pixels, torch.tensor([1, 2, 4], dtype=torch.int64))
     torch.testing.assert_close(
@@ -283,8 +504,7 @@ def test_sparse_to_moc_and_pixelized_region_preserve_ordering() -> None:
 
     upsampled = sp.to_pixelized_region(nside=16, nest=True)
     expected_children = (
-        pix_nest.unsqueeze(1) * 4
-        + torch.arange(4, dtype=torch.int64).unsqueeze(0)
+        pix_nest.unsqueeze(1) * 4 + torch.arange(4, dtype=torch.int64).unsqueeze(0)
     ).reshape(-1)
     torch.testing.assert_close(upsampled.pixels, torch.sort(expected_children)[0])
 
@@ -535,7 +755,9 @@ def test_sparse_coverage_mask_and_any_coverage_mode() -> None:
     assert bool(cov[3]) and bool(cov[7]) and (int(cov.sum().item()) == 2)
 
 
-def test_sparse_direct_construction_builds_coverage_map_after_canonicalization() -> None:
+def test_sparse_direct_construction_builds_coverage_map_after_canonicalization() -> (
+    None
+):
     sp = SparseHealpixMap(
         nside=8,
         nest=True,
@@ -545,9 +767,7 @@ def test_sparse_direct_construction_builds_coverage_map_after_canonicalization()
     )
 
     torch.testing.assert_close(sp.pixels, torch.tensor([5, 20], dtype=torch.int64))
-    torch.testing.assert_close(
-        sp.values, torch.tensor([3.0, 2.0], dtype=torch.float64)
-    )
+    torch.testing.assert_close(sp.values, torch.tensor([3.0, 2.0], dtype=torch.float64))
     assert sp.coverage_map is not None
     torch.testing.assert_close(
         torch.nonzero(sp.coverage_map >= 0, as_tuple=False).flatten(),
@@ -704,9 +924,7 @@ def test_sparse_fits_roundtrip_preserves_value_dtype(
 def test_pixel_list_write_fits_synthesizes_healsparse_coverage(tmp_path) -> None:
     pixels = torch.tensor([0, 10, 42], dtype=torch.int64)
     values = torch.tensor([1.25, 2.5, 3.75], dtype=torch.float64)
-    smap = SparseHealpixMap.from_pixels(
-        pixels, values, nside_sparse=8, sentinel=-999.0
-    )
+    smap = SparseHealpixMap.from_pixels(pixels, values, nside_sparse=8, sentinel=-999.0)
     assert smap.nside_coverage is None
     path = tmp_path / "pixlist.fits"
     smap.write_fits(str(path), overwrite=True)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any, cast
 
 import torch
 from torch import Tensor, nn
@@ -21,6 +23,8 @@ class AdaptiveAxisFeatures(nn.Module):
     input axis. Learned gates select useful bands, while one bounded continuous
     dilation shifts the ordered log-spaced bank without crossing either bound.
     """
+
+    base_log_lengths: Tensor
 
     def __init__(
         self,
@@ -122,11 +126,17 @@ class AdaptiveAxisFeatures(nn.Module):
         unique = torch.unique(values).sort().values
         if constant:
             if unique.numel() == 0:
-                raise ValueError("a constant axis requires a finite calibration coordinate")
+                raise ValueError(
+                    "a constant axis requires a finite calibration coordinate"
+                )
             # These scale/bounds are inert metadata: the feature is exactly zero.
-            return cls(center=float(unique[0]), reference_scale=1.0,
-                       length_bounds=(1.0, 2.0), constant=True,
-                       initial_gate=initial_gate)
+            return cls(
+                center=float(unique[0]),
+                reference_scale=1.0,
+                length_bounds=(1.0, 2.0),
+                constant=True,
+                initial_gate=initial_gate,
+            )
         if unique.numel() < 3:
             raise ValueError(
                 "at least three distinct finite calibration coordinates are required"
@@ -237,9 +247,7 @@ class AdaptiveAxisFeatures(nn.Module):
         def fit(log_shift: Tensor, keep: Tensor | None = None) -> tuple[Tensor, Tensor]:
             log_lengths = self.base_log_lengths.to(device=device, dtype=work_dtype)
             lengths = torch.exp(log_lengths + log_shift)
-            phase = (
-                coordinate_tensor[:, None] * ((2.0 * math.pi) / lengths)
-            )
+            phase = coordinate_tensor[:, None] * ((2.0 * math.pi) / lengths)
             design = torch.cat(
                 (
                     torch.ones_like(coordinate_tensor[:, None]),
@@ -259,9 +267,9 @@ class AdaptiveAxisFeatures(nn.Module):
             weighted_design = standardized * torch.sqrt(weight_tensor[:, None])
             weighted_evidence = evidence_tensor * torch.sqrt(weight_tensor[:, None])
             gram = weighted_design.T @ weighted_design
-            penalty = torch.eye(
-                gram.shape[0], device=device, dtype=work_dtype
-            ) * ridge_value
+            penalty = (
+                torch.eye(gram.shape[0], device=device, dtype=work_dtype) * ridge_value
+            )
             penalty[0, 0] = 0.0
             coefficients = torch.linalg.solve(
                 gram + penalty,
@@ -328,9 +336,7 @@ class AdaptiveAxisFeatures(nn.Module):
             )
         return {
             "selected_log_scale_shift": float(selected_shift.cpu()),
-            "relative_residual": float(
-                (full_rss / null_rss.clamp_min(tiny)).cpu()
-            ),
+            "relative_residual": float((full_rss / null_rss.clamp_min(tiny)).cpu()),
             "band_delta_bic": delta_bic_tensor.cpu().tolist(),
             "initial_gates": initial_gates.cpu().tolist(),
         }
@@ -347,7 +353,7 @@ class AdaptiveAxisFeatures(nn.Module):
 
     def set_extra_state(
         self,
-        state: dict[str, float | int | tuple[float, float]],
+        state: Mapping[str, Any],
     ) -> None:
         center = float(state["center"])
         reference_scale = float(state["reference_scale"])
@@ -406,7 +412,9 @@ class AdaptiveAxisFeatures(nn.Module):
         gate_weight = float(gate_weight)
         scale_shift_weight = float(scale_shift_weight)
         if gate_weight < 0.0 or scale_shift_weight < 0.0:
-            raise ValueError("adaptive-axis regularization weights must be non-negative")
+            raise ValueError(
+                "adaptive-axis regularization weights must be non-negative"
+            )
         if self.num_bands == 0:
             return self.gate_logits.sum() * 0.0
         return gate_weight * self.gates.mean() + scale_shift_weight * torch.square(
@@ -441,8 +449,7 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
         spatial_center: tuple[float, float],
         spatial_scale: float | tuple[float, float],
         spatial_length_bounds: (
-            tuple[float, float]
-            | tuple[tuple[float, float], tuple[float, float]]
+            tuple[float, float] | tuple[tuple[float, float], tuple[float, float]]
         ),
         wavelength_center: float,
         spectral_scale: float,
@@ -467,14 +474,18 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
                 raise ValueError("spatial_scale must be scalar or contain x and y")
             spatial_scales = (float(spatial_scale[0]), float(spatial_scale[1]))
         if isinstance(spatial_length_bounds[0], (int, float)):
-            x_length_bounds = spatial_length_bounds
-            y_length_bounds = spatial_length_bounds
+            # A single (lower, upper) pair shared by both axes.
+            x_length_bounds = y_length_bounds = cast(
+                "tuple[float, float]", spatial_length_bounds
+            )
         else:
             if len(spatial_length_bounds) != 2:
                 raise ValueError(
                     "spatial_length_bounds must be one pair or separate x/y pairs"
                 )
-            x_length_bounds, y_length_bounds = spatial_length_bounds
+            x_length_bounds, y_length_bounds = cast(
+                "tuple[tuple[float, float], tuple[float, float]]", spatial_length_bounds
+            )
         self.x_axis = AdaptiveAxisFeatures(
             center=float(spatial_center[0]),
             reference_scale=spatial_scales[0],

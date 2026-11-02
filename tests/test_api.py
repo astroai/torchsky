@@ -8,19 +8,8 @@ from torchsky.cli import build_parser
 
 def test_top_level_namespaces_expose_science_modules() -> None:
     assert set(torchsky.__all__) == {
-        "read",
-        "write",
-        "open",
-        "get_header",
-        "get_wcs",
         "WCS",
-        "Header",
-        "Card",
-        "HDUList",
-        "TensorHDU",
-        "TableHDU",
-        "io",
-        "table",
+        "PrecisionWarning",
         "wcs",
         "sphere",
         "spectral",
@@ -33,18 +22,12 @@ def test_top_level_namespaces_expose_science_modules() -> None:
         "scene",
         "field",
         "transforms",
-        "datasets",
-        "cache",
-        "interop",
         "encoders",
         "catalogs",
         "coords",
         "quality",
     }
-    assert callable(torchsky.io.create_dataloader)
     assert hasattr(torchsky.transforms, "Normalize")
-    assert callable(torchsky.cache.clear)
-    assert isinstance(torchsky.cache.stats(), dict)
     assert torchsky.wcs.WCS is torchsky.WCS
     assert hasattr(torchsky.sphere, "great_circle_distance")
     assert callable(torchsky.coords.transform)
@@ -53,7 +36,12 @@ def test_top_level_namespaces_expose_science_modules() -> None:
         "CatalogState",
         "EarthOrientation",
         "Site",
+        "apply_dcr",
+        "apply_ephemeris_offset",
+        "apply_refraction",
+        "apply_stellar_aberration",
         "convert_celestial",
+        "dcr_offset",
         "heliocentric_rv_to_lsr",
         "icrs_to_ecliptic_of_date",
         "icrs_to_galactocentric",
@@ -67,42 +55,88 @@ def test_top_level_namespaces_expose_science_modules() -> None:
 def test_map_root_keeps_workflow_api_small() -> None:
     assert set(torchsky.map.__all__) == {
         "Observation",
+        "IFUObservation",
+        "ImageObservation",
         "Target",
         "CubeTarget",
         "ResampleConfig",
         "SkyConfig",
         "OutlierConfig",
+        "DQPolicy",
+        "DQRejectionLog",
+        "QualityProduct",
         "StackConfig",
+        "MapResult",
+        "CubeResult",
+        "MultibandResult",
+        "HealpixResult",
+        "ApertureUncertainty",
+        "ProductSpec",
+        "BandpassSpec",
+        "ProductResult",
+        "UncertaintyProduct",
+        "TargetRenderSpec",
+        "AdaptiveResampleConfig",
         "plan",
         "plan_cube",
+        "plan_ifu_cube_response",
+        "plan_product",
         "resample",
+        "resample_healpix",
         "blot",
         "detect_outliers",
         "match_sky",
         "coadd",
         "coadd_multiband",
-        "coadd_cube",
-        "aperture_uncertainty",
         "coadd_image_plane",
-        "coadd_image_plane_cube",
-        "coadd_image_plane_multiband",
-        "evaluate_image_plane_aperture_uncertainty",
-        "stack_map_product",
-        "MapProductSpec",
-        "TargetRenderSpec",
-        "MapBandpassSpec",
-        "MapProductResult",
-        "MapUncertaintyProduct",
-        "MapPlanV2",
-        "load_map_plan",
-        "MapResult",
-        "MapApertureUncertainty",
-        "MultiBandMapResult",
-        "SpectralCubeMapResult",
+        "coadd_cube",
+        "build_ifu_cube",
+        "coadd_healpix",
+        "stack_product",
+        "aperture_uncertainty",
+        "adaptive_reprojection_response",
     }
     assert "fit_field_model" not in torchsky.map.__all__
     assert torchsky.field.fit is torchsky.map.field.fit_field_model
     assert torchsky.field.model is torchsky.map.field.make_field_model
+    for removed in (
+        "Polygon",
+        "MultiPolygon",
+        "Circle",
+        "Cone",
+        "Cap",
+        "Box",
+        "Ellipse",
+        "NativeExactSphericalRegion",
+        "HealSparseMap",
+        "SparseMap",
+        "query_cone",
+    ):
+        assert not hasattr(torchsky.sphere, removed)
+    for removed in (
+        "max_pixrad",
+        "ring_to_nested",
+        "nested_to_ring",
+        "neighbours",
+        "query_cone",
+    ):
+        assert not hasattr(torchsky.sphere.healpix, removed)
+    for removed in (
+        "get_values_pix",
+        "lookup_With_valid",
+        "generate_healpix_map",
+        "write",
+    ):
+        assert not hasattr(torchsky.sphere.SparseHealpixMap, removed)
+    assert callable(torchsky.sphere.query_polygon)
+    assert callable(torchsky.sphere.sample_map)
+    assert callable(torchsky.catalogs.crossmatch)
+    assert callable(torchsky.wcs.from_tabular)
+    assert callable(torchsky.wcs.sample_gwcs)
+    assert not hasattr(torchsky.scene, "coadd")
+    assert not hasattr(torchsky.scene, "plan")
+    assert callable(torchsky.map.coadd)
+    assert callable(torchsky.scene.render)
 
 
 def test_field_namespace_uses_short_composable_verbs() -> None:
@@ -115,9 +149,11 @@ def test_field_namespace_uses_short_composable_verbs() -> None:
         wavelength_scale=100.0,
     )
     model = field.model("sine_implicit", domain, hidden_dim=8, hidden_layers=1)
-    assert isinstance(model, field.Sine)
-    assert field.preset("fast", domain).__class__ is field.SkyEncoderMLP
-    obs = field.Observation(
+    from torchsky.map.field.core import SineImplicitField, SkyEncoderMLPField
+
+    assert isinstance(model, SineImplicitField)
+    assert isinstance(field.preset("fast", domain), SkyEncoderMLPField)
+    obs = field.FieldObservation(
         image=torch.zeros((3, 4)),
         header={
             "NAXIS": 2,
@@ -165,12 +201,34 @@ def test_map_cli_exposes_resampling_kernel_option() -> None:
     assert args.value_semantics == "flux"
 
 
-def test_fits_compatibility_aliases_delegate_to_torchfits() -> None:
-    import torchfits
-    import torchsky.cache as sky_cache
+def test_fits_io_is_owned_by_torchfits() -> None:
+    import importlib.util
 
-    assert torchsky.io.fits.write is torchfits.write
-    assert torchsky.io.fits.open is torchfits.open
-    assert torchsky.io.fits.get_header is torchfits.read_header
-    assert torchsky.io.read is torchfits.read
-    assert sky_cache.clear is torchfits.cache.clear
+    import torchfits
+
+    for name in (
+        "io",
+        "table",
+        "hdu",
+        "cache",
+        "datasets",
+        "dataloader",
+        "header_parser",
+        "core",
+    ):
+        assert importlib.util.find_spec(f"torchsky.{name}") is None
+    for name in (
+        "read",
+        "write",
+        "open",
+        "get_header",
+        "get_wcs",
+        "Header",
+        "Card",
+        "HDUList",
+        "TensorHDU",
+        "TableHDU",
+    ):
+        assert not hasattr(torchsky, name)
+    assert callable(torchfits.read)
+    assert callable(torchfits.table.read)

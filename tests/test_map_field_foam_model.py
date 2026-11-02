@@ -261,9 +261,7 @@ def test_joint_spectral_affine_inverse_recovers_heterogeneous_observations() -> 
         [[1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [1.0, 1.0]],
         dtype=torch.float64,
     )
-    truth_coefficients = torch.tensor(
-        [[2.0, 0.5], [3.0, -0.25]], dtype=torch.float64
-    )
+    truth_coefficients = torch.tensor([[2.0, 0.5], [3.0, -0.25]], dtype=torch.float64)
     truth_gradients = torch.tensor(
         [
             [[0.4, -0.2], [0.1, 0.05]],
@@ -313,9 +311,7 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
     response_basis = torch.tensor(
         [[1.0, -1.0], [1.0, 0.0], [1.0, 1.0]], dtype=torch.float64
     )
-    truth_coefficients = torch.tensor(
-        [[1.0, 0.25], [2.0, -0.5]], dtype=torch.float64
-    )
+    truth_coefficients = torch.tensor([[1.0, 0.25], [2.0, -0.5]], dtype=torch.float64)
     truth_gradients = torch.tensor(
         [[[0.1, 0.0], [0.0, 0.1]], [[-0.1, 0.0], [0.0, -0.1]]],
         dtype=torch.float64,
@@ -402,9 +398,7 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
             truth_coefficients @ basis,
             torch.einsum("ckd,k->cd", truth_gradients, basis),
         )
-        for operator, basis in zip(
-            operators, ill_conditioned_basis, strict=True
-        )
+        for operator, basis in zip(operators, ill_conditioned_basis, strict=True)
     ]
     ill_diagnostics: dict[str, float] = {}
     solve_spectral_power_pixel_affine_least_squares(
@@ -439,34 +433,36 @@ def test_joint_spectral_affine_inverse_observation_batching_is_exact() -> None:
     assert diagnostics["peak_operator_batch_bytes"] == moved.storage_bytes
     assert diagnostics["converged"] == 1.0
     assert diagnostics["relative_residual"] <= 1.0e-10
-    assert diagnostics["initial_relative_residual"] > diagnostics[
-        "relative_residual"
-    ]
-    assert diagnostics["normal_operator_applications"] == diagnostics[
-        "iterations"
-    ] + 1.0
+    assert diagnostics["initial_relative_residual"] > diagnostics["relative_residual"]
+    assert (
+        diagnostics["normal_operator_applications"] == diagnostics["iterations"] + 1.0
+    )
     assert diagnostics["preconditioner_setup_seconds"] >= 0.0
     assert diagnostics["rhs_seconds"] >= 0.0
     assert diagnostics["initial_residual_seconds"] >= 0.0
     assert diagnostics["pcg_seconds"] >= 0.0
     assert block_diagnostics["preconditioner_cell_block"] == 1.0
     assert block_diagnostics["preconditioner_block_fallback_cells"] == 0.0
-    assert block_diagnostics["preconditioner_storage_bytes"] > diagnostics[
-        "preconditioner_storage_bytes"
-    ]
+    assert (
+        block_diagnostics["preconditioner_storage_bytes"]
+        > diagnostics["preconditioner_storage_bytes"]
+    )
     assert auto_diagnostics["preconditioner_auto"] == 1.0
     assert auto_diagnostics["preconditioner_cell_block"] == 0.0
-    assert auto_diagnostics["preconditioner_response_condition"] < (
-        auto_diagnostics["preconditioner_auto_condition_threshold"]
+    assert (
+        auto_diagnostics["preconditioner_response_condition"]
+        < (auto_diagnostics["preconditioner_auto_condition_threshold"])
     )
-    assert auto_diagnostics["preconditioner_block_construction_peak_bytes"] <= (
-        auto_diagnostics["preconditioner_auto_budget_bytes"]
+    assert (
+        auto_diagnostics["preconditioner_block_construction_peak_bytes"]
+        <= (auto_diagnostics["preconditioner_auto_budget_bytes"])
     )
     assert fallback_diagnostics["preconditioner_cell_block"] == 0.0
     assert fallback_diagnostics["preconditioner_auto_budget_bytes"] == 1.0
-    assert ill_diagnostics["preconditioner_response_condition"] > ill_diagnostics[
-        "preconditioner_auto_condition_threshold"
-    ]
+    assert (
+        ill_diagnostics["preconditioner_response_condition"]
+        > ill_diagnostics["preconditioner_auto_condition_threshold"]
+    )
     assert ill_diagnostics["preconditioner_cell_block"] == 1.0
 
 
@@ -981,7 +977,9 @@ def test_foam_initialized_inr_is_positive_exact_and_zero_initialized() -> None:
 
     torch.testing.assert_close(actual, expected.to(dtype=actual.dtype))
     assert bool((actual > 0).all())
-    assert not any(parameter.requires_grad for parameter in model.reference_foam.parameters())
+    assert not any(
+        parameter.requires_grad for parameter in model.reference_foam.parameters()
+    )
     actual.sum().backward()
     assert model.residual_output.weight.grad is not None
     assert not torch.all(model.residual_output.weight.grad == 0)
@@ -1014,8 +1012,12 @@ def test_diffuse_foam_hybrid_is_combined_only_and_supports_staged_training() -> 
     assert isinstance(model, DiffuseFoamHybridField)
     assert model.component_identifiability == "combined_only"
     assert model.training_stage == "foam"
-    assert not any(parameter.requires_grad for parameter in model.diffuse_field.parameters())
-    assert all(parameter.requires_grad for parameter in model.localized_foam.parameters())
+    assert not any(
+        parameter.requires_grad for parameter in model.diffuse_field.parameters()
+    )
+    assert all(
+        parameter.requires_grad for parameter in model.localized_foam.parameters()
+    )
 
     ra = torch.tensor([9.99, 10.0, 10.01], dtype=torch.float32)
     dec = torch.tensor([20.01, 20.0, 19.99], dtype=torch.float32)
@@ -1372,6 +1374,7 @@ def test_spectral_power_foam_hard_render_supports_conditioned_operators() -> Non
     assert background.network[-1].bias.grad is not None
 
 
+@pytest.mark.needs_float64
 def test_spectral_power_foam_fits_multiple_observations_then_hard_renders() -> None:
     domain = FieldDomain(
         center_ra_deg=10.0,
@@ -1432,4 +1435,7 @@ def test_spectral_power_foam_fits_multiple_observations_then_hard_renders() -> N
 
     assert len(fit.loss_history) == 2
     assert bool(torch.isfinite(rendered).all())
-    assert not torch.equal(fit.model.cell_coefficients, initial_coefficients)
+    assert not torch.equal(
+        fit.model.cell_coefficients,
+        initial_coefficients.to(fit.model.cell_coefficients.device),
+    )

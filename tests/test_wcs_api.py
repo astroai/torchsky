@@ -1,14 +1,9 @@
-import os
-import tempfile
-
 import numpy as np
+import pytest
 import torch
-import torchfits
 from astropy.wcs import WCS as AstropyWCS
 
-import torchsky
-from torchsky.hdu import HDUList, Header, TensorHDU
-from torchsky.wcs import WCS
+from torchsky.wcs import DistortionLookupTable, WCS
 
 
 def test_wcs_2d_creation():
@@ -78,80 +73,6 @@ def test_wcs_2d_world_to_pixel():
     )
 
 
-def test_get_wcs_from_file_auto_hdu():
-    image = np.random.normal(size=(32, 32)).astype(np.float32)
-    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        path = f.name
-    torchfits.write(
-        path,
-        torch.from_numpy(image),
-        header={
-            "CTYPE1": "RA---TAN",
-            "CTYPE2": "DEC--TAN",
-            "CRPIX1": 1.0,
-            "CRPIX2": 1.0,
-            "CRVAL1": 180.0,
-            "CRVAL2": 0.0,
-            "CDELT1": -0.1,
-            "CDELT2": 0.1,
-        },
-        overwrite=True,
-    )
-
-    try:
-        wcs = torchsky.get_wcs(path, hdu="auto")
-        assert isinstance(wcs, WCS)
-        world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
-        assert torch.allclose(  # type: ignore
-            world,
-            torch.tensor([[180.0, 0.0]], dtype=torch.float64),
-            atol=1e-6,  # type: ignore
-        )
-    finally:
-        if os.path.exists(path):
-            os.unlink(path)
-
-
-def test_get_wcs_auto_hdu_skips_empty_primary():
-    image = np.random.normal(size=(16, 16)).astype(np.float32)
-    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        path = f.name
-    primary = TensorHDU(
-        data=torch.zeros((1, 1), dtype=torch.float32),
-        header=Header({"SIMPLE": True, "EXTEND": True}),
-    )
-    sci = TensorHDU(
-        data=torch.from_numpy(image),
-        header=Header(
-            {
-                "XTENSION": "IMAGE",
-                "EXTNAME": "SCI",
-                "CTYPE1": "RA---TAN",
-                "CTYPE2": "DEC--TAN",
-                "CRPIX1": 1.0,
-                "CRPIX2": 1.0,
-                "CRVAL1": 10.0,
-                "CRVAL2": -5.0,
-                "CDELT1": -0.01,
-                "CDELT2": 0.01,
-            }
-        ),
-    )
-    HDUList([primary, sci]).write(path, overwrite=True)
-
-    try:
-        wcs = torchsky.get_wcs(path, hdu="auto")
-        world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
-        assert torch.allclose(  # type: ignore
-            world,
-            torch.tensor([[10.0, -5.0]], dtype=torch.float64),
-            atol=1e-6,  # type: ignore
-        )
-    finally:
-        if os.path.exists(path):
-            os.unlink(path)
-
-
 def test_wcs_alternate_key_matches_astropy():
     header = {
         "NAXIS": 2,
@@ -191,50 +112,6 @@ def test_wcs_alternate_key_matches_astropy():
     assert twcs.pixel_shape == (100, 100)
     assert twcs.array_shape == (100, 100)
     assert twcs.pixel_bounds == [(0.0, 99.0), (0.0, 99.0)]
-
-
-def test_get_wcs_from_file_selects_alternate_key():
-    image = np.zeros((16, 16), dtype=np.float32)
-    with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
-        path = f.name
-    torchfits.write(
-        path,
-        torch.from_numpy(image),
-        header={
-            "CTYPE1": "RA---TAN",
-            "CTYPE2": "DEC--TAN",
-            "CRPIX1": 1.0,
-            "CRPIX2": 1.0,
-            "CRVAL1": 10.0,
-            "CRVAL2": 20.0,
-            "CDELT1": -0.01,
-            "CDELT2": 0.01,
-            "CTYPE1A": "RA---TAN",
-            "CTYPE2A": "DEC--TAN",
-            "CRPIX1A": 1.0,
-            "CRPIX2A": 1.0,
-            "CRVAL1A": 120.0,
-            "CRVAL2A": -30.0,
-            "CDELT1A": -0.02,
-            "CDELT2A": 0.02,
-        },
-        overwrite=True,
-    )
-
-    try:
-        wcs = torchsky.get_wcs(path, hdu=0, key="A")
-        world = wcs.pixel_to_world(torch.tensor([[0.0, 0.0]], dtype=torch.float64))
-
-        assert wcs.wcs_key == "A"
-        torch.testing.assert_close(
-            world,
-            torch.tensor([[120.0, -30.0]], dtype=torch.float64),
-            atol=1e-6,
-            rtol=0.0,
-        )
-    finally:
-        if os.path.exists(path):
-            os.unlink(path)
 
 
 def test_wcs_axis_metadata_and_footprint():
@@ -334,9 +211,7 @@ def test_wcs_mixed_pixel_world_solves_coupled_linear_system():
         "CD3_3": 4.0,
     }
     wcs = WCS(header)
-    pixels_true = torch.tensor(
-        [[4.0, 3.0, 7.0], [6.0, 5.0, 2.0]], dtype=torch.float64
-    )
+    pixels_true = torch.tensor([[4.0, 3.0, 7.0], [6.0, 5.0, 2.0]], dtype=torch.float64)
     world_true = wcs.pixel_to_world(pixels_true)
     mixed_pixel = torch.stack(
         [
@@ -650,12 +525,15 @@ def test_wcs_value_aliases_and_array_index_helpers_match_pixel_world():
     y = torch.tensor([47.4, 51.1], dtype=torch.float64)
 
     ra, dec = wcs.pixel_to_world_values(x, y)
+    x_values, y_values = wcs.world_to_pixel_values(ra, dec)
     pixels = wcs.world_to_pixel(torch.stack([ra, dec], dim=-1))
     y_index, x_index = wcs.world_to_array_index_values(ra, dec)
     ra_arr, dec_arr = wcs.array_index_to_world_values(y, x)
 
     torch.testing.assert_close(pixels[:, 0], x, atol=2e-7, rtol=1e-9)
     torch.testing.assert_close(pixels[:, 1], y, atol=2e-7, rtol=1e-9)
+    torch.testing.assert_close(x_values, x, atol=2e-7, rtol=1e-9)
+    torch.testing.assert_close(y_values, y, atol=2e-7, rtol=1e-9)
     torch.testing.assert_close(ra_arr, ra)
     torch.testing.assert_close(dec_arr, dec)
     torch.testing.assert_close(x_index, torch.round(x).to(dtype=torch.long))
@@ -1328,4 +1206,216 @@ def test_wcs_pixel_affine_correction_coupled_extra_axis():
         wcs.pixel_to_world(source),
         atol=1e-10,
         rtol=0.0,
+    )
+
+
+@pytest.mark.parametrize("unit,scale", [("rad", np.pi / 180.0), ("arcmin", 60.0)])
+def test_celestial_non_degree_units_match_astropy_and_serialize(
+    unit: str, scale: float
+) -> None:
+    header = {
+        "NAXIS": 2,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CUNIT1": unit,
+        "CUNIT2": unit,
+        "CRPIX1": 32.0,
+        "CRPIX2": 24.0,
+        "CRVAL1": 150.0 * scale,
+        "CRVAL2": -20.0 * scale,
+        "CD1_1": -0.02 * scale,
+        "CD1_2": 0.003 * scale,
+        "CD2_1": 0.002 * scale,
+        "CD2_2": 0.018 * scale,
+    }
+    pixels = np.array([[31.0, 23.0], [35.5, 19.25], [12.0, 40.0]])
+    actual = WCS(header)
+    expected = AstropyWCS(header)
+
+    np.testing.assert_allclose(
+        actual.pixel_to_world(torch.from_numpy(pixels)).numpy(),
+        expected.all_pix2world(pixels, 0),
+        atol=2e-10,
+        rtol=0.0,
+    )
+    serialized = actual.to_header()
+    assert serialized["CUNIT1"] == unit
+    assert serialized["CUNIT2"] == unit
+    assert serialized["CRVAL1"] == pytest.approx(header["CRVAL1"])
+    assert serialized["CRVAL2"] == pytest.approx(header["CRVAL2"])
+    for i in (1, 2):
+        for j in (1, 2):
+            assert serialized[f"CD{i}_{j}"] == pytest.approx(header[f"CD{i}_{j}"])
+
+
+def test_general_nd_inverse_accepts_noncontiguous_stacked_input() -> None:
+    wcs = WCS(
+        {
+            "NAXIS": 3,
+            "CTYPE1": "X",
+            "CTYPE2": "Y",
+            "CTYPE3": "Z",
+            "CRPIX1": 1.0,
+            "CRPIX2": 2.0,
+            "CRPIX3": 3.0,
+            "CRVAL1": 10.0,
+            "CRVAL2": 20.0,
+            "CRVAL3": 30.0,
+            "CDELT1": 2.0,
+            "CDELT2": 3.0,
+            "CDELT3": 4.0,
+        }
+    )
+    pixels = torch.arange(24, dtype=torch.float64).reshape(2, 4, 3).transpose(0, 1)
+    assert not pixels.is_contiguous()
+    world = wcs.pixel_to_world(pixels)
+    world_noncontiguous = world.transpose(0, 1)
+    assert not world_noncontiguous.is_contiguous()
+    torch.testing.assert_close(
+        wcs.world_to_pixel(world_noncontiguous), pixels.transpose(0, 1)
+    )
+
+
+def test_separate_coordinate_apis_broadcast_compatible_shapes() -> None:
+    wcs = WCS(
+        {
+            "NAXIS": 2,
+            "CTYPE1": "RA---CAR",
+            "CTYPE2": "DEC--CAR",
+            "CRPIX1": 1.0,
+            "CRPIX2": 1.0,
+            "CRVAL1": 0.0,
+            "CRVAL2": 0.0,
+            "CD1_1": 1.0,
+            "CD1_2": 0.0,
+            "CD2_1": 0.0,
+            "CD2_2": 1.0,
+        }
+    )
+    x = torch.tensor([[0.0], [1.0]], dtype=torch.float64)
+    y = torch.tensor([0.0, 2.0, 4.0], dtype=torch.float64)
+    ra, dec = wcs.pixel_to_world(x, y)
+    assert ra.shape == dec.shape == (2, 3)
+    px, py = wcs.world_to_pixel(ra[:, :1], dec[:1, :])
+    assert px.shape == py.shape == (2, 3)
+
+
+def test_separable_zero_cd_terms_do_not_spread_nan_between_axes() -> None:
+    wcs = WCS(
+        {
+            "NAXIS": 2,
+            "CTYPE1": "RA---CAR",
+            "CTYPE2": "DEC--CAR",
+            "CRPIX1": 1.0,
+            "CRPIX2": 1.0,
+            "CRVAL1": 0.0,
+            "CRVAL2": 0.0,
+            "CD1_1": 1.0,
+            "CD1_2": 0.0,
+            "CD2_1": 0.0,
+            "CD2_2": 1.0,
+        }
+    )
+    ra, dec = wcs.pixel_to_world(
+        torch.tensor([torch.nan], dtype=torch.float64),
+        torch.tensor([3.0], dtype=torch.float64),
+    )
+    assert torch.isnan(ra).all()
+    torch.testing.assert_close(dec, torch.tensor([3.0], dtype=torch.float64))
+    x, y = wcs.world_to_pixel(
+        torch.tensor([torch.nan], dtype=torch.float64),
+        torch.tensor([4.0], dtype=torch.float64),
+    )
+    assert torch.isnan(x).all()
+    torch.testing.assert_close(y, torch.tensor([4.0], dtype=torch.float64))
+
+
+def _distorted_tan_header(*, tpv: bool = False) -> dict[str, float | int | str]:
+    header: dict[str, float | int | str] = {
+        "NAXIS": 2,
+        "NAXIS1": 64,
+        "NAXIS2": 64,
+        "CTYPE1": "RA---TPV" if tpv else "RA---TAN-SIP",
+        "CTYPE2": "DEC--TPV" if tpv else "DEC--TAN-SIP",
+        "CRPIX1": 32.0,
+        "CRPIX2": 32.0,
+        "CRVAL1": 50.0,
+        "CRVAL2": -20.0,
+        "CD1_1": -1.0e-3,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": 1.0e-3,
+    }
+    if tpv:
+        header.update({"PV1_1": 1.0, "PV1_4": 1.0e-4, "PV2_1": 1.0})
+    else:
+        header.update(
+            {
+                "A_ORDER": 2,
+                "B_ORDER": 2,
+                "A_2_0": 2.0e-5,
+                "B_0_2": -2.0e-5,
+            }
+        )
+    return header
+
+
+@pytest.mark.parametrize("tpv", [False, True])
+def test_identity_slice_preserves_sip_or_tpv_state(tpv: bool) -> None:
+    wcs = WCS(_distorted_tan_header(tpv=tpv))
+    identity = wcs.slice((slice(None), slice(None)))
+    pixels = torch.tensor([[20.0, 25.0], [38.0, 41.0]], dtype=torch.float64)
+    torch.testing.assert_close(
+        identity.pixel_to_world(pixels), wcs.pixel_to_world(pixels)
+    )
+    assert (identity.tpv is not None) == tpv
+    assert (identity.sip is not None) == (not tpv)
+
+
+def test_identity_slice_and_affine_preserve_lut_and_existing_pixel_affine() -> None:
+    table = DistortionLookupTable(
+        torch.tensor([[0.0, 0.01], [0.02, 0.03]], dtype=torch.float64),
+        crpix=(1.0, 1.0),
+        crval=(1.0, 1.0),
+        cdelt=(64.0, 64.0),
+    )
+    wcs = WCS(_distorted_tan_header()).with_pixel_affine_correction(
+        torch.eye(2), torch.tensor([0.25, -0.5])
+    )
+    wcs.cpdis1 = table
+    wcs.cpdis2 = table
+    wcs.det2im1 = table
+    wcs.det2im2 = table
+    pixels = torch.tensor([[20.0, 25.0], [38.0, 41.0]], dtype=torch.float64)
+    for identity in (
+        wcs.slice((slice(None), slice(None))),
+        wcs.with_pixel_affine_correction(torch.eye(2), torch.zeros(2)),
+    ):
+        torch.testing.assert_close(
+            identity.pixel_to_world(pixels), wcs.pixel_to_world(pixels)
+        )
+        assert identity.cpdis1 is not None and identity.cpdis2 is not None
+        assert identity.det2im1 is not None and identity.det2im2 is not None
+        assert identity._pixel_affine_matrix is not None
+
+
+def test_lut_rebasing_and_pixel_affine_composition_are_supported() -> None:
+    table = DistortionLookupTable(
+        torch.tensor([[0.0, 0.01], [0.02, 0.03]], dtype=torch.float64),
+        crpix=(1.0, 1.0),
+        crval=(1.0, 1.0),
+        cdelt=(64.0, 64.0),
+    )
+    wcs = WCS(_distorted_tan_header(), cpdis1=table)
+    pixels = torch.tensor([[4.0, 5.0], [12.0, 18.0]], dtype=torch.float64)
+    sliced = wcs.slice((slice(1, None), slice(None)))
+    torch.testing.assert_close(
+        sliced.pixel_to_world(pixels),
+        wcs.pixel_to_world(pixels + torch.tensor([0.0, 1.0])),
+    )
+
+    matrix = torch.tensor([[1.0, 0.1], [0.0, 1.0]], dtype=torch.float64)
+    corrected = wcs.with_pixel_affine_correction(matrix, torch.zeros(2))
+    torch.testing.assert_close(
+        corrected.pixel_to_world(pixels @ matrix.T), wcs.pixel_to_world(pixels)
     )

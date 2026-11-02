@@ -7,6 +7,7 @@ import torch
 
 import torchsky
 from torchsky.map.plan import MapPlanV2, build_map_input_identity
+import torchfits
 
 
 def _header() -> dict[str, object]:
@@ -52,12 +53,12 @@ def _plan(identity: dict[str, object]) -> MapPlanV2:
 
 def test_map_plan_identity_rejects_changed_input(tmp_path: Path) -> None:
     path = tmp_path / "input.fits"
-    torchsky.write(str(path), torch.zeros((4, 4)), header=_header(), overwrite=True)
+    torchfits.write(str(path), torch.zeros((4, 4)), header=_header(), overwrite=True)
     identity = build_map_input_identity(path, hdu=0)
     plan = _plan(identity)
     plan.verify_inputs()
 
-    torchsky.write(str(path), torch.ones((4, 4)), header=_header(), overwrite=True)
+    torchfits.write(str(path), torch.ones((4, 4)), header=_header(), overwrite=True)
 
     with pytest.raises(ValueError, match="content changed|size changed|checksum"):
         plan.verify_inputs()
@@ -83,7 +84,7 @@ def test_map_plan_v2_rejects_non_boolean_inverse_variance_marker(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "input.fits"
-    torchsky.write(str(path), torch.zeros((4, 4)), header=_header(), overwrite=True)
+    torchfits.write(str(path), torch.zeros((4, 4)), header=_header(), overwrite=True)
     identity = build_map_input_identity(path, hdu=0)
     payload = _plan(identity).to_dict()
     payload["inputs"][0]["weight_is_inverse_variance"] = "false"

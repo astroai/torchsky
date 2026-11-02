@@ -80,11 +80,15 @@ class TestSpectralAxis:
             wave_nm * 10.0,
         )
         torch.testing.assert_close(
-            SpectralAxis(torch.tensor([0.4], dtype=torch.float64), "micrometer", "WAVE").to_wavelength(),
+            SpectralAxis(
+                torch.tensor([0.4], dtype=torch.float64), "micrometer", "WAVE"
+            ).to_wavelength(),
             torch.tensor([4000.0], dtype=torch.float64),
         )
         torch.testing.assert_close(
-            SpectralAxis(torch.tensor([4.0e-5], dtype=torch.float64), "cm", "WAVE").to_wavelength(),
+            SpectralAxis(
+                torch.tensor([4.0e-5], dtype=torch.float64), "cm", "WAVE"
+            ).to_wavelength(),
             torch.tensor([4000.0], dtype=torch.float64),
         )
         joule = torch.tensor([1.0], dtype=torch.float64)
@@ -136,7 +140,10 @@ class TestSpectralAxis:
     def test_awav_uses_air_refraction(self):
         air = torch.tensor([5000.0, 6563.0], dtype=torch.float64)
         axis = SpectralAxis(air, "Angstrom", "AWAV")
-        from torchsky.wcs.spectral import air_wavelength_to_vacuum, spectral_to_frequency
+        from torchsky.wcs.spectral import (
+            air_wavelength_to_vacuum,
+            spectral_to_frequency,
+        )
 
         vac = air_wavelength_to_vacuum(air, unit="Angstrom")
         torch.testing.assert_close(axis.to_wavelength(), vac)
@@ -631,7 +638,7 @@ class TestSpectralReader:
 
     @unittest.mock.patch("torchsky.spectral.WCS")
     @unittest.mock.patch("torchsky.spectral.spectral_axis_from_header")
-    @unittest.mock.patch("torchsky.io.open")
+    @unittest.mock.patch("torchfits.open")
     def test_read_data_cube_wcs_error(
         self, mock_open, mock_spectral_axis, mock_wcs_class
     ):
@@ -651,14 +658,47 @@ class TestSpectralReader:
         mock_axis.values = torch.ones(10)
         mock_spectral_axis.return_value = (mock_axis, 0)
 
-        # Make WCS.from_header raise an exception
-        mock_wcs_class.from_header.side_effect = Exception("WCS Error")
+        # Make WCS construction raise an exception
+        mock_wcs_class.side_effect = Exception("WCS Error")
 
         # Should not raise exception
         cube = SpectralReader.read_data_cube("fake_path.fits")
 
         assert isinstance(cube, DataCube)
         assert cube.spatial_wcs is None
+
+    def test_read_data_cube_populates_spatial_wcs(self):
+        """The cube reader builds a real WCS from the header (not a missing classmethod)."""
+        from torchsky.wcs import WCS
+
+        shape = (5, 8, 8)
+        with tempfile.NamedTemporaryFile(suffix=".fits", delete=False) as f:
+            path = f.name
+        try:
+            torchfits.write(
+                path,
+                torch.zeros(shape, dtype=torch.float32),
+                header={
+                    "CTYPE1": "RA---TAN",
+                    "CTYPE2": "DEC--TAN",
+                    "CTYPE3": "WAVE",
+                    "CRVAL1": 150.0,
+                    "CRVAL2": 2.0,
+                    "CRVAL3": 4000.0,
+                    "CRPIX1": 4.5,
+                    "CRPIX2": 4.5,
+                    "CRPIX3": 1.0,
+                    "CDELT1": -1.0e-4,
+                    "CDELT2": 1.0e-4,
+                    "CDELT3": 30.0,
+                    "CUNIT3": "Angstrom",
+                },
+                overwrite=True,
+            )
+            cube = SpectralReader.read_data_cube(path)
+            assert isinstance(cube.spatial_wcs, WCS)
+        finally:
+            os.unlink(path)
 
     def test_read_data_cube(self):
         """Test reading 3D data cube from FITS image."""

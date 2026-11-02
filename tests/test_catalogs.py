@@ -687,3 +687,70 @@ def test_catalog_index_and_moc_contains_stay_on_device(device_type: str) -> None
     assert mask.device.type == device_type
     inside = moved.inside(moc)
     assert inside.device.type == device_type
+
+
+def _brute_crossmatch(left, right, radius, find):
+    sep = (
+        great_circle_distance(
+            left[0][:, None], left[1][:, None], right[0][None], right[1][None]
+        )
+        * 3600.0
+    )
+    li, ri = torch.nonzero(sep <= radius.reshape(-1, 1), as_tuple=True)
+    s = sep[li, ri]
+    order = sorted(
+        range(li.numel()), key=lambda k: (li[k].item(), s[k].item(), ri[k].item())
+    )
+    idx = torch.tensor(order, dtype=torch.long)
+    li, ri, s = li[idx], ri[idx], s[idx]
+    if find == "best":
+        keep = torch.ones_like(li, dtype=torch.bool)
+        keep[1:] = li[1:] != li[:-1]
+        li, ri, s = li[keep], ri[keep], s[keep]
+    return li, ri, s
+
+
+@pytest.mark.parametrize("find", ["best", "all"])
+@pytest.mark.parametrize("region", ["all_sky", "north_pole", "ra_wrap"])
+def test_crossmatch_strip_candidates_match_brute_force(
+    region: str, find: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Tiny candidate batches force left rows to straddle batches.
+    monkeypatch.setattr(catalogs_core, "_MIN_CANDIDATE_PAIRS", 7)
+    g = torch.Generator().manual_seed(17)
+
+    def draw(n: int):
+        ra = torch.rand(n, generator=g, dtype=torch.float64) * 360.0
+        if region == "all_sky":
+            dec = torch.rad2deg(
+                torch.asin(2.0 * torch.rand(n, generator=g, dtype=torch.float64) - 1.0)
+            )
+        elif region == "north_pole":
+            dec = 87.0 + 3.0 * torch.rand(n, generator=g, dtype=torch.float64)
+        else:
+            ra = (ra * 0.01 - 0.5) % 360.0
+            dec = 10.0 * torch.rand(n, generator=g, dtype=torch.float64) - 5.0
+        return ra, dec
+
+    n = 250
+    left, right = draw(n), draw(n)
+    # Exact poles and RA outside [0, 360) are valid input.
+    left = (
+        torch.cat([left[0], torch.tensor([0.0, 725.0, -10.0], dtype=torch.float64)]),
+        torch.cat([left[1], torch.tensor([90.0, -90.0, 0.0], dtype=torch.float64)]),
+    )
+    radius = 3600.0 * (0.2 + 2.0 * torch.rand(n + 3, generator=g, dtype=torch.float64))
+    got = crossmatch_sky(
+        left[0],
+        left[1],
+        right[0],
+        right[1],
+        radius_arcsec=radius,
+        find=find,
+        left_chunk_size=64,
+    )
+    li, ri, s = _brute_crossmatch(left, right, radius, find)
+    assert li.numel() > 0
+    assert torch.equal(got.left_index, li)
+    assert torch.equal(got.right_index, ri)
+    assert torch.allclose(got.separation_arcsec, s)

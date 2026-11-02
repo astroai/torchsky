@@ -8,13 +8,13 @@ import math
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...device import default_compute_device, resolve_fit_device
+from ...device import resolve_device, resolve_fit_device
 
 from ..exposure_pose import ExposurePose, create_exposure_poses
 from ..operators.bundle import (
@@ -27,7 +27,6 @@ from ..operators.noise import StructuredDetectorNoise, StructuredNoiseOp
 
 from .bandpass import (
     bandpass_bounds as _bandpass_bounds,
-    mixture_importance_weights as _mixture_importance_weights,
     mixture_mc_samples as _mixture_mc_samples,
 )
 from .core import (
@@ -91,92 +90,11 @@ from .types import (
     ForwardContext,
 )
 
-
-def _mixture_render_kwargs(
-    observation: FieldObservation,
-    wavelengths: Tensor,
-    proposal_probs: Tensor,
-) -> dict[str, Any]:
-    weights = _mixture_importance_weights(
-        observation,
-        wavelengths,
-        proposal_probs,
-    )
-    if bool(weights.sum() > 0.0):
-        return {
-            "override_wavelengths": wavelengths,
-            "override_weights": weights,
-            "spectral_sampling": "deterministic_quadrature",
-        }
-    # ponytail: a finite shared Monte Carlo draw can miss a disjoint passband;
-    # use its exact per-observation quadrature instead of increasing every draw.
-    return {"spectral_sampling": "deterministic_quadrature"}
-
-
-def _structured_noise_loss(
-    observation: FieldObservation,
-    bundle: ObservationOperatorBundle,
-    residual: Tensor,
-    valid: Tensor,
-) -> Tensor:
-    operator = bundle.noise
-    model = getattr(operator, "model", None)
-    if not isinstance(operator, StructuredNoiseOp) or not isinstance(
-        model, StructuredDetectorNoise
-    ):
-        raise ValueError(
-            "structured_nll requires StructuredNoiseOp(StructuredDetectorNoise(...))"
-        )
-    components = {}
-    for key, value in (
-        ("VAR_POISSON", observation.var_poisson),
-        ("VAR_RNOISE", observation.var_rnoise),
-        ("VAR_FLAT", observation.var_flat),
-    ):
-        if value is None:
-            continue
-        plane = value.to(device=residual.device, dtype=residual.dtype)
-        plane_valid = torch.isfinite(plane) & (plane >= 0.0)
-        valid = valid & plane_valid
-        components[key] = torch.where(plane_valid, plane, torch.zeros_like(plane))
-    err = (
-        None
-        if observation.err is None
-        else observation.err.to(device=residual.device, dtype=residual.dtype)
-    )
-    if not components and err is None:
-        if observation.weight is None:
-            raise ValueError(
-                "structured_nll requires variance planes, ERR, or inverse-variance weight"
-            )
-        weight = observation.weight.to(device=residual.device, dtype=residual.dtype)
-        err = torch.where(
-            weight > 0.0,
-            weight.clamp_min(torch.finfo(weight.dtype).tiny).rsqrt(),
-            torch.ones_like(weight),
-        )
-    elif not components and err is not None:
-        err_valid = torch.isfinite(err) & (err >= 0.0)
-        valid = valid & err_valid
-        err = torch.where(err_valid, err, torch.ones_like(err))
-    return model.negative_log_likelihood(
-        residual,
-        components=components or None,
-        err=err,
-        valid=valid,
-        amplifier_index=(
-            None
-            if observation.amplifier_index is None
-            else observation.amplifier_index.to(device=residual.device)
-        ),
-        contamination_prior=(
-            None
-            if observation.contamination_prior is None
-            else observation.contamination_prior.to(
-                device=residual.device, dtype=residual.dtype
-            )
-        ),
-    )
+from ._training_losses import (  # noqa: F401
+    _compute_full_observation_losses,
+    _mixture_render_kwargs,
+    _structured_noise_loss,
+)
 
 
 def _field_noise_pretrain_head_modules(
@@ -252,9 +170,7 @@ def _noise_pretrain_field_model(
                 observation,
                 num_samples=max(int(pixel_samples_per_observation), 1),
                 generator=sampling_generator,
-                device=next(
-                    (p.device for p in model.parameters()), default_compute_device()
-                ),
+                device=resolve_device(None, model),
             )
             if sampled is None:
                 continue
@@ -311,7 +227,7 @@ def fit_field_component_decomposition(
     observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
     dtype: torch.dtype = torch.float32,
     device: torch.device | str | None = None,
-    **fit_kwargs: object,
+    **fit_kwargs: Any,
 ) -> FieldFitResult:
     """Construct and fit a field decomposition model on context-labeled observations."""
     if model is not None:
@@ -484,12 +400,69 @@ def compute_field_fit_diagnostics(
 
     with torch.no_grad():
         for obs_idx, observation in enumerate(observations):
-            try:
-                fctx = obs_forward_ctx[obs_idx]
-                pose = obs_exposure_poses[obs_idx]
-                observation_bundle = obs_operator_bundles[obs_idx]
+            fctx = obs_forward_ctx[obs_idx]
+            pose = obs_exposure_poses[obs_idx]
+            observation_bundle = obs_operator_bundles[obs_idx]
 
-                pred = render_field_observation(
+            pred = render_field_observation(
+                model,
+                observation,
+                num_spectral_samples=num_spectral_samples,
+                forward_context=fctx,
+                exposure_pose=pose,
+                operator_bundle=observation_bundle,
+                spatial_sampling=spatial_sampling,
+                spatial_tile_hw=spatial_tile_hw,
+            )
+
+            obs_img = observation.image.to(device=pred.device, dtype=pred.dtype)
+            weight = (
+                observation.weight.to(device=pred.device, dtype=pred.dtype)
+                if observation.weight is not None
+                else torch.ones_like(pred)
+            )
+
+            if observation.mask is not None:
+                mask = observation.mask.to(device=pred.device) > 0
+            else:
+                mask = torch.ones_like(pred, dtype=torch.bool)
+
+            residual = pred - obs_img
+            valid_res = residual[mask]
+            valid_weight = weight[mask]
+
+            if valid_res.numel() > 0:
+                weighted_sq_res = (valid_res**2) * valid_weight
+                obs_chi2 = float(weighted_sq_res.mean())
+                reduced_chi2s.append(obs_chi2)
+                quality_metrics.append(
+                    field_image_quality_metrics(
+                        pred,
+                        observation.image,
+                        weight=observation.weight,
+                        mask=observation.mask,
+                    )
+                )
+
+                if observation_bundle.psf is not None:
+                    from ..operators.psf import apply_psf_spec
+
+                    res_convolved = apply_psf_spec(residual, observation.psf_spec)
+                    valid_res_conv = res_convolved[mask]
+
+                    mx = valid_res.mean()
+                    my = valid_res_conv.mean()
+                    xm, ym = valid_res - mx, valid_res_conv - my
+                    r_num = torch.sum(xm * ym)
+                    r_den = torch.sqrt(torch.sum(xm**2) * torch.sum(ym**2) + 1.0e-8)
+                    psf_corr = float(r_num / r_den)
+                    psf_residual_correlations.append(psf_corr)
+
+            if (
+                field_model_has_predictive_distribution(model)
+                and spatial_tile_hw is None
+            ):
+                _pred_mean, pred_logvar = render_field_observation_distribution(
                     model,
                     observation,
                     num_spectral_samples=num_spectral_samples,
@@ -497,79 +470,22 @@ def compute_field_fit_diagnostics(
                     exposure_pose=pose,
                     operator_bundle=observation_bundle,
                     spatial_sampling=spatial_sampling,
-                    spatial_tile_hw=spatial_tile_hw,
                 )
-
-                obs_img = observation.image.to(device=pred.device, dtype=pred.dtype)
-                weight = (
-                    observation.weight.to(device=pred.device, dtype=pred.dtype)
-                    if observation.weight is not None
-                    else torch.ones_like(pred)
-                )
+                stddev = torch.sqrt(torch.clamp(torch.exp(pred_logvar), min=1.0e-8))
 
                 if observation.mask is not None:
-                    mask = observation.mask.to(device=pred.device) > 0
+                    mask = observation.mask.to(device=stddev.device) > 0
+                    support_unc = stddev[mask]
+                    outer_unc = stddev[~mask]
+                    if support_unc.numel() > 0:
+                        support_uncs.append(float(support_unc.mean()))
+                    if outer_unc.numel() > 0:
+                        outer_uncs.append(float(outer_unc.mean()))
                 else:
-                    mask = torch.ones_like(pred, dtype=torch.bool)
-
-                residual = pred - obs_img
-                valid_res = residual[mask]
-                valid_weight = weight[mask]
-
-                if valid_res.numel() > 0:
-                    weighted_sq_res = (valid_res**2) * valid_weight
-                    obs_chi2 = float(weighted_sq_res.mean())
-                    reduced_chi2s.append(obs_chi2)
-                    quality_metrics.append(
-                        field_image_quality_metrics(
-                            pred,
-                            observation.image,
-                            weight=observation.weight,
-                            mask=observation.mask,
-                        )
-                    )
-
-                    if observation_bundle.psf is not None:
-                        from ..operators.psf import apply_psf_spec
-
-                        res_convolved = apply_psf_spec(residual, observation.psf_spec)
-                        valid_res_conv = res_convolved[mask]
-
-                        mx = valid_res.mean()
-                        my = valid_res_conv.mean()
-                        xm, ym = valid_res - mx, valid_res_conv - my
-                        r_num = torch.sum(xm * ym)
-                        r_den = torch.sqrt(torch.sum(xm**2) * torch.sum(ym**2) + 1.0e-8)
-                        psf_corr = float(r_num / r_den)
-                        psf_residual_correlations.append(psf_corr)
-
-                if field_model_has_predictive_distribution(model) and spatial_tile_hw is None:
-                    _pred_mean, pred_logvar = render_field_observation_distribution(
-                        model,
-                        observation,
-                        num_spectral_samples=num_spectral_samples,
-                        forward_context=fctx,
-                        exposure_pose=pose,
-                        operator_bundle=observation_bundle,
-                        spatial_sampling=spatial_sampling,
-                    )
-                    stddev = torch.sqrt(torch.clamp(torch.exp(pred_logvar), min=1.0e-8))
-
-                    if observation.mask is not None:
-                        mask = observation.mask.to(device=stddev.device) > 0
-                        support_unc = stddev[mask]
-                        outer_unc = stddev[~mask]
-                        if support_unc.numel() > 0:
-                            support_uncs.append(float(support_unc.mean()))
-                        if outer_unc.numel() > 0:
-                            outer_uncs.append(float(outer_unc.mean()))
-                    else:
-                        support_uncs.append(float(stddev.mean()))
-            except Exception:
-                pass
+                    support_uncs.append(float(stddev.mean()))
 
     mean_reduced_chi2 = (
-        sum(reduced_chi2s) / len(reduced_chi2s) if reduced_chi2s else 1.0
+        sum(reduced_chi2s) / len(reduced_chi2s) if reduced_chi2s else float("nan")
     )
     mean_psf_residual_corr = (
         sum(psf_residual_correlations) / len(psf_residual_correlations)
@@ -613,186 +529,6 @@ def compute_field_fit_diagnostics(
     }
 
 
-def _compute_full_observation_losses(
-    observations: Sequence[FieldObservation],
-    model: nn.Module,
-    obs_forward_ctx: tuple[ForwardContext | None, ...],
-    obs_exposure_poses: tuple[ExposurePose | None, ...],
-    obs_operator_bundles: tuple[ObservationOperatorBundle, ...],
-    *,
-    num_spectral_samples: int,
-    loss_kind: FieldLossKind,
-    charbonnier_eps: float,
-    huber_delta: float,
-    loss_reduction: FieldLossReduction,
-    gradient_residual_weight: float = 0.0,
-    spatial_sampling: FieldSpatialSampling = "center",
-    spatial_tile_hw: tuple[int, int] | None = None,
-) -> float:
-    """Compute per-observation or aggregated reconstruction loss on full images.
-
-    Shared by the pre-training (initial) loss measurement and the post-training
-    final loss measurement so both are computed identically.
-    """
-    gradient_weight = max(float(gradient_residual_weight), 0.0)
-    losses: list[float] = []
-    global_weighted_loss = None
-    global_weight_sum = None
-    band_weighted_loss: dict[tuple[object, ...], Tensor] = {}
-    band_weight_sum: dict[tuple[object, ...], Tensor] = {}
-    for obs_idx, observation in enumerate(observations):
-        fctx = obs_forward_ctx[obs_idx]
-        pose = obs_exposure_poses[obs_idx]
-        observation_bundle = obs_operator_bundles[obs_idx]
-        if loss_kind == "gaussian_nll":
-            if spatial_tile_hw is not None:
-                raise ValueError(
-                    "diagnostic spatial tiling is not supported with gaussian_nll"
-                )
-            pred, pred_logvar = render_field_observation_distribution(
-                model,
-                observation,
-                num_spectral_samples=num_spectral_samples,
-                forward_context=fctx,
-                exposure_pose=pose,
-                operator_bundle=observation_bundle,
-                spatial_sampling=spatial_sampling,
-            )
-        else:
-            pred = render_field_observation(
-                model,
-                observation,
-                num_spectral_samples=num_spectral_samples,
-                forward_context=fctx,
-                exposure_pose=pose,
-                operator_bundle=observation_bundle,
-                spatial_sampling=spatial_sampling,
-                spatial_tile_hw=spatial_tile_hw,
-            )
-            pred_logvar = None
-        image = observation.image.to(device=pred.device, dtype=pred.dtype)
-        valid = _observation_support_mask(observation).to(device=pred.device)
-        image = torch.where(valid, image, torch.zeros_like(image))
-        residual = torch.where(valid, pred - image, torch.zeros_like(pred))
-        weight = (
-            observation.weight.to(device=pred.device, dtype=pred.dtype)
-            if observation.weight is not None
-            else torch.ones_like(pred)
-        )
-        weight = torch.where(valid, weight, torch.zeros_like(weight))
-        weight_sum = weight.sum()
-        if loss_kind == "structured_nll":
-            weight_sum = valid.sum().to(dtype=pred.dtype)
-            weighted_loss = (
-                _structured_noise_loss(observation, observation_bundle, residual, valid)
-                * weight_sum
-            )
-        else:
-            weighted_loss = torch.sum(
-                weight
-                * _field_residual_loss(
-                    residual,
-                    loss_kind=loss_kind,
-                    charbonnier_eps=charbonnier_eps,
-                    huber_delta=huber_delta,
-                    logvar=pred_logvar,
-                )
-            )
-        if gradient_weight > 0.0 and pred.ndim == 2:
-            grad_num, grad_den = _field_gradient_residual_weighted_loss(
-                pred,
-                image,
-                weight,
-                valid,
-                loss_kind=loss_kind,
-                charbonnier_eps=charbonnier_eps,
-                huber_delta=huber_delta,
-            )
-            grad_loss = grad_num / torch.clamp(grad_den, min=1.0e-8)
-            weighted_loss = weighted_loss + gradient_weight * weight_sum * grad_loss
-        if loss_reduction == "per_observation":
-            denom = torch.clamp(weight_sum, min=1.0e-8)
-            losses.append(float(weighted_loss / denom))
-        elif loss_reduction == "per_band":
-            band_key = (
-                observation.spectral_min,
-                observation.spectral_max,
-                observation.wavelength,
-                observation.band_name,
-            )
-            band_weighted_loss[band_key] = (
-                weighted_loss
-                if band_key not in band_weighted_loss
-                else band_weighted_loss[band_key] + weighted_loss
-            )
-            band_weight_sum[band_key] = (
-                weight_sum
-                if band_key not in band_weight_sum
-                else band_weight_sum[band_key] + weight_sum
-            )
-        elif loss_reduction == "global":
-            global_weighted_loss = (
-                weighted_loss
-                if global_weighted_loss is None
-                else global_weighted_loss + weighted_loss
-            )
-            global_weight_sum = (
-                weight_sum
-                if global_weight_sum is None
-                else global_weight_sum + weight_sum
-            )
-        elif loss_reduction == "band_global_mix":
-            band_key = (
-                observation.spectral_min,
-                observation.spectral_max,
-                observation.wavelength,
-                observation.band_name,
-            )
-            band_weighted_loss[band_key] = (
-                weighted_loss
-                if band_key not in band_weighted_loss
-                else band_weighted_loss[band_key] + weighted_loss
-            )
-            band_weight_sum[band_key] = (
-                weight_sum
-                if band_key not in band_weight_sum
-                else band_weight_sum[band_key] + weight_sum
-            )
-            global_weighted_loss = (
-                weighted_loss
-                if global_weighted_loss is None
-                else global_weighted_loss + weighted_loss
-            )
-            global_weight_sum = (
-                weight_sum
-                if global_weight_sum is None
-                else global_weight_sum + weight_sum
-            )
-        else:
-            raise ValueError(f"unsupported loss_reduction {loss_reduction!r}")
-    if loss_reduction == "global":
-        assert global_weighted_loss is not None and global_weight_sum is not None
-        losses = [
-            float(global_weighted_loss / torch.clamp(global_weight_sum, min=1.0e-8))
-        ]
-    elif loss_reduction == "per_band":
-        losses = [
-            float(weighted / torch.clamp(band_weight_sum[band_key], min=1.0e-8))
-            for band_key, weighted in band_weighted_loss.items()
-        ]
-    elif loss_reduction == "band_global_mix":
-        assert global_weighted_loss is not None and global_weight_sum is not None
-        band_losses = [
-            float(weighted / torch.clamp(band_weight_sum[band_key], min=1.0e-8))
-            for band_key, weighted in band_weighted_loss.items()
-        ]
-        global_loss = float(
-            global_weighted_loss / torch.clamp(global_weight_sum, min=1.0e-8)
-        )
-        losses = [0.5 * (sum(band_losses) + global_loss)]
-    return float(sum(losses)) if losses else 0.0
-
-
 def fit_structured_noise_crossfit(
     observations: Sequence[FieldObservation],
     cross_fitted_predictions: Sequence[Tensor],
@@ -820,7 +556,9 @@ def fit_structured_noise_crossfit(
     )
     if len(fitted) != len(observations):
         raise ValueError("models must match observations")
-    target_device = torch.device(device) if device is not None else torch.device("cpu")
+    target_device = resolve_device(
+        device, observations, cross_fitted_predictions, models
+    )
     parameters = []
     for model in fitted:
         model.to(target_device)
@@ -939,6 +677,24 @@ def fit_field_model(
     its gradient. Renderer activations are bounded by tile size; prediction,
     residual, and noise-model storage still scale with exposure size. As with
     activation checkpointing, rendering must not mutate model state.
+
+    Args:
+        observations: Non-empty sequence of field observations to fit.
+        model: Field module whose parameters are optimized in place.
+        steps: Number of optimizer steps.
+        lr: Initial learning rate.
+        device: Optional training device.
+        loss_kind: Per-pixel fitting loss.
+        num_spectral_samples: Spectral quadrature samples per observation.
+        render_spatial_tile_hw: Optional renderer tile height and width.
+
+    Returns:
+        Fit diagnostics, optimizer state, and reproducibility state.
+
+    Examples:
+        >>> from torchsky.field import fit
+        >>> callable(fit)
+        True
     """
     if not observations:
         raise ValueError("fit_field_model requires at least one observation")
@@ -1028,7 +784,10 @@ def fit_field_model(
         or gradient_residual_weight > 0
         or pixel_sample_count > 0
         or (context_observations_per_step > 0 and context_loss_weight > 0)
-        or (spectral_anchor_observations_per_step > 0 and spectral_anchor_loss_weight > 0)
+        or (
+            spectral_anchor_observations_per_step > 0
+            and spectral_anchor_loss_weight > 0
+        )
         or bool(component_anchor_terms)
         or bool(component_centroid_anchor_terms)
     ):
@@ -1329,9 +1088,7 @@ def fit_field_model(
             mixture_wavelengths, mixture_probs = _mixture_mc_samples(
                 observations,
                 num_spectral_samples=num_spectral_samples,
-                device=next(
-                    (p.device for p in model.parameters()), default_compute_device()
-                ),
+                device=resolve_device(None, model),
                 proposal_grid_size=training_spectral_sampling_grid_size,
             )
         epoch_batch_size = (
@@ -1529,6 +1286,7 @@ def fit_field_model(
         selected_global_weight_sum = None
         selected_band_weight_sum: dict[tuple[object, ...], float] = {}
         if streaming_accumulation:
+
             def observation_normalizer(observation: FieldObservation) -> float:
                 if loss_kind == "structured_nll":
                     return float(_observation_support_mask(observation).sum())
@@ -1648,9 +1406,7 @@ def fit_field_model(
                     observation,
                     num_samples=pixel_sample_count,
                     generator=sampling_generator,
-                    device=next(
-                        (p.device for p in model.parameters()), default_compute_device()
-                    ),
+                    device=resolve_device(None, model),
                 )
                 if sampled is None:
                     continue
@@ -1684,18 +1440,30 @@ def fit_field_model(
                 image = image.to(device=pred.device, dtype=pred.dtype)
                 weight = weight.to(device=pred.device, dtype=pred.dtype)
                 residual = pred - image
-                sample_element_loss = weight * _field_residual_loss(
+                sample_element_loss = _field_residual_loss(
                     residual,
                     loss_kind=loss_kind,
                     charbonnier_eps=charbonnier_eps,
                     huber_delta=huber_delta,
                     logvar=pred_logvar,
+                    observation_invvar=(
+                        weight
+                        if loss_kind == "gaussian_nll"
+                        and observation.weight is not None
+                        else None
+                    ),
+                    sample_weight=(weight if loss_kind != "gaussian_nll" else None),
                 )
                 weighted_loss = torch.mean(sample_element_loss) * float(
                     max(support_count, 1)
                 )
                 weight_sum = torch.as_tensor(
-                    max(float(full_weight_sum), 1.0e-8),
+                    max(
+                        float(support_count)
+                        if loss_kind == "gaussian_nll"
+                        else float(full_weight_sum),
+                        1.0e-8,
+                    ),
                     device=pred.device,
                     dtype=pred.dtype,
                 )
@@ -1703,8 +1471,11 @@ def fit_field_model(
                 if recompute_structured:
                     render_cpu_rng = torch.get_rng_state()
                     render_device_rng = (
-                        None if train_device.type == "cpu"
-                        else torch.get_device_module(train_device).get_rng_state(train_device)
+                        None
+                        if train_device.type == "cpu"
+                        else torch.get_device_module(train_device).get_rng_state(
+                            train_device
+                        )
                     )
                 with torch.no_grad() if recompute_structured else nullcontext():
                     pred = render_field_observation(
@@ -1750,16 +1521,23 @@ def fit_field_model(
                 )
                 weight = torch.where(valid, weight, torch.zeros_like(weight))
                 weighted_loss = torch.sum(
-                    weight
-                    * _field_residual_loss(
+                    _field_residual_loss(
                         residual,
                         loss_kind=loss_kind,
                         charbonnier_eps=charbonnier_eps,
                         huber_delta=huber_delta,
                         logvar=pred_logvar,
+                        observation_invvar=(
+                            weight if observation.weight is not None else None
+                        ),
+                        sample_weight=(
+                            None
+                            if observation.weight is not None
+                            else valid.to(pred.dtype)
+                        ),
                     )
                 )
-                weight_sum = weight.sum()
+                weight_sum = valid.sum().to(dtype=pred.dtype)
             else:
                 pred = render_field_observation(
                     model,
@@ -1780,13 +1558,13 @@ def fit_field_model(
                 )
                 weight = torch.where(valid, weight, torch.zeros_like(weight))
                 weighted_loss = torch.sum(
-                    weight
-                    * _field_residual_loss(
+                    _field_residual_loss(
                         residual,
                         loss_kind=loss_kind,
                         charbonnier_eps=charbonnier_eps,
                         huber_delta=huber_delta,
                         logvar=pred_logvar,
+                        sample_weight=weight,
                     )
                 )
                 weight_sum = weight.sum()
@@ -1917,9 +1695,7 @@ def fit_field_model(
             total_loss = torch.tensor(
                 streamed_total_loss,
                 dtype=torch.float32,
-                device=next(
-                    (p.device for p in model.parameters()), default_compute_device()
-                ),
+                device=resolve_device(None, model),
             )
         elif loss_reduction == "global":
             assert global_weighted_loss is not None and global_weight_sum is not None
@@ -1945,6 +1721,7 @@ def fit_field_model(
                 global_weight_sum, min=1.0e-8
             )
             total_loss = 0.5 * (band_loss + global_loss)
+        assert total_loss is not None  # every reduction above assigns it
         if (
             training_spectral_sampling == "mixture_mc"
             and anchor_count > 0
@@ -2028,10 +1805,7 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(
-                            (p.device for p in model.parameters()),
-                            default_compute_device(),
-                        ),
+                        device=resolve_device(None, model),
                     )
                 else:
                     total_loss = total_loss + anchor_loss_weight * anchor_loss
@@ -2051,9 +1825,7 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next(
-                        (p.device for p in model.parameters()), default_compute_device()
-                    ),
+                    device=resolve_device(None, model),
                 )
             else:
                 total_loss = total_loss + anchor_component_loss
@@ -2070,9 +1842,7 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next(
-                        (p.device for p in model.parameters()), default_compute_device()
-                    ),
+                    device=resolve_device(None, model),
                 )
             else:
                 total_loss = total_loss + centroid_anchor_loss
@@ -2162,10 +1932,7 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(
-                            (p.device for p in model.parameters()),
-                            default_compute_device(),
-                        ),
+                        device=resolve_device(None, model),
                     )
                 else:
                     total_loss = total_loss + scaled_context_loss
@@ -2173,9 +1940,7 @@ def fit_field_model(
             probe_ra, probe_dec = _smoothness_probe_grid(
                 smoothness_domain,
                 grid_size=smoothness_grid_size,
-                device=next(
-                    (p.device for p in model.parameters()), default_compute_device()
-                ),
+                device=resolve_device(None, model),
             )
             probe = model(
                 probe_ra,
@@ -2198,15 +1963,14 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next(
-                        (p.device for p in model.parameters()), default_compute_device()
-                    ),
+                    device=resolve_device(None, model),
                 )
             else:
                 total_loss = total_loss + smoothness_weight * smoothness_loss
         if spectral_penalty_weight > 0.0:
             spectral_penalty_fn = getattr(model, "spectral_observability_penalty", None)
             if callable(spectral_penalty_fn):
+                spectral_penalty_fn = cast(Callable[..., Tensor], spectral_penalty_fn)
                 spectral_penalty = spectral_penalty_fn(
                     observations,
                     probe_grid_size=spectral_penalty_grid,
@@ -2218,16 +1982,15 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(
-                            (p.device for p in model.parameters()),
-                            default_compute_device(),
-                        ),
+                        device=resolve_device(None, model),
                     )
                 else:
                     total_loss = total_loss + scaled_spectral_penalty
         if residual_penalty_weight > 0.0:
             residual_penalty_fn = getattr(model, "residual_head_penalty", None)
             if callable(residual_penalty_fn):
+                residual_penalty_fn = cast(Callable[..., Tensor], residual_penalty_fn)
+
                 residual_penalty = residual_penalty_fn()
                 scaled_residual_penalty = residual_penalty_weight * residual_penalty
                 if streaming_accumulation:
@@ -2236,10 +1999,7 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(
-                            (p.device for p in model.parameters()),
-                            default_compute_device(),
-                        ),
+                        device=resolve_device(None, model),
                     )
                 else:
                     total_loss = total_loss + scaled_residual_penalty
@@ -2286,10 +2046,7 @@ def fit_field_model(
                     total_loss = torch.tensor(
                         streamed_total_loss,
                         dtype=torch.float32,
-                        device=next(
-                            (p.device for p in model.parameters()),
-                            default_compute_device(),
-                        ),
+                        device=resolve_device(None, model),
                     )
                 else:
                     total_loss = total_loss + conditioning_penalty
@@ -2305,10 +2062,7 @@ def fit_field_model(
                 total_loss = torch.tensor(
                     streamed_total_loss,
                     dtype=torch.float32,
-                    device=next(
-                        (p.device for p in model.parameters()),
-                        default_compute_device(),
-                    ),
+                    device=resolve_device(None, model),
                 )
             else:
                 total_loss = total_loss + calibration_penalty

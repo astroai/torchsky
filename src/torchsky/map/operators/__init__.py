@@ -1,12 +1,22 @@
 """Internal observation-operator scaffolding for mapmaking and INR paths."""
 
 from importlib import import_module
+from typing import Any
 
 from .adaptive_axes import (
     AdaptiveAxisFeatures,
     AdaptiveSpatioSpectralTemporalEncoder,
 )
+from .adaptive import (
+    AdaptiveResampleConfig,
+    AdaptiveValueSemantics,
+    adaptive_reprojection_response,
+)
 from .background import (
+    AdditiveComponent,
+    AdditiveFrame,
+    AdditiveProcessingState,
+    AdditiveStage,
     ConditionedBackgroundField,
     DetectorBackgroundOp,
     ExplicitBackgroundOp,
@@ -16,21 +26,33 @@ from .background import (
     SkyBackgroundOp,
     SpatialSkyBackgroundOp,
     apply_background_components,
+    apply_calibrated_additive_response,
     constant_background,
     fit_background_plane,
     observation_background_components,
     polynomial_background,
 )
 from .base import (
+    AutogradMapping,
     BackgroundOp,
+    BlockPlan,
+    CallableLinearOperator,
+    ChainPlan,
+    DifferentiableMapping,
+    DomainSpec,
     GeometryOp,
+    LinearOperator,
+    MaskPlan,
     MaskWeightOp,
     NoiseOp,
     ObservationOperator,
     OperatorConditioning,
     PSFOp,
     RadiometryOp,
+    RestrictionPlan,
     SpectralResponseOp,
+    SumPlan,
+    as_domain_spec,
 )
 from .bundle import ObservationOperatorBundle
 from .bundle import (
@@ -67,6 +89,39 @@ from .calibration import (
     set_field_training_stage,
 )
 from .coverage import SpatialFillDistanceBounds, spatial_fill_distance_bounds
+from .covariance import (
+    BlockDiagonalCovariance,
+    CovarianceAction,
+    DiagonalAction,
+    DiagonalCovariance,
+    LogDetAction,
+    LowRankCovariance,
+    NuisanceCovariance,
+    NuisancePrecisionAdapter,
+    PrecisionAction,
+    SamplingAction,
+    WhiteningAction,
+)
+from .continuous_response import (
+    AchromaticPixelResponse,
+    NativeQuadratureResponseOp,
+    NativeSpectralPixelResponse,
+)
+from .detector_response import (
+    IntegratedDetectorMoments,
+    LinearDetectorResponse,
+    integrated_detector_moments,
+    integrated_photoelectron_mean,
+)
+from .epsf import (
+    GaussianPixelResponse,
+    NativePixelStamp,
+    NativeStarFit,
+    PixelIntegratedResponse,
+    native_pixel_stamp,
+    profile_native_star,
+)
+from .nuisance import CalibratedNuisancePrecision, ProfiledNuisancePrecision
 from .geometry import (
     ConservativePolygonRemapOp,
     ExactDrizzleGeometryOp,
@@ -124,7 +179,7 @@ from .learned_kernel import (
     gaussian_kernel2d,
     gaussian_kernels_from_params,
 )
-from .lensing import (
+from .magnification import (
     ConvergenceMagnification,
     MagnificationResidual,
     magnification_bias,
@@ -175,11 +230,24 @@ from .pixel_area import (
     representative_pixel_area_sr,
     wrapped_delta_ra_deg,
 )
+from .pixel_calibration import PixelCalibrationOp
 from .radiometry import (
     ExplicitRadiometryOp,
     apply_image_observation_calibration,
     expected_electrons_from_photon_spectral_density,
 )
+from .response import (
+    BilinearResponsePlan,
+    DirectCopyResponsePlan,
+    DrizzleResponsePlan,
+    IndexedResponsePlan,
+    ResponsePlan,
+    ResponseProducts,
+    apply_response_products,
+    bilinear_response,
+    direct_copy_response,
+)
+from ..provenance import Fingerprinted, PlanFingerprint, plan_fingerprint
 from .resampling import (
     custom_separable_sample,
     finalize_periodic_resampled_weighted,
@@ -217,7 +285,7 @@ _LAZY_EXPORTS = {
 }
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name not in _LAZY_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attr_name = _LAZY_EXPORTS[name]
@@ -227,9 +295,46 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "AchromaticPixelResponse",
+    "AdditiveComponent",
+    "AdditiveFrame",
+    "AdditiveProcessingState",
+    "AdditiveStage",
+    "CalibratedNuisancePrecision",
+    "AutogradMapping",
+    "BilinearResponsePlan",
+    "BlockDiagonalCovariance",
+    "BlockPlan",
+    "CallableLinearOperator",
+    "ChainPlan",
+    "CovarianceAction",
+    "DiagonalAction",
+    "DiagonalCovariance",
+    "DifferentiableMapping",
+    "DirectCopyResponsePlan",
+    "DomainSpec",
+    "DrizzleResponsePlan",
+    "Fingerprinted",
+    "GaussianPixelResponse",
+    "IntegratedDetectorMoments",
+    "LinearDetectorResponse",
+    "NativeQuadratureResponseOp",
+    "NativeSpectralPixelResponse",
+    "NativePixelStamp",
+    "NativeStarFit",
+    "PixelIntegratedResponse",
+    "PixelCalibrationOp",
+    "ProfiledNuisancePrecision",
+    "apply_calibrated_additive_response",
+    "native_pixel_stamp",
+    "integrated_detector_moments",
+    "integrated_photoelectron_mean",
+    "profile_native_star",
     "AdaptiveAxisFeatures",
+    "AdaptiveResampleConfig",
     "AffineRadiometry",
     "AdaptiveSpatioSpectralTemporalEncoder",
+    "AdaptiveValueSemantics",
     "apply_operator_calibration_pruning",
     "BackgroundCalibrationTerm",
     "BackgroundOp",
@@ -261,6 +366,9 @@ __all__ = [
     "InstrumentStateEncoder",
     "InterpolationGeometryOp",
     "LearnedBackgroundOp",
+    "LinearOperator",
+    "LogDetAction",
+    "LowRankCovariance",
     "LearnedGeometryOp",
     "LearnedInstrumentOperator",
     "LowRankChromaticPSF",
@@ -272,6 +380,7 @@ __all__ = [
     "LearnedPSFOp",
     "LearnedSpectralResponseOp",
     "MaskWeightOp",
+    "MaskPlan",
     "MAP_RESAMPLING_KERNELS",
     "MAP_STACKING_METHODS",
     "MAP_VALUE_SEMANTICS",
@@ -279,11 +388,15 @@ __all__ = [
     "MapStackingMethod",
     "MapValueSemantics",
     "NoiseOp",
+    "NuisanceCovariance",
+    "NuisancePrecisionAdapter",
     "OneOverFRowNoise",
     "ObservationOperator",
     "ObservationOperatorBundle",
     "OperatorCalibrationTerm",
     "OperatorConditioning",
+    "PlanFingerprint",
+    "PrecisionAction",
     "operator_calibration_identifiability_report",
     "operator_calibration_validation_pruning_report",
     "PSFOp",
@@ -291,6 +404,10 @@ __all__ = [
     "PSFCalibrationTerm",
     "PipelineVarianceCalibration",
     "RadiometryOp",
+    "ResponsePlan",
+    "ResponseProducts",
+    "apply_response_products",
+    "RestrictionPlan",
     "RestrictedAffineFFTGeometryOp",
     "SphericalSpectralGeometryOp",
     "SpatialSkyBackgroundOp",
@@ -299,13 +416,17 @@ __all__ = [
     "SkyBackgroundOp",
     "SpectralGlobalGeometryOp",
     "SpectralResponseOp",
+    "SamplingAction",
+    "SumPlan",
     "SubPixelShift",
     "StructuredDetectorNoise",
     "StructuredNoiseOp",
     "VAR_FLAT",
     "VAR_POISSON",
     "VAR_RNOISE",
+    "WhiteningAction",
     "apply_background_components",
+    "adaptive_reprojection_response",
     "apply_image_observation_calibration",
     "expected_electrons_from_photon_spectral_density",
     "apply_kernel2d",
@@ -323,9 +444,11 @@ __all__ = [
     "bandpass_mc_samples",
     "bandpass_quadrature",
     "bandpass_response",
+    "bilinear_response",
     "constant_background",
     "conservative_polygon_project",
     "custom_separable_sample",
+    "direct_copy_response",
     "field_observation_operator_bundle",
     "field_observations_operator_bundle",
     "fit_background_plane",
@@ -354,6 +477,7 @@ __all__ = [
     "infer_linear_affine_pixel_map",
     "kernel_support",
     "kernel_weight",
+    "IndexedResponsePlan",
     "normalized_header_for_shape",
     "prepare_image_observation_data",
     "project_image_observation_geometry",
@@ -370,6 +494,7 @@ __all__ = [
     "operator_calibration_score_report",
     "pixel_area_sr_at",
     "pixel_area_sr_map",
+    "plan_fingerprint",
     "pipeline_variance",
     "poisson_gaussian_cdf",
     "poisson_gaussian_nll",
@@ -394,6 +519,7 @@ __all__ = [
     "validate_map_resampling_kernel",
     "validate_map_stacking_method",
     "validate_map_value_semantics",
+    "as_domain_spec",
     "wcs_has_distortion",
     "wrapped_delta_ra_deg",
 ]

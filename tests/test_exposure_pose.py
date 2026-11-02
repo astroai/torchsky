@@ -5,12 +5,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from torchsky.map import (
-    ExposurePose,
+from torchsky.map.exposure_pose import ExposurePose, freeze_pose
+from torchsky.map.field import (
     FieldDomain,
     FieldObservation,
     ForwardContext,
-    freeze_pose,
     make_field_model,
     render_field_observation,
 )
@@ -124,10 +123,17 @@ def test_render_field_observation_with_pose_and_forward_context() -> None:
         model,
         obs,
         num_spectral_samples=2,
-        forward_context=ctx,
         exposure_pose=pose,
     )
     assert pred.shape == (8, 8)
+    with pytest.raises(TypeError, match="cannot consume ForwardContext"):
+        render_field_observation(
+            model,
+            obs,
+            num_spectral_samples=2,
+            forward_context=ctx,
+            exposure_pose=pose,
+        )
 
 
 def test_exposure_pose_pole_raises() -> None:

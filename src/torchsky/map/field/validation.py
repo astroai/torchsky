@@ -31,10 +31,16 @@ def paired_bootstrap_improvement(
     confidence: float = 0.95,
     samples: int = 2000,
     seed: int = 0,
+    chunk_size: int | None = None,
 ) -> PairedImprovementInterval:
-    """Paired bootstrap interval for candidate-minus-baseline improvement."""
-    candidate = torch.as_tensor(candidate, dtype=torch.float64).reshape(-1)
-    baseline = torch.as_tensor(baseline, dtype=torch.float64).reshape(-1)
+    """Paired bootstrap interval for candidate-minus-baseline improvement.
+
+    Processing uses ``O(N + samples)`` retained storage plus a bounded
+    ``O(chunk_size * N)`` work buffer instead of materializing every bootstrap
+    draw. The default bounds that work buffer to roughly one million elements.
+    """
+    candidate = torch.as_tensor(candidate).reshape(-1).cpu().to(dtype=torch.float64)
+    baseline = torch.as_tensor(baseline).reshape(-1).cpu().to(dtype=torch.float64)
     finite = torch.isfinite(candidate) & torch.isfinite(baseline)
     difference = candidate[finite] - baseline[finite]
     if not larger_is_better:
@@ -45,16 +51,28 @@ def paired_bootstrap_improvement(
         raise ValueError("statistic must be 'mean' or 'median'")
     if not 0.0 < float(confidence) < 1.0 or int(samples) < 100:
         raise ValueError("confidence must lie in (0, 1) and samples must be >= 100")
+    if chunk_size is not None and int(chunk_size) < 1:
+        raise ValueError("chunk_size must be positive when provided")
     reduce = torch.mean if statistic == "mean" else torch.median
     estimate = reduce(difference)
     generator = torch.Generator(device="cpu").manual_seed(int(seed))
-    indices = torch.randint(
-        difference.numel(),
-        (int(samples), difference.numel()),
-        generator=generator,
+    batch_size = (
+        int(chunk_size)
+        if chunk_size is not None
+        else max(1, min(int(samples), 1_000_000 // difference.numel()))
     )
-    draws = difference[indices]
-    bootstrap = draws.mean(dim=-1) if statistic == "mean" else draws.median(dim=-1).values
+    bootstrap = torch.empty(int(samples), dtype=difference.dtype)
+    for start in range(0, int(samples), batch_size):
+        stop = min(start + batch_size, int(samples))
+        indices = torch.randint(
+            difference.numel(),
+            (stop - start, difference.numel()),
+            generator=generator,
+        )
+        draws = difference[indices]
+        bootstrap[start:stop] = (
+            draws.mean(dim=-1) if statistic == "mean" else draws.median(dim=-1).values
+        )
     alpha = 0.5 * (1.0 - float(confidence))
     quantiles = torch.quantile(
         bootstrap, torch.tensor([alpha, 1.0 - alpha], dtype=bootstrap.dtype)
@@ -105,7 +123,9 @@ def completeness_limit_magnitude(
     if float(c0) == float(c1):
         return float(magnitude[index + 1])
     fraction = (float(target) - c0) / (c1 - c0)
-    return float(magnitude[index] + fraction * (magnitude[index + 1] - magnitude[index]))
+    return float(
+        magnitude[index] + fraction * (magnitude[index + 1] - magnitude[index])
+    )
 
 
 __all__ = [

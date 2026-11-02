@@ -30,4 +30,4 @@ def freeze_live_gwcs(
         return model(x, y)
 
     reference: Callable[..., Any] = _reference
-    return sample_gwcs_detector_to_tangent(reference, bounds, **kwargs)
+    return sample_gwcs_detector_to_tangent(reference, detector_bounds=bounds, **kwargs)

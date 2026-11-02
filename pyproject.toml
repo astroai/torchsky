@@ -4,23 +4,26 @@
 requires = [
     "scikit-build-core>=1.0.0",
     "nanobind>=2.10.2",
-    "torch>=2.13",
+    "torch>=2.14,<2.15",
     "numpy>=1.20.0"
 ]
 build-backend = "scikit_build_core.build"
 
 [project]
 name = "torchsky"
-version = "0.4.0.dev0"
+version = "0.5.0rc1"
 description = "Torch-native sky data, coordinates, geometry, and mapmaking"
 authors = [{ name = "Seb Fabbro", email = "sebfabbro@gmail.com" }]
 readme = "README.md"
-license = { text = "MIT" }
-keywords = ["fits", "astronomy", "pytorch", "tensor", "wcs", "machine-learning"]
+license = "MIT"
+license-files = [
+    "LICENSE",
+    "src/torchsky/cpp_src/third_party/pocketfft.LICENSE.md",
+]
+keywords = ["astronomy", "pytorch", "tensor", "wcs", "healpix", "mapmaking", "coadd", "differentiable", "machine-learning"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -35,14 +38,17 @@ requires-python = ">=3.12"
 # These are automatically managed by pixi for conda packages
 # but needed here for PyPI compatibility
 dependencies = [
-    "torch>=2.13",
+    "torch>=2.14,<2.15",
     "numpy>=1.20.0",  # Core numerical operations
-    "torchfits>=1.0.0",
+    "torchfits>=1.3.1",
 ]
 
 [project.urls]
-Homepage = "https://github.com/sfabbro/torchsky"
-Repository = "https://github.com/sfabbro/torchsky"
+Homepage = "https://github.com/astroai/torchsky"
+Repository = "https://github.com/astroai/torchsky"
+Documentation = "https://astroai.github.io/torchsky/"
+Changelog = "https://astroai.github.io/torchsky/changelog/"
+Issues = "https://github.com/astroai/torchsky/issues"
 
 [project.scripts]
 torchsky = "torchsky.cli:main"
@@ -51,12 +57,19 @@ torchsky = "torchsky.cli:main"
 # For pixi environments, these are managed separately via features
 [project.optional-dependencies]
 
+# Documentation site build (zensical + Material theme).
+docs = [
+    "zensical>=0.0.71,<0.1",
+    "mkdocstrings-python>=1.16,<2",
+]
+
 # Browser-based visualization server: torchsky viz --root /data --port 8822
-# Requires internet access for Aladin Lite JS (or a pre-built npm bundle).
+# Requires internet access for the Aladin Lite JavaScript viewer.
 viz = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",   # uvloop + httptools for high-throughput PNG streaming
     "pillow>=10.0",              # PNG encoding: tensor → uint8 → PNG bytes
+    "matplotlib>=3.8",           # all-sky and cube figures (torchsky.viz.allsky)
 ]
 
 dev = [
@@ -66,67 +79,30 @@ dev = [
     "ipykernel",
     "pyright>=1.1.350",
 ]
-bench = [
-    "astropy>=5.0",
-    "drizzle>=2.2.0",
-    "dfreproject>=1.3.0",
-    "pandas>=1.0",
-    "matplotlib>=3.0",
-    "seaborn>=0.11.0",
-    "pytest-benchmark>=3.0",
-    "pytest-xdist>=3.0",
-    "psutil>=5.0",
-    "reproject>=0.14",
-    "pyarrow>=14.0",
-    "polars>=1.0",
-]
-# Full bench + sphere HEALPix / geometry comparators (same intent as Pixi env `bench-all`).
-bench-all = [
-    "astropy>=5.0",
-    "drizzle>=2.2.0",
-    "dfreproject>=1.3.0",
-    "pandas>=1.0",
-    "matplotlib>=3.0",
-    "seaborn>=0.11.0",
-    "pytest-benchmark>=3.0",
-    "pytest-xdist>=3.0",
-    "psutil>=5.0",
-    "reproject>=0.14",
-    "pyarrow>=14.0",
-    "polars>=1.0",
-    "healpy>=1.19.0,<2",
-    "hpgeom>=1.0",
-    "healsparse>=1.10",
-    "mocpy>=0.13",
-    "astropy-healpix>=1.0",
-    "spherical-geometry>=1.2",
-]
 test = [
     "pytest>=6.0",
     "pytest-cov>=2.0",
-    "pytest-benchmark>=3.0",
     "pytest-xdist>=3.0",
     "psutil>=5.0",
+    "fastapi>=0.110",
+    "httpx>=0.27",
+    "pillow>=10.0",
     "scipy>=1.9.0",
     "requests>=2.28.0",
     "polars>=1.0",
     "pyarrow>=14.0",
     "pandas>=2.2",
     "astropy>=5.0",
+    "matplotlib>=3.8",
     "pyright>=1.1.350",
 ]
 examples = [
-    "torchvision>=0.15.0",  # For MNIST example
-    "requests>=2.28.0",     # For SDSS download example
-    "matplotlib>=3.0",      # For visualization in examples
+    "polars>=1.0",
+    "pyarrow>=14.0",
+    "pandas>=2.2",
+    "astropy>=5.0",  # Table interoperability tutorial
 ]
-# Optional HEALPix SHT peer for benches/tests. healpy remains the science oracle.
-# JAX stays out of the default test env; install with pip extra or:
-#   pixi run sht-bench-bootstrap
-sht-bench = [
-    "s2fft>=1.0",
-]
-# SVO filter profiles + FITS headers for ``torchsky map --method inr`` (default spectral source).
+# SVO filter profiles and FITS headers for spectral-source map runs.
 map = [
     "astropy>=5.0",
     "astroquery>=0.4.6",
@@ -141,47 +117,49 @@ gwcs = [
     "gwcs>=0.18",
 ]
 
-tweakreg = [
-    "jwst>=1.17",
-]
-stpsf = [
-    "stpsf>=1.2",
-]
-catalog-qa = [
-    "photutils>=1.1",
-    "astropy>=5.0",
-]
-
 # Configuration for the scikit-build-core build system.
 [tool.scikit-build]
 # Specifies the directory containing the top-level CMakeLists.txt file.
 cmake.source-dir = "src/torchsky/cpp_src"
 cmake.build-type = "Release"
-cmake.args = [
-    "-DTORCHSKY_USE_VENDORED_CFITSIO=ON",
-    "-DTORCHSKY_NIOBUF=80",
-    "-DTORCHSKY_MINDIRECT=16384",
-    "-DUSE_CUDA=OFF",
-    # Portable defaults; cpp_src/CMakeLists.txt adds -O3 in Release. Avoid -march=native
-    # here so wheels and CI builds are reproducible across machines.
-    "-DCMAKE_C_FLAGS=-O3",
-    "-DCMAKE_CXX_FLAGS=-O3",
-]
+# Portable defaults: the extension baseline is scalar on x86_64, with isolated
+# AVX2+FMA and arm64 NEON Ishioka leaves selected by runtime capability checks.
+# No CFITSIO or CUDA options: the extension is WCS/HEALPix/geometry only.
 
-# Configures the install directory for the compiled extension.
-# This ensures the compiled `cpp.so` or `cpp.pyd` file is placed inside the `torchsky` package.
+# Place the compiled `_cpp` extension inside the torchsky package.
 install.strip = false
 wheel.packages = ["src/torchsky"]
-sdist.include = ["src/torchsky/sphere/data/pixel_window_functions/*.fits"]
 
 # This setting enables CMake's incremental build feature. When you re-run the build,
 # CMake and Ninja will automatically detect which C++ files have changed and only
 # recompile those, leading to much faster iteration times.
 build-dir = "build/{wheel_tag}"
 
+# The sdist carries sources, C++ kernels, tests, and licenses; repository
+# tooling, docs sources, and agent guidance stay out.
+[tool.scikit-build.sdist]
+include = ["src/torchsky/cpp_src/**", "/LICENSE", "/README.md", "/CMakeLists.txt"]
+exclude = [
+    ".github/**",
+    ".pixi/**",
+    ".cache/**",
+    ".pytest_cache/**",
+    ".ruff_cache/**",
+    "notes/**",
+    "docs/**",
+    "examples/**",
+    "overrides/**",
+    "site/**",
+    "build/**",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "pixi.lock",
+    "zensical.toml",
+]
+
 [[tool.scikit-build.overrides]]
 if.platform-system = "^darwin"
-cmake.define.CMAKE_OSX_DEPLOYMENT_TARGET = "11.0"
+cmake.define.CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
 
 
 
@@ -194,7 +172,12 @@ markers = [
     "integration: integration tests across multiple modules",
 ]
 
-[tool.ruff.lint.per-file-ignores]
-"benchmarks/**/*.py" = ["E402"]
-"tests/test_map_smacs0723_stackers.py" = ["E402"]
-"tests/test_map_smacs0723_stackers_band_sweep.py" = ["E402"]
+[tool.pyright]
+include = ["src/torchsky"]
+exclude = ["**/__pycache__", "src/torchsky/cpp_src"]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+pythonPlatform = "All"
+reportMissingImports = "warning"
+reportMissingTypeStubs = "none"
+useLibraryCodeForTypes = false

@@ -1,0 +1,41 @@
+{% extends "main.html" %}
+
+{% block tabs %}
+  {{ super() }}
+  <section class="ts-hero" aria-label="torchsky">
+    <div class="ts-hero__sky" aria-hidden="true"></div>
+    <div class="ts-hero__inner">
+      <img
+        class="ts-hero__brand"
+        src="{{ 'assets/torchsky-logo-hero.svg' | url }}"
+        alt="torchsky"
+        width="360"
+        height="78"
+      />
+      <p class="ts-hero__headline">Astro compute for PyTorch</p>
+      <p class="ts-hero__lede">
+        Tensor-native coordinates, HEALPix, mapmaking, and differentiable sky
+        models — CPU, CUDA, and Apple Silicon.
+      </p>
+      <div class="ts-hero__actions">
+        <a class="ts-btn ts-btn--primary" href="{{ 'quickstart/' | url }}">Quick start</a>
+        <a class="ts-btn ts-btn--ghost" href="{{ 'install/' | url }}">Install</a>
+        <a class="ts-btn ts-btn--ghost" href="{{ 'wcs/' | url }}">WCS</a>
+        <a class="ts-btn ts-btn--ghost" href="{{ 'map/' | url }}">Mapmaking</a>
+        <a class="ts-btn ts-btn--ghost" href="{{ 'reference/' | url }}">API</a>
+      </div>
+      <pre class="ts-hero__code" tabindex="0"><code>import torch
+from torchsky.wcs import WCS
+import torchsky.sphere as sphere
+
+wcs = WCS(header)  # header: a plain dict, e.g. from torchfits
+x = y = torch.arange(0.0, 512.0, 64.0)
+ra, dec = wcs.pixel_to_world(x, y)
+pix = sphere.ang2pix(1024, ra, dec, lonlat=True, nest=True)</code></pre>
+    </div>
+  </section>
+{% endblock %}
+
+{% block content %}
+  {{ super() }}
+{% endblock %}

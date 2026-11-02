@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
+from torch import Tensor
 
 from ..renderers.validation import (
     residual_panel_pngs,
@@ -36,9 +38,9 @@ class ValidationPair(BaseModel):
 
 @dataclass
 class ValidationReg:
-    truth: object  # Tensor
-    model: object
-    sigma: Optional[object]
+    truth: Tensor
+    model: Tensor
+    sigma: Optional[Tensor]
     pair: ValidationPair
 
 
@@ -59,46 +61,42 @@ def _evict_validation_fifo(
         del pairs[oldest]
 
 
-def _tensor_pixel_count(t: object) -> int:
-    import torch
-
-    ten = torch.as_tensor(t)
-    if ten.dim() < 2:
-        return int(ten.numel())
-    return int(ten.shape[-1] * ten.shape[-2])
-
-
 def _register_pair_sync(request: Request, pair: ValidationPair) -> JSONResponse:
     """Register a truth/model/(optional sigma) FITS pair. Returns pair ID."""
-    from ...io import read_image
+    from torchfits import read_shape, read_tensor as read_image
 
     root: Path = request.app.state.root_dir
     max_px = int(getattr(request.app.state, "max_image_pixels", 512 * 1024 * 1024))
 
-    def load(rel: str, hdu: int) -> object:
-        abs_p = resolve_under_root(root, rel)
-        return read_image(str(abs_p), hdu=hdu)
+    def abs_path(rel: str) -> Path:
+        return resolve_under_root(root, rel)
 
+    # Reject oversized inputs from header metadata before loading pixels.
+    requested = [
+        ("truth", pair.truth_path, pair.truth_hdu),
+        ("model", pair.model_path, pair.model_hdu),
+    ]
+    if pair.sigma_path:
+        requested.append(("sigma", pair.sigma_path, pair.sigma_hdu))
+    loaded: dict[str, Tensor] = {}
     try:
-        truth = load(pair.truth_path, pair.truth_hdu).float()
-        model = load(pair.model_path, pair.model_hdu).float()
-        sigma = (
-            load(pair.sigma_path, pair.sigma_hdu).float() if pair.sigma_path else None
-        )
+        for label, rel, hdu_i in requested:
+            _, shape = read_shape(str(abs_path(rel)), hdu=hdu_i)
+            n = int(math.prod(int(dim) for dim in shape)) if shape else 0
+            if n > max_px:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"{label} image has {n} pixels; max allowed is {max_px}.",
+                )
+            loaded[label] = read_image(str(abs_path(rel)), hdu=hdu_i).float()
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
-    for label, ten in ("truth", truth), ("model", model), ("sigma", sigma):
-        if ten is None:
-            continue
-        n = _tensor_pixel_count(ten)
-        if n > max_px:
-            raise HTTPException(
-                status_code=413,
-                detail=f"{label} image has {n} pixels; max allowed is {max_px}.",
-            )
+    truth = loaded["truth"]
+    model = loaded["model"]
+    sigma = loaded.get("sigma")
 
     pid = hashlib.sha256(
         f"{pair.truth_path}:{pair.truth_hdu}:{pair.model_path}:{pair.model_hdu}:{pair.sigma_path}:{pair.sigma_hdu}".encode()
@@ -125,6 +123,7 @@ def _panel_pngs_sync(
     pid: str,
     request: Request,
     stretch: str,
+    limit_policy: str,
     pull_range: float,
 ) -> JSONResponse:
     pairs = _pairs(request)
@@ -137,6 +136,7 @@ def _panel_pngs_sync(
             r.model,
             r.sigma,
             stretch=stretch,
+            limit_policy=limit_policy,
             pull_sigma_range=pull_range,
         )
     except Exception as e:
@@ -148,13 +148,16 @@ def _panel_pngs_sync(
 async def panel_pngs(
     pid: str,
     request: Request,
-    stretch: str = "zscale",
+    stretch: str = "linear",
+    limit_policy: str = "zscale",
     pull_range: float = 5.0,
 ) -> JSONResponse:
     """Return truth/model/residual/pull as base64-encoded PNGs."""
     from .._blocking import run_in_thread
 
-    return await run_in_thread(_panel_pngs_sync, pid, request, stretch, pull_range)
+    return await run_in_thread(
+        _panel_pngs_sync, pid, request, stretch, limit_policy, pull_range
+    )
 
 
 def _pull_hist_sync(pid: str, request: Request) -> JSONResponse:
@@ -216,28 +219,3 @@ async def val_chi2_map(pid: str, request: Request) -> Response:
     from .._blocking import run_in_thread
 
     return await run_in_thread(_chi2_map_sync, pid, request)
-
-
-def _dr_report_sync(pid: str, request: Request) -> JSONResponse:
-    from ..renderers.image import detect_dynamic_range
-
-    pairs = _pairs(request)
-    if pid not in pairs:
-        raise HTTPException(status_code=404, detail="Pair not registered")
-    r = pairs[pid]
-    residual = r.model - r.truth
-    return JSONResponse(
-        {
-            "truth": detect_dynamic_range(r.truth),
-            "model": detect_dynamic_range(r.model),
-            "residual": detect_dynamic_range(residual),
-        }
-    )
-
-
-@router.get("/{pid}/dr_report")
-async def val_dr_report(pid: str, request: Request) -> JSONResponse:
-    """Return dynamic-range report for truth, model, and residual."""
-    from .._blocking import run_in_thread
-
-    return await run_in_thread(_dr_report_sync, pid, request)

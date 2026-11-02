@@ -92,10 +92,12 @@ def test_adaptive_axis_derives_bounds_from_calibration_sampling() -> None:
     assert conservative.length_bounds == (4.0, 20.0)
 
 
-def test_adaptive_axis_evidence_initializer_recovers_scale_and_is_unit_invariant() -> None:
+def test_adaptive_axis_evidence_initializer_recovers_scale_and_is_unit_invariant() -> (
+    None
+):
     coordinates = torch.linspace(-12.0, 12.0, 257, dtype=torch.float64)
-    evidence = 0.4 + 0.03 * coordinates + torch.sin(
-        (2.0 * torch.pi / 10.0) * coordinates
+    evidence = (
+        0.4 + 0.03 * coordinates + torch.sin((2.0 * torch.pi / 10.0) * coordinates)
     )
     axis = AdaptiveAxisFeatures(
         center=0.0,

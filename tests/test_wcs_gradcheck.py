@@ -63,8 +63,13 @@ def _make_wcs(projection: str) -> TorchWCS:
 def test_pixel_to_world_differentiable_gradcheck(projection: str) -> None:
     """Analytic pixel->world Jacobian matches finite differences for all projections."""
     wcs = _make_wcs(projection)
+    samples = (
+        [[128.0, 128.0], [120.0, 140.0], [135.0, 115.0]]
+        if projection == "HPX"
+        else [[128.0, 128.0], [100.0, 200.0], [150.0, 50.0]]
+    )
     pixels = torch.tensor(
-        [[128.0, 128.0], [100.0, 200.0], [150.0, 50.0]],
+        samples,
         dtype=torch.float64,
         requires_grad=True,
     )
@@ -102,8 +107,13 @@ def test_world_to_pixel_differentiable_gradcheck(projection: str) -> None:
 def test_pixel_to_world_differentiable_gradgradcheck(projection: str) -> None:
     """Second-order gradients through pixel->world are consistent."""
     wcs = _make_wcs(projection)
+    samples = (
+        [[128.0, 128.0], [120.0, 140.0]]
+        if projection == "HPX"
+        else [[128.0, 128.0], [100.0, 200.0]]
+    )
     pixels = torch.tensor(
-        [[128.0, 128.0], [100.0, 200.0]],
+        samples,
         dtype=torch.float64,
         requires_grad=True,
     )
@@ -111,9 +121,7 @@ def test_pixel_to_world_differentiable_gradgradcheck(projection: str) -> None:
     def f(p: torch.Tensor) -> torch.Tensor:
         return wcs.pixel_to_world_differentiable(p)
 
-    assert torch.autograd.gradgradcheck(
-        f, (pixels,), atol=1e-3, rtol=1e-3, eps=1e-6
-    )
+    assert torch.autograd.gradgradcheck(f, (pixels,), atol=1e-3, rtol=1e-3, eps=1e-6)
 
 
 @pytest.mark.parametrize("projection", _ANALYTIC_INVERSE_PROJECTIONS)
@@ -134,9 +142,7 @@ def test_world_to_pixel_differentiable_gradgradcheck(projection: str) -> None:
     def f(w: torch.Tensor) -> torch.Tensor:
         return wcs.world_to_pixel_differentiable(w)
 
-    assert torch.autograd.gradgradcheck(
-        f, (world,), atol=1e-3, rtol=1e-3, eps=1e-6
-    )
+    assert torch.autograd.gradgradcheck(f, (world,), atol=1e-3, rtol=1e-3, eps=1e-6)
 
 
 def test_tan_with_sip_gradcheck() -> None:

@@ -23,9 +23,13 @@ def test_splat_is_adjoint_of_bilinear_gather() -> None:
     torch.manual_seed(0)
     flux = torch.rand(1, 3, 3)
     xy = torch.tensor(
-        [[[[1.2, 1.3], [2.1, 1.4], [0.6, 2.2]],
-          [[1.7, 0.8], [2.4, 2.1], [1.1, 1.9]],
-          [[0.4, 0.5], [2.6, 1.2], [1.8, 2.7]]]],
+        [
+            [
+                [[1.2, 1.3], [2.1, 1.4], [0.6, 2.2]],
+                [[1.7, 0.8], [2.4, 2.1], [1.1, 1.9]],
+                [[0.4, 0.5], [2.6, 1.2], [1.8, 2.7]],
+            ]
+        ],
         dtype=torch.float32,
     )
     native = splat_bilinear(flux, xy, (4, 4))

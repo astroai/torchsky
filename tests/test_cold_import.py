@@ -25,7 +25,7 @@ import torchsky
 names = (
     "numpy",
     "torch",
-    "torchsky.cpp",
+    "torchsky._cpp",
     "fastapi",
     "torchsky.viz",
     "torchsky.map",
@@ -48,7 +48,7 @@ print(json.dumps({name: name in sys.modules for name in names}, sort_keys=True))
         "fastapi": False,
         "numpy": False,
         "torch": False,
-        "torchsky.cpp": False,
+        "torchsky._cpp": False,
         "torchsky.map": False,
         "torchsky.map.field": False,
         "torchsky.viz": False,

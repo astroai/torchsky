@@ -19,6 +19,7 @@ from torchsky.map.operators.noise import (
     poisson_gaussian_cdf,
     poisson_gaussian_nll,
     profile_amplifier_row_offsets,
+    sanitize_inverse_variance,
     student_t_nll,
 )
 
@@ -117,6 +118,44 @@ def test_pipeline_components_and_err_fallback(dtype: torch.dtype) -> None:
     err = torch.full((3, 4), 2.0, dtype=dtype)
     fallback = pipeline_variance(err=err, err_scale=1.5, variance_floor=0.25)
     torch.testing.assert_close(fallback, torch.full_like(err, 9.25))
+
+
+def test_pipeline_one_dimensional_calibration_is_always_leading_axis() -> None:
+    plane = torch.ones((3, 2, 3), dtype=torch.float64)
+    scale = torch.tensor([1.0, 2.0, 4.0], dtype=plane.dtype)
+    leading = pipeline_variance({VAR_POISSON: plane}, poisson_scale=scale)
+    expected = scale.square().reshape(3, 1, 1).expand_as(plane)
+    torch.testing.assert_close(leading, expected)
+
+    trailing = pipeline_variance(
+        {VAR_POISSON: plane}, poisson_scale=scale.reshape(1, 1, 3)
+    )
+    torch.testing.assert_close(
+        trailing,
+        scale.square().reshape(1, 1, 3).expand_as(plane),
+    )
+    fallback = pipeline_variance(err=plane, err_scale=scale)
+    torch.testing.assert_close(fallback, expected)
+
+
+def test_pipeline_rejects_implicit_trailing_calibration_vector() -> None:
+    plane = torch.ones((2, 3, 4))
+    with pytest.raises(ValueError, match="leading-axis.*explicit shape"):
+        pipeline_variance(
+            {VAR_POISSON: plane},
+            poisson_scale=torch.ones(4),
+        )
+
+
+def test_sanitize_inverse_variance_zeros_invalid_values() -> None:
+    weight = torch.tensor(
+        [0.5, 0.0, -1.0, float("nan"), float("inf"), 2.0],
+        dtype=torch.float64,
+    )
+    torch.testing.assert_close(
+        sanitize_inverse_variance(weight),
+        torch.tensor([0.5, 0.0, 0.0, 0.0, 0.0, 2.0], dtype=torch.float64),
+    )
 
 
 def test_pipeline_calibration_stays_positive_and_differentiable() -> None:
@@ -270,23 +309,19 @@ def test_student_t_mixture_edge_cases() -> None:
 
 def test_structured_detector_noise_profiles_amplifier_rows_and_scores_cosmics() -> None:
     height, width = 16, 20
-    amplifier = (
-        torch.arange(width)[None, :].expand(height, width) * 4 // width
-    )
+    amplifier = torch.arange(width)[None, :].expand(height, width) * 4 // width
     injected_rows = torch.stack(
         [torch.linspace(-0.3 + 0.1 * amp, 0.2 + 0.1 * amp, height) for amp in range(4)]
     )
     residual = torch.zeros((height, width))
     for amp in range(4):
-        residual = torch.where(
-            amplifier == amp, injected_rows[amp, :, None], residual
-        )
+        residual = torch.where(amplifier == amp, injected_rows[amp, :, None], residual)
     variance = torch.ones_like(residual)
-    offsets, corrected = profile_amplifier_row_offsets(
-        residual, variance, amplifier
-    )
+    offsets, corrected = profile_amplifier_row_offsets(residual, variance, amplifier)
     torch.testing.assert_close(offsets, injected_rows)
-    torch.testing.assert_close(corrected, torch.zeros_like(corrected), atol=1e-6, rtol=0)
+    torch.testing.assert_close(
+        corrected, torch.zeros_like(corrected), atol=1e-6, rtol=0
+    )
 
     residual[5, 11] = 15.0
     prior = torch.full_like(residual, 0.01)

@@ -42,6 +42,7 @@ def _pv_param(
 # COP — Conic Perspective
 # ---------------------------------------------------------------------------
 
+
 def _cop_constants(
     pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
 ) -> tuple[float, float, float, float, float, float]:
@@ -100,11 +101,14 @@ def project_conic(
         # Negate phi: the pole rotation (delta_p=90°) expects the opposite
         # sign convention from the natural atan2 output.
         phi = -alpha * w1
-        theta = theta1 + torch.atan2(
-            torch.tensor(w5, dtype=xi.dtype, device=xi.device)
-            - r * w4,
-            torch.ones_like(r),
-        ) * R2D
+        theta = (
+            theta1
+            + torch.atan2(
+                torch.tensor(w5, dtype=xi.dtype, device=xi.device) - r * w4,
+                torch.ones_like(r),
+            )
+            * R2D
+        )
         return phi, theta
 
     elif projection_code == "COE":
@@ -137,7 +141,9 @@ def project_conic(
         )
         valid = (w.abs() <= 1.0 + tol) | ((r - w8).abs() < tol)
         phi = -alpha * w1
-        theta = torch.where(valid, theta_pole, torch.full_like(theta_pole, float("nan")))
+        theta = torch.where(
+            valid, theta_pole, torch.full_like(theta_pole, float("nan"))
+        )
         return phi, theta
 
     elif projection_code == "COD":
@@ -230,11 +236,13 @@ def deproject_conic(
         sin_a = torch.sin(alpha * D2R)
         cos_a = torch.cos(alpha * D2R)
         r = torch.where(
-            torch.isclose(theta, torch.tensor(-90.0, dtype=phi.dtype, device=phi.device), atol=1e-12),
-            torch.tensor(w8, dtype=phi.dtype, device=phi.device),
-            w3 * torch.sqrt(
-                torch.clamp(w4 - w5 * torch.sin(theta * D2R), min=0.0)
+            torch.isclose(
+                theta,
+                torch.tensor(-90.0, dtype=phi.dtype, device=phi.device),
+                atol=1e-12,
             ),
+            torch.tensor(w8, dtype=phi.dtype, device=phi.device),
+            w3 * torch.sqrt(torch.clamp(w4 - w5 * torch.sin(theta * D2R), min=0.0)),
         )
         y0 = -w2
         xi = r * sin_a
@@ -274,6 +282,7 @@ def deproject_conic(
 # COE — Conic Equal Area
 # ---------------------------------------------------------------------------
 
+
 def _coe_constants(
     pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
 ) -> tuple[float, ...]:
@@ -299,6 +308,7 @@ def _coe_constants(
 # ---------------------------------------------------------------------------
 # COD — Conic Equidistant
 # ---------------------------------------------------------------------------
+
 
 def _cod_constants(
     pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
@@ -334,6 +344,7 @@ def _cod_constants(
 # COO — Conic Orthomorphic
 # ---------------------------------------------------------------------------
 
+
 def _coo_constants(
     pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
 ) -> tuple[float, float, float, float, float]:
@@ -353,7 +364,7 @@ def _coo_constants(
     if w0 == 0.0:
         raise ValueError("COO: w[0] must be non-zero")
     w1 = 1.0 / w0
-    w3 = r0 * (cos1 / w0) / (tan1 ** w0)
+    w3 = r0 * (cos1 / w0) / (tan1**w0)
     if w3 == 0.0:
         raise ValueError("COO: w[3] must be non-zero")
     w2 = w3 * (math.tan((90.0 - theta1_ref) * 0.5 * D2R) ** w0)
@@ -364,6 +375,7 @@ def _coo_constants(
 # ---------------------------------------------------------------------------
 # BON — Bonne's projection (polyconic, equal-area)
 # ---------------------------------------------------------------------------
+
 
 def _bon_constants(
     pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
@@ -442,6 +454,7 @@ def _bon_s2x(
 # ---------------------------------------------------------------------------
 # PCO — American polyconic (Paper II Sec.5.5.2, eqs. 157-160)
 # ---------------------------------------------------------------------------
+
 
 def _pco_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
     """Forward PCO: native (phi, theta) -> plane (xi, eta).

@@ -1,0 +1,136 @@
+{
+  "schema": 1,
+  "generated_at": "2026-10-23T00:12:17+00:00",
+  "environment": {
+    "python": "3.13.14",
+    "platform": "macOS-14.8.2-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "cpu": "Apple M2",
+    "gpu": null,
+    "device": "cpu",
+    "torch": "2.13.0",
+    "torchfits": "1.0.0",
+    "torchsky": "0.4.0",
+    "git_sha": "8f18ebdfd584e743a9a09d6b6471860675dfdb47",
+    "threads": 1
+  },
+  "cases": [
+    {
+      "group": "WCS",
+      "case": "wcs_pixel_to_world_tan",
+      "parameters": "n=10,000, float64, TAN",
+      "n": 10000,
+      "median_s": 0.000636,
+      "throughput": 15.726,
+      "throughput_unit": "Mpoints/s"
+    },
+    {
+      "group": "WCS",
+      "case": "wcs_world_to_pixel_tan",
+      "parameters": "n=10,000, float64, TAN",
+      "n": 10000,
+      "median_s": 0.000464,
+      "throughput": 21.573,
+      "throughput_unit": "Mpoints/s"
+    },
+    {
+      "group": "WCS",
+      "case": "wcs_pixel_to_world_tan",
+      "parameters": "n=200,000, float64, TAN",
+      "n": 200000,
+      "median_s": 0.015169,
+      "throughput": 13.185,
+      "throughput_unit": "Mpoints/s"
+    },
+    {
+      "group": "WCS",
+      "case": "wcs_world_to_pixel_tan",
+      "parameters": "n=200,000, float64, TAN",
+      "n": 200000,
+      "median_s": 0.01195,
+      "throughput": 16.737,
+      "throughput_unit": "Mpoints/s"
+    },
+    {
+      "group": "HEALPix",
+      "case": "ang2pix",
+      "parameters": "n=10,000, nside=1024, NESTED",
+      "n": 10000,
+      "median_s": 0.000244,
+      "throughput": 41.061,
+      "throughput_unit": "Mpoints/s"
+    },
+    {
+      "group": "HEALPix",
+      "case": "ang2pix",
+      "parameters": "n=200,000, nside=1024, NESTED",
+      "n": 200000,
+      "median_s": 0.004118,
+      "throughput": 48.569,
+      "throughput_unit": "Mpoints/s"
+    },
+    {
+      "group": "HEALPix",
+      "case": "get_interp_weights",
+      "parameters": "n=50,000, nside=512, bilinear",
+      "n": 50000,
+      "median_s": 0.004848,
+      "throughput": 10.313,
+      "throughput_unit": "Mpoints/s"
+    },
+    {
+      "group": "HEALPix",
+      "case": "query_disc",
+      "parameters": "nside=512, radius=0.5 deg",
+      "n": 192534,
+      "median_s": 0.008405,
+      "throughput": 22.908,
+      "throughput_unit": "Mpixels/s"
+    },
+    {
+      "group": "Spherical harmonics",
+      "case": "anafast",
+      "parameters": "nside=32, lmax=64",
+      "n": 12288,
+      "median_s": 0.001564,
+      "throughput": 7.859,
+      "throughput_unit": "Mpixels/s"
+    },
+    {
+      "group": "Spherical harmonics",
+      "case": "anafast",
+      "parameters": "nside=128, lmax=256",
+      "n": 196608,
+      "median_s": 0.031084,
+      "throughput": 6.325,
+      "throughput_unit": "Mpixels/s"
+    },
+    {
+      "group": "Catalogs",
+      "case": "crossmatch_sky (best)",
+      "parameters": "left=20,000, right=20,000, radius=2 arcsec",
+      "n": 20000,
+      "median_s": 1.027948,
+      "throughput": 0.019,
+      "throughput_unit": "Mleft rows/s"
+    },
+    {
+      "group": "Mapmaking",
+      "case": "coadd (bilinear)",
+      "parameters": "4 x 128x128, TAN",
+      "n": 65536,
+      "median_s": 0.023934,
+      "throughput": 2.738,
+      "throughput_unit": "Minput pixels/s"
+    },
+    {
+      "group": "Mapmaking",
+      "case": "coadd (bilinear)",
+      "parameters": "4 x 512x512, TAN",
+      "n": 1048576,
+      "median_s": 0.093923,
+      "throughput": 11.164,
+      "throughput_unit": "Minput pixels/s"
+    }
+  ]
+}

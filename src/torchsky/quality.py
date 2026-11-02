@@ -12,7 +12,7 @@ CONTRACT_VERSION = "torchsky.quality.v1"
 MASK_POLARITY = "set_means_flagged"
 INVERSE_VARIANCE_SEMANTICS = "inverse_variance_per_pixel"
 CONFIDENCE_SEMANTICS = "normalized_weight_0_to_1"
-MAX_CONFIDENCE_SAMPLES = 100_000
+_MAX_CONFIDENCE_SAMPLES = 100_000
 
 
 class QualityBit(IntFlag):
@@ -60,6 +60,22 @@ def build_weight_product(
     and is recorded as ``INVALID_VARIANCE``.  ``producer`` reserves a stable
     artifact field for future learned mask/weight generators without changing
     downstream consumers.
+
+    Args:
+        inverse_variance: Per-pixel inverse variance; nonpositive or nonfinite values are invalid.
+        quality_mask: Optional integer bit mask with the same shape.
+        exclude_detected: Give detected-source pixels zero weight when true.
+        confidence_percentile: Positive-weight percentile mapped to confidence one.
+        producer: Optional provenance mapping stored in the result metadata.
+
+    Returns:
+        Sanitized mask, inverse variance, weight, confidence, and metadata.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.quality import build_weight_product
+        >>> build_weight_product(torch.tensor([1.0])).weight.tolist()
+        [1.0]
     """
     ivar_raw = torch.as_tensor(inverse_variance)
     if ivar_raw.ndim == 0:
@@ -90,10 +106,12 @@ def build_weight_product(
     confidence = torch.zeros_like(weight)
     positive = weight[weight > 0]
     if positive.numel():
+        # Striding bounds the quantile's working set; the percentile is a
+        # display statistic, not a calibration claim.
         step = max(
-            1, (positive.numel() + MAX_CONFIDENCE_SAMPLES - 1) // MAX_CONFIDENCE_SAMPLES
+            1,
+            (positive.numel() + _MAX_CONFIDENCE_SAMPLES - 1) // _MAX_CONFIDENCE_SAMPLES,
         )
-        # ponytail: striding bounds quantile memory at 100k values; upgrade to a streaming estimator if needed.
         normalization = torch.quantile(positive[::step], confidence_percentile / 100.0)
         if bool(torch.isfinite(normalization) & (normalization > 0)):
             confidence = (weight / normalization).clamp(0.0, 1.0)
@@ -110,10 +128,9 @@ def build_weight_product(
 def quality_bit_names(value: int | QualityBit) -> frozenset[str]:
     """Decode a bitset into stable public names."""
     integer = int(value)
+    # ``IntFlag.name`` is typed optional, so the guard also narrows the type.
     return frozenset(
-        bit.name
-        for bit in QualityBit
-        if bit.name is not None and integer & int(bit)
+        bit.name for bit in QualityBit if bit.name is not None and integer & int(bit)
     )
 
 
@@ -128,3 +145,17 @@ def quality_bits_from_names(
         except KeyError as exc:
             raise ValueError(f"unknown quality-bit name: {name}") from exc
     return value
+
+
+__all__ = [
+    "CONFIDENCE_SEMANTICS",
+    "CONTRACT_VERSION",
+    "DEFAULT_ZERO_WEIGHT_BITS",
+    "INVERSE_VARIANCE_SEMANTICS",
+    "MASK_POLARITY",
+    "QualityBit",
+    "WeightProduct",
+    "build_weight_product",
+    "quality_bit_names",
+    "quality_bits_from_names",
+]

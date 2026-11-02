@@ -63,8 +63,7 @@ def _apply_shift_rotation(
     )
     ra_out = ra0 + torch.atan2(
         x * torch.sin(angle),
-        rho * math.cos(dec0) * torch.cos(angle)
-        - y * math.sin(dec0) * torch.sin(angle),
+        rho * math.cos(dec0) * torch.cos(angle) - y * math.sin(dec0) * torch.sin(angle),
     )
     return torch.remainder(torch.rad2deg(ra_out), 360.0), torch.rad2deg(dec_out)
 

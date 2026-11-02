@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
@@ -46,6 +46,25 @@ class Catalog:
 
     Required sky columns are ``lon`` / ``lat`` in degrees. Missing kinematics
     stay ``None``. Extra payload lives in ``columns`` (same length, same device).
+
+    Args:
+        lon: Longitude tensor in degrees.
+        lat: Latitude tensor in degrees, with the same row count as ``lon``.
+        frame: Celestial or observed coordinate-frame name.
+        epoch: Scalar or per-row Julian epoch.
+        pm_lon_coslat_mas_yr: Cosine-weighted longitude proper motion in mas/yr.
+        pm_lat_mas_yr: Latitude proper motion in mas/yr.
+        parallax_mas: Parallax in milliarcseconds.
+        radial_velocity_km_s: Radial velocity in km/s.
+        valid: Optional per-row validity mask.
+        columns: Additional tensors whose leading dimension matches the catalog.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.catalogs import Catalog
+        >>> catalog = Catalog(torch.tensor([10.0]), torch.tensor([-2.0]))
+        >>> len(catalog)
+        1
     """
 
     lon: Tensor
@@ -100,12 +119,9 @@ class Catalog:
         extras: dict[str, Tensor] = {}
         for name, col in self.columns.items():
             tensor = _move_column(torch.as_tensor(col), device)
-            if tensor.ndim == 0:
-                raise ValueError(f"columns[{name!r}] must be a 1-D row column")
-            flat = tensor.reshape(tensor.shape[0], *tensor.shape[1:])
-            if int(flat.shape[0]) != n:
+            if tensor.ndim == 0 or int(tensor.shape[0]) != n:
                 raise ValueError(f"columns[{name!r}] must match the number of rows")
-            extras[str(name)] = flat
+            extras[str(name)] = tensor
         self.columns = extras
         self._index = None
 
@@ -128,35 +144,36 @@ class Catalog:
         return self.lon.device
 
     def to(self, device: torch.device | str) -> Catalog:
+        """Return a copy on ``device``; ``__post_init__`` re-normalises dtypes."""
         device_t = torch.device(device)
 
-        def _move(value: Tensor | None, *, floating: bool = True) -> Tensor | None:
-            if value is None:
-                return None
-            if floating and value.is_floating_point():
-                return _to_device(value, device_t)
-            return value.to(device=device_t)
+        def _move(value: Tensor | None) -> Tensor | None:
+            return None if value is None else value.to(device=device_t)
 
-        extras: dict[str, Tensor] = {
-            name: _move_column(col, device_t) for name, col in self.columns.items()
-        }
         epoch = (
-            _to_device(self.epoch, device_t)
+            self.epoch.to(device=device_t)
             if isinstance(self.epoch, Tensor)
-            else torch.as_tensor(self.epoch, dtype=_work_dtype(device_t), device=device_t)
+            else self.epoch
         )
         return Catalog(
-            lon=_to_device(self.lon, device_t),
-            lat=_to_device(self.lat, device_t),
+            lon=self.lon.to(device=device_t),
+            lat=self.lat.to(device=device_t),
             frame=self.frame,
             epoch=epoch,
             pm_lon_coslat_mas_yr=_move(self.pm_lon_coslat_mas_yr),
             pm_lat_mas_yr=_move(self.pm_lat_mas_yr),
             parallax_mas=_move(self.parallax_mas),
             radial_velocity_km_s=_move(self.radial_velocity_km_s),
-            valid=_move(self.valid, floating=False),
-            columns=extras,
+            valid=_move(self.valid),
+            columns={
+                name: col.to(device=device_t) for name, col in self.columns.items()
+            },
         )
+
+    @property
+    def state(self) -> CatalogState:
+        """Return this catalog's celestial kinematic state as a :class:`CatalogState`."""
+        return self.to_state()
 
     def to_state(self) -> CatalogState:
         if self.frame in _OBSERVED_FRAMES:
@@ -179,6 +196,9 @@ class Catalog:
     def from_state(
         cls, state: CatalogState, *, columns: dict[str, Tensor] | None = None
     ) -> Catalog:
+        assert isinstance(
+            state.epoch, Tensor
+        )  # normalised by CatalogState.__post_init__
         return cls(
             lon=state.lon,
             lat=state.lat,
@@ -195,9 +215,7 @@ class Catalog:
     def _with_state(self, state: CatalogState) -> Catalog:
         return self.from_state(state, columns=self.columns)
 
-    def to_frame(
-        self, name: str, *, tt_mjd: Tensor | float | None = None
-    ) -> Catalog:
+    def to_frame(self, name: str, *, tt_mjd: Tensor | float | None = None) -> Catalog:
         dest = _normalize_frame(name)
         if dest in _OBSERVED_FRAMES and tt_mjd is None:
             raise ValueError(
@@ -218,9 +236,10 @@ class Catalog:
         obstime_mjd_utc: Any,
         site: Site,
         eop: EarthOrientation,
-        pn: PNModel = "none",
+        pn: PNModel | None = None,
         aberration: bool = False,
         refraction: bool = False,
+        refraction_model: Literal["refco", "saemundsson"] = "refco",
     ) -> Catalog:
         lon, lat = transform(
             self.lon,
@@ -233,6 +252,7 @@ class Catalog:
             pn=pn,
             aberration=aberration,
             refraction=refraction,
+            refraction_model=refraction_model,
         )
         dest = _normalize_frame(to_frame)
         return Catalog(
@@ -310,12 +330,14 @@ class Catalog:
     def crossmatch(
         self,
         other: Catalog,
-        radius_arcsec: float | Tensor,
+        radius_arcsec: float | Tensor | None = None,
         *,
         find: str = "best",
         right_index: HealpixIndex | None = None,
         target_epoch: float | Tensor | None = None,
         motion: str = "angular",
+        left_err_arcsec: float | Tensor | str | None = None,
+        right_err_arcsec: float | Tensor | str | None = None,
     ) -> CrossmatchResult:
         """Match stored positions, or explicitly propagate to a common Julian year.
 
@@ -323,6 +345,11 @@ class Catalog:
         changes; ``"physical"`` additionally requires parallax and radial
         velocity. Missing motion is never filled with zero. A supplied index
         must be rebuilt by the caller after frame/epoch changes.
+
+        ``find`` and the error options follow :func:`crossmatch_sky`;
+        ``left_err_arcsec`` / ``right_err_arcsec`` may also name a column of
+        ``self`` / ``other`` (values in arcsec). Epoch/frame alignment reorders
+        nothing, so returned indices always refer to the original rows.
         """
         if motion not in ("angular", "physical"):
             raise ValueError("motion must be 'angular' or 'physical'")
@@ -349,6 +376,28 @@ class Catalog:
 
             left, right = align(left), align(right)
         right = right if right.frame == left.frame else right.to_frame(left.frame)
+
+        def _err(value: Any, cat: Catalog) -> Any:
+            return cat.columns[value] if isinstance(value, str) else value
+
+        left_err = _err(left_err_arcsec, self)
+        right_err = _err(right_err_arcsec, other)
+        if (
+            left_err is not None
+            or right_err is not None
+            or find not in ("best", "best1", "all")
+        ):
+            # Error radii, best2, mutual and symmetric use the strip index directly.
+            return crossmatch_sky(
+                left.lon,
+                left.lat,
+                right.lon,
+                right.lat,
+                radius_arcsec=radius_arcsec,
+                find=find,
+                left_err_arcsec=left_err,
+                right_err_arcsec=right_err,
+            )
         index = right_index if right_index is not None else right.index()
         return crossmatch_sky(
             left.lon,

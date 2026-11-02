@@ -9,12 +9,12 @@ import torch
 import torchfits
 from torch import Tensor
 
-from ..hdu import HDUList, Header, TensorHDU
-from ..io import read
+from torchfits.hdu import HDUList, Header, TensorHDU
+from torchfits import read
 from .operators.image_grid import validate_image_plane_2d
 
 if TYPE_CHECKING:
-    from .product import MapProductResult
+    from .product import ProductResult
 
 _HEADER_PROBE_EXC: tuple[type[BaseException], ...] = (
     OSError,
@@ -62,7 +62,7 @@ def _product_header(
     return Header(header)
 
 
-def _context_cards(result: MapProductResult) -> dict[str, str]:
+def _context_cards(result: ProductResult) -> dict[str, str]:
     provenance = result.provenance
     if provenance is None:
         return {}
@@ -78,15 +78,13 @@ def _context_cards(result: MapProductResult) -> dict[str, str]:
             raise ValueError("FITS CTX mapping supports at most 10,000 observations")
         path = Path(str(item.get("path", ""))).name
         hdu = item.get("hdu")
-        cards[f"CTX{index:04d}"] = (
-            f"{index // 32}:{index % 32}:{index}:{path}[{hdu}]"
-        )
+        cards[f"CTX{index:04d}"] = f"{index // 32}:{index % 32}:{index}:{path}[{hdu}]"
     return cards
 
 
 def write_map_product(
     path: str | Path,
-    result: MapProductResult,
+    result: ProductResult,
     *,
     requested_planes: Iterable[str],
     overwrite: bool = False,
@@ -100,22 +98,43 @@ def write_map_product(
     ]
     if "WHT" in requested and result.weight is not None:
         planes.append(("WHT", _product_plane(result.weight), {}))
+    bunit = dict(result.header).get("BUNIT")
+    bunit_text = bunit.strip() if isinstance(bunit, str) else ""
     if "IVAR" in requested and result.uncertainty is not None:
+        ivar_header: dict[str, Any] = {"UNCKIND": result.uncertainty.kind}
+        if bunit_text:
+            ivar_header["BUNIT"] = f"({bunit_text})**-2"
         planes.append(
             (
                 "IVAR",
                 _product_plane(result.uncertainty.inverse_variance),
-                {"UNCKIND": result.uncertainty.kind},
+                ivar_header,
+            )
+        )
+    if "DQ" in requested and result.quality is not None:
+        policy = result.quality.policy
+        dq_header: dict[str, Any] = {"DQOR": "BITWISE_OR"}
+        if policy is not None:
+            dq_header.update(
+                {
+                    "DQREJECT": -1
+                    if policy.reject_bits is None
+                    else policy.reject_bits,
+                    "DQCRBIT": policy.cosmic_ray_bit,
+                    "DQUNKN": policy.unknown_bit_policy,
+                }
+            )
+        planes.append(
+            (
+                "DQ",
+                _product_plane(result.quality.dq),
+                dq_header,
             )
         )
     if "CTX" in requested and result.context is not None:
-        planes.append(
-            ("CTX", _product_plane(result.context), _context_cards(result))
-        )
+        planes.append(("CTX", _product_plane(result.context), _context_cards(result)))
     if "MASK" in requested and result.mask is not None:
-        planes.append(
-            ("MASK", _product_plane(result.mask).to(dtype=torch.uint8), {})
-        )
+        planes.append(("MASK", _product_plane(result.mask).to(dtype=torch.uint8), {}))
     if "NEXP" in requested and result.overlap_count is not None:
         planes.append(("NEXP", _product_plane(result.overlap_count), {}))
     if (

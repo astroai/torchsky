@@ -15,6 +15,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..device import require_float64
+
 
 SpectralBoundaryMode = str
 
@@ -144,6 +146,7 @@ def resample_linear_affine_spectral_2d(
             embedded in a larger zero canvas before spectral upsampling so edge
             behavior does not wrap.
     """
+    require_float64(image.device, what="affine spectral resampling")
     if image.ndim != 2:
         raise ValueError("expected a 2D [H, W] tensor")
     params = (a00, a01, a10, a11, bx, by)

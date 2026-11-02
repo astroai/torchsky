@@ -7,8 +7,10 @@ diagonal affine map in pixel space (scale + shift per axis) with the same
 **periodic** boundary model.
 
 The separable affine path upsamples each axis via zero-padded real FFTs, then
-linearly interpolates on a periodic 1D grid; treat edge bands as approximate
-unless the field is embedded in padding.
+linearly interpolates on a periodic 1D grid. It preserves field amplitudes and
+does not apply a Jacobian factor: signal and weight fields use the same linear
+operator. Propagating independent-sample variance instead requires squared
+interpolation coefficients and is not represented by these helpers.
 """
 
 import math
@@ -39,21 +41,26 @@ def resample_translation_fft2d(
     h, w = int(image.shape[0]), int(image.shape[1])
     if h < 1 or w < 1:
         raise ValueError("image must be non-empty")
+    if image.dtype not in {torch.float32, torch.float64}:
+        raise TypeError("image must have dtype float32 or float64")
+    if not math.isfinite(float(shift_y_pix)) or not math.isfinite(float(shift_x_pix)):
+        raise ValueError("shifts must be finite")
 
-    dtype = image.dtype
-    device = image.device
-    comp = torch.complex64 if dtype == torch.float32 else torch.complex128
-    img_c = image.to(comp)
-    ky = torch.fft.fftfreq(h, d=1.0, device=device, dtype=torch.float64)
-    kx = torch.fft.fftfreq(w, d=1.0, device=device, dtype=torch.float64)
-    phase = torch.exp(
-        -2j
-        * math.pi
-        * (ky.view(-1, 1) * float(shift_y_pix) + kx.view(1, -1) * float(shift_x_pix))
-    ).to(comp)
-    spectrum = torch.fft.fft2(img_c)
-    shifted = torch.fft.ifft2(spectrum * phase)
-    return shifted.real.to(dtype)
+    shifted_x = _shift_lastdim_periodic_fft(image, float(shift_x_pix))
+    shifted_y = _shift_lastdim_periodic_fft(
+        shifted_x.transpose(0, 1), float(shift_y_pix)
+    )
+    return shifted_y.transpose(0, 1)
+
+
+def _shift_lastdim_periodic_fft(x: Tensor, shift: float) -> Tensor:
+    n = int(x.shape[-1])
+    spectrum = torch.fft.rfft(x, dim=-1)
+    freq = torch.arange(spectrum.shape[-1], device=x.device, dtype=x.dtype) / float(n)
+    phase = torch.exp((-2j * math.pi * shift) * freq).to(dtype=spectrum.dtype)
+    if n % 2 == 0:
+        phase[-1] = math.cos(math.pi * shift)
+    return torch.fft.irfft(spectrum * phase, n=n, dim=-1)
 
 
 def _expand_index_along_last_dim(idx_1d: Tensor, lead_shape: tuple[int, ...]) -> Tensor:
@@ -89,6 +96,8 @@ def resample_lastdim_periodic_affine_fft(
     n = int(x.shape[-1])
     if n < 1:
         raise ValueError("last dimension must be non-empty")
+    if x.dtype not in {torch.float32, torch.float64}:
+        raise TypeError("x must have dtype float32 or float64")
     sc = float(scale)
     sh = float(shift)
     if not math.isfinite(sc) or abs(sc) < 1e-9:
@@ -99,21 +108,22 @@ def resample_lastdim_periodic_affine_fft(
     if u < 4:
         raise ValueError("upsample must be >= 4")
     nu = n * u
-    orig_dtype = x.dtype
+    dtype = x.dtype
     device = x.device
-    xw = x.to(dtype=torch.float64)
-    spec = torch.fft.rfft(xw, n=n, dim=-1)
+    spec = torch.fft.rfft(x, n=n, dim=-1)
     nfreq = nu // 2 + 1
     if spec.shape[-1] < nfreq:
         spec_p = F.pad(spec, (0, nfreq - spec.shape[-1]))
     else:
         spec_p = spec[..., :nfreq]
-    x_up = torch.fft.irfft(spec_p, n=nu, dim=-1)
-    k = torch.arange(n, device=device, dtype=torch.float64)
+    if n > 1 and n % 2 == 0:
+        spec_p[..., n // 2] *= 0.5
+    x_up = torch.fft.irfft(spec_p, n=nu, dim=-1) * float(u)
+    k = torch.arange(n, device=device, dtype=dtype)
     t = torch.remainder(k * sc + sh, float(n))
-    float_idx = t * (float(nu) / float(n))
+    float_idx = t * float(u)
     idx0 = torch.floor(float_idx).to(torch.int64)
-    w = (float_idx - idx0.to(torch.float64)).clamp(0.0, 1.0)
+    w = (float_idx - idx0.to(dtype)).clamp(0.0, 1.0)
     idx0m = torch.remainder(idx0, nu).to(torch.long)
     idx1m = torch.remainder(idx0m + 1, nu).to(torch.long)
     lead = tuple(x.shape[:-1])
@@ -121,9 +131,9 @@ def resample_lastdim_periodic_affine_fft(
     idx1e = _expand_index_along_last_dim(idx1m, lead)
     v0 = torch.gather(x_up, -1, idx0e)
     v1 = torch.gather(x_up, -1, idx1e)
-    we = _expand_index_along_last_dim(w.to(dtype=torch.float64), lead)
+    we = _expand_index_along_last_dim(w, lead)
     out = (1.0 - we) * v0 + we * v1
-    return out.to(orig_dtype)
+    return out
 
 
 def resample_diagonal_affine_fft2d(
@@ -149,7 +159,7 @@ def resample_diagonal_affine_fft2d(
         raise ValueError("resample_diagonal_affine_fft2d expects a 2D [H, W] tensor")
     sx = float(scale_x_pix)
     sy = float(scale_y_pix)
-    if abs(sx - 1.0) < 1e-7 and abs(sy - 1.0) < 1e-7:
+    if sx == 1.0 and sy == 1.0:
         return resample_translation_fft2d(
             image,
             shift_y_pix=-float(shift_y_pix),

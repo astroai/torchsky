@@ -3,8 +3,10 @@ from __future__ import annotations
 import math
 
 import torch
+from conftest import assert_close_on_device
+import torchsky.map.solvers as solver_api
 
-from torchsky.map import (
+from torchsky.map.solvers import (
     build_spherical_harmonic_solver_hooks,
     build_spherical_healpix_solver_hooks,
     build_spherical_spin_harmonic_solver_hooks,
@@ -43,6 +45,20 @@ from torchsky.map.solvers import (
 from torchsky.map.target import TargetRenderSpec
 
 
+def test_solver_package_reexports_historical_callable_aliases() -> None:
+    aliases = {
+        "AdjointOperatorFn",
+        "ApplyNoiseFn",
+        "ApplyOperatorFn",
+        "BindTargetFn",
+        "NormalOperatorFn",
+        "PreconditionerFn",
+    }
+
+    # Importable for compatibility; deliberately not in the experimental __all__.
+    assert all(hasattr(solver_api, name) for name in aliases)
+
+
 def _simple_header() -> dict[str, float | int | str]:
     return {
         "NAXIS": 2,
@@ -78,8 +94,8 @@ def test_solver_hooks_default_to_scene_render_contract() -> None:
     rendered = hooks.render_scene(scene, target)
     noised = hooks.apply_noise_model(rendered)
 
-    torch.testing.assert_close(rendered, torch.ones((3, 4), dtype=torch.float32))
-    torch.testing.assert_close(noised, rendered)
+    assert_close_on_device(rendered, torch.ones((3, 4), dtype=torch.float32))
+    assert_close_on_device(noised, rendered)
 
 
 def test_solver_hooks_accept_custom_operator_and_noise() -> None:
@@ -94,8 +110,8 @@ def test_solver_hooks_accept_custom_operator_and_noise() -> None:
     rendered = hooks.render_scene(scene, target)
     noised = hooks.apply_noise_model(rendered)
 
-    torch.testing.assert_close(rendered, torch.full((3, 4), 2.0, dtype=torch.float32))
-    torch.testing.assert_close(noised, torch.full((3, 4), 5.0, dtype=torch.float32))
+    assert_close_on_device(rendered, torch.full((3, 4), 2.0, dtype=torch.float32))
+    assert_close_on_device(noised, torch.full((3, 4), 5.0, dtype=torch.float32))
 
 
 def test_solver_hooks_require_configured_adjoint_for_adjoint_application() -> None:
@@ -123,11 +139,11 @@ def test_solver_hooks_assemble_normal_equation_probe() -> None:
 
     probe = hooks.normal_equation_probe(scene, target, data)
 
-    torch.testing.assert_close(probe.prediction, torch.full((3, 4), 2.0))
-    torch.testing.assert_close(probe.weighted_prediction, torch.full((3, 4), 1.0))
-    torch.testing.assert_close(probe.weighted_data, torch.full((3, 4), 3.0))
-    torch.testing.assert_close(probe.lhs_probe, torch.full((4,), 3.0))
-    torch.testing.assert_close(probe.rhs, torch.full((4,), 9.0))
+    assert_close_on_device(probe.prediction, torch.full((3, 4), 2.0))
+    assert_close_on_device(probe.weighted_prediction, torch.full((3, 4), 1.0))
+    assert_close_on_device(probe.weighted_data, torch.full((3, 4), 3.0))
+    assert_close_on_device(probe.lhs_probe, torch.full((4,), 3.0))
+    assert_close_on_device(probe.rhs, torch.full((4,), 9.0))
 
 
 def test_solver_hooks_bind_target_provides_shared_operator_interface() -> None:
@@ -143,9 +159,9 @@ def test_solver_hooks_bind_target_provides_shared_operator_interface() -> None:
     weighted = operator.apply_noise_model(prediction)
     adjoint = operator.adjoint(weighted)
 
-    torch.testing.assert_close(prediction, torch.ones((3, 4), dtype=torch.float32))
-    torch.testing.assert_close(weighted, torch.full((3, 4), 2.0))
-    torch.testing.assert_close(adjoint, torch.full((3,), 8.0))
+    assert_close_on_device(prediction, torch.ones((3, 4), dtype=torch.float32))
+    assert_close_on_device(weighted, torch.full((3, 4), 2.0))
+    assert_close_on_device(adjoint, torch.full((3,), 8.0))
 
 
 def test_bound_operator_normal_equation_probe_accepts_module_scene() -> None:
@@ -168,11 +184,9 @@ def test_bound_operator_normal_equation_probe_accepts_module_scene() -> None:
 
     probe = operator.normal_equation_probe(_OnesField(), data)
 
-    torch.testing.assert_close(
-        probe.prediction, torch.ones((3, 4), dtype=torch.float32)
-    )
-    torch.testing.assert_close(probe.weighted_prediction, torch.full((3, 4), 2.0))
-    torch.testing.assert_close(probe.weighted_data, torch.full((3, 4), 10.0))
+    assert_close_on_device(probe.prediction, torch.ones((3, 4), dtype=torch.float32))
+    assert_close_on_device(probe.weighted_prediction, torch.full((3, 4), 2.0))
+    assert_close_on_device(probe.weighted_data, torch.full((3, 4), 10.0))
 
 
 def test_bound_operator_weighted_least_squares_solver_recovers_identity_scene() -> None:
@@ -185,7 +199,7 @@ def test_bound_operator_weighted_least_squares_solver_recovers_identity_scene() 
 
     result = operator.solve_weighted_least_squares(data, iterations=1, step_size=1.0)
 
-    torch.testing.assert_close(result.solution, data)
+    assert_close_on_device(result.solution, data)
     assert len(result.residual_norm_history) == 1
 
 
@@ -203,7 +217,7 @@ def test_bound_operator_weighted_least_squares_solver_handles_scaled_forward_mod
 
     result = operator.solve_weighted_least_squares(data, iterations=1, step_size=1.0)
 
-    torch.testing.assert_close(result.solution, truth)
+    assert_close_on_device(result.solution, truth)
 
 
 def test_bound_operator_auto_step_estimate_is_positive_and_stable() -> None:
@@ -241,7 +255,7 @@ def test_solver_hooks_render_healpix_scene_through_spherical_bundle() -> None:
 
     rendered = operator.apply(scene)
 
-    torch.testing.assert_close(
+    assert_close_on_device(
         rendered,
         torch.ones((3, 4), dtype=torch.float32),
         atol=5.0e-2,
@@ -263,7 +277,7 @@ def test_spherical_healpix_solver_hooks_satisfy_adjoint_relation() -> None:
     lhs = torch.sum(operator.apply(coeffs) * image)
     rhs = torch.sum(coeffs * operator.adjoint(image))
 
-    torch.testing.assert_close(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
+    assert_close_on_device(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
 
 
 def test_spherical_healpix_weighted_least_squares_reduces_image_residual() -> None:
@@ -328,7 +342,7 @@ def test_spherical_harmonic_solver_hooks_satisfy_adjoint_relation() -> None:
         * operator.adjoint(image).to(torch.complex128)
     ).real
 
-    torch.testing.assert_close(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
+    assert_close_on_device(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
 
 
 def test_spherical_harmonic_weighted_least_squares_reduces_image_residual() -> None:
@@ -375,7 +389,7 @@ def test_spherical_spin_harmonic_solver_hooks_satisfy_adjoint_relation() -> None
         * operator.adjoint(maps).to(torch.complex128)
     ).real
 
-    torch.testing.assert_close(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
+    assert_close_on_device(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
 
 
 def test_spherical_spin_harmonic_weighted_least_squares_reduces_map_residual() -> None:
@@ -465,7 +479,6 @@ def test_spherical_harmonic_multi_observation_pcg_with_exact_diagonal_reduces_co
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
 
@@ -525,7 +538,6 @@ def test_composed_operator_blocks_support_mixed_image_and_state_constraints() ->
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
 
@@ -551,7 +563,7 @@ def test_harmonic_degree_diagonal_matches_expected_ell_ordering() -> None:
         dtype=torch.float32,
     )
     expected = torch.tensor([0.0, 1.0, 2.0, 1.0, 2.0, 2.0], dtype=torch.float32)
-    torch.testing.assert_close(diagonal, expected)
+    assert_close_on_device(diagonal, expected)
 
 
 def test_state_diagonal_operator_scales_forward_and_adjoint() -> None:
@@ -562,8 +574,8 @@ def test_state_diagonal_operator_scales_forward_and_adjoint() -> None:
     forward = operator.apply(state)
     adjoint = operator.adjoint(torch.ones_like(state))
 
-    torch.testing.assert_close(forward, torch.tensor([2.0, 8.0, 24.0]))
-    torch.testing.assert_close(adjoint, diagonal)
+    assert_close_on_device(forward, torch.tensor([2.0, 8.0, 24.0]))
+    assert_close_on_device(adjoint, diagonal)
 
 
 def test_state_matrix_operator_satisfies_adjoint_relation() -> None:
@@ -578,7 +590,7 @@ def test_state_matrix_operator_satisfies_adjoint_relation() -> None:
     lhs = torch.sum(torch.conj(operator.apply(state)) * image)
     rhs = torch.sum(torch.conj(state) * operator.adjoint(image))
 
-    torch.testing.assert_close(lhs, rhs)
+    assert_close_on_device(lhs, rhs)
 
 
 def test_state_subspace_operator_embeds_adjoint_into_joint_state() -> None:
@@ -597,7 +609,7 @@ def test_state_subspace_operator_embeds_adjoint_into_joint_state() -> None:
         * subspace.adjoint(image).to(torch.complex128)
     ).real
 
-    torch.testing.assert_close(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
+    assert_close_on_device(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
 
 
 def test_state_component_mixture_operator_satisfies_adjoint_relation() -> None:
@@ -621,7 +633,7 @@ def test_state_component_mixture_operator_satisfies_adjoint_relation() -> None:
         * mixture.adjoint(image).to(torch.complex128)
     ).real
 
-    torch.testing.assert_close(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
+    assert_close_on_device(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
 
 
 def test_survey_instrument_component_mixer_respects_component_roles() -> None:
@@ -638,7 +650,7 @@ def test_survey_instrument_component_mixer_respects_component_roles() -> None:
 
     weights = mixer(survey="A", instrument="cam1")
 
-    torch.testing.assert_close(weights, torch.tensor([2.0, 3.0, 4.0, 5.0]))
+    assert_close_on_device(weights, torch.tensor([2.0, 3.0, 4.0, 5.0]))
 
 
 def test_conditioned_component_mixture_operator_satisfies_adjoint_relation() -> None:
@@ -674,7 +686,7 @@ def test_conditioned_component_mixture_operator_satisfies_adjoint_relation() -> 
         * conditioned.adjoint(image).to(torch.complex128)
     ).real
 
-    torch.testing.assert_close(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
+    assert_close_on_device(lhs, rhs, atol=1.0e-4, rtol=1.0e-4)
 
 
 def test_harmonic_component_decomposition_exposes_state_and_regularization() -> None:
@@ -753,8 +765,8 @@ def test_harmonic_component_decomposition_fix_component_scale_gauge_preserves_pr
     )
     prediction_after = operator_after.apply(model.state())
 
-    torch.testing.assert_close(prediction_after, prediction_before)
-    torch.testing.assert_close(norms_after, torch.ones_like(norms_after))
+    assert_close_on_device(prediction_after, prediction_before)
+    assert_close_on_device(norms_after, torch.ones_like(norms_after))
 
 
 def test_harmonic_component_decomposition_fix_component_scale_gauge_skips_zero_components() -> (
@@ -773,10 +785,10 @@ def test_harmonic_component_decomposition_fix_component_scale_gauge_skips_zero_c
         model.mixer.survey_weights[1] = torch.tensor([0.0, 4.0])
     norms_after = model.fix_component_scale_gauge_()
 
-    torch.testing.assert_close(norms_after[0], torch.tensor(1.0))
-    torch.testing.assert_close(norms_after[1], torch.tensor(0.0))
-    torch.testing.assert_close(model.mixer.shared_weights[0], torch.tensor(6.0))
-    torch.testing.assert_close(model.mixer.survey_weights[1, 1], torch.tensor(4.0))
+    assert_close_on_device(norms_after[0], torch.tensor(1.0))
+    assert_close_on_device(norms_after[1], torch.tensor(0.0))
+    assert_close_on_device(model.mixer.shared_weights[0], torch.tensor(6.0))
+    assert_close_on_device(model.mixer.survey_weights[1, 1], torch.tensor(4.0))
 
 
 def test_harmonic_component_decomposition_component_state_aggregates_roles() -> None:
@@ -804,9 +816,9 @@ def test_harmonic_component_decomposition_component_state_aggregates_roles() -> 
         aggregate=False,
     )
 
-    torch.testing.assert_close(shared, state[0])
-    torch.testing.assert_close(private, state[1] + state[2])
-    torch.testing.assert_close(private_components, state[1:])
+    assert_close_on_device(shared, state[0])
+    assert_close_on_device(private, state[1] + state[2])
+    assert_close_on_device(private_components, state[1:])
 
 
 def test_harmonic_component_decomposition_decomposition_diagnostics_measure_exact_leakage() -> (
@@ -839,15 +851,15 @@ def test_harmonic_component_decomposition_decomposition_diagnostics_measure_exac
     )
 
     assert isinstance(diagnostics, ComponentDecompositionDiagnostics)
-    torch.testing.assert_close(
+    assert_close_on_device(
         torch.tensor(diagnostics.shared_to_private_leakage),
         torch.tensor(0.5),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         torch.tensor(diagnostics.private_to_shared_leakage),
         torch.tensor(0.25),
     )
-    torch.testing.assert_close(
+    assert_close_on_device(
         torch.tensor(diagnostics.calibration_transfer_stability),
         torch.tensor(0.0),
     )
@@ -866,7 +878,7 @@ def test_state_low_rank_operator_satisfies_adjoint_relation() -> None:
     lhs = torch.sum(torch.conj(operator.apply(state)) * image)
     rhs = torch.sum(torch.conj(state) * operator.adjoint(image))
 
-    torch.testing.assert_close(lhs, rhs)
+    assert_close_on_device(lhs, rhs)
 
 
 def test_state_kronecker_operator_satisfies_adjoint_relation() -> None:
@@ -884,7 +896,7 @@ def test_state_kronecker_operator_satisfies_adjoint_relation() -> None:
     lhs = torch.sum(torch.conj(operator.apply(state)) * image)
     rhs = torch.sum(torch.conj(state) * operator.adjoint(image))
 
-    torch.testing.assert_close(lhs, rhs)
+    assert_close_on_device(lhs, rhs)
 
 
 def test_harmonic_dense_covariance_is_positive_definite_shape() -> None:
@@ -921,7 +933,7 @@ def test_harmonic_cl_diagonal_tracks_cls_and_beam_transfer() -> None:
         ],
         dtype=torch.float64,
     )
-    torch.testing.assert_close(diagonal, expected)
+    assert_close_on_device(diagonal, expected)
 
 
 def test_teb_cls_precision_factors_shape_and_positive_blocks() -> None:
@@ -959,7 +971,6 @@ def test_harmonic_degree_prior_operator_stabilizes_mixed_block_solve() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
 
@@ -1036,7 +1047,6 @@ def test_harmonic_dense_prior_operator_reduces_correlated_mode_penalty() -> None
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
 
@@ -1085,7 +1095,6 @@ def test_harmonic_cl_prior_operator_reduces_power_spectrum_penalty() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=16,
         damping=1.0e-4,
     )
     result = operator_set.solve_normal_equation_cg(
@@ -1165,7 +1174,6 @@ def test_teb_cl_prior_joint_temperature_polarization_reduce_cross_spectrum_penal
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(joint_truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     result = operator_set.solve_normal_equation_cg(
@@ -1261,7 +1269,6 @@ def test_harmonic_survey_split_reduces_shared_component_leakage() -> None:
     split_diagonal = split_set.estimate_normal_operator_diagonal(
         split_data,
         initial_probe=torch.zeros_like(split_truth),
-        max_entries=64,
         damping=1.0e-4,
     )
     split_result = split_set.solve_normal_equation_cg(
@@ -1277,7 +1284,6 @@ def test_harmonic_survey_split_reduces_shared_component_leakage() -> None:
     shared_only_diagonal = shared_only_block.estimate_normal_operator_diagonal(
         shared_only_data,
         initial_probe=torch.zeros_like(shared_truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     shared_only_result = shared_only_block.solve_normal_equation_cg(
@@ -1378,7 +1384,6 @@ def test_spin_harmonic_prior_operator_stabilizes_mixed_block_solve() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=32,
         damping=1.0e-4,
     )
 
@@ -1434,7 +1439,6 @@ def test_spin_harmonic_kronecker_prior_reduces_separable_penalty() -> None:
     diagonal = operator_set.estimate_normal_operator_diagonal(
         data,
         initial_probe=torch.zeros_like(truth),
-        max_entries=32,
         damping=1.0e-4,
     )
     result = operator_set.solve_normal_equation_cg(

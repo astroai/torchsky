@@ -6,55 +6,38 @@ if(DEFINED ENV{TORCHSKY_DISABLE_CPP} AND "$ENV{TORCHSKY_DISABLE_CPP}" STREQUAL "
     return()
 endif()
 
-# PyTorch 2.13 conda builds use the C++20 library ABI.  Building this tensor
-# bridge as C++17 corrupts returned at::Tensor values even when package versions
-# match, so compile the extension with the same (or newer-compatible) standard.
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
 # Compiler optimization
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-# Global optimizations (Release mode)
+set(TORCHSKY_COMPILE_OPTIONS "")
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    # Using only -O3 (avoid -funroll-loops as it may conflict with manual SIMD unrolling)
-    add_compile_options(-O3)
+    list(APPEND TORCHSKY_COMPILE_OPTIONS -O3)
 endif()
 
-# Ishioka k-step / k-reduce have hand AVX2+FMA paths; enable them on x86_64 Linux.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
-    include(CheckCXXCompilerFlag)
-    check_cxx_compiler_flag("-mavx2" TORCHSKY_HAS_AVX2)
-    check_cxx_compiler_flag("-mfma" TORCHSKY_HAS_FMA)
-    if(TORCHSKY_HAS_AVX2 AND TORCHSKY_HAS_FMA)
-        add_compile_options(-mavx2 -mfma)
-        message(STATUS "Ishioka k-step: enabling -mavx2 -mfma")
+option(TORCHSKY_ENABLE_IPO "Enable IPO/LTO for the native extension" ON)
+if(TORCHSKY_ENABLE_IPO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+    if(NOT IPO_SUPPORTED)
+        message(STATUS "IPO/LTO not supported: ${IPO_ERROR}")
+        set(TORCHSKY_ENABLE_IPO OFF)
     endif()
-endif()
-
-# Enable IPO/LTO when available (portable opt-in)
-include(CheckIPOSupported)
-check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
-if(IPO_SUPPORTED)
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
-else()
-    message(STATUS "IPO/LTO not supported: ${IPO_ERROR}")
 endif()
 
 
 
 
 # Add environment prefix to search path (important for pixi/conda)
-if(DEFINED ENV{PREFIX})
+if(DEFINED ENV{BUILD_PREFIX} AND DEFINED ENV{PREFIX})
     list(APPEND CMAKE_PREFIX_PATH "$ENV{PREFIX}")
     message(STATUS "Added environment prefix to CMAKE_PREFIX_PATH: $ENV{PREFIX}")
 endif()
 
 # Find required packages
 # In pixi/conda packaging builds, ensure Python comes from the host prefix.
-if(DEFINED ENV{PREFIX} AND EXISTS "$ENV{PREFIX}/bin/python")
+if(DEFINED ENV{BUILD_PREFIX} AND DEFINED ENV{PREFIX} AND EXISTS "$ENV{PREFIX}/bin/python")
     set(Python_ROOT_DIR "$ENV{PREFIX}" CACHE PATH "Python root directory" FORCE)
     set(Python_EXECUTABLE "$ENV{PREFIX}/bin/python" CACHE FILEPATH "Python executable" FORCE)
 endif()
@@ -194,10 +177,66 @@ endif()
 # Source files
 set(SOURCES
     bindings.cpp
+    cpu_isa.cpp
+    geom.cpp
+    healpix.cpp
+    ishioka_scalar.cpp
+    sphere_ranges.cpp
+    operators/drizzle_cpu.cpp
+    operators/fixed_cpu.cpp
+    operators/fixed_schemas.cpp
+    operators/spectral_cpu.cpp
+    operators/spectral_schemas.cpp
+    operators/wcs_cpu.cpp
+    operators/wcs_schemas.cpp
+    wcs.cpp
 )
 
 # Create python binding module
-nanobind_add_module(_cpp ${SOURCES})
+nanobind_add_module(_cpp_ext ${SOURCES})
+target_include_directories(
+    _cpp_ext PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_compile_options(_cpp_ext PRIVATE ${TORCHSKY_COMPILE_OPTIONS})
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-mavx2" TORCHSKY_HAS_AVX2)
+    check_cxx_compiler_flag("-mfma" TORCHSKY_HAS_FMA)
+    if(TORCHSKY_HAS_AVX2 AND TORCHSKY_HAS_FMA)
+        add_library(torchsky_ishioka_avx2 OBJECT ishioka_avx2.cpp)
+        target_include_directories(
+            torchsky_ishioka_avx2 PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        )
+        target_compile_features(torchsky_ishioka_avx2 PRIVATE cxx_std_20)
+        target_compile_options(torchsky_ishioka_avx2 PRIVATE -O3 -mavx2 -mfma)
+        target_compile_definitions(torchsky_ishioka_avx2 PRIVATE TORCHSKY_HAVE_AVX2_KERNEL=1)
+        target_compile_definitions(_cpp_ext PRIVATE TORCHSKY_HAVE_AVX2_KERNEL=1)
+        target_sources(_cpp_ext PRIVATE $<TARGET_OBJECTS:torchsky_ishioka_avx2>)
+        message(STATUS "Ishioka AVX2+FMA leaf enabled with runtime dispatch")
+    endif()
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+    add_library(torchsky_ishioka_neon OBJECT ishioka_neon.cpp)
+    target_include_directories(
+        torchsky_ishioka_neon PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    target_compile_features(torchsky_ishioka_neon PRIVATE cxx_std_20)
+    target_compile_options(torchsky_ishioka_neon PRIVATE -O3)
+    target_compile_definitions(torchsky_ishioka_neon PRIVATE TORCHSKY_HAVE_NEON_KERNEL=1)
+    target_compile_definitions(_cpp_ext PRIVATE TORCHSKY_HAVE_NEON_KERNEL=1)
+    target_sources(_cpp_ext PRIVATE $<TARGET_OBJECTS:torchsky_ishioka_neon>)
+    message(STATUS "Ishioka arm64 NEON leaf enabled with runtime dispatch")
+endif()
+
+if(TORCHSKY_ENABLE_IPO)
+    set_property(TARGET _cpp_ext PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+endif()
 
 # conda may install a copied header tree under site-packages/torch that is older
 # than the matching libtorch package in the same solved environment.  Prefer the
@@ -210,51 +249,51 @@ execute_process(
 )
 if(EXISTS "${TORCHSKY_RUNTIME_PREFIX}/include/ATen/core/TensorBody.h")
     target_include_directories(
-        _cpp SYSTEM BEFORE PRIVATE
+        _cpp_ext SYSTEM BEFORE PRIVATE
         "${TORCHSKY_RUNTIME_PREFIX}/include/torch/csrc/api/include"
         "${TORCHSKY_RUNTIME_PREFIX}/include"
     )
     message(STATUS "Prioritizing libtorch headers in ${TORCHSKY_RUNTIME_PREFIX}/include")
 endif()
-set_source_files_properties(
-    bindings.cpp
-    PROPERTIES
-        OBJECT_DEPENDS
-            "${CMAKE_CURRENT_SOURCE_DIR}/healpix.cpp;${CMAKE_CURRENT_SOURCE_DIR}/geom.cpp;${CMAKE_CURRENT_SOURCE_DIR}/wcs.cpp;${CMAKE_CURRENT_SOURCE_DIR}/third_party/pocketfft_hdronly.h"
-)
-
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(
+        _cpp_ext PRIVATE
+        "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=torchsky-source"
+        "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=torchsky-build"
+        "-ffile-prefix-map=${TORCHSKY_RUNTIME_PREFIX}=torch-runtime"
+    )
+elseif(MSVC)
+    target_compile_options(
+        _cpp_ext PRIVATE
+        "/pathmap:${CMAKE_CURRENT_SOURCE_DIR}=torchsky-source"
+        "/pathmap:${CMAKE_CURRENT_BINARY_DIR}=torchsky-build"
+        "/pathmap:${TORCHSKY_RUNTIME_PREFIX}=torch-runtime"
+    )
+endif()
 # Link libraries
-target_link_libraries(_cpp PRIVATE ${TORCH_LIBRARIES})
-
-# Link torch_python for THPVariable_Wrap (bypasses DLPack overhead)
-execute_process(
-    COMMAND ${Python_EXECUTABLE} -c "import torch, os; print(os.path.dirname(torch.__file__))"
-    OUTPUT_VARIABLE TORCH_ROOT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-message(DEBUG "torchsky: TORCH_ROOT=${TORCH_ROOT}")
-
-# Avoid stale cached paths when switching environments/interpreters.
-unset(TORCH_PYTHON_LIBRARY CACHE)
-unset(TORCH_PYTHON_LIBRARY_FALLBACK CACHE)
-
-find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_ROOT}/lib" NO_DEFAULT_PATH)
-if(TORCH_PYTHON_LIBRARY)
-    target_link_libraries(_cpp PRIVATE ${TORCH_PYTHON_LIBRARY})
-    message(STATUS "Found libtorch_python: ${TORCH_PYTHON_LIBRARY}")
+if(TARGET torch)
+    target_link_libraries(_cpp_ext PRIVATE torch)
+    message(STATUS "Linking native extension with imported Torch target")
+elseif(TORCH_LIBRARIES)
+    target_link_libraries(_cpp_ext PRIVATE ${TORCH_LIBRARIES})
+    if(TORCH_CXX_FLAGS)
+        separate_arguments(TORCH_CXX_FLAGS_LIST NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
+        target_compile_options(_cpp_ext PRIVATE ${TORCH_CXX_FLAGS_LIST})
+    endif()
+    message(STATUS "Linking native extension with TorchConfig library fallback")
 else()
-    message(WARNING "libtorch_python not found in ${TORCH_ROOT}/lib - tensor returns will use slower DLPack path")
+    message(FATAL_ERROR "TorchConfig provided neither the torch target nor TORCH_LIBRARIES")
 endif()
 
 # Compiler flags
-target_compile_definitions(_cpp PRIVATE VERSION_INFO="")
-target_compile_definitions(_cpp PRIVATE TORCHSKY_TORCH_ABI="${TORCHSKY_BUILD_TORCH_ABI}")
-target_compile_features(_cpp PRIVATE cxx_std_20)
+target_compile_definitions(_cpp_ext PRIVATE VERSION_INFO="")
+target_compile_definitions(_cpp_ext PRIVATE TORCHSKY_TORCH_ABI="${TORCHSKY_BUILD_TORCH_ABI}")
+target_compile_features(_cpp_ext PRIVATE cxx_std_20)
 
 if(APPLE)
-    target_link_libraries(_cpp PRIVATE "-framework Accelerate")
+    target_link_libraries(_cpp_ext PRIVATE "-framework Accelerate")
 endif()
 
 # Install the compiled module
 # For scikit-build-core, install to the package directory
-install(TARGETS _cpp DESTINATION torchsky)
+install(TARGETS _cpp_ext DESTINATION torchsky)

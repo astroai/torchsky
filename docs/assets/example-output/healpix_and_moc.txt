@@ -1,0 +1,4 @@
+nside=64 npix=49152: max pixel-centre offset 0.934 deg (resolution 0.916 deg)
+disc: 210 px, polygon: 241 px, overlap: 155 px
+catalogue 7000 rows -> 1363/3072 occupied pixels (sparse == dense); degraded sum preserved: 7000
+MOC areas [deg^2] cone=747.8 box=819.4 union=1016.6 intersection=550.6 difference=197.2; 2000 randoms drawn inside the intersection

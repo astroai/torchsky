@@ -20,7 +20,7 @@ from torchsky.map.operators.resampling import (
     sample_image_plane_batched_channels,
     sample_image_plane_channels,
 )
-from torchsky.map.product import MapBandpassSpec, MapProductSpec
+from torchsky.map.product import BandpassSpec, ProductSpec
 from torchsky.map.scenes import target_to_field_observation
 from torchsky.map.splat import splat_bilinear
 from torchsky.spectrophotometry import Passband
@@ -124,9 +124,9 @@ def test_certified_observation_rejects_ambiguous_mask_and_ivar() -> None:
 
 def test_passband_propagates_from_map_product_to_target() -> None:
     passband = _passband()
-    product = MapProductSpec(
+    product = ProductSpec(
         target_header=_header(),
-        bands=(MapBandpassSpec(label="test", passband=passband),),
+        bands=(BandpassSpec(label="test", passband=passband),),
     )
     target = product.target_render_spec()
     assert target.passband is passband

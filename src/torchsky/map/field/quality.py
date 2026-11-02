@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import math
 from typing import Any
 
 import torch
@@ -80,7 +81,12 @@ def _as_prediction_tensors(
 
 
 def _weighted_mean(value: Tensor, weight: Tensor) -> Tensor:
-    return torch.sum(weight * value) / torch.clamp(weight.sum(), min=1.0e-8)
+    weight_sum = weight.sum()
+    return torch.where(
+        weight_sum > 0.0,
+        torch.sum(weight * value) / torch.clamp(weight_sum, min=1.0e-8),
+        torch.full((), float("nan"), device=value.device, dtype=value.dtype),
+    )
 
 
 def _weighted_std(value: Tensor, weight: Tensor) -> Tensor:
@@ -106,7 +112,11 @@ def _sharpness_energy(image: Tensor, weight: Tensor, valid: Tensor) -> Tensor:
         weight_y = torch.where(valid_y, weight_y, torch.zeros_like(weight_y))
         total = total + torch.sum(weight_y * grad_y * grad_y)
         denom = denom + weight_y.sum()
-    return total / torch.clamp(denom, min=1.0e-8)
+    return torch.where(
+        denom > 0.0,
+        total / torch.clamp(denom, min=1.0e-8),
+        torch.full((), float("nan"), device=image.device, dtype=image.dtype),
+    )
 
 
 def _block_sum_2d(value: Tensor, *, scale: int) -> Tensor:
@@ -150,7 +160,7 @@ def _multiscale_residual_rmse(
         block_residual = block_weighted_residual / torch.clamp(block_weight, min=1.0e-8)
         rmse = torch.sqrt(
             torch.sum(block_weight * block_residual * block_residual)
-            / torch.clamp(block_weight.sum(), min=1.0e-8)
+            / block_weight.sum()
         )
         metrics[f"residual_rmse_scale_{scale}"] = float(rmse.detach().cpu())
     return metrics
@@ -162,36 +172,179 @@ def _aggregate_quality_metrics(
     if not per_observation:
         return {}
     keys = sorted({key for metrics in per_observation for key in metrics})
-    weights = [
-        max(float(metrics.get("effective_weight_sum", 0.0)), 0.0)
-        for metrics in per_observation
-    ]
+    weights: list[float] = []
+    for metrics in per_observation:
+        weight = float(metrics.get("effective_weight_sum", 0.0))
+        weights.append(max(weight, 0.0) if math.isfinite(weight) else 0.0)
     total_weight = sum(weights)
-    aggregate: dict[str, float] = {}
+    aggregate: dict[str, float] = {"effective_weight_sum": total_weight}
+    support_count = sum(
+        float(metrics.get("support_count", 0.0)) for metrics in per_observation
+    )
+    pixel_count = sum(
+        float(metrics.get("pixel_count", 0.0)) for metrics in per_observation
+    )
+    if "support_count" in keys:
+        aggregate["support_count"] = support_count
+    if "pixel_count" in keys:
+        aggregate["pixel_count"] = pixel_count
+    if pixel_count > 0.0:
+        aggregate["support_fraction"] = support_count / pixel_count
+    elif "support_fraction" in keys:
+        aggregate["support_fraction"] = math.nan
+
+    def _pooled_mean(metric: str) -> float:
+        if total_weight <= 0.0:
+            return math.nan
+        values = [float(item.get(metric, math.nan)) for item in per_observation]
+        if any(
+            weight > 0.0 and not math.isfinite(value)
+            for value, weight in zip(values, weights, strict=True)
+        ):
+            return math.nan
+        return (
+            sum(
+                value * weight
+                for value, weight in zip(values, weights, strict=True)
+                if weight > 0.0
+            )
+            / total_weight
+        )
+
+    if pixel_count <= 0.0 and "support_fraction" in keys:
+        aggregate["support_fraction"] = _pooled_mean("support_fraction")
+
+    def _pooled_square(metric: str, primitive: str) -> float:
+        if total_weight <= 0.0:
+            return math.nan
+        total = 0.0
+        for metrics, weight in zip(per_observation, weights, strict=True):
+            if weight <= 0.0:
+                continue
+            value = float(metrics.get(primitive, math.nan))
+            if not math.isfinite(value):
+                derived = float(metrics.get(metric, math.nan))
+                if not math.isfinite(derived):
+                    return math.nan
+                value = derived * derived * weight
+            total += value
+        aggregate[primitive] = total
+        return total / total_weight
+
+    if "weighted_rmse" in keys:
+        mean_squared_error = _pooled_square(
+            "weighted_rmse",
+            "weighted_squared_residual_sum",
+        )
+        aggregate["weighted_rmse"] = math.sqrt(mean_squared_error)
+    if "weighted_mae" in keys:
+        absolute_sum = sum(
+            float(
+                metrics.get(
+                    "weighted_absolute_residual_sum", metrics["weighted_mae"] * weight
+                )
+            )
+            for metrics, weight in zip(per_observation, weights, strict=True)
+            if weight > 0.0
+        )
+        aggregate["weighted_absolute_residual_sum"] = absolute_sum
+        aggregate["weighted_mae"] = (
+            absolute_sum / total_weight if total_weight > 0.0 else math.nan
+        )
+    if "residual_bias" in keys:
+        residual_sum = sum(
+            float(
+                metrics.get("weighted_residual_sum", metrics["residual_bias"] * weight)
+            )
+            for metrics, weight in zip(per_observation, weights, strict=True)
+            if weight > 0.0
+        )
+        aggregate["weighted_residual_sum"] = residual_sum
+        aggregate["residual_bias"] = (
+            residual_sum / total_weight if total_weight > 0.0 else math.nan
+        )
+    if "residual_std" in keys:
+        bias = aggregate.get("residual_bias", _pooled_mean("residual_bias"))
+        second_moment = _pooled_square(
+            "weighted_rmse",
+            "weighted_squared_residual_sum",
+        )
+        aggregate["residual_std"] = (
+            math.sqrt(max(second_moment - bias * bias, 0.0))
+            if math.isfinite(second_moment)
+            else math.nan
+        )
+    for metric in ("target_rms", "prediction_rms"):
+        if metric in keys:
+            primitive = f"weighted_{metric.removesuffix('_rms')}_squared_sum"
+            aggregate[metric] = math.sqrt(_pooled_square(metric, primitive))
+    if "residual_snr" in keys:
+        rmse = aggregate.get("weighted_rmse", math.nan)
+        target_rms = aggregate.get("target_rms", math.nan)
+        aggregate["residual_snr"] = (
+            target_rms / max(rmse, 1.0e-12)
+            if math.isfinite(target_rms) and math.isfinite(rmse)
+            else math.nan
+        )
+    if "residual_snr_db" in keys:
+        snr = aggregate.get("residual_snr", math.nan)
+        aggregate["residual_snr_db"] = (
+            20.0 * math.log10(max(snr, 1.0e-12)) if math.isfinite(snr) else math.nan
+        )
     for key in keys:
-        if key == "effective_weight_sum":
-            aggregate[key] = total_weight
+        if key.startswith("residual_rmse_scale_"):
+            pooled = _pooled_mean(key)
+            if math.isfinite(pooled):
+                pooled = math.sqrt(
+                    sum(
+                        float(metrics[key]) ** 2 * weight
+                        for metrics, weight in zip(
+                            per_observation, weights, strict=True
+                        )
+                        if weight > 0.0
+                    )
+                    / total_weight
+                )
+            aggregate[key] = pooled
+
+    derived = {
+        "effective_weight_sum",
+        "support_count",
+        "pixel_count",
+        "support_fraction",
+        "weighted_rmse",
+        "weighted_mae",
+        "residual_bias",
+        "residual_std",
+        "target_rms",
+        "prediction_rms",
+        "residual_snr",
+        "residual_snr_db",
+        "weighted_residual_sum",
+        "weighted_absolute_residual_sum",
+        "weighted_squared_residual_sum",
+        "weighted_target_squared_sum",
+        "weighted_prediction_squared_sum",
+    }
+    for key in keys:
+        if key in derived or key.startswith("residual_rmse_scale_"):
             continue
         available = [
             (metrics, weight)
             for metrics, weight in zip(per_observation, weights, strict=True)
-            if key in metrics
+            if key in metrics and math.isfinite(float(metrics[key]))
         ]
         if not available:
+            aggregate[key] = math.nan
             continue
         key_weight = sum(weight for _, weight in available)
         if key_weight > 0.0:
             aggregate[key] = (
-                sum(
-                    float(metrics[key]) * weight
-                    for metrics, weight in available
-                )
+                sum(float(metrics[key]) * weight for metrics, weight in available)
                 / key_weight
             )
         else:
-            aggregate[key] = sum(metrics[key] for metrics, _ in available) / float(
-                len(available)
-            )
+            aggregate[key] = math.nan
     return aggregate
 
 
@@ -206,10 +359,7 @@ def _observation_quality_group_key(
     if observation.wavelength is not None:
         return f"lambda={float(observation.wavelength):.8g}"
     if observation.spectral_min is not None or observation.spectral_max is not None:
-        return (
-            f"range={observation.spectral_min!s}:"
-            f"{observation.spectral_max!s}"
-        )
+        return f"range={observation.spectral_min!s}:{observation.spectral_max!s}"
     return f"observation_{int(index)}"
 
 
@@ -243,7 +393,7 @@ def field_quality_scorecard(
         available = [
             (idx, float(metrics[metric]))
             for idx, metrics in enumerate(per_observation)
-            if metric in metrics
+            if metric in metrics and math.isfinite(float(metrics[metric]))
         ]
         if not available:
             return {"index": -1, "value": float("nan")}
@@ -269,84 +419,6 @@ def field_quality_scorecard(
     }
 
 
-def field_quality_acceptance_report(
-    per_observation: Sequence[dict[str, float]],
-    *,
-    observations: Sequence[FieldObservation] | None = None,
-    max_weighted_rmse: float | None = None,
-    min_residual_snr: float | None = None,
-    min_support_fraction: float | None = None,
-    min_effective_weight_sum: float | None = None,
-    max_abs_psf_residual_alignment: float | None = None,
-) -> dict[str, Any]:
-    """Evaluate explicit per-observation quality gates with no default thresholds."""
-    if observations is not None and len(observations) != len(per_observation):
-        raise ValueError("observations must have the same length as per_observation")
-    criteria: dict[str, tuple[str, float]] = {}
-    if max_weighted_rmse is not None:
-        criteria["weighted_rmse"] = ("max", float(max_weighted_rmse))
-    if min_residual_snr is not None:
-        criteria["residual_snr"] = ("min", float(min_residual_snr))
-    if min_support_fraction is not None:
-        criteria["support_fraction"] = ("min", float(min_support_fraction))
-    if min_effective_weight_sum is not None:
-        criteria["effective_weight_sum"] = ("min", float(min_effective_weight_sum))
-    if max_abs_psf_residual_alignment is not None:
-        criteria["psf_residual_alignment"] = (
-            "max_abs",
-            float(max_abs_psf_residual_alignment),
-        )
-    violations: list[dict[str, Any]] = []
-    for index, metrics in enumerate(per_observation):
-        band = (
-            _observation_quality_group_key(observations[index], index)
-            if observations is not None
-            else None
-        )
-        for metric, (direction, threshold) in criteria.items():
-            if metric not in metrics:
-                violations.append(
-                    {
-                        "index": int(index),
-                        "band": band,
-                        "metric": metric,
-                        "reason": "missing",
-                        "threshold": threshold,
-                    }
-                )
-                continue
-            value = float(metrics[metric])
-            compare_value = abs(value) if direction == "max_abs" else value
-            failed = (
-                compare_value > threshold
-                if direction in {"max", "max_abs"}
-                else compare_value < threshold
-            )
-            if failed:
-                violations.append(
-                    {
-                        "index": int(index),
-                        "band": band,
-                        "metric": metric,
-                        "value": value,
-                        "threshold": threshold,
-                        "direction": direction,
-                    }
-                )
-    return {
-        "passed": not violations,
-        "criteria": {
-            metric: {"direction": direction, "threshold": threshold}
-            for metric, (direction, threshold) in criteria.items()
-        },
-        "violations": tuple(violations),
-        "scorecard": field_quality_scorecard(
-            per_observation,
-            observations=observations,
-        ),
-    }
-
-
 def field_image_quality_metrics(
     prediction: Tensor,
     target: Tensor,
@@ -355,7 +427,11 @@ def field_image_quality_metrics(
     mask: Tensor | None = None,
     residual_scales: Sequence[int] = (1, 2, 4),
 ) -> dict[str, float]:
-    """Compute weighted residual, SNR, sharpness, and multiscale residual metrics."""
+    """Compute weighted residual, SNR, sharpness, and multiscale residual metrics.
+
+    Metrics that require effective support are NaN when the nonnegative finite
+    weight sum is zero. Support counts and fractions remain defined.
+    """
     pred, tgt, w, valid = _as_prediction_tensors(prediction, target, weight, mask)
     residual = torch.where(valid, pred - tgt, torch.zeros_like(pred))
     target_valid = torch.where(valid, tgt, torch.zeros_like(tgt))
@@ -374,7 +450,14 @@ def field_image_quality_metrics(
     target_sharpness = _sharpness_energy(target_valid, w, valid)
     sharpness_ratio = pred_sharpness / torch.clamp(target_sharpness, min=1.0e-12)
     support_fraction = (valid & (w > 0.0)).to(dtype=pred.dtype).mean()
+    support_count = (valid & (w > 0.0)).sum()
+    pixel_count = pred.numel()
     effective_weight_sum = w.sum()
+    weighted_residual_sum = torch.sum(w * residual)
+    weighted_absolute_residual_sum = torch.sum(w * torch.abs(residual))
+    weighted_squared_residual_sum = torch.sum(w * residual * residual)
+    weighted_target_squared_sum = torch.sum(w * target_valid * target_valid)
+    weighted_prediction_squared_sum = torch.sum(w * pred_valid * pred_valid)
 
     metrics = {
         "weighted_rmse": float(weighted_rmse.detach().cpu()),
@@ -389,7 +472,22 @@ def field_image_quality_metrics(
         "target_sharpness": float(target_sharpness.detach().cpu()),
         "sharpness_ratio": float(sharpness_ratio.detach().cpu()),
         "support_fraction": float(support_fraction.detach().cpu()),
+        "support_count": float(support_count.detach().cpu()),
+        "pixel_count": float(pixel_count),
         "effective_weight_sum": float(effective_weight_sum.detach().cpu()),
+        "weighted_residual_sum": float(weighted_residual_sum.detach().cpu()),
+        "weighted_absolute_residual_sum": float(
+            weighted_absolute_residual_sum.detach().cpu()
+        ),
+        "weighted_squared_residual_sum": float(
+            weighted_squared_residual_sum.detach().cpu()
+        ),
+        "weighted_target_squared_sum": float(
+            weighted_target_squared_sum.detach().cpu()
+        ),
+        "weighted_prediction_squared_sum": float(
+            weighted_prediction_squared_sum.detach().cpu()
+        ),
     }
     metrics.update(_multiscale_residual_rmse(residual, w, scales=residual_scales))
     return metrics
@@ -411,7 +509,7 @@ def _psf_residual_alignment(
     )
     weight_sum = valid_weight.sum()
     if float(weight_sum.detach().cpu()) <= 0.0:
-        return 0.0
+        return math.nan
     residual_mean = torch.sum(valid_weight * residual) / torch.clamp(
         weight_sum,
         min=1.0e-12,
@@ -488,8 +586,12 @@ def select_field_residual_tiles(
         raise ValueError("min_support_fraction must satisfy 0 <= value <= 1")
 
     residual = torch.as_tensor(product.residual)
-    weight = torch.as_tensor(product.weight, device=residual.device, dtype=residual.dtype)
-    support = torch.as_tensor(product.support, device=residual.device).to(dtype=torch.bool)
+    weight = torch.as_tensor(
+        product.weight, device=residual.device, dtype=residual.dtype
+    )
+    support = torch.as_tensor(product.support, device=residual.device).to(
+        dtype=torch.bool
+    )
     if residual.ndim != 2:
         raise ValueError("residual product must contain a 2D residual map")
     if weight.shape != residual.shape or support.shape != residual.shape:
@@ -516,7 +618,13 @@ def select_field_residual_tiles(
             )
             energy = torch.sum(valid_weight * residual_tile * residual_tile)
             weight_sum = valid_weight.sum()
-            rmse = torch.sqrt(energy / torch.clamp(weight_sum, min=1.0e-8))
+            rmse = (
+                torch.sqrt(energy / weight_sum)
+                if bool(weight_sum > 0.0)
+                else torch.full(
+                    (), float("nan"), device=residual.device, dtype=residual.dtype
+                )
+            )
             tiles.append(
                 FieldResidualTile(
                     y0=int(y0),
@@ -748,7 +856,6 @@ __all__ = [
     "FieldResidualTile",
     "field_image_residual_product",
     "field_image_quality_metrics",
-    "field_quality_acceptance_report",
     "field_quality_scorecard",
     "render_field_fit_quality",
     "render_field_quality",

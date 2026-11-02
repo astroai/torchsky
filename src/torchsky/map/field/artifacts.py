@@ -9,7 +9,8 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, cast
+
 
 import torch
 from torch import Tensor, nn
@@ -122,9 +123,7 @@ def _foam_constructor_metadata(model: SpectralPowerFoamField) -> dict[str, Any]:
         "log_intensity_spectra": bool(model.foam.log_intensity_spectra),
         "sites_requires_grad": bool(model.foam.sites.requires_grad),
         "radii_requires_grad": bool(model.foam.raw_radii.requires_grad),
-        "coefficients_requires_grad": bool(
-            model.foam.cell_coefficients.requires_grad
-        ),
+        "coefficients_requires_grad": bool(model.foam.cell_coefficients.requires_grad),
         "gradient_coefficients_requires_grad": (
             None if gradient is None else bool(gradient.requires_grad)
         ),
@@ -242,7 +241,9 @@ def _validate_artifact_model_kwargs(
         _validate_foam_constructor_metadata(reference)
     elif model_kind == "diffuse_foam_hybrid":
         if constructor != _DIFFUSE_FOAM_HYBRID_CONSTRUCTOR:
-            raise ValueError("diffuse/Foam artifact requires its tensor-safe constructor")
+            raise ValueError(
+                "diffuse/Foam artifact requires its tensor-safe constructor"
+            )
         hidden_dim = kwargs.get("diffuse_hidden_dim")
         hidden_layers = kwargs.get("diffuse_hidden_layers")
         if (
@@ -384,7 +385,10 @@ def _model_from_artifact_state(
             diffuse_hidden_dim=int(kwargs["diffuse_hidden_dim"]),
             diffuse_hidden_layers=int(kwargs["diffuse_hidden_layers"]),
             diffuse_omega0=float(kwargs["diffuse_omega0"]),
-            training_stage=str(kwargs["training_stage"]),
+            # Unknown stage names are rejected at runtime by ``set_training_stage``.
+            training_stage=cast(
+                Literal["diffuse", "foam", "joint"], str(kwargs["training_stage"])
+            ),
         ).to(device=device)
     return make_field_model(
         manifest.model_kind,
@@ -412,7 +416,10 @@ def restore_field_rng_state(state: Mapping[str, Any]) -> Tensor | None:
     cuda_state = state.get("cuda")
     if torch.cuda.is_available() and isinstance(cuda_state, (list, tuple)):
         torch.cuda.set_rng_state_all(
-            [torch.as_tensor(item, dtype=torch.uint8, device="cpu") for item in cuda_state]
+            [
+                torch.as_tensor(item, dtype=torch.uint8, device="cpu")
+                for item in cuda_state
+            ]
         )
     mps_state = state.get("mps")
     set_mps_state = getattr(torch.mps, "set_rng_state", None)
@@ -510,6 +517,7 @@ def save_field_artifact(
     fit_result: FieldFitResult | None = None,
     overwrite: bool = False,
 ) -> FieldArtifactManifest:
+    """Save a field model, manifest, and optional training state."""
     root = Path(path).expanduser().resolve()
     manifest_path = root / _MANIFEST_NAME
     if manifest_path.exists() and not overwrite:
@@ -564,6 +572,7 @@ def load_field_artifact(
     device: torch.device | str | None = None,
     verify_inputs: bool = True,
 ) -> LoadedFieldArtifact:
+    """Load and validate a saved field model artifact."""
     root = Path(path).expanduser().resolve()
     with (root / _MANIFEST_NAME).open("r", encoding="utf-8") as stream:
         raw = json.load(stream)
@@ -616,9 +625,7 @@ def load_field_artifact(
         optimizer = training_state.get("optimizer")
         optimizer_state = optimizer if isinstance(optimizer, dict) else None
         amp_scaler = training_state.get("amp_scaler")
-        amp_scaler_state = (
-            amp_scaler if isinstance(amp_scaler, dict) else None
-        )
+        amp_scaler_state = amp_scaler if isinstance(amp_scaler, dict) else None
         rng = training_state.get("rng")
         rng_state = rng if isinstance(rng, dict) else None
         if rng_state is not None:

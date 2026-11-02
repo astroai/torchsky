@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from enum import Enum
+from typing import Literal, cast
 
 import torch
 from torch import Tensor, nn
@@ -13,13 +15,191 @@ from .base import BackgroundOp
 from .learned_kernel import SpatioSpectralTemporalEncoder
 
 
+class AdditiveStage(str, Enum):
+    """Placement in the response graph, including currently unsupported physics."""
+
+    SAMPLED_RESPONSE_INPUT = "sampled_response_input"
+    CALIBRATED_OUTPUT = "calibrated_output"
+    PHOTON_ILLUMINATION = "photon_illumination"
+    DARK_CHARGE = "dark_charge"
+    READ_OFFSET = "read_offset"
+
+
+class AdditiveFrame(str, Enum):
+    SAMPLED_SKY = "sampled_sky"
+    DETECTOR = "detector"
+
+
+class AdditiveProcessingState(str, Enum):
+    CALIBRATED_IMAGE = "calibrated_image"
+    RAW_READS = "raw_reads"
+
+
+@dataclass(frozen=True)
+class AdditiveComponent:
+    """A signed mean plane with explicit placement and radiometric convention.
+
+    ``sampled_response_input`` is already sampled/integrated on the observation's
+    native grid in the scene's band-integrated units. It receives the existing
+    discrete, achromatic PSF, not a continuous photon/pixel response. No spectral,
+    area, time, gain or flat conversion is inferred. ``calibrated_output`` is a
+    residual in the observed detector product's units and bypasses that PSF.
+    Both are deterministic mean terms: neither adds shot noise or read covariance.
+    Physical illumination/charge/read stages are reserved and fail closed at use.
+    """
+
+    values: Tensor
+    stage: AdditiveStage
+    coordinate_frame: AdditiveFrame
+    value_unit: str
+    value_semantics: str
+    processing_state: AdditiveProcessingState
+    stochastic_contribution: Literal[
+        "deterministic_mean", "photon_shot", "charge_shot", "read_process"
+    ] = "deterministic_mean"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.values, Tensor) or self.values.ndim != 2:
+            raise ValueError("additive values must be a 2D tensor")
+        if not self.values.is_floating_point():
+            raise TypeError("additive values must be floating point")
+        if not bool(torch.isfinite(self.values).all()):
+            raise ValueError("additive values must be finite")
+        for name, enum_type in (
+            ("stage", AdditiveStage),
+            ("coordinate_frame", AdditiveFrame),
+            ("processing_state", AdditiveProcessingState),
+        ):
+            object.__setattr__(self, name, enum_type(getattr(self, name)))
+        for name in ("value_unit", "value_semantics"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"additive {name} must be a nonempty string")
+        if self.stochastic_contribution not in {
+            "deterministic_mean",
+            "photon_shot",
+            "charge_shot",
+            "read_process",
+        }:
+            raise ValueError("unsupported additive stochastic_contribution")
+
+    def to(
+        self,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> AdditiveComponent:
+        """Move the plane without detaching its gradient graph."""
+        return replace(self, values=self.values.to(device=device, dtype=dtype))
+
+
+def validate_additive_components(
+    components: tuple[AdditiveComponent, ...],
+    *,
+    shape: tuple[int, int],
+    value_unit: str | None,
+    value_semantics: str | None,
+    processing_state: AdditiveProcessingState | None,
+) -> None:
+    """Validate the bounded calibrated-image execution contract."""
+    for component in components:
+        if not isinstance(component, AdditiveComponent):
+            raise TypeError(
+                "additive_components must contain AdditiveComponent objects"
+            )
+        if component.stage not in {
+            AdditiveStage.SAMPLED_RESPONSE_INPUT,
+            AdditiveStage.CALIBRATED_OUTPUT,
+        }:
+            raise ValueError(
+                f"unsupported physical additive stage {component.stage.value!r}"
+            )
+        expected_frame = (
+            AdditiveFrame.SAMPLED_SKY
+            if component.stage == AdditiveStage.SAMPLED_RESPONSE_INPUT
+            else AdditiveFrame.DETECTOR
+        )
+        if component.coordinate_frame != expected_frame:
+            raise ValueError("additive coordinate_frame does not match stage")
+        if (
+            processing_state != AdditiveProcessingState.CALIBRATED_IMAGE
+            or component.processing_state != processing_state
+        ):
+            raise ValueError(
+                "additive execution requires matching calibrated_image processing_state"
+            )
+        if (
+            component.value_unit != value_unit
+            or component.value_semantics != value_semantics
+        ):
+            raise ValueError(
+                "additive units and value_semantics must match observation"
+            )
+        if component.stochastic_contribution != "deterministic_mean":
+            raise ValueError("additive stochastic physics is not implemented")
+        if tuple(component.values.shape) != shape:
+            raise ValueError("additive values shape must match observation")
+        if not bool(torch.isfinite(component.values).all()):
+            raise ValueError("additive values must be finite")
+
+
+def apply_additive_stage(
+    image: Tensor,
+    components: tuple[AdditiveComponent, ...],
+    stage: AdditiveStage,
+) -> Tensor:
+    """Add validated native-grid means; preserve dtype, device and gradients."""
+    for component in components:
+        if component.stage == stage:
+            image = image + component.values.to(device=image.device, dtype=image.dtype)
+    return image
+
+
+def apply_calibrated_additive_response(
+    image: Tensor,
+    components: tuple[AdditiveComponent, ...],
+    *,
+    response: Callable[[Tensor], Tensor],
+    value_unit: str,
+    value_semantics: str,
+    processing_state: AdditiveProcessingState,
+) -> Tensor:
+    """Compose calibrated native-grid means around a discrete linear response.
+
+    This exposure-level primitive needs no global field. The caller supplies an
+    achromatic, unit-preserving response on the same native grid, for example
+    ``lambda plane: apply_psf_spec(plane, psf_spec)`` with an explicit PSF. It must
+    not stand in for photon collection, dark accumulation or raw readout. Mean
+    terms carry no additional noise or nuisance covariance.
+    """
+    if image.ndim != 2 or not image.is_floating_point():
+        raise ValueError("calibrated additive response requires a floating 2D image")
+    validate_additive_components(
+        components,
+        shape=(int(image.shape[0]), int(image.shape[1])),
+        value_unit=value_unit,
+        value_semantics=value_semantics,
+        processing_state=processing_state,
+    )
+    output = response(
+        apply_additive_stage(image, components, AdditiveStage.SAMPLED_RESPONSE_INPUT)
+    )
+    if (
+        output.shape != image.shape
+        or output.dtype != image.dtype
+        or output.device != image.device
+    ):
+        raise ValueError(
+            "calibrated additive response must preserve shape, dtype and device"
+        )
+    return apply_additive_stage(output, components, AdditiveStage.CALIBRATED_OUTPUT)
+
+
 class ConditionedBackgroundField(nn.Module):
     """Signed additive background with independently scaled conditioning axes."""
 
     def __init__(
         self,
-        encoder: SpatioSpectralTemporalEncoder
-        | AdaptiveSpatioSpectralTemporalEncoder,
+        encoder: SpatioSpectralTemporalEncoder | AdaptiveSpatioSpectralTemporalEncoder,
         *,
         hidden_dim: int = 32,
         hidden_layers: int = 2,
@@ -59,8 +239,8 @@ class ConditionedBackgroundField(nn.Module):
     ) -> Tensor:
         regularization = getattr(self.encoder, "regularization", None)
         if not callable(regularization):
-            return self.network[-1].weight.sum() * 0.0
-        return regularization(
+            return torch.sum(cast(Tensor, self.network[-1].weight)) * 0.0
+        return cast(Callable[..., Tensor], regularization)(
             gate_weight=gate_weight,
             scale_shift_weight=scale_shift_weight,
         )
@@ -288,12 +468,7 @@ def fit_background_plane(
         weight = weight.to(device=residual.device, dtype=torch.float32)
         if weight.shape != residual.shape:
             raise ValueError("background weight must match residual shape")
-    mask = (
-        mask
-        & torch.isfinite(residual)
-        & torch.isfinite(weight)
-        & (weight > 0)
-    )
+    mask = mask & torch.isfinite(residual) & torch.isfinite(weight) & (weight > 0)
     if not bool(mask.any()):
         zeros = torch.zeros_like(residual)
         return BackgroundFitSummary(
@@ -331,9 +506,7 @@ def fit_background_plane(
             break
         detrended = residual - model
         center = torch.median(detrended[support])
-        robust_sigma = 1.4826 * torch.median(
-            torch.abs(detrended[support] - center)
-        )
+        robust_sigma = 1.4826 * torch.median(torch.abs(detrended[support] - center))
         tolerance = max(
             float(sigma_clip * robust_sigma),
             32.0 * torch.finfo(residual.dtype).eps,

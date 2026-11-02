@@ -6,8 +6,8 @@ import pytest
 import torch
 import torch.nn as nn
 
-from torchsky.map import (
-    ExposurePose,
+from torchsky.map.exposure_pose import ExposurePose
+from torchsky.map.field import (
     FieldObservation,
     PSFSpec,
     fit_field_model,

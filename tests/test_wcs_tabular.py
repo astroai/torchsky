@@ -2,8 +2,9 @@ import math
 
 import pytest
 import torch
+import torchfits
+import torchsky.wcs.tabular as tabular_module
 
-import torchsky
 from torchsky.wcs import (
     CoupledTabularLookupWCS,
     TabularAxis,
@@ -12,6 +13,12 @@ from torchsky.wcs import (
     coupled_tabular_wcs_from_fits,
     tabular_axes_from_fits,
 )
+
+
+def _wcs_from_fits(path, *, hdu: int = 0, key: str = "") -> WCS:
+    header = dict(torchfits.read_header(str(path), hdu))
+    with torchfits.open(str(path)) as hdul:
+        return WCS(header, key=key, tables=hdul)
 
 
 class _TabTable:
@@ -166,6 +173,118 @@ def test_coupled_tabular_lookup_wcs_multilinear_forward_and_autograd() -> None:
     )
 
 
+def test_coupled_tabular_inverse_chunks_cell_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    x = torch.linspace(-2.0, 3.0, 12, dtype=torch.float64)
+    y = torch.linspace(4.0, 9.0, 11, dtype=torch.float64)
+    xx = x[:, None].expand(12, 11)
+    yy = y[None, :].expand(12, 11)
+    world = torch.stack((2.0 * xx + 0.25 * yy, -0.5 * xx + 3.0 * yy), dim=-1)
+    lookup = CoupledTabularLookupWCS((x, y), world)
+    pixels = torch.stack(
+        (torch.linspace(-1.9, 2.9, 25), torch.linspace(4.1, 8.9, 25)), dim=0
+    ).T.to(dtype=torch.float64)
+    assert not pixels.is_contiguous()
+    target = lookup.pixel_to_world(pixels)
+
+    original = tabular_module._point_in_convex_quad_2d
+    pair_counts: list[int] = []
+
+    def bounded_point_in_quad(point, c00, c10, c11, c01, *, tol):
+        pairs = int(point.shape[0] * c00.shape[0])
+        pair_counts.append(pairs)
+        assert pairs <= 64
+        return original(point, c00, c10, c11, c01, tol=tol)
+
+    monkeypatch.setattr(tabular_module, "_MAX_PAIRWISE_ENTRIES", 64)
+    monkeypatch.setattr(
+        tabular_module, "_point_in_convex_quad_2d", bounded_point_in_quad
+    )
+    back = lookup.world_to_pixel(target)
+
+    assert len(pair_counts) > 1
+    torch.testing.assert_close(back, pixels, atol=1e-8, rtol=0.0)
+
+
+def test_nearest_grid_indices_chunked_matches_eager() -> None:
+    target = torch.tensor(
+        [[0.0, 0.0], [0.5, 0.5], [2.0, -1.0], [0.0, 0.0]],
+        dtype=torch.float64,
+    )
+    grid = torch.tensor(
+        [[-1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [1.0, 1.0], [3.0, -2.0]],
+        dtype=torch.float64,
+    )
+    expected = torch.sum((target[:, None] - grid[None, :]) ** 2, dim=-1).argmin(dim=-1)
+
+    got = tabular_module._nearest_grid_indices(target, grid, max_pairs=3)
+
+    torch.testing.assert_close(got, expected)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_coupled_tabular_inverse_dtype_and_empty_contract(dtype: torch.dtype) -> None:
+    x = torch.linspace(0.0, 2.0, 4, dtype=dtype)
+    y = torch.linspace(-1.0, 1.0, 5, dtype=dtype)
+    xx = x[:, None].expand(4, 5)
+    yy = y[None, :].expand(4, 5)
+    lookup = CoupledTabularLookupWCS((x, y), torch.stack((xx, yy), dim=-1))
+    empty = torch.empty((2, 0, 2), dtype=dtype)
+
+    empty_out = lookup.world_to_pixel(empty)
+    pixels = torch.tensor([[0.25, -0.75], [1.75, 0.5]], dtype=dtype)
+    back = lookup.world_to_pixel(
+        lookup.pixel_to_world(pixels), tol=1.0e-5 if dtype == torch.float32 else 1.0e-10
+    )
+
+    assert empty_out.shape == (2, 0, 2)
+    assert empty_out.dtype == dtype
+    assert empty_out.device == empty.device
+    torch.testing.assert_close(
+        back,
+        pixels,
+        atol=2.0e-5 if dtype == torch.float32 else 1.0e-8,
+        rtol=0.0,
+    )
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA not available"
+            ),
+        ),
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not (
+                    hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                ),
+                reason="MPS not available",
+            ),
+        ),
+    ],
+)
+def test_coupled_tabular_inverse_empty_device_contract(device: str) -> None:
+    dtype = torch.float32 if device == "mps" else torch.float64
+    axis = torch.tensor([0.0, 1.0], dtype=dtype, device=device)
+    xx = axis[:, None].expand(2, 2)
+    yy = axis[None, :].expand(2, 2)
+    lookup = CoupledTabularLookupWCS((axis, axis), torch.stack((xx, yy), dim=-1))
+    target = torch.empty((3, 0, 2), dtype=dtype, device=device)
+
+    got = lookup.world_to_pixel(target)
+
+    assert got.shape == (3, 0, 2)
+    assert got.dtype == dtype
+    assert got.device.type == device
+
+
 def test_coupled_tabular_lookup_wcs_inverse_fails_closed_for_folded_grid() -> None:
     x = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
     y = torch.tensor([0.0, 1.0], dtype=torch.float64)
@@ -280,7 +399,7 @@ def test_wcs_coupled_tabular_overdetermined_fits_inverse() -> None:
     assert wcs.coupled_tabular.world_n_dim == 3
     assert wcs.coupled_tabular_axes == (0, 1, 2)
     assert wcs.coupled_tabular_pixel_axes == (0, 1)
-    pixels = torch.tensor([[0.5, 1.5, 0.0], [2.0, 3.0, 0.0]], dtype=torch.float64)
+    pixels = torch.tensor([[1.5, 2.5, 0.0], [3.0, 4.0, 0.0]], dtype=torch.float64)
     world = wcs.pixel_to_world(pixels, origin=0)
     back = wcs.world_to_pixel(world, origin=0)
     torch.testing.assert_close(back[:, :2], pixels[:, :2], atol=1e-7, rtol=0.0)
@@ -455,7 +574,7 @@ def test_tabular_axes_from_fits_separable_multidimensional_arrays_with_pv3() -> 
 
     axes = tabular_axes_from_fits(header, tables)
     wcs = WCS(header, tabular_axes=axes)
-    pixels = torch.tensor([[0.5, 0.5], [1.5, 0.25]], dtype=torch.float64)
+    pixels = torch.tensor([[1.5, 1.5], [2.5, 1.25]], dtype=torch.float64)
     world = wcs.pixel_to_world(pixels, origin=0)
     pixels_back = wcs.world_to_pixel(world, origin=0)
 
@@ -489,7 +608,7 @@ def test_coupled_tabular_wcs_from_fits_accepts_nonseparable_arrays() -> None:
     }
 
     lookup = coupled_tabular_wcs_from_fits(header, tables)
-    got = lookup.pixel_to_world(torch.tensor([[1.5, 0.5]], dtype=torch.float64))
+    got = lookup.pixel_to_world(torch.tensor([[2.5, 1.5]], dtype=torch.float64))
 
     assert lookup.pixel_n_dim == 2
     assert lookup.world_n_dim == 2
@@ -528,7 +647,7 @@ def test_wcs_auto_loads_coupled_tabular_lookup_forward_and_jacobian() -> None:
         "TIME_GRID": 50.0 + 5.0 * yy + xx * yy,
     }
     wcs = WCS(header, tables=tables)
-    pixels = torch.tensor([[1.5, 0.5]], dtype=torch.float64)
+    pixels = torch.tensor([[2.5, 1.5]], dtype=torch.float64)
 
     world = wcs.pixel_to_world(pixels, origin=0)
     pixels_back = wcs.world_to_pixel(world, origin=0)
@@ -597,7 +716,7 @@ def test_wcs_mixed_spatial_and_coupled_tabular_extra_axes_forward() -> None:
     spatial_header.pop("PS4_1")
     spatial_header.pop("PV4_3")
     spatial_wcs = WCS(spatial_header)
-    pixels = torch.tensor([[31.0, 31.0, 1.5, 0.5]], dtype=torch.float64)
+    pixels = torch.tensor([[31.0, 31.0, 2.5, 1.5]], dtype=torch.float64)
 
     world = wcs.pixel_to_world(pixels, origin=0)
     pixels_back = wcs.world_to_pixel(world, origin=0)
@@ -716,7 +835,7 @@ def test_tabular_axes_from_fits_selects_extver_and_extlevel() -> None:
 
     assert set(axes) == {1}
     torch.testing.assert_close(
-        axes[1].pixel_to_world(torch.tensor([0.0, 1.0], dtype=torch.float64)),
+        axes[1].pixel_to_world(torch.tensor([1.0, 2.0], dtype=torch.float64)),
         torch.tensor([400.0, 420.0], dtype=torch.float64),
     )
 
@@ -738,7 +857,7 @@ def test_tabular_axes_from_fits_versioned_mapping_keys() -> None:
     axes = tabular_axes_from_fits(header, tables)
 
     torch.testing.assert_close(
-        axes[1].pixel_to_world(torch.tensor([0.0, 0.5, 1.0])),
+        axes[1].pixel_to_world(torch.tensor([1.0, 1.5, 2.0])),
         torch.tensor([40.0, 50.0, 60.0], dtype=torch.float64),
     )
 
@@ -794,7 +913,7 @@ def test_tabular_axes_from_fits_metadata_defaults_to_sample_index() -> None:
 
     torch.testing.assert_close(
         axes[1].pixel,
-        torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64),
+        torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64),
     )
     torch.testing.assert_close(
         axes[1].world,
@@ -839,7 +958,7 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
     fits_path = tmp_path / "tabular_auto.fits"
 
     # Write a FITS file with image (referencing tabular axes) and table HDU
-    from torchsky.hdu import TensorHDU, TableHDU, HDUList, Header
+    from torchfits.hdu import TensorHDU, TableHDU, HDUList, Header
 
     image_header = Header()
     image_header["SIMPLE"] = True
@@ -871,7 +990,7 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
     hdul = HDUList([image_hdu, table_hdu])
     hdul.write(str(fits_path), overwrite=True)
 
-    root_wcs = torchsky.get_wcs(str(fits_path), hdu=0)
+    root_wcs = _wcs_from_fits(fits_path)
     assert 0 in root_wcs.tabular_axes
     torch.testing.assert_close(
         root_wcs.pixel_to_world(torch.tensor([[1.0], [3.5]], dtype=torch.float64)),
@@ -882,7 +1001,7 @@ def test_wcs_tabular_fits_lazy_auto_loading(tmp_path) -> None:
 def test_wcs_coupled_tabular_fits_lazy_auto_loading(tmp_path) -> None:
     fits_path = tmp_path / "coupled_tabular_auto.fits"
 
-    from torchsky.hdu import HDUList, Header, TableHDU, TensorHDU
+    from torchfits.hdu import HDUList, Header, TableHDU, TensorHDU
 
     image_header = Header()
     image_header["SIMPLE"] = True
@@ -926,26 +1045,27 @@ def test_wcs_coupled_tabular_fits_lazy_auto_loading(tmp_path) -> None:
         str(fits_path), overwrite=True
     )
 
-    pixels = torch.tensor([[0.5, 1.5], [2.0, 3.0]], dtype=torch.float64)
+    pixels = torch.tensor([[1.5, 2.5], [3.0, 4.0]], dtype=torch.float64)
+    grid = pixels - 1.0
     expected_world = torch.stack(
         (
-            400.0 + 12.0 * pixels[:, 0] + 0.25 * pixels[:, 1],
-            59000.0 + 0.5 * pixels[:, 1] + 0.02 * pixels[:, 0],
+            400.0 + 12.0 * grid[:, 0] + 0.25 * grid[:, 1],
+            59000.0 + 0.5 * grid[:, 1] + 0.02 * grid[:, 0],
         ),
         dim=-1,
     )
 
-    root_wcs = torchsky.get_wcs(str(fits_path), hdu=0)
+    root_wcs = _wcs_from_fits(fits_path)
     assert root_wcs.coupled_tabular is not None
     assert root_wcs.coupled_tabular_axes == (0, 1)
     torch.testing.assert_close(root_wcs.pixel_to_world(pixels), expected_world)
     torch.testing.assert_close(root_wcs.world_to_pixel(expected_world), pixels)
 
 
-def test_get_wcs_auto_loads_alternate_key_tabular_axes(tmp_path) -> None:
+def test_wcs_from_header_loads_alternate_key_tabular_axes(tmp_path) -> None:
     fits_path = tmp_path / "tabular_alt_auto.fits"
 
-    from torchsky.hdu import HDUList, Header, TableHDU, TensorHDU
+    from torchfits.hdu import HDUList, Header, TableHDU, TensorHDU
 
     image_header = Header()
     image_header["SIMPLE"] = True
@@ -979,7 +1099,7 @@ def test_get_wcs_auto_loads_alternate_key_tabular_axes(tmp_path) -> None:
         str(fits_path), overwrite=True
     )
 
-    wcs = torchsky.get_wcs(str(fits_path), hdu=0, key="A")
+    wcs = _wcs_from_fits(fits_path, key="A")
 
     assert wcs.wcs_key == "A"
     assert 0 in wcs.tabular_axes
@@ -1097,7 +1217,9 @@ def test_wcs_mixed_coupled_tabular_partial_pixel_and_world() -> None:
     pixels_true = torch.tensor([[1.0, 5.0]], dtype=torch.float64)
     world_true = wcs.pixel_to_world(pixels_true)
     pix_in = torch.tensor([[1.0, float("nan")]], dtype=torch.float64)
-    world_in = torch.tensor([[float("nan"), float(world_true[0, 1])]], dtype=torch.float64)
+    world_in = torch.tensor(
+        [[float("nan"), float(world_true[0, 1])]], dtype=torch.float64
+    )
     solved_p, solved_w = wcs.mixed_pixel_world(pixel=pix_in, world=world_in)
     torch.testing.assert_close(solved_p, pixels_true, atol=1e-6, rtol=1e-6)
     torch.testing.assert_close(solved_w, world_true, atol=1e-6, rtol=1e-6)
@@ -1182,7 +1304,10 @@ def test_coupled_tabular_wcs_cuda_roundtrip() -> None:
     }
     cpu = WCS(header, tables=tables)
     gpu = WCS(header, tables=tables).to("cuda")
-    pixels = torch.tensor([[0.5, 1.5], [2.0, 2.5]], dtype=torch.float64)
+    # FITS -TAB default indexing vectors are 1-based (see
+    # test_tabular_fits_default_index_vector_is_one_based), so the valid pixel
+    # domain is [1, 4], not [0, 3].
+    pixels = torch.tensor([[1.5, 2.5], [2.0, 3.0]], dtype=torch.float64)
     world_c = cpu.pixel_to_world(pixels)
     world_g = gpu.pixel_to_world(pixels.cuda())
     assert world_g.device.type == "cuda"
@@ -1190,3 +1315,105 @@ def test_coupled_tabular_wcs_cuda_roundtrip() -> None:
     pix_g = gpu.world_to_pixel(world_g)
     torch.testing.assert_close(pix_g.cpu(), pixels, atol=1e-8, rtol=0.0)
 
+
+def test_tabular_fits_default_index_vector_is_one_based(tmp_path) -> None:
+    """FITS -TAB default indexing vector is 1..N, matching astropy/WCSLIB.
+
+    Regression: the default was 0..N-1, so every tabulated coordinate was
+    shifted by one index and the last sample fell off the table.
+    """
+    from torchfits.hdu import HDUList, Header, TableHDU, TensorHDU
+
+    image_header = Header()
+    image_header["SIMPLE"] = True
+    image_header["BITPIX"] = -64
+    image_header["NAXIS"] = 2
+    image_header["NAXIS1"] = 4
+    image_header["NAXIS2"] = 3
+    image_header["CTYPE1"] = "RA---TAN"
+    image_header["CTYPE2"] = "DEC--TAN"
+    image_header["CTYPE3"] = "WAVE-TAB"
+    image_header["CRPIX1"] = 1.0
+    image_header["CRPIX2"] = 1.0
+    image_header["CRVAL1"] = 10.0
+    image_header["CRVAL2"] = 0.0
+    image_header["CDELT1"] = -0.1
+    image_header["CDELT2"] = 0.1
+    image_header["CRPIX3"] = 1.0
+    image_header["CRVAL3"] = 1.0
+    image_header["CDELT3"] = 1.0
+    image_header["PS3_0"] = "WCS-TAB"
+    image_header["PS3_1"] = "WAVE"
+    image_header["WCSAXES"] = 3
+
+    table_header = Header()
+    table_header["XTENSION"] = "BINTABLE"
+    table_header["EXTNAME"] = "WCS-TAB"
+    table_hdu = TableHDU(
+        tensor_dict={"WAVE": torch.tensor([500.0, 501.0, 502.0, 503.0])},
+        header=table_header,
+    )
+    path = tmp_path / "tab_default_index.fits"
+    HDUList([TensorHDU(data=torch.zeros(3, 4), header=image_header), table_hdu]).write(
+        str(path), overwrite=True
+    )
+
+    header = dict(torchfits.read_header(str(path), 0))
+    with torchfits.open(str(path)) as hdul:
+        wcs = WCS(header, tables=hdul)
+
+    pixel = torch.tensor([0.0, 1.0, 3.0], dtype=torch.float64)
+    ra, dec, wave = wcs.pixel_to_world(pixel, pixel, pixel)
+    assert torch.allclose(
+        wave, torch.tensor([500.0, 501.0, 503.0], dtype=torch.float64)
+    )
+    assert torch.isfinite(ra).all() and torch.isfinite(dec).all()
+
+
+def test_tabular_tables_accept_torchfits_hdu_list() -> None:
+    """The public FITS boundary is a torchfits HDUList, not a name-indexed dict.
+
+    torchfits.HDUList supports integer indexing and __len__ but not __iter__;
+    the resolver must still find the table by EXTNAME/EXTVER.
+    """
+    import torchfits as torchfits_mod
+
+    from torchfits.hdu import HDUList, Header, TableHDU, TensorHDU
+
+    image_header = Header()
+    image_header["SIMPLE"] = True
+    image_header["BITPIX"] = -64
+    image_header["NAXIS"] = 1
+    image_header["NAXIS1"] = 3
+    image_header["CTYPE1"] = "WAVE-TAB"
+    image_header["CRPIX1"] = 1.0
+    image_header["CRVAL1"] = 1.0
+    image_header["CDELT1"] = 1.0
+    image_header["PS1_0"] = "WCS-TABLE"
+    image_header["PS1_1"] = "WAVE"
+
+    table_header = Header()
+    table_header["XTENSION"] = "BINTABLE"
+    table_header["EXTNAME"] = "WCS-TABLE"
+    table_hdu = TableHDU(
+        tensor_dict={"WAVE": torch.tensor([100.0, 200.0, 300.0])},
+        header=table_header,
+    )
+    from tempfile import TemporaryDirectory
+
+    with TemporaryDirectory() as tmp:
+        path = f"{tmp}/tab_hdul.fits"
+        HDUList([TensorHDU(data=torch.zeros(3), header=image_header), table_hdu]).write(
+            path, overwrite=True
+        )
+        header = dict(torchfits_mod.read_header(path, 0))
+        with torchfits_mod.open(path) as hdul:
+            wcs = WCS(header, tables=hdul)
+            world = wcs.pixel_to_world(
+                torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)
+            )
+        if isinstance(world, tuple):
+            world = world[0]
+        assert torch.allclose(
+            world, torch.tensor([100.0, 200.0, 300.0], dtype=torch.float64)
+        )

@@ -3,113 +3,11 @@ import pytest
 import torch
 
 from torchsky.sphere.geom import (
-    NativeExactSphericalRegion,
+    NativeApproximateSphericalRegion,
     SphericalCap,
     SphericalPolygon,
-    _numpy_sg_contains_lonlat_bulk,
-    _region_to_sg,
     to_exact_region,
 )
-
-try:
-    from spherical_geometry.polygon import SphericalPolygon as SGP  # type: ignore
-except Exception:  # pragma: no cover
-    SGP = None
-
-
-@pytest.mark.skipif(SGP is None, reason="spherical-geometry not available")
-def test_exact_region_area_matches_spherical_geometry() -> None:
-    lon = torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64)
-    lat = torch.tensor([-5.0, -5.0, 5.0, 5.0], dtype=torch.float64)
-    reg = to_exact_region(
-        SphericalPolygon(lon, lat), backend="spherical-geometry"
-    )
-
-    if hasattr(SGP, "from_lonlat"):
-        sg = SGP.from_lonlat(lon.numpy(), lat.numpy(), degrees=True)
-    else:
-        sg = SGP.from_radec(lon.numpy(), lat.numpy(), degrees=True)
-
-    np.testing.assert_allclose(
-        reg.area(degrees=False), float(sg.area()), rtol=0.0, atol=1e-12
-    )
-
-
-@pytest.mark.skipif(SGP is None, reason="spherical-geometry not available")
-def test_exact_boolean_ops_area_ordering() -> None:
-    p1 = SphericalPolygon(
-        torch.tensor([-8.0, 8.0, 8.0, -8.0], dtype=torch.float64),
-        torch.tensor([-6.0, -6.0, 6.0, 6.0], dtype=torch.float64),
-    )
-    p2 = SphericalPolygon(
-        torch.tensor([0.0, 14.0, 14.0, 0.0], dtype=torch.float64),
-        torch.tensor([-6.0, -6.0, 6.0, 6.0], dtype=torch.float64),
-    )
-
-    u = p1.exact_union(p2, backend="spherical-geometry")
-    i = p1.exact_intersection(p2, backend="spherical-geometry")
-    d = p1.exact_difference(p2, backend="spherical-geometry")
-
-    assert not u.is_empty
-    assert not i.is_empty
-    assert not d.is_empty
-
-    assert u.area() >= p1.to_exact(backend="spherical-geometry").area()
-    assert i.area() <= p1.to_exact(backend="spherical-geometry").area()
-    np.testing.assert_allclose(
-        d.area() + i.area(),
-        p1.to_exact(backend="spherical-geometry").area(),
-        rtol=0.0,
-        atol=5e-8,
-    )
-
-
-@pytest.mark.skipif(SGP is None, reason="spherical-geometry not available")
-def test_exact_region_bulk_contains_matches_numpy_sg_bulk() -> None:
-    lon = torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64)
-    lat = torch.tensor([-5.0, -5.0, 5.0, 5.0], dtype=torch.float64)
-    poly = SphericalPolygon(lon, lat)
-    reg = to_exact_region(poly, backend="spherical-geometry")
-    sg = _region_to_sg(poly, cap_steps=256)
-    probe_lon = torch.linspace(-2.0, 2.0, 32, dtype=torch.float64)
-    probe_lat = torch.linspace(-2.0, 2.0, 32, dtype=torch.float64)
-    lg, lt = torch.meshgrid(probe_lon, probe_lat, indexing="ij")
-    got = reg.contains(lg, lt).numpy().reshape(-1)
-    ref = _numpy_sg_contains_lonlat_bulk(
-        sg, lg.numpy().reshape(-1), lt.numpy().reshape(-1)
-    )
-    np.testing.assert_array_equal(got, ref)
-
-
-@pytest.mark.skipif(SGP is None, reason="spherical-geometry not available")
-def test_exact_cap_intersection_contains() -> None:
-    cap = SphericalCap(0.0, 0.0, 8.0)
-    box = SphericalPolygon(
-        torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64),
-        torch.tensor([-4.0, -4.0, 4.0, 4.0], dtype=torch.float64),
-    )
-    reg = cap.exact_intersection(box, backend="spherical-geometry")
-
-    assert bool(reg.contains(0.0, 0.0))
-    assert not bool(reg.contains(0.0, 7.5))
-
-
-@pytest.mark.skipif(SGP is None, reason="spherical-geometry not available")
-def test_boolean_region_to_exact_conversion() -> None:
-    p1 = SphericalPolygon(
-        torch.tensor([-8.0, 8.0, 8.0, -8.0], dtype=torch.float64),
-        torch.tensor([-6.0, -6.0, 6.0, 6.0], dtype=torch.float64),
-    )
-    p2 = SphericalPolygon(
-        torch.tensor([0.0, 14.0, 14.0, 0.0], dtype=torch.float64),
-        torch.tensor([-6.0, -6.0, 6.0, 6.0], dtype=torch.float64),
-    )
-    reg_bool = p1.union(p2).difference(SphericalCap(3.0, 0.0, 3.0))
-    reg_exact = reg_bool.to_exact(cap_steps=256, backend="spherical-geometry")
-
-    assert reg_exact.area() > 0.0
-    mp = reg_exact.to_multipolygon()
-    assert len(mp.polygons) >= 1
 
 
 def test_native_exact_region_basic_area_contains() -> None:
@@ -118,7 +16,7 @@ def test_native_exact_region_basic_area_contains() -> None:
         torch.tensor([-5.0, -5.0, 5.0, 5.0], dtype=torch.float64),
     )
     reg = to_exact_region(poly, backend="native", nsides=(64, 128, 256))
-    assert isinstance(reg, NativeExactSphericalRegion)
+    assert isinstance(reg, NativeApproximateSphericalRegion)
     assert reg.area() > 0.0
     assert bool(reg.contains(0.0, 0.0))
     assert not bool(reg.contains(60.0, 60.0))
@@ -138,6 +36,52 @@ def test_native_exact_region_boolean_area_ordering() -> None:
     i = r1.intersection(p2)
     d = r1.difference(p2)
 
-    assert u.area() >= r1.area()
-    assert i.area() <= r1.area()
-    np.testing.assert_allclose(d.area() + i.area(), r1.area(), rtol=0.0, atol=5e-3)
+    with pytest.raises(RuntimeError, match="area_estimate"):
+        u.area()
+    with pytest.raises(RuntimeError, match="analytic native area"):
+        _ = u.is_empty
+    with pytest.raises(RuntimeError, match="native intersection"):
+        u.intersects(p1)
+    u_est = u.area_estimate().area_sr
+    i_est = i.area_estimate().area_sr
+    d_est = d.area_estimate().area_sr
+    assert u_est >= r1.area()
+    assert i_est <= r1.area()
+    np.testing.assert_allclose(d_est + i_est, r1.area(), rtol=0.0, atol=5e-3)
+
+
+def test_native_tiny_cap_uses_analytic_area_and_emptiness() -> None:
+    cap = SphericalCap(12.0, -7.0, 1e-7)
+    region = to_exact_region(cap, backend="native", nsides=(1, 2, 4))
+
+    assert bool(region.contains(cap.lon_deg, cap.lat_deg))
+    assert region.area() > 0.0
+    assert not region.is_empty
+    assert region.area_estimate().area_sr == 0.0
+
+
+def test_native_cap_intersection_is_analytic_below_pixel_scale() -> None:
+    left = to_exact_region(
+        SphericalCap(0.0, 0.0, 1e-4), backend="native", nsides=(1, 2)
+    )
+    overlap = SphericalCap(0.00015, 0.0, 1e-4)
+    disjoint = SphericalCap(0.00025, 0.0, 1e-4)
+
+    assert left.intersects(overlap)
+    assert not left.intersects(disjoint)
+
+
+def test_native_approximate_region_clean_breaks() -> None:
+    region = to_exact_region(SphericalCap(0.0, 0.0, 1.0), backend="native")
+    assert isinstance(region, NativeApproximateSphericalRegion)
+    with pytest.raises(TypeError):
+        region.contains(0.0, 0.0, inclusive=False)
+    with pytest.raises(TypeError):
+        region.intersects(SphericalCap(0.0, 0.0, 1.0), cap_steps=32)
+    with pytest.raises(TypeError):
+        region.union(SphericalCap(0.0, 0.0, 1.0), cap_steps=32)
+
+
+def test_exact_region_backend_auto_is_removed() -> None:
+    with pytest.raises(ValueError, match="spherical-geometry.*native"):
+        to_exact_region(SphericalCap(0.0, 0.0, 1.0), backend="auto")  # type: ignore[arg-type]

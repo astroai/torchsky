@@ -13,7 +13,7 @@ Dimming conventions are named because they are not interchangeable:
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, overload
 
 import torch
 from torch import Tensor
@@ -37,7 +37,11 @@ _V_KIND_MAP = {
 }
 
 
-def require_one_plus_z(one_plus_z: float | Tensor) -> float | Tensor:
+@overload
+def _require_one_plus_z(one_plus_z: Tensor) -> Tensor: ...
+@overload
+def _require_one_plus_z(one_plus_z: float) -> float: ...
+def _require_one_plus_z(one_plus_z: float | Tensor) -> float | Tensor:
     """Reject non-finite or non-positive ``(1+z)`` factors."""
     if isinstance(one_plus_z, Tensor):
         if not bool(torch.isfinite(one_plus_z).all()) or bool((one_plus_z <= 0).any()):
@@ -49,7 +53,8 @@ def require_one_plus_z(one_plus_z: float | Tensor) -> float | Tensor:
     return value
 
 
-def normalize_v_kind(kind: Any) -> int:
+def _normalize_v_kind(kind: Any) -> int:
+    """Normalize a velocity-kind name or code to its integer code."""
     if kind is None:
         return V_KIND_KMS
     if isinstance(kind, int):
@@ -67,49 +72,61 @@ def normalize_v_kind(kind: Any) -> int:
     )
 
 
+def _require_subluminal(beta: Tensor | float) -> None:
+    beta_t = torch.as_tensor(beta)
+    if beta_t.numel() and not bool((beta_t.abs() < 1.0).all()):
+        raise ValueError("beta must satisfy |beta| < 1")
+
+
 def one_plus_z_from_beta(beta: Tensor, relativistic: bool = True) -> Tensor:
+    """``1 + z = sqrt((1+b)/(1-b))``; requires ``|b| < 1`` when relativistic."""
     if relativistic:
-        beta = torch.clamp(beta, min=-0.99999, max=0.99999)
-        return torch.sqrt((1.0 + beta) / torch.clamp(1.0 - beta, min=1e-12))
+        _require_subluminal(beta)
+        return torch.sqrt((1.0 + beta) / (1.0 - beta))
     return 1.0 + beta
 
 
 def one_plus_z_from_velocity_kms(v_kms: Tensor, relativistic: bool = True) -> Tensor:
+    """Convert radial velocity in km/s to the wavelength factor ``1 + z``."""
     return one_plus_z_from_beta(v_kms / C_KM_S, relativistic=relativistic)
 
 
 def one_plus_z_from_redshift(z: Tensor) -> Tensor:
+    """Convert redshift to the wavelength factor ``1 + z``."""
     return 1.0 + z
 
 
 def redshift_from_velocity_kms(v_kms: Tensor, relativistic: bool = True) -> Tensor:
+    """Convert radial velocity in km/s to redshift."""
     return one_plus_z_from_velocity_kms(v_kms, relativistic=relativistic) - 1.0
 
 
+def _beta_from_one_plus_z(one_plus_z: Tensor) -> Tensor:
+    """Invert ``sqrt((1+b)/(1-b)) = 1 + z``; ``(1+z)^2 + 1 >= 1`` always."""
+    squared = one_plus_z.square()
+    return (squared - 1.0) / (squared + 1.0)
+
+
 def velocity_kms_from_redshift(z: Tensor, relativistic: bool = True) -> Tensor:
+    """Convert redshift to radial velocity in km/s."""
     if relativistic:
-        one_plus_z = 1.0 + z
-        beta = (one_plus_z.pow(2) - 1.0) / torch.clamp(
-            one_plus_z.pow(2) + 1.0, min=1e-12
-        )
-        return beta * C_KM_S
+        return _beta_from_one_plus_z(1.0 + z) * C_KM_S
     return z * C_KM_S
 
 
 def beta_from_redshift(z: Tensor, relativistic: bool = True) -> Tensor:
+    """Convert redshift to the dimensionless velocity ratio ``v / c``."""
     if relativistic:
-        one_plus_z = 1.0 + z
-        return (one_plus_z.pow(2) - 1.0) / torch.clamp(
-            one_plus_z.pow(2) + 1.0, min=1e-12
-        )
+        return _beta_from_one_plus_z(1.0 + z)
     return z
 
 
 def convert_velocity_kind(  # noqa: PLR0911
     value: Tensor, from_kind: Any, to_kind: Any, relativistic: bool = True
 ) -> Tensor:
-    from_code = normalize_v_kind(from_kind)
-    to_code = normalize_v_kind(to_kind)
+    """Convert values among km/s, redshift, and dimensionless ``v / c``."""
+    from_code = _normalize_v_kind(from_kind)
+    to_code = _normalize_v_kind(to_kind)
     if from_code == to_code:
         return value
     if from_code == V_KIND_KMS:
@@ -131,7 +148,8 @@ def convert_velocity_kind(  # noqa: PLR0911
 
 
 def one_plus_z_from_kind(value: Tensor, kind: Any, relativistic: bool = True) -> Tensor:
-    kind_code = normalize_v_kind(kind)
+    """Convert values of the specified velocity kind to ``1 + z``."""
+    kind_code = _normalize_v_kind(kind)
     if kind_code == V_KIND_KMS:
         return one_plus_z_from_velocity_kms(value, relativistic=relativistic)
     if kind_code == V_KIND_REDSHIFT:
@@ -149,7 +167,7 @@ def one_plus_z_from_codes(
     relativistic: bool = True,
 ) -> Tensor:
     """Convert per-sample velocity kinds without device-synchronizing branches."""
-    default_code = normalize_v_kind(default_kind)
+    default_code = _normalize_v_kind(default_kind)
     codes = kind_codes.to(device=value.device, dtype=torch.long)
     while codes.ndim < value.ndim:
         codes = codes.unsqueeze(-1)
@@ -169,7 +187,7 @@ def one_plus_z_from_codes(
 
 def shift_wavelength(lambda_rest: Tensor, one_plus_z: Tensor | float) -> Tensor:
     """``λ_obs = λ_rest * (1+z)``."""
-    factor = require_one_plus_z(
+    factor = _require_one_plus_z(
         torch.as_tensor(one_plus_z).to(device=lambda_rest.device)
     )
     return lambda_rest * factor
@@ -178,13 +196,14 @@ def shift_wavelength(lambda_rest: Tensor, one_plus_z: Tensor | float) -> Tensor:
 def zeta_from_redshift(z: Tensor | float) -> Tensor:
     """Rapidity ``ζ = ln(1+z)``. ``z=0`` is zero."""
     z_t = torch.as_tensor(z)
-    return torch.log(require_one_plus_z(1.0 + z_t))
+    return torch.log(_require_one_plus_z(1.0 + z_t))
 
 
 def zeta_from_beta(beta: Tensor | float) -> Tensor:
     """Peculiar rapidity ``ζ_pec = atanh(β)``."""
     beta_t = torch.as_tensor(beta)
-    return torch.atanh(torch.clamp(beta_t, min=-0.99999, max=0.99999))
+    _require_subluminal(beta_t)
+    return torch.atanh(beta_t)
 
 
 def zeta_from_velocity_kms(v_kms: Tensor | float) -> Tensor:
@@ -255,13 +274,13 @@ def zeta_berv_from_sky(ra_deg: float, dec_deg: float, tt_mjd: float) -> float:
 
 def dimming_f_lambda(one_plus_z: Tensor | float) -> Tensor:
     """``F_λ`` density dimming ``1 / (1+z)``."""
-    factor = require_one_plus_z(torch.as_tensor(one_plus_z))
+    factor = _require_one_plus_z(torch.as_tensor(one_plus_z))
     return 1.0 / factor
 
 
 def dimming_tolman_sb(one_plus_z: Tensor | float) -> Tensor:
     """Tolman surface-brightness dimming ``(1+z)**-4``."""
-    factor = require_one_plus_z(torch.as_tensor(one_plus_z))
+    factor = _require_one_plus_z(torch.as_tensor(one_plus_z))
     return torch.pow(factor, -4.0)
 
 
@@ -271,7 +290,7 @@ def apply_redshift_f_lambda(
     one_plus_z: Tensor | float,
 ) -> tuple[Tensor, Tensor]:
     """Shift a sampled ``F_λ`` spectrum: ``λ' = λ(1+z)``, ``F' = F / (1+z)``."""
-    factor = require_one_plus_z(
+    factor = _require_one_plus_z(
         torch.as_tensor(one_plus_z).to(device=flux_rest.device, dtype=flux_rest.dtype)
     )
     if isinstance(factor, Tensor) and factor.ndim == flux_rest.ndim - 1:
@@ -286,7 +305,24 @@ def apply_redshift(
     velocity_or_z: Tensor,
     is_velocity: bool = True,
 ) -> tuple[Tensor, Tensor]:
-    """USPM-shaped wrapper: velocity in km/s or cosmological redshift."""
+    """Shift a sampled rest-frame ``F_lambda`` spectrum by velocity or redshift.
+
+    Args:
+        flux_rest: Rest-frame flux density per unit wavelength.
+        lambda_rest: Rest-frame wavelength samples.
+        velocity_or_z: Radial velocity in km/s or redshift.
+        is_velocity: Interpret ``velocity_or_z`` as km/s when true.
+
+    Returns:
+        Observed-frame flux density and wavelength tensors.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.redshift import apply_redshift
+        >>> flux, wave = apply_redshift(torch.ones(1), torch.tensor([5000.0]), torch.tensor(0.0))
+        >>> wave.tolist()
+        [5000.0]
+    """
     if velocity_or_z.ndim == flux_rest.ndim - 1:
         velocity_or_z = velocity_or_z.unsqueeze(-1)
     velocity_or_z = velocity_or_z.to(device=flux_rest.device, dtype=flux_rest.dtype)
@@ -295,3 +331,35 @@ def apply_redshift(
     else:
         one_plus_z = one_plus_z_from_redshift(velocity_or_z)
     return apply_redshift_f_lambda(flux_rest, lambda_rest, one_plus_z)
+
+
+__all__ = [
+    "C_KM_S",
+    "C_M_S",
+    "V_KIND_BETA",
+    "V_KIND_KMS",
+    "V_KIND_REDSHIFT",
+    "apply_redshift",
+    "apply_redshift_f_lambda",
+    "beta_from_redshift",
+    "compose_rapidities",
+    "convert_velocity_kind",
+    "dimming_f_lambda",
+    "dimming_tolman_sb",
+    "earth_barycentric_velocity_icrs",
+    "los_barycentric_beta",
+    "one_plus_z_from_beta",
+    "one_plus_z_from_codes",
+    "one_plus_z_from_kind",
+    "one_plus_z_from_redshift",
+    "one_plus_z_from_velocity_kms",
+    "one_plus_z_from_zeta",
+    "redshift_from_velocity_kms",
+    "shift_ln_wavelength",
+    "shift_wavelength",
+    "velocity_kms_from_redshift",
+    "zeta_berv_from_sky",
+    "zeta_from_beta",
+    "zeta_from_redshift",
+    "zeta_from_velocity_kms",
+]

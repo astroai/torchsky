@@ -1,88 +1,141 @@
-# Release Checklist
+# Release checklist
 
-Maintainer runbook for cutting a release.
+This runbook covers the torchsky package. Scientific benchmarks, exhaustive
+parity campaigns, large/real-data validation, and scorecards are maintained in
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness); FITS I/O
+correctness and throughput belong to
+[`torchfits`](https://github.com/astroai/torchfits).
 
-## 1. Version sync
+## 1. Release lane
 
-Confirm the version triplet matches in:
+Each torchsky release targets **one PyTorch minor** (the wheel "lane"): the
+compiled extension refuses to import under another torch minor because PyTorch
+has no stable C++ ABI across minors. `scripts/torch_lanes.json` is the single
+source of truth:
 
-- `pyproject.toml` (`version = "X.Y.Z"`)
-- `pixi.toml`
-- `src/torchsky/__init__.py`
+| PyTorch lane | torchsky release | torchfits |
+|---|---|---|
+| **2.14.x** | **0.5.0** | `>=1.3.1` |
 
-## 2. Changelog
+0.5.0 is the first supported release.
 
-Finalize the entry in `docs/changelog.md`. Follow [Keep a Changelog](https://keepachangelog.com/) format.
-
-## 3. Tests
-
-```bash
-pixi run test
-```
-
-All tests must pass.
-
-## 4. Correctness gates
-
-Run the supported local parity and benchmark gates:
+Apply the lane to every version source in one step and verify it:
 
 ```bash
-pixi run ci-local
-pixi run bench-wcs
-pixi run bench-wcs-tpv-inverse
-pixi run sphere-bench-geometry-gate
-pixi run sphere-bench-healpix-advanced-gate
-pixi run sphere-upstream-spin-matrix-gate
-pixi run sphere-bench-geom-exact-contains-gate
-pixi run bench-map-acceptance-smoke
+pixi run -e default -- python scripts/release_lane.py --apply --prerelease rc1   # 0.5.0rc1
+pixi run -e default -- python scripts/release_lane.py --apply                    # finalize: 0.5.0
+pixi run release-lane-check
 ```
 
-All gates must pass. If upstream replay scripts are reintroduced, add their
-tasks and documentation in the same change before making them release blockers.
+`--apply` rewrites `pyproject.toml` (version, build and runtime `torch` and
+`torchfits` requirements), `pixi.toml` (package version, `pytorch` and `torch`
+pins), `src/torchsky/__init__.py`, and `CITATION.cff`. `release-lane-check`
+also fails when a workflow hard-codes a torch pin: workflows read the pins from
+`scripts/release_lane.py --print-pins` (`LANE`, `VERSION`, `TORCH_PIN`,
+`TORCHFITS_PIN`).
 
-## 5. Benchmark evidence
+## 2. Package validation
 
-Run the WCS/sphere benchmark suite on CANFAR:
+Before tagging a candidate:
+
+1. `pixi run preflight-push` and targeted tests for changed behavior.
+2. `pixi run typecheck` when Python types or public signatures changed.
+3. `pixi run release-lane-check`.
+4. Confirm GitHub package CI is green. Full local test runs remain opt-in as
+   described in [Contributing](contributing.md).
+5. For performance claims, cite a scoped harness run with its subject and
+   harness revisions and the resulting scorecard. Do not treat a completed
+   process as scientific acceptance without the documented criteria.
+
+## 3. Changelog
+
+[The changelog](changelog.md) keeps the in-flight work under the heading of the
+version being released, for example `## [0.5.0rc1] - Unreleased`. Set the date
+when tagging. For the stable cut, rename the heading to `## [0.5.0] - <date>`
+and update the link reference at the bottom. `scripts/release_notes.py` builds
+the GitHub release body from the section named after the tag (falling back to
+`## [Unreleased]`).
+
+## 4. Release candidate
+
+Every stable tag is preceded by an `rc` tag for the same version, and the stable
+cut changes only the version strings and the changelog.
 
 ```bash
-pixi run bench-all
+git tag v0.5.0rc1
+git push origin v0.5.0rc1
 ```
 
-Update `docs/benchmarks.md` with the run ID, date, and snapshot tables.
+Pushing a tag runs `.github/workflows/build_wheels.yml`:
 
-## 6. Local artifact check (optional)
+1. `release_gate` classifies the tag (`vX.Y.Z` stable, `vX.Y.ZrcN` release
+   candidate; anything else fails), requires the tag to point at the checked-out
+   commit, runs `release_lane.py --check`, and requires the version to equal the
+   tag. For a stable tag it also requires a `vX.Y.Zrc*` tag, a tree that differs
+   from that rc only in version files and the changelog
+   (`scripts/check_release_rc.py`), and a successful push run for the rc at the
+   same commit (`scripts/check_release_run.py`).
+2. `tests` and `map_tests` run the retained suites in the locked Pixi
+   environments (Python 3.12 and 3.13).
+3. `build_wheels` builds CPython 3.12, 3.13, and 3.14 wheels: manylinux_2_28
+   x86_64 and macOS arm64 with deployment target 14.0, the floor of the torch
+   2.14 and torchfits wheels. Each wheel passes
+   `scripts/check_distribution.py` and the install smoke test; macOS wheels
+   also pass `scripts/check_macos_wheel_floor.py` (filename tag and Mach-O
+   `minos`). `build_sdist` builds the sdist, validates it
+   (`scripts/validate_release_sdist.py`), builds a wheel from it and smoke-tests
+   that wheel.
+4. `validate_release` checks the exact six-wheel matrix, metadata version,
+   `Requires-Python`, and the `torch<2.15,>=2.14` and `torchfits>=1.3.1`
+   requirements (`scripts/validate_release_wheels.py`), and writes
+   `RELEASE-MANIFEST.sha256` next to the artifacts.
+5. `github_release` publishes a GitHub **prerelease** with the artifacts and the
+   changelog section. A release-candidate tag never uploads to PyPI.
+
+Install the candidate from the prerelease assets in a fresh environment and run
+the post-release checks in section 6 against it. Fix problems with a new
+candidate (`rc2`, ...).
+
+## 5. Stable release
+
+Finalize the version and changelog (section 1 and 3), commit, tag, and push:
 
 ```bash
-pip wheel . --no-deps --no-build-isolation -w dist
-twine check dist/*
+pixi run -e default -- python scripts/check_release_rc.py --version 0.5.0
+git tag v0.5.0
+git push origin main v0.5.0
 ```
 
-Smoke-test the wheel in a fresh virtualenv.
-
-## 7. Tag and push
+The stable tag push builds and validates only. After it succeeds, publish by
+running the workflow manually from the exact stable tag:
 
 ```bash
-git add -A
-git commit -m "release: vX.Y.Z"
-git tag vX.Y.Z
-git push origin main --tags
+gh workflow run build_wheels.yml -f tag=v0.5.0 -f publish=true
 ```
 
-## 8. Publish
+Only a `workflow_dispatch` run with `publish=true`, on a stable tag, on
+`astroai/torchsky`, publishes. `upload_pypi` re-verifies the sha256 manifest
+against the validated artifacts, then uploads the wheels and sdist through
+[PyPI](https://pypi.org/project/torchsky/) trusted publishing (the `pypi`
+GitHub Environment, OIDC `id-token: write`; there is no API token). Fork runs
+cannot publish. `github_release` then creates the stable GitHub release.
 
-Create a GitHub release for `vX.Y.Z`.
+## 6. Post-release verification
 
-Publishing triggers `.github/workflows/build_wheels.yml`, which:
+- `pip install torchsky==X.Y.Z` works in a fresh environment with the supported
+  `torchfits` baseline.
+- `import torchsky; print(torchsky.__version__)` shows the released version and
+  the documented `torchfits` integration works.
+- [Stable docs](https://astroai.github.io/torchsky/) load and the changelog and
+  release-note links resolve.
 
-1. Runs tests.
-2. Builds wheels on Linux and macOS plus sdist.
-3. Uploads to [PyPI](https://pypi.org/project/torchsky/) via trusted publishing.
+## Local artifact checks (optional)
 
-## 9. Post-release verification
+Build an sdist or wheel from the Pixi environment and validate it with the same
+scripts the workflow uses:
 
-- [ ] `pip install torchsky==X.Y.Z` works in a fresh environment.
-- [ ] `import torchsky; print(torchsky.__version__)` shows correct version.
-- [ ] Core WCS and sphere imports run without `torchfits` or CFITSIO.
-- [ ] The documented optional integration works with the supported `torchfits`
-      0.5.x release.
-- [ ] Changelog and release notes links resolve.
+```bash
+pixi run -e default -- python -c "from scikit_build_core.build import build_sdist; build_sdist('dist')"
+pixi run -e default -- python scripts/validate_release_sdist.py dist/torchsky-X.Y.Z.tar.gz --version X.Y.Z
+pixi run -e test -- python scripts/check_distribution.py --sdist dist/torchsky-X.Y.Z.tar.gz --skip-twine
+```

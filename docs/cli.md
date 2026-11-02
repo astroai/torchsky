@@ -1,90 +1,281 @@
-# `torchsky` CLI
+# CLI
 
-The `torchsky` console entry point exposes command-line workflows for map and
-visualization tasks.
+The `torchsky` console entry point wraps the Python API for runnable workflows,
+smoke checks, demos, and batch automation. Use the Python API when composing
+tensor pipelines inside another application. Every command below exists in the
+argparse tree; run `torchsky <command> --help` for the authoritative defaults of
+your installed version, or see the generated [CLI reference](reference/cli.md).
 
-## What This Surface Is For
+| Command | Purpose |
+|---|---|
+| `torchsky map` | Coadd, resample, and render fields from FITS inputs |
+| `torchsky sky estimate` | Estimate a sky model for exposures |
+| `torchsky sky match` | Match sky offsets across exposures |
+| `torchsky viz` | Start the optional browser viewer (`torchsky[viz]`) |
 
-Use the CLI for runnable workflows, smoke checks, demos, and automation. Use the
-Python API when composing tensor-native pipelines inside another application.
+FITS inspection and table previews belong to `torchfits` (`torchfits info`,
+`torchfits table`). The CLI is an application layer: kernels consume decoded
+observations and never own FITS I/O.
 
-## Commands
+Paths follow one convention throughout:
 
-### FITS inspection
+| Placeholder | Meaning |
+|---|---|
+| `/data/exposures/` | input FITS exposures (read through `torchfits`) |
+| `/data/weights/`, `/data/masks/` | per-input weight and mask maps |
+| `/data/catalogs/` | FITS tables |
+| `/work/` | outputs, plans, and scratch files |
 
-FITS inspection and table sampling belong to `torchfits`. The legacy
-`torchsky info` and `torchsky cat` commands are migration-only and must not gain
-new behavior. Use the corresponding `torchfits` API/tooling for new automation.
+FITS decoding and writing belong to `torchfits`; the CLI is an application layer
+over the `torchsky` Python API. For pipeline code, use the Python entry points in
+[coadds and resampling](map.md) and the [map reference](reference/map.md).
 
-Torchsky CLI work is limited to sky-domain map, scene, and visualization
-workflows. File decoding should enter through an explicit `torchfits` adapter.
-
-### `torchsky viz`
-
-Starts the optional browser viewer. Install the `viz` extra first:
+## Check the environment
 
 ```bash
-pip install "torchsky[viz]"
-torchsky viz --root /path/to/data --port 8822
-```
+torchsky --help
 
-### `torchsky map`
-
-Runs map-oriented workflows from the CLI. Some INR/spectral-source paths require
-the `map` extra for SVO filter profile access:
-
-```bash
+# Map workflows that download SVO filter profiles need the optional extra.
 pip install "torchsky[map]"
-torchsky map --help
+
+# The browser viewer needs FastAPI/uvicorn/Pillow/matplotlib.
+pip install "torchsky[viz]"
 ```
 
-Classical stacks accept scalar weights plus optional per-input weight and mask
-maps:
+## Plan before you compute
+
+Expand globs, validate inputs, and print the planned output shape and tiling
+decision without writing a map. Globs are expanded by the CLI, so quote them to
+keep per-input flag counts aligned:
 
 ```bash
-torchsky map out.fits img_a.fits img_b.fits \
+torchsky map /work/mosaic.fits "/data/exposures/r_*.fits" \
+  --dry-run \
+  --plan-json /work/mosaic.plan.json
+```
+
+`--plan-json` atomically records the expanded paths and HDUs, calibration
+inputs, target WCS and shape, tiling decision, method settings, and device.
+Review the plan before submitting a batch job, then replay it later.
+
+## Weighted coadd with per-input maps
+
+```bash
+torchsky map /work/mosaic.fits \
+  /data/exposures/r_0001.fits /data/exposures/r_0002.fits \
   --weights 1.0 0.8 \
+  --weight-maps /data/weights/r_0001.wht.fits /data/weights/r_0002.wht.fits \
+  --mask-maps /data/masks/r_0001.mask.fits /data/masks/r_0002.mask.fits \
   --photometric-scales 1.0 1.02 \
   --background-offsets 0.0 12.5 \
-  --weight-maps img_a_wht.fits img_b_wht.fits \
-  --mask-maps img_a_mask.fits img_b_mask.fits \
-  --primary-beam-maps img_a_pb.fits img_b_pb.fits
+  --output-planes SCI WHT IVAR MASK NEXP
 ```
 
-INR renders use the same scalar weighting, weight-map, mask-map, and
-background-offset flags. Pass `--reference` when the output should be rendered
-on a specific FITS WCS/shape instead of the planned union grid.
+- `--weights` are per-input scalar inverse-variance weights. Without them, the
+  coadd uses unit relative weights and does not produce an IVAR plane.
+- `--weight-maps` multiply the scalar weights; `--mask-maps` mark contributing
+  pixels (nonzero pixels contribute, as stated in `--help`).
+- `--dq-maps` supply one detector DQ plane per input and `--dq-hdu` selects its
+  HDU (index or `EXTNAME`, default `DQ`); pixels with any set bit are rejected
+  by default. `--good-bits` instead reads each `--mask-maps` plane as a bitmask
+  and keeps pixels whose remaining bits are zero.
+- The count of per-input maps must match the expanded input list; the CLI exits
+  with an error when it does not.
+- `--output-planes` chooses the written extras. The current default is
+  `SCI WHT IVAR MASK NEXP`; `CTX`, `DQ`, and `NCORR` are opt-in.
+- Use `--overwrite` / `--no-overwrite` to control replacement of an existing
+  output (overwriting is the default).
 
-For compact or undersampled structure, add
-`--inr-spatial-sampling gauss_legendre_2x2` to integrate the continuous field
-over each detector pixel with four deterministic samples. The default `center`
-mode remains faster for well-sampled fields.
+## Fix the output grid
 
-Use `--dry-run` before large jobs to validate the expanded input list and print
-the planned output shape/tiling decision without writing the map or fitting an
-INR.
+By default the target WCS is the union footprint of all inputs. Render on an
+existing image's grid instead:
 
-Add `--plan-json mosaic.plan.json` to atomically record the expanded input
-paths/HDUs, calibration inputs, target WCS and shape, tiling decision, method
-settings, and resolved device before compute. It composes with `--dry-run` and
-is suitable for batch-job review and reproducibility. With `--per-filter`, one
-plan is written per filter by appending the filter name to the requested plan
-stem.
+```bash
+torchsky map /work/mosaic.fits "/data/exposures/r_*.fits" \
+  --reference /data/reference_grid.fits \
+  --reference-hdu 0 \
+  --value-semantics surface_brightness
+```
 
-The current path-oriented map CLI is an application-layer integration with
-`torchfits`; map kernels themselves consume decoded observations and do not own
-FITS I/O.
+`--value-semantics flux` multiplies by the target pixel area; the choice is
+recorded in the product provenance. Use `--union-footprint` /
+`--no-union-footprint` when you want the union or the first input grid, and
+`--plan-reference N` to pick which input defines the grid when `--reference`
+is omitted.
+
+## Drizzle, stacking, and clipping
+
+```bash
+torchsky map /work/mosaic_drz.fits "/data/exposures/r_*.fits" \
+  --kernel drizzle_square \
+  --drizzle-pixfrac 0.8 \
+  --value-semantics flux
+```
+
+```bash
+torchsky map /work/mosaic_clipped.fits "/data/exposures/r_*.fits" \
+  --stack sigma_clipped \
+  --clip-sigma 4.0 \
+  --clip-iterations 3
+```
+
+`--workflow` selects a coherent preset instead of spelling out every flag:
+`native`, `drizzle`, `swarp`, or `montage` (the preset sets kernel, stacking,
+and background policy; explicit flags override it). Available kernels are listed
+by `torchsky map --help`; the `drizzle_*` kernels use the native forward-drizzle
+path when available.
+
+## Bound memory on large mosaics
+
+```bash
+torchsky map /work/mosaic_large.fits "/data/exposures/r_*.fits" \
+  --auto-tile \
+  --tile-pixels 2048 \
+  --scratch-dir /work/scratch \
+  --max-footprint-pixels 400000000
+```
+
+Use `--tile-above-megapixels` to tune when auto-tiling starts,
+`--no-auto-tile` to disable it, and `--max-footprint-pixels` as a hard refusal
+guard. `--scratch-dir` locates spillable reducers for large products.
+
+## Render a continuous field
+
+```bash
+torchsky map /work/mosaic_field.fits "/data/exposures/r_*.fits" \
+  --method field \
+  --field-preset balanced \
+  --background-mode per-exposure \
+  --device cuda
+```
+
+`--field-preset` accepts `fast`, `balanced`, `spectral`, and
+`operator_constrained`. `--field-amp float16|bfloat16` opts into CUDA autocast
+with local gradient scaling; leave it at `none` unless you have measured the
+tradeoff. Spectral field runs may need the `map` extra for SVO profiles, or an
+explicit `--field-transmission` / `--field-transmission-dir` file source.
+
+## One product per filter
+
+```bash
+torchsky map /work/coadds/ "/data/exposures/*.fits" --per-filter
+```
+
+With `--per-filter` the output positional is a directory,
+inputs are grouped by their FITS `FILTER`, and one product is written per
+filter. Without it, inputs from different filters are rejected. With
+`--plan-json`, one plan per filter is written using the filter name as a suffix.
+
+## Replay a plan
+
+```bash
+torchsky map /work/mosaic_v2.fits \
+  --from-plan /work/mosaic.plan.json \
+  --scratch-dir /work/scratch_v2
+```
+
+`--from-plan` replays a validated schema-v2 plan; only the output path and
+scratch location may change. Inputs are omitted from the command line in this
+mode.
+
+## Estimate a sky model
+
+```bash
+torchsky sky estimate \
+  /data/exposures/r_0001.fits \
+  /work/sky_r_0001.fits \
+  --method mesh \
+  --statistic huber \
+  --block-size 128 \
+  --mask /data/masks/r_0001.mask.fits \
+  --device cuda
+```
+
+- `--method mesh|polynomial`; mesh accepts `--mesh-filter median|gaussian|none`
+  with an explicit `--mesh-filter-size` (default `3`)
+  and `--interpolate bilinear|bicubic`; polynomial accepts `--order`.
+- `--statistic median|huber|tukey` is the per-cell robust statistic.
+- `--mask` is an optional FITS mask where true pixels are excluded.
+- The sky model is written to the output FITS path with the input header.
+
+## Match sky offsets across exposures
+
+```bash
+torchsky sky match \
+  /data/exposures/r_0001.fits /data/exposures/r_0002.fits \
+  --method mesh \
+  --statistic median \
+  --block-size 128
+```
+
+Without `--output`, the command prints one additive offset per input. With an
+output pattern, it writes corrected copies (`{i}` is replaced by the input
+index):
+
+```bash
+torchsky sky match \
+  /data/exposures/r_0001.fits /data/exposures/r_0002.fits \
+  --masks /data/masks/r_0001.mask.fits /data/masks/r_0002.mask.fits \
+  --output "/work/corrected_{i}.fits"
+```
+
+Inputs must share a pixel grid. `--masks` must supply one mask per image.
+
+## Browser viewer
+
+```bash
+torchsky viz \
+  --root /data \
+  --host 127.0.0.1 \
+  --port 8822 \
+  --no-browser
+```
+
+The viewer has **no authentication**. Only bind `--host 0.0.0.0` on a trusted
+network or behind an authenticated reverse proxy; it can read any file under
+`--root`. `--cache-mb` sizes the PNG tile cache, and `--log-level` accepts
+`critical`, `error`, `warning`, `info`, or `debug`. For remote clusters, see
+[visualization](viz.md).
+
+## FITS inspection with torchfits
+
+FITS inspection and table previews are provided directly by `torchfits`.
+
+```bash
+torchfits info /data/exposures/r_0001.fits
+torchfits header /data/exposures/r_0001.fits
+torchfits table /data/catalogs/catalog.fits -e 1 -n 20
+```
+
+Use `-f json` for structured `header` or `table` output; see the torchfits CLI
+reference for column selection, batch input, and output formats.
+
+## Astrometric calibration helper
+
+`scripts/astrometric_calibrate.py` is an optional repository helper (not part of
+the installed package) for exposures that lack a usable WCS. It runs
+`solve-field` (astrometry.net) on each exposure's reference CCD, propagates the
+solved WCS to every extension with `scripts/apply_wcs_to_mef.py`, optionally
+refines it with SExtractor and SCAMP (`--scamp`), and then coadds with torchsky.
+`solve-field` must be on `PATH`; SCAMP and SExtractor come with the Pixi
+`astrometry` environment.
+
+```bash
+pixi run astrometric-calibrate solve exposures/*.fits.fz --solved-dir solved --ref-hdu 19
+pixi run astrometric-calibrate full exposures/*.fits.fz --solved-dir solved \
+    --output calibrated_mosaic.fits --scamp
+```
 
 ## Automation Guidance
 
-- Prefer explicit input/output paths and non-interactive flags.
-- Keep downloaded data and generated benchmark artifacts out of the repository.
-- For repeatable development commands, prefer Pixi tasks documented in
-  [benchmarks.md](benchmarks.md), [contributing.md](contributing.md), and
-  [release.md](release.md).
+- Prefer explicit input and output paths and non-interactive flags.
+- Keep downloaded data and generated evaluation artifacts outside the package
+  tree.
+- Use `--dry-run` and `--plan-json` before large jobs.
 
-## Related Guides
+## Related guides
 
-- [viz.md](viz.md)
-- [map.md](map.md)
-- [install.md](install.md)
+- [Visualization](viz.md)
+- [Coadds and resampling](map.md)
+- [Install](install.md)

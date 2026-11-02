@@ -2,36 +2,33 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
-import hashlib
 import json
 import math
 from pathlib import Path
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
+
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
+from ..._hash import file_sha256 as _file_sha256
 from ...calibration_evidence import load_operator_calibration_split
 from ...wcs import WCS
 
 if TYPE_CHECKING:
-    from ..product import MapProductResult
+    from ..product import ProductResult
 
 from ..operators.background import ConditionedBackgroundField, LearnedBackgroundOp
 from ..operators.bundle import (
     ObservationOperatorBundle,
     field_observation_operator_bundle,
 )
-from ..operators.learned_kernel import (
-    ConditionedKernelPSF,
-    SpatioSpectralTemporalEncoder,
-)
-from ..operators.psf import ExplicitPSFOp, LearnedPSFOp, apply_psf_spec
+from ..operators.psf import LearnedPSFOp, apply_psf_spec
 from ..scenes import DiscreteTargetImage, SceneRepresentation
 from ..solvers import (
     BoundObservationOperator,
@@ -47,60 +44,27 @@ from .observation_ops import (
 )
 from .types import FieldDomain, FieldObservation, ForwardContext, PSFSpec
 
-_RAW_COUNT_UNITS = frozenset(
-    {
-        "adu",
-        "count",
-        "counts",
-        "dn",
-        "dn/s",
-        "e",
-        "e-",
-        "e-/s",
-        "e/s",
-        "electron",
-        "electrons",
-        "electrons/s",
-    }
+from ._inverse_binding import (  # noqa: F401
+    _LinearBandGridExposureSpec,
+    _LinearBandGridOperatorSet,
+    _RAW_COUNT_UNITS,
+    _compute_detector_irls_weight,
+    _extract_linear_grid_state,
+    _grid_laplacian_action,
+    _grid_weighted_laplacian_action,
+    _grid_weighted_laplacian_diagonal_majorizer,
+    _iter_detector_tiles,
+    _tr_calculate_mad,
+    _tr_huber_weights,
+    _tr_power_weights,
+    _tr_tukey_weights,
+    _validate_spatial_tile_hw,
 )
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _validate_spatial_tile_hw(
-    spatial_tile_hw: tuple[int, int] | None,
-) -> tuple[int, int] | None:
-    if spatial_tile_hw is None:
-        return None
-    if (
-        not isinstance(spatial_tile_hw, tuple)
-        or len(spatial_tile_hw) != 2
-        or any(
-            not isinstance(v, int) or isinstance(v, bool) or v < 1
-            for v in spatial_tile_hw
-        )
-    ):
-        raise ValueError("spatial_tile_hw must be a pair of positive integers")
-    return int(spatial_tile_hw[0]), int(spatial_tile_hw[1])
-
-
-def _iter_detector_tiles(
-    height: int,
-    width: int,
-    tile_h: int,
-    tile_w: int,
-) -> Iterator[tuple[int, int, int, int]]:
-    for y0 in range(0, height, tile_h):
-        y1 = min(y0 + tile_h, height)
-        for x0 in range(0, width, tile_w):
-            x1 = min(x0 + tile_w, width)
-            yield y0, y1, x0, x1
+from ._inverse_stationary import (  # noqa: F401
+    _build_stationary_model_from_split,
+    _extract_stationary_calibrated_background,
+    _extract_stationary_effective_psf,
+)
 
 
 def prepare_linear_band_grid_observation_data(
@@ -109,6 +73,10 @@ def prepare_linear_band_grid_observation_data(
     calibrated_background: Tensor | float | None = None,
 ) -> Tensor:
     """Subtract fixed additive terms and zero unsupported detector pixels."""
+    if observation.additive_components:
+        raise NotImplementedError(
+            "linear grid inversion does not yet support typed additive components"
+        )
     image = observation.image
     background = torch.full_like(image, float(observation.background_offset))
     for component in (
@@ -152,6 +120,10 @@ def bind_linear_band_grid_observation_operator(
     spatial_tile_hw: tuple[int, int] | None = None,
 ) -> BoundObservationOperator:
     """Bind a signed, band-integrated surface-brightness grid to one exposure."""
+    if observation.additive_components:
+        raise NotImplementedError(
+            "linear grid inversion does not yet support typed additive components"
+        )
     if domain.coord_mode != "local_tangent":
         raise ValueError("linear band grid requires local_tangent coordinates")
     resolution = int(spatial_resolution)
@@ -169,7 +141,9 @@ def bind_linear_band_grid_observation_operator(
     if observation.value_semantics != "surface_brightness":
         raise ValueError("linear band grid requires surface_brightness semantics")
     if observation.weight is None:
-        raise ValueError("linear band grid requires an explicit inverse-variance weight")
+        raise ValueError(
+            "linear band grid requires an explicit inverse-variance weight"
+        )
     initial_support = observation_support_mask(observation)
     initial_weight = torch.nan_to_num(
         observation.weight.detach(), nan=0.0, posinf=0.0, neginf=0.0
@@ -195,7 +169,10 @@ def bind_linear_band_grid_observation_operator(
         raise ValueError("detector footprint coordinates must be finite on support")
     supported_x = footprint_x[initial_support]
     supported_y = footprint_y[initial_support]
-    tolerance = 1.0e-10
+    # MPS and explicitly float32 fields evaluate footprint coordinates at
+    # reduced precision; keep the bounds check strict in float64 and allow a
+    # sub-arcsecond float32 margin instead of rejecting a valid footprint.
+    tolerance = 1.0e-10 if footprint_x.dtype == torch.float64 else 1.0e-5
     if (
         bool((supported_x < x_min - tolerance).any())
         or bool((supported_x > x_max + tolerance).any())
@@ -259,7 +236,8 @@ def bind_linear_band_grid_observation_operator(
         raw = psf_spec.kernel2d.to(device=device, dtype=dtype)
         normed = raw / torch.clamp(raw.sum(), min=1.0e-8)
         ky, kx = int(normed.shape[0]), int(normed.shape[1])
-        cached = normed.view(1, 1, ky, kx)
+        # PSF payloads are source stamps; conv2d weights are correlations.
+        cached = normed.flip(-2, -1).view(1, 1, ky, kx)
         kernel_cache[key] = cached
         return cached
 
@@ -355,9 +333,7 @@ def bind_linear_band_grid_observation_operator(
             return torch.cat(row_chunks, dim=0)
         output = torch.empty(obs_shape, device=state_t.device, dtype=state_t.dtype)
         for y0, y1, x0, x1 in _iter_detector_tiles(height, width, tile_h, tile_w):
-            output[y0:y1, x0:x1] = _forward_tile(
-                state_t, sample_grid, y0, y1, x0, x1
-            )
+            output[y0:y1, x0:x1] = _forward_tile(state_t, sample_grid, y0, y1, x0, x1)
         return output
 
     def _apply_operator(
@@ -376,44 +352,45 @@ def bind_linear_band_grid_observation_operator(
                 "adjoint input shape must match the bound field observation"
             )
         dtype = dual.dtype if dual.is_floating_point() else torch.float32
-        if validated_tile_hw is None:
-            with torch.enable_grad():
-                probe = torch.zeros(
-                    (resolution, resolution),
-                    dtype=dtype,
-                    device=dual.device,
-                    requires_grad=True,
-                )
-                prediction = _forward_state(probe)
-                pairing = torch.sum(prediction * dual.to(dtype=prediction.dtype))
-                (gradient,) = torch.autograd.grad(pairing, probe)
-            return gradient
-        tile_h, tile_w = validated_tile_hw
         height, width = obs_shape
+        tile_h, tile_w = validated_tile_hw or obs_shape
         sample_grid = _normalized_sample_grid(dual.device, dtype)
         total_grad = torch.zeros(
-            (resolution, resolution),
-            dtype=dtype,
-            device=dual.device,
+            resolution * resolution, dtype=dtype, device=dual.device
         )
         for y0, y1, x0, x1 in _iter_detector_tiles(height, width, tile_h, tile_w):
-            dual_tile = dual[y0:y1, x0:x1]
-            if not bool(torch.any(dual_tile != 0)):
-                continue
-            with torch.enable_grad():
-                probe = torch.zeros(
-                    (resolution, resolution),
-                    dtype=dtype,
-                    device=dual.device,
-                    requires_grad=True,
-                )
-                tile_pred = _forward_tile(probe, sample_grid, y0, y1, x0, x1)
-                pairing = torch.sum(
-                    tile_pred * dual_tile.to(dtype=tile_pred.dtype)
-                )
-                (tile_grad,) = torch.autograd.grad(pairing, probe)
-            total_grad = total_grad + tile_grad
-        return total_grad
+            hy0, hy1 = max(y0 - halo_y, 0), min(y1 + halo_y, height)
+            hx0, hx1 = max(x0 - halo_x, 0), min(x1 + halo_x, width)
+            native_dual = dual[y0:y1, x0:x1].to(dtype=dtype)
+            if psf_spec is not None and psf_spec.mode != "none":
+                expanded = F.conv_transpose2d(
+                    native_dual[None, None],
+                    _normalized_kernel(dual.device, dtype),
+                    padding=0,
+                )[0, 0]
+                top, left = halo_y - (y0 - hy0), halo_x - (x0 - hx0)
+                native_dual = expanded[top : top + hy1 - hy0, left : left + hx1 - hx0]
+            # Explicit transpose keeps gradients through the dual/calibration;
+            # a detached autograd VJP does not differentiate x^T H(x) correctly.
+            xy = ((sample_grid[hy0:hy1, hx0:hx1] + 1) * ((resolution - 1) / 2)).clamp(
+                0, resolution - 1
+            )
+            lower = torch.floor(xy)
+            fraction = xy - lower
+            for dy in (0, 1):
+                for dx in (0, 1):
+                    index = (lower[..., 0] + dx).long().clamp_max(resolution - 1)
+                    index = (
+                        index
+                        + (lower[..., 1] + dy).long().clamp_max(resolution - 1)
+                        * resolution
+                    )
+                    wx = fraction[..., 0] if dx else 1 - fraction[..., 0]
+                    wy = fraction[..., 1] if dy else 1 - fraction[..., 1]
+                    total_grad.scatter_add_(
+                        0, index.reshape(-1), (native_dual * wx * wy).reshape(-1)
+                    )
+        return total_grad.reshape(resolution, resolution)
 
     weight_cache: dict[tuple[torch.device, torch.dtype], Tensor] = {}
 
@@ -481,426 +458,6 @@ def bind_linear_band_grid_observation_operator(
     return bound
 
 
-@dataclass(frozen=True)
-class _LinearBandGridExposureSpec:
-    resolution: int
-    obs_shape: tuple[int, int]
-    spatial_tile_hw: tuple[int, int] | None
-    has_psf: bool
-    sample_grid_fn: Callable[[torch.device, torch.dtype], Tensor]
-    kernel_fn: Callable[[torch.device, torch.dtype], Tensor | None]
-    weight_fn: Callable[[torch.device, torch.dtype], Tensor]
-
-
-def _extract_linear_grid_state(
-    scene: SceneRepresentation | nn.Module | Tensor,
-    resolution: int,
-) -> Tensor:
-    if isinstance(scene, Tensor):
-        state_t = scene
-    elif isinstance(scene, DiscreteTargetImage):
-        state_t = torch.as_tensor(scene.data)
-    else:
-        from ..scenes import as_scene_representation
-
-        scene_rep = as_scene_representation(scene)
-        if not isinstance(scene_rep, DiscreteTargetImage):
-            raise TypeError("linear band grid requires a tensor-backed 2D state")
-        state_t = torch.as_tensor(scene_rep.data)
-    if state_t.shape != (resolution, resolution):
-        raise ValueError("linear band grid state shape must match spatial_resolution")
-    if not state_t.is_floating_point():
-        raise TypeError("linear band grid state must be floating point")
-    return state_t
-
-
-class _LinearBandGridOperatorSet(BoundObservationOperatorSet):
-    """Multi-exposure operator set with batched grid_sample and grouped PSF conv2d."""
-
-    def __init__(
-        self,
-        operators: tuple[BoundObservationOperator, ...],
-        *,
-        specs: tuple[_LinearBandGridExposureSpec, ...],
-        exposure_chunk_size: int = 16,
-    ) -> None:
-        super().__init__(operators, exposure_chunk_size=exposure_chunk_size)
-        self._specs = specs
-        self._resolution = int(specs[0].resolution)
-        self._can_batch = all(spec.spatial_tile_hw is None for spec in specs)
-        self._group_cache: dict[
-            tuple[tuple[int, ...], torch.device, torch.dtype],
-            tuple[
-                tuple[int, int],
-                Tensor,
-                Tensor | None,
-                Tensor | None,
-                Tensor,
-                Tensor | None,
-            ],
-        ] = {}
-
-    def _iter_chunk_indices(self) -> Iterator[tuple[int, ...]]:
-        n = len(self.operators)
-        for start in range(0, n, self.exposure_chunk_size):
-            stop = min(start + self.exposure_chunk_size, n)
-            yield tuple(range(start, stop))
-
-    def _batched_group_tensors(
-        self,
-        indices: tuple[int, ...],
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> tuple[
-        tuple[int, int],
-        Tensor,
-        Tensor | None,
-        Tensor | None,
-        Tensor,
-        Tensor | None,
-    ]:
-        key = (indices, device, dtype)
-        cached = self._group_cache.get(key)
-        if cached is not None:
-            return cached
-        specs = [self._specs[idx] for idx in indices]
-        shapes = [spec.obs_shape for spec in specs]
-        max_h = max(h for h, _ in shapes)
-        max_w = max(w for _, w in shapes)
-        uniform_shape = all(s == (max_h, max_w) for s in shapes)
-
-        padded_grids: list[Tensor] = []
-        padded_weights: list[Tensor] = []
-        valid_box: Tensor | None = (
-            None
-            if uniform_shape
-            else torch.zeros(
-                (1, len(indices), max_h, max_w), device=device, dtype=dtype
-            )
-        )
-        for b_idx, spec in enumerate(specs):
-            h, w = spec.obs_shape
-            g = spec.sample_grid_fn(device, dtype)
-            wt = spec.weight_fn(device, dtype)
-            if (h, w) != (max_h, max_w):
-                g_pad = F.pad(
-                    g.permute(2, 0, 1),
-                    (0, max_w - w, 0, max_h - h),
-                    mode="constant",
-                    value=0.0,
-                ).permute(1, 2, 0)
-                wt_pad = F.pad(
-                    wt, (0, max_w - w, 0, max_h - h), mode="constant", value=0.0
-                )
-                assert valid_box is not None
-                valid_box[0, b_idx, :h, :w] = 1.0
-            else:
-                g_pad = g
-                wt_pad = wt
-                if valid_box is not None:
-                    valid_box[0, b_idx, :, :] = 1.0
-            padded_grids.append(g_pad)
-            padded_weights.append(wt_pad)
-
-        stacked_grids = torch.cat(padded_grids, dim=0).unsqueeze(0)
-        stacked_weights = torch.stack(padded_weights, dim=0).unsqueeze(0)
-        if not any(spec.has_psf for spec in specs):
-            stacked_kernels: Tensor | None = None
-            stacked_flipped_kernels: Tensor | None = None
-        else:
-            raw_kernels = [spec.kernel_fn(device, dtype) for spec in specs]
-            max_ky = max(
-                int(k.shape[2]) if k is not None else 1 for k in raw_kernels
-            )
-            max_kx = max(
-                int(k.shape[3]) if k is not None else 1 for k in raw_kernels
-            )
-            padded_kernels: list[Tensor] = []
-            for k in raw_kernels:
-                if k is None:
-                    k_use = torch.ones((1, 1, 1, 1), device=device, dtype=dtype)
-                else:
-                    k_use = k
-                ky, kx = int(k_use.shape[2]), int(k_use.shape[3])
-                pad_y = (max_ky - ky) // 2
-                pad_x = (max_kx - kx) // 2
-                if pad_y > 0 or pad_x > 0:
-                    k_use = F.pad(
-                        k_use,
-                        (pad_x, max_kx - kx - pad_x, pad_y, max_ky - ky - pad_y),
-                        mode="constant",
-                        value=0.0,
-                    )
-                padded_kernels.append(k_use)
-            stacked_kernels = torch.cat(padded_kernels, dim=0)
-            stacked_flipped_kernels = torch.flip(
-                stacked_kernels, dims=(-2, -1)
-            ).contiguous()
-        result = (
-            (max_h, max_w),
-            stacked_grids,
-            stacked_kernels,
-            stacked_flipped_kernels,
-            stacked_weights,
-            valid_box,
-        )
-        self._group_cache[key] = result
-        return result
-
-    def _sample_group(
-        self,
-        state_t: Tensor,
-        max_shape: tuple[int, int],
-        stacked_grids: Tensor,
-        group_size: int,
-    ) -> Tensor:
-        res = self._resolution
-        max_h, max_w = max_shape
-        return F.grid_sample(
-            state_t.view(1, 1, res, res),
-            stacked_grids,
-            mode="bilinear",
-            padding_mode="border",
-            align_corners=True,
-        ).view(1, group_size, max_h, max_w)
-
-    def _convolve_sampled(
-        self,
-        sampled_raw: Tensor,
-        stacked_kernels: Tensor | None,
-        valid_box: Tensor | None,
-        group_size: int,
-    ) -> Tensor:
-        sampled = sampled_raw if valid_box is None else sampled_raw * valid_box
-        if stacked_kernels is None:
-            return sampled
-        ky, kx = int(stacked_kernels.shape[2]), int(stacked_kernels.shape[3])
-        return F.conv2d(
-            sampled,
-            stacked_kernels,
-            padding=(ky // 2, kx // 2),
-            groups=group_size,
-        )
-
-    def _adjoint_convolve(
-        self,
-        duals_padded: Tensor,
-        stacked_flipped_kernels: Tensor | None,
-        valid_box: Tensor | None,
-        group_size: int,
-    ) -> Tensor:
-        if stacked_flipped_kernels is None:
-            adj = duals_padded
-        else:
-            ky, kx = (
-                int(stacked_flipped_kernels.shape[2]),
-                int(stacked_flipped_kernels.shape[3]),
-            )
-            adj = F.conv2d(
-                duals_padded,
-                stacked_flipped_kernels,
-                padding=(ky // 2, kx // 2),
-                groups=group_size,
-            )
-        return adj if valid_box is None else adj * valid_box
-
-    def iter_apply_chunks(
-        self,
-        scene: SceneRepresentation | nn.Module | Tensor,
-    ) -> Iterator[tuple[Tensor, ...]]:
-        if not self._can_batch:
-            yield from super().iter_apply_chunks(scene)
-            return
-        state_t = _extract_linear_grid_state(scene, self._resolution)
-        for chunk_indices in self._iter_chunk_indices():
-            (
-                max_shape,
-                stacked_grids,
-                stacked_kernels,
-                _,
-                _,
-                valid_box,
-            ) = self._batched_group_tensors(
-                chunk_indices, state_t.device, state_t.dtype
-            )
-            sampled_raw = self._sample_group(
-                state_t, max_shape, stacked_grids, len(chunk_indices)
-            )
-            preds = self._convolve_sampled(
-                sampled_raw, stacked_kernels, valid_box, len(chunk_indices)
-            ).squeeze(0)
-            if valid_box is None:
-                yield tuple(preds.unbind(dim=0))
-            else:
-                out_list: list[Tensor] = []
-                for b_idx, idx in enumerate(chunk_indices):
-                    h, w = self._specs[idx].obs_shape
-                    out_list.append(preds[b_idx, :h, :w])
-                yield tuple(out_list)
-
-    def _batched_adjoint_impl(
-        self,
-        tensors: Sequence[Tensor],
-        *,
-        weighted: bool,
-    ) -> Tensor:
-        if len(tensors) != len(self.operators):
-            raise ValueError("tensor count must match operator count")
-        res = self._resolution
-        total: Tensor | None = None
-        for chunk_indices in self._iter_chunk_indices():
-            first_t = torch.as_tensor(tensors[chunk_indices[0]])
-            dtype = first_t.dtype if first_t.is_floating_point() else torch.float32
-            device = first_t.device
-            (
-                max_shape,
-                stacked_grids,
-                _,
-                stacked_flipped_kernels,
-                stacked_weights,
-                valid_box,
-            ) = self._batched_group_tensors(chunk_indices, device, dtype)
-            max_h, max_w = max_shape
-            padded_duals: list[Tensor] = []
-            for idx in chunk_indices:
-                t = torch.as_tensor(tensors[idx])
-                obs_shape = self._specs[idx].obs_shape
-                if t.shape != obs_shape:
-                    msg = (
-                        "inverse-noise input shape must match the bound field observation"
-                        if weighted
-                        else "adjoint input shape must match the bound field observation"
-                    )
-                    raise ValueError(msg)
-                t_f = t.to(device=device, dtype=dtype)
-                if obs_shape != max_shape:
-                    h, w = obs_shape
-                    t_f = F.pad(
-                        t_f, (0, max_w - w, 0, max_h - h), mode="constant", value=0.0
-                    )
-                padded_duals.append(t_f)
-            duals_padded = torch.stack(padded_duals, dim=0).unsqueeze(0)
-            if weighted:
-                duals_padded = duals_padded * stacked_weights
-            adj_sampled = self._adjoint_convolve(
-                duals_padded,
-                stacked_flipped_kernels,
-                valid_box,
-                len(chunk_indices),
-            )
-            need_graph = bool(adj_sampled.requires_grad)
-            with torch.enable_grad():
-                probe = torch.zeros(
-                    (res, res),
-                    dtype=dtype,
-                    device=device,
-                    requires_grad=True,
-                )
-                sampled_raw = self._sample_group(
-                    probe, max_shape, stacked_grids, len(chunk_indices)
-                )
-                (grad,) = torch.autograd.grad(
-                    sampled_raw,
-                    probe,
-                    grad_outputs=adj_sampled,
-                    create_graph=need_graph,
-                )
-            total = grad if total is None else total + grad
-        assert total is not None
-        return total
-
-    def adjoint(self, tensors: Sequence[Tensor]) -> Tensor:
-        if not self._can_batch:
-            return super().adjoint(tensors)
-        return self._batched_adjoint_impl(tensors, weighted=False)
-
-    def weighted_adjoint(self, tensors: Sequence[Tensor]) -> Tensor:
-        if not self._can_batch:
-            return super().weighted_adjoint(tensors)
-        return self._batched_adjoint_impl(tensors, weighted=True)
-
-    def normal_operator_action(
-        self,
-        scene: SceneRepresentation | nn.Module | Tensor,
-    ) -> Tensor:
-        if not self._can_batch:
-            return super().normal_operator_action(scene)
-        state_t = _extract_linear_grid_state(scene, self._resolution)
-        res = self._resolution
-        need_graph = bool(state_t.requires_grad)
-        total: Tensor | None = None
-        for chunk_indices in self._iter_chunk_indices():
-            (
-                max_shape,
-                stacked_grids,
-                stacked_kernels,
-                stacked_flipped_kernels,
-                stacked_weights,
-                valid_box,
-            ) = self._batched_group_tensors(
-                chunk_indices, state_t.device, state_t.dtype
-            )
-            group_size = len(chunk_indices)
-            if not need_graph:
-                with torch.enable_grad():
-                    probe = state_t.detach().requires_grad_(True)
-                    sampled_raw = self._sample_group(
-                        probe, max_shape, stacked_grids, group_size
-                    )
-                    with torch.no_grad():
-                        preds = self._convolve_sampled(
-                            sampled_raw.detach(),
-                            stacked_kernels,
-                            valid_box,
-                            group_size,
-                        )
-                        weighted_preds = preds * stacked_weights
-                        adj_sampled = self._adjoint_convolve(
-                            weighted_preds,
-                            stacked_flipped_kernels,
-                            valid_box,
-                            group_size,
-                        )
-                    (grad,) = torch.autograd.grad(
-                        sampled_raw,
-                        probe,
-                        grad_outputs=adj_sampled,
-                    )
-            else:
-                sampled_live = self._sample_group(
-                    state_t, max_shape, stacked_grids, group_size
-                )
-                preds_live = self._convolve_sampled(
-                    sampled_live, stacked_kernels, valid_box, group_size
-                )
-                weighted_preds = preds_live * stacked_weights
-                adj_sampled = self._adjoint_convolve(
-                    weighted_preds,
-                    stacked_flipped_kernels,
-                    valid_box,
-                    group_size,
-                )
-                with torch.enable_grad():
-                    probe = torch.zeros(
-                        (res, res),
-                        dtype=state_t.dtype,
-                        device=state_t.device,
-                        requires_grad=True,
-                    )
-                    sampled_probe = self._sample_group(
-                        probe, max_shape, stacked_grids, group_size
-                    )
-                    (grad,) = torch.autograd.grad(
-                        sampled_probe,
-                        probe,
-                        grad_outputs=adj_sampled,
-                        create_graph=True,
-                    )
-            total = grad if total is None else total + grad
-        assert total is not None
-        return total
-
-
 def bind_linear_band_grid_observations_to_operator_set(
     observations: Sequence[FieldObservation],
     domain: FieldDomain,
@@ -955,9 +512,7 @@ class LinearBandGridField(_BaseFieldModel):
     ) -> None:
         super().__init__(domain)
         if self.coord_mode != "local_tangent":
-            raise ValueError(
-                "LinearBandGridField requires local_tangent coordinates"
-            )
+            raise ValueError("LinearBandGridField requires local_tangent coordinates")
         self.spatial_resolution = int(spatial_resolution)
         if self.spatial_resolution < 2:
             raise ValueError("spatial_resolution must be at least 2")
@@ -968,7 +523,10 @@ class LinearBandGridField(_BaseFieldModel):
             raise ValueError("spatial_bounds_local_deg must be finite")
         if bounds[0] >= bounds[1] or bounds[2] >= bounds[3]:
             raise ValueError("spatial_bounds_local_deg bounds must be increasing")
-        self.spatial_bounds_local_deg: tuple[float, float, float, float] = bounds
+        # Length was checked to be four above.
+        self.spatial_bounds_local_deg: tuple[float, float, float, float] = cast(
+            tuple[float, float, float, float], bounds
+        )
         self.band_name: str | None = (
             None
             if band_name is None or not str(band_name).strip()
@@ -1002,7 +560,7 @@ class LinearBandGridField(_BaseFieldModel):
 
     def initialize_from_product(
         self,
-        product: MapProductResult,
+        product: ProductResult,
         *,
         band_name: str | None = None,
     ) -> None:
@@ -1028,7 +586,7 @@ class LinearBandGridField(_BaseFieldModel):
                         break
                 if matched_idx is None:
                     raise ValueError(
-                        f"MapProductResult has no band matching {target_band!r}"
+                        f"ProductResult has no band matching {target_band!r}"
                     )
                 plane = data[matched_idx]
             elif len(product.product.bands) == 1 and int(data.shape[0]) == 1:
@@ -1120,170 +678,14 @@ class LinearBandGridField(_BaseFieldModel):
         return self.forward(ra_deg, dec_deg)
 
 
-def _grid_laplacian_action(state: Tensor) -> Tensor:
-    if state.ndim != 2:
-        raise ValueError("grid smoothness operator requires a 2D grid state")
-    out = torch.zeros_like(state)
-    if state.shape[1] > 1:
-        dx = state[:, 1:] - state[:, :-1]
-        out[:, :-1] = out[:, :-1] - dx
-        out[:, 1:] = out[:, 1:] + dx
-    if state.shape[0] > 1:
-        dy = state[1:, :] - state[:-1, :]
-        out[:-1, :] = out[:-1, :] - dy
-        out[1:, :] = out[1:, :] + dy
-    return out
-
-
-def _grid_weighted_laplacian_action(
-    state: Tensor,
-    wx: Tensor | None,
-    wy: Tensor | None,
-) -> Tensor:
-    if wx is None and wy is None:
-        return _grid_laplacian_action(state)
-    if state.ndim != 2:
-        raise ValueError("grid smoothness operator requires a 2D grid state")
-    out = torch.zeros_like(state)
-    if state.shape[1] > 1:
-        dx = state[:, 1:] - state[:, :-1]
-        if wx is not None:
-            dx = wx * dx
-        out[:, :-1] = out[:, :-1] - dx
-        out[:, 1:] = out[:, 1:] + dx
-    if state.shape[0] > 1:
-        dy = state[1:, :] - state[:-1, :]
-        if wy is not None:
-            dy = wy * dy
-        out[:-1, :] = out[:-1, :] - dy
-        out[1:, :] = out[1:, :] + dy
-    return out
-
-
-def _grid_weighted_laplacian_diagonal_majorizer(
-    shape: tuple[int, int],
-    wx: Tensor | None,
-    wy: Tensor | None,
-    *,
-    device: torch.device,
-    dtype: torch.dtype,
-) -> Tensor:
-    if wx is None and wy is None:
-        return torch.full(shape, 8.0, device=device, dtype=dtype)
-    diag = torch.zeros(shape, device=device, dtype=dtype)
-    if shape[1] > 1:
-        if wx is not None:
-            diag[:, :-1] = diag[:, :-1] + 2.0 * wx
-            diag[:, 1:] = diag[:, 1:] + 2.0 * wx
-        else:
-            diag[:, :-1] = diag[:, :-1] + 2.0
-            diag[:, 1:] = diag[:, 1:] + 2.0
-    if shape[0] > 1:
-        if wy is not None:
-            diag[:-1, :] = diag[:-1, :] + 2.0 * wy
-            diag[1:, :] = diag[1:, :] + 2.0 * wy
-        else:
-            diag[:-1, :] = diag[:-1, :] + 2.0
-            diag[1:, :] = diag[1:, :] + 2.0
-    return diag
-
-
-try:
-    from torchregress.algorithms.irls import (  # type: ignore[import-not-found]
-        IRLSConfig as _TorchRegressIRLSConfig,
-        calculate_mad as _tr_calculate_mad,
-        huber_weights as _tr_huber_weights,
-        power_weights as _tr_power_weights,
-        tukey_weights as _tr_tukey_weights,
-    )
-
-    _HAS_TORCHREGRESS_IRLS = True
-except ImportError:
-    _HAS_TORCHREGRESS_IRLS = False
-
-    @dataclass
-    class _TorchRegressIRLSConfig:  # type: ignore[no-redef]
-        weight_fn: str | Callable[..., Tensor] = "tukey"
-        weight_params: dict[str, Any] | None = None
-        max_iter: int = 50
-        tol: float = 1.0e-4
-        scale_estimator: str = "mad"
-        use_mad_scaling: bool = False
-
-    def _tr_huber_weights(scaled_residuals: Tensor, delta: float = 1.345) -> Tensor:
-        abs_r = torch.abs(scaled_residuals)
-        return torch.where(
-            abs_r <= delta, torch.ones_like(abs_r), delta / (abs_r + 1.0e-8)
-        )
-
-    def _tr_tukey_weights(scaled_residuals: Tensor, c: float = 4.685) -> Tensor:
-        abs_r = torch.abs(scaled_residuals)
-        return torch.where(
-            abs_r <= c,
-            (1.0 - (scaled_residuals / c) ** 2) ** 2,
-            torch.zeros_like(abs_r),
-        )
-
-    def _tr_power_weights(
-        scaled_residuals: Tensor, a: float = 1.5, b: float = 2.0
-    ) -> Tensor:
-        abs_r = torch.abs(scaled_residuals)
-        return (1.0 + (abs_r / (a + 1.0e-8)) ** b) ** -1
-
-    def _tr_calculate_mad(residuals: Tensor, dim: int = -2) -> Tensor:
-        med = torch.median(residuals, dim=dim, keepdim=True).values
-        abs_dev = torch.abs(residuals - med)
-        mad = torch.median(abs_dev, dim=dim, keepdim=True).values
-        return torch.clamp(mad, min=1.0e-8)
-
-
-IRLSConfig = _TorchRegressIRLSConfig
-
-
-def _compute_detector_irls_weight(
-    residual: Tensor,
-    initial_precision: Tensor,
-    *,
-    data_weight_fn: Literal["none", "huber", "tukey", "power"] | Callable[..., Tensor],
-    irls_config: IRLSConfig | None,
-    convex_warmup: bool = False,
-) -> Tensor:
-    fn_spec = (
-        irls_config.weight_fn
-        if (irls_config is not None and data_weight_fn == "none")
-        else data_weight_fn
-    )
-    if fn_spec == "none":
-        return torch.ones_like(residual)
-    params: dict[str, Any] = (
-        dict(irls_config.weight_params)
-        if (irls_config is not None and irls_config.weight_params is not None)
-        else {}
-    )
-    active = initial_precision > 0.0
-    sigma_inv = torch.sqrt(torch.clamp(initial_precision, min=0.0))
-    scaled_res = residual * sigma_inv
-    if irls_config is not None and irls_config.use_mad_scaling and bool(active.any()):
-        active_vals = scaled_res[active].unsqueeze(-1)
-        mad_scale = (_tr_calculate_mad(active_vals, dim=0) / 0.6745).squeeze()
-        scaled_res = scaled_res / torch.clamp(mad_scale, min=1.0)
-
-    if callable(fn_spec):
-        weights = fn_spec(scaled_res, **params)
-    elif fn_spec == "huber" or (fn_spec == "tukey" and convex_warmup):
-        huber_params = {"delta": float(params["delta"])} if "delta" in params else {}
-        weights = _tr_huber_weights(scaled_res, **huber_params)
-    elif fn_spec == "tukey":
-        weights = _tr_tukey_weights(scaled_res, **params)
-    elif fn_spec == "power":
-        weights = _tr_power_weights(scaled_res, **params)
-    else:
-        raise ValueError(f"Unknown IRLS data_weight_fn: {fn_spec!r}")
-    return torch.where(
-        active,
-        torch.clamp(weights, min=1.0e-8, max=1.0),
-        torch.zeros_like(weights),
-    )
+@dataclass
+class IRLSConfig:
+    weight_fn: str | Callable[..., Tensor] = "tukey"
+    weight_params: dict[str, Any] | None = None
+    max_iter: int = 50
+    tol: float = 1.0e-4
+    scale_estimator: str = "mad"
+    use_mad_scaling: bool = False
 
 
 def linear_band_grid_diagonal_majorizer(
@@ -1300,14 +702,10 @@ def linear_band_grid_diagonal_majorizer(
         raise ValueError("smoothness_weight must be finite and non-negative")
     if isinstance(operator_or_set, BoundObservationOperator):
         if isinstance(data, Sequence) and not isinstance(data, Tensor):
-            raise TypeError(
-                "single BoundObservationOperator requires a 2D data tensor"
-            )
+            raise TypeError("single BoundObservationOperator requires a 2D data tensor")
         datum = torch.as_tensor(data)
         ones = torch.ones_like(datum)
-        sensitivity = operator_or_set.adjoint(
-            operator_or_set.apply_noise_model(ones)
-        )
+        sensitivity = operator_or_set.adjoint(operator_or_set.apply_noise_model(ones))
     elif isinstance(operator_or_set, BoundObservationOperatorSet):
         if not isinstance(data, Sequence) or isinstance(data, Tensor):
             raise TypeError(
@@ -1340,7 +738,10 @@ def solve_linear_band_grid_cg(
     relative_regularization: bool = False,
     prior_reference: Literal["zero", "initial"] = "zero",
     preconditioner: (
-        Literal["diagonal_majorizer", "none"] | Callable[[Tensor], Tensor] | Tensor | None
+        Literal["diagonal_majorizer", "none"]
+        | Callable[[Tensor], Tensor]
+        | Tensor
+        | None
     ) = "diagonal_majorizer",
     tolerance: float = 1.0e-6,
     irls_steps: int = 1,
@@ -1353,8 +754,24 @@ def solve_linear_band_grid_cg(
     shared_edge_sq: tuple[Tensor, Tensor] | None = None,
     shared_source_sq: Tensor | None = None,
     diagnostics: dict[str, Any] | None = None,
+    well_covered_fraction: float = 0.5,
+    source_dead_zone_sigma: float = 2.0,
 ) -> LinearSolveResult:
-    """Solve normal equations via Preconditioned Conjugate Gradient or IRLS-PCG."""
+    """Solve normal equations via Preconditioned Conjugate Gradient or IRLS-PCG.
+
+    ``well_covered_fraction`` is the fraction of the median positive sensitivity
+    above which a pixel is trusted for data-driven priors (local means and the
+    IRLS prior solution); half the median excludes only strongly under-covered
+    pixels (edges, gaps) whose ``rhs / sensitivity`` estimate is noise dominated.
+    ``source_dead_zone_sigma`` is the SNR (in units of the sky sigma) below which
+    the edge-preserving source map ``u`` is zeroed, so sky noise at ``2 sigma``
+    (about 5% two-sided false-positive rate) does not switch off smoothing.
+    Both defaults are the previous hard-coded values.
+    """
+    if not math.isfinite(float(well_covered_fraction)) or well_covered_fraction < 0.0:
+        raise ValueError("well_covered_fraction must be finite and non-negative")
+    if not math.isfinite(float(source_dead_zone_sigma)) or source_dead_zone_sigma < 0.0:
+        raise ValueError("source_dead_zone_sigma must be finite and non-negative")
     if iterations < 1:
         raise ValueError("iterations must be positive")
     if irls_steps < 1:
@@ -1369,9 +786,11 @@ def solve_linear_band_grid_cg(
         raise ValueError("prior_reference must be 'zero' or 'initial'")
     if not math.isfinite(float(tolerance)) or tolerance < 0.0:
         raise ValueError("tolerance must be finite and non-negative")
-    if (
-        not callable(data_weight_fn)
-        and data_weight_fn not in ("none", "huber", "tukey", "power")
+    if not callable(data_weight_fn) and data_weight_fn not in (
+        "none",
+        "huber",
+        "tukey",
+        "power",
     ):
         raise ValueError(
             "data_weight_fn must be 'none', 'huber', 'tukey', 'power', or a callable"
@@ -1387,9 +806,7 @@ def solve_linear_band_grid_cg(
 
     if is_single_op:
         if isinstance(data, Sequence) and not isinstance(data, Tensor):
-            raise TypeError(
-                "single BoundObservationOperator requires a 2D data tensor"
-            )
+            raise TypeError("single BoundObservationOperator requires a 2D data tensor")
         data_t = torch.as_tensor(data)
         rhs_base = operator_or_set.adjoint(operator_or_set.apply_noise_model(data_t))
         if use_data_irls:
@@ -1408,9 +825,7 @@ def solve_linear_band_grid_cg(
         rhs_base = operator_or_set.weighted_adjoint(data_tuple)
         if use_data_irls:
             init_prec_tuple = tuple(
-                torch.clamp(
-                    op.apply_noise_model(torch.ones_like(d)).detach(), min=0.0
-                )
+                torch.clamp(op.apply_noise_model(torch.ones_like(d)).detach(), min=0.0)
                 for op, d in zip(operator_or_set.operators, data_tuple, strict=True)
             )
     else:
@@ -1488,7 +903,7 @@ def solve_linear_band_grid_cg(
         and not need_grad
         and sensitivity_diag is not None
     ):
-        well_covered = sensitivity_diag >= (0.5 * median_sens)
+        well_covered = sensitivity_diag >= (well_covered_fraction * median_sens)
         if bool(well_covered.any()):
             local_mean = (
                 rhs_base.detach()[well_covered].double()
@@ -1499,23 +914,15 @@ def solve_linear_band_grid_cg(
     base_damp_weight: Tensor | None = None
     base_wx: Tensor | None = None
     base_wy: Tensor | None = None
-    if (
-        relative_regularization
-        and sensitivity_diag is not None
-        and median_sens > 0.0
-    ):
+    if relative_regularization and sensitivity_diag is not None and median_sens > 0.0:
         base_damp_weight = torch.clamp(
             sensitivity_diag.detach() / median_sens,
             min=1.0e-3,
         )
         if base_damp_weight.shape[1] > 1:
-            base_wx = torch.minimum(
-                base_damp_weight[:, 1:], base_damp_weight[:, :-1]
-            )
+            base_wx = torch.minimum(base_damp_weight[:, 1:], base_damp_weight[:, :-1])
         if base_damp_weight.shape[0] > 1:
-            base_wy = torch.minimum(
-                base_damp_weight[1:, :], base_damp_weight[:-1, :]
-            )
+            base_wy = torch.minimum(base_damp_weight[1:, :], base_damp_weight[:-1, :])
 
     t_solve0 = time.perf_counter()
     num_stages = int(irls_steps)
@@ -1623,7 +1030,7 @@ def solve_linear_band_grid_cg(
 
             prior_sol = (
                 torch.where(
-                    stage_sens_diag >= (0.5 * median_sens),
+                    stage_sens_diag >= (well_covered_fraction * median_sens),
                     stage_rhs_base.detach()
                     / torch.clamp(stage_sens_diag.detach(), min=1.0e-12),
                     sol_det,
@@ -1632,7 +1039,9 @@ def solve_linear_band_grid_cg(
                 else sol_det
             )
             u = (prior_sol - sky_bg) / sky_sigma
-            u_dead = torch.sign(u) * torch.clamp(torch.abs(u) - 2.0, min=0.0)
+            u_dead = torch.sign(u) * torch.clamp(
+                torch.abs(u) - source_dead_zone_sigma, min=0.0
+            )
             if edge_preserving or shared_source_sq is not None:
                 src_sq = (
                     shared_source_sq.to(device=u.device, dtype=u.dtype)
@@ -1666,12 +1075,18 @@ def solve_linear_band_grid_cg(
                 wy = base_wy * stage_wy if base_wy is not None else stage_wy
             if effective_non_negative_weight > 0.0:
                 u_neg_sq = torch.square(torch.clamp(-u, min=0.0))
-                neg_weight = effective_non_negative_weight * (u_neg_sq / (1.0 + u_neg_sq))
+                neg_weight = effective_non_negative_weight * (
+                    u_neg_sq / (1.0 + u_neg_sq)
+                )
                 if base_damp_weight is not None:
                     neg_weight = neg_weight * base_damp_weight
 
         rhs = stage_rhs_base
-        if prior_reference == "initial" and effective_damping > 0.0 and has_nonzero_init:
+        if (
+            prior_reference == "initial"
+            and effective_damping > 0.0
+            and has_nonzero_init
+        ):
             if damp_weight is not None:
                 rhs = rhs + (effective_damping * damp_weight) * init_ref
             else:
@@ -1682,6 +1097,7 @@ def solve_linear_band_grid_cg(
             else:
                 rhs = rhs + effective_damping * sky_bg
 
+        _apply_prec: Callable[[Tensor], Tensor]
         if preconditioner == "diagonal_majorizer":
             assert stage_sens_diag is not None
             total_diag = stage_sens_diag.clone()
@@ -1695,12 +1111,16 @@ def solve_linear_band_grid_cg(
                 total_diag = total_diag + neg_weight
             if effective_smoothness_weight > 0.0:
                 if wx is not None or wy is not None:
-                    total_diag = total_diag + effective_smoothness_weight * _grid_weighted_laplacian_diagonal_majorizer(
-                        rhs.shape,
-                        wx,
-                        wy,
-                        device=rhs.device,
-                        dtype=rhs.dtype,
+                    total_diag = (
+                        total_diag
+                        + effective_smoothness_weight
+                        * _grid_weighted_laplacian_diagonal_majorizer(
+                            cast(tuple[int, int], rhs.shape),  # 2-D (H, W) target
+                            wx,
+                            wy,
+                            device=rhs.device,
+                            dtype=rhs.dtype,
+                        )
                     )
                 else:
                     total_diag = total_diag + 8.0 * effective_smoothness_weight
@@ -1717,32 +1137,41 @@ def solve_linear_band_grid_cg(
             )
             preconditioner_name = "diagonal_majorizer"
 
-            def _apply_prec(r: Tensor, _inv: Tensor = inv_diag) -> Tensor:
+            def _majorizer_prec(r: Tensor, _inv: Tensor = inv_diag) -> Tensor:
                 return r * _inv
+
+            _apply_prec = _majorizer_prec
 
         elif preconditioner is None or preconditioner == "none":
             preconditioner_name = "none"
 
-            def _apply_prec(r: Tensor) -> Tensor:
+            def _identity_prec(r: Tensor) -> Tensor:
                 return r
+
+            _apply_prec = _identity_prec
 
         elif isinstance(preconditioner, Tensor):
             preconditioner_name = "tensor_diagonal"
             diag_t = preconditioner.to(device=rhs.device, dtype=rhs.dtype)
             if diag_t.shape != rhs.shape:
-                raise ValueError("diagonal preconditioner shape must match target shape")
+                raise ValueError(
+                    "diagonal preconditioner shape must match target shape"
+                )
             inv_diag = torch.where(
                 diag_t > 0.0,
                 1.0 / torch.clamp(diag_t, min=1.0e-12),
                 torch.zeros_like(diag_t),
             )
 
-            def _apply_prec(r: Tensor, _inv: Tensor = inv_diag) -> Tensor:
+            def _tensor_diag_prec(r: Tensor, _inv: Tensor = inv_diag) -> Tensor:
                 return r * _inv
+
+            _apply_prec = _tensor_diag_prec
 
         elif callable(preconditioner):
             preconditioner_name = "callable"
-            _apply_prec = preconditioner
+            _apply_prec = cast(Callable[[Tensor], Tensor], preconditioner)
+
         else:
             raise ValueError(f"unsupported preconditioner {preconditioner!r}")
 
@@ -1768,9 +1197,7 @@ def solve_linear_band_grid_cg(
                 assert isinstance(operator_or_set, BoundObservationOperatorSet)
                 preds = operator_or_set.apply(state)
                 image = operator_or_set.weighted_adjoint(
-                    tuple(
-                        p_e * w_e for p_e, w_e in zip(preds, _det_w, strict=True)
-                    )
+                    tuple(p_e * w_e for p_e, w_e in zip(preds, _det_w, strict=True))
                 )
             if effective_damping > 0.0:
                 if _damp_w is not None:
@@ -1780,8 +1207,10 @@ def solve_linear_band_grid_cg(
             if _neg_w is not None:
                 image = image + _neg_w * state
             if effective_smoothness_weight > 0.0:
-                image = image + effective_smoothness_weight * _grid_weighted_laplacian_action(
-                    state, _wx, _wy
+                image = (
+                    image
+                    + effective_smoothness_weight
+                    * _grid_weighted_laplacian_action(state, _wx, _wy)
                 )
             return image
 
@@ -1807,9 +1236,7 @@ def solve_linear_band_grid_cg(
         rz_old = float(rz_old_t.detach().item())
         ref_norm = max(rhs_norm, r0_norm, 1.0e-30)
         stage_tol = (
-            float(tolerance)
-            if stage_idx == num_stages - 1
-            else float(tolerance) * 10.0
+            float(tolerance) if stage_idx == num_stages - 1 else float(tolerance) * 10.0
         )
         converged = r0_norm <= stage_tol * (ref_norm if stage_idx > 0 else 1.0)
         if num_stages == 1:
@@ -1870,9 +1297,7 @@ def solve_linear_band_grid_cg(
     assert initial_r0_norm is not None
     final_r_norm = history[-1]
     rel_residual = (
-        final_r_norm / max(initial_r0_norm, 1.0e-30)
-        if initial_r0_norm > 0.0
-        else 0.0
+        final_r_norm / max(initial_r0_norm, 1.0e-30) if initial_r0_norm > 0.0 else 0.0
     )
     if diagnostics is not None:
         effective_fn_name = (
@@ -1891,7 +1316,6 @@ def solve_linear_band_grid_cg(
                 "edge_preserving": bool(edge_preserving or shared_edge_sq is not None),
                 "non_negative_weight": float(non_negative_weight),
                 "data_weight_fn": effective_fn_name,
-                "torchregress_irls_backend": bool(_HAS_TORCHREGRESS_IRLS),
                 "detector_outlier_fraction": float(detector_outlier_fraction),
                 "preconditioner": preconditioner_name,
                 "damping": float(damping),
@@ -1926,9 +1350,7 @@ def solve_linear_band_grid_cg(
                 p50 = float(torch.quantile(pos_sens.double(), 0.50).item())
                 p90 = float(torch.quantile(pos_sens.double(), 0.90).item())
                 diagnostics["grid_sensitivity_median"] = p50
-                diagnostics["grid_sensitivity_p10_p90_ratio"] = p10 / max(
-                    p90, 1.0e-30
-                )
+                diagnostics["grid_sensitivity_p10_p90_ratio"] = p10 / max(p90, 1.0e-30)
             else:
                 diagnostics["grid_sensitivity_median"] = 0.0
                 diagnostics["grid_sensitivity_p10_p90_ratio"] = 0.0
@@ -1940,7 +1362,9 @@ def solve_linear_band_grid_cg(
 
 
 def solve_joint_multiband_grid_cg(
-    operators_by_band: Mapping[str, BoundObservationOperator | BoundObservationOperatorSet],
+    operators_by_band: Mapping[
+        str, BoundObservationOperator | BoundObservationOperatorSet
+    ],
     data_by_band: Mapping[str, Tensor | Sequence[Tensor]],
     *,
     initial_solutions: Mapping[str, Tensor] | None = None,
@@ -1959,6 +1383,8 @@ def solve_joint_multiband_grid_cg(
     ) = "none",
     irls_config: IRLSConfig | None = None,
     diagnostics_by_band: dict[str, dict[str, Any]] | None = None,
+    well_covered_fraction: float = 0.5,
+    source_dead_zone_sigma: float = 2.0,
 ) -> dict[str, LinearSolveResult]:
     """Jointly solve multi-band surface-brightness grids via coupled Vector-Charbonnier IRLS-PCG.
 
@@ -1974,14 +1400,18 @@ def solve_joint_multiband_grid_cg(
         raise ValueError("irls_steps must be positive")
     band_keys = tuple(operators_by_band.keys())
     if set(band_keys) != set(data_by_band.keys()):
-        raise ValueError("operators_by_band and data_by_band must have matching band keys")
+        raise ValueError(
+            "operators_by_band and data_by_band must have matching band keys"
+        )
 
     num_stages = int(irls_steps)
     if num_stages == 1 or not edge_preserving or len(band_keys) == 1:
         results: dict[str, LinearSolveResult] = {}
         for band in band_keys:
             band_diag: dict[str, Any] = {}
-            init_b = initial_solutions.get(band) if initial_solutions is not None else None
+            init_b = (
+                initial_solutions.get(band) if initial_solutions is not None else None
+            )
             results[band] = solve_linear_band_grid_cg(
                 operators_by_band[band],
                 data_by_band[band],
@@ -1999,6 +1429,8 @@ def solve_joint_multiband_grid_cg(
                 data_weight_fn=data_weight_fn,
                 irls_config=irls_config,
                 diagnostics=band_diag,
+                well_covered_fraction=well_covered_fraction,
+                source_dead_zone_sigma=source_dead_zone_sigma,
             )
             if diagnostics_by_band is not None:
                 diagnostics_by_band[band] = band_diag
@@ -2042,7 +1474,9 @@ def solve_joint_multiband_grid_cg(
                 sigma_b = max(sky_sigmas.get(band, 1.0), 1.0e-30)
                 bg_b = sky_bgs.get(band, 0.0)
                 u_b = (sol_b - bg_b) / sigma_b
-                u_b_dead = torch.sign(u_b) * torch.clamp(torch.abs(u_b) - 2.0, min=0.0)
+                u_b_dead = torch.sign(u_b) * torch.clamp(
+                    torch.abs(u_b) - source_dead_zone_sigma, min=0.0
+                )
                 u_list.append(u_b_dead)
             u_stack = torch.stack(u_list, dim=0)
             shared_source_sq = torch.mean(torch.square(u_stack), dim=0)
@@ -2064,7 +1498,9 @@ def solve_joint_multiband_grid_cg(
             if (irls_config is not None and data_weight_fn == "none")
             else data_weight_fn
         )
-        stage_weight_fn: Literal["none", "huber", "tukey", "power"] | Callable[..., Tensor] = (
+        stage_weight_fn: (
+            Literal["none", "huber", "tukey", "power"] | Callable[..., Tensor]
+        ) = (
             "none"
             if stage_idx == 0
             else ("huber" if (is_warmup and req_fn == "tukey") else data_weight_fn)
@@ -2107,6 +1543,8 @@ def solve_joint_multiband_grid_cg(
                 shared_edge_sq=shared_edge_sq,
                 shared_source_sq=shared_source_sq,
                 diagnostics=stage_diag,
+                well_covered_fraction=well_covered_fraction,
+                source_dead_zone_sigma=source_dead_zone_sigma,
             )
             current_solutions[band] = res_b.solution
             sky_sigmas[band] = float(stage_diag.get("sky_sigma", 1.0))
@@ -2126,9 +1564,7 @@ def solve_joint_multiband_grid_cg(
             total_rhs_sec_by_band[band] += float(
                 stage_diag.get("rhs_and_preconditioner_seconds", 0.0)
             )
-            total_solve_sec_by_band[band] += float(
-                stage_diag.get("solve_seconds", 0.0)
-            )
+            total_solve_sec_by_band[band] += float(stage_diag.get("solve_seconds", 0.0))
             per_band_diags[band] = stage_diag
 
     final_results: dict[str, LinearSolveResult] = {}
@@ -2236,8 +1672,7 @@ def solve_linear_band_grid_lsqr(
         else:
             preds = (operators[0].apply(v),)
         weighted = tuple(
-            sw * p.to(dtype=sw.dtype)
-            for sw, p in zip(sqrt_weights, preds, strict=True)
+            sw * p.to(dtype=sw.dtype) for sw, p in zip(sqrt_weights, preds, strict=True)
         )
         reg = v * sqrt_damp if sqrt_damp > 0.0 else torch.zeros_like(v)
         return weighted, reg
@@ -2247,12 +1682,11 @@ def solve_linear_band_grid_lsqr(
         u_reg: Tensor,
     ) -> Tensor:
         scaled = tuple(
-            sw * u.to(dtype=sw.dtype)
-            for sw, u in zip(sqrt_weights, u_obs, strict=True)
+            sw * u.to(dtype=sw.dtype) for sw, u in zip(sqrt_weights, u_obs, strict=True)
         )
         adj = (
             operator_or_set.adjoint(scaled)
-            if is_set
+            if isinstance(operator_or_set, BoundObservationOperatorSet)
             else operators[0].adjoint(scaled[0])
         )
         if sqrt_damp > 0.0:
@@ -2260,7 +1694,10 @@ def solve_linear_band_grid_lsqr(
         return adj
 
     def _obs_norm(u_obs: tuple[Tensor, ...], u_reg: Tensor) -> float:
-        sq = sum(torch.sum(u.to(dtype=torch.float64).square()) for u in u_obs)
+        # ``u_obs`` holds one residual block per operator (non-empty), so the sum is a Tensor.
+        sq = cast(
+            Tensor, sum(torch.sum(u.to(dtype=torch.float64).square()) for u in u_obs)
+        )
         if sqrt_damp > 0.0:
             sq = sq + torch.sum(u_reg.to(dtype=torch.float64).square())
         return float(torch.sqrt(sq).item())
@@ -2276,9 +1713,7 @@ def solve_linear_band_grid_lsqr(
         return tuple(u * inv for u in u_obs), u_reg * inv
 
     t_solve0 = time.perf_counter()
-    pred0 = (
-        operator_or_set.apply(x0) if is_set else (operators[0].apply(x0),)
-    )
+    pred0 = operator_or_set.apply(x0) if is_set else (operators[0].apply(x0),)
     u_obs = tuple(
         sw * (d.to(dtype=p.dtype) - p)
         for sw, d, p in zip(sqrt_weights, data_tuple, pred0, strict=True)
@@ -2311,9 +1746,7 @@ def solve_linear_band_grid_lsqr(
             converged = True
             break
         av_obs, av_reg = _forward_augmented(v)
-        u_obs = tuple(
-            av - alpha * u for av, u in zip(av_obs, u_obs, strict=True)
-        )
+        u_obs = tuple(av - alpha * u for av, u in zip(av_obs, u_obs, strict=True))
         u_reg = av_reg - alpha * u_reg
         beta = _obs_norm(u_obs, u_reg)
         u_obs, u_reg = _scale_obs(u_obs, u_reg, beta)
@@ -2386,172 +1819,6 @@ class StationaryCalibratedBandObservation:
     provenance: dict[str, Any]
 
 
-def _extract_stationary_effective_psf(
-    observation: FieldObservation,
-    operator_bundle: ObservationOperatorBundle,
-    *,
-    forward_context: ForwardContext | None,
-) -> tuple[Tensor, str]:
-    psf_op = operator_bundle.psf
-    if psf_op is None:
-        raise ValueError("stationary calibration adapter requires a calibrated PSF operator")
-    if not psf_op.frozen:
-        raise ValueError("stationary calibration adapter requires a frozen PSF operator")
-    if psf_op.pixel_response_included is not True:
-        raise ValueError(
-            "stationary calibration adapter requires PSF pixel_response_included=True"
-        )
-    provenance = psf_op.pixel_response_provenance
-    if not isinstance(provenance, str) or not provenance.strip():
-        raise ValueError(
-            "stationary calibration adapter requires non-empty PSF pixel_response_provenance"
-        )
-    if isinstance(psf_op, ExplicitPSFOp):
-        spec = observation.psf_spec
-        if spec is None or spec.mode != "kernel2d" or spec.kernel2d is None:
-            raise ValueError(
-                "ExplicitPSFOp stationary adapter requires observation.psf_spec kernel2d"
-            )
-        if not spec.frozen or spec.pixel_response_included is not True:
-            raise ValueError(
-                "ExplicitPSFOp observation.psf_spec must be frozen with pixel_response_included=True"
-            )
-        kernel = spec.kernel2d.detach().to(
-            device=observation.image.device, dtype=observation.image.dtype
-        )
-    elif isinstance(psf_op, LearnedPSFOp):
-        model = psf_op.model
-        if not isinstance(model, ConditionedKernelPSF):
-            raise TypeError(
-                "stationary LearnedPSFOp must wrap a ConditionedKernelPSF model"
-            )
-        if any(p.requires_grad for p in model.parameters()):
-            raise ValueError("stationary ConditionedKernelPSF parameters must be frozen")
-        height, width = map(int, observation.image.shape)
-        param = next(model.parameters())
-        probe_x = torch.tensor(
-            [0.0, float(max(width - 1, 0)), 0.5 * float(max(width - 1, 0))],
-            device=param.device,
-            dtype=param.dtype,
-        ) + float(observation.detector_x0_pix)
-        probe_y = torch.tensor(
-            [0.0, float(max(height - 1, 0)), 0.5 * float(max(height - 1, 0))],
-            device=param.device,
-            dtype=param.dtype,
-        ) + float(observation.detector_y0_pix)
-        wl = float(
-            observation.wavelength
-            if observation.wavelength is not None
-            else (
-                0.5 * (float(observation.spectral_min) + float(observation.spectral_max))
-                if observation.spectral_min is not None
-                and observation.spectral_max is not None
-                else 0.0
-            )
-        )
-        time_mjd = (
-            None
-            if forward_context is None or forward_context.time_mjd is None
-            else float(forward_context.time_mjd)
-        )
-        with torch.no_grad():
-            kernels = model.effective_kernels(probe_x, probe_y, wl, time_mjd)
-        ref_kernel = kernels[0]
-        if not torch.allclose(kernels, ref_kernel.expand_as(kernels), rtol=1.0e-6, atol=1.0e-7):
-            raise ValueError(
-                "calibrated PSF varies across detector coordinates; stationary adapter requires a coordinate-invariant PSF"
-            )
-        kernel = ref_kernel.detach().to(
-            device=observation.image.device, dtype=observation.image.dtype
-        )
-    else:
-        raise TypeError(f"unsupported PSF operator type {type(psf_op)!r}")
-
-    if (
-        kernel.ndim != 2
-        or kernel.shape[0] != kernel.shape[1]
-        or int(kernel.shape[0]) % 2 != 1
-    ):
-        raise ValueError("stationary effective PSF kernel must be odd square 2D")
-    if not bool(torch.isfinite(kernel).all()):
-        raise ValueError("stationary effective PSF kernel must be finite")
-    if bool((kernel < -1.0e-7).any()):
-        raise ValueError("stationary effective PSF kernel must be non-negative")
-    kernel = torch.clamp(kernel, min=0.0)
-    kernel_sum = float(kernel.sum().item())
-    if not math.isfinite(kernel_sum) or kernel_sum <= 0.0:
-        raise ValueError("stationary effective PSF kernel must have positive sum")
-    kernel = kernel / kernel.sum()
-    return kernel, provenance
-
-
-def _extract_stationary_calibrated_background(
-    observation: FieldObservation,
-    operator_bundle: ObservationOperatorBundle,
-    *,
-    forward_context: ForwardContext | None,
-    background_gauge_policy: str,
-) -> tuple[Tensor, float]:
-    if not isinstance(background_gauge_policy, str) or not background_gauge_policy.strip():
-        raise ValueError("background_gauge_policy must be an explicit non-empty string")
-    bg_op = operator_bundle.background
-    if bg_op is None:
-        return torch.zeros_like(observation.image), 0.0
-    if not isinstance(bg_op, LearnedBackgroundOp):
-        raise TypeError(
-            "stationary calibration adapter requires LearnedBackgroundOp or None in bundle.background"
-        )
-    if bg_op.coordinate_frame != "detector":
-        raise ValueError(
-            "stationary calibrated background must use detector coordinate_frame"
-        )
-    model = bg_op.model
-    if not isinstance(model, ConditionedBackgroundField):
-        raise TypeError(
-            "stationary LearnedBackgroundOp must wrap a ConditionedBackgroundField"
-        )
-    if any(p.requires_grad for p in model.parameters()):
-        raise ValueError("stationary ConditionedBackgroundField parameters must be frozen")
-    height, width = map(int, observation.image.shape)
-    param = next(model.parameters())
-    probe_x = torch.tensor(
-        [0.0, float(max(width - 1, 0)), 0.5 * float(max(width - 1, 0))],
-        device=param.device,
-        dtype=param.dtype,
-    ) + float(observation.detector_x0_pix)
-    probe_y = torch.tensor(
-        [0.0, float(max(height - 1, 0)), 0.5 * float(max(height - 1, 0))],
-        device=param.device,
-        dtype=param.dtype,
-    ) + float(observation.detector_y0_pix)
-    wl = float(
-        observation.wavelength
-        if observation.wavelength is not None
-        else (
-            0.5 * (float(observation.spectral_min) + float(observation.spectral_max))
-            if observation.spectral_min is not None
-            and observation.spectral_max is not None
-            else 0.0
-        )
-    )
-    time_mjd = (
-        None
-        if forward_context is None or forward_context.time_mjd is None
-        else float(forward_context.time_mjd)
-    )
-    with torch.no_grad():
-        values = model(probe_x, probe_y, wl, time_mjd)
-    if not bool(torch.isfinite(values).all()):
-        raise ValueError("stationary calibrated background evaluation must be finite")
-    scalar_val = float(values[0].item())
-    if not torch.allclose(values, values[:1].expand_as(values), rtol=1.0e-6, atol=1.0e-7):
-        raise ValueError(
-            "calibrated background varies across detector coordinates; stationary adapter requires a constant pedestal"
-        )
-    bg_map = torch.full_like(observation.image, scalar_val)
-    return bg_map, scalar_val
-
-
 def adapt_stationary_calibrated_band_observation(
     observation: FieldObservation,
     operator_bundle: ObservationOperatorBundle,
@@ -2580,7 +1847,9 @@ def adapt_stationary_calibrated_band_observation(
             f"observation.value_unit {unit!r} does not match expected {expected_value_unit!r}"
         )
     if not isinstance(observation.band_name, str) or not observation.band_name.strip():
-        raise ValueError("stationary calibration adapter requires an explicit band_name")
+        raise ValueError(
+            "stationary calibration adapter requires an explicit band_name"
+        )
     if (
         float(getattr(observation, "photometric_scale", 1.0)) != 1.0
         or observation.gain_electrons_per_adu is not None
@@ -2656,50 +1925,6 @@ def adapt_stationary_calibrated_band_observation(
     )
 
 
-def _build_stationary_model_from_split(
-    arrays: dict[str, Tensor],
-    *,
-    role: str,
-) -> nn.Module:
-    def _center_scale(values: Tensor) -> tuple[float, float]:
-        vals = values.to(dtype=torch.float64)
-        return float(vals.mean()), max(float(vals.max() - vals.min()), 1.0)
-
-    x_center, x_scale = _center_scale(arrays["detector_x"])
-    y_center, y_scale = _center_scale(arrays["detector_y"])
-    wl_center, wl_scale = _center_scale(arrays["wavelength"])
-    t_center, t_scale = _center_scale(arrays["time_mjd"])
-    encoder = SpatioSpectralTemporalEncoder(
-        spatial_center=(x_center, y_center),
-        spatial_scale=(x_scale, y_scale),
-        wavelength_center=wl_center,
-        spectral_scale=wl_scale,
-        time_center_mjd=t_center,
-        temporal_scale_days=t_scale,
-        spatial_frequencies=0,
-        spectral_frequencies=0,
-        temporal_frequencies=0,
-    )
-    if role == "psf":
-        kernel_size = int(arrays["target_kernels"].shape[-1])
-        model: nn.Module = ConditionedKernelPSF(
-            encoder,
-            n_basis=1,
-            kernel_size=kernel_size,
-            init_fwhm_pix=2.0,
-            hidden_dim=32,
-        )
-        for p in model.parameters():
-            p.requires_grad_(False)
-        return model
-    if role == "background":
-        model = ConditionedBackgroundField(encoder, hidden_dim=32, hidden_layers=2)
-        for p in model.parameters():
-            p.requires_grad_(False)
-        return model
-    raise ValueError(f"unsupported calibration role {role!r}")
-
-
 def load_stationary_calibrated_band_observations(
     observations: Sequence[FieldObservation],
     contexts: Sequence[ForwardContext],
@@ -2725,7 +1950,7 @@ def load_stationary_calibrated_band_observations(
         )
     manifest_resolved = Path(manifest_path).resolve()
     report_resolved = Path(fit_report_path).resolve()
-    manifest_sha = _sha256_file(manifest_resolved)
+    manifest_sha = _file_sha256(manifest_resolved)
     report = json.loads(report_resolved.read_text(encoding="utf-8"))
     if report.get("manifest_sha256") != manifest_sha:
         raise ValueError("operator fit report does not match the calibration manifest")
@@ -2777,7 +2002,7 @@ def load_stationary_calibrated_band_observations(
             ckpt_path = Path(group["checkpoint"])
             if not ckpt_path.is_absolute():
                 ckpt_path = (report_resolved.parent / ckpt_path).resolve()
-            ckpt_sha = _sha256_file(ckpt_path)
+            ckpt_sha = _file_sha256(ckpt_path)
             if ckpt_sha != group.get("checkpoint_sha256"):
                 raise ValueError(f"{detector}/{role} checkpoint hash mismatch")
             arrays = load_operator_calibration_split(
@@ -2820,8 +2045,8 @@ def load_stationary_calibrated_band_observations(
                     or group.get("pixel_response_provenance") != prp
                 ):
                     raise ValueError(f"invalid {detector}/psf pixel-response metadata")
-                model._torchsky_pixel_response_included = True
-                model._torchsky_pixel_response_provenance = prp
+                setattr(model, "_torchsky_pixel_response_included", True)
+                setattr(model, "_torchsky_pixel_response_provenance", prp)
             else:
                 assert isinstance(model, ConditionedBackgroundField)
                 output_layer = model.network[-1]
@@ -2912,7 +2137,7 @@ def load_stationary_calibrated_band_observations(
                 raise ValueError(
                     "measured passband path and sha256 must both be provided when declared"
                 )
-            actual_pb_sha = _sha256_file(Path(str(passband_path)))
+            actual_pb_sha = _file_sha256(Path(str(passband_path)))
             if actual_pb_sha != str(passband_sha):
                 raise ValueError("measured passband SHA-256 hash mismatch")
         key = _context_key(ctx)
@@ -2922,7 +2147,7 @@ def load_stationary_calibrated_band_observations(
             psf=LearnedPSFOp(
                 psf_model,
                 frozen=True,
-                pixel_response_included= bool(
+                pixel_response_included=bool(
                     getattr(psf_model, "_torchsky_pixel_response_included", False)
                 ),
                 pixel_response_provenance=str(
@@ -2968,4 +2193,3 @@ __all__ = [
     "solve_linear_band_grid_cg",
     "solve_linear_band_grid_lsqr",
 ]
-

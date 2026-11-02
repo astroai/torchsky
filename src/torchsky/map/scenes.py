@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from torch import Tensor, nn
 
 from .target import TargetRenderSpec
+
+if TYPE_CHECKING:
+    from .field.types import PSFSpec
 
 
 def target_to_field_observation(
@@ -17,6 +20,7 @@ def target_to_field_observation(
     *,
     device: torch.device | None = None,
 ):
+    """Create an empty field observation carrying a target's metadata."""
     from .field.types import FieldObservation
 
     if target.transmission_center is not None:
@@ -33,7 +37,9 @@ def target_to_field_observation(
         spectral_max=target.spectral_max,
         transmission_center=target.transmission_center,
         transmission_sigma=target.transmission_sigma,
-        psf_spec=target.psf_spec,
+        psf_spec=cast(
+            "PSFSpec | None", target.psf_spec
+        ),  # field targets carry a PSFSpec
         band_name=target.band_label,
         passband=target.passband,
         value_semantics=target.value_semantics,
@@ -50,6 +56,7 @@ class SceneRepresentation(ABC):
 def as_scene_representation(
     scene: SceneRepresentation | nn.Module | Tensor,
 ) -> SceneRepresentation:
+    """Adapt a scene object, module, or tensor to ``SceneRepresentation``."""
     if isinstance(scene, SceneRepresentation):
         return scene
     if isinstance(scene, nn.Module):

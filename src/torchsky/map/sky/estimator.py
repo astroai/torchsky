@@ -49,13 +49,19 @@ class CompactMeshSkyModel:
             raise ValueError("mesh render window is out of bounds")
         y = (
             2.0
-            * (torch.arange(y0, y1, device=self.mesh.device, dtype=self.mesh.dtype) + 0.5)
+            * (
+                torch.arange(y0, y1, device=self.mesh.device, dtype=self.mesh.dtype)
+                + 0.5
+            )
             / height
             - 1.0
         )
         x = (
             2.0
-            * (torch.arange(x0, x1, device=self.mesh.device, dtype=self.mesh.dtype) + 0.5)
+            * (
+                torch.arange(x0, x1, device=self.mesh.device, dtype=self.mesh.dtype)
+                + 0.5
+            )
             / width
             - 1.0
         )
@@ -92,8 +98,7 @@ class MeshSkyEstimator:
         differentiable.
     mesh_filter
         Post-filter applied to the coarse mesh: ``"median"``,
-        ``"gaussian"``, or ``None`` (no filter).  Legacy strings
-        ``"median_3"`` and ``"gaussian_3"`` are also accepted.
+        ``"gaussian"``, or ``None`` (no filter).
     mesh_filter_size
         Kernel size for the post-filter (default 3).  Ignored when
         *mesh_filter* is ``None``.
@@ -128,23 +133,26 @@ class MeshSkyEstimator:
                 f"unknown statistic '{statistic}'; "
                 f"choose from {set(_STATISTIC_REGISTRY)}"
             )
+        if mesh_filter is not None and (
+            mesh_filter_size < 1 or mesh_filter_size % 2 == 0
+        ):
+            raise ValueError("mesh_filter_size must be a positive odd integer")
 
         self._filter_type: str | None
         self._filter_kernel: int | None
-        if mesh_filter in ("median", "median_3"):
+        if mesh_filter == "median":
             self._filter_type = "median"
-            self._filter_kernel = mesh_filter_size if mesh_filter == "median" else 3
-        elif mesh_filter in ("gaussian", "gaussian_3"):
+            self._filter_kernel = mesh_filter_size
+        elif mesh_filter == "gaussian":
             self._filter_type = "gaussian"
-            self._filter_kernel = mesh_filter_size if mesh_filter == "gaussian" else 3
+            self._filter_kernel = mesh_filter_size
         elif mesh_filter is None:
             self._filter_type = None
             self._filter_kernel = None
         else:
             raise ValueError(
                 f"unknown mesh_filter '{mesh_filter}'; "
-                f"choose from 'median', 'gaussian', 'median_3', "
-                f"'gaussian_3', None"
+                f"choose from 'median', 'gaussian', None"
             )
 
         if interpolate not in ("bilinear", "bicubic"):
@@ -254,9 +262,7 @@ class MeshSkyEstimator:
         pad_width = max(0, (n_width - 1) * stride + block_size - width)
         reflect = pad_height < height and pad_width < width
         statistic = _STATISTIC_REGISTRY[self.statistic]
-        mesh = torch.empty(
-            (n_height, n_width), dtype=image.dtype, device=image.device
-        )
+        mesh = torch.empty((n_height, n_width), dtype=image.dtype, device=image.device)
         for row in range(n_height):
             y_index = torch.arange(
                 row * stride,
@@ -426,7 +432,9 @@ class MeshSkyEstimator:
 
         return mesh
 
-    def _interpolate_to_image(self, mesh: Tensor, image_shape: tuple[int, int]) -> Tensor:
+    def _interpolate_to_image(
+        self, mesh: Tensor, image_shape: tuple[int, int]
+    ) -> Tensor:
         H, W = image_shape
         mesh_2d = mesh[None, None, :, :]
         up = F.interpolate(
@@ -437,7 +445,9 @@ class MeshSkyEstimator:
         )
         return up[0, 0]
 
-    def _polynomial_to_image(self, mesh: Tensor, image_shape: tuple[int, int]) -> Tensor:
+    def _polynomial_to_image(
+        self, mesh: Tensor, image_shape: tuple[int, int]
+    ) -> Tensor:
         H, W = image_shape
         nH, nW = mesh.shape
         order = self.mesh_polynomial_order

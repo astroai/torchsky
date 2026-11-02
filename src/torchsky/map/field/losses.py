@@ -9,6 +9,25 @@ from torch import Tensor
 from .types import FieldLossKind
 
 
+# exp(+-20) spans ~1e-9..5e8 and stays finite in float32 (exp overflows at ~88).
+# The map is the identity for |logvar| <= 10 (variances 4.5e-5..2.2e4, so ordinary
+# data scales are untouched) and a C1 tanh saturation toward +-20 beyond, so the
+# gradient never vanishes exactly, unlike a hard clamp.
+LOGVAR_LINEAR_BOUND = 10.0
+LOGVAR_SOFT_BOUND = 20.0
+
+
+def soft_bound_logvar(logvar: Tensor) -> Tensor:
+    """Identity inside ``|logvar| <= 10``; smooth tanh saturation toward ``+-20``."""
+    span = LOGVAR_SOFT_BOUND - LOGVAR_LINEAR_BOUND
+    magnitude = logvar.abs()
+    excess = (magnitude - LOGVAR_LINEAR_BOUND).clamp_min(0.0)
+    saturated = LOGVAR_LINEAR_BOUND + span * torch.tanh(excess / span)
+    return torch.where(
+        magnitude > LOGVAR_LINEAR_BOUND, torch.sign(logvar) * saturated, logvar
+    )
+
+
 def _field_residual_loss(
     residual: Tensor,
     *,
@@ -16,34 +35,78 @@ def _field_residual_loss(
     charbonnier_eps: float,
     huber_delta: float,
     logvar: Tensor | None = None,
+    observation_invvar: Tensor | None = None,
+    sample_weight: Tensor | None = None,
 ) -> Tensor:
+    valid_invvar = (
+        None
+        if observation_invvar is None
+        else torch.isfinite(observation_invvar) & (observation_invvar > 0.0)
+    )
+    valid_weight = (
+        None
+        if sample_weight is None
+        else torch.isfinite(sample_weight) & (sample_weight > 0.0)
+    )
+    valid = valid_invvar
+    if valid_weight is not None:
+        valid = valid_weight if valid is None else valid & valid_weight
+    safe_residual = residual if valid is None else torch.where(valid, residual, 0.0)
     # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
     if loss_kind == "mse":
-        return residual * residual
-    if loss_kind == "charbonnier":
+        loss = safe_residual * safe_residual
+    elif loss_kind == "charbonnier":
         eps = torch.as_tensor(
             float(charbonnier_eps),
-            device=residual.device,
-            dtype=residual.dtype,
+            device=safe_residual.device,
+            dtype=safe_residual.dtype,
         )
-        return torch.sqrt((residual * residual) + (eps * eps))
-    if loss_kind == "huber":
-        return F.huber_loss(
-            residual,
-            torch.zeros_like(residual),
+        loss = torch.sqrt((safe_residual * safe_residual) + (eps * eps))
+    elif loss_kind == "huber":
+        loss = F.huber_loss(
+            safe_residual,
+            torch.zeros_like(safe_residual),
             reduction="none",
             delta=float(huber_delta),
         )
-    if loss_kind == "gaussian_nll":
+    elif loss_kind == "gaussian_nll":
         if logvar is None:
             raise ValueError("gaussian_nll requires predictive log-variance")
-        clipped = torch.clamp(logvar, min=-8.0, max=6.0)
-        return 0.5 * (torch.exp(-clipped) * (residual * residual) + clipped)
-    if loss_kind == "structured_nll":
+        safe_logvar = logvar if valid is None else torch.where(valid, logvar, 0.0)
+        clipped = soft_bound_logvar(safe_logvar)
+        total_variance = torch.exp(clipped)
+        if observation_invvar is not None:
+            assert valid_invvar is not None
+            safe_invvar = torch.where(
+                valid_invvar,
+                observation_invvar,
+                torch.ones_like(observation_invvar),
+            )
+            total_variance = total_variance + safe_invvar.reciprocal()
+        loss = 0.5 * (
+            (safe_residual * safe_residual) / total_variance + torch.log(total_variance)
+        )
+        if observation_invvar is not None:
+            assert valid_invvar is not None
+            loss = torch.where(valid_invvar, loss, torch.zeros_like(loss))
+
+    elif loss_kind == "structured_nll":
         raise ValueError(
             "structured_nll requires a full FieldObservation and StructuredNoiseOp"
         )
-    raise ValueError(f"unsupported field loss kind {loss_kind!r}")
+    else:
+        raise ValueError(f"unsupported field loss kind {loss_kind!r}")
+    if sample_weight is not None:
+        assert valid_weight is not None
+        safe_weight = torch.where(
+            valid_weight, sample_weight, torch.zeros_like(sample_weight)
+        )
+        loss = torch.where(
+            valid_weight,
+            loss * safe_weight,
+            torch.zeros_like(loss),
+        )
+    return loss
 
 
 def _field_gradient_residual_weighted_loss(

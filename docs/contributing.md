@@ -1,8 +1,7 @@
 # Contributing
 
 This guide is for contributors and maintainers.
-User-facing usage lives in `../README.md`.
-Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md`.
+The short checklist is [CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md) in the repository root; this page is the full guide. Documentation authoring is in [Authoring docs](authoring.md) and releases in [Release process](release.md).
 
 ## Engineering Doctrine
 
@@ -19,14 +18,8 @@ Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md
 
 ## Development Setup
 
-```bash
-git clone https://github.com/sfabbro/torchsky.git
-cd torchsky
-pixi install
-pixi run dev
-pixi run verify
-```
-
+Clone and install with the steps in
+[CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md#setup).
 The project uses [pixi](https://pixi.sh/) for environment management,
 [ruff](https://github.com/astral-sh/ruff) for linting, and
 [pytest](https://docs.pytest.org/) for testing. Use Pixi commands for project
@@ -35,25 +28,22 @@ work instead of a bare `python` or `python3` from your shell.
 - Python package: `src/torchsky/`
 - Native extension: `src/torchsky/cpp_src/`
 - Tests: `tests/`
-- Benchmarks: `benchmarks/`
 - Docs: `docs/`
 
 Local files that are intentionally not committed:
 
 - large downloaded real-data inputs under `data/`
-- generated benchmark artifacts under `data/benchmark_results/`
 - temporary staging files under `data/_tmp/`
 
-Fresh clones should recreate those products locally using the commands in
-`docs/benchmarks.md`.
+Scientific benchmark inputs, evaluation outputs, and scorecards are owned by the
+sibling `torchsky-harness` repository.
 
 ```
 src/torchsky/          Python package
 src/torchsky/cpp_src/  C++ native geometry/compute extension
 src/torchsky/wcs/      Pure-PyTorch WCS implementation
 src/torchsky/sphere/   HEALPix, spherical geometry, SHT
-tests/                  Unit and integration tests
-benchmarks/             Benchmark scripts and upstream-derived validation gates
+tests/                  Bounded unit, API, regression, adjoint, and device tests
 docs/                   Documentation
 examples/               Runnable example scripts
 ```
@@ -75,16 +65,20 @@ Use the `torchfits` repository for CFITSIO build configuration.
 
 ## Test Expectations
 
-Minimum pre-PR checks:
+The everyday commands (preflight, targeted tests, typecheck, docs contract) are
+listed in
+[CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md#checks).
+Minimum pre-PR check:
 
 ```bash
 pixi run -e test -- pytest tests/test_api.py tests/test_wcs_api.py -q
 ```
 
-Full suite:
+Full suite (the `pixi run test` task is the quicker lane and deliberately
+ignores `tests/test_map_*.py`):
 
 ```bash
-pixi run test
+pixi run -e test -- pytest -n auto
 ```
 
 Git pre-push hook (`pixi run setup-hooks`) is `pixi run preflight-push` only
@@ -95,60 +89,54 @@ locally:
 pixi run ci-local
 ```
 
-Targeted checks while editing:
+## Scientific evaluation
 
-```bash
-pixi run preflight-push
-pixi run typecheck
-pixi run -e test -- pytest tests/test_foo.py
-```
-
-## Benchmarks
-
-For investigation, narrow scope with domain-specific tasks such as `bench-wcs`,
-`bench-sphere`, and `bench-map-acceptance-smoke`. `bench-all` is
-comprehensive and belongs on CANFAR for resource-intensive runs.
+Scientific benchmarks, exhaustive parity, real-data validation, comparator
+environments, and CANFAR evaluation runs live in
+[`torchsky-harness`](https://github.com/astroai/torchsky-harness). Core changes
+retain bounded correctness and performance smoke contracts. See the
+[evaluation guide](evaluation/benchmarks.md) for the boundary and harness methodology for
+run instructions.
 
 ## Documentation Policy
 
+The published documentation site is built from `docs/` only. Unpublished
+research, reviews, archives, and brainstorming stay outside git; implemented
+behavior belongs in `docs/`.
+
 - Root `README.md`: user-facing only.
-- `docs/README.md`: documentation map for users, contributors, maintainers, and
-  research/history notes.
-- `docs/api.md`: public API guide and namespace router.
+- `docs/index.md`: site home and documentation map.
+- `docs/quickstart.md`: the shortest working path.
+- `docs/reference/index.md`: generated public API router; page identity and
+  ordering live in `docs/reference/_registry.toml`.
 - `docs/changelog.md`: release notes.
-- `docs/examples.md` and `docs/benchmarks.md`: operational guides.
+- `docs/examples.md` and `docs/evaluation/benchmarks.md`: operational guides.
+- `docs/roadmap.md`: planned and in-flight work.
+- Untracked research and brainstorming stay outside git; implemented behavior
+  belongs in `docs/`.
 
-If a PR changes a public API, update the relevant namespace guide and `docs/api.md` routing in the same PR.
-FITS I/O documentation and benchmarks belong in `torchfits`; update only the
-cross-package contract here.
-
-## Release Checklist (Maintainers)
-
-Use `docs/release.md` as the canonical runbook.
-
-Minimum gates:
-
-1. Run release benchmarks and update `docs/benchmarks.md`.
-2. Ensure `docs/changelog.md` is final and versions are synced in:
-   - `pyproject.toml`
-   - `pixi.toml`
-   - `src/torchsky/__init__.py`
-3. Ensure CI is green.
-4. Build and validate artifacts:
+Build and verify docs with Pixi:
 
 ```bash
-pixi run bench-all
+pixi run docs-build     # zensical build --clean --strict
+pixi run docs-serve     # local preview
+pixi run docs-contract  # strict build + offline link check + docs tests
 ```
 
-Include benchmark evidence in PRs that touch performance-sensitive paths.
+If a PR changes a public API, update the relevant namespace guide and
+`docs/reference/_registry.toml` routing in the same PR, then run
+`pixi run docs-reference`. See [authoring.md](authoring.md) for the page and
+snippet conventions. FITS I/O documentation and benchmarks belong in
+`torchfits`; update only the cross-package contract here.
 
 ## PR guidelines
 
-- Keep PRs focused on a single concern.
-- Include tests for behavior changes.
-- Run `pixi run lint` and fix issues before submitting.
-- Do not commit local scratch files, benchmark artifacts, or `.env` files.
+The checklist is in
+[CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md#pull-requests).
+Do not commit local scratch files, benchmark artifacts, or `.env` files.
 
 ## Release process
 
-See [release.md](release.md) for the maintainer checklist.
+Maintainers: see [release.md](release.md) for the canonical runbook. For
+performance claims, record a harness run and link its subject revision,
+harness revision, and scorecard in the PR.

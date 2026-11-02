@@ -1,33 +1,34 @@
+import ast
 from pathlib import Path
-import re
 
 
 def test_torchsky_src_does_not_import_astropy_io_fits():
     repo = Path(__file__).parents[1]
-    paths = list((repo / "src" / "torchsky").rglob("*.py"))
-    paths.extend((repo / "tests").glob("test_wcs*.py"))
-    paths.extend(
-        [
-            repo / "tests" / "test_catalog_compat.py",
-            repo / "tests" / "test_canfar_wcs_sphere_runner.py",
-            repo / "tests" / "test_release_smoke.py",
-            repo / "tests" / "test_real_data_validation.py",
-            repo / "tests" / "test_spectral.py",
-            repo / "benchmarks" / "bench_catalog_compat.py",
-            repo / "benchmarks" / "bench_wcs.py",
-            repo / "benchmarks" / "bench_wcs_tpv_inverse.py",
-            repo / "benchmarks" / "bench_wcs_legacy_only.py",
-            repo / "benchmarks" / "bench_wcs_spectral_temporal.py",
-        ]
-    )
     offenders = []
-    for path in paths:
-        for line_number, line in enumerate(path.read_text().splitlines(), start=1):
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if "astropy.io.fits" in line:
-                offenders.append(f"{path}:{line_number}: {stripped}")
+    roots = [
+        repo / "src" / "torchsky",
+        repo / "tests",
+        repo / "scripts",
+        repo / "examples",
+    ]
+    for root in roots:
+        for path in root.rglob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.Import):
+                    forbidden = any(
+                        alias.name == "astropy.io.fits"
+                        or alias.name.startswith("astropy.io.fits.")
+                        for alias in node.names
+                    )
+                elif isinstance(node, ast.ImportFrom):
+                    forbidden = (node.module or "").startswith("astropy.io.fits") or (
+                        node.module == "astropy.io"
+                        and any(alias.name == "fits" for alias in node.names)
+                    )
+                else:
+                    forbidden = False
+                if forbidden:
+                    offenders.append(f"{path}:{node.lineno}: Astropy FITS import")
     assert not offenders, "\n".join(offenders)
 
 
@@ -36,7 +37,6 @@ def test_torchsky_does_not_import_python_fitsio():
     roots = [
         repo / "src" / "torchsky",
         repo / "tests",
-        repo / "benchmarks",
         repo / "scripts",
         repo / "examples",
     ]
@@ -64,34 +64,23 @@ def test_torchsky_does_not_import_torchfits_private_modules():
     assert not offenders, "\n".join(offenders)
 
 
-def test_dataset_boundary_uses_published_torchfits_names():
-    from torchfits.data import FitsImageDataset, FitsImageIterableDataset
-    from torchsky.datasets import (
-        FITSDataset,
-        FitsImageDataset as TorchskyFitsImageDataset,
-        FitsImageIterableDataset as TorchskyFitsImageIterableDataset,
-        IterableFITSDataset,
-    )
+def test_fits_surfaces_are_not_owned_by_torchsky():
+    import importlib.util
 
-    assert TorchskyFitsImageDataset is FitsImageDataset
-    assert TorchskyFitsImageIterableDataset is FitsImageIterableDataset
-    assert FITSDataset is FitsImageDataset
-    assert IterableFITSDataset is FitsImageIterableDataset
-
-
-def test_table_boundary_is_a_thin_public_torchfits_facade():
     import torchfits
-    from torchfits import table as fits_table
-    from torchsky import table as sky_table
 
-    release = tuple(int(part) for part in re.findall(r"\d+", torchfits.__version__)[:3])
-    assert release >= (1, 0, 0)
-    for name in ("read", "scan", "scan_torch", "read_polars", "scan_polars"):
-        assert getattr(sky_table, name) is getattr(fits_table, name)
-    assert not any(name.startswith("_can_use_") for name in dir(sky_table))
-
-
-def test_hdu_boundary_does_not_reexport_tensor_frame():
-    import torchsky.hdu as hdu
-
-    assert not hasattr(hdu, "TensorFrame")
+    for name in (
+        "io",
+        "table",
+        "hdu",
+        "cache",
+        "datasets",
+        "dataloader",
+        "header_parser",
+        "core",
+    ):
+        assert importlib.util.find_spec(f"torchsky.{name}") is None
+    for name in ("read", "write", "open", "read_header", "read_tensor"):
+        assert hasattr(torchfits, name)
+    assert hasattr(torchfits.table, "read")
+    assert hasattr(torchfits.hdu, "HDUList")

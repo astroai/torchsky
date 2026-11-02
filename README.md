@@ -1,208 +1,112 @@
 # torchsky
 
-[![PyPI version](https://img.shields.io/pypi/v/torchsky.svg)](https://pypi.org/project/torchsky/)
-[![Wheels build](https://github.com/sfabbro/torchsky/actions/workflows/build_wheels.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/build_wheels.yml)
-[![CI status](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/sfabbro/torchsky/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/astroai/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/astroai/torchsky/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-astroai.github.io%2Ftorchsky-brightgreen)](https://astroai.github.io/torchsky/)
+[![Release: 0.5.0rc1 pre-release](https://img.shields.io/badge/release-0.5.0rc1%20pre--release-lightgrey)](https://github.com/astroai/torchsky/releases)
+[![Python 3.12-3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/astroai/torchsky/blob/main/LICENSE)
 
-`torchsky` is a **high-performance, torch-native astronomy stack** for
-survey-scale coordinates, spherical geometry, catalog indexing, mapmaking,
-observation operators, and joint modelling of sky observations.
+Sky coordinates, spherical geometry, and mapmaking as PyTorch tensor operations.
+They run on CPU, CUDA, and MPS, support autograd, and scale to survey-sized inputs.
 
-FITS image and table I/O is provided by the focused
-[`torchfits`](https://github.com/astroai/torchfits) package. The boundary is
-intentional: `torchfits` loads tensors and metadata; `torchsky` performs
-sky-domain computation without embedding a second FITS/CFITSIO engine.
-The supported integration baseline is `torchfits 1.0.0` or newer.
-For one migration release, torchsky keeps thin import aliases for the public
-torchfits cache, table, I/O, and dataset surfaces.
+torchsky covers FITS-WCS, HEALPix, spherical harmonic transforms, catalog
+crossmatch, image coadds, spectral cubes, and observation operators. FITS reading
+and writing is handled by [torchfits](https://github.com/astroai/torchfits), which
+torchsky installs as a dependency.
 
----
+## Install
 
-## Table of Contents
-
-1. [Key Features](#key-features)
-2. [Performance Highlights](#performance-highlights)
-3. [Installation](#installation)
-4. [Quick Start](#quick-start)
-5. [Contributor Setup](#contributor-setup)
-6. [Documentation Directory](#documentation-directory)
-7. [License](#license)
-
----
-
-## Key Features
-
-- 🌌 **Torch-Native WCS**: FITS-WCS transforms (`TAN`, `SIN`, `ARC`, `AIT`, etc.) and polynomial distortions (`SIP`, `TPV`, `TNX`, `ZPX`) running directly on CPU, CUDA, and MPS.
-- 🌐 **Spherical Geometry & HEALPix**: Vectorized HEALPix primitives, Spherical Polygons, Multi-Order Coverage (MOC) maps, and high-performance Spherical Harmonic Transforms (SHT).
-- 🗺️ **Scalable Mapmaking**: Area-aware coadds, spectral-cube stacking, matrix-free observation operator bundles, and bounded-memory execution.
-- 🔭 **Survey-Scale Catalog Geometry**: Tensor-native crossmatch and spherical indexing primitives designed for candidate pruning and chunked execution.
-- 🧠 **Continuous Field Models**: Experimental continuous spectral neural fields (\(F_\theta(\mathrm{RA}, \mathrm{Dec}, \lambda)\)) for implicit forward modeling.
-- 🔌 **Explicit I/O Boundary**: Tensor/header/table-batch interchange with `torchfits` and other readers.
-
----
-
-## Performance Highlights
-
-`torchsky` performance claims cover only torchsky-owned computation:
-
-- **WCS transforms**: tensor-native forward, inverse, Jacobian, spectral/time,
-  and TAB paths with focused parity and scale benchmarks.
-- **Sphere/HEALPix**: vectorized pixel, region, sparse-map, and harmonic
-  primitives with upstream comparator gates.
-- **Map/catalog workflows**: end-to-end throughput, peak memory, candidate
-  reduction, exact-adjoint checks, and science-error metrics are the priority.
-
-FITS image/table throughput is measured and documented in `torchfits`.
-
-For detailed benchmarks and methodology, see the [Benchmarks Guide](docs/benchmarks.md).
-
----
-
-## Installation
-
-Install the pre-built wheels from PyPI:
+0.5.0rc1 is distributed as a
+[GitHub pre-release](https://github.com/astroai/torchsky/releases) and is not
+uploaded to PyPI. Install from source or from the pre-release wheels now; `pip
+install torchsky` works from 0.5.0. Building from source needs a C++ compiler and
+CMake for the native extension:
 
 ```bash
-pip install torchsky
+git clone https://github.com/astroai/torchsky.git
+cd torchsky
+pip install .
 ```
 
-Package metadata supports Python `>=3.12`, PyTorch `>=2.13`, and torchfits
-`>=1.0.0` without upper caps. Native wheels still fail closed on a mismatched
-compiled PyTorch ABI; build from source against a newer supported runtime when
-needed. Install `torchfits` separately when a workflow reads or writes
-FITS files:
+torchsky supports Python 3.12 to 3.14 with PyTorch 2.14. The
+[installation guide](https://astroai.github.io/torchsky/install/) covers CUDA,
+Pixi, and troubleshooting.
 
-```bash
-pip install torchsky torchfits
-```
+## Quick start
 
-The integration baseline is `torchfits 1.0.0` or newer. Dataset
-classes are provided by `torchfits.data`; torchsky retains its own compatibility
-aliases for older downstream callers.
-
-### Optional Extras
-
-- **`viz`**: Browser sky viewer
-  ```bash
-  pip install "torchsky[viz]"
-  ```
-- **`map`**: Extended mapmaking tools (e.g. SVO filter profiles)
-  ```bash
-  pip install "torchsky[map]"
-  ```
-- **`bench-all`**: All comparator libraries for testing and parity benchmarks
-  ```bash
-  pip install "torchsky[bench-all]"
-  ```
-
----
-
-## Quick Start
-
-### 1. Load Data With torchfits, Compute With torchsky
-```python
-import torchfits
-from torchsky.wcs import WCS
-
-# File I/O belongs to torchfits.
-data, header = torchfits.read(
-    "science.fits",
-    hdu="auto",
-    device="cuda",
-    return_header=True,
-)
-
-# Sky-coordinate computation belongs to torchsky.
-wcs = WCS(header)
-ra, dec = wcs.pixel_to_world(x, y)
-```
-
-### 2. Stream Catalog Batches
-```python
-# torchfits owns FITS table projection and predicate pushdown.
-for batch in torchfits.table.scan(
-    "catalog.fits",
-    hdu=1,
-    columns=["RA", "DEC", "MAG_G"],
-    where="MAG_G < 20",
-    batch_size=100_000,
-):
-    process_catalog_batch(batch)
-```
-
-### 3. HEALPix Operations
 ```python
 import torch
 import torchsky.sphere as sphere
+from torchsky.map import Observation, coadd, plan
+from torchsky.wcs import WCS
 
-lon = torch.tensor([10.0, 42.0])
-lat = torch.tensor([-1.0, 5.0])
+header = {"NAXIS": 2, "NAXIS1": 64, "NAXIS2": 64,
+          "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN", "CRPIX1": 32.5, "CRPIX2": 32.5,
+          "CRVAL1": 150.0, "CRVAL2": 2.0, "CDELT1": -2.8e-4, "CDELT2": 2.8e-4}
 
-# Coordinate to HEALPix pixel mapping
-pix = sphere.ang2pix(1024, lon, lat, lonlat=True, nest=True)
-lon2, lat2 = sphere.pix2ang(1024, pix, lonlat=True, nest=True)
+ra, dec = WCS(header).pixel_to_world(torch.tensor([0.0, 63.0]), torch.tensor([0.0, 63.0]))
+pix = sphere.ang2pix(1024, ra, dec, lonlat=True, nest=True)
+
+obs = [Observation(data=torch.randn(64, 64), wcs={**header, "CRVAL1": c}) for c in (150.0, 150.01)]
+result = coadd(obs, plan(obs, projection="TAN"), kernel="bilinear")
 ```
 
----
+For real files, read them with torchfits and pass the header on:
+`data, header = torchfits.read("image.fits", return_header=True)`.
 
-## Contributor Setup
+## What's in the box
 
-Contributors should use `pixi` for environment management:
+| Namespace | Contents |
+|---|---|
+| `torchsky.wcs` | FITS-WCS projections, SIP/TPV distortions, affine fitting |
+| `torchsky.sphere` | HEALPix, MOC, sparse maps, polygons, spin SHT |
+| `torchsky.coords` | Frame conversion, observed alt/az, proper motion |
+| `torchsky.catalogs` | Crossmatch and spherical partitioning |
+| `torchsky.map` | Coadds, spectral cubes, observation operators, solvers |
+| `torchsky.spectral` and friends | Spectra, photometry, extinction, cosmology |
+| `torchsky.scene`, `torchsky.field` | Forward models and continuous sky fields (experimental) |
+
+## Performance
+
+On 135 JWST/NIRCam exposures (566 Mpix) onto a 512 x 512 grid, torchsky's
+Lanczos-3 coadd takes 14.3 s on 8 CPU threads and 5.2 s on a GPU slice, against
+30.1 s for SWarp. Its drizzle matches STScI drizzle to better than 2e-6 sigma. A
+280-CCD UNIONS tile coadd fell from 2292 s to 711 s on CPU. Hardware, versions,
+and evidence are on the
+[performance highlights](https://astroai.github.io/torchsky/evaluation/highlights/)
+page.
+
+## Documentation
+
+- [Quick start](https://astroai.github.io/torchsky/quickstart/) and
+  [examples](https://astroai.github.io/torchsky/examples/)
+- [User guide and API reference](https://github.com/astroai/torchsky/blob/main/docs/index.md)
+  (rendered at [astroai.github.io/torchsky](https://astroai.github.io/torchsky/))
+- [Coming from Astropy, healpy, or reproject](https://astroai.github.io/torchsky/coming-from/)
+- [Changelog](https://astroai.github.io/torchsky/changelog/)
+
+## Contributing
+
+Development uses [pixi](https://pixi.sh):
 
 ```bash
-git clone https://github.com/sfabbro/torchsky.git
-cd torchsky
-pixi install
-pixi run dev            # Rebuild native extensions
-pixi run verify         # Verify torchsky import smoke
+git clone https://github.com/astroai/torchsky.git && cd torchsky
+pixi install --locked
+pixi run dev              # build the native extension in place
+pixi run preflight-push   # lint + compile check
+pixi run test             # unit suite
 ```
 
-### Common Developer Commands
-- Run test suite: `pixi run test`
-- Fast syntax/lint check (git pre-push hook): `pixi run preflight-push`
-- Typecheck: `pixi run typecheck`
-- Optional local copy of GitHub `build-test`: `pixi run ci-local`
+Read [CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md)
+before opening a PR. Issues labelled
+[good first issue](https://github.com/astroai/torchsky/labels/good%20first%20issue)
+are a good place to start.
 
-For more information, see the [Contributing Guide](docs/contributing.md).
+## Citation
 
----
-
-## Documentation Directory
-
-### Getting Started & Installation
-- [Documentation Index](docs/README.md) &mdash; Entry point for repository docs.
-- [Getting Started Guide](docs/getting-started.md) &mdash; 10-minute introduction to the stack.
-- [Installation Guide](docs/install.md) &mdash; torchfits integration and native build configuration.
-
-### Core Modules
-- [I/O Boundary Guide](docs/io.md) &mdash; `torchfits` integration and tensor/metadata contracts.
-- [Table Boundary Guide](docs/table.md) &mdash; `torchfits.table` and torchsky catalog batches.
-- [WCS Guide](docs/wcs.md) &mdash; Coordinate projections and distortions.
-- [Sphere & HEALPix Guide](docs/sphere.md) &mdash; Spherical geometry and SHT.
-- [Mapmaking Guide](docs/map.md) &mdash; Image-plane coadds and product targets.
-- [Scene Facade Guide](docs/scene.md) &mdash; High-level observation and rendering facade.
-
-### Advanced Modeling & Research
-- [Continuous Fields Guide](docs/field.md) &mdash; Neural fields and spectral mapping.
-- [Implicit Forward Modeling Guide](docs/implicit_forward.md) &mdash; Loss formulations and kinematic states.
-- [Catalogs Guide](docs/catalogs.md) &mdash; Sky crossmatching and partition streaming.
-- [Spectral Data Guide](docs/spectral.md) &mdash; IFU cube handling and 1D spectrum containers.
-- [ML & Runtime Guide](docs/ml.md) &mdash; Dataset, DataLoader, and cache tuning.
-- [Encoders Guide](docs/encoders.md) &mdash; Feature encoders for spatial-spectral modeling.
-
-### Platform & Tooling
-- [CLI Guide](docs/cli.md) &mdash; Command-line query, print, and viz tools.
-- [Visualization Guide](docs/viz.md) &mdash; Browser sky/HiPS server.
-- [Ecosystem Compatibility Matrix](docs/compatibility.md) &mdash; AST, astropy, healpy interop boundaries.
-- [Benchmarks Guide](docs/benchmarks.md) &mdash; Command lines, runs, and correctness gates.
-- [Contributing Guidelines](docs/contributing.md) &mdash; PR policy and code rules.
-- [Release Checklist](docs/release.md) &mdash; Step-by-step maintainer runbook.
-- [Agent & Maintainer Operating Guide](AGENTS.md) &mdash; Engineering guidelines for agents.
-- [Changelog](docs/changelog.md) &mdash; Release versions history.
-
----
+If torchsky helps your research, please cite it using
+[CITATION.cff](https://github.com/astroai/torchsky/blob/main/CITATION.cff).
 
 ## License
 
-`torchsky` is licensed under the [MIT License](LICENSE).
+[MIT](https://github.com/astroai/torchsky/blob/main/LICENSE)

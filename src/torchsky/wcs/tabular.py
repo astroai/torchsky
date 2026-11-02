@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import torch
 from torch import Tensor
 
 TabularBoundsMode = Literal["nan", "clamp"]
+_MAX_PAIRWISE_ENTRIES = 1_000_000
 
 
 def _as_1d_floating_tensor(value: Any, name: str) -> Tensor:
@@ -374,15 +375,10 @@ class CoupledTabularLookupWCS:
         device = pts.device
         target = pts.to(dtype=dtype).reshape(-1, self.world_n_dim)
         axes = tuple(axis.to(device=device, dtype=dtype) for axis in self.pixel_axes)
-        world_grid = self.world.to(device=device, dtype=dtype)
-        flat_world = world_grid.reshape(-1, self.world_n_dim)
-        flat_axes = _flat_grid_pixel_coordinates(axes)
-
-        distances = torch.sum(
-            (target[:, None, :] - flat_world[None, :, :]) ** 2, dim=-1
-        )
-        nearest = torch.argmin(distances, dim=-1)
-        initial = flat_axes.index_select(0, nearest)
+        if target.shape[0] == 0:
+            return torch.empty(
+                (*query_shape, self.pixel_n_dim), dtype=dtype, device=device
+            )
 
         use_global_2d = self.pixel_n_dim == 2 and self.world_n_dim >= 2
         if use_global_2d:
@@ -394,6 +390,11 @@ class CoupledTabularLookupWCS:
                 tol=tol,
             )
         else:
+            world_grid = self.world.to(device=device, dtype=dtype)
+            flat_world = world_grid.reshape(-1, self.world_n_dim)
+            flat_axes = _flat_grid_pixel_coordinates(axes)
+            nearest = _nearest_grid_indices(target, flat_world)
+            initial = flat_axes.index_select(0, nearest)
             solved = [
                 _solve_coupled_tabular_point(
                     self,
@@ -402,7 +403,6 @@ class CoupledTabularLookupWCS:
                     axes,
                     max_iter=max_iter,
                     tol=tol,
-                    bounds=bounds_mode,
                     lower_bounds=None,
                     upper_bounds=None,
                 )
@@ -417,6 +417,46 @@ def _flat_grid_pixel_coordinates(axes: tuple[Tensor, ...]) -> Tensor:
     return torch.stack([mesh.reshape(-1) for mesh in meshes], dim=-1)
 
 
+def _nearest_grid_indices(
+    target: Tensor,
+    flat_world: Tensor,
+    *,
+    max_pairs: int | None = None,
+) -> Tensor:
+    if max_pairs is None:
+        max_pairs = _MAX_PAIRWISE_ENTRIES
+    n_points = int(target.shape[0])
+    n_grid = int(flat_world.shape[0])
+    n_dimensions = max(1, int(target.shape[1]))
+    nearest = torch.empty(n_points, dtype=torch.int64, device=target.device)
+    target_chunk_size = min(n_points, max(1, max_pairs // n_dimensions))
+    for target_start in range(0, n_points, target_chunk_size):
+        target_chunk = target[target_start : target_start + target_chunk_size]
+        grid_chunk_size = max(
+            1, max_pairs // (int(target_chunk.shape[0]) * n_dimensions)
+        )
+        best_distance = torch.full(
+            (target_chunk.shape[0],),
+            torch.inf,
+            dtype=target.dtype,
+            device=target.device,
+        )
+        best_index = torch.zeros(
+            target_chunk.shape[0], dtype=torch.int64, device=target.device
+        )
+        for grid_start in range(0, n_grid, grid_chunk_size):
+            grid_chunk = flat_world[grid_start : grid_start + grid_chunk_size]
+            distances = torch.sum(
+                (target_chunk[:, None, :] - grid_chunk[None, :, :]) ** 2, dim=-1
+            )
+            chunk_distance, chunk_index = torch.min(distances, dim=-1)
+            improve = chunk_distance < best_distance
+            best_distance = torch.where(improve, chunk_distance, best_distance)
+            best_index = torch.where(improve, chunk_index + grid_start, best_index)
+        nearest[target_start : target_start + target_chunk.shape[0]] = best_index
+    return nearest
+
+
 def _solve_coupled_tabular_point(
     lookup: CoupledTabularLookupWCS,
     target: Tensor,
@@ -425,7 +465,6 @@ def _solve_coupled_tabular_point(
     *,
     max_iter: int,
     tol: float,
-    bounds: TabularBoundsMode,
     lower_bounds: Tensor | None,
     upper_bounds: Tensor | None,
 ) -> Tensor:
@@ -497,10 +536,17 @@ def _solve_coupled_tabular_point_2d_global(
 ) -> Tensor:
     x_axis, y_axis = axes
     world = lookup.world.to(device=target.device, dtype=target.dtype)
+    dtype_tol = torch.finfo(target.dtype).eps * 8
     axis_tol = torch.stack(
         [
-            torch.clamp((x_axis[-1] - x_axis[0]).abs() * 1.0e-9, min=1.0e-10),
-            torch.clamp((y_axis[-1] - y_axis[0]).abs() * 1.0e-9, min=1.0e-10),
+            torch.clamp(
+                (x_axis[-1] - x_axis[0]).abs() * max(1.0e-9, dtype_tol),
+                min=max(1.0e-10, dtype_tol),
+            ),
+            torch.clamp(
+                (y_axis[-1] - y_axis[0]).abs() * max(1.0e-9, dtype_tol),
+                min=max(1.0e-10, dtype_tol),
+            ),
         ]
     ).to(device=target.device, dtype=target.dtype)
     world_tol = torch.as_tensor(tol, device=target.device, dtype=target.dtype)
@@ -542,7 +588,6 @@ def _solve_coupled_tabular_point_2d_global(
                 axes,
                 max_iter=max_iter,
                 tol=tol,
-                bounds="clamp",
                 lower_bounds=lower,
                 upper_bounds=upper,
             )
@@ -758,25 +803,16 @@ def _solve_coupled_tabular_2d_global_batch(
     world_tol = torch.as_tensor(tol, device=target.device, dtype=target.dtype)
     nx = int(x_axis.shape[0] - 1)
     ny = int(y_axis.shape[0] - 1)
-    # ponytail: AABB mask is N×(nx-1)×(ny-1). Ceiling ~32 MiB of flags; chunk cells if a survey table exceeds it.
-    if n_points * nx * ny > 4_000_000:
-        for row_index in range(n_points):
-            out[row_index] = _solve_coupled_tabular_point_2d_global(
-                lookup,
-                target[row_index],
-                axes,
-                max_iter=max_iter,
-                tol=tol,
-            )
-        return out
+    n_cells = nx * ny
+    cell_corners: tuple[Tensor, Tensor, Tensor, Tensor] | None = None
+    cell_lo: Tensor | None = None
+    cell_hi: Tensor | None = None
     if lookup.world_n_dim == 2:
-        c00 = world[:-1, :-1]
-        c10 = world[1:, :-1]
-        c11 = world[1:, 1:]
-        c01 = world[:-1, 1:]
-        point = target[:, None, None, :]
-        in_cell = _point_in_convex_quad_2d(
-            point, c00, c10, c11, c01, tol=world_tol
+        cell_corners = (
+            world[:-1, :-1].reshape(n_cells, 2),
+            world[1:, :-1].reshape(n_cells, 2),
+            world[1:, 1:].reshape(n_cells, 2),
+            world[:-1, 1:].reshape(n_cells, 2),
         )
     else:
         corners = torch.stack(
@@ -788,18 +824,67 @@ def _solve_coupled_tabular_2d_global_batch(
             ),
             dim=0,
         )
-        cell_lo = corners.amin(dim=0)
-        cell_hi = corners.amax(dim=0)
-        in_cell = (target[:, None, None, :] + world_tol >= cell_lo[None, :, :, :]) & (
-            target[:, None, None, :] - world_tol <= cell_hi[None, :, :, :]
+        cell_lo = corners.amin(dim=0).reshape(n_cells, lookup.world_n_dim)
+        cell_hi = corners.amax(dim=0).reshape(n_cells, lookup.world_n_dim)
+
+    candidate_count = torch.zeros(n_points, dtype=torch.int64, device=target.device)
+    candidate_index = torch.zeros(n_points, dtype=torch.int64, device=target.device)
+    max_pairs = _MAX_PAIRWISE_ENTRIES
+    n_dimensions = max(1, lookup.world_n_dim)
+    target_chunk_size = min(n_points, max(1, max_pairs // n_dimensions))
+    for target_start in range(0, n_points, target_chunk_size):
+        target_chunk = target[target_start : target_start + target_chunk_size]
+        count_chunk = candidate_count[
+            target_start : target_start + target_chunk.shape[0]
+        ]
+        index_chunk = candidate_index[
+            target_start : target_start + target_chunk.shape[0]
+        ]
+        cell_chunk_size = max(
+            1, max_pairs // (int(target_chunk.shape[0]) * n_dimensions)
         )
-        in_cell = in_cell.all(dim=-1)
-    n_cells = in_cell.reshape(n_points, -1).sum(dim=-1)
-    unique = n_cells == 1
+        for cell_start in range(0, n_cells, cell_chunk_size):
+            cell_stop = min(cell_start + cell_chunk_size, n_cells)
+            if lookup.world_n_dim == 2:
+                assert cell_corners is not None
+                c00, c10, c11, c01 = (
+                    corner[cell_start:cell_stop] for corner in cell_corners
+                )
+                in_cell = _point_in_convex_quad_2d(
+                    target_chunk[:, None, :],
+                    c00,
+                    c10,
+                    c11,
+                    c01,
+                    tol=world_tol,
+                )
+            else:
+                assert cell_lo is not None
+                assert cell_hi is not None
+                in_cell = (
+                    target_chunk[:, None, :] + world_tol
+                    >= cell_lo[None, cell_start:cell_stop, :]
+                ) & (
+                    target_chunk[:, None, :] - world_tol
+                    <= cell_hi[None, cell_start:cell_stop, :]
+                )
+                in_cell = in_cell.all(dim=-1)
+            local_count = in_cell.sum(dim=-1)
+            first = in_cell.to(dtype=torch.int64).argmax(dim=-1) + cell_start
+            take_first = (count_chunk == 0) & (local_count > 0)
+            index_chunk = torch.where(take_first, first, index_chunk)
+            count_chunk = count_chunk + local_count
+        candidate_count[target_start : target_start + target_chunk.shape[0]] = (
+            count_chunk
+        )
+        candidate_index[target_start : target_start + target_chunk.shape[0]] = (
+            index_chunk
+        )
+
+    unique = candidate_count == 1
     unique_idx = torch.nonzero(unique, as_tuple=False).reshape(-1)
     if unique_idx.numel() > 0:
-        flat = in_cell.reshape(n_points, -1)
-        cell_index = flat.to(dtype=torch.int64).argmax(dim=-1)[unique_idx]
+        cell_index = candidate_index[unique_idx]
         ix = torch.div(cell_index, ny, rounding_mode="floor")
         iy = cell_index - ix * ny
         lower = torch.stack((x_axis[ix], y_axis[iy]), dim=-1)
@@ -815,10 +900,17 @@ def _solve_coupled_tabular_2d_global_batch(
             max_iter=max_iter,
             tol=tol,
         )
+        dtype_tol = torch.finfo(target.dtype).eps * 8
         axis_tol = torch.stack(
             [
-                torch.clamp((x_axis[-1] - x_axis[0]).abs() * 1.0e-9, min=1.0e-10),
-                torch.clamp((y_axis[-1] - y_axis[0]).abs() * 1.0e-9, min=1.0e-10),
+                torch.clamp(
+                    (x_axis[-1] - x_axis[0]).abs() * max(1.0e-9, dtype_tol),
+                    min=max(1.0e-10, dtype_tol),
+                ),
+                torch.clamp(
+                    (y_axis[-1] - y_axis[0]).abs() * max(1.0e-9, dtype_tol),
+                    min=max(1.0e-10, dtype_tol),
+                ),
             ]
         ).to(device=target.device, dtype=target.dtype)
         in_bounds = torch.all(solved + axis_tol >= lower, dim=-1) & torch.all(
@@ -1099,6 +1191,23 @@ def _resolve_tab_table(
                     hdu, extname=target, extver=extver, extlev=extlev
                 ):
                     return hdu
+    # Positional lookup: HDU-list containers (e.g. torchfits.HDUList) expose
+    # integer indexing and __len__ but not __iter__, so the branch above never
+    # sees them. This is the public FITS boundary for real -TAB files.
+    if (
+        not isinstance(tables, (str, bytes, Mapping))
+        and hasattr(tables, "__len__")
+        and hasattr(tables, "__getitem__")
+    ):
+        try:
+            for index in range(len(tables)):
+                candidate = tables[index]
+                if _table_header(candidate) is not None and _table_matches_identity(
+                    candidate, extname=target, extver=extver, extlev=extlev
+                ):
+                    return candidate
+        except (KeyError, TypeError, ValueError, IndexError):
+            pass
     detail = f"table extension {extname!r}"
     if extver is not None:
         detail += f" EXTVER={extver}"
@@ -1128,7 +1237,7 @@ def _extract_separable_tab_axis(
     return reference[:, 0]
 
 
-def _as_independent_tab_array(
+def _as_tab_coordinate_array(
     value: Any, name: str, tab_axis_number: int | None = None
 ) -> Tensor:
     tensor = torch.as_tensor(value)
@@ -1142,20 +1251,10 @@ def _as_independent_tab_array(
     return _extract_separable_tab_axis(tensor, name, tab_axis_number)
 
 
-def _as_tabular_index_array(
-    value: Any, name: str, tab_axis_number: int | None = None
-) -> Tensor:
-    tensor = torch.as_tensor(value)
-    squeezed = torch.squeeze(tensor)
-    if squeezed.ndim == 1:
-        return squeezed
-    if tab_axis_number is None:
-        raise ValueError(
-            f"{name} is multidimensional and requires PVi_3 tabular-axis mapping"
-        )
-    return _extract_separable_tab_axis(tensor, name, tab_axis_number)
-
-
+@overload
+def _default_tab_axis_number(value: int) -> int: ...
+@overload
+def _default_tab_axis_number(value: None) -> None: ...
 def _default_tab_axis_number(value: int | None) -> int | None:
     if value is None:
         return None
@@ -1222,16 +1321,19 @@ def tabular_axes_from_fits(
             extlev=extlev,
         )
         coord_col = str(coord_col_raw).strip()
-        coord = _as_independent_tab_array(
+        coord = _as_tab_coordinate_array(
             _read_table_column(table, coord_col),
             f"PS{axis_number}_1 column {coord_col!r}",
             tab_axis_number,
         )
         if index_col_raw is None or str(index_col_raw).strip() == "":
-            pixel = torch.arange(coord.shape[0], dtype=torch.float64)
+            # FITS -TAB default index vector is 1..N (the table index is a
+            # 1-based coordinate), not 0..N-1. The CRVAL/CDELT/CD linear
+            # transform produces that index directly.
+            pixel = torch.arange(1, coord.shape[0] + 1, dtype=torch.float64)
         else:
             index_col = str(index_col_raw).strip()
-            pixel = _as_tabular_index_array(
+            pixel = _as_tab_coordinate_array(
                 _read_table_column(table, index_col),
                 f"PS{axis_number}_2 column {index_col!r}",
                 tab_axis_number,
@@ -1331,10 +1433,12 @@ def coupled_tabular_wcs_and_axes_from_fits(
             )
 
         if index_col_raw is None or str(index_col_raw).strip() == "":
-            pixel_axis = torch.arange(shape[tab_axis_number - 1], dtype=torch.float64)
+            pixel_axis = torch.arange(
+                1, shape[tab_axis_number - 1] + 1, dtype=torch.float64
+            )
         else:
             index_col = str(index_col_raw).strip()
-            pixel_axis = _as_tabular_index_array(
+            pixel_axis = _as_tab_coordinate_array(
                 _read_table_column(table, index_col),
                 f"PS{axis_number}_2 column {index_col!r}",
                 tab_axis_number,
@@ -1365,7 +1469,7 @@ def coupled_tabular_wcs_and_axes_from_fits(
     if missing:
         for axis in missing:
             pixel_axes_by_tab_axis[axis] = torch.arange(
-                grid_shape[axis - 1], dtype=torch.float64
+                1, grid_shape[axis - 1] + 1, dtype=torch.float64
             )
 
     coords.sort(key=lambda item: item[0])

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from torchsky.sphere import HealSparseMap, MOC, STMOC
+from torchsky.sphere import MOC, STMOC, SparseHealpixMap
 from torchsky.sphere.healpix import get_interp_weights, query_disc, query_polygon
 from torchsky.sphere.moc import nest2uniq
 from torchsky.wcs.core import WCS
@@ -205,7 +205,7 @@ def test_moc_healsparse_stmoc_stay_on_device(device_type: str) -> None:
 
     pix = torch.tensor([0, 1, 2], dtype=torch.int64, device=device)
     vals = torch.tensor([1.0, 2.0, 3.0], dtype=dtype, device=device)
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pix, vals, nside_sparse=nside, nside_coverage=1, sentinel=0.0
     )
     got = smap.get_values(pix)

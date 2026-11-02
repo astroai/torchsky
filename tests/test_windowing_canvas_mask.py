@@ -42,7 +42,7 @@ def test_inside_outside_border_and_nonfinite() -> None:
             [100.0, 100.0],  # interior
             [600.0, 256.0],  # beyond right edge
             [256.0, -20.0],  # below bottom edge
-            [0.0, 0.0],      # border pixel center -> inside
+            [0.0, 0.0],  # border pixel center -> inside
             [511.0, 511.0],  # far corner pixel center -> inside
         ],
         dtype=np.float64,

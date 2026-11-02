@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from ...encoders import SkyCoordinateEncoder, sky_encoder_fourier_min_frequency
+from ...encoders import SkyCoordinateEncoder, _sky_encoder_fourier_min_frequency
 
 from .types import FieldDomain
 
@@ -19,7 +19,7 @@ def make_sky_coordinate_encoder(
 ) -> SkyCoordinateEncoder:
     min_freq = 1.0
     if scale_fourier_to_domain:
-        min_freq = sky_encoder_fourier_min_frequency(
+        min_freq = _sky_encoder_fourier_min_frequency(
             patch_extent_deg=float(domain.spatial_scale_deg),
         )
     return SkyCoordinateEncoder(

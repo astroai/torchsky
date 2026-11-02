@@ -48,9 +48,7 @@ def _spk_compute(kernel: Any, chain: tuple[tuple[int, int], ...], jd: float):
         try:
             part = kernel[center, target].compute(jd)
         except KeyError as exc:
-            raise ValueError(
-                f"kernel has no SPK segment {center}→{target}"
-            ) from exc
+            raise ValueError(f"kernel has no SPK segment {center}→{target}") from exc
         xyz = part if xyz is None else xyz + part
     return xyz
 

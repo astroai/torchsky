@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from torchsky.map import MapBandpassSpec, MapProductSpec
+from torchsky.map import BandpassSpec, ProductSpec
 from torchsky.map.target import TargetRenderSpec
 
 
@@ -27,10 +27,10 @@ def test_target_render_spec_from_header_tracks_shape() -> None:
 
 
 def test_target_render_spec_from_map_product_pulls_band_metadata() -> None:
-    product = MapProductSpec(
+    product = ProductSpec(
         target_header=_simple_header(),
         bands=(
-            MapBandpassSpec(
+            BandpassSpec(
                 label="f444w",
                 spectral_min=42000.0,
                 spectral_max=47000.0,
@@ -47,11 +47,11 @@ def test_target_render_spec_from_map_product_pulls_band_metadata() -> None:
 
 
 def test_map_product_target_render_specs_preserve_band_order_and_psf() -> None:
-    product = MapProductSpec(
+    product = ProductSpec(
         target_header=_simple_header(),
         bands=(
-            MapBandpassSpec(label="blue", transmission_center=4500.0),
-            MapBandpassSpec(label="red", transmission_center=6500.0),
+            BandpassSpec(label="blue", transmission_center=4500.0),
+            BandpassSpec(label="red", transmission_center=6500.0),
         ),
         value_semantics="flux",
     )

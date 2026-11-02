@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from typing import cast
+
 
 import torch
 import torch.nn as nn
@@ -131,7 +133,8 @@ class BaconField(_BaseFieldModel):
         selected = int(level)
         if selected < 0 or selected >= self.num_levels:
             raise ValueError(f"level must be in [0, {self.num_levels - 1}]")
-        parameter = self.readouts[0].weight
+        # Every entry of ``readouts`` is an ``nn.Linear`` appended in ``__init__``.
+        parameter = cast(nn.Linear, self.readouts[0]).weight
         coords = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom).to(
             device=parameter.device,
             dtype=parameter.dtype,
@@ -189,6 +192,9 @@ class SASNetField(_BaseFieldModel):
     """
 
     is_strictly_band_limited = False
+
+    frequencies: Tensor
+    phase: Tensor
 
     def __init__(
         self,
@@ -316,7 +322,8 @@ class SASNetField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
         """Return learned per-frequency masks for diagnostics."""
-        parameter = self.readout[0].weight
+        # ``readout`` is built as Linear -> SiLU -> Linear in ``__init__``.
+        parameter = cast(nn.Linear, self.readout[0]).weight
         coords_unit = self._unit_box_coords(
             ra_deg,
             dec_deg,
@@ -331,15 +338,16 @@ class SASNetField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
-        parameter = self.readout[0].weight
+        # ``readout`` is built as Linear -> SiLU -> Linear in ``__init__``.
+        parameter = cast(nn.Linear, self.readout[0]).weight
         coords = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom).to(
             device=parameter.device,
             dtype=parameter.dtype,
         )
         masks = self.spatial_masks(ra_deg, dec_deg, wavelength_angstrom)
-        features = torch.sin(
-            coords @ self.frequencies.transpose(0, 1) + self.phase
-        ) * masks
+        features = (
+            torch.sin(coords @ self.frequencies.transpose(0, 1) + self.phase) * masks
+        )
         value = self.readout(features).squeeze(-1)
         return F.softplus(value) + self.intensity_floor
 
@@ -352,11 +360,13 @@ def _bla_features(
     v = beta * u
     # cos(pi*v)/(1-4*v**2) = pi/4 * (sinc(v-.5) + sinc(v+.5)).
     raised_cosine = (math.pi / 4) * (torch.sinc(v - 0.5) + torch.sinc(v + 0.5))
-    amplitude = torch.sinc(u) / period * raised_cosine * torch.exp(
-        -0.5 * (x / sigma).square()
+    amplitude = (
+        torch.sinc(u) / period * raised_cosine * torch.exp(-0.5 * (x / sigma).square())
     )
     phase = 2 * math.pi * shift * x
-    return torch.cat((amplitude * torch.cos(phase), amplitude * torch.sin(phase)), dim=-1)
+    return torch.cat(
+        (amplitude * torch.cos(phase), amplitude * torch.sin(phase)), dim=-1
+    )
 
 
 class FlairField(_BaseFieldModel):
@@ -393,11 +403,17 @@ class FlairField(_BaseFieldModel):
             raise ValueError("intensity_floor must be finite and non-negative")
         self.intensity_floor = float(intensity_floor)
         self.hidden = nn.ModuleList(
-            nn.Linear(self.coord_dim if layer == 0 else 2 * int(hidden_dim), int(hidden_dim))
+            nn.Linear(
+                self.coord_dim if layer == 0 else 2 * int(hidden_dim), int(hidden_dim)
+            )
             for layer in range(int(hidden_layers))
         )
-        self.log_period = nn.Parameter(torch.full((int(hidden_layers),), math.log(period)))
-        self.log_sigma = nn.Parameter(torch.full((int(hidden_layers),), math.log(sigma)))
+        self.log_period = nn.Parameter(
+            torch.full((int(hidden_layers),), math.log(period))
+        )
+        self.log_sigma = nn.Parameter(
+            torch.full((int(hidden_layers),), math.log(sigma))
+        )
         self.frequency_shift = nn.Parameter(
             torch.full((int(hidden_layers),), float(frequency_shift))
         )
@@ -411,8 +427,10 @@ class FlairField(_BaseFieldModel):
         )
         for index, layer in enumerate(self.hidden):
             features = _bla_features(
-                layer(features), self.log_period[index].exp(),
-                self.log_sigma[index].exp(), self.frequency_shift[index],
+                layer(features),
+                self.log_period[index].exp(),
+                self.log_sigma[index].exp(),
+                self.frequency_shift[index],
             )
         return F.softplus(self.output(features).squeeze(-1)) + self.intensity_floor
 

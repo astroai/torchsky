@@ -36,18 +36,6 @@ def parse_wat_keywords(header: Dict[str, Any], prefix: str = "WAT") -> str:
     return full_str
 
 
-def _looks_numeric_iraf_poly(s: str) -> bool:
-    s = s.strip()
-    if not s or "=" in s:
-        return False
-    parts = s.split()
-    try:
-        int(float(parts[0]))
-    except (ValueError, IndexError):
-        return False
-    return True
-
-
 class LegacyPolynomial:
     """
     Base class for IRAF polynomials (Chebyshev, Legendre, etc.)
@@ -313,4 +301,3 @@ def deproject_zpx(
         pv2_eff = pv2_eff.to(device=phi.device, dtype=phi.dtype)
     xi_c, eta_c = deproject_zenithal(phi, theta, "ZPN", pv2=pv2_eff)
     return invert_tnx_plane(xi_c, eta_c, wat_data)
-

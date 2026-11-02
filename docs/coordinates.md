@@ -1,77 +1,168 @@
-# Catalog coordinates
+# Coordinate frames and motion
 
-torchsky does not clone Astropy `SkyCoord`. Catalog geometry is batched
-tensors with explicit missing data. Observed place is a separate module and
-never runs unless Earth orientation is supplied.
+torchsky does not clone Astropy `SkyCoord`. Catalog geometry is a batch of
+tensors with explicit missing data, frame conversion is a function, and observed
+place is a separate step that never runs unless you supply Earth orientation.
 
-## Layout
+## CatalogState
 
-- `CatalogState` in `torchsky.wcs.catalog_state`: `lon`, `lat`, optional
-  proper motion, parallax, radial velocity, epoch, and frame. Missing
-  components stay `None`. There is no `pmsafe` distance override.
-- Geometric frames: ICRS, Galactic, FK4, FK5, mean ecliptic of J2000,
-  ecliptic of date (TT MJD + IAU 2006 NPB), Galactocentric (explicit
-  `galcen_distance_kpc` / `z_sun_pc`), and LSR (explicit solar UVW on
-  radial velocity). These are not a SkyCoord graph.
-- Angular propagation: `propagate_proper_motion` / `CatalogState.propagate_angular`.
-- Physical 6-parameter propagation: `propagate_space_motion` /
-  `CatalogState.propagate_physical`. Incomplete state raises.
-- Observed place: `torchsky.wcs.observed`. Requires `EarthOrientation.dut1_s`,
-  site, and UTC MJD. Omitting polar motion keeps classical DUT1 GMST hour-angle
-  AltAz. Setting `xp_arcsec` / `yp_arcsec` applies CIO/ERA plus SOFA `pom00`
-  (`s'=0`) into ITRS geodetic AltAz. `pn='iau2006'` adds Fukushima-Williams
-  bias-precession and full IAU 2000A nutation with IAU 2006/P03 adjustments
-  (SOFA `nut06a` / `c2i06a`; requires `tt_minus_utc_s`; leaps are never
-  inferred). That name is kept; the series is IAU 2000A, not the old 10-term
-  truncation. `wcs.transform(..., to_frame='GCRS'|'CIRS'|'TETE')` needs the
-  same obstime and EOP as ITRS. GCRS is ICRS plus optional Keplerian
-  aberration (no PN). CIRS is GCRS then the CIO-based NPB matrix. TETE is
-  GCRS then the equinox-based true equator/equinox of date (same FW + nutation
-  as SOFA `pnm06a`). Stellar aberration is Keplerian Earth barycentric velocity and
-  is off unless requested. Saemundsson/Meeus refraction is off unless
-  `refraction=True` with `site.pressure_mbar` and `site.temperature_c`.
-  `icrs_to_itrs_xyz` returns unit ITRS directions. IERS values are never
-  inferred. Site `height_m` is WGS84 ellipsoidal height (metres); it does not
-  change stellar (infinite-distance) azimuth and altitude.
-- Thin façade: `torchsky.wcs.transform(lon, lat, from_frame=..., to_frame=...)`
-  and the same names on `torchsky.coords`. Geometric frames use
-  `CatalogState.to_frame`. `ALTAZ`/`HORIZON`, `ITRS`, `GCRS`, `CIRS`, and
-  `TETE` need obstime and EOP. This is not a SkyCoord subclass. Catalog
-  tensors stay on their device. Observed place and geometric frames use ATen
-  (CUDA float64, MPS float32; MPS has no float64). MPS IAU 2006 observed vs
-  CPU float64 is a few arcseconds. There is no fused C++ observed kernel.
+`CatalogState` (also importable from `torchsky.coords`) carries `lon`, `lat`,
+the `frame`, an `epoch`, and optional proper motion, parallax, and radial
+velocity. Missing components stay `None`; nothing is imputed, and there is no
+`pmsafe`-style distance override.
 
-`torchsky.coords` re-exports `CatalogState`, `transform`, `convert_celestial`,
-`Site`, `EarthOrientation`, `observed_altaz`, `propagate_proper_motion`, and
-`propagate_space_motion`. Kernels stay in `wcs`. FITS WCS stays `torchsky.wcs`.
-`torchsky.transforms` is image ops, not sky geometry.
-
-### Compose with `Catalog`
-
+<!-- docs: run -->
 ```python
-from torchsky.catalogs import Catalog
-from torchsky.coords import Site, EarthOrientation, transform
+import torch
 
-cat = Catalog(lon=ra, lat=dec, frame="ICRS")
-gal = cat.to_frame("galactic")
-lon, lat = transform(ra, dec, from_frame="ICRS", to_frame="GALACTIC")
-altaz = cat.observe(
-    "ALTAZ",
-    obstime_mjd_utc=mjd,
-    site=Site(lon_deg=-155.47, lat_deg=19.83),
-    eop=EarthOrientation(dut1_s=0.1),
+from torchsky.coords import CatalogState, transform
+
+ra = torch.tensor([10.0, 266.4], dtype=torch.float64)
+dec = torch.tensor([-5.0, -28.9], dtype=torch.float64)
+
+# Frame conversion on bare tensors ...
+l, b = transform(ra, dec, from_frame="ICRS", to_frame="GALACTIC")
+ra_back, _ = transform(l, b, from_frame="GALACTIC", to_frame="ICRS")
+torch.testing.assert_close(ra_back, ra, atol=1e-9, rtol=0.0)
+
+# ... or on a state, which rotates proper motion with the position.
+state = CatalogState(
+    lon=ra, lat=dec, frame="ICRS", epoch=2016.0,
+    pm_lon_coslat_mas_yr=torch.tensor([50.0, -20.0], dtype=torch.float64),
+    pm_lat_mas_yr=torch.tensor([10.0, 5.0], dtype=torch.float64),
+)
+gal = state.to_frame("galactic")
+assert gal.frame == "GALACTIC"
+torch.testing.assert_close(
+    torch.hypot(gal.pm_lon_coslat_mas_yr, gal.pm_lat_mas_yr),
+    torch.hypot(state.pm_lon_coslat_mas_yr, state.pm_lat_mas_yr),
 )
 ```
 
-Representations are layouts (`lonlat_deg`, `unit_xyz`, `barycentric_au`),
-not Astropy representation classes. `barycentric_au` requires a positive
-parallax; it is never filled from a default distance.
+Supported geometric frames are ICRS, Galactic, FK4, FK5, mean ecliptic of J2000,
+ecliptic of date (TT MJD with IAU 2006 precession-nutation), Galactocentric
+(explicit `galcen_distance_kpc` and `z_sun_pc`), and LSR (explicit solar UVW).
+Representations are layouts (`lonlat_deg`, `unit_xyz`, `barycentric_au`), not
+Astropy representation classes; `barycentric_au` needs a positive parallax.
+FK4 proper-motion conversion is rejected because no complete time-dependent
+transform is implemented; position-only FK4 conversion works. The conversion is
+differentiable.
 
-Optional extras (not imported by `torchsky.wcs`): `astropy_interop`
-(`from_astropy` / `to_astropy`), `ephemeris.get_body` (`jplephem` + DE
-kernel path), `tle.catalog_state_from_tle` (`sgp4`, frame `TEME`), and
-`gwcs_live.freeze_live_gwcs`. Core `gwcs_sampling` never imports `gwcs`.
-There is no `SkyCoord` class.
+## Propagating motion
 
-Oracle: Astropy/ERFA for geometric frames and space motion. Observed-place
-parity is only meaningful after the same EOP values are pinned on both sides.
+The free functions `propagate_proper_motion` and `propagate_space_motion` do the
+same on bare tensors. `CatalogState.propagate_angular` moves positions with proper motion only; it needs both
+components. `propagate_physical` is the six-parameter ERFA/SOFA model with
+changing light-time and needs proper motion, parallax, and radial velocity. An
+incomplete state raises `ValueError`.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.coords import CatalogState
+
+ra = torch.tensor([10.0, 266.4], dtype=torch.float64)
+dec = torch.tensor([-5.0, -28.9], dtype=torch.float64)
+pm = torch.tensor([50.0, -20.0], dtype=torch.float64)
+state = CatalogState(
+    lon=ra, lat=dec, frame="ICRS", epoch=2016.0,
+    pm_lon_coslat_mas_yr=pm, pm_lat_mas_yr=torch.tensor([10.0, 5.0], dtype=torch.float64),
+)
+
+earlier = state.propagate_angular(2000.0)
+assert earlier.epoch == 2000.0 and not torch.equal(earlier.lon, state.lon)
+
+try:
+    state.propagate_physical(2000.0)
+except ValueError:
+    pass
+else:
+    raise AssertionError("physical propagation must not impute parallax")
+
+full = CatalogState(
+    lon=ra, lat=dec, frame="ICRS", epoch=2016.0,
+    pm_lon_coslat_mas_yr=pm, pm_lat_mas_yr=torch.tensor([10.0, 5.0], dtype=torch.float64),
+    parallax_mas=torch.tensor([10.0, 5.0], dtype=torch.float64),
+    radial_velocity_km_s=torch.tensor([20.0, -30.0], dtype=torch.float64),
+)
+assert full.propagate_physical(2000.0).lon.shape == (2,)
+```
+
+`propagate_proper_motion_with_jacobian` and `propagate_space_motion_with_jacobian`
+also return the local Jacobian (2x4 and 6x6) in east/north tangent-plane
+offsets, so you can propagate a covariance with `J @ C @ J.mT`. The 6x6 form
+lets you select Gaia's correlated astrometric subspace without inventing joint
+radial-velocity covariance. Catalog covariance modelling, blends, and
+association probabilities are out of scope.
+
+## Observed place
+
+Altitude and azimuth need a site, a UTC MJD, and Earth orientation. Nothing is
+inferred from IERS tables.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import Catalog
+from torchsky.coords import EarthOrientation, Site
+
+cat = Catalog(
+    lon=torch.tensor([10.0, 266.4], dtype=torch.float64),
+    lat=torch.tensor([-5.0, -28.9], dtype=torch.float64),
+    frame="ICRS",
+)
+altaz = cat.observe(
+    "ALTAZ",
+    obstime_mjd_utc=torch.full((2,), 60000.5, dtype=torch.float64),
+    site=Site(lon_deg=-155.47, lat_deg=19.83),
+    eop=EarthOrientation(dut1_s=0.1),
+)
+assert altaz.frame == "ALTAZ"
+assert bool((altaz.lat.abs() <= 90.0).all())
+```
+
+- Without polar motion the result is classical DUT1 GMST hour-angle AltAz.
+  Setting `xp_arcsec`/`yp_arcsec` applies CIO/ERA plus the SOFA polar-motion
+  matrix into ITRS geodetic AltAz.
+- `pn="iau2006"` adds Fukushima-Williams bias-precession and the IAU 2000A
+  nutation series; it requires `tt_minus_utc_s` and never infers leap seconds.
+- `transform(..., to_frame="GCRS"|"CIRS"|"TETE"|"ITRS")` uses the same obstime
+  and EOP. Aberration and refraction are off unless requested.
+- `aberration=True` gives the apparent place as ERFA `atciq` does: solar light
+  deflection plus annual and diurnal aberration (the observer's Earth-rotation
+  velocity), with the ERFA `epv00` Earth ephemeris (about 1e-15 au, evaluated in
+  float64 on the CPU). Measured against `erfa.atco13` without refraction over
+  4000 random sky positions and epochs (2017-2026, polar motion, DUT1, 4.2 km
+  height), alt/az agrees to 0.012 mas at the maximum (median 0.009 mas); the
+  residual is the TIO locator s' (taken as 0) and TT used for TDB. The earlier
+  Keplerian Earth velocity was off by about 540 m/s, up to 0.37 arcsec.
+- `refraction=True` applies the ERFA `refco` model, `A tan z + B tan^3 z`, to the
+  topocentric direction as `atioq` does (`Site.relative_humidity` and
+  `Site.wavelength_um` enter `refco`; wavelengths above 100 micrometres select the
+  radio formula). Against `erfa.atco13` it agrees to 0.012 mas for zenith
+  distance below 85 degrees (optical and radio). `refraction_model="saemundsson"`
+  selects the Saemundsson/Meeus altitude formula instead. Refraction needs
+  `site.pressure_mbar` and `site.temperature_c`.
+- Site `height_m` is the WGS84 ellipsoidal height. It does not change the
+  azimuth and altitude of an infinitely distant star.
+- Observed place runs on the catalog's device (CUDA float64, MPS float32). MPS
+  IAU 2006 results differ from CPU float64 by a few arcseconds.
+  There is no fused C++ observed kernel.
+
+## Optional interop
+
+Opt-in extras are never imported by `torchsky.wcs`: `astropy_interop`
+(`from_astropy`, `to_astropy`), `ephemeris.get_body` (`jplephem` and a DE
+kernel; the small DE440s kernel covers the Sun, Moon and inner planets, Mars and the
+outer planets need the full DE440), `tle.catalog_state_from_tle` (`sgp4`, frame `TEME`), and
+`gwcs_live.freeze_live_gwcs`. Astropy and ERFA are the oracles for geometric
+frames and space motion; observed-place parity is only meaningful once both
+sides pin the same EOP values.
+
+## See also
+
+- [WCS](wcs.md) for FITS-WCS transforms.
+- [Catalogs and crossmatch](catalogs.md) for epoch-aware matching.
+- [`torchsky.coords` reference](reference/coords.md).

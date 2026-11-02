@@ -8,25 +8,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torchsky import WCS
-from torchsky.map import (
+from torchsky.map.field import (
     BandpassConditionedField,
     FieldDomain,
     FieldFitResult,
     FieldObservation,
     PSFSpec,
-    field_image_residual_product,
+    StrainerSkyEncoderMLPField,
     field_image_quality_metrics,
-    field_quality_acceptance_report,
+    field_image_residual_product,
     field_quality_scorecard,
     fit_field_model,
     make_residual_tile_basis_field,
+    pretrain_strainer_trunk_synthetic,
     render_field_fit_quality,
     render_field_quality,
     render_field_residual,
     render_field_residual_product,
     select_field_residual_tiles,
-    pretrain_strainer_trunk_synthetic,
-    StrainerSkyEncoderMLPField,
 )
 from torchsky.map.field.core import _BaseFieldModel
 from torchsky.map.field.hashgrid import sample_feature_plane
@@ -274,9 +273,7 @@ def test_field_observation_coordinate_cache_tracks_header_mutation() -> None:
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
 def test_field_coordinate_grid_mps_matches_cpu() -> None:
     header = _tan_header(5, crval1=150.0, crval2=2.0, scale_deg=0.01)
-    ra_cpu, dec_cpu = coordinate_grid(
-        header, shape=(5, 5), device=torch.device("cpu")
-    )
+    ra_cpu, dec_cpu = coordinate_grid(header, shape=(5, 5), device=torch.device("cpu"))
     observation = FieldObservation(
         image=torch.ones((5, 5), dtype=torch.float32),
         header=header,
@@ -303,13 +300,18 @@ def test_feature_plane_mps_border_sampling_matches_cpu() -> None:
     coord_u = torch.tensor([-0.5, 0.25, 1.5], requires_grad=True)
     coord_v = torch.tensor([0.5, 0.75, -0.5], requires_grad=True)
     grid = torch.stack([2.0 * coord_u - 1.0, 2.0 * coord_v - 1.0], dim=-1)
-    expected = F.grid_sample(
-        plane.unsqueeze(0),
-        grid.view(1, -1, 1, 2),
-        mode="bilinear",
-        padding_mode="border",
-        align_corners=True,
-    ).squeeze(0).squeeze(-1).transpose(0, 1)
+    expected = (
+        F.grid_sample(
+            plane.unsqueeze(0),
+            grid.view(1, -1, 1, 2),
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
+        )
+        .squeeze(0)
+        .squeeze(-1)
+        .transpose(0, 1)
+    )
     expected.sum().backward()
 
     plane_mps = plane.detach().to("mps").requires_grad_()
@@ -368,6 +370,70 @@ def test_field_quality_metrics_ignore_nonfinite_pixels_and_weights() -> None:
     assert metrics["weighted_rmse"] == 0.0
     assert metrics["effective_weight_sum"] == 2.0
     assert metrics["support_fraction"] == 0.25
+
+
+def test_field_quality_metrics_report_nan_for_empty_effective_support() -> None:
+    prediction = torch.ones((2, 3), dtype=torch.float32)
+    target = torch.zeros_like(prediction)
+    mask = torch.zeros_like(prediction, dtype=torch.bool)
+
+    metrics = field_image_quality_metrics(prediction, target, mask=mask)
+
+    assert metrics["effective_weight_sum"] == 0.0
+    assert metrics["support_count"] == 0.0
+    assert metrics["support_fraction"] == 0.0
+    for key in (
+        "weighted_rmse",
+        "weighted_mae",
+        "residual_bias",
+        "residual_std",
+        "target_rms",
+        "prediction_rms",
+        "residual_snr",
+        "residual_snr_db",
+        "prediction_sharpness",
+        "target_sharpness",
+        "sharpness_ratio",
+        "residual_rmse_scale_1",
+    ):
+        assert torch.isnan(torch.tensor(metrics[key]))
+
+
+def test_field_quality_aggregate_pools_residual_primitives() -> None:
+    first = field_image_quality_metrics(torch.tensor([[1.0]]), torch.tensor([[0.0]]))
+    second = field_image_quality_metrics(torch.tensor([[3.0]]), torch.tensor([[0.0]]))
+
+    aggregate = field_quality_scorecard((first, second))["aggregate"]
+
+    assert aggregate["weighted_rmse"] == pytest.approx(5.0**0.5)
+    assert aggregate["weighted_mae"] == pytest.approx(2.0)
+    assert aggregate["residual_bias"] == pytest.approx(2.0)
+    assert aggregate["residual_std"] == pytest.approx(1.0)
+    assert aggregate["support_count"] == 2.0
+    assert aggregate["support_fraction"] == 1.0
+
+
+@pytest.mark.parametrize(
+    ("device", "dtype"),
+    [("cpu", torch.float32), ("cpu", torch.float64)]
+    + (
+        [("cuda", torch.float32), ("cuda", torch.float64)]
+        if torch.cuda.is_available()
+        else []
+    )
+    + ([("mps", torch.float32)] if torch.backends.mps.is_available() else []),
+)
+def test_field_quality_metrics_preserve_device_and_dtype_semantics(
+    dtype: torch.dtype,
+    device: str,
+) -> None:
+    prediction = torch.tensor([[1.0, 3.0]], dtype=dtype, device=device)
+    target = torch.zeros_like(prediction)
+
+    metrics = field_image_quality_metrics(prediction, target, residual_scales=(1,))
+
+    assert metrics["weighted_rmse"] == pytest.approx(5.0**0.5, rel=1.0e-6)
+    assert metrics["weighted_mae"] == pytest.approx(2.0)
 
 
 def test_field_residual_product_carries_support_weight_and_metrics() -> None:
@@ -473,61 +539,6 @@ def test_field_quality_scorecard_groups_bands_and_tracks_extrema() -> None:
     assert scorecard["extrema"]["highest_weighted_rmse"]["index"] == 1
     assert scorecard["extrema"]["lowest_residual_snr"]["index"] == 1
     assert scorecard["extrema"]["lowest_support_fraction"]["index"] == 2
-
-
-def test_field_quality_acceptance_report_flags_explicit_threshold_violations() -> None:
-    observations = (
-        FieldObservation(
-            image=torch.ones((2, 2), dtype=torch.float32),
-            header=_tan_header(2, crval1=150.0, crval2=2.0, scale_deg=0.01),
-            wavelength=5000.0,
-            band_name="g",
-        ),
-        FieldObservation(
-            image=torch.ones((2, 2), dtype=torch.float32),
-            header=_tan_header(2, crval1=150.0, crval2=2.0, scale_deg=0.01),
-            wavelength=6500.0,
-            band_name="r",
-        ),
-    )
-    metrics = (
-        {
-            "weighted_rmse": 0.05,
-            "residual_snr": 20.0,
-            "support_fraction": 0.95,
-            "effective_weight_sum": 10.0,
-            "psf_residual_alignment": 0.1,
-        },
-        {
-            "weighted_rmse": 0.2,
-            "residual_snr": 3.0,
-            "support_fraction": 0.4,
-            "effective_weight_sum": 2.0,
-        },
-    )
-
-    report = field_quality_acceptance_report(
-        metrics,
-        observations=observations,
-        max_weighted_rmse=0.1,
-        min_residual_snr=5.0,
-        min_support_fraction=0.5,
-        min_effective_weight_sum=3.0,
-        max_abs_psf_residual_alignment=0.2,
-    )
-
-    assert report["passed"] is False
-    assert report["scorecard"]["by_band"]["g"]["observation_count"] == 1
-    assert {
-        (violation["index"], violation["metric"], violation.get("reason"))
-        for violation in report["violations"]
-    } == {
-        (1, "weighted_rmse", None),
-        (1, "residual_snr", None),
-        (1, "support_fraction", None),
-        (1, "effective_weight_sum", None),
-        (1, "psf_residual_alignment", "missing"),
-    }
 
 
 def test_select_field_residual_tiles_ranks_weighted_residual_energy() -> None:
@@ -682,9 +693,12 @@ def test_render_field_quality_and_residual_helpers() -> None:
         "residual_products",
     }
     assert len(quality_with_products["residual_products"]) == 1
-    assert quality_with_products["scorecard"]["extrema"]["lowest_support_fraction"][
-        "index"
-    ] == 0
+    assert (
+        quality_with_products["scorecard"]["extrema"]["lowest_support_fraction"][
+            "index"
+        ]
+        == 0
+    )
 
 
 def test_render_field_quality_helpers_accept_operator_bundles() -> None:

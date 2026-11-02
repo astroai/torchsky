@@ -1,15 +1,6 @@
 import torch
 from torch import Tensor
-from typing import Dict, Any, Tuple
-
-from torchsky._native import cpp as _cpp
-
-try:
-    from torch.func import vmap, jacrev
-except ImportError:
-    # Fallback for very old torch versions if needed, though we assume modern torch
-    vmap = None
-    jacrev = None
+from typing import Dict, Any
 
 
 class SIP:
@@ -22,8 +13,6 @@ class SIP:
     References:
     - Shupe et al. (2005): "The SIP Convention for Representing Distortion in FITS Image Headers"
     """
-
-    _SMALL_VEC_MAX_POINTS = 0
 
     def __init__(self, header: Dict[str, Any]):
         self.a_order = int(header.get("A_ORDER", 0))
@@ -81,11 +70,6 @@ class SIP:
         self._quad_b11 = 0.0
         self._quad_b02 = 0.0
         self._quad_inverse_fast = False
-        self._cpp_sip_quadratic_distort = (
-            getattr(_cpp, "wcs_sip_quadratic_distort", None)
-            if _cpp is not None
-            else None
-        )
         self._init_quadratic_forward_fastpath()
 
     def to(self, device: torch.device) -> "SIP":
@@ -123,13 +107,13 @@ class SIP:
 
     def _parse_coeffs(
         self, header: Dict[str, Any], prefix: str, order: int
-    ) -> Dict[str, float]:
+    ) -> Dict[tuple[int, int], float]:
         """
         Parse coefficients for a given prefix and order.
         Example: A_2_0, A_0_2, etc.
         Returns a dictionary {(p, q): value}
         """
-        coeffs = {}
+        coeffs: Dict[tuple[int, int], float] = {}
         for p in range(order + 1):
             for q in range(order + 1):
                 if p + q > order:
@@ -235,44 +219,62 @@ class SIP:
             pows.append(curr)
         return torch.stack(pows, dim=0)
 
-    def _distort_scalar(self, uv: Tensor) -> Tensor:
-        """
-        Distort a single (u, v) point. uv shape [2].
-        Returns [2].
-        Used by vmap and jacrev.
-        """
-        u, v = uv[0], uv[1]
+    @staticmethod
+    def _horner_grid(terms: "list[tuple[int, int, float]]") -> "list[list[float]]":
+        """Coefficients c[p][q] of sum_{p,q} c_pq u^p v^q, as a dense triangle for 2-D Horner evaluation."""
+        if not terms:
+            return []
+        P = max(t[0] for t in terms)
+        Q = max(t[1] for t in terms)
+        grid = [[0.0] * (Q + 1) for _ in range(P + 1)]
+        for p, q, c in terms:
+            grid[p][q] += float(c)
+        for row in grid:  # trim trailing zero coefficients of each row
+            while len(row) > 1 and row[-1] == 0.0:
+                row.pop()
+        return grid
 
-        # Build powers manually for scalar
-        max_order = max(self.a_order, self.b_order)
-        up = torch.pow(u, torch.arange(max_order + 1, device=uv.device, dtype=uv.dtype))
-        vp = torch.pow(v, torch.arange(max_order + 1, device=uv.device, dtype=uv.dtype))
+    @staticmethod
+    def _horner2d(grid: "list[list[float]]", u: Tensor, v: Tensor) -> Tensor:
+        """sum_p u^p (sum_q c_pq v^q) by nested Horner: no power tables, no (terms, N) intermediates.
+        In place when no gradient is needed, out of place otherwise (autograd safe)."""
+        if not grid:
+            return torch.zeros_like(u)
+        inplace = not (torch.is_grad_enabled() and (u.requires_grad or v.requires_grad))
+        out: Tensor | None = None
+        for row in reversed(grid):
+            inner = torch.full_like(v, row[-1])
+            for c in reversed(row[:-1]):
+                if inplace:
+                    inner.mul_(v)
+                    if c != 0.0:
+                        inner.add_(c)
+                else:
+                    inner = inner * v + c
+            if out is None:
+                out = inner
+            elif inplace:
+                out.mul_(u).add_(inner)
+            else:
+                out = out * u + inner
+        assert out is not None  # grid is non-empty
+        return out
 
-        # Evaluation
-        def eval_poly_scalar(pack):
-            c = pack["c"]
-            if c.numel() == 0:
-                return torch.tensor(0.0, device=uv.device, dtype=uv.dtype)
-            p = pack["p"]
-            q = pack["q"]
-            if p.device != uv.device:
-                p = p.to(device=uv.device)
-                q = q.to(device=uv.device)
-            if c.device != uv.device or c.dtype != uv.dtype:
-                c = c.to(device=uv.device, dtype=uv.dtype)
-            basis = up[p] * vp[q]
-            return torch.dot(c, basis)
-
-        f_uv = eval_poly_scalar(self._a_pack)
-        g_uv = eval_poly_scalar(self._b_pack)
-
-        return uv + torch.stack([f_uv, g_uv])
-
-    def distort_vmap(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
-        """Apply distortion using torch.func.vmap (JAX-style)."""
-        uv = torch.stack([u.reshape(-1), v.reshape(-1)], dim=1)  # [N, 2]
-        out = vmap(self._distort_scalar)(uv)  # [N, 2]
-        return out[:, 0].reshape(u.shape), out[:, 1].reshape(v.shape)
+    def _horner_grids(self) -> "dict[str, list[list[float]]]":
+        g = getattr(self, "_hgrids", None)
+        if g is None:
+            g = {
+                "a": self._horner_grid(self.a_terms),
+                "b": self._horner_grid(self.b_terms),
+                "a_du": self._horner_grid(self.a_du_terms),
+                "a_dv": self._horner_grid(self.a_dv_terms),
+                "b_du": self._horner_grid(self.b_du_terms),
+                "b_dv": self._horner_grid(self.b_dv_terms),
+                "ap": self._horner_grid(getattr(self, "ap_terms", [])),
+                "bp": self._horner_grid(getattr(self, "bp_terms", [])),
+            }
+            self._hgrids = g
+        return g
 
     def distort(self, u: Tensor, v: Tensor) -> "tuple[Tensor, Tensor]":
         """
@@ -281,25 +283,6 @@ class SIP:
         if u.numel() == 0 or not self.has_forward:
             return u, v
         if self._quad_forward_fast:
-            if (
-                self._cpp_sip_quadratic_distort is not None
-                and u.device.type == "cpu"
-                and v.device.type == "cpu"
-                and u.dtype == torch.float64
-                and v.dtype == torch.float64
-                and not u.requires_grad
-                and not v.requires_grad
-            ):
-                return self._cpp_sip_quadratic_distort(
-                    u,
-                    v,
-                    self._quad_a20,
-                    self._quad_a11,
-                    self._quad_a02,
-                    self._quad_b20,
-                    self._quad_b11,
-                    self._quad_b02,
-                )
             uv = u * v
             u2 = u * u
             v2 = v * v
@@ -307,40 +290,8 @@ class SIP:
             g_uv = self._quad_b20 * u2 + self._quad_b11 * uv + self._quad_b02 * v2
             return u + f_uv, v + g_uv
 
-        max_order = max(self.a_order, self.b_order)
-        u_p = [torch.ones_like(u)]
-        v_p = [torch.ones_like(v)]
-        for _ in range(1, max_order + 1):
-            u_p.append(u_p[-1] * u)
-            v_p.append(v_p[-1] * v)
-
-        # Sparse SIP term sets (typical in astronomy headers) are faster with
-        # direct accumulation than dense basis materialization.
-        n_terms = len(self.a_terms) + len(self.b_terms)
-        if n_terms <= 24:
-            f_uv = torch.zeros_like(u)
-            g_uv = torch.zeros_like(v)
-            for p, q, coeff in self.a_terms:
-                f_uv.add_(u_p[p] * v_p[q], alpha=float(coeff))
-            for p, q, coeff in self.b_terms:
-                g_uv.add_(u_p[p] * v_p[q], alpha=float(coeff))
-            return u + f_uv, v + g_uv
-
-        u_stack = torch.stack(u_p, dim=0)
-        v_stack = torch.stack(v_p, dim=0)
-
-        f_uv = self._sum_terms_from_pack(self._a_pack, u_stack, v_stack, u)
-        g_uv = self._sum_terms_from_pack(self._b_pack, u_stack, v_stack, v)
-        return u + f_uv, v + g_uv
-
-    def _distort_smallvec(self, u: Tensor, v: Tensor) -> "tuple[Tensor, Tensor]":
-        max_order = max(self.a_order, self.b_order, 1)
-
-        u_s = self._make_pow_stack(u, max_order)
-        v_s = self._make_pow_stack(v, max_order)
-        f_uv = self._sum_terms_from_pack(self._a_pack, u_s, v_s, u)
-        g_uv = self._sum_terms_from_pack(self._b_pack, u_s, v_s, v)
-        return u + f_uv, v + g_uv
+        g = self._horner_grids()
+        return u + self._horner2d(g["a"], u, v), v + self._horner2d(g["b"], u, v)
 
     def _forward_and_jacobian(
         self, u: Tensor, v: Tensor
@@ -363,56 +314,13 @@ class SIP:
             dyd_dv = 1.0 + self._quad_b11 * u + 2.0 * self._quad_b02 * v
             return xd, yd, dxd_du, dxd_dv, dyd_du, dyd_dv
 
-        if u.numel() <= self._SMALL_VEC_MAX_POINTS:
-            return self._forward_and_jacobian_smallvec(u, v)
-
-        max_order = max(self.a_order, self.b_order, 1)
-
-        u_p = self._make_pow_cache(u, max_order)
-        v_p = self._make_pow_cache(v, max_order)
-
-        xd = u.clone()
-        yd = v.clone()
-        dxd_du = torch.ones_like(u)
-        dxd_dv = torch.zeros_like(u)
-        dyd_du = torch.zeros_like(v)
-        dyd_dv = torch.ones_like(v)
-
-        for p, q, coeff in self.a_terms:
-            xd.add_(u_p[p] * v_p[q], alpha=float(coeff))
-
-        for p, q, coeff in self.a_du_terms:
-            dxd_du.add_(u_p[p] * v_p[q], alpha=float(coeff))
-        for p, q, coeff in self.a_dv_terms:
-            dxd_dv.add_(u_p[p] * v_p[q], alpha=float(coeff))
-
-        for p, q, coeff in self.b_terms:
-            yd.add_(u_p[p] * v_p[q], alpha=float(coeff))
-        for p, q, coeff in self.b_du_terms:
-            dyd_du.add_(u_p[p] * v_p[q], alpha=float(coeff))
-        for p, q, coeff in self.b_dv_terms:
-            dyd_dv.add_(u_p[p] * v_p[q], alpha=float(coeff))
-
-        return xd, yd, dxd_du, dxd_dv, dyd_du, dyd_dv
-
-    def _forward_and_jacobian_smallvec(
-        self, u: Tensor, v: Tensor
-    ) -> "tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]":
-        max_order = max(self.a_order, self.b_order, 1)
-
-        u_s = self._make_pow_stack(u, max_order)
-        v_s = self._make_pow_stack(v, max_order)
-
-        xd = u + self._sum_terms_from_pack(self._a_pack, u_s, v_s, u)
-        yd = v + self._sum_terms_from_pack(self._b_pack, u_s, v_s, v)
-        dxd_du = torch.ones_like(u) + self._sum_terms_from_pack(
-            self._a_du_pack, u_s, v_s, u
-        )
-        dxd_dv = self._sum_terms_from_pack(self._a_dv_pack, u_s, v_s, u)
-        dyd_du = self._sum_terms_from_pack(self._b_du_pack, u_s, v_s, v)
-        dyd_dv = torch.ones_like(v) + self._sum_terms_from_pack(
-            self._b_dv_pack, u_s, v_s, v
-        )
+        g = self._horner_grids()
+        xd = u + self._horner2d(g["a"], u, v)
+        yd = v + self._horner2d(g["b"], u, v)
+        dxd_du = 1.0 + self._horner2d(g["a_du"], u, v)
+        dxd_dv = self._horner2d(g["a_dv"], u, v)
+        dyd_du = self._horner2d(g["b_du"], u, v)
+        dyd_dv = 1.0 + self._horner2d(g["b_dv"], u, v)
         return xd, yd, dxd_du, dxd_dv, dyd_du, dyd_dv
 
     def undistort(self, u: Tensor, v: Tensor) -> "tuple[Tensor, Tensor]":
@@ -422,30 +330,8 @@ class SIP:
         if u.numel() == 0 or not self.has_inverse:
             return u, v
 
-        max_order = max(self.ap_order, self.bp_order)
-        u_p = [torch.ones_like(u)]
-        v_p = [torch.ones_like(v)]
-        for _ in range(1, max_order + 1):
-            u_p.append(u_p[-1] * u)
-            v_p.append(v_p[-1] * v)
-
-        n_terms = len(self.ap_terms) + len(self.bp_terms)
-        if n_terms <= 24:
-            delta_u = torch.zeros_like(u)
-            delta_v = torch.zeros_like(v)
-            for p, q, coeff in self.ap_terms:
-                delta_u.add_(u_p[p] * v_p[q], alpha=float(coeff))
-            for p, q, coeff in self.bp_terms:
-                delta_v.add_(u_p[p] * v_p[q], alpha=float(coeff))
-            return u + delta_u, v + delta_v
-
-        u_stack = torch.stack(u_p, dim=0)
-        v_stack = torch.stack(v_p, dim=0)
-
-        delta_u = self._sum_terms_from_pack(self._ap_pack, u_stack, v_stack, u)
-        delta_v = self._sum_terms_from_pack(self._bp_pack, u_stack, v_stack, v)
-
-        return u + delta_u, v + delta_v
+        g = self._horner_grids()
+        return u + self._horner2d(g["ap"], u, v), v + self._horner2d(g["bp"], u, v)
 
     def invert_distortion(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-pytest.importorskip("torchsky.cpp")
+pytest.importorskip("torchsky._cpp")
 
 from torchsky.sphere.spectral import alm2map, map2alm  # noqa: E402
 from torchsky.sphere import healpix as hp  # noqa: E402

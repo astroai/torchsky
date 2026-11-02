@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 import torch
 
-import torchsky
 from torchsky.map.field import (
     FieldDomain,
     FieldFitResult,
@@ -20,6 +19,7 @@ from torchsky.map.field import (
 )
 from torchsky.map.field.core import ExplicitSpectralGridField
 from torchsky.map.plan import build_map_input_identity
+import torchfits
 
 
 def _header() -> dict[str, object]:
@@ -66,9 +66,7 @@ def _foam() -> SpectralPowerFoamField:
         _foam_domain(),
         sites=torch.tensor([[-0.25, 0.0], [0.25, 0.0]], dtype=torch.float64),
         radii=torch.tensor([0.8, 0.9], dtype=torch.float64),
-        cell_coefficients=torch.tensor(
-            [[0.5, 0.1], [0.8, -0.1]], dtype=torch.float64
-        ),
+        cell_coefficients=torch.tensor([[0.5, 0.1], [0.8, -0.1]], dtype=torch.float64),
         cell_gradient_coefficients=torch.tensor(
             [[[0.01, 0.02], [0.03, 0.04]], [[-0.01, 0.0], [0.02, -0.03]]],
             dtype=torch.float64,
@@ -87,12 +85,10 @@ def test_field_artifact_roundtrip_uses_weights_only_load(
     monkeypatch,
 ) -> None:
     input_path = tmp_path / "input.fits"
-    torchsky.write(
+    torchfits.write(
         str(input_path), torch.ones((6, 6)), header=_header(), overwrite=True
     )
-    model = make_field_model(
-        "sine_implicit", _domain(), hidden_dim=8, hidden_layers=1
-    )
+    model = make_field_model("sine_implicit", _domain(), hidden_dim=8, hidden_layers=1)
     artifact_path = tmp_path / "artifact"
     save_field_artifact(
         artifact_path,
@@ -155,9 +151,7 @@ def test_field_artifact_roundtrips_explicit_grid_spatial_bounds(tmp_path: Path) 
         "spectral_resolution": 3,
         "spatial_bounds_local_deg": (-0.01, 0.02, -0.03, 0.04),
     }
-    model = make_field_model(
-        "explicit_spectral_grid_field", _foam_domain(), **kwargs
-    )
+    model = make_field_model("explicit_spectral_grid_field", _foam_domain(), **kwargs)
     assert isinstance(model, ExplicitSpectralGridField)
     artifact_path = tmp_path / "grid-artifact"
     manifest = save_field_artifact(
@@ -299,9 +293,7 @@ def test_field_artifact_roundtrips_diffuse_foam_hybrid(tmp_path: Path) -> None:
         model_kind="diffuse_foam_hybrid",
     )
 
-    assert (
-        manifest.model_kwargs["artifact_constructor"] == "diffuse_foam_hybrid_v1"
-    )
+    assert manifest.model_kwargs["artifact_constructor"] == "diffuse_foam_hybrid_v1"
     assert manifest.model_kwargs["training_stage"] == "foam"
     assert "sites" not in manifest.model_kwargs["localized_foam"]
     loaded = load_field_artifact(artifact_path, device="cpu")
@@ -319,7 +311,9 @@ def test_field_artifact_roundtrips_diffuse_foam_hybrid(tmp_path: Path) -> None:
     )
 
 
-def test_field_artifact_rejects_non_json_metadata_before_writing(tmp_path: Path) -> None:
+def test_field_artifact_rejects_non_json_metadata_before_writing(
+    tmp_path: Path,
+) -> None:
     model = make_field_model("sine_implicit", _domain(), hidden_dim=8, hidden_layers=1)
     artifact_path = tmp_path / "invalid-artifact"
     with pytest.raises(ValueError, match="finite JSON"):
@@ -335,7 +329,7 @@ def test_field_artifact_rejects_non_json_metadata_before_writing(tmp_path: Path)
 def test_field_artifact_resume_matches_uninterrupted_training(tmp_path: Path) -> None:
     input_path = tmp_path / "input.fits"
     image = torch.linspace(0.0, 1.0, 36).reshape(6, 6)
-    torchsky.write(str(input_path), image, header=_header(), overwrite=True)
+    torchfits.write(str(input_path), image, header=_header(), overwrite=True)
     observation = FieldObservation(
         image=image,
         header=_header(),

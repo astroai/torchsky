@@ -86,7 +86,7 @@ def test_astropy_flat_lambda_cdm_parity() -> None:
     astropy = pytest.importorskip("astropy.cosmology")
     z = torch.tensor([0.1, 0.5, 1.0, 2.0], dtype=torch.float64)
     ref = astropy.FlatLambdaCDM(H0=PLANCK18_H0, Om0=0.3111)
-    got = luminosity_distance(z, H0=PLANCK18_H0, om0=0.3111, w0=-1.0, n_steps=4096)
+    got = luminosity_distance(z, H0=PLANCK18_H0, om0=0.3111, w0=-1.0)
     want = torch.tensor(ref.luminosity_distance(z.numpy()).value, dtype=torch.float64)
     torch.testing.assert_close(got, want, rtol=2e-3, atol=0.5)
 
@@ -96,7 +96,7 @@ def test_differential_comoving_volume_matches_astropy_and_has_gradients() -> Non
     z = torch.tensor([0.1, 0.5, 1.0, 2.0], dtype=torch.float64)
     om0 = torch.tensor(0.3111, dtype=torch.float64, requires_grad=True)
     cosmology = FLRW(H0=PLANCK18_H0, Om0=om0)
-    got = differential_comoving_volume(z, cosmology, n_steps=4096)
+    got = differential_comoving_volume(z, cosmology)
     reference = astropy.FlatLambdaCDM(H0=PLANCK18_H0, Om0=0.3111)
     want = torch.tensor(
         reference.differential_comoving_volume(z.numpy()).value,
@@ -113,9 +113,7 @@ def test_curved_transverse_distance_matches_astropy(ok0: float) -> None:
     z = torch.tensor([0.1, 0.5, 1.0, 2.0], dtype=torch.float64)
     om0 = 0.3
     ref = astropy.LambdaCDM(H0=70.0, Om0=om0, Ode0=1.0 - om0 - ok0)
-    got = transverse_comoving_distance(
-        z, H0=70.0, om0=om0, ok0=ok0, w0=-1.0, n_steps=8192
-    )
+    got = transverse_comoving_distance(z, H0=70.0, om0=om0, ok0=ok0, w0=-1.0)
     want = torch.tensor(
         ref.comoving_transverse_distance(z.numpy()).value, dtype=torch.float64
     )
@@ -209,7 +207,6 @@ def test_curved_arcminute_pair_is_stable_in_float32(ok0: float) -> None:
         direction32_b,
         z32,
         FLRW(H0=70.0, Om0=0.3, Ok0=ok0),
-        n_steps=4096,
     )
     reference = comoving_separation(
         direction64_a,
@@ -217,7 +214,6 @@ def test_curved_arcminute_pair_is_stable_in_float32(ok0: float) -> None:
         direction64_b,
         z64,
         FLRW(H0=70.0, Om0=0.3, Ok0=ok0),
-        n_steps=4096,
     )
     assert got.item() > 0.0
     torch.testing.assert_close(got.to(torch.float64), reference, rtol=2e-4, atol=2e-4)
@@ -247,7 +243,6 @@ def test_curvature_series_transition_is_continuous(sign: float) -> None:
                 direction_b,
                 z_b,
                 FLRW(H0=70.0, Om0=0.3, Ok0=sign * factor * transition),
-                n_steps=4096,
             )
         )
     torch.testing.assert_close(values[0], values[1], rtol=5e-8, atol=1e-5)
@@ -268,7 +263,6 @@ def test_curved_pair_matrix_has_finite_diagonal_gradients(ok0_value: float) -> N
         directions[None, :, :],
         redshifts[None, :],
         FLRW(H0=h0, Om0=0.3, Ok0=ok0),
-        n_steps=1024,
     )
 
     torch.testing.assert_close(
@@ -331,10 +325,10 @@ def test_flrw_geometry_parameter_gradients_are_finite() -> None:
     unit_a = torch.tensor([1.0, 0.0, 0.0], dtype=dtype)
     unit_b = torch.tensor([0.8, 0.6, 0.0], dtype=dtype)
 
-    scaling = alcock_paczynski_scaling(z, cosmology, reference, n_steps=1024)
+    scaling = alcock_paczynski_scaling(z, cosmology, reference)
     loss = (
-        cosmology.transverse_comoving_distance(z, n_steps=1024).sum()
-        + comoving_separation(unit_a, z[0], unit_b, z[-1], cosmology, n_steps=1024)
+        cosmology.transverse_comoving_distance(z).sum()
+        + comoving_separation(unit_a, z[0], unit_b, z[-1], cosmology)
         + scaling.alpha_parallel.sum()
         + scaling.alpha_perpendicular.sum()
     )
@@ -349,15 +343,11 @@ def test_flat_curvature_gradients_match_two_sided_limits() -> None:
     epsilon = 1.0e-4
     z = torch.tensor(1.1, dtype=dtype)
     ok0 = torch.tensor(0.0, dtype=dtype, requires_grad=True)
-    distance = FLRW(H0=70.0, Om0=0.3, Ok0=ok0).transverse_comoving_distance(
-        z, n_steps=4096
-    )
+    distance = FLRW(H0=70.0, Om0=0.3, Ok0=ok0).transverse_comoving_distance(z)
     (distance_gradient,) = torch.autograd.grad(distance, ok0)
-    distance_plus = FLRW(H0=70.0, Om0=0.3, Ok0=epsilon).transverse_comoving_distance(
-        z, n_steps=4096
-    )
+    distance_plus = FLRW(H0=70.0, Om0=0.3, Ok0=epsilon).transverse_comoving_distance(z)
     distance_minus = FLRW(H0=70.0, Om0=0.3, Ok0=-epsilon).transverse_comoving_distance(
-        z, n_steps=4096
+        z
     )
     distance_finite_difference = (distance_plus - distance_minus) / (2.0 * epsilon)
     torch.testing.assert_close(
@@ -370,7 +360,7 @@ def test_flat_curvature_gradients_match_two_sided_limits() -> None:
     z_b = torch.tensor(1.2, dtype=dtype)
     ok0 = torch.tensor(0.0, dtype=dtype, requires_grad=True)
     separation = comoving_separation(
-        unit_a, z_a, unit_b, z_b, FLRW(H0=70.0, Om0=0.3, Ok0=ok0), n_steps=4096
+        unit_a, z_a, unit_b, z_b, FLRW(H0=70.0, Om0=0.3, Ok0=ok0)
     )
     (separation_gradient,) = torch.autograd.grad(separation, ok0)
     separation_plus = comoving_separation(
@@ -379,7 +369,6 @@ def test_flat_curvature_gradients_match_two_sided_limits() -> None:
         unit_b,
         z_b,
         FLRW(H0=70.0, Om0=0.3, Ok0=epsilon),
-        n_steps=4096,
     )
     separation_minus = comoving_separation(
         unit_a,
@@ -387,7 +376,6 @@ def test_flat_curvature_gradients_match_two_sided_limits() -> None:
         unit_b,
         z_b,
         FLRW(H0=70.0, Om0=0.3, Ok0=-epsilon),
-        n_steps=4096,
     )
     separation_finite_difference = (separation_plus - separation_minus) / (
         2.0 * epsilon
@@ -406,3 +394,13 @@ def test_comoving_position_rejects_curvature_and_non_unit_directions() -> None:
         )
     with pytest.raises(ValueError, match="unit vectors"):
         comoving_position(torch.tensor([2.0, 0.0, 0.0]), torch.tensor(0.5))
+
+
+def test_python_float_parameters_keep_float64_precision() -> None:
+    astropy = pytest.importorskip("astropy.cosmology")
+    z = torch.tensor([0.1, 0.5, 1.0, 3.0], dtype=torch.float64)
+    h0, om0 = 67.66, 0.3111
+    ref = astropy.FlatLambdaCDM(H0=h0, Om0=om0, Tcmb0=0).comoving_distance(z.numpy())
+    got = comoving_distance(z, H0=h0, om0=om0)
+    assert got.dtype == torch.float64
+    torch.testing.assert_close(got, torch.as_tensor(ref.value), rtol=1e-9, atol=0.0)

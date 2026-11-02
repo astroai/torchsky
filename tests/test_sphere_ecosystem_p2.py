@@ -1,6 +1,6 @@
 import torch
 import os
-from torchsky.sphere import HealSparseMap, MOC, nest2uniq
+from torchsky.sphere import MOC, SparseHealpixMap, nest2uniq
 
 
 def test_moc_normalization():
@@ -55,7 +55,7 @@ def test_moc_contains_mixed_order_subset():
 def test_sparse_udgrade():
     # Create sparse map at nside 4
     pixels = torch.arange(16)  # All pixels in first coverage pixel
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels, nside_sparse=4, nside_coverage=1, values=torch.ones(16)
     )
 
@@ -77,14 +77,14 @@ def test_sparse_udgrade():
 def test_sparse_fits_io(tmp_path):
     path = str(tmp_path / "test.hs")
     pixels = torch.tensor([0, 10, 100])
-    smap = HealSparseMap.from_pixels(
+    smap = SparseHealpixMap.from_pixels(
         pixels, nside_sparse=128, nside_coverage=8, values=torch.tensor([1.0, 2.0, 3.0])
     )
 
     smap.write_fits(path, overwrite=True)
     assert os.path.exists(path)
 
-    smap_read = HealSparseMap.read_fits(path)
+    smap_read = SparseHealpixMap.read_fits(path)
     assert smap_read.nside_sparse == smap.nside_sparse
     assert smap_read.nside_coverage == smap.nside_coverage
     assert torch.allclose(smap_read.values, smap.values)

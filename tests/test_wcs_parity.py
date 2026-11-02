@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import torch
-from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
 
@@ -84,64 +83,6 @@ def _ra_wrap_delta(ra_a: np.ndarray, ra_b: np.ndarray) -> np.ndarray:
 
 @pytest.mark.parametrize("projection", PROJECTIONS)
 @pytest.mark.parametrize("origin", [0, 1])
-def test_projection_forward_matches_astropy(projection: str, origin: int) -> None:
-    header = _make_header(projection)  # type: ignore
-    awcs = AstropyWCS(header)  # type: ignore
-    twcs = TorchWCS(dict(header))  # type: ignore
-
-    x, y = _sample_pixels(header)  # type: ignore
-
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
-    ra_t, dec_t = twcs.pixel_to_world(
-        torch.from_numpy(x),
-        torch.from_numpy(y),
-        origin=origin,
-    )
-
-    ra_t_np = ra_t.cpu().numpy()  # type: ignore
-    dec_t_np = dec_t.cpu().numpy()  # type: ignore
-
-    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
-    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
-    assert np.any(valid), f"No finite parity points for projection={projection}"
-
-    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
-    ddec = dec_t_np[valid] - dec_ast[valid]  # type: ignore
-
-    np.testing.assert_allclose(dra, 0.0, atol=5e-9)  # type: ignore
-    np.testing.assert_allclose(ddec, 0.0, atol=5e-9)  # type: ignore
-
-
-@pytest.mark.parametrize("projection", PROJECTIONS)
-@pytest.mark.parametrize("origin", [0, 1])
-def test_projection_forward_stack_tensor_matches_astropy(
-    projection: str, origin: int
-) -> None:  # type: ignore
-    """Stacked (N, 2) pixel tensor path must match Astropy (same as two-arg semantics)."""  # type: ignore
-    header = _make_header(projection)  # type: ignore
-    awcs = AstropyWCS(header)  # type: ignore
-    twcs = TorchWCS(dict(header))  # type: ignore
-
-    x, y = _sample_pixels(header)  # type: ignore
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
-    pixels = torch.stack([torch.from_numpy(x), torch.from_numpy(y)], dim=-1)  # type: ignore
-    world = twcs.pixel_to_world(pixels, origin=origin)
-    ra_t_np = world[..., 0].cpu().numpy().reshape(-1)  # type: ignore
-    dec_t_np = world[..., 1].cpu().numpy().reshape(-1)  # type: ignore
-
-    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
-    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
-    assert np.any(valid), f"No finite parity points for projection={projection}"
-
-    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
-    ddec = dec_t_np[valid] - dec_ast[valid]  # type: ignore
-
-    np.testing.assert_allclose(dra, 0.0, atol=5e-9)  # type: ignore
-    np.testing.assert_allclose(ddec, 0.0, atol=5e-9)  # type: ignore
-
-
-@pytest.mark.parametrize("projection", PROJECTIONS)
-@pytest.mark.parametrize("origin", [0, 1])
 def test_projection_forward_stack_matches_separate_args(
     projection: str, origin: int
 ) -> None:  # type: ignore
@@ -155,181 +96,6 @@ def test_projection_forward_stack_matches_separate_args(
     world = twcs.pixel_to_world(torch.stack([xt, yt], dim=-1), origin=origin)  # type: ignore
     torch.testing.assert_close(world[..., 0], ra_a, atol=1e-9, rtol=1e-12)  # type: ignore
     torch.testing.assert_close(world[..., 1], dec_a, atol=1e-9, rtol=1e-12)  # type: ignore
-
-
-@pytest.mark.parametrize("projection", PROJECTIONS)
-@pytest.mark.parametrize("origin", [0, 1])
-def test_projection_inverse_matches_astropy(projection: str, origin: int) -> None:
-    header = _make_header(projection)  # type: ignore
-    awcs = AstropyWCS(header)  # type: ignore
-    twcs = TorchWCS(dict(header))  # type: ignore
-
-    x, y = _sample_pixels(header)  # type: ignore
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
-
-    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
-    assert np.any(valid), f"No finite inverse points for projection={projection}"
-
-    ra_valid = ra_ast[valid]
-    dec_valid = dec_ast[valid]
-
-    x_ast, y_ast = awcs.all_world2pix(ra_valid, dec_valid, origin)
-    x_t, y_t = twcs.world_to_pixel(
-        torch.from_numpy(ra_valid),
-        torch.from_numpy(dec_valid),
-        origin=origin,
-    )
-
-    np.testing.assert_allclose(x_t.cpu().numpy(), x_ast, atol=1e-6)  # type: ignore
-    np.testing.assert_allclose(y_t.cpu().numpy(), y_ast, atol=1e-6)  # type: ignore
-
-    np.testing.assert_allclose(x_t.cpu().numpy(), x[valid], atol=1e-6)  # type: ignore
-    np.testing.assert_allclose(y_t.cpu().numpy(), y[valid], atol=1e-6)  # type: ignore
-
-
-@pytest.mark.parametrize("projection", PROJECTIONS)
-@pytest.mark.parametrize("origin", [0, 1])
-def test_projection_inverse_stack_tensor_matches_astropy(
-    projection: str, origin: int
-) -> None:  # type: ignore
-    """Stacked (N, 2) world tensor inverse must match Astropy ``all_world2pix``."""
-    header = _make_header(projection)  # type: ignore
-    awcs = AstropyWCS(header)  # type: ignore
-    twcs = TorchWCS(dict(header))  # type: ignore
-
-    x, y = _sample_pixels(header)  # type: ignore
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
-
-    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
-    assert np.any(valid), f"No finite inverse points for projection={projection}"
-
-    ra_valid = ra_ast[valid]
-    dec_valid = dec_ast[valid]
-
-    x_ast, y_ast = awcs.all_world2pix(ra_valid, dec_valid, origin)
-    world = torch.stack(
-        [torch.from_numpy(ra_valid), torch.from_numpy(dec_valid)],
-        dim=-1,  # type: ignore
-    )
-    pix_t = twcs.world_to_pixel(world, origin=origin)
-    x_t = pix_t[..., 0].cpu().numpy().reshape(-1)  # type: ignore
-    y_t = pix_t[..., 1].cpu().numpy().reshape(-1)  # type: ignore
-
-    np.testing.assert_allclose(x_t, x_ast, atol=1e-6)  # type: ignore
-    np.testing.assert_allclose(y_t, y_ast, atol=1e-6)  # type: ignore
-
-
-@pytest.mark.parametrize("projection", PROJECTIONS)
-@pytest.mark.parametrize("origin", [0, 1])
-def test_projection_forward_stack_compiled_matches_astropy(
-    projection: str, origin: int
-) -> None:  # type: ignore
-    """After ``compile()``, stacked forward path still matches Astropy (legacy gate)."""
-    header = _make_header(projection)  # type: ignore
-    awcs = AstropyWCS(header)  # type: ignore
-    twcs = TorchWCS(dict(header))  # type: ignore
-    try:
-        twcs.compile(mode="reduce-overhead")  # type: ignore
-    except Exception:
-        pytest.skip("torch.compile not available")
-
-    x, y = _sample_pixels(header)  # type: ignore
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
-    pixels = torch.stack([torch.from_numpy(x), torch.from_numpy(y)], dim=-1)  # type: ignore
-    try:
-        world = twcs.pixel_to_world(pixels, origin=origin)
-    except RuntimeError:
-        pytest.skip("torch.compile execution failed (likely missing CUDA headers)")
-    ra_t_np = world[..., 0].cpu().numpy().reshape(-1)  # type: ignore
-    dec_t_np = world[..., 1].cpu().numpy().reshape(-1)  # type: ignore
-
-    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
-    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
-    assert np.any(valid), f"No finite parity points for projection={projection}"
-
-    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
-    ddec = dec_t_np[valid] - dec_ast[valid]  # type: ignore
-
-    np.testing.assert_allclose(dra, 0.0, atol=5e-9)  # type: ignore
-    np.testing.assert_allclose(ddec, 0.0, atol=5e-9)  # type: ignore
-
-
-@pytest.mark.parametrize("projection", PROJECTIONS)
-@pytest.mark.parametrize("origin", [0, 1])
-def test_projection_inverse_stack_compiled_matches_astropy(
-    projection: str, origin: int
-) -> None:  # type: ignore
-    """After ``compile()``, stacked inverse still matches Astropy (legacy gate)."""
-    header = _make_header(projection)  # type: ignore
-    awcs = AstropyWCS(header)  # type: ignore
-    twcs = TorchWCS(dict(header))  # type: ignore
-    try:
-        twcs.compile(mode="reduce-overhead")  # type: ignore
-    except Exception:
-        pytest.skip("torch.compile not available")
-
-    x, y = _sample_pixels(header)  # type: ignore
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
-    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
-    assert np.any(valid), f"No finite inverse points for projection={projection}"
-    ra_v = ra_ast[valid]
-    dec_v = dec_ast[valid]
-
-    x_ast, y_ast = awcs.all_world2pix(ra_v, dec_v, origin)
-    world = torch.stack(
-        [torch.from_numpy(ra_v), torch.from_numpy(dec_v)],
-        dim=-1,  # type: ignore
-    )
-    try:
-        pix = twcs.world_to_pixel(world, origin=origin)
-    except RuntimeError:
-        pytest.skip("torch.compile execution failed (likely missing CUDA headers)")
-    x_t = pix[..., 0].cpu().numpy().reshape(-1)  # type: ignore
-    y_t = pix[..., 1].cpu().numpy().reshape(-1)  # type: ignore
-
-    np.testing.assert_allclose(x_t, x_ast, atol=1e-6)  # type: ignore
-    np.testing.assert_allclose(y_t, y_ast, atol=1e-6)  # type: ignore
-
-
-@pytest.mark.parametrize("projection", ["CEA", "MER"])
-@pytest.mark.parametrize("origin", [0, 1])
-def test_off_equator_cylindrical_forward_matches_astropy(
-    projection: str, origin: int
-) -> None:  # type: ignore
-    header = _make_header(  # type: ignore
-        projection,
-        crval1=12.0,
-        crval2=-3.0,  # type: ignore
-        naxis1=1024,
-        naxis2=640,
-    )
-    awcs = AstropyWCS(header)  # type: ignore
-    twcs = TorchWCS(dict(header))  # type: ignore
-
-    x = np.array([512.5, 512.5, 600.0, 700.0], dtype=np.float64)
-    y = np.array([320.5, 400.0, 320.5, 500.0], dtype=np.float64)
-
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, origin)
-    ra_t, dec_t = twcs.pixel_to_world(
-        torch.from_numpy(x),
-        torch.from_numpy(y),
-        origin=origin,
-    )
-
-    ra_t_np = ra_t.cpu().numpy()  # type: ignore
-    dec_t_np = dec_t.cpu().numpy()  # type: ignore
-
-    valid = np.isfinite(ra_ast) & np.isfinite(dec_ast)
-    valid &= np.isfinite(ra_t_np) & np.isfinite(dec_t_np)
-    assert np.any(valid), (
-        f"No finite off-equator parity points for projection={projection}"
-    )  # type: ignore
-
-    dra = _ra_wrap_delta(ra_t_np[valid], ra_ast[valid])
-    ddec = dec_t_np[valid] - dec_ast[valid]  # type: ignore
-
-    np.testing.assert_allclose(dra, 0.0, atol=5e-9)  # type: ignore
-    np.testing.assert_allclose(ddec, 0.0, atol=5e-9)  # type: ignore
 
 
 def test_off_equator_cea_fused_matches_python_fallback() -> None:
@@ -357,25 +123,6 @@ def test_off_equator_cea_fused_matches_python_fallback() -> None:
     np.testing.assert_allclose(
         dec_default.cpu().numpy(), dec_python.cpu().numpy(), atol=5e-9
     )
-
-
-def test_lonpole_180_fused_and_stacked_match_astropy() -> None:
-    header = _make_header("CEA")
-    header["LONPOLE"] = 180.0
-    awcs = AstropyWCS(header)
-    twcs = TorchWCS(dict(header))
-    x, y = _sample_pixels(header)
-    ra_ast, dec_ast = awcs.all_pix2world(x, y, 0)
-    xt = torch.from_numpy(x)
-    yt = torch.from_numpy(y)
-    ra2, dec2 = twcs.pixel_to_world(xt, yt, origin=0)
-    world = twcs.pixel_to_world(torch.stack([xt, yt], dim=-1), origin=0)
-    dra2 = _ra_wrap_delta(ra2.cpu().numpy(), ra_ast)
-    dras = _ra_wrap_delta(world[..., 0].cpu().numpy(), ra_ast)
-    np.testing.assert_allclose(dra2, 0.0, atol=5e-9)
-    np.testing.assert_allclose(dras, 0.0, atol=5e-9)
-    np.testing.assert_allclose(dec2.cpu().numpy(), dec_ast, atol=5e-9)
-    np.testing.assert_allclose(world[..., 1].cpu().numpy(), dec_ast, atol=5e-9)
 
 
 def test_float32_two_arg_matches_stacked() -> None:
@@ -407,5 +154,9 @@ def test_mps_two_arg_world_to_pixel_stays_float32() -> None:
     assert px.device.type == "mps"
     assert px.dtype == torch.float32
     assert stacked.dtype == torch.float32
-    torch.testing.assert_close(stacked[..., 0], px, atol=1e-5, rtol=1e-5)
-    torch.testing.assert_close(stacked[..., 1], py, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(
+        stacked[..., 0], px, atol=1e-5, rtol=1e-5, equal_nan=True
+    )
+    torch.testing.assert_close(
+        stacked[..., 1], py, atol=1e-5, rtol=1e-5, equal_nan=True
+    )

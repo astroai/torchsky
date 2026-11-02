@@ -1,0 +1,10 @@
+source      l [deg]   b [deg]   ecl.lon  ecl.lat
+Sgr A*    359.9443   -0.0462  267.1751  -5.6107
+Crab      184.5575   -5.7844   84.4209  -1.2914
+LMC       280.4652  -32.8884  312.8596 -85.3536
+Galactic round trip: 8.2e-07 mas; ICRS->FK5(J2000) shift: 28.6 mas
+Barnard's star moves 351.9 arcsec in Dec over 34 yr; rigorous vs linear proper motion differ by 741.9 mas
+Sgr A*   az= 119.77 alt= -68.82
+Crab     az= 279.86 alt=  67.69
+LMC      az= 188.90 alt=  -1.54
+device=cpu

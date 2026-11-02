@@ -46,7 +46,7 @@ def test_release_smoke_wcs_header_build(tmp_path: Path) -> None:
         header=header,
         overwrite=True,
     )
-    wcs = torchsky.get_wcs(path.as_posix(), hdu=0)
+    wcs = torchsky.WCS(dict(torchfits.read_header(path.as_posix(), 0)))
     world = wcs.pixel_to_world(torch.tensor([3.0]), torch.tensor([3.0]))
     assert len(world) == 2
     assert torch.isfinite(world[0]).all()

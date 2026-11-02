@@ -25,6 +25,7 @@ from torch import Tensor, nn
 from torch.nn import functional as F
 
 from .base import NoiseOp
+from .image_grid import image_shape_hw
 
 
 VAR_POISSON: Final[str] = "VAR_POISSON"
@@ -61,7 +62,11 @@ class StructuredNoiseOp(NoiseOp):
 
 
 def sanitize_inverse_variance(weight: Tensor) -> Tensor:
-    return weight.where(weight > 0.0, weight.new_zeros(()).expand_as(weight))
+    return torch.where(
+        torch.isfinite(weight) & (weight > 0.0),
+        weight,
+        torch.zeros((), dtype=weight.dtype, device=weight.device),
+    )
 
 
 def _reference_tensor(*values: object) -> Tensor | None:
@@ -99,13 +104,24 @@ def _validate_positive(value: Tensor, *, name: str) -> None:
 def _broadcast_parameter(value: Tensor, shape: tuple[int, ...], *, name: str) -> Tensor:
     """Broadcast a scalar/map or a leading exposure parameter to ``shape``.
 
-    Standard PyTorch broadcasting handles detector maps (``H x W`` against
-    ``E x H x W``). A one-dimensional calibration vector conventionally
-    indexes the leading exposure/amp axis, so the fallback appends singleton
-    dimensions for that case.
+    Standard PyTorch broadcasting handles explicit detector maps (``H x W``
+    against ``E x H x W``). A one-dimensional calibration vector always
+    indexes the leading exposure/amp axis, even when its length also equals a
+    trailing dimension. Trailing-axis calibration maps must therefore include
+    explicit singleton dimensions, such as ``(1, W)``.
     """
     if value.ndim > len(shape):
         raise ValueError(f"{name} has too many dimensions for target shape {shape}")
+    if value.ndim == 1 and len(shape) > 1:
+        leading = value.reshape(value.shape + (1,) * (len(shape) - 1))
+        try:
+            torch.broadcast_shapes(tuple(leading.shape), shape)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"{name} leading-axis shape {tuple(value.shape)} is not "
+                f"broadcastable to {shape}; use an explicit shape for a trailing map"
+            ) from exc
+        return leading
     try:
         torch.broadcast_shapes(tuple(value.shape), shape)
     except RuntimeError:
@@ -233,6 +249,10 @@ def pipeline_variance(
     _validate_nonnegative(err_tensor, name="ERR")
     scale = _coerce(err_scale, reference)
     _validate_positive(scale, name="ERR scale")
+    scale = _broadcast_parameter(scale, tuple(err_tensor.shape), name="ERR scale")
+    floor_tensor = _broadcast_parameter(
+        floor_tensor, tuple(err_tensor.shape), name="variance_floor"
+    )
     try:
         shape = torch.broadcast_shapes(
             tuple(err_tensor.shape), tuple(scale.shape), tuple(floor_tensor.shape)
@@ -241,11 +261,7 @@ def pipeline_variance(
         raise ValueError(
             "ERR, ERR scale, and variance_floor are not broadcastable"
         ) from exc
-    return _broadcast_parameter(
-        scale, shape, name="ERR scale"
-    ).square() * err_tensor.square() + _broadcast_parameter(
-        floor_tensor, shape, name="variance_floor"
-    )
+    return scale.square() * err_tensor.square() + floor_tensor
 
 
 calibrated_pipeline_variance = pipeline_variance
@@ -424,7 +440,16 @@ def one_over_f_row_psd(
     minimum_tensor = frequencies.new_tensor(minimum)
     safe_frequency = torch.where(frequencies > 0.0, frequencies, minimum_tensor)
     ratio = knee[..., None] / safe_frequency
-    return white[..., None] * (1.0 + ratio.pow(power[..., None]))
+    # ``0 ** p`` has an infinite (p < 1) or zero (p >= 1) knee gradient and a NaN
+    # exponent gradient at knee == 0; the knee == 0 branch is exactly white, so
+    # evaluate the power only where knee > 0 to keep every gradient finite.
+    has_knee = ratio > 0.0
+    knee_term = torch.where(
+        has_knee,
+        torch.where(has_knee, ratio, torch.ones_like(ratio)).pow(power[..., None]),
+        torch.zeros_like(ratio),
+    )
+    return white[..., None] * (1.0 + knee_term)
 
 
 one_over_f_psd = one_over_f_row_psd
@@ -507,14 +532,22 @@ whiten_rows_fft = fft_whiten_rows
 
 
 class OneOverFRowNoise(nn.Module):
-    """Positive learnable one-over-frequency PSDs for amp/exposure groups."""
+    """Positive learnable one-over-frequency PSDs for amp/exposure groups.
+
+    The knee is learned in log space (``knee = min_knee_frequency + exp(raw)``)
+    so its gradient scales with the knee instead of vanishing at small values.
+    ``knee_frequency=None`` starts at ``0.01 / sample_spacing`` (one hundredth of
+    the sampling rate, 50x below Nyquist): a nearly white initial PSD that still
+    has a usable knee gradient. An explicit ``0`` is accepted but sits at the
+    ``min_knee_frequency`` floor and is effectively unlearnable.
+    """
 
     def __init__(
         self,
         parameter_shape: int | tuple[int, ...] = (4,),
         *,
         white_psd: Tensor | float = 1.0,
-        knee_frequency: Tensor | float = 0.0,
+        knee_frequency: Tensor | float | None = None,
         exponent: Tensor | float = 1.0,
         sample_spacing: float = 1.0,
         min_white_psd: float = 1.0e-8,
@@ -541,6 +574,8 @@ class OneOverFRowNoise(nn.Module):
         self.min_white_psd = float(min_white_psd)
         self.min_knee_frequency = float(min_knee_frequency)
         self.min_exponent = float(min_exponent)
+        if knee_frequency is None:
+            knee_frequency = 0.01 / float(sample_spacing)
         reference = _reference_tensor(white_psd, knee_frequency, exponent)
         if reference is None:
             reference = torch.tensor(0.0, dtype=torch.get_default_dtype())
@@ -553,6 +588,7 @@ class OneOverFRowNoise(nn.Module):
             name: str,
             minimum: float,
             allow_zero: bool = False,
+            log_space: bool = False,
         ) -> nn.Parameter:
             tensor = _coerce(value, reference)
             if tensor.numel() == 1:
@@ -570,6 +606,8 @@ class OneOverFRowNoise(nn.Module):
             shifted = (tensor - tensor.new_tensor(minimum)).clamp_min(
                 torch.finfo(tensor.dtype).tiny
             )
+            if log_space:
+                return nn.Parameter(torch.log(shifted))
             return nn.Parameter(_inverse_softplus(shifted))
 
         self.raw_white_psd = init(
@@ -580,6 +618,7 @@ class OneOverFRowNoise(nn.Module):
             name="knee_frequency",
             minimum=self.min_knee_frequency,
             allow_zero=True,
+            log_space=True,
         )
         self.raw_exponent = init(exponent, name="exponent", minimum=self.min_exponent)
 
@@ -589,7 +628,9 @@ class OneOverFRowNoise(nn.Module):
 
     @property
     def knee_frequency(self) -> Tensor:
-        return _positive_parameter(self.raw_knee_frequency, self.min_knee_frequency)
+        return self.raw_knee_frequency.exp() + self.raw_knee_frequency.new_tensor(
+            self.min_knee_frequency
+        )
 
     @property
     def exponent(self) -> Tensor:
@@ -848,50 +889,266 @@ def student_t_nll(
     return _reduce_nll(-log_prob, reduction)
 
 
-def _poisson_gaussian_components(
+def _integer_probability_powers(base: Tensor, degree: Tensor) -> Tensor:
+    power = degree.abs()
+    nonlinear_base = torch.where(power >= 2, base, 1.0)
+    return torch.where(
+        power == 0,
+        1.0,
+        torch.where(power == 1, base, nonlinear_base.pow(power.clamp_min(2.0))),
+    )
+
+
+def _poisson_mode_probability_terms(
+    rate: Tensor, counts: Tensor, included: Tensor
+) -> Tensor:
+    """Mode-scaled finite probabilities without log-rate differentiation."""
+    mode = rate.detach().floor().unsqueeze(-1)
+    degree = counts.to(rate.dtype) - mode
+    below_mode = degree < 0
+    # Integer reference modes bound both coefficients and power bases by one.
+    # The zero-rate value is frozen here; its right derivative is supplied by
+    # the same analytic boundary jet used by the logarithmic density path.
+    positive_rate = torch.where(rate == 0, 1.0, rate).unsqueeze(-1)
+    left_scale = mode.clamp_min(1.0)
+    right_scale = mode + 1.0
+    # These recurrences depend only on the detached mode. Keeping rate
+    # dependence in explicit powers avoids cumprod's division-based Hessian;
+    # ratios also avoid subtracting large, nearly equal log-factorials.
+    right_coefficient = torch.cumprod(
+        torch.where(degree > 0, right_scale / counts.clamp_min(1), 1.0), dim=-1
+    )
+    left_coefficient = torch.cumprod(
+        torch.where(below_mode, (counts + 1) / left_scale, 1.0).flip(-1), dim=-1
+    ).flip(-1)
+    coefficient = torch.where(below_mode, left_coefficient, right_coefficient)
+    left_rate = torch.where(mode > 0, positive_rate, 1.0)
+    base = torch.where(below_mode, left_scale / left_rate, positive_rate / right_scale)
+    # Isolate degrees zero/one: the generic tensor-power Hessian otherwise
+    # evaluates zero times an overflowing inverse power at tiny positive rates.
+    powers = _integer_probability_powers(base, degree)
+    weights = (coefficient * powers).masked_fill(~included, 0.0)
+    weights = torch.where(
+        (rate == 0).unsqueeze(-1), (counts == 0).to(rate.dtype), weights
+    )
+    return weights
+
+
+def _normalized_poisson_probability_weights(
+    rate: Tensor, counts: Tensor, included: Tensor
+) -> Tensor:
+    weights = _poisson_mode_probability_terms(rate, counts, included)
+    return weights / weights.sum(dim=-1, keepdim=True)
+
+
+def _prepare_poisson_gaussian(
     value: Tensor,
     expected_electrons: Tensor,
     read_noise_variance: Tensor,
-    *,
-    gain: Tensor | float = 1.0,
-    background: Tensor | float = 0.0,
-    tail_sigma: float = 12.0,
-    max_terms: int = 4096,
-) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    gain: Tensor | float,
+    background: Tensor | float,
+    tail_sigma: float,
+    max_terms: int,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Validate and broadcast detector inputs to a common shape."""
     if not math.isfinite(float(tail_sigma)) or tail_sigma <= 0.0:
         raise ValueError("tail_sigma must be finite and positive")
     if int(max_terms) < 2:
         raise ValueError("max_terms must be at least 2")
 
     value = torch.as_tensor(value)
+    if value.dtype not in (torch.float32, torch.float64):
+        raise TypeError("value must have real float32 or float64 dtype")
+    if float(tail_sigma) > math.sqrt(torch.finfo(value.dtype).max):
+        raise ValueError("Poisson--Gaussian support radius exceeds the dtype range")
     rate = torch.as_tensor(expected_electrons, device=value.device, dtype=value.dtype)
     read_var = torch.as_tensor(
         read_noise_variance, device=value.device, dtype=value.dtype
     )
-    value, rate, read_var = torch.broadcast_tensors(value, rate, read_var)
-    gain_t = torch.broadcast_to(
-        torch.as_tensor(gain, device=value.device, dtype=value.dtype),
-        value.shape,
-    )
-    background_t = torch.broadcast_to(
-        torch.as_tensor(background, device=value.device, dtype=value.dtype),
-        value.shape,
+    gain_t = torch.as_tensor(gain, device=value.device, dtype=value.dtype)
+    background_t = torch.as_tensor(background, device=value.device, dtype=value.dtype)
+    value, rate, read_var, gain_t, background_t = torch.broadcast_tensors(
+        value, rate, read_var, gain_t, background_t
     )
     _validate_finite(value, name="value")
     _validate_nonnegative(rate, name="expected_electrons")
     _validate_positive(read_var, name="read_noise_variance")
     _validate_positive(gain_t, name="gain")
     _validate_finite(background_t, name="background")
+    return value, rate, read_var, gain_t, background_t
 
-    # ponytail: bounded finite mixture; replace with a saddle-point tail
-    # approximation if certified high-count exposures exceed max_terms.
-    detached_rate = rate.detach()
-    radius = (
-        float(tail_sigma) * torch.sqrt(detached_rate + 1.0) + float(tail_sigma) ** 2
+
+# Working-set budget per chunk (bytes); peak memory is independent of frame size.
+_POISSON_GAUSSIAN_CHUNK_BYTES: Final[int] = 256 << 20
+# Autograd-saved bytes allowed before chunks are checkpointed (recomputed in
+# backward). Below it the graph is kept: faster, and memory is still bounded.
+_POISSON_GAUSSIAN_SAVE_BYTES: Final[int] = 8 << 30
+# Live (pixel x count) tensors per term, in units of the element size.
+_VALUE_TEMPORARIES: Final[int] = 12
+_DERIVATIVE_TEMPORARIES: Final[int] = 32
+# Streaming moment pass (values plus analytic gradients), same units.
+_MOMENT_TEMPORARIES: Final[int] = 18
+# Bisection brackets the posterior mode to within this many counts; the support
+# is taken from the bracket ends, so the window bound stays rigorous.
+_POISSON_MODE_TOLERANCE: Final[float] = 0.25
+
+
+def _poisson_gaussian_window(
+    value: Tensor,
+    rate: Tensor,
+    read_var: Tensor,
+    gain: Tensor,
+    background: Tensor,
+    *,
+    tail_sigma: float,
+    cdf: bool,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Per-pixel inclusive count window ``(lower, upper)`` and a ``far`` flag.
+
+    The prior window is ``rate +- (tail_sigma sqrt(rate + 1) + tail_sigma^2)``.
+    The observation-conditioned weight ``Pois(n; rate) N(value; gain n +
+    background, read_var)`` is log-concave in ``n``, so its maximiser lies
+    between the Poisson mode and the Gaussian centre ``(value - background) /
+    gain``; it is located by bisection on the exactly monotone score. The
+    posterior standard deviation is at most ``sqrt(1/(1/(m+1) + gain^2/var))``
+    (``psi'(x) >= 1/x``), so the same ``tail_sigma`` Gaussian-equivalent radius
+    around the mode retains the posterior tail beyond ``tail_sigma`` sigmas.
+    Overlapping windows are merged (a superset of the prior window, so
+    in-distribution pixels are unchanged up to the prior tail mass). A
+    posterior window disjoint from the prior window is used on its own and
+    flagged ``far`` (+1 above, -1 below): its terms are evaluated with the
+    exact, unrenormalised Poisson log pmf. For the CDF a far-above pixel needs
+    only the prior window (the CDF is one there), so it is not flagged.
+    """
+    dtype = value.dtype
+    eps = torch.finfo(dtype).eps
+    tail = float(tail_sigma)
+    rate = rate.detach()
+    radius = tail * torch.sqrt(rate + 1.0) + tail**2
+    plo = torch.floor((rate - radius).clamp_min(0.0))
+    phi = torch.ceil(rate + radius)
+    positive = rate > 0
+    cap = 2.0 / eps
+    centre = ((value - background) / gain).detach()
+    lo = (torch.minimum(rate, centre) - 1.0).clamp_min(0.0)
+    hi = torch.maximum(rate, centre).clamp(0.0, cap)
+    lo = torch.minimum(lo, hi)
+    log_rate = torch.where(positive, rate, 1.0).log()
+    slope = (gain / read_var).detach()
+    resid = (value - background).detach()
+    active = positive & ((hi - lo) > _POISSON_MODE_TOLERANCE)
+    if bool(active.any()):
+        idx = active.nonzero(as_tuple=True)
+        a, b = lo[idx], hi[idx]
+        lr, sl, rs, g = log_rate[idx], slope[idx], resid[idx], gain.detach()[idx]
+
+        def score_at(x):
+            return lr - torch.digamma(x + 1.0) + sl * (rs - g * x)
+
+        # The score is monotone decreasing: a boundary root is located exactly.
+        a = torch.where(score_at(b) >= 0, b, a)
+        b = torch.where(score_at(a) <= 0, a, b)
+        steps = int(
+            math.ceil(
+                math.log2(
+                    max(float((b - a).max()), _POISSON_MODE_TOLERANCE)
+                    / _POISSON_MODE_TOLERANCE
+                )
+            )
+        )
+        for _ in range(max(steps, 0)):
+            mid = 0.5 * (a + b)
+            up = score_at(mid) > 0
+            a = torch.where(up, mid, a)
+            b = torch.where(up, b, mid)
+        lo = lo.clone()
+        hi = hi.clone()
+        lo[idx], hi[idx] = a, b
+    # Posterior variance is largest at the upper bracket end (psi'(x) >= 1/x).
+    var = 1.0 / (1.0 / (hi + 1.0) + (gain.detach() ** 2) / read_var.detach())
+    post_radius = tail * torch.sqrt(var + 1.0) + tail**2
+    mlo = torch.floor((lo - post_radius).clamp_min(0.0))
+    mhi = torch.ceil(hi + post_radius)
+    above = positive & (mlo > phi + 1.0)
+    below = positive & (mhi < plo - 1.0)
+    far = above | below
+    lower = torch.where(positive, torch.where(far, mlo, torch.minimum(plo, mlo)), plo)
+    upper = torch.where(positive, torch.where(far, mhi, torch.maximum(phi, mhi)), phi)
+    if cdf:
+        keep_prior = above
+        lower = torch.where(keep_prior, plo, lower)
+        upper = torch.where(keep_prior, phi, upper)
+        far = below
+    # The prior support must itself be representable, even when a far outlier
+    # is evaluated on its own (smaller) window.
+    if (
+        not bool(torch.isfinite(torch.maximum(upper, phi)).all())
+        or bool((torch.maximum(upper, phi) >= 2**63).any())
+        or bool((torch.maximum(upper, phi) > cap).any())
+    ):
+        raise ValueError(
+            "Poisson--Gaussian support exceeds the dtype's exact count range"
+        )
+    side = torch.where(far, torch.where(below, -1, 1), 0).to(torch.int8)
+    return lower, upper, side
+
+
+def _poisson_log_weights_mode_anchored(
+    rate: Tensor, counts_i: Tensor, included: Tensor
+) -> Tensor:
+    """Normalised Poisson log weights as cumulative log-ratios from the mode.
+
+    ``log p(n) - log p(m)`` is a sum of ``log1p`` ratios whose errors scale with
+    the distance from the mode, not with ``lgamma(n)``; this keeps float32
+    accurate at large rates. The window contains the prior mode. Values only
+    (derivatives use the modal polynomial form).
+    """
+    counts = counts_i.to(rate.dtype)
+    mode = rate.detach().floor().unsqueeze(-1)
+    positive = rate.unsqueeze(-1) > 0
+    lam = torch.where(positive, rate.unsqueeze(-1), 1.0)
+    above = counts > mode
+    below = counts < mode
+    # log(x / y) via log1p when the ratio is near one (small cancellation
+    # error), else a difference of logs; both are the same exact quantity.
+    safe_c = counts.clamp_min(1.0)
+    near = (lam - safe_c).abs() < 0.5 * safe_c
+    right_term = torch.where(
+        near,
+        torch.log1p((lam - safe_c) / safe_c),
+        lam.log() - safe_c.log(),
     )
-    lower = torch.floor((detached_rate - radius).clamp_min(0.0)).to(torch.int64)
-    upper = torch.ceil(detached_rate + radius).to(torch.int64)
-    width = int((upper - lower + 1).max().item()) if upper.numel() else 0
+    next_c = counts + 1.0
+    near_l = (next_c - lam).abs() < 0.5 * lam
+    left_term = torch.where(
+        near_l,
+        torch.log1p((next_c - lam) / lam),
+        next_c.log() - lam.log(),
+    )
+    right = torch.where(above, right_term, 0.0).cumsum(-1)
+    left = torch.where(below, left_term, 0.0).flip(-1).cumsum(-1).flip(-1)
+    log_w = (right + left).masked_fill(~included, -torch.inf)
+    # A zero-rate row is the point mass at count zero.
+    point = torch.where(counts_i == 0, 0.0, -torch.inf)
+    log_w = torch.where(positive, log_w, point.masked_fill(~included, -torch.inf))
+    return log_w - torch.logsumexp(log_w, dim=-1, keepdim=True)
+
+
+def _poisson_gaussian_components(
+    value: Tensor,
+    rate: Tensor,
+    read_var: Tensor,
+    gain_t: Tensor,
+    background_t: Tensor,
+    lower_float: Tensor,
+    upper_float: Tensor,
+    *,
+    max_terms: int,
+    logarithmic_weights: bool = True,
+    normalize: bool = True,
+    stable_values: bool = False,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    width = int((upper_float - lower_float + 1).max().item()) if value.numel() else 0
     if width > int(max_terms):
         raise ValueError(
             f"Poisson--Gaussian support requires {width} terms, exceeding "
@@ -900,26 +1157,587 @@ def _poisson_gaussian_components(
         )
     if width == 0:
         empty = torch.empty_like(value).unsqueeze(-1)
-        return value, read_var, empty, empty
+        return value, read_var, empty, empty, empty.to(torch.int64)
+
+    lower, upper = lower_float.to(torch.int64), upper_float.to(torch.int64)
 
     offset = torch.arange(width, device=value.device, dtype=torch.int64)
     counts_i = lower.unsqueeze(-1) + offset
     included = counts_i <= upper.unsqueeze(-1)
     counts = counts_i.to(dtype=value.dtype)
-    safe_rate = rate.clamp_min(torch.finfo(rate.dtype).tiny).unsqueeze(-1)
-    poisson_log = (
-        counts * safe_rate.log() - rate.unsqueeze(-1) - torch.lgamma(counts + 1.0)
-    )
-    log_weights = torch.where(
-        (rate == 0).unsqueeze(-1),
-        torch.where(counts_i == 0, torch.zeros_like(poisson_log), -torch.inf),
-        poisson_log,
-    )
-    log_weights = log_weights.masked_fill(~included, -torch.inf)
-    log_weights = log_weights - torch.logsumexp(log_weights, dim=-1, keepdim=True)
+    if stable_values:
+        weights = _poisson_log_weights_mode_anchored(rate, counts_i, included)
+    elif logarithmic_weights:
+        safe_rate = torch.where(rate == 0, 1.0, rate).unsqueeze(-1)
+        poisson_log = (
+            counts * safe_rate.log() - rate.unsqueeze(-1) - torch.lgamma(counts + 1.0)
+        )
+        weights = torch.where(
+            (rate == 0).unsqueeze(-1),
+            torch.where(counts_i == 0, torch.zeros_like(poisson_log), -torch.inf),
+            poisson_log,
+        )
+        weights = weights.masked_fill(~included, -torch.inf)
+        if normalize:
+            weights = weights - torch.logsumexp(weights, dim=-1, keepdim=True)
+    else:
+        weights = _normalized_poisson_probability_weights(rate, counts_i, included)
 
     conditional_mean = gain_t.unsqueeze(-1) * counts + background_t.unsqueeze(-1)
-    return value, read_var, log_weights, conditional_mean
+    return value, read_var, weights, conditional_mean, counts_i
+
+
+def _standard_normal_interval_mass(lower: Tensor, upper: Tensor) -> Tensor:
+    """Stable Phi(upper)-Phi(lower) for ordered standardized endpoints."""
+    root_two = math.sqrt(2.0)
+    lower_tail = 0.5 * (torch.erfc(-upper / root_two) - torch.erfc(-lower / root_two))
+    upper_tail = 0.5 * (torch.erfc(lower / root_two) - torch.erfc(upper / root_two))
+    across_zero = 0.5 * (torch.erf(upper / root_two) - torch.erf(lower / root_two))
+    return torch.where(
+        upper <= 0, lower_tail, torch.where(lower >= 0, upper_tail, across_zero)
+    )
+
+
+def _poisson_gaussian_zero_rate_jet(
+    result: Tensor,
+    value: Tensor,
+    expected_electrons: Tensor,
+    read_var: Tensor,
+    *,
+    gain: Tensor | float,
+    background: Tensor | float,
+    tail_sigma: float,
+    cdf: bool,
+) -> Tensor:
+    """Restore exact right-hand first/second derivatives at zero Poisson rate.
+
+    Log weights cannot represent the derivative of a zero probability. Their
+    zero-rate branch already gives the exact value and read/location gradients;
+    this adds its rate Taylor jet through second order. Higher rate derivatives
+    at zero are not supplied. No positive rate uses a Taylor approximation.
+    """
+    rate = torch.broadcast_to(_coerce(expected_electrons, value), value.shape)
+    zero = rate == 0
+    forward_tangent = torch.autograd.forward_ad.unpack_dual(rate).tangent
+    reverse_grad = torch.is_grad_enabled() and rate.requires_grad
+    if not (reverse_grad or forward_tangent is not None) or not bool(zero.any()):
+        return result
+    gain_t = torch.broadcast_to(_coerce(gain, value), value.shape)
+    background_t = torch.broadcast_to(_coerce(background, value), value.shape)
+    # Mask before exponentiation: a positive-rate observation can have an
+    # enormous f_1/f_0 ratio that is irrelevant to this boundary correction.
+    residual = torch.where(zero, value - background_t, 0.0)
+    boundary_gain = torch.where(zero, gain_t, 1.0)
+    variance = torch.where(zero, read_var, 1.0)
+    # At an integer cutoff, immediately positive rates add the next count.
+    # In particular a zero radius of one includes count two in the right jet.
+    # Use the same tensor operations/dtype as the represented radius. Even a
+    # radius underflowing to zero adds count one immediately to the right.
+    zero_radius = float(tail_sigma) * value.new_tensor(1.0) + float(tail_sigma) ** 2
+    includes_two = bool(zero_radius >= 1)
+    if cdf:
+        sigma = variance.sqrt()
+        z0 = residual / sigma
+        z1 = (residual - boundary_gain) / sigma
+        interval01 = _standard_normal_interval_mass(z1, z0)
+        score = -interval01
+        curvature = (
+            interval01
+            - _standard_normal_interval_mass((residual - 2 * boundary_gain) / sigma, z1)
+            if includes_two
+            else 2 * interval01
+        )
+    else:
+        log_ratio = boundary_gain * (residual - 0.5 * boundary_gain) / variance
+        score = -torch.expm1(log_ratio)
+        if includes_two:
+            # f_1^2/f_0^2 - f_2/f_0 in log form avoids cancellation and
+            # avoids overflowing the individual squared ratio unnecessarily.
+            squared_spacing = boundary_gain.square() / variance
+            underflow = squared_spacing == 0
+            safe_spacing = torch.where(underflow, 1.0, squared_spacing)
+            log_factor = torch.where(
+                underflow,
+                2 * boundary_gain.log() - variance.log(),
+                (-torch.expm1(-safe_spacing)).log(),
+            )
+            curvature = torch.exp(2 * log_ratio + log_factor)
+        else:
+            curvature = torch.expm1(2 * log_ratio)
+    if not bool(torch.isfinite(score[zero]).all()) or not bool(
+        torch.isfinite(curvature[zero]).all()
+    ):
+        raise ValueError(
+            "zero-rate first/second derivatives exceed the dtype range; "
+            "the zero-rate density/CDF value remains available without rate gradients"
+        )
+    boundary_rate = torch.where(zero, rate, 0.0)
+    return result + boundary_rate * score + 0.5 * boundary_rate.square() * curvature
+
+
+def _poisson_gaussian_modal_nll(
+    observed: Tensor,
+    rate: Tensor,
+    read_var: Tensor,
+    gain: Tensor,
+    background: Tensor,
+    counts_i: Tensor,
+    poisson_log: Tensor,
+    gaussian_log: Tensor,
+) -> Tensor:
+    """Ratio of modal polynomial sums with a frozen Gaussian reference."""
+    included = torch.isfinite(poisson_log)
+    counts = counts_i.to(observed.dtype)
+    mode = rate.detach().floor().unsqueeze(-1)
+    prior_terms = _poisson_mode_probability_terms(rate, counts_i, included)
+    joint_index = (poisson_log + gaussian_log).detach().argmax(dim=-1, keepdim=True)
+    joint_mode = counts.gather(-1, joint_index)
+    degree = counts - joint_mode
+    below = (degree < 0) & included
+    above = (degree > 0) & included
+    has_left = below.any(dim=-1, keepdim=True)
+    has_right = above.any(dim=-1, keepdim=True)
+    # Zero-rate rows retain the exact Gaussian value and the separate right jet.
+    positive = (rate != 0).unsqueeze(-1)
+    reference_gain = torch.where(positive, gain.detach().unsqueeze(-1), 1.0)
+    reference_var = torch.where(positive, read_var.detach().unsqueeze(-1), 1.0)
+    residual = torch.where(
+        positive, (observed - background).detach().unsqueeze(-1), 0.0
+    )
+    reference_sigma = reference_var.sqrt()
+    standardized_gain = reference_gain / reference_sigma
+    standardized_residual = residual / reference_sigma
+    spacing = standardized_gain.square()
+    left_log_scale = joint_mode.clamp_min(1.0).log() + standardized_gain * (
+        standardized_gain * (joint_mode - 0.5) - standardized_residual
+    )
+    right_log_scale = (joint_mode + 1.0).log() + standardized_gain * (
+        standardized_gain * (joint_mode + 0.5) - standardized_residual
+    )
+    left_scale = torch.where(has_left, left_log_scale, 0.0).exp()
+    right_inverse_scale = torch.where(has_right, -right_log_scale, 0.0).exp()
+    bad_scaling = (
+        (has_left & ((left_scale == 0) | ~torch.isfinite(left_scale)))
+        | (
+            has_right
+            & ((right_inverse_scale == 0) | ~torch.isfinite(right_inverse_scale))
+        )
+    ).squeeze(-1)
+    safe_rate = torch.where(rate == 0, 1.0, rate)
+    # Degree multipliers can overflow before cancellation to a finite Hessian.
+    left_order = torch.where(below, -degree + 1.0, 0.0).amax(dim=-1)
+    right_order = torch.where(above, degree, 0.0).amax(dim=-1)
+    bad_curvature_range = ~torch.isfinite((left_order / safe_rate.detach()).square())
+    bad_curvature_range |= ~torch.isfinite(
+        (right_order * right_inverse_scale.squeeze(-1)).square()
+    )
+    bad = bad_scaling | bad_curvature_range
+    if bool(bad.any()):
+        parameters = (observed, rate, read_var, gain, background)
+        reverse_grad = torch.is_grad_enabled() and any(
+            p.requires_grad for p in parameters
+        )
+        forward_grad = any(
+            torch.autograd.forward_ad.unpack_dual(p).tangent is not None
+            for p in parameters
+        )
+        if reverse_grad or forward_grad:
+            raise ValueError(
+                "Poisson--Gaussian modal derivative intermediates exceed the dtype "
+                "range; evaluate without gradients or use a wider dtype"
+            )
+    # Mask ill-conditioned reference scalings before arithmetic; inference-only
+    # rows fall back to the same retained law's logarithmic value evaluation.
+    bad_row = bad.unsqueeze(-1)
+    left_scale = torch.where(bad_row, 1.0, left_scale)
+    right_inverse_scale = torch.where(bad_row, 1.0, right_inverse_scale)
+    left_rate = torch.where(has_left & ~bad_row, safe_rate.unsqueeze(-1), 1.0)
+    live_rate = torch.where(bad, 1.0, safe_rate).unsqueeze(-1)
+    base = torch.where(below, left_scale / left_rate, live_rate * right_inverse_scale)
+    left_coefficient = torch.cumprod(
+        torch.where(
+            below,
+            (counts + 1.0)
+            / joint_mode.clamp_min(1.0)
+            * torch.exp(-(-degree - 1.0).clamp_min(0.0) * spacing),
+            1.0,
+        ).flip(-1),
+        dim=-1,
+    ).flip(-1)
+    right_coefficient = torch.cumprod(
+        torch.where(
+            above,
+            (joint_mode + 1.0)
+            / counts.clamp_min(1.0)
+            * torch.exp(-(degree - 1.0).clamp_min(0.0) * spacing),
+            1.0,
+        ),
+        dim=-1,
+    )
+    coefficient = torch.where(below, left_coefficient, right_coefficient)
+    finite_gaussian = torch.where(torch.isfinite(gaussian_log), gaussian_log, 0.0)
+    conditional_change = (finite_gaussian - finite_gaussian.detach()).exp()
+    joint_terms = coefficient * _integer_probability_powers(base, degree)
+    joint_terms = (joint_terms * conditional_change).masked_fill(~included, 0.0)
+
+    # Sum short adjacent factorial ratios, avoiding cancellation of large lgamma
+    # values in the prior-to-joint anchor, including supports starting above zero.
+    right_ratio = (mode + 1.0) / counts.clamp_min(1.0)
+    left_ratio = (counts + 1.0) / mode.clamp_min(1.0)
+    log_coefficient = torch.where(
+        (counts > mode) & (counts <= joint_mode), right_ratio.log(), 0.0
+    ).sum(dim=-1)
+    log_coefficient = log_coefficient + torch.where(
+        (counts >= joint_mode) & (counts < mode), left_ratio.log(), 0.0
+    ).sum(dim=-1)
+    anchor_degree = (joint_mode - mode).squeeze(-1)
+    left_anchor_rate = torch.where(mode.squeeze(-1) > 0, safe_rate, 1.0)
+    anchor_base = torch.where(
+        anchor_degree < 0,
+        mode.clamp_min(1.0).squeeze(-1) / left_anchor_rate,
+        safe_rate / (mode.squeeze(-1) + 1.0),
+    )
+    anchor_base = torch.where((anchor_degree == 0) | bad, 1.0, anchor_base)
+    log_prior_anchor = log_coefficient + anchor_degree.abs() * anchor_base.log()
+    result = (
+        prior_terms.sum(dim=-1).log()
+        - joint_terms.sum(dim=-1).log()
+        - log_prior_anchor
+        - gaussian_log.detach().gather(-1, joint_index).squeeze(-1)
+    )
+    fallback = -torch.logsumexp((poisson_log + gaussian_log).detach(), dim=-1)
+    return torch.where(bad, fallback, result)
+
+
+def _needs_derivatives(*tensors: Tensor) -> bool:
+    """True when reverse- or forward-mode derivatives of the inputs are live."""
+    if torch.is_grad_enabled() and any(t.requires_grad for t in tensors):
+        return True
+    return any(
+        torch.autograd.forward_ad.unpack_dual(t).tangent is not None for t in tensors
+    )
+
+
+def _chunk_plan(
+    rate: Tensor, tail_sigma: float, derivatives: bool, live: int | None = None
+) -> tuple[int, int]:
+    """Pixels per chunk (working-set budget) and total terms of the frame."""
+    if rate.numel() == 0:
+        return 1, 0
+    radius = float(tail_sigma) * math.sqrt(float(rate.detach().max()) + 1.0)
+    # Prior window width, with slack for merged observation windows.
+    terms = 3.0 * (radius + float(tail_sigma) ** 2) + 2.0
+    if live is None:
+        live = _DERIVATIVE_TEMPORARIES if derivatives else _VALUE_TEMPORARIES
+    per_term = live * rate.element_size() + 16
+    chunk = max(1, int(_POISSON_GAUSSIAN_CHUNK_BYTES // (per_term * terms)))
+    # Saved-graph estimate uses the prior window width (merged slack excluded).
+    width = 2.0 * (radius + float(tail_sigma) ** 2) + 1.0
+    return chunk, int(width * rate.numel())
+
+
+def _run_chunks(
+    fn, tensors: tuple[Tensor, ...], chunk: int, total_terms: int
+) -> Tensor:
+    from torch.utils.checkpoint import checkpoint
+
+    count = tensors[0].numel()
+    reverse = torch.is_grad_enabled() and any(t.requires_grad for t in tensors)
+    dual = any(
+        torch.autograd.forward_ad.unpack_dual(t).tangent is not None for t in tensors
+    )
+    saved = total_terms * tensors[0].element_size() * _DERIVATIVE_TEMPORARIES
+    # Never under no_grad or forward mode; only when the graph would exceed the
+    # budget and there is more than one chunk to recompute.
+    checkpointed = (
+        reverse and not dual and count > chunk and saved > _POISSON_GAUSSIAN_SAVE_BYTES
+    )
+    pieces = []
+    for start in range(0, count, chunk):
+        part = tuple(t[start : start + chunk] for t in tensors)
+        if checkpointed:
+            pieces.append(checkpoint(fn, *part, use_reentrant=False))
+        else:
+            pieces.append(fn(*part))
+    return torch.cat(pieces) if pieces else tensors[0].new_empty(0)
+
+
+def _scatter_rows(
+    size: int, parts: list[tuple[Tensor, Tensor]], like: Tensor
+) -> Tensor:
+    out = like.new_zeros(size)
+    for index, values in parts:
+        out = out.index_put((index,), values)
+    return out
+
+
+def _poisson_gaussian_nll_near(
+    obs, rate, var, gain, bg, lower, upper, *, max_terms, tail_sigma, derivatives
+) -> Tensor:
+    _, var, poisson_log, conditional_mean, counts = _poisson_gaussian_components(
+        obs,
+        rate,
+        var,
+        gain,
+        bg,
+        lower,
+        upper,
+        max_terms=max_terms,
+        stable_values=not derivatives,
+    )
+    if poisson_log.shape[-1] == 0:
+        return torch.empty_like(obs)
+    gaussian_log = -0.5 * (
+        var.unsqueeze(-1).log()
+        + obs.new_tensor(math.log(2.0 * math.pi))
+        + ((obs.unsqueeze(-1) - conditional_mean) / var.sqrt().unsqueeze(-1)).square()
+    )
+    if not derivatives:
+        # Value only: the same normalised law as a plain log-sum-exp. The modal
+        # polynomial form exists to keep derivatives well conditioned.
+        return -torch.logsumexp(poisson_log + gaussian_log, dim=-1)
+    return _poisson_gaussian_modal_nll(
+        obs, rate, var, gain, bg, counts, poisson_log, gaussian_log
+    )
+
+
+def _poisson_gaussian_nll_far(
+    obs, rate, var, gain, bg, lower, upper, *, max_terms
+) -> Tensor:
+    _, var, poisson_log, conditional_mean, _ = _poisson_gaussian_components(
+        obs, rate, var, gain, bg, lower, upper, max_terms=max_terms, normalize=False
+    )
+    gaussian_log = -0.5 * (
+        var.unsqueeze(-1).log()
+        + obs.new_tensor(math.log(2.0 * math.pi))
+        + ((obs.unsqueeze(-1) - conditional_mean) / var.sqrt().unsqueeze(-1)).square()
+    )
+    return -torch.logsumexp(poisson_log + gaussian_log, dim=-1)
+
+
+def _streaming_gradients(flat: tuple[Tensor, ...]) -> bool:
+    """Reverse-mode only: use the O(pixels)-memory analytic-gradient Function."""
+    if not (torch.is_grad_enabled() and any(t.requires_grad for t in flat)):
+        return False
+    return not any(
+        torch.autograd.forward_ad.unpack_dual(t).tangent is not None for t in flat
+    )
+
+
+def _zero_rate_score(
+    obs: Tensor, var: Tensor, gain: Tensor, bg: Tensor, *, cdf: bool
+) -> Tensor:
+    """Exact right derivative with respect to the rate at zero rate (first order)."""
+    residual = obs - bg
+    if cdf:
+        sigma = var.sqrt()
+        return -_standard_normal_interval_mass(
+            (residual - gain) / sigma, residual / sigma
+        )
+    return -torch.expm1(gain * (residual - 0.5 * gain) / var)
+
+
+def _pg_rows_nll(obs, rt, var, g, bg, lower, upper, *, far, max_terms):
+    """Per-pixel NLL and analytic gradients ``(y, rate, var, gain, background)``.
+
+    With posterior ``q_n`` over the retained counts, ``r_n = y - g n - b``:
+    ``dy = E[r]/s``, ``db = -dy``, ``dg = -E[n r]/s``,
+    ``ds = 1/(2 s) - E[r^2]/(2 s^2)`` (``s`` the read variance) and, for the
+    renormalised prior window, ``dλ = -(E_q[n] - E_prior[n])/λ`` (the unrenormalised
+    far case is ``1 - E_q[n]/λ``). ``E[n r] = -g Var(n) + E[n] E[r]`` and
+    ``E[r^2] = E[r]^2 + g^2 Var(n)`` keep everything cancellation free.
+    """
+    _, s, lw, mean, counts = _poisson_gaussian_components(
+        obs,
+        rt,
+        var,
+        g,
+        bg,
+        lower,
+        upper,
+        max_terms=max_terms,
+        normalize=False,
+        stable_values=not far,
+    )
+    gl = -0.5 * (
+        s.unsqueeze(-1).log()
+        + obs.new_tensor(math.log(2.0 * math.pi))
+        + ((obs.unsqueeze(-1) - mean) / s.sqrt().unsqueeze(-1)).square()
+    )
+    joint = lw + gl
+    lse = torch.logsumexp(joint, dim=-1)
+    post = (joint - lse.unsqueeze(-1)).exp()
+    c = (counts - lower.to(torch.int64).unsqueeze(-1)).to(obs.dtype)
+    cm = (post * c).sum(-1)
+    var_n = (post * (c - cm.unsqueeze(-1)).square()).sum(-1)
+    nbar = lower + cm
+    mr = ((obs - bg) - g * lower) - g * cm
+    dy = mr / s
+    d_gain = (g * var_n - nbar * mr) / s
+    d_var = 0.5 / s - (mr.square() + g.square() * var_n) / (2.0 * s.square())
+    positive = rt > 0
+    safe = torch.where(positive, rt, 1.0)
+    if far:
+        d_rate = 1.0 - nbar / safe
+    else:
+        prior_cm = (lw.exp() * c).sum(-1)
+        d_rate = -(cm - prior_cm) / safe
+    return -lse, (dy, d_rate, d_var, d_gain, -dy)
+
+
+def _pg_rows_cdf(obs, rt, var, g, bg, lower, upper, *, far, max_terms):
+    """Per-pixel CDF and analytic gradients ``(y, rate, var, gain, background)``.
+
+    Near rows: ``F = Σ w_n Φ(z_n)`` over the renormalised prior, so
+    ``dλ = Cov_w(n, Φ)/λ`` (survival form in the upper half), ``dy = Σ w φ(z)/σ``,
+    ``dg = -Σ w n φ/σ``, ``ds = -Σ w z φ/(2 s)``. Far-below rows use the same
+    sums over unrenormalised Poisson weights in the log domain.
+    """
+    root_two = math.sqrt(2.0)
+    _, s, lw, mean, counts = _poisson_gaussian_components(
+        obs,
+        rt,
+        var,
+        g,
+        bg,
+        lower,
+        upper,
+        max_terms=max_terms,
+        normalize=False,
+        stable_values=not far,
+    )
+    sigma = s.sqrt()
+    z = (obs.unsqueeze(-1) - mean) / sigma.unsqueeze(-1)
+    c = (counts - lower.to(torch.int64).unsqueeze(-1)).to(obs.dtype)
+    positive = rt > 0
+    safe = torch.where(positive, rt, 1.0)
+    log_pdf = -0.5 * z.square() - 0.5 * math.log(2.0 * math.pi)
+    if far:
+        joint = lw + torch.special.log_ndtr(z)
+        lse = torch.logsumexp(joint, dim=-1)
+        cdf = lse.exp().clamp(0.0, 1.0)
+        q = (joint - lse.unsqueeze(-1)).exp()
+        nbar = lower + (q * c).sum(-1)
+        d_rate = cdf * (nbar / safe - 1.0)
+        dens_log = lw + log_pdf - sigma.log().unsqueeze(-1)
+        dl = torch.logsumexp(dens_log, dim=-1)
+        dens = dl.exp()
+        q2 = (dens_log - dl.unsqueeze(-1)).exp()
+        dy = dens
+        d_gain = -dens * (lower + (q2 * c).sum(-1))
+        d_var = -dens * sigma * (q2 * z).sum(-1) / (2.0 * s)
+    else:
+        w = lw.exp()
+        big_phi = 0.5 * torch.erfc(-z / root_two)
+        surv = 0.5 * torch.erfc(z / root_two)
+        cdf_sum = (w * big_phi).sum(-1)
+        survival_sum = (w * surv).sum(-1)
+        low = cdf_sum <= 0.5
+        cdf = torch.where(low, cdf_sum, 1.0 - survival_sum).clamp(0.0, 1.0)
+        cdev = c - (w * c).sum(-1, keepdim=True)
+        cov = torch.where(
+            low,
+            (w * cdev * big_phi).sum(-1),
+            -(w * cdev * surv).sum(-1),
+        )
+        d_rate = cov / safe
+        pdf = log_pdf.exp() / sigma.unsqueeze(-1)
+        dy = (w * pdf).sum(-1)
+        d_gain = -(lower * dy + (w * c * pdf).sum(-1))
+        d_var = -sigma * (w * pdf * z).sum(-1) / (2.0 * s)
+    return cdf, (dy, d_rate, d_var, d_gain, -dy)
+
+
+def _poisson_gaussian_streaming(flat, *, cdf, tail_sigma, max_terms, need):
+    """One chunked pass returning values and analytic gradients (O(pixels))."""
+    obs, rate = flat[0], flat[1]
+    count = obs.numel()
+    out = obs.new_empty(count)
+    grads = [obs.new_empty(count) if n else None for n in need]
+    chunk, _ = _chunk_plan(rate, tail_sigma, False, live=_MOMENT_TEMPORARIES)
+    rows = _pg_rows_cdf if cdf else _pg_rows_nll
+    for start in range(0, count, chunk):
+        stop = min(start + chunk, count)
+        part = tuple(t[start:stop] for t in flat)
+        lower, upper, side = _poisson_gaussian_window(
+            *part, tail_sigma=tail_sigma, cdf=cdf
+        )
+        far = side != 0
+        size = stop - start
+        c_out = obs.new_empty(size)
+        c_grads = [obs.new_empty(size) for _ in range(5)]
+        for mask, is_far in ((~far, False), (far, True)):
+            idx = mask.nonzero(as_tuple=True)[0]
+            if idx.numel() == 0:
+                continue
+            args = tuple(t[idx] for t in (*part, lower, upper))
+            value, gs = rows(*args, far=is_far, max_terms=max_terms)
+            c_out[idx] = value
+            for dst, src in zip(c_grads, gs):
+                dst[idx] = src
+        zero = part[1] == 0
+        if need[1] and bool(zero.any()):
+            score = _zero_rate_score(part[0], part[2], part[3], part[4], cdf=cdf)
+            if not bool(torch.isfinite(score[zero]).all()):
+                raise ValueError(
+                    "zero-rate first/second derivatives exceed the dtype range; "
+                    "the zero-rate density/CDF value remains available without "
+                    "rate gradients"
+                )
+            c_grads[1] = torch.where(zero, score, c_grads[1])
+        out[start:stop] = c_out
+        for dst, src in zip(grads, c_grads):
+            if dst is not None:
+                dst[start:stop] = src
+    return out, grads
+
+
+class _PoissonGaussianStreaming(torch.autograd.Function):
+    """Poisson--Gaussian NLL/CDF with analytic, streaming first derivatives.
+
+    The forward pass computes the per-pixel value and its gradients from
+    posterior moments over the Poisson count in one chunked sweep, saving only
+    O(pixels) tensors. The retained support is detached exactly as in the
+    differentiable modal path. Double backward (``create_graph=True``) recomputes
+    through that modal path, which is differentiable to any order but keeps the
+    per-count graph (memory O(pixels x window)).
+    """
+
+    @staticmethod
+    def forward(ctx, cdf, tail_sigma, max_terms, *flat):
+        need = tuple(bool(n) for n in ctx.needs_input_grad[3:])
+        out, grads = _poisson_gaussian_streaming(
+            flat, cdf=cdf, tail_sigma=tail_sigma, max_terms=max_terms, need=need
+        )
+        ctx.cdf, ctx.tail_sigma, ctx.max_terms = cdf, tail_sigma, max_terms
+        ctx.need = need
+        ctx.n_inputs = len(flat)
+        ctx.save_for_backward(*flat, *[g for g in grads if g is not None])
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        saved = ctx.saved_tensors
+        flat, stored = saved[: ctx.n_inputs], saved[ctx.n_inputs :]
+        if torch.is_grad_enabled():
+            with torch.enable_grad():
+                path = (
+                    _poisson_gaussian_cdf_modal_path
+                    if ctx.cdf
+                    else _poisson_gaussian_nll_modal_path
+                )
+                out = path(tuple(flat), ctx.tail_sigma, ctx.max_terms)
+                wrt = [t for t, n in zip(flat, ctx.need) if n]
+                got = iter(
+                    torch.autograd.grad(
+                        out, wrt, grad_out, create_graph=True, allow_unused=True
+                    )
+                )
+            result = [next(got) if n else None for n in ctx.need]
+        else:
+            it = iter(stored)
+            result = [grad_out * next(it) if n else None for n in ctx.need]
+        return (None, None, None, *result)
 
 
 def poisson_gaussian_nll(
@@ -939,27 +1757,117 @@ def poisson_gaussian_nll(
     that count is Gaussian. A per-pixel Poisson support containing at least
     ``tail_sigma`` standard deviations is retained and explicitly renormalized,
     so the returned finite mixture is a normalized density. Support selection is
-    detached from autograd; probabilities and Gaussian terms remain
-    differentiable.
+    detached from autograd. Positive-rate derivatives are local to the retained
+    support; changing support can change the finite-mixture law discontinuously.
+    At exactly zero rate, first/second rate and mixed derivatives are the exact
+    right-hand continuation, including a cutoff that increases immediately to
+    the right of zero. Third/higher rate derivatives at
+    zero are unsupported. A requested zero-rate derivative outside the dtype
+    range rejects, while inference-only zero-rate values remain available.
+    Positive-rate autograd uses modal polynomial sums, with separate prior and
+    observation-conditioned pivots, avoiding tiny-rate logarithmic curvature
+    cancellation and density underflow. Derivatives exceeding the modal
+    intermediate range reject; inference-only values use the same retained
+    law's log-sum evaluation in that domain. This is a numeric range contract,
+    not an intensity cutoff or change of physical model. It can conservatively
+    reject a finite final derivative when reference scales underflow or larger
+    intermediate curvature terms are not representable.
+
+    The Poisson support is chosen per pixel from the expected rate *and* the
+    observed value (see ``_poisson_gaussian_window``): the prior window is
+    merged with a ``tail_sigma`` window around the mode of the
+    observation-conditioned weight. A far outlier whose posterior window is
+    disjoint from the prior one is scored with the exact unrenormalised Poisson
+    log pmf over its own window. Pixels are processed in chunks of about
+    ``2**22`` count terms (with activation checkpointing under reverse-mode
+    autograd), so peak memory is independent of frame size.
+
+    ``gain`` is output units per electron, ``background`` is a signed
+    deterministic output-unit offset, and ``read_noise_variance`` is in output
+    units squared. Expected electrons are a physical nonnegative integrated
+    Poisson mean, including all independent photon/dark contributions. This
+    normalized finite mixture is not the full untruncated physical law, nor a
+    joint likelihood for correlated charge mixing or read noise.
+    Observations require real float32/float64 tensors; integer and low-precision
+    observations are unsupported. Other tensor parameters follow observation
+    dtype/device by the existing explicit coercion convention.
     """
-    observed, read_var, poisson_log, conditional_mean = _poisson_gaussian_components(
+    observed, rate, read_var, gain_t, background_t = _prepare_poisson_gaussian(
         observed,
         expected_electrons,
         read_noise_variance,
-        gain=gain,
-        background=background,
-        tail_sigma=tail_sigma,
-        max_terms=max_terms,
+        gain,
+        background,
+        tail_sigma,
+        max_terms,
     )
-    if poisson_log.shape[-1] == 0:
-        return _reduce_nll(torch.empty_like(observed), reduction)
-    gaussian_log = -0.5 * (
-        read_var.unsqueeze(-1).log()
-        + observed.new_tensor(math.log(2.0 * math.pi))
-        + (observed.unsqueeze(-1) - conditional_mean).square() / read_var.unsqueeze(-1)
+    shape = observed.shape
+    flat = tuple(
+        t.reshape(-1) for t in (observed, rate, read_var, gain_t, background_t)
     )
-    nll = -torch.logsumexp(poisson_log + gaussian_log, dim=-1)
-    return _reduce_nll(nll, reduction)
+    if _streaming_gradients(flat):
+        nll = _PoissonGaussianStreaming.apply(False, tail_sigma, max_terms, *flat)
+        return _reduce_nll(nll.reshape(shape), reduction)
+    nll = _poisson_gaussian_nll_modal_path(flat, tail_sigma, max_terms)
+    return _reduce_nll(nll.reshape(shape), reduction)
+
+
+def _poisson_gaussian_nll_modal_path(
+    flat: tuple[Tensor, ...], tail_sigma: float, max_terms: int
+) -> Tensor:
+    """Differentiable (modal polynomial) chunked NLL; supports any-order AD."""
+    derivatives = _needs_derivatives(*flat)
+    rate = flat[1]
+
+    def chunk_nll(obs, rt, var, g, bg):
+        lower, upper, side = _poisson_gaussian_window(
+            obs, rt, var, g, bg, tail_sigma=tail_sigma, cdf=False
+        )
+        far = side != 0
+        if not bool(far.any()):
+            nll = _poisson_gaussian_nll_near(
+                obs,
+                rt,
+                var,
+                g,
+                bg,
+                lower,
+                upper,
+                max_terms=max_terms,
+                tail_sigma=tail_sigma,
+                derivatives=derivatives,
+            )
+        else:
+            parts = []
+            for mask in (~far, far):
+                idx = mask.nonzero(as_tuple=True)[0]
+                if idx.numel() == 0:
+                    continue
+                args = tuple(t[idx] for t in (obs, rt, var, g, bg, lower, upper))
+                if mask is far:
+                    values = _poisson_gaussian_nll_far(*args, max_terms=max_terms)
+                else:
+                    values = _poisson_gaussian_nll_near(
+                        *args,
+                        max_terms=max_terms,
+                        tail_sigma=tail_sigma,
+                        derivatives=derivatives,
+                    )
+                parts.append((idx, values))
+            nll = _scatter_rows(obs.numel(), parts, obs)
+        return _poisson_gaussian_zero_rate_jet(
+            nll,
+            obs,
+            rt,
+            var,
+            gain=g,
+            background=bg,
+            tail_sigma=tail_sigma,
+            cdf=False,
+        )
+
+    chunk, total = _chunk_plan(rate, tail_sigma, derivatives)
+    return _run_chunks(chunk_nll, flat, chunk, total)
 
 
 def poisson_gaussian_cdf(
@@ -972,23 +1880,115 @@ def poisson_gaussian_cdf(
     tail_sigma: float = 12.0,
     max_terms: int = 4096,
 ) -> Tensor:
-    """CDF of the normalized finite Poisson--Gaussian detector mixture."""
-    value, read_var, poisson_log, conditional_mean = _poisson_gaussian_components(
+    """CDF of the normalized finite Poisson--Gaussian detector mixture.
+
+    Units, detached-support locality and zero-rate derivative-order/range
+    contracts are the same as :func:`poisson_gaussian_nll`.
+    Gaussian CDF/survival sums use erfc; the lower half uses the CDF sum and
+    the upper half one minus survival. This is numerical tail conditioning of
+    the same retained law, with no intensity cutoff or Gaussian approximation.
+    Mode-scaled probability powers avoid logarithmic-weight curvature
+    cancellation at tiny positive rates. This does not change the NLL path.
+    A pixel far below the prior window uses its own posterior window and a
+    log-domain sum, so its tiny CDF is not truncated to the prior support;
+    far above the prior window the prior support already gives CDF one.
+    """
+    value, rate, read_var, gain_t, background_t = _prepare_poisson_gaussian(
         value,
         expected_electrons,
         read_noise_variance,
-        gain=gain,
-        background=background,
-        tail_sigma=tail_sigma,
-        max_terms=max_terms,
+        gain,
+        background,
+        tail_sigma,
+        max_terms,
     )
-    if poisson_log.shape[-1] == 0:
-        return torch.empty_like(value)
-    standardized = (value.unsqueeze(-1) - conditional_mean) / read_var.sqrt().unsqueeze(
-        -1
-    )
-    conditional_cdf = torch.special.ndtr(standardized)
-    return torch.sum(poisson_log.exp() * conditional_cdf, dim=-1).clamp(0.0, 1.0)
+    shape = value.shape
+    flat = tuple(t.reshape(-1) for t in (value, rate, read_var, gain_t, background_t))
+    if _streaming_gradients(flat):
+        out = _PoissonGaussianStreaming.apply(True, tail_sigma, max_terms, *flat)
+        return out.reshape(shape)
+    return _poisson_gaussian_cdf_modal_path(flat, tail_sigma, max_terms).reshape(shape)
+
+
+def _poisson_gaussian_cdf_modal_path(
+    flat: tuple[Tensor, ...], tail_sigma: float, max_terms: int
+) -> Tensor:
+    """Differentiable chunked CDF; supports any-order AD."""
+    root_two = math.sqrt(2.0)
+    derivatives = _needs_derivatives(*flat)
+    rate = flat[1]
+
+    def near(v, rt, var, g, bg, lower, upper):
+        _, var, weights, mean, _c = _poisson_gaussian_components(
+            v,
+            rt,
+            var,
+            g,
+            bg,
+            lower,
+            upper,
+            max_terms=max_terms,
+            logarithmic_weights=not derivatives,
+            stable_values=not derivatives,
+        )
+        if weights.shape[-1] == 0:
+            return torch.empty_like(v)
+        if not derivatives:
+            # Value only: normalised log weights, exponentiated (the same law
+            # as the mode-scaled polynomial weights used for derivatives).
+            weights = weights.exp()
+        standardized = (v.unsqueeze(-1) - mean) / var.sqrt().unsqueeze(-1)
+        # erfc retains representable lower-tail mass where ndtr/erf rounds to zero.
+        conditional_cdf = 0.5 * torch.erfc(-standardized / root_two)
+        conditional_survival = 0.5 * torch.erfc(standardized / root_two)
+        cdf_sum = torch.sum(weights * conditional_cdf, dim=-1)
+        survival_sum = torch.sum(weights * conditional_survival, dim=-1)
+        # Same normalized law; the probability-half crossover only selects the
+        # better-conditioned tail calculation, never a physical model.
+        result = torch.where(cdf_sum <= 0.5, cdf_sum, 1 - survival_sum)
+        # Clamp only out-of-range rounding: clamp's gradient is zero at the
+        # bound, and the upper tail rounds to exactly 1 with nonzero derivative.
+        in_range = (result >= 0.0) & (result <= 1.0)
+        return torch.where(in_range, result, result.clamp(0.0, 1.0))
+
+    def far_low(v, rt, var, g, bg, lower, upper):
+        _, var, log_p, mean, _c = _poisson_gaussian_components(
+            v, rt, var, g, bg, lower, upper, max_terms=max_terms, normalize=False
+        )
+        z = (v.unsqueeze(-1) - mean) / var.sqrt().unsqueeze(-1)
+        return torch.exp(
+            torch.logsumexp(log_p + torch.special.log_ndtr(z), dim=-1)
+        ).clamp(0.0, 1.0)
+
+    def chunk_cdf(v, rt, var, g, bg):
+        lower, upper, side = _poisson_gaussian_window(
+            v, rt, var, g, bg, tail_sigma=tail_sigma, cdf=True
+        )
+        low = side != 0
+        if not bool(low.any()):
+            result = near(v, rt, var, g, bg, lower, upper)
+        else:
+            parts = []
+            for mask in (~low, low):
+                idx = mask.nonzero(as_tuple=True)[0]
+                if idx.numel() == 0:
+                    continue
+                args = tuple(t[idx] for t in (v, rt, var, g, bg, lower, upper))
+                parts.append((idx, (far_low if mask is low else near)(*args)))
+            result = _scatter_rows(v.numel(), parts, v)
+        return _poisson_gaussian_zero_rate_jet(
+            result,
+            v,
+            rt,
+            var,
+            gain=g,
+            background=bg,
+            tail_sigma=tail_sigma,
+            cdf=True,
+        )
+
+    chunk, total = _chunk_plan(rate, tail_sigma, derivatives)
+    return _run_chunks(chunk_cdf, flat, chunk, total)
 
 
 def gaussian_student_t_mixture_responsibilities(
@@ -1217,7 +2217,9 @@ class StructuredDetectorNoise(nn.Module):
         safe_residual = torch.where(support, residual, torch.zeros_like(residual))
         safe_variance = torch.where(support, variance, torch.ones_like(variance))
         amp = (
-            self.default_amplifier_index(tuple(residual.shape), residual.device)
+            self.default_amplifier_index(
+                image_shape_hw(residual.shape), residual.device
+            )
             if amplifier_index is None
             else amplifier_index.to(device=residual.device)
         )
@@ -1280,7 +2282,9 @@ class StructuredDetectorNoise(nn.Module):
         safe_residual = torch.where(support, residual, torch.zeros_like(residual))
         safe_variance = torch.where(support, variance, torch.ones_like(variance))
         amp = (
-            self.default_amplifier_index(tuple(residual.shape), residual.device)
+            self.default_amplifier_index(
+                image_shape_hw(residual.shape), residual.device
+            )
             if amplifier_index is None
             else amplifier_index.to(device=residual.device)
         )

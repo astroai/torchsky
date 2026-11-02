@@ -2,7 +2,7 @@
 **HEALPix / healpy compatibility layer** (one slice of torchsky’s broader ecosystem
 compatibility story). torchsky also documents migration paths vs **Astropy**,
 **spherical_geometry**, and other common packages at their respective API layers; see
-``docs/compatibility.md``.
+``docs/coming-from.md``.
 
 This module implements healpy’s NumPy-oriented HEALPix API with
 :class:`torch.Tensor` inputs/outputs and **torchsky-native** kernels (no optional
@@ -16,14 +16,12 @@ This module implements healpy’s NumPy-oriented HEALPix API with
 * **Harmonic / map** — ``map2alm``, ``alm2map``, ``synfast``, ``pixwin``, spin
   transforms, smoothing, etc. delegate to :mod:`torchsky.sphere.spectral` (torch +
   torchsky C++ only).
-* **Strict mode** — :func:`set_strict_mode` is retained for API compatibility; geometry
-  queries always use the same torch-native implementation as the default path.
 
 **Relationship to** :mod:`torchsky.sphere`
 
 Top-level :mod:`torchsky.sphere` exposes the same spectral helpers as the *native*
 API. This module is the *healpy-shaped compatibility* surface: names and signatures
-aligned with healpy for migration and tests. Prefer ``import torchsky.sphere.healpy as hp`` or
+aligned with healpy for migration and tests. Use
 ``import torchsky.sphere.compat as hp`` when porting healpy code. Other ecosystem
 mirrors (WCS, FITS tables, polygon semantics, etc.) live in their own subpackages.
 
@@ -35,16 +33,14 @@ the package. Parity tests may compare against optional **healpy** where installe
 geometry kernels remain torchsky-native.
 """
 
-from contextlib import contextmanager
 import math
 import os
-from typing import Literal
 
 import torch
 from torch import Tensor
 
-from ..io import read_image as _read_image
-from ..io import write as _write
+from torchfits import read_tensor as _read_image
+from torchfits import write as _write
 from . import healpix as _healpix
 from .core import fit_monopole_dipole as _fit_monopole_dipole
 from .geom import query_ellipse as _query_ellipse
@@ -68,9 +64,6 @@ from .spectral import smoothalm as _smoothalm
 from .spectral import smoothmap as _smoothmap
 from .spectral import synalm as _synalm
 from .spectral import synfast as _synfast
-
-
-_STRICT_MODE = False
 
 
 class Rotator:
@@ -141,34 +134,6 @@ class Alm:
             if index < stop:
                 return m + index - start, m
         raise AssertionError("validated alm index was not decoded")
-
-
-def set_strict_mode(enabled: bool) -> None:
-    """Set global strict compatibility mode."""
-    global _STRICT_MODE
-    _STRICT_MODE = bool(enabled)
-
-
-def get_strict_mode() -> bool:
-    """Return global strict compatibility mode."""
-    return _STRICT_MODE
-
-
-@contextmanager
-def strict_mode(enabled: bool = True):
-    """Context manager for temporary strict compatibility mode."""
-    prev = get_strict_mode()
-    set_strict_mode(enabled)
-    try:
-        yield
-    finally:
-        set_strict_mode(prev)
-
-
-def _resolve_strict(strict: bool | None) -> bool:
-    if strict is None:
-        return get_strict_mode()
-    return bool(strict)
 
 
 def ang2pix(
@@ -246,13 +211,25 @@ def query_circle(
     nest: bool = False,
     chunk_size: int = 1_000_000,
     fact: int = 4,
-    strict: bool | None = None,
     return_pixel_ranges: bool = False,
 ) -> Tensor:
-    del strict  # torch-native path only; flag kept for healpy-shaped API compatibility
-    del fact
     if return_pixel_ranges and not nest:
         raise ValueError("return_pixel_ranges is only supported with nest=True")
+    if return_pixel_ranges:
+        lon_t = _healpix._as_float64(lon)
+        lat_t = _healpix._as_float64(lat)
+        if lon_t.ndim != 0 or lat_t.ndim != 0:
+            raise ValueError("lon and lat must be scalar center coordinates")
+        x, y, z = _healpix.lonlat_to_xyz(lon_t, lat_t)
+        ranges = _healpix._query_disc_nest_ranges(
+            nside,
+            torch.stack((x, y, z)),
+            math.radians(radius) if degrees else radius,
+            inclusive=inclusive,
+            fact=fact,
+        )
+        if ranges is not None:
+            return ranges
     pix = _healpix.query_circle(
         nside,
         lon,
@@ -260,6 +237,7 @@ def query_circle(
         radius,
         degrees=degrees,
         inclusive=inclusive,
+        fact=fact,
         nest=nest,
         chunk_size=chunk_size,
     )
@@ -275,12 +253,16 @@ def query_circle_vec(
     fact: int = 4,
     nest: bool = False,
     chunk_size: int = 1_000_000,
-    strict: bool | None = None,
     return_pixel_ranges: bool = False,
 ) -> Tensor:
-    del strict
     if return_pixel_ranges and not nest:
         raise ValueError("return_pixel_ranges is only supported with nest=True")
+    if return_pixel_ranges:
+        ranges = _healpix._query_disc_nest_ranges(
+            nside, vec, radius, inclusive=inclusive, fact=fact
+        )
+        if ranges is not None:
+            return ranges
     pix = _healpix.query_circle_vec(
         nside,
         vec,
@@ -305,16 +287,10 @@ def query_ellipse(
     nest: bool = False,
     inclusive: bool = False,
     fact: int = 4,
-    strict: bool | None = None,
-    backend: Literal["auto", "torch"] = "auto",
     lonlat: bool = True,
     degrees: bool = True,
     return_pixel_ranges: bool = False,
 ) -> Tensor:
-    del strict  # geometry is always torch-native; flag kept for API symmetry
-    if backend not in {"auto", "torch"}:
-        raise ValueError("backend must be 'auto' or 'torch' (torchsky-native only)")
-    _ = backend  # 'auto' and 'torch' are equivalent; parameter kept for API compatibility
     fact_i = int(fact)
     if fact_i < 1:
         raise ValueError("fact must be >= 1")
@@ -428,7 +404,6 @@ def remove_monopole(
     gal_cut: float = 0.0,
     fitval: bool = False,
     copy: bool = True,
-    verbose: bool = True,  # noqa: ARG001 - compatibility signature
 ) -> Tensor | tuple[Tensor, Tensor]:
     """Remove fitted monopole with healpy-like masking semantics."""
     vals = torch.as_tensor(map_values)
@@ -483,7 +458,6 @@ def remove_dipole(
     gal_cut: float = 0.0,
     fitval: bool = False,
     copy: bool = True,
-    verbose: bool = True,  # noqa: ARG001 - compatibility signature
     nside: int | None = None,
     valid_mask: Tensor | None = None,
 ) -> Tensor | tuple[Tensor, Tensor, Tensor]:
@@ -690,9 +664,8 @@ def synalm(
     mmax: int | None = None,
     *,
     new: bool = False,
-    verbose: bool = True,
 ) -> Tensor:
-    return _synalm(cls, lmax=lmax, mmax=mmax, new=new, verbose=verbose)
+    return _synalm(cls, lmax=lmax, mmax=mmax, new=new)
 
 
 def synfast(
@@ -709,7 +682,6 @@ def synfast(
     fwhm: float = 0.0,
     sigma: float | None = None,
     new: bool = False,
-    verbose: bool = True,
 ) -> Tensor | tuple[Tensor, Tensor]:
     return _synfast(
         cls,
@@ -722,7 +694,6 @@ def synfast(
         fwhm=fwhm,
         sigma=sigma,
         new=new,
-        verbose=verbose,
     )
 
 
@@ -756,7 +727,6 @@ def smoothmap(
     use_weights: bool = False,
     use_pixel_weights: bool = False,
     gal_cut: float = 0.0,
-    verbose: bool = True,
     datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
     return _smoothmap(
@@ -774,7 +744,6 @@ def smoothmap(
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
         gal_cut=gal_cut,
-        verbose=verbose,
         datapath=datapath,
     )
 
@@ -790,7 +759,6 @@ def smoothing(
     mmax: int | None = None,
     use_weights: bool = False,
     use_pixel_weights: bool = False,
-    verbose: bool = True,
     nest: bool = False,
     datapath: str | os.PathLike[str] | None = None,
 ) -> Tensor:
@@ -809,7 +777,6 @@ def smoothing(
         iter=iter,
         use_weights=use_weights,
         use_pixel_weights=use_pixel_weights,
-        verbose=verbose,
         datapath=datapath,
     )
 
@@ -876,7 +843,7 @@ get_map_size = _healpix.get_map_size
 get_nside = _healpix.get_nside
 isnpixok = _healpix.isnpixok
 isnsideok = _healpix.isnsideok
-max_pixrad = _healpix.max_pixrad
+max_pixrad = _healpix.max_pixel_radius
 nest2ring = _healpix.nest2ring
 npix2nside = _healpix.npix2nside
 nside2npix = _healpix.nside2npix
@@ -929,7 +896,6 @@ __all__ = [
     "fit_monopole",
     "get_all_neighbors",
     "get_all_neighbours",
-    "get_strict_mode",
     "get_interp_val",
     "get_interp_weights",
     "get_map_size",
@@ -969,8 +935,6 @@ __all__ = [
     "remove_monopole",
     "read_map",
     "ring2nest",
-    "set_strict_mode",
-    "strict_mode",
     "ud_grade",
     "upgrade_pixels",
     "upgrade_pixel_ranges",

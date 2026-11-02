@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from torchsky.wcs import CatalogState, EarthOrientation, transform
+from torchsky.wcs import CatalogState, EarthOrientation, Site, observed_altaz, transform
 from torchsky.wcs.frames import ARCSEC_TO_RAD
 from torchsky.wcs.iau2000a import iau2000a_nutation, iau2006_nutation
 from torchsky.wcs.iau2006 import cirs_matrix, npb_matrix
@@ -47,6 +47,76 @@ def test_npb_and_cirs_matrices_match_erfa() -> None:
     np.testing.assert_allclose(
         cirs_matrix(tt).numpy(), erfa.c2i06a(JD0, TT_MJD), atol=1e-13, rtol=0.0
     )
+
+
+def test_iau2006_altaz_handedness_matches_erfa_c2tcio() -> None:
+    ra = np.array([10.0, 83.6331, 201.2983], dtype=np.float64)
+    dec = np.array([20.0, 22.0145, -43.0191], dtype=np.float64)
+    site_lon = np.array([-70.4, 0.0, 149.1], dtype=np.float64)
+    site_lat = np.array([-24.6, 51.5, -35.3], dtype=np.float64)
+    xp_arcsec = 0.12
+    yp_arcsec = -0.21
+    eop = EarthOrientation(
+        dut1_s=DUT1_S,
+        xp_arcsec=xp_arcsec,
+        yp_arcsec=yp_arcsec,
+        tt_minus_utc_s=TT_MINUS_UTC_S,
+    )
+    az, alt = observed_altaz(
+        CatalogState(lon=ra, lat=dec),
+        obstime_mjd_utc=UTC_MJD,
+        site=Site(lon_deg=site_lon, lat_deg=site_lat),
+        eop=eop,
+        pn="iau2006",
+    )
+
+    ut1_mjd = UTC_MJD + DUT1_S / 86400.0
+    rpom = erfa.pom00(
+        xp_arcsec * ARCSEC_TO_RAD,
+        yp_arcsec * ARCSEC_TO_RAD,
+        0.0,
+    )
+    rotation = erfa.c2tcio(erfa.c2i06a(JD0, TT_MJD), erfa.era00(JD0, ut1_mjd), rpom)
+    lon = np.deg2rad(ra)
+    lat = np.deg2rad(dec)
+    icrs = np.stack(
+        (np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)),
+        axis=-1,
+    )
+    itrs = np.einsum("ij,nj->ni", rotation, icrs)
+    lon_site = np.deg2rad(site_lon)
+    lat_site = np.deg2rad(site_lat)
+    east = np.stack(
+        (-np.sin(lon_site), np.cos(lon_site), np.zeros_like(lon_site)), axis=-1
+    )
+    north = np.stack(
+        (
+            -np.sin(lat_site) * np.cos(lon_site),
+            -np.sin(lat_site) * np.sin(lon_site),
+            np.cos(lat_site),
+        ),
+        axis=-1,
+    )
+    up = np.stack(
+        (
+            np.cos(lat_site) * np.cos(lon_site),
+            np.cos(lat_site) * np.sin(lon_site),
+            np.sin(lat_site),
+        ),
+        axis=-1,
+    )
+    expected_az = (
+        np.rad2deg(
+            np.arctan2(np.sum(itrs * east, axis=-1), np.sum(itrs * north, axis=-1))
+        )
+        % 360.0
+    )
+    expected_alt = np.rad2deg(np.arcsin(np.sum(itrs * up, axis=-1)))
+
+    np.testing.assert_allclose(
+        _wrap_delta_deg(az.numpy(), expected_az), 0.0, atol=2.0e-10
+    )
+    np.testing.assert_allclose(alt.numpy(), expected_alt, atol=2.0e-10)
 
 
 def test_gcrs_without_aberration_is_icrs() -> None:

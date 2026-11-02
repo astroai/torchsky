@@ -1,4 +1,4 @@
-"""Implicit forward-modeling shell aligned with ``docs/implicit_forward.md``.
+"""Implicit forward-modeling shell aligned with ``docs/field.md``.
 
 This module is the **code counterpart** to the architectural note: shared scene INR
 ``F_θ``, optional kinematics ``ζ``, context ``c``, and instrument-side rendering
@@ -23,7 +23,7 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
-from torchsky.redshift import require_one_plus_z
+from torchsky.redshift import _require_one_plus_z
 
 from ..operators.bundle import ObservationOperatorBundle
 from .core import render_field_observation
@@ -49,12 +49,12 @@ class KinematicState:
         z = self.one_plus_z
         if z is None:
             return 1.0
-        return float(require_one_plus_z(z))
+        return float(_require_one_plus_z(z))
 
 
 @dataclass(frozen=True)
 class SurveyDataTerm:
-    """One modular likelihood term ``L_s`` (``implicit_forward.md`` §8.2)."""
+    """One modular likelihood term ``L_s`` (see ``docs/field.md``)."""
 
     name: str
     observations: tuple[FieldObservation, ...]

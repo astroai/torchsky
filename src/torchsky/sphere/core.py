@@ -5,13 +5,11 @@ from __future__ import annotations
 from typing import Literal
 
 import torch
+
+from .._dtype import work_dtype as _float_dtype
 from torch import Tensor
 
 from . import healpix as _healpix
-
-
-def _float_dtype(device: torch.device) -> torch.dtype:
-    return torch.float32 if device.type == "mps" else torch.float64
 
 
 def _as_float_tensor(x: Tensor | float) -> Tensor:
@@ -56,7 +54,7 @@ def unit_xyz_to_lonlat(
     return wrap_longitude(lon, center_deg=wrap_center_deg), lat
 
 
-def chord_radius(angle_rad: Tensor | float) -> Tensor:
+def _chord_radius(angle_rad: Tensor | float) -> Tensor:
     """Unit-sphere Euclidean chord length ``2 * sin(theta / 2)``.
 
     A Euclidean ball of this radius on unit vectors is exactly the spherical
@@ -113,9 +111,17 @@ def pairwise_angular_distance(
     cross_sq = cross_sq + cross_y.square()
     cross_z = x[:, None] * y[None, :] - y[:, None] * x[None, :]
     cross_sq = cross_sq + cross_z.square()
-    cross = torch.sqrt(torch.clamp(cross_sq, min=0.0))
+    diagonal = torch.eye(v.shape[0], dtype=torch.bool, device=v.device)
+    # Safe-sqrt: zero cross norm (diagonal or duplicate points) has zero
+    # subgradient instead of inf * 0 = NaN.
+    positive = (cross_sq > 0.0) & ~diagonal
+    cross = torch.where(
+        positive,
+        torch.sqrt(torch.where(positive, cross_sq, torch.ones_like(cross_sq))),
+        torch.zeros_like(cross_sq),
+    )
     dist_rad = torch.atan2(cross, dot)
-    dist_rad.fill_diagonal_(0.0)
+    dist_rad = torch.where(diagonal, torch.zeros_like(dist_rad), dist_rad)
     if degrees:
         return torch.rad2deg(dist_rad)
     return dist_rad
@@ -200,6 +206,8 @@ def sample_healpix_map(
         pix = _healpix.ang2pix(nside, lon_flat, lat_flat, nest=nest, lonlat=True)
         out = vals[:, pix]
     else:
+        if not vals.is_floating_point():
+            vals = vals.to(dtype=_float_dtype(vals.device))
         pix4, w4 = _healpix.get_interp_weights(
             nside, lon_flat, lat_flat, nest=nest, lonlat=True
         )
@@ -209,7 +217,7 @@ def sample_healpix_map(
         weights = w4.to(device=gathered.device, dtype=gathered.dtype)
         out = (gathered * weights.unsqueeze(0)).sum(dim=1)
 
-    return out.reshape(*values.shape[:-1], *coord_shape)
+    return out.reshape(values.shape[:-1] + coord_shape)
 
 
 def sample_multiband_healpix(
@@ -238,7 +246,7 @@ def sample_multiband_healpix(
     )
 
 
-def interpolate_wavelength_axis(
+def _interpolate_wavelength_axis(
     values: Tensor,
     source_wavelength: Tensor | list[float],
     target_wavelength: Tensor | list[float],
@@ -316,7 +324,7 @@ def sample_multiwavelength_healpix(
     lat_t = _as_float_tensor(lat_deg)
     coord_ndim = torch.broadcast_tensors(lon_t, lat_t)[0].ndim
     spectral_axis = sampled.ndim - coord_ndim - 1
-    return interpolate_wavelength_axis(
+    return _interpolate_wavelength_axis(
         sampled,
         source_wavelength=source_wavelength,
         target_wavelength=target_wavelength,
@@ -393,15 +401,69 @@ def remove_monopole_dipole(
     return vals.to(dtype=model.dtype) - model
 
 
+def sample_map(
+    values: Tensor,
+    nside_or_lon: int | Tensor | float,
+    lon_or_lat: Tensor | float,
+    lat_deg: Tensor | float | None = None,
+    *,
+    nside: int | None = None,
+    nest: bool = False,
+    interpolation: Literal["nearest", "bilinear"] = "bilinear",
+    source_wavelength: Tensor | list[float] | None = None,
+    target_wavelength: Tensor | list[float] | None = None,
+) -> Tensor:
+    """Unified HEALPix map / multiband / multiwavelength sampler.
+
+    Supports both ``sample_map(values, lon_deg, lat_deg, ...)`` (inferring
+    ``nside`` from ``values.shape[-1]``) and ``sample_map(values, nside, lon_deg, lat_deg, ...)``.
+    """
+    if lat_deg is None:
+        lon_val = nside_or_lon
+        lat_val = lon_or_lat
+        resolved_nside = (
+            int(nside)
+            if nside is not None
+            else _healpix.npix2nside(int(values.shape[-1]))
+        )
+    else:
+        if not isinstance(nside_or_lon, int):
+            raise TypeError(
+                "nside must be an int when 4 positional arguments are passed"
+            )
+        resolved_nside = int(nside_or_lon)
+        lon_val = lon_or_lat
+        lat_val = lat_deg
+
+    if target_wavelength is not None:
+        return sample_multiwavelength_healpix(
+            values,
+            resolved_nside,
+            lon_val,
+            lat_val,
+            source_wavelength=source_wavelength,
+            target_wavelength=target_wavelength,
+            nest=nest,
+            interpolation=interpolation,
+        )
+    return sample_healpix_map(
+        values,
+        resolved_nside,
+        lon_val,
+        lat_val,
+        nest=nest,
+        interpolation=interpolation,
+    )
+
+
 __all__ = [
-    "chord_radius",
     "fit_monopole_dipole",
     "great_circle_distance",
-    "interpolate_wavelength_axis",
     "lonlat_to_unit_xyz",
     "pairwise_angular_distance",
     "remove_monopole_dipole",
     "sample_healpix_map",
+    "sample_map",
     "sample_multiband_healpix",
     "sample_multiwavelength_healpix",
     "slerp_lonlat",

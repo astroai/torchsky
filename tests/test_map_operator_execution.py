@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 import torch
 import pytest
+from types import SimpleNamespace
 
 from torchsky import WCS
-from torchsky.map import ImageObservation
+from torchsky.map.observation import ImageObservation
 from torchsky.map.operators import (
     ConservativePolygonRemapOp,
     ExactDrizzleGeometryOp,
@@ -35,6 +37,7 @@ from torchsky.map.operators import (
     validate_map_value_semantics,
 )
 from torchsky.map.operators import execution as execution_mod
+from torchsky.map.operators import pixel_area as pixel_area_mod
 
 
 def test_overlap_background_scratch_bytes_are_linear_in_observations() -> None:
@@ -168,7 +171,6 @@ def test_project_image_observation_geometry_dispatches_by_operator_family(
         value_semantics="surface_brightness",
         drizzle_pixfrac=1.0,
         pixel_area_sr_map_fn="area",
-        representative_pixel_area_fn="repr",
         chunk_pixels=256,
         resample_weighted_to_target_fn=resample_fn,
         forward_project_weighted_to_target_fn=splat_fn,
@@ -183,7 +185,6 @@ def test_project_image_observation_geometry_dispatches_by_operator_family(
         value_semantics="surface_brightness",
         drizzle_pixfrac=1.0,
         pixel_area_sr_map_fn="area",
-        representative_pixel_area_fn="repr",
         chunk_pixels=256,
         resample_weighted_to_target_fn=resample_fn,
         forward_project_weighted_to_target_fn=splat_fn,
@@ -198,7 +199,6 @@ def test_project_image_observation_geometry_dispatches_by_operator_family(
         value_semantics="surface_brightness",
         drizzle_pixfrac=1.0,
         pixel_area_sr_map_fn="area",
-        representative_pixel_area_fn="repr",
         chunk_pixels=256,
         resample_weighted_to_target_fn=resample_fn,
         forward_project_weighted_to_target_fn=splat_fn,
@@ -213,7 +213,6 @@ def test_project_image_observation_geometry_dispatches_by_operator_family(
         value_semantics="surface_brightness",
         drizzle_pixfrac=1.0,
         pixel_area_sr_map_fn="area",
-        representative_pixel_area_fn="repr",
         chunk_pixels=256,
         resample_weighted_to_target_fn=resample_fn,
         forward_project_weighted_to_target_fn=splat_fn,
@@ -323,6 +322,146 @@ def test_pixel_area_helpers_are_positive_and_consistent_for_plain_tan() -> None:
         wrapped_delta_ra_deg(torch.tensor([359.0]), torch.tensor([1.0])),
         torch.tensor([-2.0]),
     )
+
+
+def test_large_tan_pixel_area_matches_exact_jacobian_at_center_and_corner() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 401,
+        "NAXIS2": 401,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 201.0,
+        "CRPIX2": 201.0,
+        "CRVAL1": 137.0,
+        "CRVAL2": 42.0,
+        "CDELT1": -0.01,
+        "CDELT2": 0.01,
+    }
+    area = pixel_area_sr_map(
+        WCS(header),
+        (401, 401),
+        device=torch.device("cpu"),
+        chunk_size=37,
+    )
+    d2r = math.pi / 180.0
+    center_expected = (0.01 * d2r) ** 2
+    corner_radius_sq = 2.0 * (2.0 * d2r) ** 2
+    corner_expected = center_expected / (1.0 + corner_radius_sq) ** 1.5
+
+    assert float(area[200, 200].item()) == pytest.approx(center_expected, rel=2e-7)
+    assert float(area[0, 0].item()) == pytest.approx(corner_expected, rel=2e-7)
+    assert float(area[0, 0].item()) < float(area[200, 200].item())
+
+
+@pytest.mark.parametrize(
+    "attribute,value",
+    [
+        ("sip", object()),
+        ("cpdis1", object()),
+        ("cpdis2", object()),
+        ("det2im1", object()),
+        ("det2im2", object()),
+        ("_pixel_affine_matrix", torch.eye(2)),
+        ("_is_tpv", True),
+        ("_is_tnx", True),
+        ("_is_zpx", True),
+    ],
+)
+def test_tan_area_fast_path_rejects_every_distortion_kind(
+    attribute: str, value: object
+) -> None:
+    values = {
+        "_use_fast_tan": True,
+        "sip": None,
+        "cpdis1": None,
+        "cpdis2": None,
+        "det2im1": None,
+        "det2im2": None,
+        "_pixel_affine_matrix": None,
+        "_is_tpv": False,
+        "_is_tnx": False,
+        "_is_zpx": False,
+    }
+    values[attribute] = value
+    assert not pixel_area_mod._is_undistorted_tan(SimpleNamespace(**values))
+
+
+def test_tpv_pixel_area_uses_spherical_polygons_and_chunking() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 19,
+        "NAXIS2": 17,
+        "CTYPE1": "RA---TPV",
+        "CTYPE2": "DEC--TPV",
+        "CRPIX1": 10.0,
+        "CRPIX2": 9.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -3.0,
+        "CDELT1": -0.05,
+        "CDELT2": 0.05,
+        "PV1_1": 1.0,
+        "PV1_4": 0.01,
+        "PV2_1": 1.0,
+        "PV2_4": -0.008,
+    }
+    wcs = WCS(header)
+    area_small_chunks = pixel_area_sr_map(
+        wcs, (17, 19), device=torch.device("cpu"), chunk_size=3
+    )
+    area_single_chunk = pixel_area_sr_map(
+        wcs, (17, 19), device=torch.device("cpu"), chunk_size=64
+    )
+    samples = pixel_area_sr_at(
+        wcs,
+        torch.tensor([0.0, 9.0, 18.0], dtype=torch.float32),
+        torch.tensor([0.0, 8.0, 16.0], dtype=torch.float32),
+    )
+
+    assert area_small_chunks.dtype == torch.float32
+    assert area_small_chunks.device.type == "cpu"
+    assert samples.dtype == torch.float64
+    assert samples.device.type == "cpu"
+    torch.testing.assert_close(area_small_chunks, area_single_chunk)
+    torch.testing.assert_close(
+        samples,
+        area_small_chunks[torch.tensor([0, 8, 16]), torch.tensor([0, 9, 18])].to(
+            torch.float64
+        ),
+        rtol=2e-7,
+        atol=0.0,
+    )
+    assert float((area_small_chunks.max() - area_small_chunks.min()).item()) > 0.0
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test_tan_pixel_area_preserves_requested_mps_device_and_dtype() -> None:
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 17,
+        "NAXIS2": 13,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 9.0,
+        "CRPIX2": 7.0,
+        "CRVAL1": 12.0,
+        "CRVAL2": -3.0,
+        "CDELT1": -0.05,
+        "CDELT2": 0.05,
+    }
+    cpu_area = pixel_area_sr_map(
+        WCS(header), (13, 17), device=torch.device("cpu"), chunk_size=4
+    )
+    mps_area = pixel_area_sr_map(
+        WCS(header).to(torch.device("mps")),
+        (13, 17),
+        device=torch.device("mps"),
+        chunk_size=4,
+    )
+
+    assert mps_area.dtype == torch.float32
+    assert mps_area.device.type == "mps"
+    torch.testing.assert_close(mps_area.cpu(), cpu_area, rtol=2e-6, atol=0.0)
 
 
 def test_map_config_validators_share_public_option_sets() -> None:

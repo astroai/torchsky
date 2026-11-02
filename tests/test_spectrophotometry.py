@@ -184,7 +184,6 @@ def test_evaluate_throughput_lvf_and_gaussian() -> None:
     assert lvf[1, 2].item() == pytest.approx(1.0)
 
 
-
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="MPS is not available on this machine"
 )
@@ -211,4 +210,6 @@ def test_mps_spectrum_matches_the_cpu_integral() -> None:
     assert on_device.value.device.type == "mps"
     assert bool(on_device.valid.item())
     assert on_device.value.item() == pytest.approx(reference.value.item(), rel=1e-4)
-    assert on_device.coverage.item() == pytest.approx(reference.coverage.item(), rel=1e-4)
+    assert on_device.coverage.item() == pytest.approx(
+        reference.coverage.item(), rel=1e-4
+    )

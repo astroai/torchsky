@@ -60,21 +60,22 @@ def sample_healpix_map_on_image_header(
     if h < 1 or w < 1:
         raise ValueError("target header must have positive NAXIS1/NAXIS2")
 
-    wcs = WCS(dict(target_header))
+    work_dtype = torch.float32 if dev.type == "mps" else torch.float64
+    wcs = WCS(dict(target_header)).to(dev)
     result = torch.empty(h, w, dtype=m.dtype, device=dev)
     chunk_size = 128
-    m_f64 = m.to(dtype=torch.float64, device=dev)
+    m_work = m.to(dtype=work_dtype, device=dev)
     for y_start in range(0, h, chunk_size):
         y_end = min(y_start + chunk_size, h)
         n_rows = y_end - y_start
         y, x = torch.meshgrid(
-            torch.arange(y_start, y_end, dtype=torch.float64, device=dev),
-            torch.arange(w, dtype=torch.float64, device=dev),
+            torch.arange(y_start, y_end, dtype=work_dtype, device=dev),
+            torch.arange(w, dtype=work_dtype, device=dev),
             indexing="ij",
         )
         ra, dec = wcs.pixel_to_world(x, y)
         flat = hp.get_interp_val(
-            m_f64,
+            m_work,
             ra.reshape(-1),
             dec.reshape(-1),
             nest=nest,
@@ -114,20 +115,21 @@ def accumulate_image_on_healpix_map_adjoint(
         raise ValueError("image shape must match source_header NAXIS2/NAXIS1")
     dev = device if device is not None else img.device
     npix = hp.nside2npix(int(nside))
-    wcs = WCS(dict(source_header))
-    out = torch.zeros(npix, dtype=torch.float64, device=dev)
-    img_f64 = img.to(dtype=torch.float64, device=dev)
+    work_dtype = torch.float32 if dev.type == "mps" else torch.float64
+    wcs = WCS(dict(source_header)).to(dev)
+    out = torch.zeros(npix, dtype=work_dtype, device=dev)
+    img_work = img.to(dtype=work_dtype, device=dev)
     chunk_size = 128
     any_valid = False
     for y_start in range(0, h, chunk_size):
         y_end = min(y_start + chunk_size, h)
         y, x = torch.meshgrid(
-            torch.arange(y_start, y_end, dtype=torch.float64, device=dev),
-            torch.arange(w, dtype=torch.float64, device=dev),
+            torch.arange(y_start, y_end, dtype=work_dtype, device=dev),
+            torch.arange(w, dtype=work_dtype, device=dev),
             indexing="ij",
         )
         ra, dec = wcs.pixel_to_world(x, y)
-        chunk_img = img_f64[y_start:y_end]
+        chunk_img = img_work[y_start:y_end]
         valid = torch.isfinite(ra) & torch.isfinite(dec) & torch.isfinite(chunk_img)
         if not bool(valid.any()):
             continue
@@ -142,7 +144,7 @@ def accumulate_image_on_healpix_map_adjoint(
         valid_flat = valid.reshape(-1)
         pix_flat = pix.reshape(4, -1)[:, valid_flat]
         weight_flat = weight.reshape(4, -1)[:, valid_flat].to(
-            dtype=torch.float64, device=dev
+            dtype=work_dtype, device=dev
         )
         values_flat = chunk_img.reshape(-1)[valid_flat]
         out.scatter_add_(

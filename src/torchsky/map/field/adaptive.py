@@ -11,7 +11,11 @@ from torch import Tensor
 
 from ...wcs import WCS
 from .core import _BaseFieldModel
-from .quality import FieldResidualProduct, FieldResidualTile, select_field_residual_tiles
+from .quality import (
+    FieldResidualProduct,
+    FieldResidualTile,
+    select_field_residual_tiles,
+)
 from .types import FieldObservation
 
 
@@ -42,12 +46,12 @@ def _tile_weighted_mean_residual(
     if product is None:
         return 0.0
     residual = torch.as_tensor(product.residual)[tile.y0 : tile.y1, tile.x0 : tile.x1]
-    weight = torch.as_tensor(product.weight, device=residual.device, dtype=residual.dtype)[
-        tile.y0 : tile.y1, tile.x0 : tile.x1
-    ]
-    support = torch.as_tensor(product.support, device=residual.device).to(dtype=torch.bool)[
-        tile.y0 : tile.y1, tile.x0 : tile.x1
-    ]
+    weight = torch.as_tensor(
+        product.weight, device=residual.device, dtype=residual.dtype
+    )[tile.y0 : tile.y1, tile.x0 : tile.x1]
+    support = torch.as_tensor(product.support, device=residual.device).to(
+        dtype=torch.bool
+    )[tile.y0 : tile.y1, tile.x0 : tile.x1]
     valid_weight = torch.where(
         support,
         torch.clamp(weight, min=0.0),
@@ -130,6 +134,9 @@ def residual_tile_basis_spec_from_observation(
 class ResidualTileBasisField(_BaseFieldModel):
     """Add sparse local residual-tile basis atoms on top of a diffuse field."""
 
+    tile_centers: Tensor
+    tile_scales: Tensor
+
     def __init__(
         self,
         base_model: _BaseFieldModel,
@@ -138,6 +145,8 @@ class ResidualTileBasisField(_BaseFieldModel):
         learn_scales: bool = False,
     ) -> None:
         super().__init__(base_model.domain)
+        self.log_tile_scales: nn.Parameter | None
+
         if int(spec.centers.shape[0]) == 0:
             raise ValueError("ResidualTileBasisField requires at least one tile")
         if spec.centers.shape != spec.scales.shape:
@@ -150,7 +159,9 @@ class ResidualTileBasisField(_BaseFieldModel):
         self.tiles = tuple(spec.tiles)
         self.register_buffer("tile_centers", spec.centers.detach().clone())
         if learn_scales:
-            self.log_tile_scales = nn.Parameter(torch.log(torch.clamp(spec.scales, min=1.0e-6)))
+            self.log_tile_scales = nn.Parameter(
+                torch.log(torch.clamp(spec.scales, min=1.0e-6))
+            )
         else:
             self.register_buffer("tile_scales", spec.scales.detach().clone())
             self.log_tile_scales = None

@@ -1,8 +1,12 @@
 """
-torchsky.viz — browser-based astronomy visualization server.
+torchsky.viz — astronomy visualization: browser server and slide figures.
 
-All computation runs server-side via the torchsky API.
-The browser receives PNG tiles, JSON geometries, and chart data.
+Two surfaces live here:
+
+* the browser server, which computes server-side and ships PNG tiles, JSON
+  geometries and chart data to the bundled Aladin Lite viewer;
+* matplotlib figures for talks and papers — full-sky maps in ``allsky`` and
+  cube quick-looks in ``plots`` — themed in ``theme``.
 
 Usage::
 
@@ -12,6 +16,7 @@ Usage::
     # Python
     import torchsky.viz as viz
     viz.serve(root="/path/to/data", port=8822)
+    viz.plot_healpix_sky(values, nside=256, save="sky.png")
 """
 
 from __future__ import annotations
@@ -19,7 +24,13 @@ from __future__ import annotations
 import threading
 import webbrowser
 from pathlib import Path
+from typing import Any
 
+from .allsky import SkyGrid as SkyGrid
+from .allsky import healpix_sky_grid as healpix_sky_grid
+from .allsky import plot_healpix_sky as plot_healpix_sky
+from .allsky import plot_sky_grid as plot_sky_grid
+from .allsky import sky_grid as sky_grid
 from .plots import plot_pixel_spectrum as plot_pixel_spectrum
 from .plots import plot_pseudo_rgb as plot_pseudo_rgb
 
@@ -98,7 +109,9 @@ def serve_background(
 
     Returns the thread so callers can check liveness.
     """
-    kw = dict(root=root, port=port, host=host, open_browser=False, cache_mb=cache_mb)
+    kw: dict[str, Any] = dict(
+        root=root, port=port, host=host, open_browser=False, cache_mb=cache_mb
+    )
     kw.update(kwargs)
     t = threading.Thread(
         target=serve,
@@ -130,6 +143,11 @@ __all__ = [
     "serve",
     "serve_background",
     "show_url",
+    "SkyGrid",
+    "healpix_sky_grid",
+    "sky_grid",
+    "plot_sky_grid",
+    "plot_healpix_sky",
     "plot_pseudo_rgb",
     "plot_pixel_spectrum",
 ]

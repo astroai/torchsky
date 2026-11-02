@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 120" role="img" aria-label="torchsky">
+  <defs>
+    <linearGradient id="ts-hero-sky" x1="8" y1="8" x2="108" y2="108" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0b1f3a"/>
+      <stop offset="1" stop-color="#123a63"/>
+    </linearGradient>
+    <linearGradient id="ts-hero-star" x1="36" y1="28" x2="84" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7fd3ff"/>
+      <stop offset="1" stop-color="#c9a6ff"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(6 12) scale(0.95)">
+    <rect width="96" height="96" rx="20" fill="url(#ts-hero-sky)"/>
+    <circle cx="48" cy="48" r="24" fill="none" stroke="#7fd3ff" stroke-opacity="0.35" stroke-width="1.4"/>
+    <path d="M20 60c10-16 30-26 56-28" fill="none" stroke="#7fd3ff" stroke-width="2.4" stroke-linecap="round" stroke-opacity="0.8"/>
+    <path d="M76 36c-10 16-30 26-56 28" fill="none" stroke="#c9a6ff" stroke-width="2.4" stroke-linecap="round" stroke-opacity="0.7"/>
+    <path d="M48 26l4.8 14.4L67 45l-14.2 4.6L48 64l-4.8-14.4L29 45l14.2-4.6z" fill="url(#ts-hero-star)"/>
+  </g>
+  <text x="132" y="76" font-family="Space Grotesk, Inter, Segoe UI, sans-serif" font-size="62" font-weight="600" letter-spacing="-2" fill="currentColor">torchsky</text>
+</svg>

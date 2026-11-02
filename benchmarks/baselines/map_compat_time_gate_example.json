@@ -1,9 +1,0 @@
-[
-  {
-    "case": "synthetic_shifted_wcs",
-    "library": "torchsky",
-    "method": "torchsky",
-    "variant": "bilinear",
-    "max_time_ms": 500.0
-  }
-]
