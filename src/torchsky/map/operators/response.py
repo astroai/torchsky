@@ -83,6 +83,21 @@ def apply_response_products(
     )
 
 
+def _occupied_bits(values: Tensor, width: int) -> list[int]:
+    """Bit positions set in any element (on-device reductions, one transfer)."""
+    present = torch.stack([((values >> b) & 1).amax() for b in range(width)])
+    return [b for b, flag in enumerate(present.tolist()) if flag]
+
+
+def _from_bit_pattern(packed: Tensor, dtype: torch.dtype) -> Tensor:
+    """Reinterpret an unsigned bit pattern held in int64 as ``dtype``."""
+    bits = torch.iinfo(dtype).bits
+    if dtype == torch.uint8 or bits == 64:
+        return packed.to(dtype)
+    half = 1 << (bits - 1)
+    return torch.where(packed >= half, packed - (1 << bits), packed).to(dtype)
+
+
 def _chunk_ranges(size: int, chunk_size: int | None) -> Iterator[tuple[int, int]]:
     chunk = size if chunk_size is None else int(chunk_size)
     if chunk <= 0:
@@ -106,6 +121,9 @@ class IndexedResponsePlan:
     default_chunk_size: int = 65_536
     fingerprint: PlanFingerprint = field(init=False)
     _snapshot: EvidenceSnapshot = field(init=False, repr=False, compare=False)
+    _order: Tensor = field(init=False, repr=False, compare=False)
+    _bounds: dict[int, list[int]] = field(init=False, repr=False, compare=False)
+    _pair_order: list[Tensor] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for name, indices, limit in (
@@ -157,6 +175,14 @@ class IndexedResponsePlan:
             raise ValueError("default_chunk_size must be positive")
         object.__setattr__(self, "default_chunk_size", chunk)
         object.__setattr__(self, "contributor_ids", contributor_ids)
+        # Group entries by target once, O(E log E). A stable sort keeps the
+        # original entry order within a target, so per-target reductions add in
+        # the same order as the COO order.
+        object.__setattr__(
+            self, "_order", torch.argsort(self.target_indices, stable=True)
+        )
+        object.__setattr__(self, "_bounds", {})
+        object.__setattr__(self, "_pair_order", [])
         object.__setattr__(
             self,
             "_snapshot",
@@ -192,6 +218,30 @@ class IndexedResponsePlan:
             self.default_chunk_size if chunk_size is None else chunk_size,
         )
 
+    def _entry_slices(self, chunk_size: int | None) -> Iterator[tuple[int, int, int]]:
+        """Yield ``(target_start, entry_lo, entry_hi)`` per target chunk.
+
+        Entries ``_order[entry_lo:entry_hi]`` are exactly those whose target lies
+        in the chunk. The boundaries come from one ``searchsorted`` over the
+        sorted targets (a single host transfer per chunk size, cached).
+        """
+        size = int(self.default_chunk_size if chunk_size is None else chunk_size)
+        chunks = list(self._chunks(size))
+        if not chunks:
+            return
+        bounds = self._bounds.get(size)
+        if bounds is None:
+            sorted_targets = self.target_indices[self._order]
+            edges = torch.tensor(
+                [c[0] for c in chunks] + [chunks[-1][1]],
+                dtype=torch.int64,
+                device=sorted_targets.device,
+            )
+            bounds = torch.searchsorted(sorted_targets, edges).tolist()
+            self._bounds[size] = bounds
+        for k, (start, _stop) in enumerate(chunks):
+            yield start, bounds[k], bounds[k + 1]
+
     def _validate_source(self, value: Tensor, name: str) -> None:
         self._snapshot.validate()
         self.source.validate(value, name=name)
@@ -204,37 +254,37 @@ class IndexedResponsePlan:
         if value.device != self.coefficients.device:
             raise ValueError(f"{name} must share the response device")
 
-    def _selected_entries(self, start: int, stop: int) -> Tensor:
-        return (self.target_indices >= start) & (self.target_indices < stop)
-
     def apply(self, value: Tensor, *, chunk_size: int | None = None) -> Tensor:
         self._validate_source(value, "response input")
         source = value.reshape(-1)
         output = value.new_zeros(self.target.numel)
-        for start, stop in self._chunks(chunk_size):
-            selected = self._selected_entries(start, stop)
-            local_target = self.target_indices[selected] - start
+        for start, lo, hi in self._entry_slices(chunk_size):
+            entries = self._order[lo:hi]
+            stop = min(start + self._chunk_len(chunk_size), self.target.numel)
             local = output.new_zeros(stop - start)
             local.scatter_add_(
                 0,
-                local_target,
-                source[self.source_indices[selected]]
-                * self.coefficients[selected].to(dtype=value.dtype),
+                self.target_indices[entries] - start,
+                source[self.source_indices[entries]]
+                * self.coefficients[entries].to(dtype=value.dtype),
             )
             output[start:stop] = local
         return output.reshape(self.target.shape)
+
+    def _chunk_len(self, chunk_size: int | None) -> int:
+        return int(self.default_chunk_size if chunk_size is None else chunk_size)
 
     def adjoint(self, value: Tensor, *, chunk_size: int | None = None) -> Tensor:
         self._validate_target(value, "response adjoint input")
         target = value.reshape(-1)
         output = value.new_zeros(self.source.numel)
-        for start, stop in self._chunks(chunk_size):
-            selected = self._selected_entries(start, stop)
+        for _start, lo, hi in self._entry_slices(chunk_size):
+            entries = self._order[lo:hi]
             output.scatter_add_(
                 0,
-                self.source_indices[selected],
-                target[self.target_indices[selected]]
-                * self.coefficients[selected].to(dtype=value.dtype),
+                self.source_indices[entries],
+                target[self.target_indices[entries]]
+                * self.coefficients[entries].to(dtype=value.dtype),
             )
         return output.reshape(self.source.shape)
 
@@ -242,14 +292,15 @@ class IndexedResponsePlan:
         self._validate_source(value, "squared-response input")
         source = value.reshape(-1)
         output = value.new_zeros(self.target.numel)
-        for start, stop in self._chunks(chunk_size):
-            selected = self._selected_entries(start, stop)
+        for start, lo, hi in self._entry_slices(chunk_size):
+            entries = self._order[lo:hi]
+            stop = min(start + self._chunk_len(chunk_size), self.target.numel)
             local = output.new_zeros(stop - start)
-            coefficient = self.coefficients[selected].to(dtype=value.dtype)
+            coefficient = self.coefficients[entries].to(dtype=value.dtype)
             local.scatter_add_(
                 0,
-                self.target_indices[selected] - start,
-                source[self.source_indices[selected]] * coefficient.square(),
+                self.target_indices[entries] - start,
+                source[self.source_indices[entries]] * coefficient.square(),
             )
             output[start:stop] = local
         return output.reshape(self.target.shape)
@@ -268,16 +319,31 @@ class IndexedResponsePlan:
             raise TypeError("flags must have an integer dtype")
         source = flags.reshape(-1)
         output = flags.new_zeros(self.target.numel)
-        for start, stop in self._chunks(chunk_size):
-            selected = torch.nonzero(
-                self._selected_entries(start, stop), as_tuple=False
-            ).flatten()
-            for entry in selected.tolist():
-                target_index = int(self.target_indices[entry].item())
-                source_index = int(self.source_indices[entry].item())
-                output[target_index] = torch.bitwise_or(
-                    output[target_index], source[source_index]
+        if source.numel() == 0:
+            return output.reshape(self.target.shape)
+        # Bitwise OR has no scatter reduction: reduce each occupied bit with
+        # amax, one vectorised pass per bit. The set of occupied bits is the
+        # OR of all flags, found with one reduction (one host transfer).
+        width = torch.iinfo(flags.dtype).bits
+        wide = torch.int64
+        values = source.to(wide)
+        if flags.dtype != torch.uint8:
+            # Reinterpret two's complement as the unsigned bit pattern.
+            values = values & ((1 << width) - 1) if width < 64 else values
+        occupied = _occupied_bits(values, width)
+        for start, lo, hi in self._entry_slices(chunk_size):
+            entries = self._order[lo:hi]
+            stop = min(start + self._chunk_len(chunk_size), self.target.numel)
+            gathered = values[self.source_indices[entries]]
+            local_target = self.target_indices[entries] - start
+            packed = torch.zeros(stop - start, dtype=wide, device=flags.device)
+            for bit in occupied:
+                plane = (gathered >> bit) & 1
+                bit_plane = torch.zeros_like(packed).scatter_reduce_(
+                    0, local_target, plane, reduce="amax", include_self=True
                 )
+                packed |= bit_plane << bit
+            output[start:stop] = _from_bit_pattern(packed, flags.dtype)
         return output.reshape(self.target.shape)
 
     def contributor_count(self, *, chunk_size: int | None = None) -> Tensor:
@@ -288,18 +354,25 @@ class IndexedResponsePlan:
             device=self.coefficients.device,
         )
         assert self.contributor_ids is not None
-        for start, stop in self._chunks(chunk_size):
-            selected = self._selected_entries(start, stop)
-            targets = self.target_indices[selected]
-            contributors = self.contributor_ids[selected]
-            if targets.numel() == 0:
-                continue
-            pairs = torch.stack((targets, contributors), dim=1)
-            unique_targets = torch.unique(pairs, dim=0)[:, 0]
-            output.scatter_add_(0, unique_targets, torch.ones_like(unique_targets))
+        if self._order.numel() == 0:
+            return output.reshape(self.target.shape)
+        if not self._pair_order:
+            # Lexicographic (target, contributor) order from two stable sorts.
+            by_contributor = torch.argsort(self.contributor_ids, stable=True)
+            by_target = torch.argsort(self.target_indices[by_contributor], stable=True)
+            self._pair_order.append(by_contributor[by_target])
+        order = self._pair_order[0]
+        targets = self.target_indices[order]
+        contributors = self.contributor_ids[order]
+        first = torch.ones_like(targets, dtype=torch.bool)
+        first[1:] = (targets[1:] != targets[:-1]) | (
+            contributors[1:] != contributors[:-1]
+        )
+        output.scatter_add_(0, targets[first], torch.ones_like(targets[first]))
         return output.reshape(self.target.shape)
 
     def context(self, *, chunk_size: int | None = None) -> Tensor:
+        """Per-target contributor bitmask planes (32 contributors per plane)."""
         self._snapshot.validate()
         assert self.contributor_ids is not None
         contributor_count = (
@@ -308,24 +381,24 @@ class IndexedResponsePlan:
             else int(self.contributor_ids.max().item()) + 1
         )
         planes = math.ceil(contributor_count / 32)
+        count = self.target.numel
         output = torch.zeros(
-            (planes, self.target.numel),
+            (planes, count),
             dtype=torch.int64,
             device=self.coefficients.device,
         )
-        for start, stop in self._chunks(chunk_size):
-            selected = torch.nonzero(
-                self._selected_entries(start, stop), as_tuple=False
-            ).flatten()
-            for entry in selected.tolist():
-                contributor = int(self.contributor_ids[entry].item())
-                target = int(self.target_indices[entry].item())
-                plane = contributor // 32
-                bit = contributor % 32
-                output[plane, target] = torch.bitwise_or(
-                    output[plane, target],
-                    output.new_tensor(1 << bit),
-                )
+        if planes == 0 or count == 0:
+            return output.reshape(planes, *self.target.shape)
+        flat = output.reshape(-1)
+        plane = self.contributor_ids >> 5
+        bit = self.contributor_ids & 31
+        slot = plane * count + self.target_indices
+        # Setting a bit is idempotent, so duplicate (target, contributor)
+        # entries need no deduplication: one vectorised pass per bit position.
+        for b in range(32):
+            marked = torch.zeros_like(flat)
+            marked[slot[bit == b]] = 1
+            flat |= marked << b
         return output.reshape(planes, *self.target.shape)
 
 

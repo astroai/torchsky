@@ -74,6 +74,7 @@ def detect_outliers(
     scale_primary: float | None = None,
     scale_neighbor: float | None = None,
     min_floor: float | None = None,
+    gain: float | None = 1.0,
     grow: int | None = None,
     kernel: Literal[
         "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
@@ -96,6 +97,7 @@ def detect_outliers(
     scale_primary: float | None = None,
     scale_neighbor: float | None = None,
     min_floor: float | None = None,
+    gain: float | None = 1.0,
     grow: int | None = None,
     kernel: Literal[
         "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
@@ -117,6 +119,7 @@ def detect_outliers(
     scale_primary: float | None = None,
     scale_neighbor: float | None = None,
     min_floor: float | None = None,
+    gain: float | None = 1.0,
     grow: int | None = None,
     kernel: Literal[
         "bilinear", "bicubic", "lanczos2", "lanczos3", "lanczos4", "nearest"
@@ -133,6 +136,17 @@ def detect_outliers(
 
     Returns ``(outlier_masks, updated_observations)`` where ``outlier_masks[i]`` is a boolean
     tensor with ``True`` at detected cosmic-ray/outlier pixels in exposure ``i``.
+
+    When no variance/weight plane is declared, the per-pixel noise falls back to
+    ``sqrt(|blotted| / gain + MAD**2)`` in calibrated data units: a Poisson term
+    plus the robust residual scatter. ``gain`` is the number of electrons per
+    calibrated data unit (``1.0``, the default and previous behaviour, means the
+    data are already in electrons; ADU data need the detector gain in e-/ADU).
+    ``gain=None`` drops the Poisson term. The decisions are invariant under
+    ``data -> k * data`` with ``gain -> gain / k``. The MAD floor is
+    ``eps(dtype) * max|finite data|``: the smallest scatter distinguishable from
+    float rounding at the image's own scale (unit-covariant, unlike an absolute
+    constant). ``min_floor`` remains an explicit threshold floor in data units.
     """
     if not observations:
         raise ValueError("At least one Observation is required")
@@ -149,6 +163,8 @@ def detect_outliers(
         raise ValueError("certified parity mode requires a final usability mask")
     if grow_px < 0:
         raise ValueError("outlier grow radius must be non-negative")
+    if gain is not None and not (float(gain) > 0.0 and float(gain) < float("inf")):
+        raise ValueError("gain must be a positive finite number or None")
 
     from .image_plane_coadd import _blot_spatial_derivative, blot, coadd_image_plane
 
@@ -227,13 +243,28 @@ def detect_outliers(
             )
         if noise_sigma is None:
             finite_diff = diff[torch.isfinite(diff)]
+            eps = torch.finfo(diff.dtype).eps
+            finite_data = torch.cat(
+                (
+                    cal_img[torch.isfinite(cal_img)].abs(),
+                    blotted[torch.isfinite(blotted)].abs(),
+                )
+            )
+            scale = float(finite_data.max().item()) if finite_data.numel() > 0 else 0.0
+            mad_floor = eps * scale
             if finite_diff.numel() > 0:
-                mad_sigma = torch.clamp(1.4826 * torch.median(finite_diff), min=1e-6)
+                mad_sigma = torch.clamp(
+                    1.4826 * torch.median(finite_diff), min=mad_floor
+                )
             else:
                 mad_sigma = torch.tensor(1.0, device=map_device, dtype=torch.float32)
-            noise_sigma = torch.clamp(
-                torch.sqrt(torch.clamp(torch.abs(blotted), min=0.0) + mad_sigma**2),
-                min=float(mad_sigma.item()),
+            poisson = (
+                torch.zeros_like(blotted)
+                if gain is None
+                else torch.abs(blotted) / float(gain)
+            )
+            noise_sigma = torch.sqrt(
+                torch.where(torch.isfinite(poisson), poisson, 0.0) + mad_sigma**2
             )
 
         thresh_primary = c_prim * grad + s_prim * noise_sigma + floor_val

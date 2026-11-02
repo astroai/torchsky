@@ -299,13 +299,26 @@ class RandomRotation:
         self.interpolation = interpolation
 
     def __call__(self, tensor: Tensor) -> Tensor:
-        theta = math.radians(float(torch.rand(())) * 360.0)
+        return self.rotate(tensor, float(torch.rand(())) * 360.0)
+
+    def rotate(self, tensor: Tensor, degrees: float) -> Tensor:
+        """Rotate the trailing two axes by ``degrees`` about the image centre.
+
+        The rotation is rigid in pixel space. ``affine_grid`` works in
+        coordinates normalised per axis to ``[-1, 1]``, so for a non-square image
+        the pixel-space rotation ``R`` becomes ``diag(2/W, 2/H) R diag(W/2, H/2)``
+        there; using ``R`` directly would shear and stretch the image.
+        """
+        theta = math.radians(degrees)
         c, s = math.cos(theta), math.sin(theta)
         dtype = (
             tensor.dtype if tensor.is_floating_point() else torch.get_default_dtype()
         )
+        height, width = int(tensor.shape[-2]), int(tensor.shape[-1])
         rotation = torch.tensor(
-            [[c, -s, 0.0], [s, c, 0.0]], dtype=dtype, device=tensor.device
+            [[c, -s * height / width, 0.0], [s * width / height, c, 0.0]],
+            dtype=dtype,
+            device=tensor.device,
         ).unsqueeze(0)
         batched = tensor if tensor.dtype == dtype else tensor.to(dtype)
         if batched.dim() == 3:

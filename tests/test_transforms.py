@@ -377,3 +377,22 @@ def test_robust_scale_centres_on_the_mean_of_the_two_middle_values() -> None:
     x = torch.tensor([1.0, 2.0, 10.0, 100.0], dtype=torch.float64)
     out = RobustScale(scale=False)(x)
     np.testing.assert_allclose(out.numpy(), x.numpy() - np.median(x.numpy()))
+
+
+@pytest.mark.parametrize("shape", [(16, 32), (32, 16), (24, 24)])
+@pytest.mark.parametrize("degrees", (90.0, 180.0, 270.0, -90.0))
+def test_random_rotation_non_square_is_rigid(shape, degrees):
+    """A quarter-turn must equal torch.rot90 on the region that stays in frame."""
+    import torchsky.transforms as T
+
+    height, width = shape
+    img = torch.arange(height * width, dtype=torch.float64).reshape(height, width)
+    out = T.RandomRotation(interpolation="bilinear").rotate(img, degrees)
+    assert out.shape == img.shape
+    side = min(height, width)
+    r0, c0 = (height - side) // 2, (width - side) // 2
+    window = (slice(r0, r0 + side), slice(c0, c0 + side))
+    centre = img[window]
+    # +90 degrees is a counter-clockwise quarter-turn: torch.rot90 with k = 1.
+    expected = torch.rot90(centre, k=int(round(degrees / 90.0)))
+    torch.testing.assert_close(out[window], expected, atol=1e-8, rtol=0)
