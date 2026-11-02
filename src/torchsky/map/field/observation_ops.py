@@ -101,11 +101,6 @@ def observation_weight_sum_scalar(observation: FieldObservation) -> float:
     return float(weight.sum().item())
 
 
-def observation_support_count_scalar(observation: FieldObservation) -> int:
-    support = observation_support_mask(observation)
-    return int(torch.count_nonzero(support).item())
-
-
 def _coprime_stride(size: int, generator: torch.Generator) -> int:
     """Draw a stride uniformly from the units coprime with ``size``."""
     if size <= 1:
@@ -607,7 +602,6 @@ __all__ = [
     "observation_pixel_to_world",
     "header_shape",
     "observation_band_key",
-    "observation_support_count_scalar",
     "observation_support_mask",
     "observation_weight_sum_scalar",
     "sample_observation_indices",

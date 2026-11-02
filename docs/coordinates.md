@@ -1,4 +1,4 @@
-# Frames and motion
+# Coordinate frames and motion
 
 torchsky does not clone Astropy `SkyCoord`. Catalog geometry is a batch of
 tensors with explicit missing data, frame conversion is a function, and observed

@@ -1,5 +1,10 @@
 # Parity and correctness evidence
 
+!!! warning "Historical baseline (torch 2.13 / torchsky 0.4 pre-release)"
+    The tables below summarize the 0.4.0 release-candidate baseline (torch 2.13, measured 2026-10). Current-lane results (torch 2.14, torchsky 0.5) come from the
+    `torchsky-harness` CANFAR evaluation campaigns; see the
+    [CANFAR guide](https://github.com/astroai/torchsky-harness/blob/main/docs/canfar.md).
+
 Scientific correctness is evaluated against trusted references in
 [`torchsky-harness`](https://github.com/astroai/torchsky-harness), not in this
 repository. This page records what that evidence covers, where it lives, and

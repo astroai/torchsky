@@ -47,7 +47,7 @@ owned by `torchfits`.
   `sphere.interpolate_wavelength_axis`; scene re-exports of map kernels; `field.Observation` (use
   `FieldObservation`); `encoders.SineLayer`; redshift validation helpers; `torchsky.foreground`.
   See the 0.5 section of the migration guide.
-- `cosmology.comoving_distance(n_steps=...)` is deprecated (ignored; removal in 0.6).
+- `cosmology` distance functions no longer take `n_steps` (the quadrature is a fixed Gauss-Legendre rule).
 
 ### Added
 - `torchsky.filter_profiles.photon_quadrature`: photon-weighted equal-mass

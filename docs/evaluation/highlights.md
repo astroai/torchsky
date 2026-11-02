@@ -1,6 +1,6 @@
 # Performance highlights
 
-Headline results from the ADASS XXXVI (2026) campaign, run on real JWST/NIRCam
+Headline results from the ADASS XXXVI (2026) evaluation, run on real JWST/NIRCam
 and CFHT/MegaCam data. Every number on this page is copied from the harness
 record, not re-measured here. The full job sources, per-run provenance
 (scripts, `launch.env`, sha256 sums, `pip freeze`), and result files are in
@@ -88,11 +88,11 @@ Recorded in the [changelog](../changelog.md).
 
 ## Forward-model fits
 
-The same campaign fits SMACS J0723 NIRCam exposures with a chromatic PSF field
+The same evaluation fits SMACS J0723 NIRCam exposures with a chromatic PSF field
 and compares sky parameterizations against coadd baselines on held-out exposures
 (for example, flux-error NMAD 2.1 sigma for an explicit grid versus 2.8 sigma for
 the SWarp-like Lanczos-3 coadd). The protocol and full table are in the
-[campaign README](https://github.com/astroai/torchsky-harness/blob/main/campaigns/adass2026/README.md);
+[evaluation README](https://github.com/astroai/torchsky-harness/blob/main/campaigns/adass2026/README.md);
 the method is described in [Field formulation](../field-formulation.md).
 
 ## Reproducing

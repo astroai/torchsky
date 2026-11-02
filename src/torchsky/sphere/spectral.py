@@ -240,7 +240,7 @@ def _smoke_test_torch_compile() -> bool:
 
         _test_fn(torch.randn(10, dtype=torch.float64))
         return True
-    except Exception:
+    except Exception:  # capability probe: dynamo/inductor raise many unrelated types
         warnings.warn(
             "torch.compile unavailable (missing CUDA headers or other issue); "
             "Wigner d-matrix helpers will run uncompiled.",
@@ -277,7 +277,9 @@ def _maybe_compile(fn):
             compiled = torch.compile(fn)
         try:
             return compiled(*args, **kwargs)
-        except Exception as compile_error:
+        except (
+            Exception
+        ) as compile_error:  # compile errors are untyped; eager retry below
             try:
                 result = fn(*args, **kwargs)
             except Exception:
@@ -403,14 +405,14 @@ def _read_healpix_full_weight_vector(path: str, nside: int) -> Tensor:
     for hdu in (1, 0):
         try:
             data = torch.as_tensor(read_image(path, hdu=hdu, mmap=False)).reshape(-1)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, IndexError, KeyError):
             continue
         if data.numel() > 0:
             candidates.append(data)
     if not candidates:
         try:
             table = read_table(path)
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError, IndexError, KeyError) as exc:
             raise ValueError(
                 f"could not read HEALPix pixel weights from {path!r}"
             ) from exc
@@ -3419,7 +3421,7 @@ def map2alm_spin(
         raise ValueError("invalid lmax/mmax")
     try:
         spin_i = int(spin)
-    except Exception as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("spin must be an integer") from exc
     if float(spin_i) != raw_spin:
         raise ValueError("spin must be an integer")

@@ -12,7 +12,7 @@ request is mergeable.
 | Signatures, parameters, return contracts, per-name docstrings | Generated reference under `docs/reference/` |
 | Page title, stability tier, grouping order, cross-links, quick paths | `docs/reference/_registry.toml` |
 | Measured performance tables and parity summaries | `docs/evaluation/` (highlights, scaling, kernel benchmarks, parity) plus its committed data artifacts |
-| Historical design notes, audits, research, scratch analysis | `notes/` — never inside `docs/` |
+| Design notes, audits, research, scratch analysis | Outside the published docs; never inside `docs/` |
 | Release history | `docs/changelog.md` |
 
 Rules of thumb:
@@ -124,8 +124,8 @@ is not a tutorial.
 - Use relative links between published pages: `[WCS guide](wcs.md)`.
 - Link to a rendered API entry with its canonical anchor:
   `[`WCS`](reference/wcs.md#torchsky.wcs.WCS)`.
-- Never link into `src/`, `notes/`, `examples/` internals, or generated
-  `published-examples/` files that do not exist in `examples/`.
+- Do not link into `src/` or unpublished files; link to `examples/` scripts by
+  their repository URL.
 - External links are allowed; first-party 404s fail the link check.
 - Every page has exactly one `# H1`; the file name supplies the nav label.
 

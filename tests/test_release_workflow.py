@@ -105,3 +105,12 @@ def test_wheel_workflow_gates_publication() -> None:
 def tomllib_free_job_names(workflow: str) -> list[str]:
     body = workflow[workflow.index("\njobs:\n") + len("\njobs:\n") :]
     return re.findall(r"^  ([a-z_]+):$", body, flags=re.MULTILINE)
+
+
+def test_all_workflows_pin_actions_and_pixi() -> None:
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        text = path.read_text()
+        refs = re.findall(r"uses:\s+\S+@([^\s]+)", text)
+        assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in refs), path.name
+        assert "pixi-version: latest" not in text, path.name
+        assert "- develop" not in text, path.name

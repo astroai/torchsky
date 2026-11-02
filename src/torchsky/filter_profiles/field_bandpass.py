@@ -272,7 +272,7 @@ def _load_cached_transmission(
             data = json.load(f)
         wl = torch.as_tensor(data["wavelength"], dtype=torch.float64).reshape(-1)
         tr = torch.as_tensor(data["transmission"], dtype=torch.float64).reshape(-1)
-    except Exception:
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         return None
     if wl.numel() < 2 or wl.shape != tr.shape:
         return None
@@ -305,7 +305,7 @@ def _load_cached_filter_list(
             data = json.load(f)
         if isinstance(data, list):
             return data
-    except Exception:
+    except (OSError, ValueError):
         return None
     return None
 
@@ -341,7 +341,7 @@ def _svo_fps() -> Any:
     """Import astroquery's SVO FPS client, failing with an install hint."""
     try:
         from astroquery.svo_fps import SvoFps  # type: ignore[import-not-found]
-    except Exception as exc:  # pragma: no cover - optional dependency
+    except ImportError as exc:  # pragma: no cover - optional dependency
         raise ImportError(
             "astroquery is required for --field-spectral-source=svo when the filter "
             "profile is not cached. Install with: pip install 'astroquery>=0.4.6'"

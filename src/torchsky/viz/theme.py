@@ -152,15 +152,6 @@ def halo_effect(background: str, linewidth: float = 1.8) -> list[Any]:
     return [pe.withStroke(linewidth=linewidth, foreground=background)]
 
 
-def compact_formatter() -> Any:
-    """Scientific formatter for short colorbars (``10^-1`` rather than ``0.001``)."""
-    from matplotlib.ticker import ScalarFormatter
-
-    formatter = ScalarFormatter(useMathText=True)
-    formatter.set_scientific(True)
-    return formatter
-
-
 def _style_tick_labels(ax: Any, theme: Theme, size: float) -> None:
     family = mono_family()
     halo = halo_effect(theme.axes_bg)

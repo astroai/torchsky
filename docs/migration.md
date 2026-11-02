@@ -65,7 +65,7 @@ them from their defining module only for white-box tests; they are not API.
 | `torchsky.redshift` | `require_one_plus_z`, `normalize_v_kind` | `one_plus_z_from_*`, `convert_velocity_kind` |
 | `torchsky.quality` | `MAX_CONFIDENCE_SAMPLES` | None |
 | modules | `torchsky.foreground`, `torchsky.map.field.gauss_newton` | Now private (`_foreground`, `_gauss_newton`) |
-| `cosmology` | `n_steps=` (ignored since the Gauss-Legendre quadrature) | Drop it; passing it warns with `FutureWarning` and is removed in 0.6 |
+| `cosmology` | `n_steps=` (had no effect with the Gauss-Legendre quadrature) | Removed; drop the argument (the quadrature is fixed) |
 
 Added in 0.5: `torchsky.map.coadd_image_plane`, `torchsky.map.ImageObservation`, and
 `torchsky.wcs.TemporalWCS`.

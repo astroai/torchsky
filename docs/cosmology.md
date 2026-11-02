@@ -19,9 +19,8 @@ scalings before feeding spectral or catalog models. The reference is
   spelling (`Ok0=0` by default).
 - Distances are defined for `z >= 0`: negative redshifts are clamped to zero, so
   `D_C(0) = D_L(0) = 0` and `D_A` never divides by zero.
-- `n_steps` (default `2048`) is the quadrature size for the line-of-sight
-  integral. Raise it when you compare against a reference to sub-percent
-  precision, or when evaluating at large `z`.
+- The line-of-sight integral uses a fixed Gauss-Legendre rule in `ln(1+z)`;
+  there is no quadrature-size argument.
 
 ## Which function?
 
@@ -156,8 +155,8 @@ Passing the same cosmology as `cosmology` and `reference` yields
 ## Differentiability
 
 Distances and the volume element are differentiable with respect to `H0`,
-`Om0`, `Ok0`, `w0`, and `wa`. Use `float64` for parameter gradients and raise
-`n_steps` if the finite-difference agreement matters at the required precision.
+`Om0`, `Ok0`, `w0`, and `wa`. Use `float64` for parameter gradients when
+finite-difference agreement matters.
 
 <!-- docs: run -->
 ```python
@@ -169,7 +168,7 @@ om0 = torch.tensor(0.3111, dtype=torch.float64, requires_grad=True)
 cosmology = FLRW(Om0=om0)
 z = torch.tensor([0.5, 1.0], dtype=torch.float64)
 
-distance = cosmology.comoving_distance(z, n_steps=4096)
+distance = cosmology.comoving_distance(z)
 distance.sum().backward()
 assert om0.grad is not None
 assert torch.isfinite(om0.grad)
@@ -182,8 +181,5 @@ print(om0.grad.item())
   precision statement.
 - `comoving_position` raises for `Ok0 != 0`; use `comoving_separation` on a
   curved slice.
-- The quadrature grid is built up to `1.01 * max(z)` and then interpolated.
-  Evaluating far outside the requested range is fine, but the `n_steps`
-  accuracy statement applies to the requested redshifts.
 - Distances clamp negative redshifts; model predictions that need the sign of a
   small negative perturbation should handle it before calling these functions.

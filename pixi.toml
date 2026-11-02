@@ -94,6 +94,7 @@ docs-docstrings = "pixi run -e test python scripts/docstring_audit.py --report"
 docs-docstrings-baseline = "pixi run -e test python scripts/docstring_audit.py --write-baseline"
 docs-docstrings-check = "pixi run -e test python scripts/docstring_audit.py --check"
 docs-anchors = "python scripts/check_reference_anchors.py"
+astrometric-calibrate = "pixi run -e astrometry python scripts/astrometric_calibrate.py"
 docs-contract = "pixi run docs-build && pixi run cli-reference-check && pixi run -e docs python scripts/check_docs_links.py --skip-external && pixi run docs-anchors && pixi run docs-examples-check && pixi run docs-bench-tables-check && pixi run docs-docstrings-check && pixi run docs-snippets && pixi run -e test -- pytest tests/test_docs_integrity.py tests/test_docs_snippets.py tests/test_docs_coverage.py tests/test_docs_reference.py tests/test_docs_claims.py tests/test_docstrings.py -q"
 verify = "pixi run -e default -- python scripts/verify_setup.py"
 

@@ -1191,56 +1191,42 @@ def _grid_weighted_laplacian_diagonal_majorizer(
     return diag
 
 
-try:
-    from torchregress.algorithms.irls import (  # type: ignore[import-not-found]
-        IRLSConfig as _TorchRegressIRLSConfig,
-        calculate_mad as _tr_calculate_mad,
-        huber_weights as _tr_huber_weights,
-        power_weights as _tr_power_weights,
-        tukey_weights as _tr_tukey_weights,
+@dataclass
+class IRLSConfig:
+    weight_fn: str | Callable[..., Tensor] = "tukey"
+    weight_params: dict[str, Any] | None = None
+    max_iter: int = 50
+    tol: float = 1.0e-4
+    scale_estimator: str = "mad"
+    use_mad_scaling: bool = False
+
+
+def _tr_huber_weights(scaled_residuals: Tensor, delta: float = 1.345) -> Tensor:
+    abs_r = torch.abs(scaled_residuals)
+    return torch.where(abs_r <= delta, torch.ones_like(abs_r), delta / (abs_r + 1.0e-8))
+
+
+def _tr_tukey_weights(scaled_residuals: Tensor, c: float = 4.685) -> Tensor:
+    abs_r = torch.abs(scaled_residuals)
+    return torch.where(
+        abs_r <= c,
+        (1.0 - (scaled_residuals / c) ** 2) ** 2,
+        torch.zeros_like(abs_r),
     )
 
-    _HAS_TORCHREGRESS_IRLS = True
-except ImportError:
-    _HAS_TORCHREGRESS_IRLS = False
 
-    @dataclass
-    class _TorchRegressIRLSConfig:  # type: ignore[no-redef]
-        weight_fn: str | Callable[..., Tensor] = "tukey"
-        weight_params: dict[str, Any] | None = None
-        max_iter: int = 50
-        tol: float = 1.0e-4
-        scale_estimator: str = "mad"
-        use_mad_scaling: bool = False
-
-    def _tr_huber_weights(scaled_residuals: Tensor, delta: float = 1.345) -> Tensor:
-        abs_r = torch.abs(scaled_residuals)
-        return torch.where(
-            abs_r <= delta, torch.ones_like(abs_r), delta / (abs_r + 1.0e-8)
-        )
-
-    def _tr_tukey_weights(scaled_residuals: Tensor, c: float = 4.685) -> Tensor:
-        abs_r = torch.abs(scaled_residuals)
-        return torch.where(
-            abs_r <= c,
-            (1.0 - (scaled_residuals / c) ** 2) ** 2,
-            torch.zeros_like(abs_r),
-        )
-
-    def _tr_power_weights(
-        scaled_residuals: Tensor, a: float = 1.5, b: float = 2.0
-    ) -> Tensor:
-        abs_r = torch.abs(scaled_residuals)
-        return (1.0 + (abs_r / (a + 1.0e-8)) ** b) ** -1
-
-    def _tr_calculate_mad(residuals: Tensor, dim: int = -2) -> Tensor:
-        med = torch.median(residuals, dim=dim, keepdim=True).values
-        abs_dev = torch.abs(residuals - med)
-        mad = torch.median(abs_dev, dim=dim, keepdim=True).values
-        return torch.clamp(mad, min=1.0e-8)
+def _tr_power_weights(
+    scaled_residuals: Tensor, a: float = 1.5, b: float = 2.0
+) -> Tensor:
+    abs_r = torch.abs(scaled_residuals)
+    return (1.0 + (abs_r / (a + 1.0e-8)) ** b) ** -1
 
 
-IRLSConfig = _TorchRegressIRLSConfig
+def _tr_calculate_mad(residuals: Tensor, dim: int = -2) -> Tensor:
+    med = torch.median(residuals, dim=dim, keepdim=True).values
+    abs_dev = torch.abs(residuals - med)
+    mad = torch.median(abs_dev, dim=dim, keepdim=True).values
+    return torch.clamp(mad, min=1.0e-8)
 
 
 def _compute_detector_irls_weight(
@@ -1917,7 +1903,6 @@ def solve_linear_band_grid_cg(
                 "edge_preserving": bool(edge_preserving or shared_edge_sq is not None),
                 "non_negative_weight": float(non_negative_weight),
                 "data_weight_fn": effective_fn_name,
-                "torchregress_irls_backend": bool(_HAS_TORCHREGRESS_IRLS),
                 "detector_outlier_fraction": float(detector_outlier_fraction),
                 "preconditioner": preconditioner_name,
                 "damping": float(damping),

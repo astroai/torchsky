@@ -18,14 +18,8 @@ The short checklist is [CONTRIBUTING.md](https://github.com/astroai/torchsky/blo
 
 ## Development Setup
 
-```bash
-git clone https://github.com/astroai/torchsky.git
-cd torchsky
-pixi install
-pixi run dev
-pixi run verify
-```
-
+Clone and install with the steps in
+[CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md#setup).
 The project uses [pixi](https://pixi.sh/) for environment management,
 [ruff](https://github.com/astral-sh/ruff) for linting, and
 [pytest](https://docs.pytest.org/) for testing. Use Pixi commands for project
@@ -41,7 +35,7 @@ Local files that are intentionally not committed:
 - large downloaded real-data inputs under `data/`
 - temporary staging files under `data/_tmp/`
 
-Scientific benchmark inputs, campaign outputs, and scorecards are owned by the
+Scientific benchmark inputs, evaluation outputs, and scorecards are owned by the
 sibling `torchsky-harness` repository.
 
 ```
@@ -71,7 +65,10 @@ Use the `torchfits` repository for CFITSIO build configuration.
 
 ## Test Expectations
 
-Minimum pre-PR checks:
+The everyday commands (preflight, targeted tests, typecheck, docs contract) are
+listed in
+[CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md#checks).
+Minimum pre-PR check:
 
 ```bash
 pixi run -e test -- pytest tests/test_api.py tests/test_wcs_api.py -q
@@ -92,18 +89,10 @@ locally:
 pixi run ci-local
 ```
 
-Targeted checks while editing:
-
-```bash
-pixi run preflight-push
-pixi run typecheck
-pixi run -e test -- pytest tests/test_foo.py
-```
-
 ## Scientific evaluation
 
 Scientific benchmarks, exhaustive parity, real-data validation, comparator
-environments, and CANFAR campaigns run from
+environments, and CANFAR evaluation runs live in
 [`torchsky-harness`](https://github.com/astroai/torchsky-harness). Core changes
 retain bounded correctness and performance smoke contracts. See the
 [evaluation guide](evaluation/benchmarks.md) for the boundary and harness methodology for
@@ -142,10 +131,9 @@ snippet conventions. FITS I/O documentation and benchmarks belong in
 
 ## PR guidelines
 
-- Keep PRs focused on a single concern.
-- Include tests for behavior changes.
-- Run `pixi run preflight-push` and fix issues before submitting.
-- Do not commit local scratch files, benchmark artifacts, or `.env` files.
+The checklist is in
+[CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md#pull-requests).
+Do not commit local scratch files, benchmark artifacts, or `.env` files.
 
 ## Release process
 

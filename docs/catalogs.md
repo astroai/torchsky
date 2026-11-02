@@ -5,7 +5,7 @@ calls. Coordinates are tensors; there is no `SkyCoord` class. Matching uses an
 exact great-circle predicate: covering is only ever a *candidate* step, so
 pruning can never drop a true match inside the stated radius.
 
-Frames and epochs are covered in [Frames and motion](coordinates.md), MOC coverage
+Frames and epochs are covered in [Coordinate frames and motion](coordinates.md), MOC coverage
 in [MOC and sparse maps](moc-and-sparse.md), and the table boundary in
 [Concepts](concepts.md#file-boundary). Signatures are in the
 [`torchsky.catalogs` reference](reference/catalogs.md).

@@ -214,7 +214,7 @@ sign, including reflected detector frames.
 
 | Need | Use |
 |---|---|
-| Frames, proper motion, observed place | [Frames and motion](coordinates.md) |
+| Frames, proper motion, observed place | [Coordinate frames and motion](coordinates.md) |
 | Spectral axes as free functions | [Spectra](spectral.md) |
 | IFU slice WCS, tabular axes | `IFUSliceWCS`, `TabularAxis`, `TabularLookupWCS` in the [reference](reference/wcs.md) |
 | Footprints and pixel scales | `footprint`, `pixel_scales`, `pixel_area`, `position_angle` |

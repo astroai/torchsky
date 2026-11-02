@@ -350,17 +350,6 @@ class PseudoClField:
         ).values
 
 
-def _spin_product(left: Tensor, right: Tensor, *, conjugate_left: bool) -> Tensor:
-    left_complex = torch.complex(left[..., 0, :, :], left[..., 1, :, :])
-    right_complex = torch.complex(right[..., 0, :, :], right[..., 1, :, :])
-    if conjugate_left:
-        left_complex = torch.conj(left_complex)
-    product = left_complex * right_complex
-    if conjugate_left:
-        product = -product
-    return torch.stack((product.real, product.imag), dim=-3)
-
-
 def pure_alms(field: PseudoClField, *, values: Tensor | None = None) -> Tensor:
     """Return pure ``(E, B)`` alms for a validated apodized spin-2 field.
 

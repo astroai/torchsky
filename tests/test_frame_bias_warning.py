@@ -43,22 +43,30 @@ def test_fk5_j2000_to_icrs_warns_and_applies_frame_bias():
 def test_same_frame_and_explicit_icrs_do_not_warn():
     lon = torch.tensor([0.0], dtype=torch.float64)
     lat = torch.tensor([24.5], dtype=torch.float64)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", CelestialFrameBiasWarning)
-        _convert_world_between_wcs(lon, lat, _tan(RADESYS="ICRS"), _tan(RADESYS="ICRS"))
-        _convert_world_between_wcs(
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", CelestialFrameBiasWarning)
+        out_icrs = _convert_world_between_wcs(
+            lon, lat, _tan(RADESYS="ICRS"), _tan(RADESYS="ICRS")
+        )
+        out_fk5 = _convert_world_between_wcs(
             lon,
             lat,
             _tan(RADESYS="FK5", EQUINOX=2000.0),
             _tan(RADESYS="FK5", EQUINOX=2000.0),
         )
+    assert not caught
+    for out_lon, out_lat in (out_icrs, out_fk5):
+        torch.testing.assert_close(out_lon, lon)
+        torch.testing.assert_close(out_lat, lat)
 
 
 def test_fk5_other_equinox_does_not_warn():
     lon = torch.tensor([10.0], dtype=torch.float64)
     lat = torch.tensor([24.5], dtype=torch.float64)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", CelestialFrameBiasWarning)
-        _convert_world_between_wcs(
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", CelestialFrameBiasWarning)
+        out_lon, out_lat = _convert_world_between_wcs(
             lon, lat, _tan(RADESYS="FK5", EQUINOX=1975.0), _tan(RADESYS="ICRS")
         )
+    assert not caught
+    assert out_lon.shape == lon.shape and out_lat.shape == lat.shape

@@ -1,4 +1,4 @@
-# `torchsky.viz`
+# Visualization
 
 `torchsky.viz` has two surfaces:
 

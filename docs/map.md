@@ -222,7 +222,7 @@ and splat projection, spectral resamplers, encoder field models) raise
 
 ## Evaluation And Examples
 
-Truth metrics, uncertainty scoring, comparator protocols, and campaign reports
+Truth metrics, uncertainty scoring, comparator protocols, and evaluation reports
 belong to [`torchsky-harness`](https://github.com/astroai/torchsky-harness); this
 repository keeps bounded product, gradient, adjoint, and device-contract tests.
 The [speed evidence](evaluation/highlights.md) and

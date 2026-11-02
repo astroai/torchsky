@@ -17,9 +17,7 @@ source of truth:
 |---|---|---|
 | **2.14.x** | **0.5.0** | `>=1.3.1` |
 
-`0.4.0` on PyPI is an unsupported stray upload (one macOS cp313 wheel built
-against torch 2.13). That version is not reused; 0.5.0 is the first supported
-release.
+0.5.0 is the first supported release.
 
 Apply the lane to every version source in one step and verify it:
 

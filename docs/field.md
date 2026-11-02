@@ -336,4 +336,4 @@ assert torch.isfinite(loss)
   [native operators](published-examples/native_operators.py).
 - Harness notebooks:
   [synthetic field fit](https://github.com/astroai/torchsky-harness/blob/main/notebooks/01_field_fit_synthetic.ipynb)
-  and [campaign tools](https://github.com/astroai/torchsky-harness/tree/main/notebooks).
+  and [evaluation tools](https://github.com/astroai/torchsky-harness/tree/main/notebooks).

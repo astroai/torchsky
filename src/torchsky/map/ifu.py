@@ -14,7 +14,6 @@ from ..device import resolve_device
 from ..domain import DomainSpec
 from ..wcs.spectral import canonical_spectral_type, spectral_unit_scale
 from .observation import (
-    ApertureUncertainty,
     CubeResult,
     CubeTarget,
     IFUObservation,
@@ -725,14 +724,9 @@ def build_ifu_cube(
     )
 
 
-def cube_query_uncertainty(result: CubeResult, query: Tensor) -> ApertureUncertainty:
-    return result.query_uncertainty(query)
-
-
 __all__ = [
     "IFUCubeCovariance",
     "IFUCubeResponse",
     "build_ifu_cube",
-    "cube_query_uncertainty",
     "plan_ifu_cube_response",
 ]

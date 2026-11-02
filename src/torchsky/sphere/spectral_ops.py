@@ -12,6 +12,7 @@ import os
 import torch
 from torch import Tensor
 
+from ..device import require_float64, resolve_device
 from . import healpix as _healpix
 from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLES
 
@@ -295,6 +296,14 @@ def _infer_field_count_from_ncls(n_cls: int) -> int:
     return int(n)
 
 
+def _tensor_inputs(cls: object) -> list[Tensor]:
+    if isinstance(cls, Tensor):
+        return [cls]
+    if isinstance(cls, (list, tuple)):
+        return [c for c in cls if isinstance(c, Tensor)]
+    return []
+
+
 def _normalize_cls_input(
     cls: Tensor
     | list[Tensor | list[float] | None]
@@ -304,16 +313,20 @@ def _normalize_cls_input(
 ) -> tuple[list[Tensor | None], list[tuple[int, int]], int]:
     if isinstance(cls, Tensor):
         if cls.ndim == 1:
-            return [cls.to(torch.float64)], [(0, 0)], 1
+            return [cls.to(device="cpu", dtype=torch.float64)], [(0, 0)], 1
         if cls.ndim == 2:
             seq: list[Tensor | None] = [
-                cls[i].to(torch.float64) for i in range(int(cls.shape[0]))
+                cls[i].to(device="cpu", dtype=torch.float64)
+                for i in range(int(cls.shape[0]))
             ]
         else:
             raise ValueError("cls tensor must be 1D or 2D")
     elif isinstance(cls, (list, tuple)):
         seq = [
-            None if c is None else torch.as_tensor(c, dtype=torch.float64) for c in cls
+            None
+            if c is None
+            else torch.as_tensor(c).to(device="cpu", dtype=torch.float64)
+            for c in cls
         ]
     else:
         arr = torch.as_tensor(cls, dtype=torch.float64)
@@ -347,7 +360,15 @@ def synalm(
     *,
     new: bool = False,
 ) -> Tensor:
-    """Generate alm coefficient vector(s) from power spectra."""
+    """Generate alm coefficient vector(s) from power spectra.
+
+    The covariance factorisation and the Gaussian draw run in float64 on the
+    CPU (so a seed gives the same coefficients on every device); the result is
+    returned on the device of the input spectra (CPU for lists/arrays).
+    """
+    tensors = _tensor_inputs(cls)
+    out_device = resolve_device(None, *tensors) if tensors else torch.device("cpu")
+    require_float64(out_device, what="synalm/synfast")
     seq, pairs, n_fields = _normalize_cls_input(cls, new=bool(new))
     ll_data = -1
     for c in seq:
@@ -447,6 +468,7 @@ def synalm(
     # Construct complex output [n_fields, nalm]
     out = torch.complex(v_real.transpose(0, 1), v_imag.transpose(0, 1))
 
+    out = out.to(out_device)
     if n_fields == 1:
         return out[0]
     return out

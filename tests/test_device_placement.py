@@ -225,3 +225,25 @@ def test_infer_linear_affine_pixel_map_accepts_accelerator_wcs() -> None:
     tol = 1e-9
     for a, b in zip(cpu, dev, strict=True):
         assert abs(a - b) < tol
+
+
+def test_synfast_returns_on_the_spectrum_device_and_is_seed_stable() -> None:
+    import torch
+
+    from torchsky import sphere
+
+    ell = torch.arange(33, dtype=torch.float64)
+    cl = 1.0 / ell.clamp(min=1.0) ** 2
+    torch.manual_seed(3)
+    cpu_alm = sphere.synalm(cl, lmax=32)
+    assert cpu_alm.device.type == "cpu"
+    if not torch.cuda.is_available():
+        pytest.skip("needs CUDA")
+    torch.manual_seed(3)
+    gpu_alm = sphere.synalm(cl.cuda(), lmax=32)
+    assert gpu_alm.device.type == "cuda"
+    # The draw happens on the CPU, so a seed gives the same coefficients everywhere.
+    torch.testing.assert_close(gpu_alm.cpu(), cpu_alm, rtol=0.0, atol=0.0)
+    sky = sphere.synfast(cl.cuda(), nside=8, lmax=16)
+    assert sky.device.type == "cuda"
+    assert sphere.anafast(sky, lmax=16).device.type == "cuda"

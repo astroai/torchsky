@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/astroai/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/astroai/torchsky/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-astroai.github.io%2Ftorchsky-brightgreen)](https://astroai.github.io/torchsky/)
-[![PyPI: coming with 0.5](https://img.shields.io/badge/PyPI-coming%20with%200.5-lightgrey)](https://astroai.github.io/torchsky/install/)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
+[![Release: 0.5.0rc1 pre-release](https://img.shields.io/badge/release-0.5.0rc1%20pre--release-lightgrey)](https://github.com/astroai/torchsky/releases)
+[![Python 3.12-3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/astroai/torchsky/blob/main/LICENSE)
 
 Sky coordinates, spherical geometry, and mapmaking as PyTorch tensor operations.
@@ -16,8 +16,11 @@ torchsky installs as a dependency.
 
 ## Install
 
-torchsky 0.5 is not on PyPI yet. Until then, install from source (a C++ compiler
-and CMake are needed for the native extension):
+0.5.0rc1 is distributed as a
+[GitHub pre-release](https://github.com/astroai/torchsky/releases) and is not
+uploaded to PyPI. Install from source or from the pre-release wheels now; `pip
+install torchsky` works from 0.5.0. Building from source needs a C++ compiler and
+CMake for the native extension:
 
 ```bash
 git clone https://github.com/astroai/torchsky.git
@@ -25,8 +28,7 @@ cd torchsky
 pip install .
 ```
 
-Once 0.5 is published, `pip install torchsky` will do. It supports Python 3.12 and
-3.13 with PyTorch 2.14. The
+torchsky supports Python 3.12 to 3.14 with PyTorch 2.14. The
 [installation guide](https://astroai.github.io/torchsky/install/) covers CUDA,
 Pixi, and troubleshooting.
 

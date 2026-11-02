@@ -5,7 +5,7 @@ spectral Power Foam, and their hybrids). It defines the inverse problem and
 modelling assumptions behind the map/field APIs; it is not a scientific
 acceptance claim. Current API contracts live in [Continuous fields](field.md)
 and the [implicit forward scaffold](field.md#implicit-forward-scaffold). Measured validation and
-campaign status live in `torchsky-harness`.
+evaluation status live in `torchsky-harness`.
 
 ## Purpose
 
@@ -858,7 +858,7 @@ A low training residual is insufficient because a flexible model can absorb
 noise, backgrounds, or calibration errors. We need data that did not update the
 model.
 
-Each campaign freezes its train, validation, and blind-test groups before
+Each evaluation freezes its train, validation, and blind-test groups before
 fitting; exact exposure and injection identities belong in its harness manifest.
 Validation evidence selects architecture, spectral rank, atom density, learning
 rate, temperature schedule, regularization, stopping rule, and detection
@@ -888,8 +888,8 @@ Useful diagnostics include:
 
 The SMACS depth endpoint, recovery thresholds, bootstrap protocol, comparator
 matrix, and ablation rows are maintained in the
-[harness campaign formulation](https://github.com/astroai/torchsky-harness/blob/main/docs/inr_foam_problem_formulation.md)
-and [UPDec campaign record](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md).
+[harness evaluation formulation](https://github.com/astroai/torchsky-harness/blob/main/docs/inr_foam_problem_formulation.md)
+and [UPDec evaluation record](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md).
 They are scientific evaluation contracts rather than runtime package defaults.
 
 ## 14. Optimization procedures
@@ -1065,5 +1065,5 @@ metric.
   operators, and training workflow.
 - [Implicit forward scaffold](field.md#implicit-forward-scaffold): compact multi-survey
   prediction and robust-loss scaffold.
-- [UPDec depth evaluation campaign](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md):
-  frozen data split, method matrix, claim gates, and campaign evidence.
+- [UPDec depth evaluation](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md):
+  frozen data split, method matrix, claim gates, and evaluation evidence.

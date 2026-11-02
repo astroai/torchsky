@@ -251,6 +251,22 @@ torchfits table /data/catalogs/catalog.fits -e 1 -n 20
 Use `-f json` for structured `header` or `table` output; see the torchfits CLI
 reference for column selection, batch input, and output formats.
 
+## Astrometric calibration helper
+
+`scripts/astrometric_calibrate.py` is an optional repository helper (not part of
+the installed package) for exposures that lack a usable WCS. It runs
+`solve-field` (astrometry.net) on each exposure's reference CCD, propagates the
+solved WCS to every extension with `scripts/apply_wcs_to_mef.py`, optionally
+refines it with SExtractor and SCAMP (`--scamp`), and then coadds with torchsky.
+`solve-field` must be on `PATH`; SCAMP and SExtractor come with the Pixi
+`astrometry` environment.
+
+```bash
+pixi run astrometric-calibrate solve exposures/*.fits.fz --solved-dir solved --ref-hdu 19
+pixi run astrometric-calibrate full exposures/*.fits.fz --solved-dir solved \
+    --output calibrated_mosaic.fits --scamp
+```
+
 ## Automation Guidance
 
 - Prefer explicit input and output paths and non-interactive flags.

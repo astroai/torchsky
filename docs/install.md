@@ -2,14 +2,15 @@
 
 ## Release status
 
-!!! warning "0.5 is not on PyPI yet"
-    The current line is **0.5.0rc1**, and no public PyPI project exists yet. Once
-    0.5 is published, install with `pip install torchsky`. Until then, build from
-    source (below), install a wheel built from this repository, or use Pixi. This
-    note changes in the same commit that publishes the release.
+!!! warning "0.5.0rc1 is a GitHub pre-release"
+    The current line is **0.5.0rc1**. Release candidates are distributed as
+    [GitHub pre-releases](https://github.com/astroai/torchsky/releases) and are
+    never uploaded to PyPI. Install from source (below) or from the pre-release
+    wheels now; `pip install torchsky` works from 0.5.0. This note changes in the
+    same commit that publishes the release.
 
 ```bash
-pip install torchsky        # once 0.5 is on PyPI
+pip install torchsky        # from 0.5.0 (not the rc)
 ```
 
 `torchsky` does not own or bundle CFITSIO.
