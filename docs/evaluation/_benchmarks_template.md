@@ -26,10 +26,12 @@ Torchsky retains production implementations and the bounded kernel snapshots bel
 - Throughput counts the operation's natural unit: transformed points, analysed
   map pixels, left catalog rows, or input image pixels.
 
-Regenerate the artifact and this page on the reference machine:
+The measurement lives in
+[torchsky-harness](https://github.com/astroai/torchsky-harness/blob/main/docs/canfar.md)
+(`bench-docs-reference-gate`, run on CPU and CUDA by the CANFAR campaigns). Copy its
+`reference_benchmarks.json` to `docs/data/` and render this page with:
 
 ```bash
-pixi run docs-bench
 pixi run docs-bench-tables
 ```
 

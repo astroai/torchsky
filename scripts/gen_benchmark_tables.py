@@ -4,7 +4,8 @@
     pixi run docs-bench-tables          # regenerate docs/evaluation/benchmarks.md
     pixi run docs-bench-tables-check    # fail if the page is stale
 
-The JSON artifact is produced by ``scripts/bench_docs.py``. Tables are rendered
+The JSON artifact is produced by torchsky-harness (``benchmarks/bench_docs_reference.py``,
+run on CANFAR by the CPU and GPU campaigns). Tables are rendered
 between the ``<!-- BENCH_TABLES -->`` marker in the template; prose outside the
 marker stays hand-written.
 """
