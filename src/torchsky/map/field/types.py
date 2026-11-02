@@ -277,7 +277,7 @@ class PSFSpec:
         """Return an independently moved PSF without mutating the source model."""
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("PSFSpec dtype must be floating point")
-        move_kwargs: dict[str, object] = {}
+        move_kwargs: dict[str, Any] = {}
         if device is not None:
             move_kwargs["device"] = device
         if dtype is not None:
@@ -581,9 +581,10 @@ class FieldObservation:
             raise ValueError(
                 "transmission_wavelength and transmission_throughput must both be set or both None"
             )
-        if wl is None:
+        if wl is None or tt is None:
             return
         if wl.ndim != 1 or tt.ndim != 1:
+
             raise ValueError(
                 "transmission_wavelength and transmission_throughput must be 1D"
             )
@@ -616,7 +617,7 @@ class FieldObservation:
         """
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("FieldObservation dtype must be floating point")
-        kwargs: dict[str, object] = {"header": dict(self.header)}
+        kwargs: dict[str, Any] = {"header": dict(self.header)}
         kwargs["additive_components"] = tuple(
             component.to(device=device, dtype=dtype)
             for component in self.additive_components
@@ -653,7 +654,7 @@ class FieldObservation:
         transform = self.detector_to_sky
         if isinstance(transform, nn.Module):
             transform = copy.deepcopy(transform)
-            move_kwargs: dict[str, object] = {}
+            move_kwargs: dict[str, Any] = {}
             if device is not None:
                 move_kwargs["device"] = device
             if dtype is not None:

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import NoReturn
+from typing import Any, Callable, NoReturn, cast
+
 
 from torch import Tensor, nn
 
@@ -31,7 +32,13 @@ def _reject_unsupported_context(model: nn.Module, method_name: str) -> NoReturn:
     )
 
 
+def _method(model: nn.Module, name: str) -> Callable[..., Any]:
+    # Duck-typed field API: torch types dynamic attributes as ``Tensor | Module``.
+    return cast(Callable[..., Any], getattr(model, name))
+
+
 def call_scalar_field_forward(
+
     model: nn.Module,
     ra: Tensor,
     dec: Tensor,
@@ -55,7 +62,7 @@ def call_render_bandpass(
     *,
     forward_context: ForwardContext | None,
 ) -> Tensor:
-    rb = model.render_bandpass
+    rb = _method(model, "render_bandpass")
     if forward_context is None:
         return rb(ra, dec, wavelengths, weights)
     if type_method_accepts_kwarg(type(model), "render_bandpass", "forward_context"):
@@ -72,7 +79,7 @@ def call_render_bandpass_distribution(
     *,
     forward_context: ForwardContext | None,
 ) -> tuple[Tensor, Tensor]:
-    rb = model.render_bandpass_distribution
+    rb = _method(model, "render_bandpass_distribution")
     if forward_context is None:
         return rb(ra, dec, wavelengths, weights)
     if type_method_accepts_kwarg(
@@ -90,7 +97,7 @@ def call_forward_distribution(
     *,
     forward_context: ForwardContext | None,
 ) -> tuple[Tensor, Tensor]:
-    fd = model.forward_distribution
+    fd = _method(model, "forward_distribution")
     if forward_context is None:
         return fd(ra, dec, wavelength)
     if type_method_accepts_kwarg(

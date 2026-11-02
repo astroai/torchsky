@@ -9,7 +9,8 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, cast
+
 
 import torch
 from torch import Tensor, nn
@@ -384,7 +385,10 @@ def _model_from_artifact_state(
             diffuse_hidden_dim=int(kwargs["diffuse_hidden_dim"]),
             diffuse_hidden_layers=int(kwargs["diffuse_hidden_layers"]),
             diffuse_omega0=float(kwargs["diffuse_omega0"]),
-            training_stage=str(kwargs["training_stage"]),
+            # Unknown stage names are rejected at runtime by ``set_training_stage``.
+            training_stage=cast(
+                Literal["diffuse", "foam", "joint"], str(kwargs["training_stage"])
+            ),
         ).to(device=device)
     return make_field_model(
         manifest.model_kind,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Sequence, cast
 
 import torch
 import torch.nn as nn
@@ -110,6 +110,7 @@ def _render_field_component_anchor_target(
     base_observation = _observation_without_background(term.observation)
     if isinstance(term.reference_model, FieldComponentDecomposition):
         if term.sample_ra_deg is not None:
+            assert term.sample_dec_deg is not None  # validated pairwise in __post_init__
             return term.reference_model.render_component_samples(
                 base_observation,
                 ra_deg=term.sample_ra_deg.to(device=device, dtype=torch.float32),
@@ -135,6 +136,7 @@ def _render_field_component_anchor_target(
             forward_context=term.forward_context,
         ).to(device=device, dtype=dtype)
     if term.sample_ra_deg is not None:
+        assert term.sample_dec_deg is not None  # validated pairwise in __post_init__
         return render_field_samples(
             term.reference_model,
             base_observation,
@@ -356,7 +358,8 @@ def field_component_centroid_anchor_loss(
             dtype=prediction.dtype,
         )
         x_grid, y_grid = _pixel_coordinate_grids(
-            tuple(prediction.shape),
+            cast(tuple[int, int], tuple(prediction.shape)),  # 2-D (H, W) image
+
             device=prediction.device,
             dtype=prediction.dtype,
         )
@@ -440,7 +443,7 @@ STRAINER_TRUNK_CHECKPOINT_FORMAT = _STRAINER_TRUNK_FORMAT
 def make_field_model(
     kind: FieldModelKind,
     domain: FieldDomain,
-    **kwargs: object,
+    **kwargs: Any,
 ) -> nn.Module:
     """Construct a field model of the requested kind on a fixed domain.
 

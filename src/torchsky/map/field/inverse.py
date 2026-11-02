@@ -8,7 +8,8 @@ import json
 import math
 from pathlib import Path
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
+
 
 import torch
 import torch.nn as nn
@@ -973,7 +974,10 @@ class LinearBandGridField(_BaseFieldModel):
             raise ValueError("spatial_bounds_local_deg must be finite")
         if bounds[0] >= bounds[1] or bounds[2] >= bounds[3]:
             raise ValueError("spatial_bounds_local_deg bounds must be increasing")
-        self.spatial_bounds_local_deg: tuple[float, float, float, float] = bounds
+        # Length was checked to be four above.
+        self.spatial_bounds_local_deg: tuple[float, float, float, float] = cast(
+            tuple[float, float, float, float], bounds
+        )
         self.band_name: str | None = (
             None
             if band_name is None or not str(band_name).strip()
@@ -1274,7 +1278,7 @@ def _compute_detector_irls_weight(
         scaled_res = scaled_res / torch.clamp(mad_scale, min=1.0)
 
     if callable(fn_spec):
-        weights = fn_spec(scaled_res, **params)
+        weights = cast(Callable[..., Tensor], fn_spec)(scaled_res, **params)
     elif fn_spec == "huber" or (fn_spec == "tukey" and convex_warmup):
         huber_params = {"delta": float(params["delta"])} if "delta" in params else {}
         weights = _tr_huber_weights(scaled_res, **huber_params)
@@ -1705,6 +1709,7 @@ def solve_linear_band_grid_cg(
             else:
                 rhs = rhs + effective_damping * sky_bg
 
+        _apply_prec: Callable[[Tensor], Tensor]
         if preconditioner == "diagonal_majorizer":
             assert stage_sens_diag is not None
             total_diag = stage_sens_diag.clone()
@@ -1719,7 +1724,7 @@ def solve_linear_band_grid_cg(
             if effective_smoothness_weight > 0.0:
                 if wx is not None or wy is not None:
                     total_diag = total_diag + effective_smoothness_weight * _grid_weighted_laplacian_diagonal_majorizer(
-                        rhs.shape,
+                        cast(tuple[int, int], rhs.shape),  # 2-D (H, W) target
                         wx,
                         wy,
                         device=rhs.device,
@@ -1740,14 +1745,18 @@ def solve_linear_band_grid_cg(
             )
             preconditioner_name = "diagonal_majorizer"
 
-            def _apply_prec(r: Tensor, _inv: Tensor = inv_diag) -> Tensor:
+            def _majorizer_prec(r: Tensor, _inv: Tensor = inv_diag) -> Tensor:
                 return r * _inv
+
+            _apply_prec = _majorizer_prec
 
         elif preconditioner is None or preconditioner == "none":
             preconditioner_name = "none"
 
-            def _apply_prec(r: Tensor) -> Tensor:
+            def _identity_prec(r: Tensor) -> Tensor:
                 return r
+
+            _apply_prec = _identity_prec
 
         elif isinstance(preconditioner, Tensor):
             preconditioner_name = "tensor_diagonal"
@@ -1760,12 +1769,16 @@ def solve_linear_band_grid_cg(
                 torch.zeros_like(diag_t),
             )
 
-            def _apply_prec(r: Tensor, _inv: Tensor = inv_diag) -> Tensor:
+            def _tensor_diag_prec(r: Tensor, _inv: Tensor = inv_diag) -> Tensor:
                 return r * _inv
 
+            _apply_prec = _tensor_diag_prec
+
         elif callable(preconditioner):
+
             preconditioner_name = "callable"
-            _apply_prec = preconditioner
+            _apply_prec = cast(Callable[[Tensor], Tensor], preconditioner)
+
         else:
             raise ValueError(f"unsupported preconditioner {preconditioner!r}")
 
@@ -2283,7 +2296,7 @@ def solve_linear_band_grid_lsqr(
         )
         adj = (
             operator_or_set.adjoint(scaled)
-            if is_set
+            if isinstance(operator_or_set, BoundObservationOperatorSet)
             else operators[0].adjoint(scaled[0])
         )
         if sqrt_damp > 0.0:
@@ -2291,7 +2304,8 @@ def solve_linear_band_grid_lsqr(
         return adj
 
     def _obs_norm(u_obs: tuple[Tensor, ...], u_reg: Tensor) -> float:
-        sq = sum(torch.sum(u.to(dtype=torch.float64).square()) for u in u_obs)
+        # ``u_obs`` holds one residual block per operator (non-empty), so the sum is a Tensor.
+        sq = cast(Tensor, sum(torch.sum(u.to(dtype=torch.float64).square()) for u in u_obs))
         if sqrt_damp > 0.0:
             sq = sq + torch.sum(u_reg.to(dtype=torch.float64).square())
         return float(torch.sqrt(sq).item())
@@ -2851,8 +2865,8 @@ def load_stationary_calibrated_band_observations(
                     or group.get("pixel_response_provenance") != prp
                 ):
                     raise ValueError(f"invalid {detector}/psf pixel-response metadata")
-                model._torchsky_pixel_response_included = True
-                model._torchsky_pixel_response_provenance = prp
+                setattr(model, "_torchsky_pixel_response_included", True)
+                setattr(model, "_torchsky_pixel_response_provenance", prp)
             else:
                 assert isinstance(model, ConditionedBackgroundField)
                 output_layer = model.network[-1]

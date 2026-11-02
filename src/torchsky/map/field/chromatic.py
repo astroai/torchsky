@@ -67,6 +67,8 @@ class ChromaticPSFField(nn.Module):
         Normaliser of the diffraction-unit coordinates (in ``lambda / D``).
     """
 
+    _offsets: Tensor
+
     def __init__(
         self,
         *,
@@ -103,8 +105,10 @@ class ChromaticPSFField(nn.Module):
             nn.Linear(48, 48), nn.SiLU(),
             nn.Linear(48, max(num_kernels - 1, 1)),
         )
-        nn.init.zeros_(self.weight_net[-1].weight)
-        nn.init.zeros_(self.weight_net[-1].bias)
+        weight_out = self.weight_net[-1]
+        assert isinstance(weight_out, nn.Linear)  # last layer built above
+        nn.init.zeros_(weight_out.weight)
+        nn.init.zeros_(weight_out.bias)
         r = torch.arange(self.size, dtype=torch.float32) - self.size // 2
         yy, xx = torch.meshgrid(r, r, indexing="ij")
         self.register_buffer("_offsets", torch.stack([xx, yy], -1).reshape(-1, 2), persistent=False)
@@ -170,7 +174,10 @@ class LogLambdaRBFBasis(nn.Module):
     ``[lam_min, lam_max]`` (a partition of unity), optionally plus a learned smooth
     correction initialised at zero."""
 
-    def __init__(self, num_basis: int, lam_min_um: float, lam_max_um: float, *, learned: bool = False) -> None:
+    centres: Tensor
+
+    def __init__(self, num_basis: int,
+ lam_min_um: float, lam_max_um: float, *, learned: bool = False) -> None:
         super().__init__()
         if num_basis < 2:
             raise ValueError("num_basis must be at least 2")
@@ -180,11 +187,14 @@ class LogLambdaRBFBasis(nn.Module):
         self.log_min, self.log_max = math.log(lam_min_um), math.log(lam_max_um)
         self.register_buffer("centres", torch.linspace(0.0, 1.0, num_basis))
         self.width = 1.0 / (num_basis - 1)
-        self.correction = None
+        self.correction: nn.Sequential | None = None
         if learned:
             self.correction = nn.Sequential(nn.Linear(2 * 6, 32), nn.SiLU(), nn.Linear(32, num_basis))
-            nn.init.zeros_(self.correction[-1].weight)
-            nn.init.zeros_(self.correction[-1].bias)
+            correction_out = self.correction[-1]
+            assert isinstance(correction_out, nn.Linear)  # last layer built above
+            nn.init.zeros_(correction_out.weight)
+            nn.init.zeros_(correction_out.bias)
+
 
     def unit(self, lam_um: Tensor) -> Tensor:
         return (torch.log(lam_um) - self.log_min) / (self.log_max - self.log_min)
@@ -211,6 +221,10 @@ class SpectralSkyField(nn.Module):
     same for a faint galaxy as for a bright one; ``"absolute"`` divides by ``scale``
     only and flattens the spectra of bright sources.
     """
+
+    nodes_um: Tensor
+    node_weights: Tensor
+
 
     def __init__(
         self,

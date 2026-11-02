@@ -130,6 +130,10 @@ def residual_tile_basis_spec_from_observation(
 class ResidualTileBasisField(_BaseFieldModel):
     """Add sparse local residual-tile basis atoms on top of a diffuse field."""
 
+    tile_centers: Tensor
+    tile_scales: Tensor
+
+
     def __init__(
         self,
         base_model: _BaseFieldModel,
@@ -138,6 +142,8 @@ class ResidualTileBasisField(_BaseFieldModel):
         learn_scales: bool = False,
     ) -> None:
         super().__init__(base_model.domain)
+        self.log_tile_scales: nn.Parameter | None
+
         if int(spec.centers.shape[0]) == 0:
             raise ValueError("ResidualTileBasisField requires at least one tile")
         if spec.centers.shape != spec.scales.shape:

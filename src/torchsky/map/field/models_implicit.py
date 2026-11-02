@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+
 
 from typing import Sequence
 import math
@@ -20,6 +21,7 @@ from ._core_helpers import (
     _reset_xavier_mlp,
     _sample_feature_volume,
 )
+from .networks import linear_at, linear_layers
 from .types import (
     FieldDomain,
 )
@@ -57,7 +59,7 @@ class ExplicitSpectralGridField(_BaseFieldModel):
                 raise ValueError("spatial_bounds_local_deg must be finite")
             if bounds[0] >= bounds[1] or bounds[2] >= bounds[3]:
                 raise ValueError("spatial_bounds_local_deg bounds must be increasing")
-            self.spatial_bounds_local_deg = bounds
+            self.spatial_bounds_local_deg = cast(tuple[float, float, float, float], bounds)  # length checked above
         self.grid = nn.Parameter(
             1.0e-3
             * torch.randn(
@@ -263,7 +265,7 @@ class SineImplicitField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         first = True
-        for layer in self.hidden:
+        for layer in linear_layers(self.hidden):
             fan_in = layer.weight.shape[1]
             if first:
                 bound = 1.0 / max(fan_in, 1)
@@ -282,7 +284,7 @@ class SineImplicitField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
         x = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom).to(
-            dtype=self.hidden[0].weight.dtype
+            dtype=linear_at(self.hidden, 0).weight.dtype
         )
         for layer in self.hidden:
             x = torch.sin(self.omega0 * layer(x))
@@ -358,6 +360,8 @@ class GaussianBasisField(_BaseFieldModel):
     PSF convolution belongs to the observation operator, not this latent field.
     The default retains the original three-dimensional basis/checkpoint layout.
     """
+
+    spectral_knots: Tensor
 
     def __init__(
         self,

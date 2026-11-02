@@ -53,6 +53,19 @@ def silu_mlp_sequential(
     return nn.Sequential(*layers)
 
 
+def linear_at(container: nn.Sequential | nn.ModuleList, index: int) -> nn.Linear:
+    """Return ``container[index]`` typed as :class:`nn.Linear` (torch types items as Module)."""
+    layer = container[index]
+    if not isinstance(layer, nn.Linear):
+        raise TypeError(f"expected nn.Linear at index {index}, got {type(layer).__name__}")
+    return layer
+
+
+def linear_layers(container: nn.Sequential | nn.ModuleList) -> list[nn.Linear]:
+    """Return every item of ``container`` typed as :class:`nn.Linear`."""
+    return [linear_at(container, index) for index in range(len(container))]
+
+
 def reset_silu_mlp_linears(sequence: nn.Sequential) -> None:
     for module in sequence:
         if type(module) is nn.Linear:
@@ -68,6 +81,9 @@ def reset_logflux_readout_linear(linear: nn.Linear) -> None:
 __all__ = [
     "ResidualMLPBlock",
     "ResidualStack",
+    "linear_at",
+    "linear_layers",
+
     "reset_logflux_readout_linear",
     "reset_silu_mlp_linears",
     "silu_mlp_sequential",

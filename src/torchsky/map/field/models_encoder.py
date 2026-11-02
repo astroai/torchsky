@@ -23,6 +23,8 @@ from ._core_helpers import (
 from .hashgrid import HashGridEncoder
 from .networks import (
     ResidualMLPBlock,
+    linear_at,
+    linear_layers,
     reset_logflux_readout_linear,
     reset_silu_mlp_linears,
     silu_mlp_sequential,
@@ -86,10 +88,10 @@ class SkyEncoderBandpassField(_BaseFieldModel):
 
     def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
         lam = (
-            wavelengths.to(dtype=self.hidden[0].weight.dtype)
+            wavelengths.to(dtype=linear_at(self.hidden, 0).weight.dtype)
             - float(self.domain.wavelength_center)
         ) / float(self.domain.wavelength_scale)
-        weights = weights.to(dtype=self.hidden[0].weight.dtype)
+        weights = weights.to(dtype=linear_at(self.hidden, 0).weight.dtype)
         weights = weights / torch.clamp(weights.sum(), min=1.0e-8)
         mean = torch.sum(weights * lam)
         centered = lam - mean
@@ -239,7 +241,7 @@ class ConditionedSpectralField(_BaseFieldModel):
     def _reset_parameters(self) -> None:
         nn.init.xavier_uniform_(self.input.weight)
         nn.init.zeros_(self.input.bias)
-        for layer in self.hidden:
+        for layer in linear_layers(self.hidden):
             nn.init.xavier_uniform_(layer.weight)
             nn.init.zeros_(layer.bias)
         for module in self.spectral_mlp:

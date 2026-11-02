@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from typing import Sequence
+from typing import Sequence, TypedDict, cast
+
 
 import torch
 import torch.nn as nn
@@ -41,6 +42,14 @@ from ...device import resolve_device
 
 if TYPE_CHECKING:
     pass
+
+
+class _RenderKwargs(TypedDict):
+    num_spectral_samples: int
+    spectral_sampling: FieldSpectralSampling
+    spectral_sampling_grid_size: int | None
+    generator: torch.Generator | None
+    forward_context: ForwardContext | None
 
 class FieldComponentDecomposition(_BaseFieldModel):
     """Explicit shared/private decomposition over multiple field models."""
@@ -209,7 +218,7 @@ class FieldComponentDecomposition(_BaseFieldModel):
         device = resolve_device(None, self)
         ra_deg, dec_deg = _coordinate_grid(
             base_observation,
-            shape=tuple(image.shape),
+            shape=cast(tuple[int, int], tuple(image.shape)),  # validated 2-D above
             device=device,
         )
         if override_wavelengths is not None or override_weights is not None:
@@ -392,7 +401,7 @@ class FieldComponentDecomposition(_BaseFieldModel):
         calibration_anchor_chunks: list[Tensor] = []
 
         for observation, forward_context in zip(observations, contexts, strict=True):
-            render_kwargs = dict(
+            render_kwargs = _RenderKwargs(
                 num_spectral_samples=num_spectral_samples,
                 spectral_sampling=spectral_sampling,
                 spectral_sampling_grid_size=spectral_sampling_grid_size,

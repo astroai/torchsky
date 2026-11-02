@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from typing import Sequence
+from typing import Callable, Sequence, cast
 
 import torch
 import torch.nn.functional as F
@@ -29,7 +29,8 @@ def observation_pixel_to_world(
 ) -> tuple[Tensor, Tensor]:
     """Map local observation pixels to sky, honoring a native detector model."""
     if observation.detector_to_sky is None:
-        return WCS(observation.header).pixel_to_world(x, y)
+        # ``WCS.pixel_to_world`` yields an (ra, dec) pair for 2-D celestial WCS.
+        return cast(tuple[Tensor, Tensor], WCS(observation.header).pixel_to_world(x, y))
     return observation.detector_to_sky.pixel_to_world(
         x + float(observation.detector_x0_pix),
         y + float(observation.detector_y0_pix),
@@ -190,6 +191,7 @@ def sample_observation_indices(
         # smaller than ``observations_per_step``).
         if full_coverage:
             return epoch_permutation(total, epoch=epoch).tolist()
+        assert observations_per_step is not None  # else full_coverage
         if int(step_in_epoch) < 0:
             raise ValueError("step_in_epoch must be non-negative")
         band_groups: dict[tuple[object, ...], list[int]] = {}
@@ -212,7 +214,9 @@ def sample_observation_indices(
         return order[start : min(start + target, total)]
     if full_coverage:
         return list(range(total))
+    assert observations_per_step is not None  # else full_coverage
     target = int(observations_per_step)
+
     if observation_sampling == "uniform":
         return torch.randperm(total, generator=generator)[:target].tolist()
     if observation_sampling != "band_balanced":
@@ -426,7 +430,8 @@ def crop_field_observation_to_shared_sky_patch(
                 "shared-sky cropping requires detector_to_sky.world_to_pixel for "
                 "non-reference native observations"
             )
-        px, py = inverse(ra_deg, dec_deg)
+        px, py = cast(Callable[..., tuple[Tensor, Tensor]], inverse)(ra_deg, dec_deg)
+
         px = px - float(observation.detector_x0_pix)
         py = py - float(observation.detector_y0_pix)
     if not (torch.isfinite(px).any() and torch.isfinite(py).any()):

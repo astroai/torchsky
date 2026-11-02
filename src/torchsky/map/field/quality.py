@@ -172,8 +172,9 @@ def _aggregate_quality_metrics(
     if not per_observation:
         return {}
     keys = sorted({key for metrics in per_observation for key in metrics})
-    weights = []
+    weights: list[float] = []
     for metrics in per_observation:
+
         weight = float(metrics.get("effective_weight_sum", 0.0))
         weights.append(max(weight, 0.0) if math.isfinite(weight) else 0.0)
     total_weight = sum(weights)

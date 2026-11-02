@@ -207,7 +207,14 @@ class SpectralPowerFoam(torch.nn.Module):
     from detached geometry for scientific inference.
     """
 
+    _minimum_radius: Tensor
+    heldout_residual_ema: Tensor
+    contribution_ema: Tensor
+    residual_position_ema: Tensor
+    evidence_updates: Tensor
+
     def __init__(
+
         self,
         sites: Tensor,
         radii: Tensor,

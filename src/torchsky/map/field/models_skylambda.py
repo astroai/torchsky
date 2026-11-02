@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Sequence, cast
 import math
 
 import torch
@@ -400,7 +400,7 @@ class SkyLambdaFeatureField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for mlp in self.scale_mlps:
-            for module in mlp:
+            for module in cast(nn.Sequential, mlp):  # each scale MLP is an nn.Sequential
                 if type(module) is nn.Linear:
                     nn.init.xavier_uniform_(module.weight)
                     nn.init.zeros_(module.bias)
@@ -872,6 +872,11 @@ class SkyLambdaFeatureField(_BaseFieldModel):
 
 
 class OperatorConstrainedFeatureField(_BaseFieldModel):
+    spectral_basis_centers: Tensor
+    spectral_basis_widths: Tensor
+    spectral_log_center: Tensor
+    spectral_log_scale: Tensor
+
     def __init__(
         self,
         domain: FieldDomain,
@@ -1045,7 +1050,7 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for mlp in self.scale_mlps:
-            for module in mlp:
+            for module in cast(nn.Sequential, mlp):  # each scale MLP is an nn.Sequential
                 if type(module) is nn.Linear:
                     nn.init.xavier_uniform_(module.weight)
                     nn.init.zeros_(module.bias)
@@ -1494,6 +1499,8 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
 
 
 class SkyLambdaAtlasField(_BaseFieldModel):
+    atlas_centers: Tensor
+
     def __init__(
         self,
         domain: FieldDomain,
@@ -1535,6 +1542,14 @@ class SkyLambdaAtlasField(_BaseFieldModel):
                 for _ in range(self.atlas_side * self.atlas_side)
             ]
         )
+
+    def _typed_experts(self) -> list[SkyLambdaKPlanesField]:
+        experts: list[SkyLambdaKPlanesField] = []
+        for expert in self.experts:
+            if not isinstance(expert, SkyLambdaKPlanesField):
+                raise TypeError(f"unexpected atlas expert type {type(expert).__name__}")
+            experts.append(expert)
+        return experts
 
     def _atlas_local_xy(self, xy: Tensor) -> Tensor:
         return _atlas_local_coords(xy, self.atlas_centers, self.atlas_side)
@@ -1599,16 +1614,16 @@ class SkyLambdaAtlasField(_BaseFieldModel):
             ra_deg,
             dec_deg,
             wavelength_angstrom,
-        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        ).to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         spatial_unit = self._spatial_unit_box_coords(
             ra_deg,
             dec_deg,
             wavelength_angstrom,
-        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        ).to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         lam = self._normalized_wavelength(
             wavelength_angstrom,
             device=ra_deg.device,
-            dtype=self.experts[0].base_output.weight.dtype,
+            dtype=self._typed_experts()[0].base_output.weight.dtype,
             shape=ra_deg.shape,
         )
         lam_unit = 0.5 * (torch.tanh(lam) + 1.0)
@@ -1626,7 +1641,7 @@ class SkyLambdaAtlasField(_BaseFieldModel):
                         local_xys[..., expert_idx, :],
                     )
                 )
-                for expert_idx, expert in enumerate(self.experts)
+                for expert_idx, expert in enumerate(self._typed_experts())
             ],
             dim=-1,
         )
@@ -1639,26 +1654,26 @@ class SkyLambdaAtlasField(_BaseFieldModel):
         wavelengths: Tensor,
         weights: Tensor,
     ) -> Tensor:
-        norm_weights = weights.to(dtype=self.experts[0].base_output.weight.dtype)
+        norm_weights = weights.to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
         spatial_raw = self._spatial_coords(
             ra_deg,
             dec_deg,
             float(wavelengths[0].item()),
-        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        ).to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         spatial_unit = self._spatial_unit_box_coords(
             ra_deg,
             dec_deg,
             float(wavelengths[0].item()),
-        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        ).to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         local_xys = self._atlas_local_xy(spatial_unit[..., :2])
         atlas_weights = self._atlas_weights(
             ra_deg,
             dec_deg,
             float(wavelengths[0].item()),
-        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        ).to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         mixed_expert_hiddens: list[Tensor] = []
-        for expert_idx, expert in enumerate(self.experts):
+        for expert_idx, expert in enumerate(self._typed_experts()):
             per_lambda_hidden = []
             for wavelength in wavelengths:
                 lam = expert._normalized_wavelength(
@@ -1690,7 +1705,7 @@ class SkyLambdaAtlasField(_BaseFieldModel):
             [
                 expert._decode_hidden(hidden)
                 for expert, hidden in zip(
-                    self.experts, mixed_expert_hiddens, strict=True
+                    self._typed_experts(), mixed_expert_hiddens, strict=True
                 )
             ],
             dim=-1,
@@ -1699,6 +1714,8 @@ class SkyLambdaAtlasField(_BaseFieldModel):
 
 
 class SkyLambdaFeatureAtlasField(_BaseFieldModel):
+    atlas_centers: Tensor
+
     def __init__(
         self,
         domain: FieldDomain,
@@ -1752,6 +1769,14 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
                 for _ in range(self.atlas_side * self.atlas_side)
             ]
         )
+
+    def _typed_experts(self) -> list[SkyLambdaFeatureField]:
+        experts: list[SkyLambdaFeatureField] = []
+        for expert in self.experts:
+            if not isinstance(expert, SkyLambdaFeatureField):
+                raise TypeError(f"unexpected atlas expert type {type(expert).__name__}")
+            experts.append(expert)
+        return experts
 
     def _atlas_local_xy(self, xy: Tensor) -> Tensor:
         return _atlas_local_coords(xy, self.atlas_centers, self.atlas_side)
@@ -1855,18 +1880,18 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
             ra_deg,
             dec_deg,
             reference_wavelength,
-        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        ).to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         spatial_unit = self._spatial_unit_box_coords(
             ra_deg,
             dec_deg,
             reference_wavelength,
-        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        ).to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         local_xys = self._atlas_local_xy(spatial_unit[..., :2])
         atlas_weights = self._atlas_weights(
             ra_deg,
             dec_deg,
             reference_wavelength,
-        ).to(dtype=self.experts[0].base_output.weight.dtype)
+        ).to(dtype=self._typed_experts()[0].base_output.weight.dtype)
         preds = torch.stack(
             [
                 self._expert_prediction(
@@ -1877,7 +1902,7 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
                     wavelengths,
                     weights,
                 )
-                for expert_idx, expert in enumerate(self.experts)
+                for expert_idx, expert in enumerate(self._typed_experts())
             ],
             dim=-1,
         )
@@ -1889,7 +1914,7 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
-        dtype = self.experts[0].base_output.weight.dtype
+        dtype = self._typed_experts()[0].base_output.weight.dtype
         spatial_raw = self._spatial_coords(
             ra_deg,
             dec_deg,
@@ -1908,7 +1933,7 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
         ).to(dtype=dtype)
         one_weight = torch.ones(1, device=spatial_raw.device, dtype=dtype)
         preds = []
-        for expert_idx, expert in enumerate(self.experts):
+        for expert_idx, expert in enumerate(self._typed_experts()):
             lam = expert._normalized_wavelength(
                 wavelength_angstrom,
                 device=spatial_raw.device,

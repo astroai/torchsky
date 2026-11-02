@@ -8,7 +8,7 @@ remain float32 because MPS cannot represent absolute sky coordinates in float64.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any, Literal
+from typing import Any, Callable, Literal, cast
 
 import torch
 import torch.nn as nn
@@ -473,7 +473,7 @@ def _apply_observation_background(
             output,
             **observation_background_components(
                 observation,
-                shape=tuple(output.shape),
+                shape=cast(tuple[int, int], tuple(output.shape)),  # 2-D (H, W) image
                 device=output.device,
                 dtype=output.dtype,
             ),
@@ -614,7 +614,7 @@ def _render_spatially_integrated_distribution(
             output_mean,
             **observation_background_components(
                 observation,
-                shape=tuple(output_mean.shape),
+                shape=cast(tuple[int, int], tuple(output_mean.shape)),  # 2-D (H, W) image
                 device=output_mean.device,
                 dtype=output_mean.dtype,
             ),
@@ -717,7 +717,7 @@ def render_field_observation_distribution(
         )
     ra_deg, dec_deg = _coordinate_grid(
         observation,
-        shape=tuple(image.shape),
+        shape=cast(tuple[int, int], tuple(image.shape)),  # 2-D (H, W) image
         device=device,
     )
     ra_deg, dec_deg = _apply_exposure_pose_to_sky_grid(
@@ -778,7 +778,7 @@ def render_field_observation_distribution(
             mean,
             **observation_background_components(
                 observation,
-                shape=tuple(mean.shape),
+                shape=cast(tuple[int, int], tuple(mean.shape)),  # 2-D (H, W) image
                 device=mean.device,
                 dtype=mean.dtype,
             ),
@@ -959,7 +959,7 @@ def render_field_observation(
     if spatial_sampling == "center":
         ra_deg, dec_deg = _coordinate_grid(
             observation,
-            shape=tuple(image.shape),
+            shape=cast(tuple[int, int], tuple(image.shape)),  # 2-D (H, W) image
             device=device,
         )
         center_coordinates = _apply_exposure_pose_to_sky_grid(
@@ -1196,7 +1196,11 @@ def render_spectral_power_foam_observation_exact(
         raise TypeError(
             "model must provide normalized_spatial_coordinates and render_exact"
         )
+    # Duck-typed exact-render API; both return tensors.
+    normalized_spatial_coordinates = cast(Callable[..., Tensor], normalized_spatial_coordinates)
+    render_exact = cast(Callable[..., Tensor], render_exact)
     device = resolve_device(None, model)
+
     height, width = _header_shape(
         observation.header,
         fallback=(int(observation.image.shape[-2]), int(observation.image.shape[-1])),

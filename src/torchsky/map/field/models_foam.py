@@ -45,6 +45,8 @@ class SpectralPowerFoamField(_BaseFieldModel):
     wavelength, avoiding poorly conditioned raw powers for broad bandpasses.
     """
 
+    _spectral_basis_transform: Tensor
+
     def __init__(
         self,
         domain: FieldDomain,
@@ -334,6 +336,8 @@ class DiffuseFoamHybridField(_BaseFieldModel):
     """
 
     _STAGES = {"diffuse": 0, "foam": 1, "joint": 2}
+    _training_stage_code: Tensor
+
 
     def __init__(
         self,

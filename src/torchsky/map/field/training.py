@@ -8,7 +8,7 @@ import math
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn as nn
@@ -309,7 +309,7 @@ def fit_field_component_decomposition(
     observation_forward_contexts: Sequence[ForwardContext | None] | None = None,
     dtype: torch.dtype = torch.float32,
     device: torch.device | str | None = None,
-    **fit_kwargs: object,
+    **fit_kwargs: Any,
 ) -> FieldFitResult:
     """Construct and fit a field decomposition model on context-labeled observations."""
     if model is not None:
@@ -1990,6 +1990,7 @@ def fit_field_model(
                 global_weight_sum, min=1.0e-8
             )
             total_loss = 0.5 * (band_loss + global_loss)
+        assert total_loss is not None  # every reduction above assigns it
         if (
             training_spectral_sampling == "mixture_mc"
             and anchor_count > 0
@@ -2238,6 +2239,7 @@ def fit_field_model(
         if spectral_penalty_weight > 0.0:
             spectral_penalty_fn = getattr(model, "spectral_observability_penalty", None)
             if callable(spectral_penalty_fn):
+                spectral_penalty_fn = cast(Callable[..., Tensor], spectral_penalty_fn)
                 spectral_penalty = spectral_penalty_fn(
                     observations,
                     probe_grid_size=spectral_penalty_grid,
@@ -2256,6 +2258,8 @@ def fit_field_model(
         if residual_penalty_weight > 0.0:
             residual_penalty_fn = getattr(model, "residual_head_penalty", None)
             if callable(residual_penalty_fn):
+                residual_penalty_fn = cast(Callable[..., Tensor], residual_penalty_fn)
+
                 residual_penalty = residual_penalty_fn()
                 scaled_residual_penalty = residual_penalty_weight * residual_penalty
                 if streaming_accumulation:

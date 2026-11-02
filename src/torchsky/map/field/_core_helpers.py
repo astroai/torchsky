@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import math
 import time
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence, cast
 
 import torch
 import torch.nn as nn
@@ -459,6 +459,8 @@ def save_strainer_trunk_checkpoint(
         raise TypeError(
             "model must implement trunk_state_dict() (e.g. StrainerSkyEncoderMLPField)"
         )
+    trunk_fn = cast(Callable[[], Mapping[str, Tensor]], trunk_fn)  # duck-typed trunk API
+
     payload: dict[str, object] = {
         "format": _STRAINER_TRUNK_FORMAT,
         "trunk": {k: v.detach().cpu() for k, v in trunk_fn().items()},
@@ -512,6 +514,7 @@ def pretrain_strainer_trunk_synthetic(
     steps = max(int(steps), 0)
     if steps == 0:
         return None
+    kinds: tuple[FieldNoisePretrainKind, ...]
     if noise_kinds is not None:
         kinds = tuple(k for k in noise_kinds if k != "none")
         if not kinds:
@@ -520,6 +523,7 @@ def pretrain_strainer_trunk_synthetic(
             )
     else:
         if noise_kind == "none":
+
             raise ValueError(
                 "noise_kind must not be 'none' for synthetic trunk pretraining"
             )

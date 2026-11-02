@@ -88,7 +88,9 @@ def _field_residual_loss(
             + torch.log(total_variance)
         )
         if observation_invvar is not None:
+            assert valid_invvar is not None
             loss = torch.where(valid_invvar, loss, torch.zeros_like(loss))
+
     elif loss_kind == "structured_nll":
         raise ValueError(
             "structured_nll requires a full FieldObservation and StructuredNoiseOp"
