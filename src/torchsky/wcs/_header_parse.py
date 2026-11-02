@@ -121,6 +121,20 @@ class _HeaderParseMixin:
                     self._header_get(header, f"CUNIT{i}", "")
                 )
 
+    def _supported_celestial_codes(self) -> frozenset[str]:
+        # TAB: celestial axes backed by -TAB lookup tables.
+        return frozenset(
+            self.ZENITHAL_CODES
+            + self.CYLINDRICAL_CODES
+            + self.ALLSKY_CODES
+            + self.CONIC_CODES
+            + self.POLYCONIC_CODES
+            + self.QUADCUBE_CODES
+            + self.PSEUDOCYLINDRICAL_CODES
+            + self.SPECIAL_CODES
+            + ("TAB",)
+        )
+
     def _identify_celestial_axes(self) -> None:
         longitude = []
         latitude = []
@@ -152,6 +166,16 @@ class _HeaderParseMixin:
         if lon_code != lat_code:
             raise ValueError(
                 "celestial longitude and latitude axes must use the same projection code"
+            )
+        supported = self._supported_celestial_codes()
+        if lon_code not in supported:
+            raise ValueError(
+                "unsupported celestial projection "
+                f"{lon_code!r} in CTYPE{lon_axis + 1}="
+                f"{self.wcs_params.get(f'CTYPE{lon_axis + 1}', '')!r} and "
+                f"CTYPE{lat_axis + 1}="
+                f"{self.wcs_params.get(f'CTYPE{lat_axis + 1}', '')!r}; "
+                f"supported projection codes: {', '.join(sorted(supported))}"
             )
         self._has_celestial = True
         self._celestial_lon_axis = lon_axis

@@ -32,7 +32,7 @@ namespaces keep imports light: they load on first access.
 | `torchsky.catalogs` | core | [reference](catalogs.md) |
 | `torchsky.coords` | core | [reference](coords.md) |
 | `torchsky.cosmology` | core | [reference](cosmology.md) |
-| `torchsky.encoders` | core | [reference](encoders.md) |
+| `torchsky.encoders` | experimental | [reference](encoders.md) |
 | `torchsky.extinction` | core | [reference](extinction.md) |
 | `torchsky.field` | experimental | [reference](field.md) |
 | `torchsky.log_lambda` | core | [reference](log-lambda.md) |

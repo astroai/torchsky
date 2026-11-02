@@ -1,4 +1,8 @@
-"""Coordinate-aware encoders for implicit sky models."""
+"""Coordinate-aware encoders for implicit sky models.
+
+Note:
+This module is experimental; its API may change between releases.
+"""
 
 from __future__ import annotations
 

@@ -4,8 +4,8 @@ Implements 1D spectra with inverse variance/mask arrays and 3D data cubes
 for IFU instruments and radio astronomy.
 
 Note:
-This module is an experimental helper layer built on top of torchsky FITS I/O.
-It is not part of the core FITS read/write parity surface.
+This is a core torchsky module. FITS file I/O is owned by ``torchfits``;
+spectra and cubes here operate on in-memory tensors and header mappings.
 """
 
 from __future__ import annotations

@@ -2,7 +2,10 @@
 
 # `torchsky.encoders`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
+!!! warning "Experimental surface"
+    These APIs are under active development. Names, defaults, and result
+    objects may change between minor releases; pin a version if you depend
+    on them in production.
 
 Coordinate-aware encoders for implicit sky models.
 

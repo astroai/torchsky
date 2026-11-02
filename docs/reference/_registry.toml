@@ -267,7 +267,7 @@ related = ["spectra/spectral-axes.md"]
 [[namespace]]
 name = "torchsky.encoders"
 slug = "encoders"
-tier = "core"
+tier = "experimental"
 related = ["models/encoders.md"]
 
 [[namespace]]

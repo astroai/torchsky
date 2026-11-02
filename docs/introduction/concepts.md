@@ -226,7 +226,7 @@ assert torch.equal(matches.left_index, matches.right_index)
 | Celestial frame | ICRS unless a frame is given. Conversions are explicit calls. |
 | HEALPix | RING ordering by default, `nest=True` for NESTED; `lonlat=True` means degrees, otherwise `(theta, phi)` colatitude and longitude in radians, as in healpy. |
 | Headers | Plain `dict` of FITS keywords, as returned by torchfits. |
-| Masks and weights | Stated by each function: a weight is inverse variance only when declared so. |
+| Masks and weights | Weights are relative by default; pass `weight_is_inverse_variance=True` when they are inverse variances. |
 
 <!-- docs: run -->
 ```python

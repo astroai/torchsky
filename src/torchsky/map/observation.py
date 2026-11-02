@@ -32,7 +32,8 @@ class ImageObservation:
         weight: Scalar exposure weight.
         photometric_scale: Multiplicative flux calibration.
         background_offset: Additive background removed before resampling.
-        weight_map: Optional per-pixel weight or inverse-variance tensor.
+        weight_map: Optional per-pixel relative weight tensor (an inverse
+            variance only when ``weight_is_inverse_variance=True``).
         mask: Optional Boolean valid-pixel mask.
 
     Examples:
