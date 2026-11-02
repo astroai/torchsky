@@ -31,7 +31,7 @@ reference pages carry the contracts.
 
 | Namespace | Tier | Names | Reference |
 |---|---|---|---|
-| `torchsky` | core | 17 | [reference](torchsky.md) |
+| `torchsky` | core | 18 | [reference](torchsky.md) |
 | `torchsky.catalogs` | core | 34 | [reference](catalogs.md) |
 | `torchsky.coords` | core | 16 | [reference](coords.md) |
 | `torchsky.cosmology` | core | 18 | [reference](cosmology.md) |
@@ -45,7 +45,7 @@ reference pages carry the contracts.
 | `torchsky.spectrophotometry` | core | 10 | [reference](spectrophotometry.md) |
 | `torchsky.sphere` | core | 134 | [reference](sphere.md) |
 | `torchsky.transforms` | core | 20 | [reference](transforms.md) |
-| `torchsky.wcs` | core | 139 | [reference](wcs.md) |
+| `torchsky.wcs` | core | 140 | [reference](wcs.md) |
 | `torchsky.field` | experimental | 52 | [reference](field.md) |
 | `torchsky.filter_profiles` | experimental | 6 | [reference](filter-profiles.md) |
 | `torchsky.map.evidence` | experimental | 1 | [reference](map-evidence.md) |

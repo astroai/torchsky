@@ -5,6 +5,7 @@ for forward (pixel->world) and inverse (world->pixel) directions.
 """
 
 import os
+import platform
 import numpy as np
 import pytest
 import torch
@@ -226,3 +227,41 @@ def test_csc_s2x_x2s_cuda_matches_cpu():
             # Off-face samples are NaN on both devices; transcendental kernels may
             # still differ by an ulp, far below the 3.6e-3 arcsec release gate.
             torch.testing.assert_close(b.cpu(), a, rtol=0.0, atol=1e-10, equal_nan=True)
+
+
+# torchsky never fuses a*b+c (identical results on every platform). Baseline
+# x86-64 WCSLIB builds do not fuse either and match exactly; AArch64 builds (macOS
+# arm64 astropy wheels) fuse, which moves a float32 step by one ulp: 45 * 2**-22 deg
+# (plane coordinate up to 8 face units) and ~5e-6 deg on the sphere.
+_EXACT = platform.machine().lower() in ("x86_64", "amd64")
+ATOL_FWD = 1e-10 if _EXACT else 2.5e-5
+ATOL_INV = 1e-10 if _EXACT else 6e-6
+
+
+def test_csc_matches_wcslib_float32_semantics_on_every_face():
+    """CSC reproduces WCSLIB's float32 polynomials and float32 face-offset sums.
+
+    Before, the plane coordinate was formed in float64 (``45 * xf`` + offset) and
+    differed from WCSLIB by up to 2e-5 deg on the non-base faces.
+    """
+    astropy_wcs = pytest.importorskip("astropy.wcs")
+    prj = astropy_wcs.Prjprm()
+    prj.code = "CSC"
+    prj.set()
+    rng = np.random.default_rng(1)
+    phi = rng.uniform(-180.0, 180.0, 5000)
+    theta = rng.uniform(-90.0, 90.0, 5000)
+    xw, yw = prj.prjs2x(phi, theta)
+    xi, eta = quadcube._csc_s2x(torch.from_numpy(phi), torch.from_numpy(theta))
+    np.testing.assert_allclose(xi.numpy(), xw, rtol=0, atol=ATOL_FWD)
+    np.testing.assert_allclose(eta.numpy(), yw, rtol=0, atol=ATOL_FWD)
+    x = rng.uniform(-45.0, 315.0, 5000)
+    y = rng.uniform(-135.0, 135.0, 5000)
+    pw, tw = prj.prjx2s(x, y)
+    p, t = quadcube._csc_x2s(torch.from_numpy(x), torch.from_numpy(y))
+    ok = np.isfinite(pw)
+    assert np.array_equal(np.isfinite(p.numpy()), ok)
+    np.testing.assert_allclose(
+        _ra_wrap_delta(p.numpy()[ok], pw[ok]), 0.0, rtol=0, atol=ATOL_INV
+    )
+    np.testing.assert_allclose(t.numpy()[ok], tw[ok], rtol=0, atol=ATOL_INV)

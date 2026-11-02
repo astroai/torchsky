@@ -18,6 +18,7 @@ namespaces keep imports light: they load on first access.
 ::: torchsky
     options:
       members:
+        - PrecisionWarning
         - WCS
       heading_level: 3
       show_root_heading: false

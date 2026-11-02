@@ -65,7 +65,11 @@ from .residuals import (
     predict_bayesian_modes,
     update_bayesian_modes,
 )
-from .core import DistortionLookupTable as DistortionLookupTable, WCS as WCS
+from .core import (
+    DistortionLookupTable as DistortionLookupTable,
+    PrecisionWarning as PrecisionWarning,
+    WCS as WCS,
+)
 from .detector_astrometry import (
     AffineFreeResidualGrid2D,
     DetectorToSkyTransform,
@@ -249,6 +253,7 @@ __all__ = [
     "WCSMapping",
     "air_wavelength_to_vacuum",
     "CelestialFrameBiasWarning",
+    "PrecisionWarning",
     "convert_celestial",
     "convert_spectral",
     "ecliptic_to_icrs",

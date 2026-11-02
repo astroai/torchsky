@@ -89,10 +89,15 @@ def project_zenithal(
             sqrt_disc = torch.sqrt(torch.clamp(disc, min=0.0))
             z = (-bb + sqrt_disc) / aa
             valid = valid & (z >= -1.0) & (z <= 1.0)
-            x_comp = x0 + a * z
-            y_comp = y0 + b * z
+            # 1 - z = r^2 / (aa + bb + sqrt(disc)) exactly (from the quadratic), which
+            # keeps the slant components and theta accurate as r -> 0, where
+            # asin(z) near 1 would lose half the digits.
+            omz = (x * x + y * y) / (aa + bb + sqrt_disc)
+            z = 1.0 - omz
+            x_comp = x - a * omz
+            y_comp = y - b * omz
             phi = torch.atan2(-x_comp, -y_comp) * R2D
-            theta = torch.asin(torch.clamp(z, -1.0, 1.0)) * R2D
+            theta = torch.atan2(z, torch.hypot(x_comp, y_comp)) * R2D
             theta = theta.masked_fill(~valid, float("nan"))
             phi = phi.masked_fill(~valid, float("nan"))
         else:
@@ -510,7 +515,6 @@ def deproject_zenithal(
         safe_tan = torch.where(tan_xi == 0.0, torch.ones_like(tan_xi), tan_xi)
         r_large = -(w0 * (torch.log(cos_xi) / safe_tan + w1 * tan_xi))
         r = torch.where(xi_half.abs() < w4, r_small, r_large)
-        r = torch.where(safe_theta == 90.0, torch.zeros_like(theta), r)
         r = torch.where(valid, r, torch.full_like(r, float("nan")))
         # Torchsky zenithal convention: xi = -x = -r*sin(phi)
         xi = -r * sin_phi

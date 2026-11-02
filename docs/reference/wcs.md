@@ -119,6 +119,7 @@ namespace `torchsky.wcs` unless the group text says otherwise.
     options:
       members:
         - DistortionLookupTable
+        - PrecisionWarning
         - WCS
       heading_level: 3
       show_root_heading: false

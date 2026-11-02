@@ -17,6 +17,7 @@ from typing import (
 )
 import math
 import os
+import warnings
 import numpy as np
 
 from torchsky import _ops
@@ -241,6 +242,27 @@ def _coerce_distortion_lookup_table(
     raise TypeError(
         "distortion lookup table must be a DistortionLookupTable or compatible object"
     )
+
+
+class PrecisionWarning(UserWarning):
+    """A WCS runs in float32 (MPS) with an expected error of half a pixel or more.
+
+    MPS has no float64. The warning is emitted once per WCS when the expected
+    float32 position error, ``(ulp32(world) / pixel scale) + ulp32(pixel extent)``
+    in pixels, reaches 0.5 pixel: beyond that the nearest pixel can no longer be
+    identified reliably. Use CPU or CUDA (float64) for such grids.
+    """
+
+
+# Half a pixel is where rounding a coordinate to the nearest pixel centre starts to
+# pick the wrong pixel, so float32 can no longer represent the grid.
+_MPS_PIXEL_IDENTIFICATION_LIMIT_PX = 0.5
+
+
+def _float32_ulp(x: float) -> float:
+    """Spacing of float32 values at ``x`` (> 0)."""
+    t = torch.tensor(float(x), dtype=torch.float32)
+    return float(torch.nextafter(t, torch.tensor(float("inf"))) - t)
 
 
 class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
@@ -968,6 +990,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             dtype = self._wcs_coord_dtype(self.device)
             return torch.as_tensor(value, device=self.device, dtype=dtype)
         if value.device.type == "mps":
+            self._warn_mps_precision()
             return value.to(dtype=torch.float32)
         dtype = self._wcs_coord_dtype(value.device)
         out = value if value.dtype == dtype else value.to(dtype=dtype)
@@ -1472,25 +1495,31 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         # LONPOLE / LATPOLE
         # Paper II: LONPOLE defaults to 0 if delta_0 >= theta_0, else 180.
         # PV{lon}_3 / PV{lon}_4 are LONPOLE / LATPOLE; PV{lon}_1 / PV{lon}_2 are the
-        # native fiducial point (phi_0, theta_0), which is not implemented.
+        # native fiducial point (phi_0, theta_0) handled below.
         pj = self._projection_params
         # Bonne's native fiducial point is (0, 0): its y-offset puts the origin there.
         cel_theta0 = 0.0 if self._proj_code == "BON" else self._theta0
+        # Native fiducial point (phi_0, theta_0) = (PV1_1, PV1_2) (Paper II 2.5,
+        # WCSLIB celset): it is the native point mapped to CRVAL and fixes the
+        # Euler angles / default LONPOLE. Like WCSLIB with ``cel.offset = 0`` the
+        # projection origin (x, y) = (0, 0) is not shifted onto it.
+        self._fiducial_override = False
+        phi0_cel = 0.0
+        theta0_cel = cel_theta0
         if self._has_celestial and not (
             self._is_tpv or self._proj_code in ("HPX", "SFL", "GLS", "TPV")
         ):
-            for key, default in (("PV1_1", 0.0), ("PV1_2", self._theta0)):
-                if key in pj and float(pj[key]) != default:
-                    raise NotImplementedError(
-                        f"{key} (native fiducial point phi_0/theta_0) differs from "
-                        f"the {self._proj_code} default; not supported"
-                    )
+            if "PV1_1" in pj:
+                phi0_cel = float(pj["PV1_1"])
+            if "PV1_2" in pj:
+                theta0_cel = float(pj["PV1_2"])
+            self._fiducial_override = phi0_cel != 0.0 or theta0_cel != cel_theta0
         if "LONPOLE" in self.wcs_params:
             lonpole = float(self.wcs_params["LONPOLE"])
         elif "PV1_3" in pj:
             lonpole = float(pj["PV1_3"])
         else:
-            lonpole = _celprm.default_lonpole(self.delta0, cel_theta0)
+            lonpole = _celprm.default_lonpole(self.delta0, theta0_cel, phi0_cel)
         if "LATPOLE" in self.wcs_params:
             latpole = float(self.wcs_params["LATPOLE"])
         elif "PV1_4" in pj:
@@ -1590,11 +1619,14 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             _celprm.celestial_correction(
                 self.alpha0,
                 self.delta0,
-                cel_theta0,
+                theta0_cel,
                 lonpole,
                 latpole,
                 exist_lonpole,
                 exist_matrix,
+                phi0=phi0_cel,
+                exist_theta0=cel_theta0,
+                force=self._fiducial_override,
             )
             if self._has_celestial
             else None
@@ -2702,6 +2734,140 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         theta.masked_fill_(~valid, float("nan"))
         return phi, theta
 
+    def _native_to_intermediate(
+        self, phi: Tensor, theta: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        """Native spherical (phi, theta) to intermediate (xi, eta), default fiducial."""
+        xi, eta = phi, theta
+        if (
+            self._is_tan
+            or self._is_tpv
+            or self._is_tnx
+            or self._is_arc
+            or self._is_zea
+            or self._is_stg
+        ):
+            phi_rad = phi * self._d2r
+            sin_phi, cos_phi = _sincos(phi_rad)
+            if self._is_tan or self._is_tpv or self._is_tnx:
+                r = self._r2d * torch.tan((90.0 - theta) * self._d2r)
+            elif self._is_arc:
+                r = 90.0 - theta
+            elif self._is_zea:
+                w = (90.0 - theta) * self._d2r
+                r = 2.0 * self._r2d * torch.sin(0.5 * w)
+            else:
+                w = (90.0 - theta) * self._d2r
+                r = 2.0 * self._r2d * torch.tan(0.5 * w)
+            xi = -r * sin_phi
+            eta = -r * cos_phi
+            if self._is_tan or self._is_tpv or self._is_tnx:
+                valid = (
+                    torch.isfinite(theta)
+                    & (theta > 64.0 * torch.finfo(theta.dtype).eps * self._r2d)
+                    & (theta <= 90.0 + 1e-12)
+                )
+            elif self._is_arc:
+                valid = torch.isfinite(theta) & (theta >= -90.0) & (theta <= 90.0)
+            else:
+                valid = torch.ones_like(theta, dtype=torch.bool)
+            nan = torch.full_like(theta, float("nan"))
+            xi = torch.where(valid, xi, nan)
+            eta = torch.where(valid, eta, nan)
+        elif self._is_sin:
+            xi, eta = deproject_zenithal(phi, theta, "SIN", None, self._pv2_tensor)
+        elif self._is_ait:
+            xi, eta = deproject_allsky(phi, theta, "AIT")
+        elif self._is_mol:
+            xi, eta = deproject_allsky(phi, theta, "MOL")
+        elif self._is_hpx:
+            phi_w = _wrap_lon180(phi)
+            s_theta = torch.sin(theta * self._d2r)
+            abs_s = torch.abs(s_theta)
+            mask_eq = abs_s <= self._hpx_transition_sin
+            sigma = torch.sqrt(torch.clamp(self._hpx_k * (1.0 - abs_s), min=0.0))
+            eta_pol = torch.sign(s_theta) * (
+                self._hpx_eta_pole - self._hpx_facet_half_width * sigma
+            )
+            facet_offset = torch.full_like(phi_w, self._hpx_facet_half_width)
+            if self._hpx_k % 2.0 == 0.0:
+                facet_offset = torch.where(
+                    s_theta < 0.0, torch.zeros_like(phi_w), facet_offset
+                )
+            xc = (
+                torch.floor(
+                    (phi_w + 180.0 - facet_offset + self._hpx_facet_half_width)
+                    / self._hpx_facet_spacing
+                )
+                * self._hpx_facet_spacing
+                - 180.0
+                + facet_offset
+            )
+            xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
+            eta = torch.where(mask_eq, self._hpx_eta_scale * s_theta, eta_pol)
+        elif (
+            self._is_cea or self._is_mer or self._is_cyp or self._is_car or self._is_sfl
+        ):
+            xi, eta = self._cylindrical_native_to_intermediate(phi, theta)
+        elif self._is_zpn:
+            if self._is_zpn_linear:
+                phi_w = _wrap_lon180(phi)
+                r = 90.0 - theta
+                phi_rad = phi_w * self._d2r
+                sin_phi, cos_phi = _sincos(phi_rad)
+                xi = -r * sin_phi
+                eta = -r * cos_phi
+            else:
+                xi, eta = deproject_zenithal(phi, theta, "ZPN", None, self._pv2_tensor)
+        elif (
+            self._proj_code in self.CONIC_CODES
+            or self._proj_code in self.POLYCONIC_CODES
+        ):
+            xi, eta = deproject_conic(
+                phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+            )
+        elif self._proj_code in self.QUADCUBE_CODES:
+            xi, eta = deproject_quadcube(phi, theta, self._proj_code)
+        elif self._proj_code == "XPH":
+            xi, eta = deproject_allsky(
+                phi, theta, "XPH", self._pv1_tensor, self._pv2_tensor
+            )
+        elif self._proj_code == "PAR":
+            xi, eta = deproject_allsky(
+                phi, theta, "PAR", self._pv1_tensor, self._pv2_tensor
+            )
+        elif self._proj_code in ("AZP", "SZP", "AIR"):
+            xi, eta = deproject_zenithal(
+                phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+            )
+        elif self._is_zpx:
+            xi, eta = deproject_zpx(phi, theta, self._projection_params, self.wat_data)
+        else:
+            # Fallback: dispatch to the appropriate deproject function.
+            if self._project_native_kind == "zenithal":
+                xi, eta = deproject_zenithal(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+            elif self._project_native_kind == "cylindrical":
+                xi, eta = deproject_cylindrical(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+            elif self._project_native_kind == "allsky":
+                xi, eta = deproject_allsky(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+            elif self._project_native_kind == "conic":
+                xi, eta = deproject_conic(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+            elif self._project_native_kind == "quadcube":
+                xi, eta = deproject_quadcube(phi, theta, self._proj_code)
+            else:
+                xi, eta = deproject_zenithal(
+                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                )
+        return xi, eta
+
     def _world_to_pixel_2d_core(
         self,
         ra: Tensor,
@@ -2748,141 +2914,7 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
                 )
 
             # 2. Inverse Projection (Native -> Intermediate)
-            if (
-                self._is_tan
-                or self._is_tpv
-                or self._is_tnx
-                or self._is_arc
-                or self._is_zea
-                or self._is_stg
-            ):
-                phi_rad = phi * self._d2r
-                sin_phi, cos_phi = _sincos(phi_rad)
-                if self._is_tan or self._is_tpv or self._is_tnx:
-                    r = self._r2d * torch.tan((90.0 - theta) * self._d2r)
-                elif self._is_arc:
-                    r = 90.0 - theta
-                elif self._is_zea:
-                    w = (90.0 - theta) * self._d2r
-                    r = 2.0 * self._r2d * torch.sin(0.5 * w)
-                else:
-                    w = (90.0 - theta) * self._d2r
-                    r = 2.0 * self._r2d * torch.tan(0.5 * w)
-                xi = -r * sin_phi
-                eta = -r * cos_phi
-                if self._is_tan or self._is_tpv or self._is_tnx:
-                    valid = (
-                        torch.isfinite(theta)
-                        & (theta > 64.0 * torch.finfo(theta.dtype).eps * self._r2d)
-                        & (theta <= 90.0 + 1e-12)
-                    )
-                elif self._is_arc:
-                    valid = torch.isfinite(theta) & (theta >= -90.0) & (theta <= 90.0)
-                else:
-                    valid = torch.ones_like(theta, dtype=torch.bool)
-                nan = torch.full_like(theta, float("nan"))
-                xi = torch.where(valid, xi, nan)
-                eta = torch.where(valid, eta, nan)
-            elif self._is_sin:
-                xi, eta = deproject_zenithal(phi, theta, "SIN", None, self._pv2_tensor)
-            elif self._is_ait:
-                xi, eta = deproject_allsky(phi, theta, "AIT")
-            elif self._is_mol:
-                xi, eta = deproject_allsky(phi, theta, "MOL")
-            elif self._is_hpx:
-                phi_w = _wrap_lon180(phi)
-                s_theta = torch.sin(theta * self._d2r)
-                abs_s = torch.abs(s_theta)
-                mask_eq = abs_s <= self._hpx_transition_sin
-                sigma = torch.sqrt(torch.clamp(self._hpx_k * (1.0 - abs_s), min=0.0))
-                eta_pol = torch.sign(s_theta) * (
-                    self._hpx_eta_pole - self._hpx_facet_half_width * sigma
-                )
-                facet_offset = torch.full_like(phi_w, self._hpx_facet_half_width)
-                if self._hpx_k % 2.0 == 0.0:
-                    facet_offset = torch.where(
-                        s_theta < 0.0, torch.zeros_like(phi_w), facet_offset
-                    )
-                xc = (
-                    torch.floor(
-                        (phi_w + 180.0 - facet_offset + self._hpx_facet_half_width)
-                        / self._hpx_facet_spacing
-                    )
-                    * self._hpx_facet_spacing
-                    - 180.0
-                    + facet_offset
-                )
-                xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
-                eta = torch.where(mask_eq, self._hpx_eta_scale * s_theta, eta_pol)
-            elif (
-                self._is_cea
-                or self._is_mer
-                or self._is_cyp
-                or self._is_car
-                or self._is_sfl
-            ):
-                xi, eta = self._cylindrical_native_to_intermediate(phi, theta)
-            elif self._is_zpn:
-                if self._is_zpn_linear:
-                    phi_w = _wrap_lon180(phi)
-                    r = 90.0 - theta
-                    phi_rad = phi_w * self._d2r
-                    sin_phi, cos_phi = _sincos(phi_rad)
-                    xi = -r * sin_phi
-                    eta = -r * cos_phi
-                else:
-                    xi, eta = deproject_zenithal(
-                        phi, theta, "ZPN", None, self._pv2_tensor
-                    )
-            elif (
-                self._proj_code in self.CONIC_CODES
-                or self._proj_code in self.POLYCONIC_CODES
-            ):
-                xi, eta = deproject_conic(
-                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                )
-            elif self._proj_code in self.QUADCUBE_CODES:
-                xi, eta = deproject_quadcube(phi, theta, self._proj_code)
-            elif self._proj_code == "XPH":
-                xi, eta = deproject_allsky(
-                    phi, theta, "XPH", self._pv1_tensor, self._pv2_tensor
-                )
-            elif self._proj_code == "PAR":
-                xi, eta = deproject_allsky(
-                    phi, theta, "PAR", self._pv1_tensor, self._pv2_tensor
-                )
-            elif self._proj_code in ("AZP", "SZP", "AIR"):
-                xi, eta = deproject_zenithal(
-                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                )
-            elif self._is_zpx:
-                xi, eta = deproject_zpx(
-                    phi, theta, self._projection_params, self.wat_data
-                )
-            else:
-                # Fallback: dispatch to the appropriate deproject function.
-                if self._project_native_kind == "zenithal":
-                    xi, eta = deproject_zenithal(
-                        phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                    )
-                elif self._project_native_kind == "cylindrical":
-                    xi, eta = deproject_cylindrical(
-                        phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                    )
-                elif self._project_native_kind == "allsky":
-                    xi, eta = deproject_allsky(
-                        phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                    )
-                elif self._project_native_kind == "conic":
-                    xi, eta = deproject_conic(
-                        phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                    )
-                elif self._project_native_kind == "quadcube":
-                    xi, eta = deproject_quadcube(phi, theta, self._proj_code)
-                else:
-                    xi, eta = deproject_zenithal(
-                        phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
-                    )
+            xi, eta = self._native_to_intermediate(phi, theta)
 
         # 3. Inverse TPV / Special distortions
         if self._is_tpv:
@@ -3190,6 +3222,46 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
         return self
 
+    def _mps_float32_error_pixels(self) -> float:
+        """Expected float32 (MPS) round-trip position error in pixels.
+
+        One float32 ulp of the largest world value on each celestial axis
+        (longitude up to 360 degrees, scaled by ``cos(dec_0)``; latitude up to 90)
+        divided by the smallest pixel scale (norm of a CD column, degrees per
+        pixel), plus one ulp of the largest pixel coordinate (``NAXISn`` or
+        ``2 CRPIXn``). Zero without a celestial pair.
+        """
+        if not self._has_celestial:
+            return 0.0
+        cd = self.cd.detach().cpu().to(torch.float64)
+        scale = float(torch.linalg.vector_norm(cd, dim=0).min())
+        if not scale > 0.0:
+            return float("inf")
+        world = max(
+            _float32_ulp(360.0) * math.cos(math.radians(min(abs(self.delta0), 89.0))),
+            _float32_ulp(90.0),
+        )
+        extent = 1.0
+        for i in range(self.naxis):
+            size = float(self.wcs_params.get(f"NAXIS{i + 1}", 0.0) or 0.0)
+            extent = max(extent, size, 2.0 * abs(float(self.crpix[i])))
+        return world / scale + _float32_ulp(extent)
+
+    def _warn_mps_precision(self) -> None:
+        """Emit :class:`PrecisionWarning` once per WCS when MPS float32 is too coarse."""
+        if getattr(self, "_mps_precision_warned", False):
+            return
+        error = self._mps_float32_error_pixels()
+        if error >= _MPS_PIXEL_IDENTIFICATION_LIMIT_PX:
+            self._mps_precision_warned = True
+            warnings.warn(
+                f"WCS on MPS is float32: expected position error {error:.2f} pixel "
+                "(>= 0.5 pixel) at this pixel scale; the nearest pixel is not "
+                "reliable. Use CPU or CUDA (float64) for this grid.",
+                PrecisionWarning,
+                stacklevel=3,
+            )
+
     def to(self, device: Union[str, torch.device]):
         """Move WCS parameters to specified device.
 
@@ -3234,6 +3306,8 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         if self._pixel_affine_matrix is not None:
             assert self._pixel_affine_offset is not None
             self._set_pixel_affine(self._pixel_affine_matrix, self._pixel_affine_offset)
+        if self.device.type == "mps":
+            self._warn_mps_precision()
         return self
 
     @property
@@ -4007,23 +4081,26 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             guess = guess - step
         return guess
 
-    # Offset (pixel / degree) used to differentiate exactly at the reference point,
-    # where the zenithal/pseudo-cylindrical native longitude is singular.
+    # Rows within ``_REF_TOL`` of CRPIX (pixel) / of the CRPIX world position
+    # (degrees) are the only ones where the native-longitude chain rule is 0 * inf.
     _REF_TOL = 1e-7
-    _REF_STEP = 1e-2
+    _KINKED_CODES = ("XPH", "QSC")
+    _KINK_STEP = 1e-4
 
     def _scatter_rows(self, full_shape, dtype, device, idx_a, vals_a, idx_b, vals_b):
         out = torch.zeros(full_shape, dtype=dtype, device=device)
         out = out.index_put((idx_a,), vals_a)
         return out.index_put((idx_b,), vals_b)
 
-    def _grad_safe_eval(self, fn, x: Tensor, at_ref: Tensor, shift: Tensor) -> Tensor:
-        """Evaluate ``fn`` row-wise so autograd stays finite at singular rows.
+    def _first_order_rows(
+        self, fn, x: Tensor, at_ref: Tensor, jac: Tensor, x_ref_axes: tuple[int, int]
+    ) -> Tensor:
+        """Evaluate ``fn`` row-wise with an exact analytic Jacobian on reference rows.
 
-        Rows flagged by ``at_ref`` (the reference point, where native longitude is
-        undefined and the chain rule produces 0 * inf) keep the exact forward
-        value, while their gradient is the symmetric average of the gradients at
-        ``x +/- shift`` (error O(shift^2)).
+        Rows flagged by ``at_ref`` keep the exact forward value (computed without
+        autograd) and carry the analytic first derivative ``jac`` (output-columns x
+        input-columns over ``x_ref_axes``); all other rows use ordinary autograd.
+        The Hessian on the flagged rows is not defined by this construction (zero).
         """
         idx_s = torch.nonzero(at_ref, as_tuple=True)[0]
         idx_o = torch.nonzero(~at_ref, as_tuple=True)[0]
@@ -4031,9 +4108,10 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         xs = x.index_select(0, idx_s)
         with torch.no_grad():
             val = fn(xs.detach())
-        sh = shift.to(dtype=xs.dtype, device=xs.device)
-        g = 0.5 * (fn(xs + sh) + fn(xs - sh))
-        out_s = g - g.detach() + val
+        j = jac.to(dtype=xs.dtype, device=xs.device)
+        cols = list(x_ref_axes)
+        dx = (xs - xs.detach())[:, cols]
+        out_s = val + dx @ j.T
         if out_o is None:
             return self._scatter_rows(
                 (x.shape[0], out_s.shape[1]),
@@ -4054,6 +4132,96 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
             out_s,
         )
 
+    def _reference_pixel(self, origin: float) -> Tensor:
+        """CRPIX of the celestial pair in the caller's pixel convention (float64)."""
+        return (self.crpix.detach().to(torch.float64).cpu() - (1.0 - origin))[:2]
+
+    def _reference_jacobian_pixel_to_world(self, origin: float) -> Tensor:
+        """Exact ``d(world_lon, world_lat)/d(pixel_x, pixel_y)`` at CRPIX.
+
+        Returns a float64 CPU ``(2, 2)`` matrix in ``(lon, lat) x (x, y)`` order.
+
+        * Zenithal projections (except TAN) have their native pole at CRPIX, where
+          ``phi`` is undefined. Approaching the pole along a fixed native longitude
+          the maps are smooth in ``t = 90 - theta``; two directions ``phi = 0, 90``
+          give ``K = d(xi, eta)/dt`` (the projection's own ``R'(theta_0)`` and
+          obliquity terms) and ``W = d(lon, lat)/dt`` (the celestial rotation), so
+          ``J = W K^-1 CD`` exactly, to autograd precision.
+        * PCO has native fiducial point (0, 0) where ``cot(theta)`` is singular; its
+          native Jacobian there is the identity (the limit of the closed form).
+        * XPH and QSC are piecewise smooth with a kink at CRPIX (the derivative is
+          direction dependent and undefined there). The defined subgradient is the
+          autograd Jacobian of the branch entered along ``(+1, +0.371)`` pixels,
+          evaluated ``_KINK_STEP`` (1e-4) pixels from CRPIX, i.e. the branch derivative
+          to ~1e-4 relative (QSC's forward map is noisy closer in);
+          the inverse direction uses its matrix inverse, so ``J_w2p J_p2w = I``.
+        * All other families evaluate the ordinary autograd Jacobian, which is exact
+          at CRPIX.
+        """
+        cd = torch.tensor(
+            [[self._cd00, self._cd01], [self._cd10, self._cd11]], dtype=torch.float64
+        )
+        code = self._proj_code
+        dev = self.device
+        dt = self._wcs_coord_dtype(dev)
+        special_zen = (
+            code in self.ZENITHAL_CODES
+            and code != "TAN"
+            and not (self._is_tpv or self._is_tnx or self._is_zpx)
+        )
+        if special_zen:
+            phi = torch.tensor([0.0, 90.0], dtype=dt, device=dev)
+            t = torch.zeros(2, dtype=dt, device=dev, requires_grad=True)
+            theta = 90.0 - t
+            xi, eta = self._native_to_intermediate(phi, theta)
+            lon, lat = self._spherical_rotation_optimized(
+                phi, theta, "pole", allow_cpp_sphere=False
+            )
+            kmat = torch.stack([self._row_grad(v, t) for v in (xi, eta)])
+            wmat = torch.stack([self._row_grad(v, t) for v in (lon, lat)])
+            return wmat @ torch.linalg.inv(kmat) @ cd
+        if code == "PCO":
+            nat = torch.zeros(2, dtype=dt, device=dev, requires_grad=True)
+            lon, lat = self._spherical_rotation_optimized(
+                nat[0:1], nat[1:2], self._native_type, allow_cpp_sphere=False
+            )
+            wmat = (
+                torch.stack(
+                    [
+                        torch.autograd.grad(v.sum(), nat, retain_graph=True)[0]
+                        for v in (lon, lat)
+                    ]
+                )
+                .to(torch.float64)
+                .cpu()
+            )
+            return wmat @ cd
+        pix = self._reference_pixel(origin).to(dtype=dt, device=dev)
+        if code in self._KINKED_CODES:
+            pix = pix + self._KINK_STEP * torch.tensor(
+                [1.0, 0.371], dtype=dt, device=dev
+            )
+        pix = pix.detach().clone().requires_grad_(True)
+        world = self._stacked_pixels_to_world_flat(
+            pix[None], origin, allow_cpp_sphere=False
+        )
+        lonlat = (
+            world[0, self._celestial_lon_axis],
+            world[0, self._celestial_lat_axis],
+        )
+        return (
+            torch.stack(
+                [torch.autograd.grad(v, pix, retain_graph=True)[0] for v in lonlat]
+            )
+            .to(torch.float64)
+            .cpu()
+        )
+
+    @staticmethod
+    def _row_grad(v: Tensor, t: Tensor) -> Tensor:
+        """Per-row ``dv_i/dt_i`` when row ``i`` depends only on ``t_i``."""
+        return torch.autograd.grad(v.sum(), t, retain_graph=True)[0]
+
     def _grad_safe_pixels_to_world(self, pixels_flat: Tensor, origin: float) -> Tensor:
         def fn(p):
             return self._stacked_pixels_to_world_flat(p, origin, allow_cpp_sphere=False)
@@ -4068,13 +4236,19 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
         at_ref = rel.abs().amax(dim=1) < self._REF_TOL
         if not bool(at_ref.any()):
             return fn(pixels_flat)
-        return self._grad_safe_eval(
-            fn,
-            pixels_flat,
-            at_ref,
-            self._REF_STEP
-            * torch.tensor([[1.0, 0.371]]).expand(1, pixels_flat.shape[1]).contiguous(),
+        code = self._proj_code
+        needs_exact = code in ("PCO", *self._KINKED_CODES) or (
+            code in self.ZENITHAL_CODES
+            and code != "TAN"
+            and not (self._is_tpv or self._is_tnx or self._is_zpx)
         )
+        if not needs_exact:
+            return fn(pixels_flat)
+        jac2 = self._reference_jacobian_pixel_to_world(origin)
+        jac = torch.zeros((self.naxis, 2), dtype=torch.float64)
+        jac[self._celestial_lon_axis] = jac2[0]
+        jac[self._celestial_lat_axis] = jac2[1]
+        return self._first_order_rows(fn, pixels_flat, at_ref, jac, (0, 1))
 
     def _grad_safe_world_to_pixel(self, world_flat: Tensor, origin: float) -> Tensor:
         def fn(w):
@@ -4084,18 +4258,24 @@ class WCS(_RotationMixin, _GeometryMixin, _HeaderIOMixin):
 
         if not (torch.is_grad_enabled() and world_flat.requires_grad):
             return fn(world_flat)
-        w = world_flat.detach()
         lon, lat = self._celestial_lon_axis, self._celestial_lat_axis
-        dlon = torch.remainder(w[:, lon] - self.alpha0 + 180.0, 360.0) - 180.0
+        with torch.no_grad():
+            pix_ref = self._reference_pixel(origin).to(
+                dtype=world_flat.dtype, device=world_flat.device
+            )
+            world_ref = self._stacked_pixels_to_world_flat(
+                pix_ref[None], origin, allow_cpp_sphere=False
+            )[0]
+        w = world_flat.detach()
+        dlon = torch.remainder(w[:, lon] - world_ref[lon] + 180.0, 360.0) - 180.0
         at_ref = (dlon.abs() < self._REF_TOL) & (
-            (w[:, lat] - self.delta0).abs() < self._REF_TOL
+            (w[:, lat] - world_ref[lat]).abs() < self._REF_TOL
         )
         if not bool(at_ref.any()):
             return fn(world_flat)
-        shift = torch.zeros((1, world_flat.shape[1]))
-        shift[0, lon] = self._REF_STEP
-        shift[0, lat] = 0.371 * self._REF_STEP
-        return self._grad_safe_eval(fn, world_flat, at_ref, shift)
+        jac2 = self._reference_jacobian_pixel_to_world(origin)
+        jac_w2p = torch.linalg.inv(jac2)
+        return self._first_order_rows(fn, world_flat, at_ref, jac_w2p, (lon, lat))
 
     def pixel_to_world_differentiable(self, pixels: Any, *, origin: int = 0) -> Tensor:
         """Pure-Torch pixel-to-world transform intended for optimization loops.

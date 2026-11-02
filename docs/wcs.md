@@ -13,7 +13,8 @@ tests, never runtime fallbacks.
   says otherwise (`pixel_to_world_values(..., origin=1)` keeps the FITS
   convention).
 - Dtype and device follow your tensors. `wcs.to("cuda")` moves cached tables
-  with the pixels. CUDA and CPU run float64; MPS runs float32.
+  with the pixels. CUDA and CPU run float64; MPS runs float32 (see
+  [MPS precision](#mps-precision)).
 - Invalid projection domains and singular inverses return NaN instead of
   raising, so a batch never fails because of one bad point.
 - Geometry is differentiable (see [Jacobians](#jacobians-and-gradients)).
@@ -113,6 +114,21 @@ torch.testing.assert_close(full_dec, cut_dec)
 `jacobian` returns the local `d(world)/d(pixel)` matrix per point, and the
 `*_differentiable` variants keep the autograd graph for geometry fitting.
 
+At the reference point (CRPIX) the native longitude is undefined for zenithal
+projections (the pole) and `cot(theta)` is singular for `PCO`. There the
+Jacobian is analytic rather than differenced. For zenithal projections it is
+`J = W K^-1 CD`, where `K = d(xi, eta)/dt` and `W = d(lon, lat)/dt` follow
+`t = 90 - theta` along two native longitudes, so `K` carries the projection's own
+`R'(theta_0)`; `PCO` uses the identity native Jacobian. The inverse direction uses
+the matrix inverse. Elsewhere ordinary autograd is exact at CRPIX. The Hessian
+on those reference rows is not defined by this construction (zero).
+
+`XPH` and `QSC` have a genuine kink at CRPIX: the derivative depends on the
+direction of approach and is undefined there. The WCS returns one defined
+subgradient, the autograd Jacobian of the branch entered along `(+1, +0.371)`
+pixels, evaluated 1e-4 pixel from CRPIX (about 1e-4 relative accuracy), and the
+world-to-pixel Jacobian is its exact inverse, so the two directions are consistent.
+
 <!-- docs: run -->
 ```python
 import torch
@@ -197,11 +213,36 @@ apparent place is outside the runtime contract.
 
 Celestial projections include the Paper II zenithal, cylindrical, and conic
 families, polyconic (`BON`, `PCO`), HEALPix (`HPX`, `XPH`), quadcube (`TSC`,
-`CSC`, `QSC`), and `NCP` (slant `SIN`). `PV1_1` and `PV1_2` raise
-`NotImplementedError` rather than being ignored. Fused C++ kernels cover
-`PCO`, `XPH`, `TSC`, `CSC`, and `QSC` on CPU; the public methods are the only
-supported entry points and fall back to tensor code elsewhere. CSC on CPU uses
-the WCSLIB Chan-O'Neill polynomial so rounding matches on every device.
+`CSC`, `QSC`), and `NCP` (slant `SIN`). `PV1_1` and `PV1_2` set the native
+fiducial point `(phi_0, theta_0)` of Paper II section 2.5 as in WCSLIB `celset`:
+they fix the Euler angles and the default `LONPOLE` (`phi_0` if `dec_0 >= theta_0`,
+else `phi_0 + 180`), and the projection origin is not shifted onto the fiducial
+point (WCSLIB `cel.offset = 0`). Headers with a non-default fiducial point use
+the tensor path on every device (no fused C++ shortcut). `TAN` with any `PV` card
+is read as SCAMP `TPV` distortion, so its `PV1_1`/`PV1_2` are distortion terms.
+Fused C++ kernels cover `PCO`, `XPH`, `TSC`, `CSC`, and `QSC` on CPU; the public
+methods are the only supported entry points and fall back to tensor code
+elsewhere.
+
+`CSC` reproduces WCSLIB's float32 evaluation: float32 Chan-O'Neill polynomials,
+the float32 `x/45` plane coordinate with its wrap and face classification, and the
+float32 face-offset sum in the forward direction (up to 1e-5 degree on faces away
+from the base face). `a*b + c` is always two separately rounded operations, so
+results are identical on every platform and device. A baseline x86-64 WCSLIB
+build matches exactly (6e-14 degree); AArch64 WCSLIB builds fuse the multiply-add,
+so against them CSC differs by one float32 ulp (about 2e-5 degree forward).
+
+### MPS precision
+
+MPS has no float64, so a WCS on MPS runs float32. `wcs.to("mps")` (and the first
+MPS tensor passed to a WCS on another device) emits `torchsky.wcs.PrecisionWarning`
+once per WCS when the expected float32 error reaches half a pixel, the point at
+which the nearest pixel is no longer reliable. The estimate is one float32 ulp of
+the largest world value (longitude up to 360 degrees times `cos(dec_0)`, latitude
+up to 90) divided by the smallest CD-column norm in degrees per pixel, plus one
+ulp of the largest pixel coordinate. At 0.2 arcsec per pixel and `dec_0 = 0` that
+is 111 mas, 0.55 pixel, so the warning fires; at 1 arcsec per pixel it is 0.11
+pixel and it stays silent. Use CPU or CUDA for such grids.
 
 Identity TPV uses `PV1_1=1` and `PV2_1=1`. A header with `PV2_2=1` and no `PV2_1`
 is rank-deficient and its inverse is a particular solution.

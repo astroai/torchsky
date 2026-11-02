@@ -29,17 +29,20 @@ from .iau2006 import (
     _rx,
     _ry,
     _rz,
+    apparent_gcrs_unit,
+    apply_refco_enu,
     apply_refraction,
-    apply_stellar_aberration,
     cirs_matrix,
-    earth_barycentric_velocity_icrs,
     npb_matrix,
+    refco,
     tt_mjd_from_utc,
 )
 
 SECONDS_PER_DAY = 86400.0
 MJD_J2000 = 51544.5
 PNModel = Literal["none", "iau2006"]
+RefractionModel = Literal["refco", "saemundsson"]
+_EARTH_ROTATION_RAD_S = 1.00273781191135448 * 2.0 * 3.141592653589793 / SECONDS_PER_DAY
 
 
 @dataclass(frozen=True)
@@ -70,13 +73,19 @@ class EarthOrientation:
 
 @dataclass(frozen=True)
 class Site:
-    """Geodetic site. Height is WGS84 ellipsoidal height (metres) on the ITRS path."""
+    """Geodetic site. Height is WGS84 ellipsoidal height (metres) on the ITRS path.
+
+    ``relative_humidity`` (0..1) and ``wavelength_um`` (> 100 selects the radio
+    formula) only enter the ERFA ``refco`` refraction model.
+    """
 
     lon_deg: Tensor
     lat_deg: Tensor
     height_m: Tensor | float = 0.0
     pressure_mbar: Tensor | float | None = None
     temperature_c: Tensor | float | None = None
+    relative_humidity: Tensor | float = 0.0
+    wavelength_um: Tensor | float = 0.55
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "lon_deg", _as_tensor(self.lon_deg))
@@ -186,22 +195,65 @@ def _ut1_64(utc64: Tensor, eop: EarthOrientation) -> Tensor:
     return utc64 + _time64(eop.dut1_s) / SECONDS_PER_DAY
 
 
-def _gcrs_to_terrestrial_matrix(
+def _gcrs_to_tirs_and_pom(
     utc64: Tensor, eop: EarthOrientation, pn: PNModel
-) -> Tensor:
-    """GCRS -> ITRS rotation, float64 on CPU."""
+) -> tuple[Tensor, Tensor | None]:
+    """GCRS -> TIRS rotation and the TIRS -> ITRS polar-motion matrix (or None)."""
     ut1 = _ut1_64(utc64, eop)
     if pn == "iau2006":
         tt = _tt64(utc64, eop, "pn='iau2006'")
         rot = _rz(_era_rad_from_ut1_mjd(ut1)) @ cirs_matrix(tt)
     else:
         rot = _rz(_gmst_deg_from_ut1_mjd(ut1) * D2R)
+    pom = None
     if eop.xp_arcsec is not None or eop.yp_arcsec is not None:
         z = torch.zeros((), dtype=torch.float64)
         xp = z if eop.xp_arcsec is None else _time64(eop.xp_arcsec)
         yp = z if eop.yp_arcsec is None else _time64(eop.yp_arcsec)
-        rot = _polar_motion_matrix(xp, yp) @ rot
-    return rot
+        pom = _polar_motion_matrix(xp, yp)
+    return rot, pom
+
+
+def _gcrs_to_terrestrial_matrix(
+    utc64: Tensor, eop: EarthOrientation, pn: PNModel
+) -> Tensor:
+    """GCRS -> ITRS rotation, float64 on CPU."""
+    rot, pom = _gcrs_to_tirs_and_pom(utc64, eop, pn)
+    return rot if pom is None else pom @ rot
+
+
+def _observer_pv_gcrs(
+    site: Site, utc64: Tensor, eop: EarthOrientation, pn: PNModel
+) -> tuple[Tensor, Tensor]:
+    """Observer position (m) and velocity (m/s) relative to the geocentre in GCRS.
+
+    ERFA ``pvtob``: the station rotates about the TIRS pole at the sidereal rate
+    ``1.00273781191135448 * 2 pi / 86400`` rad/s; the velocity is carried to GCRS
+    by the transpose of the GCRS -> TIRS rotation. Float64 on the CPU.
+    """
+    lon = _time64(site.lon_deg) * D2R
+    lat = _time64(site.lat_deg) * D2R
+    assert isinstance(site.height_m, Tensor)
+    r_itrs = _wgs84_itrs_m(lon, lat, _time64(site.height_m))
+    rot, pom = _gcrs_to_tirs_and_pom(utc64, eop, pn)
+    r_tirs = (
+        r_itrs
+        if pom is None
+        else (pom.transpose(-1, -2) @ r_itrs.unsqueeze(-1)).squeeze(-1)
+    )
+    omega = _EARTH_ROTATION_RAD_S
+    v_tirs = torch.stack(
+        (
+            -omega * r_tirs[..., 1],
+            omega * r_tirs[..., 0],
+            torch.zeros_like(r_tirs[..., 2]),
+        ),
+        dim=-1,
+    )
+    rt = rot.transpose(-1, -2)
+    return (rt @ r_tirs.unsqueeze(-1)).squeeze(-1), (rt @ v_tirs.unsqueeze(-1)).squeeze(
+        -1
+    )
 
 
 def _apply_matrix(m: Tensor, v: Tensor) -> Tensor:
@@ -218,6 +270,7 @@ def observed_altaz(
     pn: PNModel | None = None,
     aberration: bool = False,
     refraction: bool = False,
+    refraction_model: RefractionModel = "refco",
 ) -> tuple[Tensor, Tensor]:
     """Return ``(az_deg, alt_deg)`` from north toward east.
 
@@ -231,8 +284,17 @@ def observed_altaz(
     matrix (requires ``eop.tt_minus_utc_s``). ``pn='none'`` omits
     precession-nutation and uses GMST; it is approximate (~0.3 deg off) and is
     continuous in ``xp``/``yp`` (zero polar motion equals no polar motion).
-    Stellar aberration and Saemundsson refraction are off unless requested.
-    Refraction needs ``site.pressure_mbar`` and ``site.temperature_c``.
+    ``aberration=True`` converts the astrometric ICRS direction to the apparent
+    place as ERFA ``atciq`` does: solar light deflection plus annual and diurnal
+    aberration (the observer's Earth-rotation velocity), with the ``epv00`` Earth
+    ephemeris. Without refraction the result agrees with ``erfa.atco13`` to
+    < 1 mas (residual: TIO locator s' = 0, observer offset in the solar
+    deflection, TT used for TDB).
+    ``refraction=True`` applies the ERFA ``refco`` model (``A tan z + B tan^3 z``,
+    honouring ``site.relative_humidity`` and ``site.wavelength_um``) to the
+    topocentric direction as ``atioq`` does; ``refraction_model="saemundsson"``
+    selects the Saemundsson/Meeus altitude formula instead. Both are off unless
+    requested and need ``site.pressure_mbar`` and ``site.temperature_c``.
 
     Time-only quantities are evaluated in float64 on CPU on every device; only
     the final rotation matrices move to the coordinate device (CUDA float64,
@@ -246,7 +308,7 @@ def observed_altaz(
     device = icrs.lon.device
     dtype = _work_dtype(device)
     v_itrs = _icrs_unit_to_itrs(
-        icrs, obstime_mjd_utc, eop, pn=pn, aberration=aberration
+        icrs, obstime_mjd_utc, eop, pn=pn, aberration=aberration, site=site
     )
     lon_rad = site.lon_deg.to(device=device, dtype=dtype) * D2R
     lat_rad = site.lat_deg.to(device=device, dtype=dtype) * D2R
@@ -255,14 +317,30 @@ def observed_altaz(
     if not bool(torch.isfinite(height).all()):
         raise ValueError("site.height_m must be finite WGS84 ellipsoidal height")
     east, north, up = _geodetic_normal_east_north(lon_rad, lat_rad)
-    alt = torch.asin(torch.clamp((v_itrs * up).sum(dim=-1), -1.0, 1.0)) * R2D
-    az = torch.atan2((v_itrs * east).sum(dim=-1), (v_itrs * north).sum(dim=-1)) * R2D
-    az = _wrap360(az)
     if refraction:
         if site.pressure_mbar is None or site.temperature_c is None:
             raise ValueError(
                 "refraction=True requires site.pressure_mbar and site.temperature_c"
             )
+        if refraction_model not in ("refco", "saemundsson"):
+            raise ValueError("refraction_model must be 'refco' or 'saemundsson'")
+    e_c = (v_itrs * east).sum(dim=-1)
+    n_c = (v_itrs * north).sum(dim=-1)
+    u_c = (v_itrs * up).sum(dim=-1)
+    if refraction and refraction_model == "refco":
+        assert site.pressure_mbar is not None and site.temperature_c is not None
+        refa, refb = refco(
+            site.pressure_mbar,
+            site.temperature_c,
+            site.relative_humidity,
+            site.wavelength_um,
+            like=u_c,
+        )
+        e_c, n_c, u_c = apply_refco_enu(e_c, n_c, u_c, refa, refb)
+    alt = torch.asin(torch.clamp(u_c, -1.0, 1.0)) * R2D
+    az = _wrap360(torch.atan2(e_c, n_c) * R2D)
+    if refraction and refraction_model == "saemundsson":
+        assert site.pressure_mbar is not None and site.temperature_c is not None
         alt = apply_refraction(
             alt,
             pressure_mbar=site.pressure_mbar,
@@ -303,6 +381,8 @@ def _icrs_to_gcrs_unit(
     eop: EarthOrientation,
     *,
     aberration: bool,
+    site: Site | None = None,
+    pn: PNModel | None = None,
 ) -> Tensor:
     device = icrs.lon.device
     dtype = _work_dtype(device)
@@ -310,9 +390,12 @@ def _icrs_to_gcrs_unit(
     if aberration:
         if eop.tt_minus_utc_s is None:
             raise ValueError("aberration requires eop.tt_minus_utc_s")
-        tt = _tt64(_time64(obstime), eop, "aberration")
-        vel = earth_barycentric_velocity_icrs(tt).to(device=device, dtype=dtype)
-        v = apply_stellar_aberration(v, vel)
+        utc64 = _time64(obstime)
+        tt = _tt64(utc64, eop, "aberration")
+        pobs = vobs = None
+        if site is not None:
+            pobs, vobs = _observer_pv_gcrs(site, utc64, eop, _resolve_pn(pn, eop))
+        v = apparent_gcrs_unit(v, tt, vobs, pobs)
     return v
 
 
@@ -323,7 +406,7 @@ def icrs_to_gcrs_xyz(
     eop: EarthOrientation,
     aberration: bool = False,
 ) -> Tensor:
-    """ICRS direction to GCRS. Optional Keplerian aberration; no PN."""
+    """ICRS direction to GCRS. Optional apparent place (deflection + aberration); no PN."""
     icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
     return _icrs_to_gcrs_unit(icrs, obstime_mjd_utc, eop, aberration=aberration)
 
@@ -363,7 +446,8 @@ def _icrs_unit_to_itrs(
     *,
     pn: PNModel,
     aberration: bool,
+    site: Site | None = None,
 ) -> Tensor:
-    v = _icrs_to_gcrs_unit(icrs, obstime, eop, aberration=aberration)
+    v = _icrs_to_gcrs_unit(icrs, obstime, eop, aberration=aberration, site=site, pn=pn)
     rot = _gcrs_to_terrestrial_matrix(_time64(obstime), eop, pn)
     return _apply_matrix(rot, v)

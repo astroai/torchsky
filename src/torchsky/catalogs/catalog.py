@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
@@ -239,6 +239,7 @@ class Catalog:
         pn: PNModel | None = None,
         aberration: bool = False,
         refraction: bool = False,
+        refraction_model: Literal["refco", "saemundsson"] = "refco",
     ) -> Catalog:
         lon, lat = transform(
             self.lon,
@@ -251,6 +252,7 @@ class Catalog:
             pn=pn,
             aberration=aberration,
             refraction=refraction,
+            refraction_model=refraction_model,
         )
         dest = _normalize_frame(to_frame)
         return Catalog(

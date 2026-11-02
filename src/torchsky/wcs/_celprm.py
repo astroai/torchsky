@@ -12,9 +12,17 @@ import math
 _TOL = 1e-5
 
 
-def default_lonpole(delta0: float, theta0: float) -> float:
-    """Paper II default LONPOLE: 0 if ``delta_0 >= theta_0`` else 180 degrees."""
-    return 0.0 if delta0 >= theta0 else 180.0
+def default_lonpole(delta0: float, theta0: float, phi0: float = 0.0) -> float:
+    """Paper II default LONPOLE: ``phi_0`` if ``delta_0 >= theta_0`` else ``phi_0 + 180``.
+
+    Wrapped to ``[-180, 180]`` like WCSLIB ``celset``.
+    """
+    lonpole = phi0 if delta0 >= theta0 else phi0 + 180.0
+    if lonpole > 180.0:
+        lonpole -= 360.0
+    elif lonpole < -180.0:
+        lonpole += 360.0
+    return lonpole
 
 
 def celestial_euler(
@@ -124,21 +132,33 @@ def celestial_correction(
     latpole: float,
     exist_lonpole: float,
     exist_matrix: list[list[float]] | None = None,
+    *,
+    phi0: float = 0.0,
+    exist_theta0: float | None = None,
+    force: bool = False,
 ) -> list[list[float]] | None:
     """Rotation ``M`` with ``R_true = M @ R_exist``; ``None`` when it is the identity.
 
     ``R_exist`` is the native pole rotation baked into the projection kernels
     (``exist_lonpole`` with ``LATPOLE = 90``); ``R_true`` honours the header's
-    LONPOLE/LATPOLE exactly.
+    LONPOLE/LATPOLE exactly. ``force`` keeps an identity matrix so callers can
+    use a non-None result to gate native fast paths off.
     """
     r_true = native_to_celestial_matrix(
-        celestial_euler(alpha0, delta0, 0.0, theta0, lonpole, latpole)
+        celestial_euler(alpha0, delta0, phi0, theta0, lonpole, latpole)
     )
     r_exist = exist_matrix or native_to_celestial_matrix(
-        celestial_euler(alpha0, delta0, 0.0, theta0, exist_lonpole, 90.0)
+        celestial_euler(
+            alpha0,
+            delta0,
+            0.0,
+            theta0 if exist_theta0 is None else exist_theta0,
+            exist_lonpole,
+            90.0,
+        )
     )
     m = _matmul(r_true, transpose(r_exist))
     dev = max(
         abs(m[i][j] - (1.0 if i == j else 0.0)) for i in range(3) for j in range(3)
     )
-    return None if dev < 1e-13 else m
+    return None if (dev < 1e-13 and not force) else m

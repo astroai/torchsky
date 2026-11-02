@@ -1,5 +1,6 @@
 """Regression tests for the WCS/geometry audit (parity against astropy.wcs / WCSLIB)."""
 
+import platform
 import warnings
 
 import numpy as np
@@ -153,9 +154,8 @@ def test_zenithal_pv1_3_is_lonpole():
     _assert_parity(_hdr("SIN", {"PV1_3": 170.0}))
 
 
-def test_native_fiducial_pv1_1_not_silently_ignored():
-    with pytest.raises(NotImplementedError):
-        WCS(_hdr("CAR", {"PV1_1": 10.0, "PV1_2": 20.0}))
+def test_native_fiducial_pv1_1_matches_wcslib():
+    _assert_parity(_hdr("CAR", {"PV1_1": 10.0, "PV1_2": 20.0}))
 
 
 @pytest.mark.parametrize(
@@ -206,9 +206,12 @@ def test_quadcube_negative_x_wraps(proj):
     assert ok.sum() > 1900
     for r, d in ((r1, d1), (wd[:, 0], wd[:, 1])):
         assert np.array_equal(np.isfinite(r), ok)
-        # CSC's polynomial approximation differs from WCSLIB at the 1e-5 deg level.
+        # CSC reproduces WCSLIB's float32 evaluation (incl. the float32 plane
+        # coordinate), so it agrees with WCSLIB to double precision like TSC/QSC.
+        # arm64 WCSLIB builds fuse a*b+c in CSC (one float32 ulp); torchsky never does.
+        exact = proj != "CSC" or platform.machine().lower() in ("x86_64", "amd64")
         assert np.max(_angsep(r[ok], d[ok], ra[ok], dec[ok])) < (
-            1e-4 if proj == "CSC" else 1e-6
+            1e-9 if exact else 3e-5
         )
 
 

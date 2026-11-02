@@ -82,16 +82,21 @@ _CSC_INV_Z4 = (_CSC_P04, _CSC_P14, _CSC_P24)
 _CSC_INV_Z5 = (_CSC_P05, _CSC_P15)
 
 
-def _madd(acc: Tensor, a: Tensor, b: Tensor) -> Tensor:
-    """``acc + a * b`` as two separately rounded float32 kernels.
+# WCSLIB evaluates the CSC polynomials in float32 C. ``a*b + c`` is always two
+# separately rounded float32 operations here, on every device and platform, so
+# results are identical everywhere. An FMA-contracting WCSLIB build (AArch64,
+# e.g. macOS arm64 astropy wheels) can differ by one float32 ulp in those steps;
+# baseline x86-64 builds match exactly.
 
-    WCSLIB's quad-cube polynomials are evaluated without contraction. A fused
-    ``torch.addcmul`` is device dependent: the CPU kernel rounds the product,
-    while the CUDA kernel is contracted to a hardware FMA by nvcc, giving
-    one-ulp (~8 mas) differences. Two eager ops cannot be contracted, so every
-    device gives the same bits.
-    """
+
+def _madd(acc: Tensor, a: Tensor, b: Tensor) -> Tensor:
+    """``acc + a * b`` as two separately rounded float32 ops (never fused)."""
     return acc + a * b
+
+
+def _msub(acc: Tensor, a: Tensor, b: Tensor) -> Tensor:
+    """``acc - a * b`` with the same fusing rule as :func:`_madd`."""
+    return _madd(acc, -a, b)
 
 
 def _horner_addcmul(x: Tensor, coeffs: tuple[float, ...]) -> Tensor:
@@ -222,6 +227,56 @@ def _face_to_xy(face: Tensor, xf: Tensor, yf: Tensor) -> Tuple[Tensor, Tensor]:
         cx = torch.where(m, torch.full_like(cx, fcx), cx)
         cy = torch.where(m, torch.full_like(cy, fcy), cy)
     return cx + 45.0 * xf, cy + 45.0 * yf
+
+
+def _face_to_xy_f32(face: Tensor, xf: Tensor, yf: Tensor) -> Tuple[Tensor, Tensor]:
+    """``45 * float32(face_offset + xf)`` as WCSLIB ``cscs2x`` (offsets in face units)."""
+    cx = torch.zeros_like(xf)
+    cy = torch.zeros_like(yf)
+    for f, (fcx, fcy) in enumerate(_FACE_CENTRES):
+        m = face == f
+        cx = torch.where(m, torch.full_like(cx, fcx / 45.0), cx)
+        cy = torch.where(m, torch.full_like(cy, fcy / 45.0), cy)
+    x32 = (cx.to(torch.float32) + xf.to(torch.float32)).to(xf.dtype)
+    y32 = (cy.to(torch.float32) + yf.to(torch.float32)).to(yf.dtype)
+    return 45.0 * x32, 45.0 * y32
+
+
+def _xy_to_face_f32(x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    """CSC plane -> face and face-local ``(xf, yf)`` following WCSLIB ``cscx2s``.
+
+    WCSLIB keeps ``xf = x / 45`` in a float32, applies the ``xf < -1`` wrap and
+    classifies the face on those float32 values, then subtracts the face offset
+    (rounded to float32 again). Faces away from the base face therefore carry the
+    float32 rounding of the whole cross-layout coordinate (up to 2.4e-7 face units,
+    1e-5 deg).
+    """
+    _, _, _, valid = _xy_to_face(x, y)
+    w1 = 1.0 / 45.0
+    dt = x.dtype
+    xs = (x * w1).to(torch.float32)
+    ys = (y * w1).to(torch.float32)
+    xs = torch.where(xs < -1.0, xs + 8.0, xs)
+    x64 = xs.to(dt)
+    y64 = ys.to(dt)
+    face = torch.ones_like(xs, dtype=torch.long)
+    xoff = torch.zeros_like(x64)
+    yoff = torch.zeros_like(y64)
+    f4, f3, f2 = x64 > 5.0, x64 > 3.0, x64 > 1.0
+    f0, f5 = y64 > 1.0, y64 < -1.0
+    face = torch.where(f5, torch.full_like(face, 5), face)
+    face = torch.where(f0, torch.zeros_like(face), face)
+    face = torch.where(f2, torch.full_like(face, 2), face)
+    face = torch.where(f3, torch.full_like(face, 3), face)
+    face = torch.where(f4, torch.full_like(face, 4), face)
+    xoff = torch.where(f2, torch.full_like(xoff, 2.0), xoff)
+    xoff = torch.where(f3, torch.full_like(xoff, 4.0), xoff)
+    xoff = torch.where(f4, torch.full_like(xoff, 6.0), xoff)
+    yoff = torch.where(f5 & ~f2, torch.full_like(yoff, -2.0), yoff)
+    yoff = torch.where(f0 & ~f2, torch.full_like(yoff, 2.0), yoff)
+    xf = (x64 - xoff).to(torch.float32).to(dt)
+    yf = (y64 - yoff).to(torch.float32).to(dt)
+    return face, torch.clamp(xf, -1.0, 1.0), torch.clamp(yf, -1.0, 1.0), valid
 
 
 def _xy_to_face(x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
@@ -391,12 +446,14 @@ def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
     inner = _madd(inner, chi2.new_tensor(_CSC_C20), chi4)
     inner = _madd(inner, chi2.new_tensor(_CSC_C02), psi4)
     mid = _madd(
-        _madd(chi2.new_tensor(_CSC_GAMMA) * chi2co, chi2.new_tensor(_CSC_M), chi2),
+        _madd(chi2.new_tensor(_CSC_M) * chi2, chi2.new_tensor(_CSC_GAMMA), chi2co),
         psi2co,
         inner,
     )
-    omega = chi2.new_tensor(_CSC_OMEGA1) - chi2co * _madd(
-        chi2.new_tensor(_CSC_D0), chi2.new_tensor(_CSC_D1), chi2
+    omega = _msub(
+        chi2.new_tensor(_CSC_OMEGA1),
+        chi2co,
+        _madd(chi2.new_tensor(_CSC_D0), chi2.new_tensor(_CSC_D1), chi2),
     )
     gterm = _madd(
         _madd(chi2.new_tensor(_CSC_GSTAR), psi2, mid),
@@ -436,18 +493,20 @@ def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
     face, chi, psi, _ = _face_from_lmn(lx, m, n)
     xf = torch.clamp(_csc_forward_poly(chi, psi), -1.0, 1.0)
     yf = torch.clamp(_csc_forward_poly(psi, chi), -1.0, 1.0)
-    return _face_to_xy(face, xf, yf)
+    # WCSLIB keeps x0 + xf in a float32 variable (face offsets reach 6), so the
+    # plane coordinate is quantised to float32 ulps at |x0 + xf| (up to 4.8e-7).
+    return _face_to_xy_f32(face, xf, yf)
 
 
 def _csc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
     cpp_out = _csc_cpp_pair("wcs_csc_x2s", xi, eta)
     if cpp_out is not None:
         return cpp_out
-    face, xf, yf, valid = _xy_to_face(xi, eta)
+    face, xf, yf, valid = _xy_to_face_f32(xi, eta)
     chi = _csc_inverse_poly(xf, yf)
     psi = _csc_inverse_poly(yf, xf)
     # WCSLIB: float32 χ²+ψ², then double sqrt. Promoting first is the 8 mas gap.
-    sumsq = (chi * chi + psi * psi).to(dtype=xi.dtype)
+    sumsq = _madd(psi * psi, chi, chi).to(dtype=xi.dtype)
     t = 1.0 / torch.sqrt(sumsq + 1.0)
     chi = chi.to(dtype=xi.dtype)
     psi = psi.to(dtype=xi.dtype)

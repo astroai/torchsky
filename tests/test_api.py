@@ -9,6 +9,7 @@ from torchsky.cli import build_parser
 def test_top_level_namespaces_expose_science_modules() -> None:
     assert set(torchsky.__all__) == {
         "WCS",
+        "PrecisionWarning",
         "wcs",
         "sphere",
         "spectral",

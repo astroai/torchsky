@@ -37,6 +37,7 @@ _NAMESPACES: dict[str, str] = {
 
 __all__ = (
     "WCS",
+    "PrecisionWarning",
     "wcs",
     "sphere",
     "spectral",
@@ -66,6 +67,11 @@ def __getattr__(name: str) -> Any:
 
         globals()[name] = WCS
         return WCS
+    if name == "PrecisionWarning":
+        from .wcs import PrecisionWarning
+
+        globals()[name] = PrecisionWarning
+        return PrecisionWarning
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -92,4 +98,4 @@ if TYPE_CHECKING:
         transforms as transforms,
         wcs as wcs,
     )
-    from .wcs import WCS as WCS
+    from .wcs import PrecisionWarning as PrecisionWarning, WCS as WCS

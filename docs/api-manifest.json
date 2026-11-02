@@ -1,5 +1,6 @@
 {
   "torchsky": [
+    "PrecisionWarning",
     "WCS",
     "catalogs",
     "coords",
@@ -646,6 +647,7 @@
     "PhotometricReference",
     "PortRoute",
     "PortRoutingMapping",
+    "PrecisionWarning",
     "RegularGridTransform2D",
     "ResidualComponentInput",
     "ResidualComponentResult",

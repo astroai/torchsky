@@ -10,6 +10,7 @@ from .catalog_state import CatalogState
 from .observed import (
     EarthOrientation,
     PNModel,
+    RefractionModel,
     Site,
     icrs_to_cirs_xyz,
     icrs_to_gcrs_xyz,
@@ -32,6 +33,7 @@ def transform(
     pn: PNModel | None = None,
     aberration: bool = False,
     refraction: bool = False,
+    refraction_model: RefractionModel = "refco",
 ) -> tuple[Tensor, Tensor]:
     """Rotate or observe ``(lon, lat)`` tensors. Returns ``(lon_out, lat_out)``.
 
@@ -51,6 +53,8 @@ def transform(
         pn: Precession-nutation model.
         aberration: Apply annual aberration for supported observed frames.
         refraction: Apply atmospheric refraction to altitude-azimuth output.
+        refraction_model: ``"refco"`` (ERFA, default; uses ``Site`` humidity and
+            wavelength) or ``"saemundsson"``.
 
     Returns:
         Output longitude and latitude tensors in degrees.
@@ -75,6 +79,7 @@ def transform(
             pn=pn,
             aberration=aberration,
             refraction=refraction,
+            refraction_model=refraction_model,
         )
     if dest in {"ITRS", "GCRS", "CIRS", "TETE"}:
         if obstime_mjd_utc is None or eop is None:

@@ -129,8 +129,21 @@ assert bool((altaz.lat.abs() <= 90.0).all())
 - `pn="iau2006"` adds Fukushima-Williams bias-precession and the IAU 2000A
   nutation series; it requires `tt_minus_utc_s` and never infers leap seconds.
 - `transform(..., to_frame="GCRS"|"CIRS"|"TETE"|"ITRS")` uses the same obstime
-  and EOP. Stellar aberration (Keplerian Earth velocity) and Saemundsson/Meeus
-  refraction are off unless requested, and refraction needs
+  and EOP. Aberration and refraction are off unless requested.
+- `aberration=True` gives the apparent place as ERFA `atciq` does: solar light
+  deflection plus annual and diurnal aberration (the observer's Earth-rotation
+  velocity), with the ERFA `epv00` Earth ephemeris (about 1e-15 au, evaluated in
+  float64 on the CPU). Measured against `erfa.atco13` without refraction over
+  4000 random sky positions and epochs (2017-2026, polar motion, DUT1, 4.2 km
+  height), alt/az agrees to 0.012 mas at the maximum (median 0.009 mas); the
+  residual is the TIO locator s' (taken as 0) and TT used for TDB. The earlier
+  Keplerian Earth velocity was off by about 540 m/s, up to 0.37 arcsec.
+- `refraction=True` applies the ERFA `refco` model, `A tan z + B tan^3 z`, to the
+  topocentric direction as `atioq` does (`Site.relative_humidity` and
+  `Site.wavelength_um` enter `refco`; wavelengths above 100 micrometres select the
+  radio formula). Against `erfa.atco13` it agrees to 0.012 mas for zenith
+  distance below 85 degrees (optical and radio). `refraction_model="saemundsson"`
+  selects the Saemundsson/Meeus altitude formula instead. Refraction needs
   `site.pressure_mbar` and `site.temperature_c`.
 - Site `height_m` is the WGS84 ellipsoidal height. It does not change the
   azimuth and altitude of an infinitely distant star.

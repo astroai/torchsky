@@ -5,6 +5,12 @@
 Public exception types raised by `torchsky`. Each type is also documented on
 its namespace reference page.
 
+## `torchsky`
+
+**[`PrecisionWarning`](torchsky.md#torchsky.PrecisionWarning)**
+
+A WCS runs in float32 (MPS) with an expected error of half a pixel or more.
+
 ## `torchsky.catalogs`
 
 **[`KnownComponentFitError`](catalogs.md#torchsky.catalogs.KnownComponentFitError)**
@@ -50,6 +56,10 @@ Unspecified run-time error.
 **[`CelestialFrameBiasWarning`](wcs.md#torchsky.wcs.CelestialFrameBiasWarning)**
 
 A resampling path converted between FK5 (J2000) and ICRS.
+
+**[`PrecisionWarning`](wcs.md#torchsky.wcs.PrecisionWarning)**
+
+A WCS runs in float32 (MPS) with an expected error of half a pixel or more.
 
 **[`UnsupportedInverseError`](wcs.md#torchsky.wcs.UnsupportedInverseError)**
 

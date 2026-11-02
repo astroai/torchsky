@@ -56,6 +56,6 @@ def test_star_import_matches_declared_surface(name: str) -> None:
 
 
 def test_root_namespaces_are_lazy_and_declared() -> None:
-    assert set(torchsky.__all__) == set(torchsky._NAMESPACES) | {"WCS"}
+    assert set(torchsky.__all__) == set(torchsky._NAMESPACES) | {"WCS", "PrecisionWarning"}
     for name in torchsky._NAMESPACES:
         assert name in torchsky.__all__

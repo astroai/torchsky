@@ -1818,7 +1818,20 @@ void quadcube_face_to_xy(int face, double xf, double yf, double* x, double* y) {
     *y = cy[face] + 45.0 * yf;
 }
 
-// WCSLIB cscs2x / cscx2s evaluate Chan–O'Neill polynomials in float32.
+// WCSLIB cscs2x / cscx2s evaluate Chan–O'Neill polynomials in float32. `a*b + c`
+// is always two separately rounded operations (never an FMA) so results match the
+// tensor path on every platform; keep in sync with `_madd` in
+// torchsky/wcs/quadcube.py.
+inline float csc_madd(float acc, float a, float b) {
+    volatile float prod = a * b;  // volatile: forbid compiler contraction
+    return acc + prod;
+}
+
+inline float csc_mul(float a, float b) {
+    volatile float prod = a * b;
+    return prod;
+}
+
 float csc_forward_poly(float chi, float psi) {
     const float gstar = 1.37484847732f;
     const float mm = 0.004869491981f;
@@ -1832,58 +1845,59 @@ float csc_forward_poly(float chi, float psi) {
     const float c11 = 0.15384112876f;
     const float c20 = -0.178251207466f;
     const float c02 = 0.106959469314f;
-    float chi2 = chi * chi;
-    float psi2 = psi * psi;
+    float chi2 = csc_mul(chi, chi);
+    float psi2 = csc_mul(psi, psi);
     float chi2co = 1.0f - chi2;
     float psi2co = 1.0f - psi2;
-    float chi4 = (chi2 > 1.0e-16f) ? chi2 * chi2 : 0.0f;
-    float psi4 = (psi2 > 1.0e-16f) ? psi2 * psi2 : 0.0f;
-    float chipsi = std::fabs(chi * psi);
-    float chi2psi2 = (chipsi > 1.0e-16f) ? chi2 * psi2 : 0.0f;
-    return chi * (chi2 + chi2co * (gstar + psi2 * (gamma * chi2co + mm * chi2 +
-        psi2co * (c00 + c10 * chi2 + c01 * psi2 + c11 * chi2psi2 + c20 * chi4 +
-        c02 * psi4)) + chi2 * (omega1 - chi2co * (d0 + d1 * chi2))));
+    float chi4 = (chi2 > 1.0e-16f) ? csc_mul(chi2, chi2) : 0.0f;
+    float psi4 = (psi2 > 1.0e-16f) ? csc_mul(psi2, psi2) : 0.0f;
+    float chipsi = std::fabs(csc_mul(chi, psi));
+    float chi2psi2 = (chipsi > 1.0e-16f) ? csc_mul(chi2, psi2) : 0.0f;
+    float inner = csc_madd(c00, c10, chi2);
+    inner = csc_madd(inner, c01, psi2);
+    inner = csc_madd(inner, c11, chi2psi2);
+    inner = csc_madd(inner, c20, chi4);
+    inner = csc_madd(inner, c02, psi4);
+    float mid = csc_madd(csc_madd(csc_mul(mm, chi2), gamma, chi2co), psi2co, inner);
+    float omega = csc_madd(omega1, -chi2co, csc_madd(d0, d1, chi2));
+    float g = csc_madd(csc_madd(gstar, psi2, mid), chi2, omega);
+    return csc_mul(chi, csc_madd(chi2, chi2co, g));
+}
+
+float csc_horner(float x, const float* c, int n) {
+    float acc = c[n - 1];
+    for (int k = n - 2; k >= 0; --k) {
+        acc = csc_madd(c[k], x, acc);
+    }
+    return acc;
 }
 
 float csc_inverse_poly(float xf, float yf) {
-    const float p00 = -0.27292696f;
-    const float p10 = -0.07629969f;
-    const float p20 = -0.22797056f;
-    const float p30 = 0.54852384f;
-    const float p40 = -0.62930065f;
-    const float p50 = 0.25795794f;
-    const float p60 = 0.02584375f;
-    const float p01 = -0.02819452f;
-    const float p11 = -0.01471565f;
-    const float p21 = 0.48051509f;
-    const float p31 = -1.74114454f;
-    const float p41 = 1.71547508f;
-    const float p51 = -0.53022337f;
-    const float p02 = 0.27058160f;
-    const float p12 = -0.56800938f;
-    const float p22 = 0.30803317f;
-    const float p32 = 0.98938102f;
-    const float p42 = -0.83180469f;
-    const float p03 = -0.60441560f;
-    const float p13 = 1.50880086f;
-    const float p23 = -0.93678576f;
-    const float p33 = 0.08693841f;
-    const float p04 = 0.93412077f;
-    const float p14 = -1.41601920f;
-    const float p24 = 0.33887446f;
-    const float p05 = -0.63915306f;
-    const float p15 = 0.52032238f;
+    static const float z0c[] = {-0.27292696f, -0.07629969f, -0.22797056f, 0.54852384f,
+                                -0.62930065f, 0.25795794f, 0.02584375f};
+    static const float z1c[] = {-0.02819452f, -0.01471565f, 0.48051509f, -1.74114454f,
+                                1.71547508f, -0.53022337f};
+    static const float z2c[] = {0.27058160f, -0.56800938f, 0.30803317f, 0.98938102f,
+                                -0.83180469f};
+    static const float z3c[] = {-0.60441560f, 1.50880086f, -0.93678576f, 0.08693841f};
+    static const float z4c[] = {0.93412077f, -1.41601920f, 0.33887446f};
+    static const float z5c[] = {-0.63915306f, 0.52032238f};
     const float p06 = 0.14381585f;
-    float xx = xf * xf;
-    float yy = yf * yf;
-    float z0 = p00 + xx * (p10 + xx * (p20 + xx * (p30 + xx * (p40 + xx * (p50 + xx * p60)))));
-    float z1 = p01 + xx * (p11 + xx * (p21 + xx * (p31 + xx * (p41 + xx * p51))));
-    float z2 = p02 + xx * (p12 + xx * (p22 + xx * (p32 + xx * p42)));
-    float z3 = p03 + xx * (p13 + xx * (p23 + xx * p33));
-    float z4 = p04 + xx * (p14 + xx * p24);
-    float z5 = p05 + xx * p15;
-    float chi = z0 + yy * (z1 + yy * (z2 + yy * (z3 + yy * (z4 + yy * (z5 + yy * p06)))));
-    return xf + xf * (1.0f - xx) * chi;
+    float xx = csc_mul(xf, xf);
+    float yy = csc_mul(yf, yf);
+    float z0 = csc_horner(xx, z0c, 7);
+    float z1 = csc_horner(xx, z1c, 6);
+    float z2 = csc_horner(xx, z2c, 5);
+    float z3 = csc_horner(xx, z3c, 4);
+    float z4 = csc_horner(xx, z4c, 3);
+    float z5 = csc_horner(xx, z5c, 2);
+    float chi = csc_madd(z5, yy, p06);
+    chi = csc_madd(z4, yy, chi);
+    chi = csc_madd(z3, yy, chi);
+    chi = csc_madd(z2, yy, chi);
+    chi = csc_madd(z1, yy, chi);
+    chi = csc_madd(z0, yy, chi);
+    return csc_madd(xf, csc_mul(xf, 1.0f - xx), chi);
 }
 
 void csc_s2x(double phi_w, double theta, double* xi, double* eta) {
@@ -1911,18 +1925,51 @@ void csc_s2x(double phi_w, double theta, double* xi, double* eta) {
     float yf = csc_forward_poly(static_cast<float>(psi_d), static_cast<float>(chi_d));
     xf = std::max(-1.0f, std::min(1.0f, xf));
     yf = std::max(-1.0f, std::min(1.0f, yf));
-    quadcube_face_to_xy(face, xf, yf, xi, eta);
+    // WCSLIB keeps x0 + xf in a float32 (face offsets in face units, up to 6).
+    static const float cxu[6] = {0.0f, 0.0f, 2.0f, 4.0f, 6.0f, 0.0f};
+    static const float cyu[6] = {2.0f, 0.0f, 0.0f, 0.0f, 0.0f, -2.0f};
+    volatile float xs = cxu[face] + xf;
+    volatile float ys = cyu[face] + yf;
+    *xi = 45.0 * static_cast<double>(xs);
+    *eta = 45.0 * static_cast<double>(ys);
+}
+
+// WCSLIB cscx2s: float32 xf = x/45, wrap, classify, subtract the face offset.
+bool csc_xy_to_face(double x, double y, int* face, float* xf, float* yf) {
+    double xd, yd;
+    int f;
+    if (!quadcube_xy_to_face(x, y, &f, &xd, &yd)) {
+        return false;  // bounds exactly as the shared cross-layout test
+    }
+    const double w1 = 1.0 / 45.0;
+    volatile float xs = static_cast<float>(x * w1);
+    volatile float ys = static_cast<float>(y * w1);
+    if (xs < -1.0f) xs = static_cast<float>(static_cast<double>(xs) + 8.0);
+    double xo = 0.0, yo = 0.0;
+    int fc = 1;
+    if (xs > 5.0f) { fc = 4; xo = 6.0; }
+    else if (xs > 3.0f) { fc = 3; xo = 4.0; }
+    else if (xs > 1.0f) { fc = 2; xo = 2.0; }
+    else if (ys > 1.0f) { fc = 0; yo = 2.0; }
+    else if (ys < -1.0f) { fc = 5; yo = -2.0; }
+    *face = fc;
+    float xl = static_cast<float>(static_cast<double>(xs) - xo);
+    float yl = static_cast<float>(static_cast<double>(ys) - yo);
+    *xf = std::max(-1.0f, std::min(1.0f, xl));
+    *yf = std::max(-1.0f, std::min(1.0f, yl));
+    return true;
 }
 
 bool csc_x2s(double xi_deg, double eta_deg, double* phi, double* theta) {
     int face;
-    double xf, yf;
-    if (!quadcube_xy_to_face(xi_deg, eta_deg, &face, &xf, &yf)) {
+    float xf, yf;
+    if (!csc_xy_to_face(xi_deg, eta_deg, &face, &xf, &yf)) {
         return false;
     }
-    float chi = csc_inverse_poly(static_cast<float>(xf), static_cast<float>(yf));
-    float psi = csc_inverse_poly(static_cast<float>(yf), static_cast<float>(xf));
-    double t = 1.0 / std::sqrt(static_cast<double>(chi * chi + psi * psi) + 1.0);
+    float chi = csc_inverse_poly(xf, yf);
+    float psi = csc_inverse_poly(yf, xf);
+    float sumsq = csc_madd(csc_mul(psi, psi), chi, chi);
+    double t = 1.0 / std::sqrt(static_cast<double>(sumsq) + 1.0);
     double l, m, n;
     if (face == 0) { l = -psi * t; m = chi * t; n = t; }
     else if (face == 1) { l = t; m = chi * t; n = psi * t; }
