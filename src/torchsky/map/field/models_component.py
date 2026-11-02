@@ -51,6 +51,7 @@ class _RenderKwargs(TypedDict):
     generator: torch.Generator | None
     forward_context: ForwardContext | None
 
+
 class FieldComponentDecomposition(_BaseFieldModel):
     """Explicit shared/private decomposition over multiple field models."""
 

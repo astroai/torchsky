@@ -67,7 +67,9 @@ def _call_operator(
 
 
 @pytest.mark.parametrize("direction", ["pixel_to_world", "world_to_pixel"])
-def test_wcs_operator_default_arguments_return_functional_outputs(direction: str) -> None:
+def test_wcs_operator_default_arguments_return_functional_outputs(
+    direction: str,
+) -> None:
     output1, output2 = _call_operator(direction)
     torch.testing.assert_close(output1, torch.tensor([1.0, 2.0], dtype=torch.float64))
     torch.testing.assert_close(output2, torch.tensor([3.0, 4.0], dtype=torch.float64))

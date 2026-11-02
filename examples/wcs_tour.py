@@ -45,15 +45,34 @@ def base_header(code: str, *, scale: float = 2.8e-4, crval=(150.0, 2.0)) -> dict
 
 def sip_header() -> dict:
     h = base_header("TAN-SIP")
-    h.update(A_ORDER=2, B_ORDER=2, A_2_0=3e-6, A_1_1=-2e-6, A_0_2=1e-6,
-             B_2_0=-2.5e-6, B_1_1=2e-6, B_0_2=2.5e-6)
+    h.update(
+        A_ORDER=2,
+        B_ORDER=2,
+        A_2_0=3e-6,
+        A_1_1=-2e-6,
+        A_0_2=1e-6,
+        B_2_0=-2.5e-6,
+        B_1_1=2e-6,
+        B_0_2=2.5e-6,
+    )
     return h
 
 
 def tpv_header() -> dict:
     h = base_header("TPV")
-    h.update(PV1_0=0.0, PV1_1=1.0, PV1_4=2e-4, PV1_5=-3e-4, PV1_6=1.5e-4,
-             PV2_0=0.0, PV2_1=1.0, PV2_2=2e-4, PV2_4=-1e-4, PV2_5=2.5e-4, PV2_6=-2e-4)
+    h.update(
+        PV1_0=0.0,
+        PV1_1=1.0,
+        PV1_4=2e-4,
+        PV1_5=-3e-4,
+        PV1_6=1.5e-4,
+        PV2_0=0.0,
+        PV2_1=1.0,
+        PV2_2=2e-4,
+        PV2_4=-1e-4,
+        PV2_5=2.5e-4,
+        PV2_6=-2e-4,
+    )
     return h
 
 
@@ -95,7 +114,11 @@ def main() -> None:
         "TPV": tpv_header(),
         "AZP mu=2": {**base_header("AZP", scale=0.02), "PV2_1": 2.0},
         "AIR": {**base_header("AIR", scale=0.02), "PV2_1": 90.0},
-        "COE": {**base_header("COE", scale=0.02, crval=(150.0, 45.0)), "PV2_1": 45.0, "PV2_2": 10.0},
+        "COE": {
+            **base_header("COE", scale=0.02, crval=(150.0, 45.0)),
+            "PV2_1": 45.0,
+            "PV2_2": 10.0,
+        },
         "BON": {**base_header("BON", scale=0.5), "PV2_1": 45.0},
         "PAR": base_header("PAR", scale=0.5),
     }

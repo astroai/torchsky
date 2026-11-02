@@ -29,7 +29,9 @@ def _resolve_estimator(args: argparse.Namespace):
 
 def _run_estimate(args: argparse.Namespace) -> int:
     read_dev = str(args.device or default_compute_device())
-    img, hdr = read(str(args.image), hdu=int(args.hdu), return_header=True, device=read_dev)
+    img, hdr = read(
+        str(args.image), hdu=int(args.hdu), return_header=True, device=read_dev
+    )
     mask = None
     if args.mask is not None:
         mask = read(str(args.mask), hdu=int(args.mask_hdu), device=read_dev)
@@ -76,7 +78,12 @@ def _run_match(args: argparse.Namespace) -> int:
             )
         corrected = corrector.correct(images, masks)
         for i, (corr, hdr) in enumerate(zip(corrected, hdrs)):
-            write(str(args.output).replace("{i}", str(i)), corr, header=hdr, overwrite=True)
+            write(
+                str(args.output).replace("{i}", str(i)),
+                corr,
+                header=hdr,
+                overwrite=True,
+            )
     else:
         offsets = corrector.fit_offsets(images, masks)
         for i, off in enumerate(offsets):
@@ -84,15 +91,15 @@ def _run_match(args: argparse.Namespace) -> int:
     return 0
 
 
-def register_sky_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def register_sky_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
     p = subparsers.add_parser(
         "sky",
         help="Sky background estimation and multi-exposure matching.",
         description="Estimate detector backgrounds or solve additive offsets across aligned exposures.",
         epilog=(
-            "Examples:\n"
-            "  torchsky sky estimate --help\n"
-            "  torchsky sky match --help"
+            "Examples:\n  torchsky sky estimate --help\n  torchsky sky match --help"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -112,7 +119,9 @@ def register_sky_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     est.add_argument("image", help="Input FITS image path.")
     est.add_argument("output", help="Output FITS path for sky model.")
     est.add_argument("--hdu", default=0, type=int, help="Image HDU index.")
-    est.add_argument("--mask", default=None, help="Optional mask FITS (True = exclude).")
+    est.add_argument(
+        "--mask", default=None, help="Optional mask FITS (True = exclude)."
+    )
     est.add_argument("--mask-hdu", default=0, type=int, help="Mask HDU index.")
     est.add_argument(
         "--method",
@@ -177,9 +186,13 @@ def register_sky_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     )
     match.add_argument("images", nargs="+", help="Input FITS images (same pixel grid).")
     match.add_argument("--hdu", default=0, type=int, help="Image HDU index.")
-    match.add_argument("--masks", default=None, nargs="*", help="Optional per-image masks.")
+    match.add_argument(
+        "--masks", default=None, nargs="*", help="Optional per-image masks."
+    )
     match.add_argument("--mask-hdu", default=0, type=int, help="Mask HDU index.")
-    match.add_argument("--output", default=None, help="Output pattern with {i} (e.g. sky_{i}.fits).")
+    match.add_argument(
+        "--output", default=None, help="Output pattern with {i} (e.g. sky_{i}.fits)."
+    )
     match.add_argument(
         "--method",
         default="mesh",

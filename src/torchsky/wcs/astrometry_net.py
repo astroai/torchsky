@@ -174,7 +174,9 @@ class _OriginWCS:
 
 
 def _is_sha256(value: str) -> bool:
-    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+    return len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -194,14 +196,20 @@ def _require_file(path: Path, description: str) -> Path:
 
 def _resolve_executable(config: AstrometryNetConfig) -> Path:
     raw = Path(config.executable).expanduser()
-    candidate = str(raw) if raw.is_absolute() or raw.parent != Path(".") else shutil.which(str(raw))
+    candidate = (
+        str(raw)
+        if raw.is_absolute() or raw.parent != Path(".")
+        else shutil.which(str(raw))
+    )
     if candidate is None:
         raise AstrometryNetUnavailableError(
             f"astrometry.net executable is absent: {config.executable}"
         )
     executable = _require_file(Path(candidate), "astrometry.net executable")
     if _sha256(executable) != config.executable_sha256:
-        raise AstrometryNetIdentityError("astrometry.net executable SHA-256 does not match")
+        raise AstrometryNetIdentityError(
+            "astrometry.net executable SHA-256 does not match"
+        )
     return executable
 
 
@@ -215,34 +223,52 @@ def _relative_manifest_path(manifest: Path, value: Any, description: str) -> Pat
 
 
 def _load_index_identity(config: AstrometryNetConfig) -> AstrometryNetIndexIdentity:
-    manifest = _require_file(Path(config.index_manifest), "astrometry.net index manifest")
+    manifest = _require_file(
+        Path(config.index_manifest), "astrometry.net index manifest"
+    )
     digest = _sha256(manifest)
     if digest != config.index_manifest_sha256:
-        raise AstrometryNetIdentityError("astrometry.net index manifest SHA-256 does not match")
+        raise AstrometryNetIdentityError(
+            "astrometry.net index manifest SHA-256 does not match"
+        )
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise AstrometryNetIdentityError("astrometry.net index manifest is not valid JSON") from exc
+        raise AstrometryNetIdentityError(
+            "astrometry.net index manifest is not valid JSON"
+        ) from exc
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
-        raise AstrometryNetIdentityError("astrometry.net index manifest schema_version must be 1")
+        raise AstrometryNetIdentityError(
+            "astrometry.net index manifest schema_version must be 1"
+        )
     index_id = payload.get("id")
     version = payload.get("version")
     if not isinstance(index_id, str) or not index_id.strip():
         raise AstrometryNetIdentityError("astrometry.net index manifest id is absent")
     if not isinstance(version, str) or not version.strip():
-        raise AstrometryNetIdentityError("astrometry.net index manifest version is absent")
+        raise AstrometryNetIdentityError(
+            "astrometry.net index manifest version is absent"
+        )
     backend = payload.get("backend_config")
     if not isinstance(backend, dict) or not _is_sha256(str(backend.get("sha256", ""))):
-        raise AstrometryNetIdentityError("index manifest backend_config identity is incomplete")
-    backend_path = _relative_manifest_path(manifest, backend.get("path"), "backend config")
+        raise AstrometryNetIdentityError(
+            "index manifest backend_config identity is incomplete"
+        )
+    backend_path = _relative_manifest_path(
+        manifest, backend.get("path"), "backend config"
+    )
     backend_sha = str(backend["sha256"])
     if _sha256(backend_path) != backend_sha:
-        raise AstrometryNetIdentityError("astrometry.net backend config SHA-256 does not match")
+        raise AstrometryNetIdentityError(
+            "astrometry.net backend config SHA-256 does not match"
+        )
     raw_ids = payload.get("astrometry_index_ids")
     if (
         not isinstance(raw_ids, list)
         or not raw_ids
-        or any(not isinstance(value, int) or isinstance(value, bool) for value in raw_ids)
+        or any(
+            not isinstance(value, int) or isinstance(value, bool) for value in raw_ids
+        )
     ):
         raise AstrometryNetIdentityError(
             "index manifest astrometry_index_ids must be a non-empty integer list"
@@ -253,11 +279,15 @@ def _load_index_identity(config: AstrometryNetConfig) -> AstrometryNetIndexIdent
     files: list[tuple[str, str]] = []
     for row in raw_files:
         if not isinstance(row, dict) or not _is_sha256(str(row.get("sha256", ""))):
-            raise AstrometryNetIdentityError("index manifest file identity is incomplete")
+            raise AstrometryNetIdentityError(
+                "index manifest file identity is incomplete"
+            )
         path = _relative_manifest_path(manifest, row.get("path"), "index file")
         file_digest = str(row["sha256"])
         if _sha256(path) != file_digest:
-            raise AstrometryNetIdentityError(f"astrometry.net index SHA-256 does not match: {path}")
+            raise AstrometryNetIdentityError(
+                f"astrometry.net index SHA-256 does not match: {path}"
+            )
         files.append((str(path), file_digest))
     return AstrometryNetIndexIdentity(
         index_id=index_id,
@@ -297,7 +327,9 @@ def _run(
 def _read_columns(path: Path) -> dict[str, Tensor]:
     table = read_torch(str(path), hdu=1)
     if not isinstance(table, Mapping):
-        raise AstrometryNetExecutionError(f"astrometry.net output is not a table: {path.name}")
+        raise AstrometryNetExecutionError(
+            f"astrometry.net output is not a table: {path.name}"
+        )
     return {str(name).lower(): torch.as_tensor(value) for name, value in table.items()}
 
 
@@ -377,11 +409,17 @@ def _same_hypothesis(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
         "CD2_1",
         "CD2_2",
     )
-    return all(str(left.get(key)) == str(right.get(key)) for key in text_keys) and all(
-        math.isclose(float(left[key]), float(right[key]), rel_tol=0.0, abs_tol=1.0e-12)
-        for key in numeric_keys
-        if key in left and key in right
-    ) and all(key in left and key in right for key in numeric_keys)
+    return (
+        all(str(left.get(key)) == str(right.get(key)) for key in text_keys)
+        and all(
+            math.isclose(
+                float(left[key]), float(right[key]), rel_tol=0.0, abs_tol=1.0e-12
+            )
+            for key in numeric_keys
+            if key in left and key in right
+        )
+        and all(key in left and key in right for key in numeric_keys)
+    )
 
 
 def _coerce_inputs(
@@ -397,18 +435,28 @@ def _coerce_inputs(
     if y_tensor.shape != x_tensor.shape or y_tensor.is_complex():
         raise ValueError("y must have the same shape and real dtype as x")
     if x_tensor.numel() < 5 or not bool(
-        (torch.isfinite(x_tensor) & torch.isfinite(y_tensor)).all().detach().cpu().item()
+        (torch.isfinite(x_tensor) & torch.isfinite(y_tensor))
+        .all()
+        .detach()
+        .cpu()
+        .item()
     ):
         raise ValueError("x and y must contain at least five finite centroids")
     points = torch.stack((x_tensor, y_tensor), dim=-1).detach().cpu().to(torch.float64)
     flux_tensor = None
     if flux is not None:
-        flux_tensor = torch.as_tensor(flux, dtype=x_tensor.dtype, device=x_tensor.device)
-        if flux_tensor.shape != x_tensor.shape or not bool(torch.isfinite(flux_tensor).all()):
+        flux_tensor = torch.as_tensor(
+            flux, dtype=x_tensor.dtype, device=x_tensor.device
+        )
+        if flux_tensor.shape != x_tensor.shape or not bool(
+            torch.isfinite(flux_tensor).all()
+        ):
             raise ValueError("flux must contain finite values with shape (N,)")
         flux_tensor = flux_tensor.detach().cpu().to(torch.float64)
     if covariance is None:
-        covariance_tensor = torch.eye(2, dtype=torch.float64).expand(points.shape[0], 2, 2).clone()
+        covariance_tensor = (
+            torch.eye(2, dtype=torch.float64).expand(points.shape[0], 2, 2).clone()
+        )
     else:
         covariance_tensor = torch.as_tensor(covariance, dtype=torch.float64)
         if covariance_tensor.shape == (2, 2):
@@ -470,7 +518,9 @@ def _correspondences(
             residuals_pixels=torch.empty(0, dtype=torch.float64),
         )
     if bool(((field_id < 0) | (field_id >= ordered_rows.numel())).any()):
-        raise AstrometryNetExecutionError("astrometry.net correspondence field_id is invalid")
+        raise AstrometryNetExecutionError(
+            "astrometry.net correspondence field_id is invalid"
+        )
     field_xy = torch.stack(
         (
             _column(columns, "field_x", path).to(torch.float64).reshape(-1),
@@ -546,7 +596,9 @@ def _base_command(
 
 def _solved(path: Path, purpose: str) -> None:
     if not path.is_file() or not any(path.read_bytes()):
-        raise AstrometryNetExecutionError(f"astrometry.net {purpose} produced no accepted solution")
+        raise AstrometryNetExecutionError(
+            f"astrometry.net {purpose} produced no accepted solution"
+        )
 
 
 def _sanitized(command: Sequence[str], work: Path) -> tuple[str, ...]:
@@ -689,7 +741,9 @@ def solve_with_astrometry_net(
             raise AstrometryNetHypothesisRejected(
                 "held-out verification replaced the bootstrap hypothesis"
             )
-        serialized_verify = points.index_select(0, verify_order) + float(1 - pixel_origin)
+        serialized_verify = points.index_select(0, verify_order) + float(
+            1 - pixel_origin
+        )
         heldout = _correspondences(verify_corr, verify_order, serialized_verify)
         matched_count = int(heldout.residuals_pixels.numel())
         if matched_count < verification.min_matches:
@@ -699,7 +753,10 @@ def solve_with_astrometry_net(
             )
         rms = float(torch.sqrt(torch.mean(heldout.residuals_pixels.square())).item())
         maximum = float(heldout.residuals_pixels.max().item())
-        if rms > verification.max_rms_pixels or maximum > verification.max_residual_pixels:
+        if (
+            rms > verification.max_rms_pixels
+            or maximum > verification.max_residual_pixels
+        ):
             raise AstrometryNetHypothesisRejected(
                 f"held-out residuals exceed limits: rms={rms:.8g} pixels, "
                 f"max={maximum:.8g} pixels"
@@ -735,8 +792,7 @@ def solve_with_astrometry_net(
             covariance_space="detector",
         )
         reference_covariance = (
-            torch.eye(2, dtype=torch.float64)
-            * verification.reference_sigma_arcsec**2
+            torch.eye(2, dtype=torch.float64) * verification.reference_sigma_arcsec**2
         )
         graph = AstrometricMatchGraph(
             [observation],

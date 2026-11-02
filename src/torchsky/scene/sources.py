@@ -705,7 +705,9 @@ class SourceCatalogScene(SceneRepresentation):
             * axis_ratio
             * radius.square()
             * index_n
-            * torch.exp(bn - 2.0 * index_n * torch.log(bn) + torch.lgamma(2.0 * index_n))
+            * torch.exp(
+                bn - 2.0 * index_n * torch.log(bn) + torch.lgamma(2.0 * index_n)
+            )
         )
         pixel_area = torch.linalg.det(sky_from_pixel).abs()
         return profile * (pixel_area / total_sky)

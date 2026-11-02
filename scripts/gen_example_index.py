@@ -52,7 +52,10 @@ SCENARIOS: list[tuple[str, str, list[tuple[str, str]]]] = [
             ("healpix_and_moc", "HEALPix queries, sparse maps and MOC algebra"),
             ("sht_power_spectrum", "Spherical harmonic transforms and C_ell recovery"),
             ("sphere_image_inverse", "All-sky harmonic fit from flat cutouts"),
-            ("polarization_teb", "Joint T/E/B inverse from temperature and Q/U cutouts"),
+            (
+                "polarization_teb",
+                "Joint T/E/B inverse from temperature and Q/U cutouts",
+            ),
         ],
     ),
     (
@@ -64,7 +67,10 @@ SCENARIOS: list[tuple[str, str, list[tuple[str, str]]]] = [
         "Mapmaking: coadds, drizzle and cubes",
         "Resample many exposures onto one grid, a HEALPix map, or a spectral cube.",
         [
-            ("coadd_dithered_sip", "Coadd dithered SIP exposures: Lanczos3 and drizzle"),
+            (
+                "coadd_dithered_sip",
+                "Coadd dithered SIP exposures: Lanczos3 and drizzle",
+            ),
             ("drizzle_flagship", "Exact square drizzle with flux conservation"),
             ("coadd_to_healpix", "Multiband tiles coadded directly onto HEALPix"),
             ("spectral_cube", "IFU frames to a spectral cube"),
@@ -107,7 +113,11 @@ def _excerpt(name: str) -> str | None:
     path = OUTPUTS / f"{Path(name).stem}.txt"
     if not path.is_file():
         return None
-    lines = [line.rstrip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    lines = [
+        line.rstrip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     return "\n".join(lines[:12]) if lines else None
 
 
@@ -116,11 +126,23 @@ def _listed() -> list[str]:
 
 
 def _problems() -> list[str]:
-    on_disk = {p.stem for p in EXAMPLES.glob("*.py") if p.name not in EXCLUDE and not p.name.startswith("_")}
+    on_disk = {
+        p.stem
+        for p in EXAMPLES.glob("*.py")
+        if p.name not in EXCLUDE and not p.name.startswith("_")
+    }
     listed = _listed()
-    problems = [f"example not in SCENARIOS: {n}.py" for n in sorted(on_disk - set(listed))]
-    problems += [f"SCENARIOS lists missing example: {n}.py" for n in sorted(set(listed) - on_disk)]
-    problems += [f"example listed twice: {n}" for n in sorted({n for n in listed if listed.count(n) > 1})]
+    problems = [
+        f"example not in SCENARIOS: {n}.py" for n in sorted(on_disk - set(listed))
+    ]
+    problems += [
+        f"SCENARIOS lists missing example: {n}.py"
+        for n in sorted(set(listed) - on_disk)
+    ]
+    problems += [
+        f"example listed twice: {n}"
+        for n in sorted({n for n in listed if listed.count(n) > 1})
+    ]
     return problems
 
 
@@ -200,7 +222,10 @@ def make_thumbnails() -> int:
         with tempfile.TemporaryDirectory(prefix="torchsky-thumb-") as tmp:
             proc = subprocess.run(
                 [sys.executable, str(script), "--out", tmp],
-                cwd=ROOT, capture_output=True, text=True, check=False,
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
             )
             if proc.returncode != 0:
                 print(f"[skip] {name}: exit {proc.returncode}")
@@ -214,10 +239,16 @@ def make_thumbnails() -> int:
                 image = image.convert("RGB")
                 if image.width > THUMB_WIDTH:
                     height = round(image.height * THUMB_WIDTH / image.width)
-                    image = image.resize((THUMB_WIDTH, height), Image.Resampling.LANCZOS)
+                    image = image.resize(
+                        (THUMB_WIDTH, height), Image.Resampling.LANCZOS
+                    )
                 target = THUMBS / f"{name}.png"
-                image.quantize(colors=128, dither=Image.Dither.NONE).save(target, optimize=True)
-            print(f"[ok] {name}: {target.relative_to(ROOT)} ({target.stat().st_size // 1024} KB)")
+                image.quantize(colors=128, dither=Image.Dither.NONE).save(
+                    target, optimize=True
+                )
+            print(
+                f"[ok] {name}: {target.relative_to(ROOT)} ({target.stat().st_size // 1024} KB)"
+            )
     return 0
 
 
@@ -226,7 +257,9 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
-    mode.add_argument("--thumbnails", action="store_true", help="regenerate committed thumbnails")
+    mode.add_argument(
+        "--thumbnails", action="store_true", help="regenerate committed thumbnails"
+    )
     args = parser.parse_args(argv)
     if args.thumbnails:
         return make_thumbnails()

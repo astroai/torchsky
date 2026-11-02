@@ -218,8 +218,6 @@ def test_tpv_skips_cpp_direct_tan_projection_shortcuts() -> None:
     np.testing.assert_allclose(y_rt.cpu().numpy(), y_ref.cpu().numpy(), atol=1e-12)
 
 
-
-
 def test_tpv_identity_pv2_1_mixed_fov_roundtrip() -> None:
     header = _tpv_header()
     header["PV2_1"] = 1.0
@@ -305,6 +303,7 @@ def test_empty_tpv_is_identity() -> None:
     torch.testing.assert_close(dv, expected_v, equal_nan=True)
     torch.testing.assert_close(iu, expected_u, equal_nan=True)
     torch.testing.assert_close(iv, expected_v, equal_nan=True)
+
 
 @pytest.mark.parametrize("path", ["fused", "standalone", "python"])
 def test_rank_deficient_affine_returns_nan_in_forced_inverse_paths(path: str) -> None:
@@ -401,9 +400,13 @@ def test_valid_tpv_fixture_matches_astropy_in_forced_paths(path: str) -> None:
     expected_world = oracle.all_pix2world(pixels, 0)
     ra, dec = wcs.pixel_to_world(torch.from_numpy(x), torch.from_numpy(y), origin=0)
     actual_world = np.column_stack((ra.numpy(), dec.numpy()))
-    delta_ra = np.remainder(actual_world[:, 0] - expected_world[:, 0] + 180.0, 360.0) - 180.0
+    delta_ra = (
+        np.remainder(actual_world[:, 0] - expected_world[:, 0] + 180.0, 360.0) - 180.0
+    )
     np.testing.assert_allclose(delta_ra, 0.0, atol=2e-9, rtol=0.0)
-    np.testing.assert_allclose(actual_world[:, 1], expected_world[:, 1], atol=2e-9, rtol=0.0)
+    np.testing.assert_allclose(
+        actual_world[:, 1], expected_world[:, 1], atol=2e-9, rtol=0.0
+    )
 
     px, py = wcs.world_to_pixel(ra, dec, origin=0)
     np.testing.assert_allclose(px.numpy(), x, atol=2e-5, rtol=0.0)

@@ -552,7 +552,9 @@ def _separable_sample_chunked(
                 table = torch.cat([table, variance_column], dim=0)
             table = table.t().contiguous()
         elif planes is None and table is None:
-            assert variance_column is not None  # planes and variance are never both None
+            assert (
+                variance_column is not None
+            )  # planes and variance are never both None
             table = variance_column.t().contiguous()
         assert table is not None
         for start in range(0, count, chunk):

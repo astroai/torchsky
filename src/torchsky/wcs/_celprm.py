@@ -45,7 +45,9 @@ def celestial_euler(
     z = math.hypot(x, y)
     if z == 0.0:
         if slat0 != 0.0:
-            raise ValueError("invalid LONPOLE/LATPOLE for the reference point (Paper II eq. 8)")
+            raise ValueError(
+                "invalid LONPOLE/LATPOLE for the reference point (Paper II eq. 8)"
+            )
         latp = latpole
     else:
         slz = slat0 / z
@@ -136,5 +138,7 @@ def celestial_correction(
         celestial_euler(alpha0, delta0, 0.0, theta0, exist_lonpole, 90.0)
     )
     m = _matmul(r_true, transpose(r_exist))
-    dev = max(abs(m[i][j] - (1.0 if i == j else 0.0)) for i in range(3) for j in range(3))
+    dev = max(
+        abs(m[i][j] - (1.0 if i == j else 0.0)) for i in range(3) for j in range(3)
+    )
     return None if dev < 1e-13 else m

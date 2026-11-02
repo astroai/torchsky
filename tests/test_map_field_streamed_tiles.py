@@ -27,7 +27,9 @@ class Scene(nn.Module):
     def forward(self, ra, dec, wavelength):
         wavelength = torch.broadcast_to(wavelength, ra.shape)
         return self.net(
-            torch.stack(((ra - 1) * 10, dec * 10, wavelength / 2), -1).to(self.net[0].weight.dtype)
+            torch.stack(((ra - 1) * 10, dec * 10, wavelength / 2), -1).to(
+                self.net[0].weight.dtype
+            )
         ).squeeze(-1)
 
 
@@ -165,9 +167,14 @@ def test_training_diagnostics_inherit_requested_tile_size():
             return super().forward(ra, dec, wavelength)
 
     fit_field_model(
-        [observation()], BoundedScene(), steps=1, lr=0.0,
-        num_spectral_samples=1, streaming_accumulation=True,
-        render_spatial_tile_hw=(8, 8), device="cpu",
+        [observation()],
+        BoundedScene(),
+        steps=1,
+        lr=0.0,
+        num_spectral_samples=1,
+        streaming_accumulation=True,
+        render_spatial_tile_hw=(8, 8),
+        device="cpu",
     )
 
 
@@ -176,8 +183,13 @@ def test_zero_pixel_samples_retains_full_quadrature_and_negative_rejected():
     full, zero = Scene(), Scene()
     zero.load_state_dict(full.state_dict())
     obs = replace(observation(), psf_spec=PSFSpec())
-    kwargs = dict(steps=1, lr=0.0, num_spectral_samples=1,
-                  spatial_sampling="gauss_legendre_2x2", device="cpu")
+    kwargs = dict(
+        steps=1,
+        lr=0.0,
+        num_spectral_samples=1,
+        spatial_sampling="gauss_legendre_2x2",
+        device="cpu",
+    )
     fit_field_model([obs], full, **kwargs)
     fit_field_model([obs], zero, pixel_samples_per_observation=0, **kwargs)
     for left, right in zip(full.parameters(), zero.parameters(), strict=True):
@@ -185,9 +197,15 @@ def test_zero_pixel_samples_retains_full_quadrature_and_negative_rejected():
     with pytest.raises(ValueError, match="non-negative"):
         fit_field_model([obs], zero, pixel_samples_per_observation=-1, **kwargs)
     with pytest.raises(ValueError, match="context and anchor"):
-        fit_field_model([obs], zero, streaming_accumulation=True,
-                        render_spatial_tile_hw=(8, 8), context_observations_per_step=1,
-                        context_loss_weight=1.0, **kwargs)
+        fit_field_model(
+            [obs],
+            zero,
+            streaming_accumulation=True,
+            render_spatial_tile_hw=(8, 8),
+            context_observations_per_step=1,
+            context_loss_weight=1.0,
+            **kwargs,
+        )
 
 
 def test_incompatible_sampling_and_correlated_tile_loss_fail_explicitly():
@@ -236,26 +254,44 @@ def test_recomputed_structured_loss_preserves_full_image_and_noise_gradients(red
     results = []
     for index, model in enumerate(models):
         bundles = [
-            replace(field_observation_operator_bundle(obs),
-                    noise=StructuredNoiseOp(noises[index], frozen=False),
-                    background=LearnedBackgroundOp(backgrounds[index]))
+            replace(
+                field_observation_operator_bundle(obs),
+                noise=StructuredNoiseOp(noises[index], frozen=False),
+                background=LearnedBackgroundOp(backgrounds[index]),
+            )
             for obs in observations
         ]
-        results.append(fit_field_model(
-            observations, model, steps=1, lr=0.0, num_spectral_samples=2,
-            spatial_sampling="gauss_legendre_2x2", loss_kind="structured_nll",
-            loss_reduction=reduction, observation_operator_bundles=bundles,
-            streaming_accumulation=bool(index),
-            render_spatial_tile_hw=(6, 7) if index else None, device="cpu",
-        ))
+        results.append(
+            fit_field_model(
+                observations,
+                model,
+                steps=1,
+                lr=0.0,
+                num_spectral_samples=2,
+                spatial_sampling="gauss_legendre_2x2",
+                loss_kind="structured_nll",
+                loss_reduction=reduction,
+                observation_operator_bundles=bundles,
+                streaming_accumulation=bool(index),
+                render_spatial_tile_hw=(6, 7) if index else None,
+                device="cpu",
+            )
+        )
     assert results[1].final_loss == pytest.approx(results[0].final_loss, rel=2e-5)
     for left, right in [models, noises, backgrounds]:
-        for (name, full), tiled in zip(left.named_parameters(), right.parameters(), strict=True):
+        for (name, full), tiled in zip(
+            left.named_parameters(), right.parameters(), strict=True
+        ):
             if full.grad is None:
                 assert tiled.grad is None, name
             else:
-                torch.testing.assert_close(tiled.grad, full.grad, rtol=3e-4, atol=2e-6,
-                                           msg=lambda message: f"{name}: {message}")
+                torch.testing.assert_close(
+                    tiled.grad,
+                    full.grad,
+                    rtol=3e-4,
+                    atol=2e-6,
+                    msg=lambda message: f"{name}: {message}",
+                )
 
 
 def test_recomputed_structured_loss_replays_random_draws():
@@ -268,15 +304,25 @@ def test_recomputed_structured_loss_replays_random_draws():
     recomputed = copy.deepcopy(full)
     obs = observation(13)
     noise = StructuredDetectorNoise(num_amplifiers=2).requires_grad_(False)
-    bundle = replace(field_observation_operator_bundle(obs), noise=StructuredNoiseOp(noise))
+    bundle = replace(
+        field_observation_operator_bundle(obs), noise=StructuredNoiseOp(noise)
+    )
     rng_states = []
     for model, streaming in [(full, False), (recomputed, True)]:
         torch.manual_seed(243)
         fit_field_model(
-            [obs], model, steps=1, lr=0.0, num_spectral_samples=2,
-            training_spectral_sampling="bandpass_mc", loss_kind="structured_nll",
-            observation_operator_bundles=[bundle], streaming_accumulation=streaming,
-            render_spatial_tile_hw=(6, 7), diagnostic_spatial_tile_hw=(6, 7), device="cpu",
+            [obs],
+            model,
+            steps=1,
+            lr=0.0,
+            num_spectral_samples=2,
+            training_spectral_sampling="bandpass_mc",
+            loss_kind="structured_nll",
+            observation_operator_bundles=[bundle],
+            streaming_accumulation=streaming,
+            render_spatial_tile_hw=(6, 7),
+            diagnostic_spatial_tile_hw=(6, 7),
+            device="cpu",
         )
         rng_states.append(torch.get_rng_state())
     for left, right in zip(full.parameters(), recomputed.parameters(), strict=True):
@@ -315,10 +361,17 @@ def test_recomputed_structured_loss_bounds_field_activation_memory():
             noise=StructuredNoiseOp(StructuredDetectorNoise(num_amplifiers=2)),
         )
         fit_field_model(
-            [obs], model, steps=1, lr=0.0, num_spectral_samples=1,
-            observation_operator_bundles=[bundle], loss_kind="structured_nll",
-            streaming_accumulation=streaming, render_spatial_tile_hw=(8, 8),
-            diagnostic_spatial_tile_hw=(8, 8), device="cpu",
+            [obs],
+            model,
+            steps=1,
+            lr=0.0,
+            num_spectral_samples=1,
+            observation_operator_bundles=[bundle],
+            loss_kind="structured_nll",
+            streaming_accumulation=streaming,
+            render_spatial_tile_hw=(8, 8),
+            diagnostic_spatial_tile_hw=(8, 8),
+            device="cpu",
         )
         assert model.counter[0] == 0
         return model.counter[1]
@@ -429,8 +482,12 @@ def test_zero_pixel_samples_disable_sampling_and_negatives_fail():
     obs = replace(observation(9), psf_spec=PSFSpec(), detector_background=None)
     model = RecordingScene()
     fit_field_model(
-        [obs], model, steps=1, num_spectral_samples=1,
-        pixel_samples_per_observation=0, spatial_sampling="gauss_legendre_2x2",
+        [obs],
+        model,
+        steps=1,
+        num_spectral_samples=1,
+        pixel_samples_per_observation=0,
+        spatial_sampling="gauss_legendre_2x2",
         device="cpu",
     )
     assert model.training_sizes == [obs.image.numel()] * 4
@@ -438,16 +495,26 @@ def test_zero_pixel_samples_disable_sampling_and_negatives_fail():
         fit_field_model([obs], Scene(), steps=1, pixel_samples_per_observation=-1)
 
 
-@pytest.mark.parametrize("unsupported", [
-    {"context_observations_per_step": 1, "context_loss_weight": 1.0},
-    {"training_spectral_sampling": "mixture_mc", "spectral_anchor_observations_per_step": 1,
-     "spectral_anchor_loss_weight": 1.0},
-])
+@pytest.mark.parametrize(
+    "unsupported",
+    [
+        {"context_observations_per_step": 1, "context_loss_weight": 1.0},
+        {
+            "training_spectral_sampling": "mixture_mc",
+            "spectral_anchor_observations_per_step": 1,
+            "spectral_anchor_loss_weight": 1.0,
+        },
+    ],
+)
 def test_streamed_tiles_reject_full_image_auxiliary_losses(unsupported):
     with pytest.raises(ValueError, match="context and anchor"):
         fit_field_model(
-            [observation()], Scene(), steps=1, streaming_accumulation=True,
-            render_spatial_tile_hw=(8, 8), **unsupported,
+            [observation()],
+            Scene(),
+            steps=1,
+            streaming_accumulation=True,
+            render_spatial_tile_hw=(8, 8),
+            **unsupported,
         )
 
 
@@ -456,7 +523,10 @@ def test_disabled_psf_bundle_does_not_reject_pixel_quadrature():
     obs.psf_spec.pixel_response_included = True
     explicit_none = ObservationOperatorBundle()
     prediction = rendering.render_field_observation(
-        Scene(), obs, operator_bundle=explicit_none,
-        spatial_sampling="gauss_legendre_2x2", spatial_tile_hw=(4, 5),
+        Scene(),
+        obs,
+        operator_bundle=explicit_none,
+        spatial_sampling="gauss_legendre_2x2",
+        spatial_tile_hw=(4, 5),
     )
     assert prediction.shape == obs.image.shape

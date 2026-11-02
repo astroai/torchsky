@@ -18,7 +18,12 @@ from torchsky.map.field import (
     render_field_observation,
 )
 from torchsky.map.observation import ImageObservation
-from torchsky.map.product import estimate_map_inverse_variance, plan_map_product, render_field_ensemble_product, render_field_product
+from torchsky.map.product import (
+    estimate_map_inverse_variance,
+    plan_map_product,
+    render_field_ensemble_product,
+    render_field_product,
+)
 from torchsky.map.scenes import ContinuousFieldModel, DiscreteTargetImage
 from torchsky.map.scenes import HealpixMapScene
 from torchsky.map.operators import spherical_spectral_operator_bundle
@@ -457,7 +462,7 @@ def test_square_drizzle_reports_squared_coefficient_inverse_variance(
     ["bilinear", "conservative_polygon", "splat_box"],
 )
 @pytest.mark.parametrize("value_semantics", ["surface_brightness", "flux"])
-@pytest.mark.needs_float64('conservative_polygon', 'splat_box')
+@pytest.mark.needs_float64("conservative_polygon", "splat_box")
 def test_half_pixel_projection_reports_squared_coefficient_inverse_variance(
     tmp_path: Path,
     kernel: str,
@@ -768,8 +773,6 @@ def test_render_scene_product_renders_healpix_scene_through_solver_hooks() -> No
     assert result.mask is not None and bool(torch.all(result.mask))
 
 
-
-
 def test_estimate_map_inverse_variance_support_proxy_flags_extrapolated_regions() -> (
     None
 ):
@@ -812,7 +815,3 @@ def test_estimate_map_inverse_variance_never_invents_field_weights() -> None:
         estimate_map_inverse_variance(result),
         torch.full_like(result.data, 0.25),
     )
-
-
-
-

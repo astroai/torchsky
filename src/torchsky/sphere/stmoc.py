@@ -27,11 +27,7 @@ _SERIAL_CONTAINS_PRODUCT = 64
 
 def mjd_to_time_us(mjd: Tensor | float) -> Tensor:
     """Convert MJD to integer microseconds since JD=0 (TMOC order-61 index)."""
-    t = (
-        mjd
-        if isinstance(mjd, Tensor)
-        else torch.as_tensor(mjd, dtype=torch.float64)
-    )
+    t = mjd if isinstance(mjd, Tensor) else torch.as_tensor(mjd, dtype=torch.float64)
     device = t.device
     # ponytail: float32 MJD cannot encode µs near MJD 5e4; host float64 on MPS.
     if device.type == "mps":
@@ -209,9 +205,7 @@ class STMOC:
             selected = self._time_order[lo_i:hi_i]
         else:
             stop = int(
-                torch.searchsorted(starts, query[1:], right=False)
-                .detach()
-                .cpu()[0]
+                torch.searchsorted(starts, query[1:], right=False).detach().cpu()[0]
             )
             selected = self._time_order[:stop][ends[:stop] > query[0]]
         indices = selected.detach().cpu().tolist()
@@ -445,9 +439,7 @@ class STMOC:
         return _from_segments(segs, time_depth=time_depth, spatial_depth=spatial_depth)
 
 
-def _contains_serial(
-    stmoc: STMOC, t_us: Tensor, lon: Tensor, lat: Tensor
-) -> Tensor:
+def _contains_serial(stmoc: STMOC, t_us: Tensor, lon: Tensor, lat: Tensor) -> Tensor:
     out = torch.zeros(t_us.numel(), dtype=torch.bool, device=t_us.device)
     starts = stmoc.time_start_us.to(device=t_us.device)
     ends = stmoc.time_end_us.to(device=t_us.device)
@@ -632,10 +624,7 @@ def _from_segments(
         if (
             merged
             and merged[-1][1] == start
-            and (
-                merged[-1][2] is moc
-                or _moc_key(merged[-1][2]) == _moc_key(moc)
-            )
+            and (merged[-1][2] is moc or _moc_key(merged[-1][2]) == _moc_key(moc))
         ):
             prev_s, _, prev_m = merged[-1]
             merged[-1] = (prev_s, end, prev_m)
@@ -694,16 +683,14 @@ def _sweep_boolean(a: STMOC, b: STMOC, *, op: str) -> list[tuple[int, int, MOC]]
         if op == "union":
             moc = _merge_optional_moc(acc_a, acc_b)
         elif op == "intersection":
-            moc = (
-                None
-                if acc_a is None or acc_b is None
-                else acc_a.intersection(acc_b)
-            )
+            moc = None if acc_a is None or acc_b is None else acc_a.intersection(acc_b)
         elif op == "difference":
             moc = (
                 None
                 if acc_a is None
-                else acc_a if acc_b is None else acc_a.difference(acc_b)
+                else acc_a
+                if acc_b is None
+                else acc_a.difference(acc_b)
             )
         else:
             raise ValueError(f"unknown STMOC boolean op: {op!r}")

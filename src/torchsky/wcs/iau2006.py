@@ -431,9 +431,7 @@ def dcr_offset(
 
     dn = _air_refractive_index_minus_one(
         lam, pressure_mbar=p, temperature_c=t
-    ) - _air_refractive_index_minus_one(
-        lam_ref, pressure_mbar=p, temperature_c=t
-    )
+    ) - _air_refractive_index_minus_one(lam_ref, pressure_mbar=p, temperature_c=t)
     dr_deg = torch.rad2deg(dn * torch.tan(torch.deg2rad(zen)))
     pa_rad = torch.deg2rad(pa)
     d_east_deg = dr_deg * torch.sin(pa_rad)

@@ -48,8 +48,14 @@ class DiagonalAction(Protocol):
     def diagonal(self) -> Tensor: ...
 
 
-def _validate_real_floating(tensor: Tensor, *, name: str, ndim: int | None = None) -> None:
-    if not isinstance(tensor, Tensor) or not tensor.is_floating_point() or tensor.is_complex():
+def _validate_real_floating(
+    tensor: Tensor, *, name: str, ndim: int | None = None
+) -> None:
+    if (
+        not isinstance(tensor, Tensor)
+        or not tensor.is_floating_point()
+        or tensor.is_complex()
+    ):
         raise TypeError(f"{name} must be a real floating tensor")
     if ndim is not None and tensor.ndim != ndim:
         raise ValueError(f"{name} must have {ndim} dimensions")
@@ -74,7 +80,11 @@ class DiagonalCovariance:
 
     def _value(self, value: Tensor) -> Tensor:
         self._snapshot.validate()
-        if value.shape != self.variance.shape or value.dtype != self.variance.dtype or value.device != self.variance.device:
+        if (
+            value.shape != self.variance.shape
+            or value.dtype != self.variance.dtype
+            or value.device != self.variance.device
+        ):
             raise ValueError("value must match variance shape, dtype, and device")
         return value
 
@@ -142,12 +152,16 @@ class BlockDiagonalCovariance:
             inferred = []
             for block in items:
                 if not isinstance(block, DiagonalAction):
-                    raise ValueError("block_shapes are required when a block has no diagonal")
+                    raise ValueError(
+                        "block_shapes are required when a block has no diagonal"
+                    )
                 inferred.append(tuple(block.diagonal().shape))
             shapes = tuple(inferred)
         else:
             shapes = tuple(tuple(int(size) for size in shape) for shape in block_shapes)
-        if len(shapes) != len(items) or any(any(size < 0 for size in shape) for shape in shapes):
+        if len(shapes) != len(items) or any(
+            any(size < 0 for size in shape) for shape in shapes
+        ):
             raise ValueError("block shapes must be non-negative and align with blocks")
         object.__setattr__(self, "blocks", items)
         object.__setattr__(self, "block_shapes", shapes)
@@ -158,7 +172,9 @@ class BlockDiagonalCovariance:
 
     def _parts(self, value: Tensor) -> list[Tensor]:
         if value.ndim != 1 or value.numel() != self.size:
-            raise ValueError("block covariance values must be flat with the declared size")
+            raise ValueError(
+                "block covariance values must be flat with the declared size"
+            )
         parts = []
         offset = 0
         for shape in self.block_shapes:
@@ -195,7 +211,11 @@ class BlockDiagonalCovariance:
         for block in self.blocks:
             if not isinstance(block, SamplingAction):
                 raise NotImplementedError("block does not provide sampling")
-            outputs.append(block.sample(sample_shape, generator=generator).flatten(start_dim=len(sample_shape)))
+            outputs.append(
+                block.sample(sample_shape, generator=generator).flatten(
+                    start_dim=len(sample_shape)
+                )
+            )
         return torch.cat(outputs, dim=-1)
 
     def logdet(self) -> Tensor:
@@ -231,14 +251,19 @@ class LowRankCovariance:
         _validate_real_floating(self.factor, name="factor")
         if self.factor.shape[:-1] != self.variance.shape:
             raise ValueError("factor must have shape (*variance.shape, rank)")
-        if self.factor.dtype != self.variance.dtype or self.factor.device != self.variance.device:
+        if (
+            self.factor.dtype != self.variance.dtype
+            or self.factor.device != self.variance.device
+        ):
             raise ValueError("factor and variance must share dtype and device")
         if bool((self.variance <= 0).any()):
             raise ValueError("low-rank covariance requires positive diagonal variance")
         object.__setattr__(
             self,
             "_snapshot",
-            EvidenceSnapshot.capture({"variance": self.variance, "factor": self.factor}),
+            EvidenceSnapshot.capture(
+                {"variance": self.variance, "factor": self.factor}
+            ),
         )
 
     @property
@@ -247,7 +272,11 @@ class LowRankCovariance:
 
     def _value(self, value: Tensor) -> Tensor:
         self._snapshot.validate()
-        if value.shape != self.variance.shape or value.dtype != self.variance.dtype or value.device != self.variance.device:
+        if (
+            value.shape != self.variance.shape
+            or value.dtype != self.variance.dtype
+            or value.device != self.variance.device
+        ):
             raise ValueError("value must match covariance shape, dtype, and device")
         return value
 
@@ -258,7 +287,9 @@ class LowRankCovariance:
         safe = self._value(value)
         flat = safe.reshape(-1)
         factor = self._flat_factor()
-        return (self.variance.reshape(-1) * flat + factor @ (factor.T @ flat)).reshape(self.variance.shape)
+        return (self.variance.reshape(-1) * flat + factor @ (factor.T @ flat)).reshape(
+            self.variance.shape
+        )
 
     def apply_precision(self, value: Tensor) -> Tensor:
         safe = self._value(value)
@@ -268,7 +299,10 @@ class LowRankCovariance:
         if self.rank == 0:
             return weighted.reshape(self.variance.shape)
         weighted_factor = factor / diagonal[:, None]
-        system = torch.eye(self.rank, dtype=factor.dtype, device=factor.device) + factor.T @ weighted_factor
+        system = (
+            torch.eye(self.rank, dtype=factor.dtype, device=factor.device)
+            + factor.T @ weighted_factor
+        )
         correction = weighted_factor @ torch.linalg.solve(system, factor.T @ weighted)
         return (weighted - correction).reshape(self.variance.shape)
 
@@ -303,10 +337,14 @@ class LowRankCovariance:
         if self.rank == 0:
             return diagonal_logdet
         factor = self._flat_factor()
-        system = torch.eye(self.rank, dtype=factor.dtype, device=factor.device) + factor.T @ (factor / self.variance.reshape(-1, 1))
+        system = torch.eye(
+            self.rank, dtype=factor.dtype, device=factor.device
+        ) + factor.T @ (factor / self.variance.reshape(-1, 1))
         sign, logabsdet = torch.linalg.slogdet(system)
         if bool(sign <= 0):
-            raise RuntimeError("low-rank determinant lemma produced a non-positive system")
+            raise RuntimeError(
+                "low-rank determinant lemma produced a non-positive system"
+            )
         return diagonal_logdet + logabsdet
 
     def diagonal(self) -> Tensor:
@@ -317,7 +355,9 @@ class LowRankCovariance:
         safe = self._value(query)
         flat = safe.reshape(-1)
         projected = self._flat_factor().T @ flat
-        return torch.sum(flat.square() * self.variance.reshape(-1)) + torch.sum(projected.square())
+        return torch.sum(flat.square() * self.variance.reshape(-1)) + torch.sum(
+            projected.square()
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,7 +366,9 @@ class NuisancePrecisionAdapter:
 
     action: Callable[[Tensor], Tensor] = field(repr=False, compare=False)
     logdet_correction: Tensor | None = None
-    diagonal_action: Callable[[], Tensor] | None = field(default=None, repr=False, compare=False)
+    diagonal_action: Callable[[], Tensor] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @classmethod
     def from_nuisance(cls, nuisance: object) -> NuisancePrecisionAdapter:

@@ -63,7 +63,9 @@ def test_forced_scalar_and_native_ishioka_parity() -> None:
 
 
 def test_forced_unsupported_isa_is_rejected() -> None:
-    unsupported = "neon" if platform.machine().lower() in {"x86_64", "amd64"} else "avx2"
+    unsupported = (
+        "neon" if platform.machine().lower() in {"x86_64", "amd64"} else "avx2"
+    )
     result = _run(unsupported)
     assert result.returncode != 0
     assert "is not supported by this build and CPU/OS" in result.stderr
@@ -90,7 +92,9 @@ def test_scalar_leaf_has_no_avx_instructions() -> None:
         pytest.skip(result.stderr)
     sections = result.stdout.split("torchsky::ishioka_k_step_scalar", 1)
     if len(sections) != 2:
-        pytest.skip("scalar symbol hidden after final linking; CI inspects the object file")
+        pytest.skip(
+            "scalar symbol hidden after final linking; CI inspects the object file"
+        )
     section = sections[1]
     section = section.split("\n\n", 1)[0].lower()
     assert "ymm" not in section

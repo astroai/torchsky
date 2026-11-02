@@ -132,9 +132,7 @@ def test_catalog_state_epoch_semantics_are_explicit_and_compatible() -> None:
     with pytest.raises(ValueError, match="TCB jyear"):
         tt.propagate_physical(2020.0)
     with pytest.raises(ValueError, match="unsupported time-scale"):
-        legacy.propagate_angular(
-            Epoch(2020.0, TimeSpec(format="jyear", scale="tt"))
-        )
+        legacy.propagate_angular(Epoch(2020.0, TimeSpec(format="jyear", scale="tt")))
 
 
 def test_catalog_state_astropy_epoch_roundtrip_preserves_tcb_scale() -> None:

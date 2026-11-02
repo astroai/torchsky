@@ -25,6 +25,7 @@ from typing import Any, Literal
 import torch
 from torch import Tensor
 
+
 def bounded_power_pixel_operator(
     pixel_polygons: Tensor,
     sites: Tensor,

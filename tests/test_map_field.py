@@ -100,6 +100,7 @@ class _ConstantDistributionField(_ConstantField):
         self.log_variance = torch.nn.Parameter(
             torch.tensor(math.log(float(variance)), dtype=torch.float32)
         )
+
     def forward_distribution(
         self,
         ra_deg: torch.Tensor,
@@ -127,9 +128,7 @@ def test_fit_field_model_rejects_amp_off_cuda() -> None:
     )
     observation = FieldObservation(
         image=torch.ones((4, 4), dtype=torch.float32),
-        header=_tan_header(
-            4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0
-        ),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
         weight=torch.ones((4, 4), dtype=torch.float32),
         spectral_min=4500.0,
         spectral_max=5500.0,
@@ -178,14 +177,11 @@ def test_fit_field_model_amp_skips_overflowing_step() -> None:
     )
     model = OverflowField(domain)
     initial = {
-        name: parameter.detach().clone()
-        for name, parameter in model.named_parameters()
+        name: parameter.detach().clone() for name, parameter in model.named_parameters()
     }
     observation = FieldObservation(
         image=torch.zeros((4, 4), dtype=torch.float32),
-        header=_tan_header(
-            4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0
-        ),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
         weight=torch.ones((4, 4), dtype=torch.float32),
         spectral_min=4500.0,
         spectral_max=5500.0,
@@ -394,12 +390,8 @@ def test_observation_crop_preserves_physical_background_components() -> None:
 
     assert_close_on_device(cropped.image, values[1:4, 2:6])
     assert_close_on_device(cropped.sky_background, values[1:4, 2:6] + 100.0)
-    assert_close_on_device(
-        cropped.instrument_background, values[1:4, 2:6] + 200.0
-    )
-    assert_close_on_device(
-        cropped.detector_background, values[1:4, 2:6] + 300.0
-    )
+    assert_close_on_device(cropped.instrument_background, values[1:4, 2:6] + 200.0)
+    assert_close_on_device(cropped.detector_background, values[1:4, 2:6] + 300.0)
     assert cropped.detector_x0_pix == 2.0
     assert cropped.detector_y0_pix == 1.0
 
@@ -424,12 +416,8 @@ def test_native_detector_transform_uses_full_detector_coordinates_after_crop() -
         detector_y0_pix=200.0,
         detector_to_sky=transform,
     )
-    cropped = crop_field_observation(
-        observation, x0=3, y0=2, width=2, height=2
-    )
-    ra_deg, dec_deg = coordinate_grid(
-        cropped, shape=(2, 2), device=torch.device("cpu")
-    )
+    cropped = crop_field_observation(observation, x0=3, y0=2, width=2, height=2)
+    ra_deg, dec_deg = coordinate_grid(cropped, shape=(2, 2), device=torch.device("cpu"))
 
     assert_close_on_device(
         ra_deg[0, 0], torch.tensor(150.0 + 103.25 / 3600.0, dtype=torch.float64)
@@ -487,7 +475,9 @@ def test_psf_halo_training_crop_matches_full_render_and_gradient() -> None:
     assert model.value.grad is not None
     full_gradient = model.value.grad.detach().clone()
     model.zero_grad(set_to_none=True)
-    render_field_observation(model, halo, num_spectral_samples=1)[halo.mask].sum().backward()
+    render_field_observation(model, halo, num_spectral_samples=1)[
+        halo.mask
+    ].sum().backward()
     assert_close_on_device(model.value.grad, full_gradient)
 
     edge_halo = crop_field_observation_for_training(
@@ -497,9 +487,7 @@ def test_psf_halo_training_crop_matches_full_render_and_gradient() -> None:
         width=width,
         height=height,
     )
-    edge_render = render_field_observation(
-        model, edge_halo, num_spectral_samples=1
-    )
+    edge_render = render_field_observation(model, edge_halo, num_spectral_samples=1)
     assert edge_halo.mask is not None
     assert_close_on_device(
         edge_render[edge_halo.mask], full[:height, :width].reshape(-1)
@@ -610,9 +598,7 @@ def test_field_spatial_quadrature_reduces_subpixel_gaussian_error() -> None:
         wavelength_scale=1000.0,
     )
     wcs = WCS(header)
-    dense_offsets = (
-        torch.arange(48, dtype=torch.float64) + 0.5
-    ) / 48.0 - 0.5
+    dense_offsets = (torch.arange(48, dtype=torch.float64) + 0.5) / 48.0 - 0.5
     dy, dx, y, x = torch.meshgrid(
         dense_offsets,
         dense_offsets,
@@ -649,13 +635,13 @@ def test_field_spatial_quadrature_reduces_subpixel_gaussian_error() -> None:
             num_spectral_samples=1,
             spatial_sampling="gauss_legendre_2x2",
         )
-        dense = model(dense_ra, dense_dec, 5600.0).reshape(
-            48, 48, size, size
-        ).mean(dim=(0, 1))
-        center_error += float(torch.mean(torch.abs(center - dense)).detach())
-        quadrature_error += float(
-            torch.mean(torch.abs(quadrature - dense)).detach()
+        dense = (
+            model(dense_ra, dense_dec, 5600.0)
+            .reshape(48, 48, size, size)
+            .mean(dim=(0, 1))
         )
+        center_error += float(torch.mean(torch.abs(center - dense)).detach())
+        quadrature_error += float(torch.mean(torch.abs(quadrature - dense)).detach())
 
     assert quadrature_error < center_error
 
@@ -732,14 +718,10 @@ def test_distribution_tiling_and_psf_variance_match_full_render() -> None:
     full_mean, full_logvar = render_field_observation_distribution(
         model, observation, num_spectral_samples=1
     )
-    kernel = gaussian_kernel1d(
-        1.0, device=torch.device("cpu"), dtype=torch.float32
-    )
+    kernel = gaussian_kernel1d(1.0, device=torch.device("cpu"), dtype=torch.float32)
     # Default variance_mode is coherent: std propagates linearly through the PSF.
     expected_center_variance = 3.0 * kernel.sum() ** 2
-    assert_close_on_device(
-        torch.exp(full_logvar[5, 5]), expected_center_variance
-    )
+    assert_close_on_device(torch.exp(full_logvar[5, 5]), expected_center_variance)
     full_logvar.sum().backward()
     assert model.log_variance.grad is not None
     full_gradient = model.log_variance.grad.detach().clone()
@@ -844,15 +826,11 @@ def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> No
         background_model.network[-1].weight.normal_(std=0.01)
     bundle = ObservationOperatorBundle(
         psf=LearnedPSFOp(psf_model),
-        background=LearnedBackgroundOp(
-            background_model, coordinate_frame="detector"
-        ),
+        background=LearnedBackgroundOp(background_model, coordinate_frame="detector"),
     )
     observation = FieldObservation(
         image=torch.zeros((size, size), dtype=torch.float32),
-        header=_tan_header(
-            size, crval1=150.0, crval2=2.0, scale_deg=scale_deg
-        ),
+        header=_tan_header(size, crval1=150.0, crval2=2.0, scale_deg=scale_deg),
         spectral_min=6500.0,
         spectral_max=7500.0,
         transmission_center=7000.0,
@@ -884,7 +862,10 @@ def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> No
         for name, parameter in (
             *model.named_parameters(),
             *((f"psf.{name}", value) for name, value in psf_model.named_parameters()),
-            *((f"bg.{name}", value) for name, value in background_model.named_parameters()),
+            *(
+                (f"bg.{name}", value)
+                for name, value in background_model.named_parameters()
+            ),
         )
         if parameter.grad is not None
     }
@@ -906,15 +887,16 @@ def test_conditioned_psf_background_render_is_tiled_exact_and_contextual() -> No
         for name, parameter in (
             *model.named_parameters(),
             *((f"psf.{name}", value) for name, value in psf_model.named_parameters()),
-            *((f"bg.{name}", value) for name, value in background_model.named_parameters()),
+            *(
+                (f"bg.{name}", value)
+                for name, value in background_model.named_parameters()
+            ),
         )
         if parameter.grad is not None
     }
     assert full_gradients.keys() == tiled_gradients.keys()
     for name, expected in full_gradients.items():
-        assert_close_on_device(
-            tiled_gradients[name], expected, rtol=2e-4, atol=2e-5
-        )
+        assert_close_on_device(tiled_gradients[name], expected, rtol=2e-4, atol=2e-5)
 
     later = render_field_observation(
         model,
@@ -967,15 +949,11 @@ def test_fit_field_model_optimizes_conditioned_background_bundle(
     target = 2.0 + 0.15 * (x.to(dtype=torch.float32) - 4.0) / 4.0
     observation = FieldObservation(
         image=target,
-        header=_tan_header(
-            size, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0
-        ),
+        header=_tan_header(size, crval1=150.0, crval2=2.0, scale_deg=1.0 / 3600.0),
         wavelength=7000.0,
     )
     bundle = ObservationOperatorBundle(
-        background=LearnedBackgroundOp(
-            background_model, coordinate_frame="detector"
-        )
+        background=LearnedBackgroundOp(background_model, coordinate_frame="detector")
     )
     calibration_term = BackgroundCalibrationTerm(
         background_model,

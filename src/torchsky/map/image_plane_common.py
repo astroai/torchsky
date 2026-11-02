@@ -42,8 +42,7 @@ from .windowing import (
     _LARGE_TAN_WINDOWING_EDGE_SAMPLES,  # noqa: F401
     _LARGE_TAN_WINDOWING_MARGIN_PIXELS,  # noqa: F401
     _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS,  # noqa: F401
-    )
-
+)
 
 
 from .calibration import (  # noqa: F401 - re-exported helpers
@@ -58,6 +57,7 @@ from .calibration import (  # noqa: F401 - re-exported helpers
     _set_context_bit,
     _should_apply_surface_brightness_area_scaling,
 )
+
 
 def load_observation_image_and_header(
     obs: object,

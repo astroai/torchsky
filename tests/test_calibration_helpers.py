@@ -67,9 +67,7 @@ def test_external_wcs_and_scamp_header_card_layouts(tmp_path):
 def test_propagate_preserves_mef_payloads_headers_and_unsigned_data(tmp_path):
     source = tmp_path / "input.fits"
     output = tmp_path / "propagated.fits"
-    science = (torch.arange(9, dtype=torch.int16).reshape(3, 3) + 300).to(
-        torch.uint16
-    )
+    science = (torch.arange(9, dtype=torch.int16).reshape(3, 3) + 300).to(torch.uint16)
     error = torch.arange(9, dtype=torch.float32).reshape(3, 3) / 4
     catalog = {
         "ID": torch.tensor([11, 12], dtype=torch.int32),

@@ -48,7 +48,9 @@ def _import_nodes(source: str) -> list[ast.stmt]:
     return nodes
 
 
-@pytest.mark.parametrize(("label", "source"), _blocks(), ids=[label for label, _ in _blocks()])
+@pytest.mark.parametrize(
+    ("label", "source"), _blocks(), ids=[label for label, _ in _blocks()]
+)
 def test_doc_imports_resolve(label: str, source: str) -> None:
     blocks = [_import_nodes(source)]
     namespace: dict[str, object] = {}

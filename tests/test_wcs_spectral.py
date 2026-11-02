@@ -39,8 +39,6 @@ def _cube_header() -> dict[str, float | int | str]:
     }
 
 
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_wcs_spectral_1d_cuda_matches_cpu() -> None:
     header = _wave_1d_header()
@@ -53,14 +51,6 @@ def test_wcs_spectral_1d_cuda_matches_cpu() -> None:
     torch.testing.assert_close(world_g.cpu(), world_c, atol=1e-12, rtol=0.0)
     pix_g = gpu.world_to_pixel(world_g, origin=0)
     torch.testing.assert_close(pix_g.cpu(), pixels, atol=1e-9, rtol=0.0)
-
-
-
-
-
-
-
-
 
 
 def test_spectral_redshift_and_rest_wavelength_roundtrip() -> None:
@@ -105,10 +95,6 @@ def test_wcs_spectral_convenience_uses_header_rest_frequency() -> None:
 
     assert wcs.spectral_axis_indices == (0,)
     torch.testing.assert_close(velocity_back, velocity)
-
-
-
-
 
 
 _SUPPORTED_COMPOUND_CASES = [
@@ -157,10 +143,15 @@ def _compound_header(ctype: str) -> dict[str, float | int | str]:
     return header
 
 
-
-
 def test_wcs_spectral_zopt_and_beta_compound_roundtrip() -> None:
-    for ctype in ("FREQ-Z2F", "FREQ-B2F", "FREQ-N2F", "FREQ-E2F", "ENER-F2E", "WAVN-F2N"):
+    for ctype in (
+        "FREQ-Z2F",
+        "FREQ-B2F",
+        "FREQ-N2F",
+        "FREQ-E2F",
+        "ENER-F2E",
+        "WAVN-F2N",
+    ):
         header = _compound_header(ctype)
         twcs = torchsky.WCS(header)
         pixels = torch.tensor([[0.0], [1.0], [2.0]], dtype=torch.float64)
@@ -219,14 +210,6 @@ def _grism_header(ctype: str) -> dict[str, float | int | str]:
     }
 
 
-
-
-
-
-
-
-
-
 def test_specsys_is_preserved_not_applied() -> None:
     base = {
         "NAXIS": 1,
@@ -264,15 +247,11 @@ def test_unknown_spectral_algorithm_raises() -> None:
         )
 
 
-
-
 def test_convert_spectral_frequency_to_radio_velocity() -> None:
     rest_hz = 1420.40575177e6
     freq = torch.tensor([rest_hz, 1.419e9], dtype=torch.float64)
     radio_km_s = convert_spectral(
         freq, "FREQ", "VRAD", to_unit="km/s", rest_frequency=rest_hz
     )
-    expected = frequency_to_spectral(
-        freq, "VRAD", unit="km/s", rest_frequency=rest_hz
-    )
+    expected = frequency_to_spectral(freq, "VRAD", unit="km/s", rest_frequency=rest_hz)
     torch.testing.assert_close(radio_km_s, expected)

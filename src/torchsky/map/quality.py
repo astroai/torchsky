@@ -70,7 +70,11 @@ class DQPolicy:
     @staticmethod
     def _coerce(dq: Tensor) -> Tensor:
         value = torch.as_tensor(dq)
-        if value.dtype.is_floating_point or value.dtype.is_complex or value.dtype == torch.bool:
+        if (
+            value.dtype.is_floating_point
+            or value.dtype.is_complex
+            or value.dtype == torch.bool
+        ):
             raise TypeError("DQ planes must use a non-boolean integer dtype")
         return value.to(dtype=torch.int64)
 
@@ -118,7 +122,9 @@ class QualityProduct:
             dtype=torch.bool,
         )
         if dq.shape != usable.shape or dq.ndim not in {2, 3}:
-            raise ValueError("DQ and usability planes must be matching 2D or 3D tensors")
+            raise ValueError(
+                "DQ and usability planes must be matching 2D or 3D tensors"
+            )
         object.__setattr__(self, "dq", dq)
         object.__setattr__(self, "usability_mask", usable)
         object.__setattr__(

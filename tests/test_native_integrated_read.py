@@ -13,7 +13,9 @@ from torch import nn
 
 from torchsky.map.evidence import EvidenceSnapshot
 from torchsky.map import field as field_api
-from torchsky.map.field.native_integrated_read import bind_native_integrated_read_likelihood
+from torchsky.map.field.native_integrated_read import (
+    bind_native_integrated_read_likelihood,
+)
 from torchsky.map.field.native_response import NativeFieldResponse
 from torchsky.map.field.types import FieldObservation, PSFSpec
 from torchsky.map.operators.background import (
@@ -175,11 +177,16 @@ def _fixture(
 
 def _bind(fixture):
     observation, response, output, kwargs, _ = fixture
-    return bind_native_integrated_read_likelihood(observation, response, output, **kwargs)
+    return bind_native_integrated_read_likelihood(
+        observation, response, output, **kwargs
+    )
 
 
 def test_public_physical_binding_exports_are_actual_client():
-    assert field_api.bind_native_integrated_read_likelihood is bind_native_integrated_read_likelihood
+    assert (
+        field_api.bind_native_integrated_read_likelihood
+        is bind_native_integrated_read_likelihood
+    )
     fixture = _fixture()
     bound = field_api.bind_native_integrated_read_likelihood(*fixture[:3], **fixture[3])
     assert isinstance(bound, field_api.NativeIntegratedReadLikelihood)
@@ -492,7 +499,9 @@ def test_mutation_during_actual_callback_rejects_stale_evidence(client):
             response,
             quadrature=replace(response.quadrature, response=MutatingResponse(matrix)),
         )
-    bound = bind_native_integrated_read_likelihood(observation, response, output, **kwargs)
+    bound = bind_native_integrated_read_likelihood(
+        observation, response, output, **kwargs
+    )
     if client == "field":
 
         class MutatingField(nn.Module):
@@ -529,7 +538,9 @@ def test_masks_units_processing_and_unsupported_noise_physics_fail_closed():
     identity = LinearDetectorResponse(lambda x: x, lambda x: x)
     for name in ("charge_response", "read_noise_response"):
         with pytest.raises(ValueError, match="mixing"):
-            bind_native_integrated_read_likelihood(*fixture[:3], **(kwargs | {name: identity}))
+            bind_native_integrated_read_likelihood(
+                *fixture[:3], **(kwargs | {name: identity})
+            )
     with pytest.raises(ValueError, match="units"):
         bind_native_integrated_read_likelihood(
             observation, response, replace(output, input_unit="photon/s"), **kwargs
@@ -538,7 +549,9 @@ def test_masks_units_processing_and_unsupported_noise_physics_fail_closed():
         response, calibration=replace(response.calibration, flat_convention="sky_flat")
     )
     with pytest.raises(ValueError, match="QE excluded"):
-        bind_native_integrated_read_likelihood(observation, wrong_optical, output, **kwargs)
+        bind_native_integrated_read_likelihood(
+            observation, wrong_optical, output, **kwargs
+        )
     # Physical stages remain opt-in; they do not widen legacy observation paths.
     with pytest.raises(ValueError, match="unsupported physical additive"):
         replace(observation, additive_components=(kwargs["additive_components"][0],))
@@ -695,7 +708,9 @@ def test_real_finite_pixel_gaussian_limit_rejects_sum_and_mean_overflow():
         electrons_per_photon=torch.tensor(1.0),
         read_variance_electrons2=torch.tensor(1.0),
     )
-    bound = bind_native_integrated_read_likelihood(observation, response, output, **kwargs)
+    bound = bind_native_integrated_read_likelihood(
+        observation, response, output, **kwargs
+    )
     state = torch.zeros(2, 2, dtype=torch.float32)
     per_pixel = bound.nll(state, reduction="none")
     assert bool(torch.isfinite(per_pixel).all())

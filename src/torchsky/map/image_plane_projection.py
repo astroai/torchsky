@@ -72,7 +72,6 @@ from .windowing import (
 )
 
 
-
 from .calibration import (  # noqa: F401 - re-exported helpers
     _accumulate_variance_weight,
     _apply_observation_calibration,
@@ -430,7 +429,9 @@ def _interpolated_source_pixels(
             offset_y=off_y,
         )
 
-        def evaluate(x: Tensor, y: Tensor, _exact=exact) -> tuple[Tensor, Tensor, Tensor]:
+        def evaluate(
+            x: Tensor, y: Tensor, _exact=exact
+        ) -> tuple[Tensor, Tensor, Tensor]:
             # The WCS follows its own device; the lattice lives on ``map_device``.
             x_s, y_s, ok = _exact(x, y)
             if x_s.device != map_device:
@@ -681,7 +682,9 @@ def _resample_weighted_to_target(
         sampled_weight = resample_linear_affine_periodic_bilinear_2d(
             weighted_weight, **aff_kw
         )
-        sampled_support = resample_linear_affine_periodic_bilinear_2d(periodic_support, **aff_kw)
+        sampled_support = resample_linear_affine_periodic_bilinear_2d(
+            periodic_support, **aff_kw
+        )
         sampled_numer, sampled_weight = finalize_periodic_resampled_weighted(
             sampled_numer,
             sampled_weight,
@@ -940,7 +943,9 @@ def _resample_weighted_to_target(
         if _requires_roundtrip_validity_check(source_wcs) and valid_mask is not None:
             in_bounds = in_bounds & valid_mask
         elif _requires_roundtrip_validity_check(source_wcs):
-            assert flat_ra is not None and flat_dec is not None  # needed for the round trip
+            assert (
+                flat_ra is not None and flat_dec is not None
+            )  # needed for the round trip
             in_bounds = in_bounds & _roundtrip_validity_mask(
                 source_wcs,
                 x_src=x_src,
@@ -1018,7 +1023,9 @@ def _resample_weighted_to_target(
         )
         return center_sep_deg > source_cap_radius_deg + target.cap_radius_deg
 
-    def _zero_result(like_shape) -> tuple[Tensor, Tensor, Tensor | None] | tuple[Tensor, Tensor]:
+    def _zero_result(
+        like_shape,
+    ) -> tuple[Tensor, Tensor, Tensor | None] | tuple[Tensor, Tensor]:
         zeros = torch.zeros(like_shape, dtype=torch.float32, device=image.device)
         return _result(
             zeros,
@@ -1077,9 +1084,7 @@ def _resample_weighted_to_target(
                     w_tgt,
                     device=image.device,
                 )
-                return _sample_on_source_grid(
-                    x_src, y_src, flat_ra=None, flat_dec=None
-                )
+                return _sample_on_source_grid(x_src, y_src, flat_ra=None, flat_dec=None)
         if use_interpolated_mapping:
             if _tpv_disjoint_from_target():
                 return _zero_result((h_tgt, w_tgt))
@@ -1521,9 +1526,10 @@ def _project_observation_to_target_chunk(
     operator_bundle = prepared_observation.operator_bundle
     # Exact diagonal variance is a second sampling pass; skip it on request.
     has_explicit_noise = operator_bundle.noise is not None and propagate_variance
-    direct_copy = (
-        tuple(image.shape) == target_shape
-        and headers_equivalent_for_direct_copy(header_dict_obs, target_header)
+    direct_copy = tuple(
+        image.shape
+    ) == target_shape and headers_equivalent_for_direct_copy(
+        header_dict_obs, target_header
     )
     if prepared_target is None and (
         not direct_copy or value_semantics == "flux" or footprint_order is not None

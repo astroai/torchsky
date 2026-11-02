@@ -12,12 +12,7 @@ import torch
 from torch import Tensor
 
 
-type StateTree = (
-    Tensor
-    | tuple[StateTree, ...]
-    | list[StateTree]
-    | dict[str, StateTree]
-)
+type StateTree = Tensor | tuple[StateTree, ...] | list[StateTree] | dict[str, StateTree]
 
 StateT = TypeVar("StateT", bound=StateTree)
 ImageT = TypeVar("ImageT", bound=StateTree)
@@ -116,14 +111,18 @@ class TensorNullspaceProjection:
     def __init__(self, basis: Tensor, *, state_shape: tuple[int, ...] | None = None):
         basis_t = torch.as_tensor(basis)
         if not (torch.is_floating_point(basis_t) or torch.is_complex(basis_t)):
-            raise TypeError("nullspace basis must have a floating-point or complex dtype")
+            raise TypeError(
+                "nullspace basis must have a floating-point or complex dtype"
+            )
         if basis_t.ndim < 1:
             raise ValueError("nullspace basis must have at least one dimension")
         if not bool(torch.isfinite(basis_t).all()):
             raise ValueError("nullspace basis must be finite")
         if state_shape is None:
             if basis_t.ndim != 2:
-                raise ValueError("state_shape is required unless basis has shape (k, n)")
+                raise ValueError(
+                    "state_shape is required unless basis has shape (k, n)"
+                )
             state_shape = (int(basis_t.shape[1]),)
         if int(basis_t.shape[0]) == 0:
             raise ValueError("nullspace basis must contain at least one vector")
@@ -140,7 +139,9 @@ class TensorNullspaceProjection:
     def project(self, state: Tensor) -> Tensor:
         state_t = torch.as_tensor(state)
         if tuple(state_t.shape) != self._state_shape:
-            raise ValueError("projected tensor shape must match the declared state shape")
+            raise ValueError(
+                "projected tensor shape must match the declared state shape"
+            )
         basis = self._basis.to(dtype=state_t.dtype, device=state_t.device)
         gram = self._gram.to(dtype=state_t.dtype, device=state_t.device)
         flat = state_t.reshape(-1)
@@ -154,7 +155,9 @@ class DiagonalPreconditioner:
     def __init__(self, diagonal: Tensor):
         diagonal_t = torch.as_tensor(diagonal)
         if not (torch.is_floating_point(diagonal_t) or torch.is_complex(diagonal_t)):
-            raise TypeError("preconditioner diagonal must have a floating-point or complex dtype")
+            raise TypeError(
+                "preconditioner diagonal must have a floating-point or complex dtype"
+            )
         if not bool(torch.isfinite(diagonal_t).all()):
             raise ValueError("preconditioner diagonal must be finite")
         self.diagonal = diagonal_t
@@ -168,9 +171,10 @@ class DiagonalPreconditioner:
         residual_t = torch.as_tensor(residual)
         if tuple(residual_t.shape) != tuple(self.diagonal.shape):
             raise ValueError("preconditioner diagonal shape must match the residual")
-        return self.reciprocal.to(
-            dtype=residual_t.dtype, device=residual_t.device
-        ) * residual_t
+        return (
+            self.reciprocal.to(dtype=residual_t.dtype, device=residual_t.device)
+            * residual_t
+        )
 
     def __call__(self, residual: Tensor) -> Tensor:
         return self.apply(residual)
@@ -275,7 +279,9 @@ def tree_axpy(state: StateT, scalar: Tensor | float, direction: StateTree) -> St
 def tree_inner(lhs: StateTree, rhs: StateTree) -> Tensor:
     products = _tree_leaves(
         _tree_zip_map(
-            lambda left, right: torch.sum(torch.conj(left.reshape(-1)) * right.reshape(-1)),
+            lambda left, right: torch.sum(
+                torch.conj(left.reshape(-1)) * right.reshape(-1)
+            ),
             lhs,
             rhs,
         )
@@ -321,7 +327,10 @@ def _project(
 
 
 def _apply_preconditioner(
-    preconditioner: Preconditioner[StateT] | Callable[[StateT], StateT] | StateTree | None,
+    preconditioner: Preconditioner[StateT]
+    | Callable[[StateT], StateT]
+    | StateTree
+    | None,
     residual: StateT,
 ) -> StateT:
     if preconditioner is None:
@@ -400,7 +409,10 @@ def conjugate_gradient(
     max_iterations: int = 100,
     rtol: float = 1.0e-5,
     atol: float = 0.0,
-    preconditioner: Preconditioner[StateT] | Callable[[StateT], StateT] | StateTree | None = None,
+    preconditioner: Preconditioner[StateT]
+    | Callable[[StateT], StateT]
+    | StateTree
+    | None = None,
     projection: GaugeProjection[StateT] | Callable[[StateT], StateT] | None = None,
     record_residual_history: bool = True,
 ) -> SolverResult[StateT]:
@@ -418,7 +430,11 @@ def conjugate_gradient(
         if not math.isfinite(float(value)) or value < 0.0:
             raise ValueError(f"{name} must be finite and non-negative")
     rhs_t = _validate_tree(rhs, name="rhs")
-    solution = tree_zeros_like(rhs_t) if initial_solution is None else tree_clone(initial_solution)
+    solution = (
+        tree_zeros_like(rhs_t)
+        if initial_solution is None
+        else tree_clone(initial_solution)
+    )
     solution = _tree_zip_map(
         lambda left, right: right.to(dtype=left.dtype), rhs_t, solution
     )
@@ -539,7 +555,9 @@ def conjugate_gradient(
             termination = TerminationReason.NONFINITE
             break
         curvature = tree_inner(direction, image_direction)
-        curvature_real = _scalar(curvature.real) if bool(torch.isfinite(curvature)) else math.nan
+        curvature_real = (
+            _scalar(curvature.real) if bool(torch.isfinite(curvature)) else math.nan
+        )
         if not bool(torch.isfinite(curvature)) or curvature_real <= 0.0:
             breakdown = SolverBreakdown(
                 BreakdownReason.NON_POSITIVE_CURVATURE,
@@ -666,7 +684,8 @@ def lsqr(
         solution = tree_zeros_like(prototype)
     else:
         solution = _project(
-            projection, _validate_tree(tree_clone(initial_solution), name="initial_solution")
+            projection,
+            _validate_tree(tree_clone(initial_solution), name="initial_solution"),
         )
 
     def apply_operator(state: StateT) -> StateTree:
@@ -693,6 +712,7 @@ def lsqr(
     augmented_rhs: StateTree = (
         rhs_t if damping == 0.0 else (rhs_t, tree_zeros_like(solution))
     )
+
     def residual_state(state: StateT) -> tuple[StateTree, StateTree]:
         """Undamped and augmented residuals from a single operator application."""
         image = apply_operator(state)
@@ -816,7 +836,11 @@ def lsqr(
             )
             termination = TerminationReason.NONFINITE
             break
-        u = tree_zeros_like(u_unscaled) if _scalar(beta) == 0.0 else tree_scale(u_unscaled, torch.reciprocal(beta))
+        u = (
+            tree_zeros_like(u_unscaled)
+            if _scalar(beta) == 0.0
+            else tree_scale(u_unscaled, torch.reciprocal(beta))
+        )
         v_unscaled = tree_sub(augmented_adjoint(u), tree_scale(v, beta))
         alpha = tree_norm(v_unscaled)
         if not bool(torch.isfinite(alpha)):
@@ -827,7 +851,11 @@ def lsqr(
             )
             termination = TerminationReason.NONFINITE
             break
-        v = tree_zeros_like(v_unscaled) if _scalar(alpha) == 0.0 else tree_scale(v_unscaled, torch.reciprocal(alpha))
+        v = (
+            tree_zeros_like(v_unscaled)
+            if _scalar(alpha) == 0.0
+            else tree_scale(v_unscaled, torch.reciprocal(alpha))
+        )
         rho = torch.sqrt(rho_bar.square() + beta.square())
         if _scalar(rho) == 0.0 or not bool(torch.isfinite(rho)):
             breakdown = SolverBreakdown(
@@ -860,9 +888,13 @@ def lsqr(
         residual_norm = _scalar(phi_bar)
         normal_residual_norm = _scalar(phi_bar * alpha * cosine.abs())
         completed = iteration
-        if math.isfinite(residual_norm) and math.isfinite(normal_residual_norm) and (
-            residual_norm <= residual_threshold
-            or normal_residual_norm <= normal_threshold
+        if (
+            math.isfinite(residual_norm)
+            and math.isfinite(normal_residual_norm)
+            and (
+                residual_norm <= residual_threshold
+                or normal_residual_norm <= normal_threshold
+            )
         ):
             actual_residual, augmented_residual = residual_state(solution)
             residual_norm = _scalar(tree_norm(actual_residual))
@@ -879,7 +911,10 @@ def lsqr(
             )
             termination = TerminationReason.NONFINITE
             break
-        if residual_norm <= residual_threshold or normal_residual_norm <= normal_threshold:
+        if (
+            residual_norm <= residual_threshold
+            or normal_residual_norm <= normal_threshold
+        ):
             termination = TerminationReason.CONVERGED
             break
         if _scalar(alpha) == 0.0 and _scalar(beta) == 0.0:

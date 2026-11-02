@@ -91,9 +91,14 @@ def test_hpx_forced_paths_match_astropy_both_directions(
         origin=1,
     )
     np.testing.assert_allclose(
-        _wrapped_delta(actual_ra.numpy(), expected_world[:, 0]), 0.0, atol=3e-10, rtol=0.0
+        _wrapped_delta(actual_ra.numpy(), expected_world[:, 0]),
+        0.0,
+        atol=3e-10,
+        rtol=0.0,
     )
-    np.testing.assert_allclose(actual_dec.numpy(), expected_world[:, 1], atol=3e-10, rtol=0.0)
+    np.testing.assert_allclose(
+        actual_dec.numpy(), expected_world[:, 1], atol=3e-10, rtol=0.0
+    )
 
 
 @pytest.mark.parametrize(
@@ -120,7 +125,9 @@ def test_hpx_default_parameters_are_unchanged() -> None:
     del implicit_header["PV2_1"]
     del implicit_header["PV2_2"]
     implicit = WCS(implicit_header)
-    world = torch.tensor([[0.0, 0.0], [45.0, 45.0], [120.0, -80.0]], dtype=torch.float64)
+    world = torch.tensor(
+        [[0.0, 0.0], [45.0, 45.0], [120.0, -80.0]], dtype=torch.float64
+    )
     torch.testing.assert_close(
         implicit.world_to_pixel(world, origin=1),
         explicit.world_to_pixel(world, origin=1),

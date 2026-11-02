@@ -62,9 +62,7 @@ def test_multiorder_map_canonicalizes_uniq_and_rejects_overlap() -> None:
     parent = nest2uniq(1, torch.tensor([0]))
     child = nest2uniq(2, torch.tensor([1]))
     with pytest.raises(ValueError, match="non-overlapping"):
-        MultiOrderHealpixMap(
-            torch.cat((parent, child)), torch.tensor([1.0, 2.0])
-        )
+        MultiOrderHealpixMap(torch.cat((parent, child)), torch.tensor([1.0, 2.0]))
 
 
 def test_multiorder_density_integral_matches_low_order_oracle() -> None:
@@ -175,9 +173,7 @@ def test_healpix_index_moc_lookup_matches_point_oracle() -> None:
     lon = torch.tensor([10.0, 10.2, 40.0, 80.0], dtype=torch.float64)
     lat = torch.tensor([0.0, 0.1, -5.0, 20.0], dtype=torch.float64)
     index = HealpixIndex.build(lon, lat, nside=8, nest=False)
-    fine_pixels = healpix.ang2pix(
-        32, lon[[0, 2]], lat[[0, 2]], nest=True, lonlat=True
-    )
+    fine_pixels = healpix.ang2pix(32, lon[[0, 2]], lat[[0, 2]], nest=True, lonlat=True)
     footprint = MOC(nest2uniq(32, fine_pixels))
     expected = torch.nonzero(footprint.contains(lon, lat), as_tuple=False).reshape(-1)
     torch.testing.assert_close(index.lookup_moc(footprint), expected)

@@ -86,15 +86,11 @@ def test_mask_pipe():
 
     dense1 = torch.zeros(192)
     dense1[0:16] = 1
-    m1 = SparseHealpixMap.convert_healpix_map(
-        dense1, nside_coverage=1, sentinel=0
-    )
+    m1 = SparseHealpixMap.convert_healpix_map(dense1, nside_coverage=1, sentinel=0)
 
     dense2 = torch.zeros(192)
     dense2[8:24] = 1
-    m2 = SparseHealpixMap.convert_healpix_map(
-        dense2, nside_coverage=1, sentinel=0
-    )
+    m2 = SparseHealpixMap.convert_healpix_map(dense2, nside_coverage=1, sentinel=0)
 
     pipe.add_stage("s1", m1)
     pipe.add_stage("s2", m2)
@@ -117,4 +113,6 @@ def test_sphere_namespace_exports_healpix_range_helpers():
 def test_sphere_namespace_exports_healpix_pixel_resolution_helpers():
     pixels = torch.tensor([2, 5], dtype=torch.int64)
     upgraded = upgrade_pixels(2, pixels, 8, nest=True)
-    torch.testing.assert_close(degrade_pixels(8, upgraded[[0, -1]], 2, nest=True), pixels)
+    torch.testing.assert_close(
+        degrade_pixels(8, upgraded[[0, -1]], 2, nest=True), pixels
+    )

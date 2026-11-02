@@ -16,9 +16,7 @@ def _brute_contains(
     lon_deg: torch.Tensor,
     lat_deg: torch.Tensor,
 ) -> torch.Tensor:
-    time_mjd, lon_deg, lat_deg = torch.broadcast_tensors(
-        time_mjd, lon_deg, lat_deg
-    )
+    time_mjd, lon_deg, lat_deg = torch.broadcast_tensors(time_mjd, lon_deg, lat_deg)
     time_us = mjd_to_time_us(time_mjd.reshape(-1))
     lon = lon_deg.reshape(-1)
     lat = lat_deg.reshape(-1)
@@ -48,9 +46,7 @@ def test_mjd_time_us_roundtrip_identity() -> None:
     mjd = torch.tensor([0.0, 51544.5, 59000.0, 59000.5], dtype=torch.float64)
     back = time_us_to_mjd(mjd_to_time_us(mjd))
     torch.testing.assert_close(back, mjd, atol=1e-12, rtol=0.0)
-    assert int(mjd_to_time_us(59000.5).item()) == int(
-        mjd_to_time_us(mjd[-1]).item()
-    )
+    assert int(mjd_to_time_us(59000.5).item()) == int(mjd_to_time_us(mjd[-1]).item())
 
 
 def test_stmoc_empty_contains_false() -> None:
@@ -69,9 +65,7 @@ def test_overlapping_empty_spatial_segments_contain_nothing() -> None:
         61,
         0,
     )
-    time_mjd = time_us_to_mjd(
-        base + torch.arange(80, dtype=torch.int64) * 50_000
-    )
+    time_mjd = time_us_to_mjd(base + torch.arange(80, dtype=torch.int64) * 50_000)
     assert not bool(stmoc.contains(time_mjd, 0.0, 0.0).any())
 
 
@@ -258,9 +252,7 @@ def test_contains_randomized_brute_force_parity_with_broadcasting() -> None:
     query_us = base + torch.randint(
         -2_000_000, 98_000_000, (37, 1), generator=generator, dtype=torch.int64
     )
-    query_pixels = torch.randint(
-        0, 12 * nside * nside, (1, 19), generator=generator
-    )
+    query_pixels = torch.randint(0, 12 * nside * nside, (1, 19), generator=generator)
     lon, lat = hp.pix2ang(nside, query_pixels, nest=True, lonlat=True)
     time_mjd = time_us_to_mjd(query_us)
     expected = _brute_contains(stmoc, time_mjd, lon, lat)
@@ -329,9 +321,7 @@ def test_overlapping_unsorted_segments_and_set_algebra_match_brute_force() -> No
     query_us = base + torch.randint(
         0, 410_000_000, (300,), generator=generator, dtype=torch.int64
     )
-    query_pixels = torch.randint(
-        0, 12 * nside * nside, (300,), generator=generator
-    )
+    query_pixels = torch.randint(0, 12 * nside * nside, (300,), generator=generator)
     lon, lat = hp.pix2ang(nside, query_pixels, nest=True, lonlat=True)
     time_mjd = time_us_to_mjd(query_us)
     in_a = _brute_contains(a, time_mjd, lon, lat)

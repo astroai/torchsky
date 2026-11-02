@@ -44,15 +44,11 @@ def _lagrange4(t: Tensor) -> tuple[Tensor, Tensor]:
     w1 = t * (t - 2) * (t - 3) / 2
     w2 = -t * (t - 1) * (t - 3) / 2
     w3 = t * (t - 1) * (t - 2) / 6
-    d0 = -(
-        (t - 2) * (t - 3) + (t - 1) * (t - 3) + (t - 1) * (t - 2)
-    ) / 6
+    d0 = -((t - 2) * (t - 3) + (t - 1) * (t - 3) + (t - 1) * (t - 2)) / 6
     d1 = ((t - 2) * (t - 3) + t * (t - 3) + t * (t - 2)) / 2
     d2 = -((t - 1) * (t - 3) + t * (t - 3) + t * (t - 1)) / 2
     d3 = ((t - 1) * (t - 2) + t * (t - 2) + t * (t - 1)) / 6
-    return torch.stack((w0, w1, w2, w3), dim=-1), torch.stack(
-        (d0, d1, d2, d3), dim=-1
-    )
+    return torch.stack((w0, w1, w2, w3), dim=-1), torch.stack((d0, d1, d2, d3), dim=-1)
 
 
 def _interpolate_regular_grid(
@@ -197,7 +193,9 @@ class RegularGridTransform2D(nn.Module):
         if mode not in {"bilinear", "bicubic"}:
             raise ValueError("mode must be 'bilinear' or 'bicubic'")
         if min(values.shape[:2]) < minimum_size:
-            raise ValueError(f"{mode} tables need at least {minimum_size} samples per axis")
+            raise ValueError(
+                f"{mode} tables need at least {minimum_size} samples per axis"
+            )
         if validation_subdivisions < 1:
             raise ValueError("validation_subdivisions must be positive")
         if determinant_floor < 0:
@@ -279,7 +277,9 @@ class RegularGridTransform2D(nn.Module):
         determinant_floor: float | None = None,
     ) -> Tensor:
         """Return sampled determinants or reject a non-finite/folded table."""
-        floor = self.determinant_floor if determinant_floor is None else determinant_floor
+        floor = (
+            self.determinant_floor if determinant_floor is None else determinant_floor
+        )
         if floor < 0:
             raise ValueError("determinant_floor must be non-negative")
         with torch.no_grad():
@@ -376,7 +376,9 @@ class TangentPlaneAffine(nn.Module):
             or matrix_t.is_complex()
             or matrix_t.shape != (2, 2)
         ):
-            raise ValueError("matrix must be a real floating-point tensor of shape (2, 2)")
+            raise ValueError(
+                "matrix must be a real floating-point tensor of shape (2, 2)"
+            )
         offset_t = _as_pair(
             offset,
             "offset",
@@ -460,14 +462,16 @@ class AffineFreeResidualGrid2D(nn.Module):
             or values.ndim != 3
             or values.shape[-1] != 2
         ):
-            raise ValueError("control must be a real floating tensor of shape (H, W, 2)")
+            raise ValueError(
+                "control must be a real floating tensor of shape (H, W, 2)"
+            )
         minimum_size = 4 if mode == "bicubic" else 2
         if mode not in {"bilinear", "bicubic"} or min(values.shape[:2]) < minimum_size:
-            raise ValueError(f"{mode} control grids need at least {minimum_size} samples per axis")
+            raise ValueError(
+                f"{mode} control grids need at least {minimum_size} samples per axis"
+            )
         _finite(values, "control")
-        origin_t = _as_pair(
-            origin, "origin", dtype=values.dtype, device=values.device
-        )
+        origin_t = _as_pair(origin, "origin", dtype=values.dtype, device=values.device)
         spacing_t = _as_pair(
             spacing, "spacing", dtype=values.dtype, device=values.device
         )
@@ -583,8 +587,7 @@ class DetectorToTangentTransform(nn.Module):
         with torch.no_grad():
             diagnostic_output = self(self.table.diagnostic_points())
             output_extent = (
-                diagnostic_output.amax(dim=(0, 1))
-                - diagnostic_output.amin(dim=(0, 1))
+                diagnostic_output.amax(dim=(0, 1)) - diagnostic_output.amin(dim=(0, 1))
             ).amax()
         atol_value, rtol_value = _inverse_tolerances(
             target=tgt,
@@ -607,9 +610,7 @@ class DetectorToTangentTransform(nn.Module):
         pred, _ = self.evaluate_with_jacobian(x)
         residual = pred - tgt
         max_resid = float(residual.abs().amax().detach().cpu().item())
-        if not _inverse_residual_ok(
-            residual, tgt, atol=atol_value, rtol=rtol_value
-        ):
+        if not _inverse_residual_ok(residual, tgt, atol=atol_value, rtol=rtol_value):
             raise ValueError(
                 f"detector inverse residual {max_resid:.8g} exceeds "
                 f"atol={atol_value:.8g}, rtol={rtol_value:.8g}"
@@ -676,7 +677,9 @@ class DetectorToSkyTransform(nn.Module):
         result = self.attitude(tangent)
         if isinstance(result, tuple):
             if len(result) != 2:
-                raise ValueError("attitude tuple output must contain longitude, latitude")
+                raise ValueError(
+                    "attitude tuple output must contain longitude, latitude"
+                )
             world = torch.stack(result, dim=-1)
         else:
             world = torch.as_tensor(result)
@@ -776,9 +779,13 @@ def validate_sampled_transform(
     if not samples.is_floating_point() or samples.shape[-1:] != (2,):
         raise ValueError("points must be floating point with last dimension 2")
     predicted = torch.as_tensor(transform(samples))
-    expected = torch.as_tensor(reference(samples), device=predicted.device, dtype=predicted.dtype)
+    expected = torch.as_tensor(
+        reference(samples), device=predicted.device, dtype=predicted.dtype
+    )
     if predicted.shape != expected.shape or predicted.shape[-1:] != (2,):
-        raise ValueError("transform and reference must return matching (..., 2) tensors")
+        raise ValueError(
+            "transform and reference must return matching (..., 2) tensors"
+        )
     _finite(predicted, "transform output")
     _finite(expected, "reference output")
     if coordinates == "sky_degrees":

@@ -174,8 +174,7 @@ class ConditionedKernelPSF(nn.Module):
 
     def __init__(
         self,
-        encoder: SpatioSpectralTemporalEncoder
-        | AdaptiveSpatioSpectralTemporalEncoder,
+        encoder: SpatioSpectralTemporalEncoder | AdaptiveSpatioSpectralTemporalEncoder,
         *,
         n_basis: int = 4,
         kernel_size: int = 15,
@@ -209,9 +208,7 @@ class ConditionedKernelPSF(nn.Module):
         time_mjd: Tensor | float | None = None,
     ) -> Tensor:
         return torch.softmax(
-            self.mixer(
-                self.encoder(spatial_x, spatial_y, wavelength, time_mjd)
-            ),
+            self.mixer(self.encoder(spatial_x, spatial_y, wavelength, time_mjd)),
             dim=-1,
         ).movedim(-1, 0)
 
@@ -244,9 +241,9 @@ class ConditionedKernelPSF(nn.Module):
             raise ValueError("ConditionedKernelPSF image must be 2D")
         if spatial_x.shape != image.shape or spatial_y.shape != image.shape:
             raise ValueError("PSF spatial coordinates must match image shape")
-        mixture = self.mixture_weights(
-            spatial_x, spatial_y, wavelength, time_mjd
-        ).to(dtype=image.dtype)
+        mixture = self.mixture_weights(spatial_x, spatial_y, wavelength, time_mjd).to(
+            dtype=image.dtype
+        )
         basis = self.kernel_basis.basis_kernels().to(
             device=image.device, dtype=image.dtype
         )
@@ -300,8 +297,7 @@ class ExtendedResidualKernelPSF(nn.Module):
 
     def __init__(
         self,
-        encoder: SpatioSpectralTemporalEncoder
-        | AdaptiveSpatioSpectralTemporalEncoder,
+        encoder: SpatioSpectralTemporalEncoder | AdaptiveSpatioSpectralTemporalEncoder,
         *,
         core_kernel: Tensor | None = None,
         wing_kernel: Tensor | None = None,
@@ -320,9 +316,7 @@ class ExtendedResidualKernelPSF(nn.Module):
             raise ValueError("baseline_wing_fraction must lie in [0, 1]")
         if not 0.0 < float(residual_fraction_max) < 1.0:
             raise ValueError("residual_fraction_max must lie in (0, 1)")
-        if not 0.0 < float(residual_fraction_init) < float(
-            residual_fraction_max
-        ):
+        if not 0.0 < float(residual_fraction_init) < float(residual_fraction_max):
             raise ValueError(
                 "residual_fraction_init must lie in (0, residual_fraction_max)"
             )
@@ -372,9 +366,7 @@ class ExtendedResidualKernelPSF(nn.Module):
 
     @property
     def residual_fraction(self) -> Tensor:
-        return self.residual_fraction_max * torch.sigmoid(
-            self.raw_residual_fraction
-        )
+        return self.residual_fraction_max * torch.sigmoid(self.raw_residual_fraction)
 
     def mixture_weights(
         self,
@@ -407,7 +399,9 @@ class ExtendedResidualKernelPSF(nn.Module):
             "...b,bhw->...hw", mixture, self._anchored_residual_basis()
         )
         baseline = self.baseline_kernel.to(device=residual.device, dtype=residual.dtype)
-        fraction = self.residual_fraction.to(device=residual.device, dtype=residual.dtype)
+        fraction = self.residual_fraction.to(
+            device=residual.device, dtype=residual.dtype
+        )
         return (1.0 - fraction) * baseline + fraction * residual
 
     def conditioning_regularization(
@@ -440,18 +434,22 @@ class ExtendedResidualKernelPSF(nn.Module):
             raise ValueError("ExtendedResidualKernelPSF image must be 2D")
         if spatial_x.shape != image.shape or spatial_y.shape != image.shape:
             raise ValueError("PSF spatial coordinates must match image shape")
-        mixture = self.mixture_weights(
-            spatial_x, spatial_y, wavelength, time_mjd
-        ).to(dtype=image.dtype)
+        mixture = self.mixture_weights(spatial_x, spatial_y, wavelength, time_mjd).to(
+            dtype=image.dtype
+        )
         basis = self._anchored_residual_basis().to(
             device=image.device, dtype=image.dtype
         )
-        residual = F.conv2d(
-            (mixture * image.unsqueeze(0)).unsqueeze(0),
-            basis.flip(-2, -1).unsqueeze(1),
-            padding=self.kernel_size // 2,
-            groups=int(basis.shape[0]),
-        ).squeeze(0).sum(dim=0)
+        residual = (
+            F.conv2d(
+                (mixture * image.unsqueeze(0)).unsqueeze(0),
+                basis.flip(-2, -1).unsqueeze(1),
+                padding=self.kernel_size // 2,
+                groups=int(basis.shape[0]),
+            )
+            .squeeze(0)
+            .sum(dim=0)
+        )
         baseline_kernel = self.baseline_kernel.to(
             device=image.device, dtype=image.dtype
         )
@@ -831,9 +829,7 @@ def _soft_limit_correlation(rho: Tensor) -> Tensor:
     return torch.where(magnitude > _RHO_LINEAR, torch.sign(rho) * saturated, rho)
 
 
-def gaussian_kernels_from_params(
-    params: Tensor, *, size: int | None = None
-) -> Tensor:
+def gaussian_kernels_from_params(params: Tensor, *, size: int | None = None) -> Tensor:
     """Unit-sum, zero-centroid Gaussian kernels from ``(sigma_x, sigma_y, rho)``.
 
     ``params`` is ``[..., 3]``; returns ``[..., ky, kx]`` with odd ``ky == kx``.
@@ -870,6 +866,7 @@ def gaussian_kernels_from_params(
         ).unsqueeze(-1)
         kern = torch.exp(-0.5 * quad)
         return kern / kern.sum(dim=(-2, -1), keepdim=True).clamp_min(1e-12)
+
     mean_x = torch.zeros_like(sigma_x)
     mean_y = torch.zeros_like(sigma_y)
     kern = _kernel(mean_x, mean_y)
@@ -879,10 +876,9 @@ def gaussian_kernels_from_params(
         mean_x = mean_x + centroid_x
         mean_y = mean_y + centroid_y
         kern = _kernel(mean_x, mean_y)
-        if (
-            (kern * gx).sum(dim=(-2, -1)).abs().max() < 1e-6
-            and (kern * gy).sum(dim=(-2, -1)).abs().max() < 1e-6
-        ):
+        if (kern * gx).sum(dim=(-2, -1)).abs().max() < 1e-6 and (kern * gy).sum(
+            dim=(-2, -1)
+        ).abs().max() < 1e-6:
             break
     return kern
 
@@ -939,9 +935,7 @@ class LowRankChromaticPSF(nn.Module):
             "node_uvw",
             torch.stack([node_x, node_y], dim=-1).reshape(n_nodes, 2),
         )
-        self._kernel_size = (
-            int(kernel_size) if kernel_size is not None else None
-        )
+        self._kernel_size = int(kernel_size) if kernel_size is not None else None
         if self._kernel_size is not None and self._kernel_size % 2 == 0:
             raise ValueError("kernel_size must be odd")
         self.register_buffer(
@@ -1002,8 +996,15 @@ class LowRankChromaticPSF(nn.Module):
         params = self(u_pix, lam_norm)
         return gaussian_kernels_from_params(params, size=self.kernel_size)
 
-    def forward(self, *args, spatial_x=None, spatial_y=None,
-                wavelength=None, time_mjd=None, **kwargs):
+    def forward(
+        self,
+        *args,
+        spatial_x=None,
+        spatial_y=None,
+        wavelength=None,
+        time_mjd=None,
+        **kwargs,
+    ):
         """Dispatch between the two call contracts.
 
         Renderer: ``model(image, spatial_x=..., spatial_y=..., wavelength=...)``
@@ -1015,7 +1016,9 @@ class LowRankChromaticPSF(nn.Module):
             sx = spatial_x if spatial_x is not None else kwargs["spatial_x"]
             sy = spatial_y if spatial_y is not None else kwargs["spatial_y"]
             wl: Any = wavelength if wavelength is not None else kwargs.get("wavelength")
-            return self.filter_image(image=image, spatial_x=sx, spatial_y=sy, wavelength=wl)
+            return self.filter_image(
+                image=image, spatial_x=sx, spatial_y=sy, wavelength=wl
+            )
         u_pix = args[0] if args else kwargs["u_pix"]
         lam_norm = args[1] if len(args) > 1 else kwargs["lam_norm"]
         return self._forward_uvlam(u_pix, lam_norm)
@@ -1024,9 +1027,9 @@ class LowRankChromaticPSF(nn.Module):
         """Return stacked ``(sigma_x, sigma_y, rho)`` of shape ``[N, 3]``."""
         if u_pix.ndim != 2 or u_pix.shape[-1] != 2:
             raise ValueError("u_pix must have shape [N, 2]")
-        lam = torch.as_tensor(
-            lam_norm, device=u_pix.device, dtype=u_pix.dtype
-        ).expand(u_pix.shape[0])
+        lam = torch.as_tensor(lam_norm, device=u_pix.device, dtype=u_pix.dtype).expand(
+            u_pix.shape[0]
+        )
         # Legendre polynomials are orthogonal on [-1, 1]; lam_norm lives on
         # [0, 1], so rescale before evaluating the spectral basis.
         spec = _legendre_basis(2.0 * lam - 1.0, self.spectral_degree).to(

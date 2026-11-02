@@ -15,14 +15,22 @@ from torchsky.map.field.chromatic import (
 
 def test_chromatic_psf_basis_is_normalised_and_zero_sum() -> None:
     torch.manual_seed(0)
-    psf = ChromaticPSFField(num_channels=2, num_detectors=3, pixel_scale_arcsec=0.04, size=21)
+    psf = ChromaticPSFField(
+        num_channels=2, num_detectors=3, pixel_scale_arcsec=0.04, size=21
+    )
     lam = torch.tensor([0.9, 2.0, 4.4])
     b = psf.basis(lam, torch.tensor([0, 0, 1]))
     assert b.shape == (3, 4, 21, 21)
     assert torch.allclose(b[:, 0].sum((-2, -1)), torch.ones(3), atol=1e-5)
     assert bool((b[:, 0] >= 0).all())
     assert torch.allclose(b[:, 1:].sum((-2, -1)), torch.zeros(3, 3), atol=1e-6)
-    w = psf.weights(torch.tensor(2.0), torch.tensor(0), torch.tensor(1), torch.rand(10) * 2 - 1, torch.rand(10) * 2 - 1)
+    w = psf.weights(
+        torch.tensor(2.0),
+        torch.tensor(0),
+        torch.tensor(1),
+        torch.rand(10) * 2 - 1,
+        torch.rand(10) * 2 - 1,
+    )
     assert w.shape == (10, 4) and torch.allclose(w[:, 0], torch.ones(10))
     # zero-initialised weight net: no spatial variation before training
     assert torch.allclose(w[:, 1:], torch.zeros(10, 3))
@@ -30,11 +38,15 @@ def test_chromatic_psf_basis_is_normalised_and_zero_sum() -> None:
 
 def test_chromatic_psf_learns_diffraction_scaling() -> None:
     torch.manual_seed(0)
-    psf = ChromaticPSFField(num_channels=1, num_detectors=1, pixel_scale_arcsec=0.04, size=31, num_kernels=1)
+    psf = ChromaticPSFField(
+        num_channels=1, num_detectors=1, pixel_scale_arcsec=0.04, size=31, num_kernels=1
+    )
     lam = torch.tensor([1.0, 2.0, 4.0])
     r = torch.arange(31.0) - 15
     rr = r[None, :] ** 2 + r[:, None] ** 2
-    sig = 0.42 * lam * 1e-6 / 6.5 * 206264.8 / 0.04  # Gaussian approx. of the Airy core, in pixels
+    sig = (
+        0.42 * lam * 1e-6 / 6.5 * 206264.8 / 0.04
+    )  # Gaussian approx. of the Airy core, in pixels
     target = torch.exp(-0.5 * rr[None] / sig[:, None, None] ** 2)
     target = target / target.sum((-2, -1), keepdim=True)
     opt = torch.optim.Adam(psf.parameters(), lr=3e-3)
@@ -46,9 +58,16 @@ def test_chromatic_psf_learns_diffraction_scaling() -> None:
     # an unseen wavelength in between should have an intermediate core: encircled energy
     # inside 1.5 px decreases monotonically with wavelength
     inner = rr <= 1.5**2
-    ee = [float(psf.basis(torch.tensor([x]), torch.tensor([0]))[0, 0].detach()[inner].sum()) for x in (2.0, 3.0, 4.0)]
+    ee = [
+        float(
+            psf.basis(torch.tensor([x]), torch.tensor([0]))[0, 0].detach()[inner].sum()
+        )
+        for x in (2.0, 3.0, 4.0)
+    ]
     assert ee[0] > ee[1] > ee[2]
-    assert float(psf.centring_penalty(lam, torch.zeros(3))) < 0.05  # centroids within ~0.1 px
+    assert (
+        float(psf.centring_penalty(lam, torch.zeros(3))) < 0.05
+    )  # centroids within ~0.1 px
 
 
 def test_spectral_sky_reproduces_band_images_and_is_differentiable() -> None:
@@ -84,11 +103,18 @@ def test_spectral_sky_reproduces_band_images_and_is_differentiable() -> None:
 
 def test_validation_errors() -> None:
     with pytest.raises(ValueError):
-        ChromaticPSFField(num_channels=1, num_detectors=1, pixel_scale_arcsec=0.04, size=30)
+        ChromaticPSFField(
+            num_channels=1, num_detectors=1, pixel_scale_arcsec=0.04, size=30
+        )
     with pytest.raises(ValueError):
         LogLambdaRBFBasis(1, 0.7, 5.0)
     with pytest.raises(ValueError):
-        SpectralSkyField(nn.Identity(), LogLambdaRBFBasis(4, 0.7, 5.0), torch.ones(2, 3), torch.ones(3, 2))
+        SpectralSkyField(
+            nn.Identity(),
+            LogLambdaRBFBasis(4, 0.7, 5.0),
+            torch.ones(2, 3),
+            torch.ones(3, 2),
+        )
 
 
 def test_relative_spectral_prior_is_brightness_independent() -> None:
@@ -106,7 +132,14 @@ def test_relative_spectral_prior_is_brightness_independent() -> None:
             return self.a
 
     def penalty(amplitude: float, mode: str) -> float:
-        sky = SpectralSkyField(Fixed(amplitude * shape), basis, nodes, weights, spectral_smoothness=1.0, smoothness_mode=mode)
+        sky = SpectralSkyField(
+            Fixed(amplitude * shape),
+            basis,
+            nodes,
+            weights,
+            spectral_smoothness=1.0,
+            smoothness_mode=mode,
+        )
         return float(sky.penalty())
 
     # same spectral shape at 1x and 1000x the noise level

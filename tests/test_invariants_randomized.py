@@ -17,7 +17,9 @@ import torchsky.sphere as sphere
 from torchsky.wcs import WCS
 
 
-def _tan_header(ra: float, dec: float, *, crpix: tuple[float, float] = (16.5, 16.5)) -> dict:
+def _tan_header(
+    ra: float, dec: float, *, crpix: tuple[float, float] = (16.5, 16.5)
+) -> dict:
     return {
         "NAXIS": 2,
         "NAXIS1": 32,
@@ -85,7 +87,7 @@ def test_query_disc_membership_and_uniqueness(nside: int) -> None:
 
 def test_great_circle_distance_matches_planar_limit() -> None:
     g = torch.Generator().manual_seed(11)
-    lat = ((torch.rand(64, generator=g, dtype=torch.float64) * 120.0) - 60.0)
+    lat = (torch.rand(64, generator=g, dtype=torch.float64) * 120.0) - 60.0
     dlon = (torch.rand(64, generator=g, dtype=torch.float64) * 2.0 - 1.0) * 1e-3
     dlat = (torch.rand(64, generator=g, dtype=torch.float64) * 2.0 - 1.0) * 1e-3
     distance = sphere.great_circle_distance(0.0 * lat, lat, dlon, lat + dlat)
@@ -103,7 +105,11 @@ def test_slerp_endpoints_and_constant_speed() -> None:
     lon_a = torch.rand(4, generator=g, dtype=torch.float64) * 360.0 - 180.0
     lat_a = (torch.rand(4, generator=g, dtype=torch.float64) * 120.0) - 60.0
     lon_b = lon_a + (torch.rand(4, generator=g, dtype=torch.float64) * 20.0 - 10.0)
-    lat_b = torch.clamp(lat_a + (torch.rand(4, generator=g, dtype=torch.float64) * 20.0 - 10.0), -89.0, 89.0)
+    lat_b = torch.clamp(
+        lat_a + (torch.rand(4, generator=g, dtype=torch.float64) * 20.0 - 10.0),
+        -89.0,
+        89.0,
+    )
 
     lon_a0, lat_a0 = sphere.slerp_lonlat(lon_a, lat_a, lon_b, lat_b, 0.0)
     lon_b1, lat_b1 = sphere.slerp_lonlat(lon_a, lat_a, lon_b, lat_b, 1.0)
@@ -122,7 +128,9 @@ def test_slerp_endpoints_and_constant_speed() -> None:
         d = sphere.great_circle_distance(lon_a, lat_a, lon_t, lat_t)
         fractions.append((d / full).mean())
     fractions = torch.stack(fractions)
-    assert torch.allclose(fractions, torch.tensor(steps, dtype=torch.float64), atol=2e-3)
+    assert torch.allclose(
+        fractions, torch.tensor(steps, dtype=torch.float64), atol=2e-3
+    )
 
 
 def test_observing_geometry_zenith_distance_is_consistent() -> None:
@@ -131,9 +139,15 @@ def test_observing_geometry_zenith_distance_is_consistent() -> None:
     lat = torch.rad2deg(torch.asin(torch.rand(64, generator=g, dtype=torch.float64)))
     xyz = sphere.lonlat_to_unit_xyz(lon, lat)
     back_lon, back_lat = sphere.unit_xyz_to_lonlat(xyz)
-    assert torch.allclose(sphere.wrap_longitude(back_lon), sphere.wrap_longitude(lon), atol=1e-10)
+    assert torch.allclose(
+        sphere.wrap_longitude(back_lon), sphere.wrap_longitude(lon), atol=1e-10
+    )
     assert torch.allclose(back_lat, lat, atol=1e-10)
-    assert torch.allclose(torch.linalg.vector_norm(xyz, dim=-1), torch.ones(64, dtype=torch.float64), atol=1e-12)
+    assert torch.allclose(
+        torch.linalg.vector_norm(xyz, dim=-1),
+        torch.ones(64, dtype=torch.float64),
+        atol=1e-12,
+    )
 
 
 def _small_tan_header(crval: tuple[float, float], *, size: int = 16) -> dict:
@@ -175,8 +189,14 @@ def test_identity_coadd_preserves_constant_and_sums_weight(n_obs: int) -> None:
 
     covered = _interior(result.weight > 0)
     assert bool(covered.any())
-    assert torch.allclose(result.weight[covered], torch.full_like(result.weight[covered], float(n_obs)), atol=1e-9)
-    assert torch.allclose(result.data[covered], torch.ones_like(result.data[covered]), atol=1e-9)
+    assert torch.allclose(
+        result.weight[covered],
+        torch.full_like(result.weight[covered], float(n_obs)),
+        atol=1e-9,
+    )
+    assert torch.allclose(
+        result.data[covered], torch.ones_like(result.data[covered]), atol=1e-9
+    )
 
 
 def test_coadd_is_deterministic() -> None:
@@ -206,7 +226,9 @@ def test_constant_sky_is_projection_invariant(crval: tuple[float, float]) -> Non
     result = coadd([observation], target)
     covered = _interior(result.weight > 0)
     assert bool(covered.any()), f"no coverage at {crval}"
-    assert torch.allclose(result.data[covered], torch.full_like(result.data[covered], 3.5), atol=1e-6)
+    assert torch.allclose(
+        result.data[covered], torch.full_like(result.data[covered], 3.5), atol=1e-6
+    )
 
 
 @pytest.mark.parametrize(
@@ -218,7 +240,9 @@ def test_constant_sky_is_projection_invariant(crval: tuple[float, float]) -> Non
         ("VELO", 0.0, 10.0),
     ],
 )
-def test_single_axis_spectral_wcs_roundtrip(ctype: str, crval: float, cdelt: float) -> None:
+def test_single_axis_spectral_wcs_roundtrip(
+    ctype: str, crval: float, cdelt: float
+) -> None:
     header = {
         "NAXIS": 1,
         "NAXIS1": 32,

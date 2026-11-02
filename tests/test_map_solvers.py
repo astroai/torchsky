@@ -6,7 +6,11 @@ import torch
 from conftest import assert_close_on_device
 import torchsky.map.solvers as solver_api
 
-from torchsky.map.solvers import build_spherical_harmonic_solver_hooks, build_spherical_healpix_solver_hooks, build_spherical_spin_harmonic_solver_hooks
+from torchsky.map.solvers import (
+    build_spherical_harmonic_solver_hooks,
+    build_spherical_healpix_solver_hooks,
+    build_spherical_spin_harmonic_solver_hooks,
+)
 from torchsky.map.operators import (
     InterpolationGeometryOp,
     ObservationOperatorBundle,
@@ -180,9 +184,7 @@ def test_bound_operator_normal_equation_probe_accepts_module_scene() -> None:
 
     probe = operator.normal_equation_probe(_OnesField(), data)
 
-    assert_close_on_device(
-        probe.prediction, torch.ones((3, 4), dtype=torch.float32)
-    )
+    assert_close_on_device(probe.prediction, torch.ones((3, 4), dtype=torch.float32))
     assert_close_on_device(probe.weighted_prediction, torch.full((3, 4), 2.0))
     assert_close_on_device(probe.weighted_data, torch.full((3, 4), 10.0))
 

@@ -945,7 +945,9 @@ class Spectrum1D:
             current_wave[idx_hi] - current_wave[idx_lo]
         )
         alpha64 = torch.where(
-            (alpha_raw >= 0.0) & (alpha_raw <= 1.0), alpha_raw, alpha_raw.clamp(0.0, 1.0)
+            (alpha_raw >= 0.0) & (alpha_raw <= 1.0),
+            alpha_raw,
+            alpha_raw.clamp(0.0, 1.0),
         )
 
         flux = self.flux
@@ -1030,7 +1032,9 @@ class DataCube:
     def spatial_shape(self) -> Tuple[int, int]:
         """Get spatial dimensions (y, x)."""
         shape = self.data.shape
-        spatial = [shape[index] for index in range(3) if index != self.spectral_axis_index]
+        spatial = [
+            shape[index] for index in range(3) if index != self.spectral_axis_index
+        ]
         return spatial[0], spatial[1]
 
     def extract_spectrum(self, y: int, x: int) -> "Spectrum1D":
@@ -1219,6 +1223,7 @@ class SpectralReader:
                 header=header,
                 spectral_axis_index=spectral_axis_index,
             )
+
 
 __all__ = [
     # Data containers and readers (I/O delegates to torchfits).

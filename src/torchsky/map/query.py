@@ -290,4 +290,5 @@ def fit_linear_query(
         _evidence_guard=validate_query,
     )
 
+
 __all__ = ["LinearQueryResult", "fit_linear_query"]

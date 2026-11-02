@@ -198,7 +198,10 @@ def main() -> None:
         [round(float(v), 4) for v in gains_before_fix.tolist()],
         [round(float(v), 4) for v in result.model.component_gains.detach().tolist()],
     )
-    assert diagnostics.shared_relative_error < 0.1 and diagnostics.private_relative_error < 0.1
+    assert (
+        diagnostics.shared_relative_error < 0.1
+        and diagnostics.private_relative_error < 0.1
+    )
     print(
         "learned context weights:",
         [round(float(v), 4) for v in result.model.mixer(survey="A").detach().tolist()],

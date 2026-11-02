@@ -10,16 +10,6 @@ from torchsky.sphere.geom import (
 )
 
 
-
-
-
-
-
-
-
-
-
-
 def test_native_exact_region_basic_area_contains() -> None:
     poly = SphericalPolygon(
         torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64),

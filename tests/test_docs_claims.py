@@ -18,7 +18,9 @@ from torchsky.cli import build_parser
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-WORKFLOW = (ROOT / ".github" / "workflows" / "build_wheels.yml").read_text(encoding="utf-8")
+WORKFLOW = (ROOT / ".github" / "workflows" / "build_wheels.yml").read_text(
+    encoding="utf-8"
+)
 
 
 def _docs_text() -> str:
@@ -85,13 +87,23 @@ def test_documented_wheel_python_versions_are_built() -> None:
     match = re.search(r"CIBW_BUILD:\s*(.+)", WORKFLOW)
     assert match, "wheel workflow must declare CIBW_BUILD"
     built = set(re.findall(r"cp(\d)(\d+)", match.group(1)))
-    documented = set(re.findall(r"Python 3\.(\d+)", (DOCS / "install.md").read_text(encoding="utf-8")))
+    documented = set(
+        re.findall(
+            r"Python 3\.(\d+)", (DOCS / "install.md").read_text(encoding="utf-8")
+        )
+    )
     if documented:
-        not_built = sorted(version for version in documented if ("3", version) not in built)
-        assert not not_built, f"docs claim wheels for unbuilt Python versions: {not_built}"
+        not_built = sorted(
+            version for version in documented if ("3", version) not in built
+        )
+        assert not not_built, (
+            f"docs claim wheels for unbuilt Python versions: {not_built}"
+        )
 
 
 def test_public_namespace_list_matches_manifest() -> None:
     manifest = json.loads((DOCS / "api-manifest.json").read_text(encoding="utf-8"))
-    registry = tomllib.loads((DOCS / "reference" / "_registry.toml").read_text(encoding="utf-8"))
+    registry = tomllib.loads(
+        (DOCS / "reference" / "_registry.toml").read_text(encoding="utf-8")
+    )
     assert sorted(entry["name"] for entry in registry["namespace"]) == sorted(manifest)

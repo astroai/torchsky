@@ -546,6 +546,4 @@ def test_bad_basis_units_shapes_modes_and_duplicate_lineage():
         ({"nuisance_treatment": "calibrated"}, "covariance_factor"),
     ):
         with pytest.raises(ValueError, match=message):
-            bind_joint_native_likelihood(
-                observations, responses, **(common | changes)
-            )
+            bind_joint_native_likelihood(observations, responses, **(common | changes))

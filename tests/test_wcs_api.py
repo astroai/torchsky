@@ -1,4 +1,3 @@
-
 import numpy as np
 import pytest
 import torch
@@ -212,9 +211,7 @@ def test_wcs_mixed_pixel_world_solves_coupled_linear_system():
         "CD3_3": 4.0,
     }
     wcs = WCS(header)
-    pixels_true = torch.tensor(
-        [[4.0, 3.0, 7.0], [6.0, 5.0, 2.0]], dtype=torch.float64
-    )
+    pixels_true = torch.tensor([[4.0, 3.0, 7.0], [6.0, 5.0, 2.0]], dtype=torch.float64)
     world_true = wcs.pixel_to_world(pixels_true)
     mixed_pixel = torch.stack(
         [
@@ -1368,7 +1365,9 @@ def test_identity_slice_preserves_sip_or_tpv_state(tpv: bool) -> None:
     wcs = WCS(_distorted_tan_header(tpv=tpv))
     identity = wcs.slice((slice(None), slice(None)))
     pixels = torch.tensor([[20.0, 25.0], [38.0, 41.0]], dtype=torch.float64)
-    torch.testing.assert_close(identity.pixel_to_world(pixels), wcs.pixel_to_world(pixels))
+    torch.testing.assert_close(
+        identity.pixel_to_world(pixels), wcs.pixel_to_world(pixels)
+    )
     assert (identity.tpv is not None) == tpv
     assert (identity.sip is not None) == (not tpv)
 
@@ -1392,7 +1391,9 @@ def test_identity_slice_and_affine_preserve_lut_and_existing_pixel_affine() -> N
         wcs.slice((slice(None), slice(None))),
         wcs.with_pixel_affine_correction(torch.eye(2), torch.zeros(2)),
     ):
-        torch.testing.assert_close(identity.pixel_to_world(pixels), wcs.pixel_to_world(pixels))
+        torch.testing.assert_close(
+            identity.pixel_to_world(pixels), wcs.pixel_to_world(pixels)
+        )
         assert identity.cpdis1 is not None and identity.cpdis2 is not None
         assert identity.det2im1 is not None and identity.det2im2 is not None
         assert identity._pixel_affine_matrix is not None

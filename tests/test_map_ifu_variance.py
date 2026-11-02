@@ -109,9 +109,7 @@ def test_ifu_generic_weights_are_not_reported_as_inverse_variance() -> None:
 
 
 def test_ifu_photometric_scale_is_applied_once() -> None:
-    result = _coadd(
-        [_ifu_observation(3.0, 4.0, inverse_variance=True, scale=2.0)]
-    )
+    result = _coadd([_ifu_observation(3.0, 4.0, inverse_variance=True, scale=2.0)])
 
     torch.testing.assert_close(result.data[:, 0, 0], torch.tensor([6.0, 6.0]))
     torch.testing.assert_close(result.weight[:, 0, 0], torch.tensor([0.5, 0.5]))
@@ -158,8 +156,7 @@ def test_healpix_photometric_scale_is_applied_once() -> None:
             "mps",
             marks=pytest.mark.skipif(
                 not (
-                    hasattr(torch.backends, "mps")
-                    and torch.backends.mps.is_available()
+                    hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
                 ),
                 reason="MPS not available",
             ),

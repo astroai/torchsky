@@ -53,7 +53,9 @@ class ParametricBounds:
             *self.sersic_index,
             self.angle_delta_deg,
         )
-        if any(not math.isfinite(float(value)) or float(value) <= 0 for value in positive):
+        if any(
+            not math.isfinite(float(value)) or float(value) <= 0 for value in positive
+        ):
             raise ValueError("all parametric bounds must be finite and positive")
         for lower, upper in (
             self.gaussian_sigma_arcsec,
@@ -62,7 +64,9 @@ class ParametricBounds:
             self.sersic_index,
         ):
             if lower >= upper:
-                raise ValueError("each parametric lower bound must be below its upper bound")
+                raise ValueError(
+                    "each parametric lower bound must be below its upper bound"
+                )
         if self.sersic_axis_ratio[1] > 1.0:
             raise ValueError("Sersic axis-ratio upper bound cannot exceed one")
         if self.sersic_index[0] < 0.3 or self.sersic_index[1] > 8.0:
@@ -190,10 +194,19 @@ class _ParameterEntry:
     upper: float
 
 
-def _coefficient_rows(scene: SourceCatalogScene, values: Tensor | None = None) -> Tensor:
+def _coefficient_rows(
+    scene: SourceCatalogScene, values: Tensor | None = None
+) -> Tensor:
     state = scene.coefficients if values is None else values
-    rows = [scene.component_parameters(index, state) for index in range(scene.component_count)]
-    width = 0 if scene.component_count == 0 else int(scene.parameter_slices[0, 1] - scene.parameter_slices[0, 0])
+    rows = [
+        scene.component_parameters(index, state)
+        for index in range(scene.component_count)
+    ]
+    width = (
+        0
+        if scene.component_count == 0
+        else int(scene.parameter_slices[0, 1] - scene.parameter_slices[0, 0])
+    )
     return torch.stack(rows) if rows else scene.lon.new_empty((0, width))
 
 
@@ -213,7 +226,9 @@ def _copy_scene(
         component_ids=scene.component_ids,
         morphology=scene.morphology_codes,
         gaussian_parameters=(
-            scene.gaussian_parameters if gaussian_parameters is None else gaussian_parameters
+            scene.gaussian_parameters
+            if gaussian_parameters is None
+            else gaussian_parameters
         ),
         sersic_parameters=(
             scene.sersic_parameters if sersic_parameters is None else sersic_parameters
@@ -233,7 +248,9 @@ def _copy_scene(
     )
 
 
-def _component_mask(value: bool | Tensor, scene: SourceCatalogScene, *, name: str) -> Tensor:
+def _component_mask(
+    value: bool | Tensor, scene: SourceCatalogScene, *, name: str
+) -> Tensor:
     if isinstance(value, bool):
         return torch.full(
             (scene.component_count,), value, dtype=torch.bool, device=scene.device
@@ -452,15 +469,66 @@ def _parameter_layout(
         code = int(scene.morphology_codes[component])
         if code == GAUSSIAN_MORPHOLOGY:
             parameters = scene.gaussian_parameters[component]
-            append(component, "gaussian", 0, f"component[{component}].major_sigma_arcsec", parameters[0], *bounds.gaussian_sigma_arcsec)
-            append(component, "gaussian", 1, f"component[{component}].minor_sigma_arcsec", parameters[1], *bounds.gaussian_sigma_arcsec)
-            append(component, "gaussian", 2, f"component[{component}].position_angle_deg", parameters[2], float(parameters[2]) - bounds.angle_delta_deg, float(parameters[2]) + bounds.angle_delta_deg)
+            append(
+                component,
+                "gaussian",
+                0,
+                f"component[{component}].major_sigma_arcsec",
+                parameters[0],
+                *bounds.gaussian_sigma_arcsec,
+            )
+            append(
+                component,
+                "gaussian",
+                1,
+                f"component[{component}].minor_sigma_arcsec",
+                parameters[1],
+                *bounds.gaussian_sigma_arcsec,
+            )
+            append(
+                component,
+                "gaussian",
+                2,
+                f"component[{component}].position_angle_deg",
+                parameters[2],
+                float(parameters[2]) - bounds.angle_delta_deg,
+                float(parameters[2]) + bounds.angle_delta_deg,
+            )
         elif code == SERSIC_MORPHOLOGY:
             parameters = scene.sersic_parameters[component]
-            append(component, "sersic", 0, f"component[{component}].half_light_radius_arcsec", parameters[0], *bounds.sersic_radius_arcsec)
-            append(component, "sersic", 1, f"component[{component}].axis_ratio", parameters[1], *bounds.sersic_axis_ratio)
-            append(component, "sersic", 2, f"component[{component}].position_angle_deg", parameters[2], float(parameters[2]) - bounds.angle_delta_deg, float(parameters[2]) + bounds.angle_delta_deg)
-            append(component, "sersic", 3, f"component[{component}].sersic_index", parameters[3], *bounds.sersic_index)
+            append(
+                component,
+                "sersic",
+                0,
+                f"component[{component}].half_light_radius_arcsec",
+                parameters[0],
+                *bounds.sersic_radius_arcsec,
+            )
+            append(
+                component,
+                "sersic",
+                1,
+                f"component[{component}].axis_ratio",
+                parameters[1],
+                *bounds.sersic_axis_ratio,
+            )
+            append(
+                component,
+                "sersic",
+                2,
+                f"component[{component}].position_angle_deg",
+                parameters[2],
+                float(parameters[2]) - bounds.angle_delta_deg,
+                float(parameters[2]) + bounds.angle_delta_deg,
+            )
+            append(
+                component,
+                "sersic",
+                3,
+                f"component[{component}].sersic_index",
+                parameters[3],
+                *bounds.sersic_index,
+            )
     if values:
         return (
             torch.stack(values),
@@ -490,7 +558,11 @@ def _project_parameters(
     for indices in positions.values():
         if len(indices) == 2:
             radius = torch.linalg.vector_norm(projected[indices])
-            scale = torch.clamp(bounds.position_arcsec / radius.clamp_min(torch.finfo(projected.dtype).tiny), max=1.0)
+            scale = torch.clamp(
+                bounds.position_arcsec
+                / radius.clamp_min(torch.finfo(projected.dtype).tiny),
+                max=1.0,
+            )
             projected[indices] = projected[indices] * scale
     for offsets in gaussian.values():
         if 0 in offsets and 1 in offsets:
@@ -567,12 +639,13 @@ def _catastrophic_swap(
     refined_lat = refined.lat[sources]
     cos_lat = torch.cos(torch.deg2rad(initial_lat)).abs().clamp_min(1.0e-8)
     east = (
-        (refined_lon[:, None] - initial_lon[None, :] + 180.0).remainder(360.0)
-        - 180.0
+        (refined_lon[:, None] - initial_lon[None, :] + 180.0).remainder(360.0) - 180.0
     ) * cos_lat[None, :]
     north = refined_lat[:, None] - initial_lat[None, :]
     nearest = torch.argmin(east.square() + north.square(), dim=1)
-    return not bool(torch.equal(nearest, torch.arange(sources.numel(), device=sources.device)))
+    return not bool(
+        torch.equal(nearest, torch.arange(sources.numel(), device=sources.device))
+    )
 
 
 def _require_deblend_controls(
@@ -617,11 +690,15 @@ def fit_parametric_deblending(
     """Refine supplied point, Gaussian, and bounded-Sersic components by LM."""
     if not isinstance(scene, SourceCatalogScene):
         raise TypeError("scene must be a SourceCatalogScene")
-    allowed = (scene.morphology_codes == POINT_MORPHOLOGY) | (
-        scene.morphology_codes == GAUSSIAN_MORPHOLOGY
-    ) | (scene.morphology_codes == SERSIC_MORPHOLOGY)
+    allowed = (
+        (scene.morphology_codes == POINT_MORPHOLOGY)
+        | (scene.morphology_codes == GAUSSIAN_MORPHOLOGY)
+        | (scene.morphology_codes == SERSIC_MORPHOLOGY)
+    )
     if not bool(allowed.all()):
-        raise ValueError("parametric deblending accepts only point, Gaussian, and Sersic components")
+        raise ValueError(
+            "parametric deblending accepts only point, Gaussian, and Sersic components"
+        )
     _require_deblend_controls(
         max_iterations=max_iterations,
         max_group_size=max_group_size,
@@ -749,12 +826,20 @@ def fit_parametric_deblending(
                     break
                 diagonal = torch.diagonal(information).clamp_min(1.0)
                 system = information + damping * torch.diag(diagonal)
-                analysis_system = system.to("cpu") if system.device.type == "mps" else system
-                analysis_gradient = gradient.to("cpu") if gradient.device.type == "mps" else gradient
+                analysis_system = (
+                    system.to("cpu") if system.device.type == "mps" else system
+                )
+                analysis_gradient = (
+                    gradient.to("cpu") if gradient.device.type == "mps" else gradient
+                )
                 try:
-                    delta = torch.linalg.solve(analysis_system, -analysis_gradient).to(values)
+                    delta = torch.linalg.solve(analysis_system, -analysis_gradient).to(
+                        values
+                    )
                 except RuntimeError:
-                    delta = (torch.linalg.pinv(analysis_system) @ -analysis_gradient).to(values)
+                    delta = (
+                        torch.linalg.pinv(analysis_system) @ -analysis_gradient
+                    ).to(values)
                 trial_values = values.clone()
                 trial_values[selected] += delta
                 trial_values = _project_parameters(
@@ -788,7 +873,9 @@ def fit_parametric_deblending(
                     relative_step = torch.linalg.vector_norm(delta) / (
                         torch.linalg.vector_norm(values[selected]).clamp_min(1.0)
                     )
-                    relative_objective = (previous - objective).abs() / previous.abs().clamp_min(1.0)
+                    relative_objective = (
+                        previous - objective
+                    ).abs() / previous.abs().clamp_min(1.0)
                     if bool(relative_step <= step_tolerance) or bool(
                         relative_objective <= objective_tolerance
                     ):
@@ -808,7 +895,11 @@ def fit_parametric_deblending(
         )
         gauge_mask = torch.diagonal(information).abs() <= cutoff
         if information.numel() and rank < information.shape[0]:
-            analysis = information.to("cpu") if information.device.type == "mps" else information
+            analysis = (
+                information.to("cpu")
+                if information.device.type == "mps"
+                else information
+            )
             null_values, null_vectors = torch.linalg.eigh(0.5 * (analysis + analysis.T))
             null_vectors = null_vectors[:, null_values <= cutoff.to(analysis)]
             if null_vectors.numel():
@@ -819,7 +910,11 @@ def fit_parametric_deblending(
         gauge_local = torch.nonzero(gauge_mask, as_tuple=False).flatten()
         covariance = torch.full_like(information, float("nan"))
         if information.numel() and rank == information.shape[0]:
-            analysis = information.to("cpu") if information.device.type == "mps" else information
+            analysis = (
+                information.to("cpu")
+                if information.device.type == "mps"
+                else information
+            )
             covariance = torch.linalg.inv(analysis).to(information)
             covariance = 0.5 * (covariance + covariance.T)
         positive = eigenvalues[eigenvalues > cutoff]
@@ -839,7 +934,9 @@ def fit_parametric_deblending(
                 source_indices=sources,
                 component_ids=scene.component_ids[sources],
                 parameter_indices=selected,
-                parameter_labels=tuple(entries[index].label for index in selected.tolist()),
+                parameter_labels=tuple(
+                    entries[index].label for index in selected.tolist()
+                ),
                 converged=converged,
                 iterations=iterations,
                 initial_objective=initial_objective,
@@ -939,8 +1036,12 @@ def fit_parametric_deblending(
 def _template_tuple(scene: SourceCatalogScene, data: Tensor) -> tuple[Tensor, ...]:
     values = []
     for component in range(scene.component_count):
-        start, stop = (int(value) for value in scene.template_slices[component].tolist())
-        height, width = (int(value) for value in scene.template_shapes[component].tolist())
+        start, stop = (
+            int(value) for value in scene.template_slices[component].tolist()
+        )
+        height, width = (
+            int(value) for value in scene.template_shapes[component].tolist()
+        )
         values.append(data[start:stop].reshape(height, width))
     return tuple(values)
 
@@ -986,10 +1087,14 @@ def _project_template_data(
     pieces = []
     cursor = 0
     for component in range(scene.component_count):
-        start, stop = (int(value) for value in scene.template_slices[component].tolist())
+        start, stop = (
+            int(value) for value in scene.template_slices[component].tolist()
+        )
         if start > cursor:
             pieces.append(data[cursor:start])
-        height, width = (int(value) for value in scene.template_shapes[component].tolist())
+        height, width = (
+            int(value) for value in scene.template_shapes[component].tolist()
+        )
         value = data[start:stop].reshape(height, width)
         if selected_sources is None or component in selected_sources:
             value = _project_morphology(
@@ -1030,7 +1135,9 @@ def fit_morphology_spectrum_deblending(
     if not isinstance(scene, SourceCatalogScene):
         raise TypeError("scene must be a SourceCatalogScene")
     if not bool((scene.morphology_codes == TEMPLATE_MORPHOLOGY).all()):
-        raise ValueError("morphology-spectrum deblending requires supplied template components")
+        raise ValueError(
+            "morphology-spectrum deblending requires supplied template components"
+        )
     cursor = 0
     for start, stop in scene.template_slices.tolist():
         if start != cursor or stop <= start:
@@ -1168,9 +1275,7 @@ def fit_morphology_spectrum_deblending(
                     trial_residual = _weighted_residual(
                         trial_fit, training, fixed_bounds[group_index]
                     )
-                    trial_objective = 0.5 * torch.dot(
-                        trial_residual, trial_residual
-                    )
+                    trial_objective = 0.5 * torch.dot(trial_residual, trial_residual)
                     if bool(torch.isfinite(trial_objective)) and bool(
                         trial_objective < objective
                     ):
@@ -1182,7 +1287,9 @@ def fit_morphology_spectrum_deblending(
                         local_step = trial_step / backtracking
                         accepted = True
                         accepted_steps += 1
-                        relative_objective = (previous - objective).abs() / previous.abs().clamp_min(1.0)
+                        relative_objective = (
+                            previous - objective
+                        ).abs() / previous.abs().clamp_min(1.0)
                         relative_step = trial_step * gradient_norm
                         if bool(relative_objective <= objective_tolerance) or bool(
                             relative_step <= step_tolerance
@@ -1198,7 +1305,10 @@ def fit_morphology_spectrum_deblending(
             if not converged and failure_reason is None:
                 failure_reason = "maximum_iterations"
         sums = torch.stack(
-            [current_data[start:stop].sum() for start, stop in scene.template_slices.tolist()]
+            [
+                current_data[start:stop].sum()
+                for start, stop in scene.template_slices.tolist()
+            ]
         )
         zero = torch.nonzero(sums <= 0, as_tuple=False).flatten()
         gauge_parts = [
@@ -1249,8 +1359,7 @@ def fit_morphology_spectrum_deblending(
         coefficients=torch.nan_to_num(spectra, nan=0.0),
     )
     free_morphology = sum(
-        max(int(stop - start) - 1, 0)
-        for start, stop in scene.template_slices.tolist()
+        max(int(stop - start) - 1, 0) for start, stop in scene.template_slices.tolist()
     )
     adequacy = _adequacy(
         observations,

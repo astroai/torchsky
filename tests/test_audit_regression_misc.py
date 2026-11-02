@@ -22,9 +22,7 @@ ZS = [1e-5, 1e-4, 0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 100.0, 1100.0]
 )
 def test_distances_match_astropy_and_are_batch_independent(om, ok, w0, wa) -> None:
     astropy_cosmo = pytest.importorskip("astropy.cosmology")
-    ref = astropy_cosmo.w0waCDM(
-        H0=70, Om0=om, Ode0=1 - om - ok, w0=w0, wa=wa, Tcmb0=0
-    )
+    ref = astropy_cosmo.w0waCDM(H0=70, Om0=om, Ode0=1 - om - ok, w0=w0, wa=wa, Tcmb0=0)
     kw = {"H0": 70.0, "om0": om, "ok0": ok, "w0": w0, "wa": wa}
     z = torch.tensor(ZS, dtype=F64)
     d_l = C.luminosity_distance(z, **kw).numpy()

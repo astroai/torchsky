@@ -127,9 +127,7 @@ def pull_histogram(
     # observed and expected counts would be on different totals.
     bin_width = (hist_max - hist_min) / n_bins
     n_in_window = int(((flat >= hist_min) & (flat <= hist_max)).sum().item())
-    norm = (
-        n_in_window * bin_width / (std * math.sqrt(2 * math.pi)) if std > 0 else 0.0
-    )
+    norm = n_in_window * bin_width / (std * math.sqrt(2 * math.pi)) if std > 0 else 0.0
     gaussian_counts = [
         norm * math.exp(-0.5 * ((float(c.item()) - mu) / max(std, 1e-6)) ** 2)
         for c in centers

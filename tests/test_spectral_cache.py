@@ -36,12 +36,13 @@ def test_same_key_construction_is_single_flight() -> None:
         first = executor.submit(manager.get_or_build, "basis", 1, build)
         assert started.wait(timeout=5)
         others = [
-            executor.submit(manager.get_or_build, "basis", 1, build)
-            for _ in range(7)
+            executor.submit(manager.get_or_build, "basis", 1, build) for _ in range(7)
         ]
         _wait_for_waiters(manager, 7)
         release.set()
-        values = [first.result(timeout=5)] + [future.result(timeout=5) for future in others]
+        values = [first.result(timeout=5)] + [
+            future.result(timeout=5) for future in others
+        ]
 
     assert build_count == 1
     assert all(value is values[0] for value in values)
@@ -144,8 +145,7 @@ def test_failed_build_wakes_waiters_and_allows_retry() -> None:
         first = executor.submit(manager.get_or_build, "failure", 1, fail)
         assert started.wait(timeout=5)
         others = [
-            executor.submit(manager.get_or_build, "failure", 1, fail)
-            for _ in range(3)
+            executor.submit(manager.get_or_build, "failure", 1, fail) for _ in range(3)
         ]
         _wait_for_waiters(manager, 3)
         release.set()

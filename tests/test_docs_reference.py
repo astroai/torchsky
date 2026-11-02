@@ -112,4 +112,6 @@ def test_every_generated_page_is_in_the_navigation() -> None:
             for header in (HEADER, CLI_HEADER)
         )
     }
-    assert handwritten == {"runtime-contract.md"}, f"unexpected handwritten reference pages: {handwritten}"
+    assert handwritten == {"runtime-contract.md"}, (
+        f"unexpected handwritten reference pages: {handwritten}"
+    )

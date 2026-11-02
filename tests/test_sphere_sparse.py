@@ -31,9 +31,7 @@ def test_sparse_from_pixels_canonicalizes_unsorted_duplicates() -> None:
     pixels = torch.tensor([5, 2, 5, 1], dtype=torch.int64)
     values = torch.tensor([50.0, 20.0, 55.0, 10.0], dtype=torch.float64)
 
-    sp = SparseHealpixMap.from_pixels(
-        pixels, values, nside_sparse=8, sentinel=-1.0
-    )
+    sp = SparseHealpixMap.from_pixels(pixels, values, nside_sparse=8, sentinel=-1.0)
 
     torch.testing.assert_close(sp.pixels, torch.tensor([1, 2, 5], dtype=torch.int64))
     torch.testing.assert_close(
@@ -387,7 +385,9 @@ def test_sparse_ud_grade_coverage_blocks_match_pixel_list(
         torch.testing.assert_close(got.to_dense(), exp.to_dense(), atol=1e-12, rtol=0.0)
         assert got.nside_coverage == min(32, nside_out)
         q = torch.arange(0, hp.nside2npix(nside_out), 17, dtype=torch.int64)
-        torch.testing.assert_close(got.get_values(q), exp.get_values(q), atol=1e-12, rtol=0.0)
+        torch.testing.assert_close(
+            got.get_values(q), exp.get_values(q), atol=1e-12, rtol=0.0
+        )
 
 
 def test_sparse_ud_grade_coverage_blocks_multiband_match_pixel_list() -> None:
@@ -426,9 +426,7 @@ def test_sparse_from_pixels_canonicalizes_multiband_values() -> None:
         dtype=torch.float64,
     )
 
-    sp = SparseHealpixMap.from_pixels(
-        pixels, values, nside_sparse=8, sentinel=-1.0
-    )
+    sp = SparseHealpixMap.from_pixels(pixels, values, nside_sparse=8, sentinel=-1.0)
 
     torch.testing.assert_close(sp.pixels, torch.tensor([1, 2, 4], dtype=torch.int64))
     torch.testing.assert_close(
@@ -506,8 +504,7 @@ def test_sparse_to_moc_and_pixelized_region_preserve_ordering() -> None:
 
     upsampled = sp.to_pixelized_region(nside=16, nest=True)
     expected_children = (
-        pix_nest.unsqueeze(1) * 4
-        + torch.arange(4, dtype=torch.int64).unsqueeze(0)
+        pix_nest.unsqueeze(1) * 4 + torch.arange(4, dtype=torch.int64).unsqueeze(0)
     ).reshape(-1)
     torch.testing.assert_close(upsampled.pixels, torch.sort(expected_children)[0])
 
@@ -758,7 +755,9 @@ def test_sparse_coverage_mask_and_any_coverage_mode() -> None:
     assert bool(cov[3]) and bool(cov[7]) and (int(cov.sum().item()) == 2)
 
 
-def test_sparse_direct_construction_builds_coverage_map_after_canonicalization() -> None:
+def test_sparse_direct_construction_builds_coverage_map_after_canonicalization() -> (
+    None
+):
     sp = SparseHealpixMap(
         nside=8,
         nest=True,
@@ -768,9 +767,7 @@ def test_sparse_direct_construction_builds_coverage_map_after_canonicalization()
     )
 
     torch.testing.assert_close(sp.pixels, torch.tensor([5, 20], dtype=torch.int64))
-    torch.testing.assert_close(
-        sp.values, torch.tensor([3.0, 2.0], dtype=torch.float64)
-    )
+    torch.testing.assert_close(sp.values, torch.tensor([3.0, 2.0], dtype=torch.float64))
     assert sp.coverage_map is not None
     torch.testing.assert_close(
         torch.nonzero(sp.coverage_map >= 0, as_tuple=False).flatten(),
@@ -927,9 +924,7 @@ def test_sparse_fits_roundtrip_preserves_value_dtype(
 def test_pixel_list_write_fits_synthesizes_healsparse_coverage(tmp_path) -> None:
     pixels = torch.tensor([0, 10, 42], dtype=torch.int64)
     values = torch.tensor([1.25, 2.5, 3.75], dtype=torch.float64)
-    smap = SparseHealpixMap.from_pixels(
-        pixels, values, nside_sparse=8, sentinel=-999.0
-    )
+    smap = SparseHealpixMap.from_pixels(pixels, values, nside_sparse=8, sentinel=-999.0)
     assert smap.nside_coverage is None
     path = tmp_path / "pixlist.fits"
     smap.write_fits(str(path), overwrite=True)

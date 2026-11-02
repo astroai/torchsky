@@ -5,7 +5,12 @@ from pathlib import Path
 def test_torchsky_src_does_not_import_astropy_io_fits():
     repo = Path(__file__).parents[1]
     offenders = []
-    roots = [repo / "src" / "torchsky", repo / "tests", repo / "scripts", repo / "examples"]
+    roots = [
+        repo / "src" / "torchsky",
+        repo / "tests",
+        repo / "scripts",
+        repo / "examples",
+    ]
     for root in roots:
         for path in root.rglob("*.py"):
             for node in ast.walk(ast.parse(path.read_text())):

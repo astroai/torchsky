@@ -259,10 +259,9 @@ class CrossExposureSkyCorrector:
         differences = torch.stack(
             [
                 torch.median(
-                    (
-                        images[right][iy0:iy1, ix0:ix1]
-                        - images[left][iy0:iy1, ix0:ix1]
-                    )[ov[iy0:iy1, ix0:ix1]]
+                    (images[right][iy0:iy1, ix0:ix1] - images[left][iy0:iy1, ix0:ix1])[
+                        ov[iy0:iy1, ix0:ix1]
+                    ]
                 )
                 for left, right, ov, _, (iy0, iy1, ix0, ix1) in edges_bbox
             ]
@@ -383,9 +382,7 @@ class CrossExposureSkyCorrector:
                 for left, right, overlap, _ in edges
             ]
         )
-        corrections = _solve_anchored_graph(
-            len(images), edges, difference_models
-        )
+        corrections = _solve_anchored_graph(len(images), edges, difference_models)
         return [image - corrections[index] for index, image in enumerate(images)]
 
     def fit_corrections(

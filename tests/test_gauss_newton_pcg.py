@@ -88,8 +88,6 @@ class _SimpleDetectorToSky:
         height, width = self.shape
         x_local = x_min + x * (x_max - x_min) / max(width - 1, 1)
         y_local = y_min + y * (y_max - y_min) / max(height - 1, 1)
-        ra = self.center_ra_deg + x_local / math.cos(
-            math.radians(self.center_dec_deg)
-        )
+        ra = self.center_ra_deg + x_local / math.cos(math.radians(self.center_dec_deg))
         dec = self.center_dec_deg + y_local
         return ra, dec

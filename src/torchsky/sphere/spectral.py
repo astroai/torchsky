@@ -53,10 +53,13 @@ _ANGLE_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor, Tensor, float]] = (
         "angles", device="cpu", dtype=(torch.int64, torch.float64)
     )
 )
-_YLM_CACHE: SpectralCacheNamespace[
-    tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
-] = _SPECTRAL_CACHE.namespace(
-    "ylm", device="cpu", dtype=torch.complex128, max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT
+_YLM_CACHE: SpectralCacheNamespace[tuple[tuple[Tensor, ...], tuple[Tensor, ...]]] = (
+    _SPECTRAL_CACHE.namespace(
+        "ylm",
+        device="cpu",
+        dtype=torch.complex128,
+        max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
+    )
 )
 _ALM_ELL_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
     "alm_ell", device="cpu", dtype=torch.int64
@@ -67,7 +70,10 @@ _ALM_M_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
 _SPIN_YLM_CACHE: SpectralCacheNamespace[
     tuple[tuple[Tensor, ...], tuple[Tensor, ...]]
 ] = _SPECTRAL_CACHE.namespace(
-    "spin_ylm", device="cpu", dtype=torch.complex128, max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT
+    "spin_ylm",
+    device="cpu",
+    dtype=torch.complex128,
+    max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT,
 )
 _SPIN_MAP2ALM_MAT_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor]] = (
     _SPECTRAL_CACHE.namespace(
@@ -85,21 +91,17 @@ _SPIN_ALM2MAP_MAT_CACHE: SpectralCacheNamespace[
     dtype=torch.complex128,
     max_entry_bytes=_SPIN_CACHE_ENTRY_LIMIT,
 )
-_SCALAR_MAP2ALM_MAT_CACHE: SpectralCacheNamespace[Tensor] = (
-    _SPECTRAL_CACHE.namespace(
-        "scalar_map2alm_mat",
-        device="cpu",
-        dtype=torch.complex128,
-        max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
-    )
+_SCALAR_MAP2ALM_MAT_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "scalar_map2alm_mat",
+    device="cpu",
+    dtype=torch.complex128,
+    max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
 )
-_SCALAR_ALM2MAP_MAT_CACHE: SpectralCacheNamespace[Tensor] = (
-    _SPECTRAL_CACHE.namespace(
-        "scalar_alm2map_mat",
-        device="cpu",
-        dtype=torch.complex128,
-        max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
-    )
+_SCALAR_ALM2MAP_MAT_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "scalar_alm2map_mat",
+    device="cpu",
+    dtype=torch.complex128,
+    max_entry_bytes=_SCALAR_CACHE_ENTRY_LIMIT,
 )
 _RING_LAYOUT_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor, Tensor, Tensor]] = (
     _SPECTRAL_CACHE.namespace(
@@ -117,18 +119,14 @@ _RING_SCALAR_BASIS_CACHE: SpectralCacheNamespace[tuple[Tensor, ...]] = (
 _RING_PHI0_PHASE_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
     "ring_phi0_phase", device="cpu", dtype=torch.complex128
 )
-_RING_AZIMUTH_PHASE_CACHE: SpectralCacheNamespace[Tensor] = (
-    _SPECTRAL_CACHE.namespace(
-        "ring_azimuth_phase", device="cpu", dtype=torch.complex128
-    )
+_RING_AZIMUTH_PHASE_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
+    "ring_azimuth_phase", device="cpu", dtype=torch.complex128
 )
 _RING_ALIAS_INDEX_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
     "ring_alias_index", device="cpu", dtype=torch.int64
 )
 _RING_SPIN_CONJ_INDEX_CACHE: SpectralCacheNamespace[tuple[Tensor, Tensor, Tensor]] = (
-    _SPECTRAL_CACHE.namespace(
-        "ring_spin_conj_index", device="cpu", dtype=torch.int64
-    )
+    _SPECTRAL_CACHE.namespace("ring_spin_conj_index", device="cpu", dtype=torch.int64)
 )
 _RING_PIX2RING_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
     "ring_pix2ring", device="cpu", dtype=torch.int64
@@ -156,12 +154,8 @@ _RING_SCALAR_BASIS_CONCAT_CACHE: SpectralCacheNamespace[Tensor] = (
     )
 )
 _RING_GROUP_CACHE: SpectralCacheNamespace[
-    tuple[
-        tuple[int, int, int, int, int] | None, tuple[tuple[int, Tensor, Tensor], ...]
-    ]
-] = _SPECTRAL_CACHE.namespace(
-    "ring_group", device="cpu", dtype=torch.int64
-)
+    tuple[tuple[int, int, int, int, int] | None, tuple[tuple[int, Tensor, Tensor], ...]]
+] = _SPECTRAL_CACHE.namespace("ring_group", device="cpu", dtype=torch.int64)
 _SCALAR_RING_AUTO_MIN_BYTES = int(
     os.environ.get("TORCHSKY_SCALAR_RING_AUTO_MIN_BYTES", "0")
 )
@@ -654,9 +648,7 @@ def _ring2nest_perm_for_nside(nside: int) -> Tensor:
         npix = _healpix.nside2npix(ns)
         idx = torch.arange(npix, dtype=torch.int64)
         return (
-            _healpix.ring2nest(ns, idx)
-            .to(dtype=torch.int64, device="cpu")
-            .contiguous()
+            _healpix.ring2nest(ns, idx).to(dtype=torch.int64, device="cpu").contiguous()
         )
 
     return _RING2NEST_PERM_CACHE.get_or_build(ns, build)
@@ -669,9 +661,7 @@ def _nest2ring_perm_for_nside(nside: int) -> Tensor:
         npix = _healpix.nside2npix(ns)
         idx = torch.arange(npix, dtype=torch.int64)
         return (
-            _healpix.nest2ring(ns, idx)
-            .to(dtype=torch.int64, device="cpu")
-            .contiguous()
+            _healpix.nest2ring(ns, idx).to(dtype=torch.int64, device="cpu").contiguous()
         )
 
     return _NEST2RING_PERM_CACHE.get_or_build(ns, build)
@@ -689,7 +679,6 @@ def _reorder_ring_to_nest_rows(rows: Tensor, nside: int) -> Tensor:
     if rows.device.type != "cpu":
         perm = perm.to(device=rows.device)
     return torch.index_select(rows, rows.ndim - 1, perm)
-
 
 
 def _legendre_rec_coeffs(
@@ -779,7 +768,6 @@ def _legendre_l_sequence(m: int, x: Tensor, lmax: int) -> Tensor:
     return torch.stack(seq, dim=0)
 
 
-
 def _ylm_basis(
     nside: int, nest: bool, lmax: int, mmax: int
 ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
@@ -806,10 +794,7 @@ def _ylm_basis(
         return tuple(y_blocks), tuple(y_conj_blocks)
 
     estimated_bytes = (
-        2
-        * alm_size(int(lmax), int(mmax))
-        * _healpix.nside2npix(int(nside))
-        * 16
+        2 * alm_size(int(lmax), int(mmax)) * _healpix.nside2npix(int(nside)) * 16
     )
     return _YLM_CACHE.get_or_build(key, build, estimated_bytes=estimated_bytes)
 
@@ -869,9 +854,7 @@ def _wigner_d_l_sequence(
     Uses a stable three-term recurrence relation.
     """
     if ell_max < ell_min:
-        return torch.empty(
-            (0, theta.shape[0]), dtype=theta.dtype, device=theta.device
-        )
+        return torch.empty((0, theta.shape[0]), dtype=theta.dtype, device=theta.device)
 
     # Bootstrap with direct formula for the first two terms
     # The direct formula is stable and exact for terms near the minimal l (max(|m|,|mp|))
@@ -932,7 +915,6 @@ def _wigner_d_l_sequence(
         prev1 = cur
 
     return torch.stack(seq, dim=0)
-
 
 
 def _build_spin_ylm_basis(
@@ -1016,10 +998,7 @@ def _spin_ylm_basis(
 ) -> tuple[tuple[Tensor, ...], tuple[Tensor, ...]]:
     key = (int(nside), bool(nest), int(lmax), int(mmax), int(spin))
     estimated_bytes = (
-        2
-        * alm_size(int(lmax), int(mmax))
-        * _healpix.nside2npix(int(nside))
-        * 16
+        2 * alm_size(int(lmax), int(mmax)) * _healpix.nside2npix(int(nside)) * 16
     )
     return _SPIN_YLM_CACHE.get_or_build(
         key,
@@ -1071,10 +1050,7 @@ def _spin_ylm_basis_concat(
 ) -> tuple[Tensor, Tensor]:
     key = (int(nside), bool(nest), int(lmax), int(mmax), int(spin))
     bytes_needed = (
-        2
-        * alm_size(int(lmax), int(mmax))
-        * _healpix.nside2npix(int(nside))
-        * 16
+        2 * alm_size(int(lmax), int(mmax)) * _healpix.nside2npix(int(nside)) * 16
     )
     return _SPIN_YLM_CONCAT_CACHE.get_or_build(
         key,
@@ -1191,7 +1167,6 @@ def _scalar_alm2map_mat(
         return None
     key = (int(nside), bool(nest), int(lmax), int(mmax))
 
-
     def build() -> Tensor:
         y_blocks, _ = _ylm_basis(nside, nest, lmax, mmax)
         return torch.cat(y_blocks, dim=0).contiguous()
@@ -1239,9 +1214,7 @@ def _build_ring_layout_for_nside(
 
 def _ring_layout_for_nside(nside: int) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     ns = int(nside)
-    return _RING_LAYOUT_CACHE.get_or_build(
-        ns, lambda: _build_ring_layout_for_nside(ns)
-    )
+    return _RING_LAYOUT_CACHE.get_or_build(ns, lambda: _build_ring_layout_for_nside(ns))
 
 
 def _build_ring_grouping(
@@ -1322,9 +1295,7 @@ def _ring_scalar_bases_for_nside(
     nside: int, lmax: int, mmax: int
 ) -> tuple[Tensor, ...]:
     key = (int(nside), int(lmax), int(mmax))
-    estimated_bytes = (
-        alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
-    )
+    estimated_bytes = alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
     return _RING_SCALAR_BASIS_CACHE.get_or_build(
         key,
         lambda: _build_ring_scalar_bases_for_nside(nside, lmax, mmax),
@@ -1654,9 +1625,7 @@ def _ring_phi0_phase_for_nside(nside: int, mmax: int, *, sign: int) -> Tensor:
         _, _, _, phi0_ring_cpu = _ring_layout_for_nside(int(nside))
         m_vals = torch.arange(int(mmax) + 1, dtype=torch.float64)
         ang = (float(s) * m_vals.unsqueeze(1)) * phi0_ring_cpu.unsqueeze(0)
-        return torch.exp(torch.complex(torch.zeros_like(ang), ang)).to(
-            torch.complex128
-        )
+        return torch.exp(torch.complex(torch.zeros_like(ang), ang)).to(torch.complex128)
 
     return _RING_PHI0_PHASE_CACHE.get_or_build(key, build)
 
@@ -1669,9 +1638,7 @@ def _ring_azimuth_phase(nph: int, mmax: int) -> Tensor:
         m_vals = torch.arange(int(mmax) + 1, dtype=torch.float64).unsqueeze(1)
         j = torch.arange(n, dtype=torch.float64).unsqueeze(0)
         ang = m_vals * (2.0 * math.pi / float(n)) * j
-        return torch.exp(torch.complex(torch.zeros_like(ang), ang)).to(
-            torch.complex128
-        )
+        return torch.exp(torch.complex(torch.zeros_like(ang), ang)).to(torch.complex128)
 
     return _RING_AZIMUTH_PHASE_CACHE.get_or_build(key, build)
 
@@ -1748,9 +1715,7 @@ def _ring_spin_bases_for_nside(
     nside: int, lmax: int, mmax: int, spin: int
 ) -> tuple[Tensor, ...]:
     key = (int(nside), int(lmax), int(mmax), int(spin))
-    estimated_bytes = (
-        alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
-    )
+    estimated_bytes = alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
     return _RING_SPIN_BASIS_CACHE.get_or_build(
         key,
         lambda: _build_ring_spin_bases_for_nside(nside, lmax, mmax, spin),
@@ -1775,9 +1740,7 @@ def _ring_spin_basis_concat(
     Returns concatenated (N_alm, N_rings) basis matrices for +spin and -spin.
     """
     key = (int(nside), int(lmax), int(mmax), int(spin))
-    bytes_needed = (
-        2 * alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
-    )
+    bytes_needed = 2 * alm_size(int(lmax), int(mmax)) * ((4 * int(nside)) - 1) * 16
 
     def build() -> tuple[Tensor, Tensor]:
         y_plus_blocks = _ring_spin_bases_for_nside(nside, lmax, mmax, spin)
@@ -2049,8 +2012,7 @@ def _m_per_alm_cached(lmax: int, mmax: int) -> Tensor:
 
     def build() -> Tensor:
         parts = [
-            torch.full((lmax - m + 1,), m, dtype=torch.int64)
-            for m in range(mmax + 1)
+            torch.full((lmax - m + 1,), m, dtype=torch.int64) for m in range(mmax + 1)
         ]
         return torch.cat(parts)
 
@@ -3349,9 +3311,7 @@ def alm2lonlat_spin(
             continue
         d_plus = _wigner_d_l_sequence(ell_start, ll, m, -spin_i, theta)
         d_minus = _wigner_d_l_sequence(ell_start, ll, m, spin_i, theta)
-        ell_vec = torch.arange(
-            ell_start, ll + 1, dtype=real_dtype, device=theta.device
-        )
+        ell_vec = torch.arange(ell_start, ll + 1, dtype=real_dtype, device=theta.device)
         norms = torch.sqrt((2 * ell_vec + 1) / (4.0 * math.pi))
         m_phase = -1.0 if (m & 1) else 1.0
         spin_phase = -1.0 if (spin_i & 1) else 1.0
@@ -3422,8 +3382,6 @@ def alm2map_batched(
         pol=False,
         pixwin=pixwin,
     )
-
-
 
 
 def map2alm_spin(

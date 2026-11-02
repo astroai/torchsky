@@ -50,9 +50,7 @@ def _read_external_header(path: str) -> dict[str, Any]:
     else:
         cards = [raw[i : i + 80].ljust(80) for i in range(0, len(raw), 80)]
     cleaned = [
-        card
-        for card in cards
-        if card[:8].strip() not in {"", "CONTINUE", "END"}
+        card for card in cards if card[:8].strip() not in {"", "CONTINUE", "END"}
     ]
     return FastHeaderParser.parse_header_string("".join(cleaned))
 
@@ -110,6 +108,7 @@ def _propagate_hdu(
     _use_distortion = True
     if max_crpix_offset < float("inf") and ref_crpix is not None:
         import math as _math
+
         _dx = crpix1 - ref_crpix[0]
         _dy = crpix2 - ref_crpix[1]
         if _math.sqrt(_dx * _dx + _dy * _dy) > max_crpix_offset:
@@ -187,10 +186,12 @@ def cmd_propagate(args: argparse.Namespace) -> None:
 
     cd11 = solved_wcs.wcs_params.get("CD1_1")
     cd11_str = f"{cd11:.12g}" if isinstance(cd11, (int, float)) else str(cd11)
-    print(f"Solved WCS: CTYPE={solved_wcs.wcs_params.get('CTYPE1', '?')}, "
-          f"CD1_1={cd11_str}, "
-          f"has_sip={solved_wcs.sip is not None}, "
-          f"has_tpv={solved_wcs.tpv is not None}")
+    print(
+        f"Solved WCS: CTYPE={solved_wcs.wcs_params.get('CTYPE1', '?')}, "
+        f"CD1_1={cd11_str}, "
+        f"has_sip={solved_wcs.sip is not None}, "
+        f"has_tpv={solved_wcs.tpv is not None}"
+    )
 
     # Reference CRPIX for distortion-approximation gating
     ref_crpix = (
@@ -199,9 +200,11 @@ def cmd_propagate(args: argparse.Namespace) -> None:
     )
     max_crpix_offset = float(getattr(args, "max_crpix_offset", float("inf")))
     if max_crpix_offset < float("inf"):
-        print(f"Distortion gating: max_crpix_offset={max_crpix_offset:.0f} "
-              f"(CCDs farther than {max_crpix_offset:.0f} pixels from ref CRPIX"
-              f" ({ref_crpix[0]:.1f}, {ref_crpix[1]:.1f}) get pure-TAN)")
+        print(
+            f"Distortion gating: max_crpix_offset={max_crpix_offset:.0f} "
+            f"(CCDs farther than {max_crpix_offset:.0f} pixels from ref CRPIX"
+            f" ({ref_crpix[0]:.1f}, {ref_crpix[1]:.1f}) get pure-TAN)"
+        )
 
     # Open MEF and update each extension
     print(f"Propagating WCS from {ref_desc} to all HDUs in {mef_path}")
@@ -218,9 +221,13 @@ def cmd_propagate(args: argparse.Namespace) -> None:
         for idx in image_hdus:
             hdu = hdul[idx]
             updated_header = _propagate_hdu(
-                solved_wcs, solved_header, hdu.header, idx,
+                solved_wcs,
+                solved_header,
+                hdu.header,
+                idx,
                 distortion=args.distortion,
-                ref_crpix=ref_crpix, max_crpix_offset=max_crpix_offset,
+                ref_crpix=ref_crpix,
+                max_crpix_offset=max_crpix_offset,
             )
             for key in list(hdu.header):
                 if key not in updated_header:
@@ -272,9 +279,11 @@ def cmd_merge_scamp(args: argparse.Namespace) -> None:
                 if key not in {"HISTORY", "COMMENT"} and hdu.header.get(key) != value:
                     hdu.header[key] = value
 
-            print(f"  HDU {idx}: applied {head_path}, "
-                  f"CRVAL old=({old_crval[0]}, {old_crval[1]}) "
-                  f"new=({hdu.header.get('CRVAL1', '?'):.8f}, {hdu.header.get('CRVAL2', '?'):.8f})")
+            print(
+                f"  HDU {idx}: applied {head_path}, "
+                f"CRVAL old=({old_crval[0]}, {old_crval[1]}) "
+                f"new=({hdu.header.get('CRVAL1', '?'):.8f}, {hdu.header.get('CRVAL2', '?'):.8f})"
+            )
 
         print(f"Writing {output_path}")
         torchfits.write(str(output_path), hdul, overwrite=True)
@@ -289,22 +298,40 @@ def main() -> None:
     sub = parser.add_subparsers(dest="mode", required=True)
 
     # propagate
-    p_prop = sub.add_parser("propagate", help="Propagate WCS from solved reference to all HDUs")
+    p_prop = sub.add_parser(
+        "propagate", help="Propagate WCS from solved reference to all HDUs"
+    )
     p_prop.add_argument("--mef", required=True, help="Input MEF file (.fits, .fits.fz)")
     p_prop.add_argument("--solved-wcs", help="Solved .wcs file from astrometry.net")
-    p_prop.add_argument("--ref-hdu", type=int, help="Reference HDU index within the MEF")
-    p_prop.add_argument("--distortion", choices=["sip", "tpv"], default="tpv",
-                        help="Distortion format (default: tpv; SWarp requires tpv)")
-    p_prop.add_argument("--max-crpix-offset", type=float, default=float("inf"),
-                        help="Fall back to pure-TAN if CCD CRPIX offset from reference "
-                             "exceeds this value (default: no fallback)")
+    p_prop.add_argument(
+        "--ref-hdu", type=int, help="Reference HDU index within the MEF"
+    )
+    p_prop.add_argument(
+        "--distortion",
+        choices=["sip", "tpv"],
+        default="tpv",
+        help="Distortion format (default: tpv; SWarp requires tpv)",
+    )
+    p_prop.add_argument(
+        "--max-crpix-offset",
+        type=float,
+        default=float("inf"),
+        help="Fall back to pure-TAN if CCD CRPIX offset from reference "
+        "exceeds this value (default: no fallback)",
+    )
     p_prop.add_argument("--output", "-o", required=True, help="Output MEF file")
     p_prop.set_defaults(func=cmd_propagate)
 
     # merge-scamp
-    p_merge = sub.add_parser("merge-scamp", help="Merge SCAMP per-extension .head files into MEF")
+    p_merge = sub.add_parser(
+        "merge-scamp", help="Merge SCAMP per-extension .head files into MEF"
+    )
     p_merge.add_argument("--mef", required=True, help="Input MEF file")
-    p_merge.add_argument("--scamp-prefix", required=True, help="Path prefix for SCAMP .head files (e.g. 'scamp/raw' -> raw_1.head)")
+    p_merge.add_argument(
+        "--scamp-prefix",
+        required=True,
+        help="Path prefix for SCAMP .head files (e.g. 'scamp/raw' -> raw_1.head)",
+    )
     p_merge.add_argument("--output", "-o", required=True, help="Output MEF file")
     p_merge.set_defaults(func=cmd_merge_scamp)
 

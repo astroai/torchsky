@@ -389,10 +389,6 @@ def test_compat_pixels_to_ranges_roundtrip() -> None:
     )
 
 
-
-
-
-
 def test_compat_degrade_pixels_expected_nested_and_ring() -> None:
     parent_nest = torch.tensor([2, 5], dtype=torch.int64)
     child_nest = compat.upgrade_pixels(2, parent_nest, 8, nest=True)
@@ -406,12 +402,6 @@ def test_compat_degrade_pixels_expected_nested_and_ring() -> None:
     degraded_ring = compat.degrade_pixels(8, child_ring[[0, 1, 20, -1]], 2, nest=False)
     degraded_nest = torch.sort(compat.ring2nest(2, degraded_ring)).values
     torch.testing.assert_close(degraded_nest, parent_nest)
-
-
-
-
-
-
 
 
 def test_compat_rotator_rotate_alm_and_map_alms() -> None:

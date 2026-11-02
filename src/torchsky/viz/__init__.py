@@ -109,7 +109,9 @@ def serve_background(
 
     Returns the thread so callers can check liveness.
     """
-    kw: dict[str, Any] = dict(root=root, port=port, host=host, open_browser=False, cache_mb=cache_mb)
+    kw: dict[str, Any] = dict(
+        root=root, port=port, host=host, open_browser=False, cache_mb=cache_mb
+    )
     kw.update(kwargs)
     t = threading.Thread(
         target=serve,

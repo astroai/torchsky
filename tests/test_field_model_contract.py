@@ -58,7 +58,9 @@ def _make_contract_model(kind: str, domain: FieldDomain):
 
 @pytest.mark.parametrize("kind", FIELD_MODEL_KINDS)
 @pytest.mark.parametrize("coordinate_dtype", [torch.float32, torch.float64])
-def test_registered_field_model_contract(kind: str, domain: FieldDomain, coordinate_dtype) -> None:
+def test_registered_field_model_contract(
+    kind: str, domain: FieldDomain, coordinate_dtype
+) -> None:
     """Every registered candidate has the same minimum evaluation contract."""
     torch.manual_seed(8912)
     model = _make_contract_model(kind, domain)

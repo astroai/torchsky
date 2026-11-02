@@ -400,7 +400,9 @@ class SkyLambdaFeatureField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for mlp in self.scale_mlps:
-            for module in cast(nn.Sequential, mlp):  # each scale MLP is an nn.Sequential
+            for module in cast(
+                nn.Sequential, mlp
+            ):  # each scale MLP is an nn.Sequential
                 if type(module) is nn.Linear:
                     nn.init.xavier_uniform_(module.weight)
                     nn.init.zeros_(module.bias)
@@ -1050,7 +1052,9 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
 
     def _reset_parameters(self) -> None:
         for mlp in self.scale_mlps:
-            for module in cast(nn.Sequential, mlp):  # each scale MLP is an nn.Sequential
+            for module in cast(
+                nn.Sequential, mlp
+            ):  # each scale MLP is an nn.Sequential
                 if type(module) is nn.Linear:
                     nn.init.xavier_uniform_(module.weight)
                     nn.init.zeros_(module.bias)
@@ -1654,7 +1658,9 @@ class SkyLambdaAtlasField(_BaseFieldModel):
         wavelengths: Tensor,
         weights: Tensor,
     ) -> Tensor:
-        norm_weights = weights.to(dtype=self._typed_experts()[0].base_output.weight.dtype)
+        norm_weights = weights.to(
+            dtype=self._typed_experts()[0].base_output.weight.dtype
+        )
         norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
         spatial_raw = self._spatial_coords(
             ra_deg,
@@ -1955,9 +1961,7 @@ class SkyLambdaFeatureAtlasField(_BaseFieldModel):
             mixed_hidden = expert._aggregate_hidden_stack(
                 hidden.unsqueeze(0), one_weight
             )
-            bandpass_latent = expert.bandpass_context(
-                _point_bandpass_features(lam, 4)
-            )
+            bandpass_latent = expert.bandpass_context(_point_bandpass_features(lam, 4))
             global_hidden = expert._global_hidden_from_components(
                 local_spatial_raw, lam
             )

@@ -318,18 +318,14 @@ def _accumulate_quadrilateral_overlaps(
         pair_stop = min(pair_start + pair_chunk, pair_count)
         if pair_start == 0 and pair_stop == pair_count:
             owners = torch.repeat_interleave(
-                torch.arange(
-                    quad_x.shape[0], dtype=torch.int64, device=quad_x.device
-                ),
+                torch.arange(quad_x.shape[0], dtype=torch.int64, device=quad_x.device),
                 counts,
             )
         else:
             first_owner = int(
                 torch.searchsorted(
                     ends,
-                    torch.tensor(
-                        pair_start, dtype=torch.int64, device=quad_x.device
-                    ),
+                    torch.tensor(pair_start, dtype=torch.int64, device=quad_x.device),
                     right=True,
                 ).item()
             )
@@ -350,17 +346,13 @@ def _accumulate_quadrilateral_overlaps(
             )
             selected_starts = torch.maximum(
                 starts[owner_ids],
-                torch.as_tensor(
-                    pair_start, dtype=torch.int64, device=quad_x.device
-                ),
+                torch.as_tensor(pair_start, dtype=torch.int64, device=quad_x.device),
             )
             selected_ends = torch.minimum(
                 ends[owner_ids],
                 torch.as_tensor(pair_stop, dtype=torch.int64, device=quad_x.device),
             )
-            owners = torch.repeat_interleave(
-                owner_ids, selected_ends - selected_starts
-            )
+            owners = torch.repeat_interleave(owner_ids, selected_ends - selected_starts)
         pair_ids = torch.arange(
             pair_start,
             pair_stop,
@@ -370,23 +362,15 @@ def _accumulate_quadrilateral_overlaps(
         local = pair_ids - starts[owners]
         owner_nx = nx[owners]
         center_x = min_x[owners] + torch.remainder(local, owner_nx)
-        center_y = min_y[owners] + torch.div(
-            local, owner_nx, rounding_mode="floor"
-        )
+        center_y = min_y[owners] + torch.div(local, owner_nx, rounding_mode="floor")
         centers = torch.stack((center_x, center_y), dim=1).to(quad_x.dtype)
-        overlaps = _batch_quads_pixel_areas(
-            quad_x[owners], quad_y[owners], centers
-        )
+        overlaps = _batch_quads_pixel_areas(quad_x[owners], quad_y[owners], centers)
         overlap_valid = overlaps > resolution[owners]
         if not bool(overlap_valid.any()):
             continue
         owners = owners[overlap_valid]
-        output_index = (
-            center_y[overlap_valid] * width + center_x[overlap_valid]
-        )
-        coefficients = (overlaps[overlap_valid] / areas[owners]).to(
-            dtype=torch.float32
-        )
+        output_index = center_y[overlap_valid] * width + center_x[overlap_valid]
+        coefficients = (overlaps[overlap_valid] / areas[owners]).to(dtype=torch.float32)
         targets = [flat_numer, flat_weight]
         values = [quad_numer[owners] * coefficients, quad_weight[owners] * coefficients]
         if flat_variance_weight is not None:

@@ -309,23 +309,19 @@ def test_student_t_mixture_edge_cases() -> None:
 
 def test_structured_detector_noise_profiles_amplifier_rows_and_scores_cosmics() -> None:
     height, width = 16, 20
-    amplifier = (
-        torch.arange(width)[None, :].expand(height, width) * 4 // width
-    )
+    amplifier = torch.arange(width)[None, :].expand(height, width) * 4 // width
     injected_rows = torch.stack(
         [torch.linspace(-0.3 + 0.1 * amp, 0.2 + 0.1 * amp, height) for amp in range(4)]
     )
     residual = torch.zeros((height, width))
     for amp in range(4):
-        residual = torch.where(
-            amplifier == amp, injected_rows[amp, :, None], residual
-        )
+        residual = torch.where(amplifier == amp, injected_rows[amp, :, None], residual)
     variance = torch.ones_like(residual)
-    offsets, corrected = profile_amplifier_row_offsets(
-        residual, variance, amplifier
-    )
+    offsets, corrected = profile_amplifier_row_offsets(residual, variance, amplifier)
     torch.testing.assert_close(offsets, injected_rows)
-    torch.testing.assert_close(corrected, torch.zeros_like(corrected), atol=1e-6, rtol=0)
+    torch.testing.assert_close(
+        corrected, torch.zeros_like(corrected), atol=1e-6, rtol=0
+    )
 
     residual[5, 11] = 15.0
     prior = torch.full_like(residual, 0.01)

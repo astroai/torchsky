@@ -84,8 +84,7 @@ def _field_residual_loss(
             )
             total_variance = total_variance + safe_invvar.reciprocal()
         loss = 0.5 * (
-            (safe_residual * safe_residual) / total_variance
-            + torch.log(total_variance)
+            (safe_residual * safe_residual) / total_variance + torch.log(total_variance)
         )
         if observation_invvar is not None:
             assert valid_invvar is not None

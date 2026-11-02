@@ -99,8 +99,10 @@ def main() -> None:
     assert abs(centroid_y - 15.5) < 2.0e-2
     assert 0 < support_pixels <= result_data.numel()
 
-    print(f"flux {measured_flux:.5f} (truth 1), centroid ({centroid_x:.3f}, {centroid_y:.3f}) "
-          f"(truth 15.5, 15.5), support {support_pixels} pixels, device={device}")
+    print(
+        f"flux {measured_flux:.5f} (truth 1), centroid ({centroid_x:.3f}, {centroid_y:.3f}) "
+        f"(truth 15.5, 15.5), support {support_pixels} pixels, device={device}"
+    )
 
 
 if __name__ == "__main__":

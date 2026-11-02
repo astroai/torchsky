@@ -80,11 +80,15 @@ class TestSpectralAxis:
             wave_nm * 10.0,
         )
         torch.testing.assert_close(
-            SpectralAxis(torch.tensor([0.4], dtype=torch.float64), "micrometer", "WAVE").to_wavelength(),
+            SpectralAxis(
+                torch.tensor([0.4], dtype=torch.float64), "micrometer", "WAVE"
+            ).to_wavelength(),
             torch.tensor([4000.0], dtype=torch.float64),
         )
         torch.testing.assert_close(
-            SpectralAxis(torch.tensor([4.0e-5], dtype=torch.float64), "cm", "WAVE").to_wavelength(),
+            SpectralAxis(
+                torch.tensor([4.0e-5], dtype=torch.float64), "cm", "WAVE"
+            ).to_wavelength(),
             torch.tensor([4000.0], dtype=torch.float64),
         )
         joule = torch.tensor([1.0], dtype=torch.float64)
@@ -136,7 +140,10 @@ class TestSpectralAxis:
     def test_awav_uses_air_refraction(self):
         air = torch.tensor([5000.0, 6563.0], dtype=torch.float64)
         axis = SpectralAxis(air, "Angstrom", "AWAV")
-        from torchsky.wcs.spectral import air_wavelength_to_vacuum, spectral_to_frequency
+        from torchsky.wcs.spectral import (
+            air_wavelength_to_vacuum,
+            spectral_to_frequency,
+        )
 
         vac = air_wavelength_to_vacuum(air, unit="Angstrom")
         torch.testing.assert_close(axis.to_wavelength(), vac)

@@ -139,7 +139,9 @@ def jwst_exposure_timing(
         else {str(key).upper(): value for key, value in science_header.items()}
     )
 
-    def resolve(name: str, candidates: tuple[tuple[str, Mapping[str, Any]], ...]) -> float | None:
+    def resolve(
+        name: str, candidates: tuple[tuple[str, Mapping[str, Any]], ...]
+    ) -> float | None:
         found: list[tuple[str, float]] = []
         for keyword, header in candidates:
             if keyword not in header or header[keyword] in (None, ""):
@@ -147,7 +149,9 @@ def jwst_exposure_timing(
             try:
                 value = float(header[keyword])
             except (TypeError, ValueError) as exc:
-                raise ValueError(f"JWST timing keyword {keyword} must be numeric") from exc
+                raise ValueError(
+                    f"JWST timing keyword {keyword} must be numeric"
+                ) from exc
             if not math.isfinite(value):
                 raise ValueError(f"JWST timing keyword {keyword} must be finite")
             found.append((keyword, value))

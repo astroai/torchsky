@@ -411,7 +411,9 @@ def test_footprint_hull_test_is_conservative_and_prunes_rotated_corners() -> Non
     for y0 in range(0, 400, size):
         for x0 in range(0, 400, size):
             truly = any(
-                (x, y) in hit for y in range(y0, y0 + size) for x in range(x0, x0 + size)
+                (x, y) in hit
+                for y in range(y0, y0 + size)
+                for x in range(x0, x0 + size)
             )
             decided = footprint.intersects(y0, y0 + size, x0, x0 + size)
             if truly:
@@ -454,7 +456,7 @@ def test_tiles_outside_the_footprint_are_not_projected(monkeypatch) -> None:
 
 @pytest.mark.parametrize("kernel", ["bilinear", "lanczos3", "drizzle_square"])
 @pytest.mark.parametrize("tile", [None, (64, 70)])
-@pytest.mark.needs_float64('drizzle_square')
+@pytest.mark.needs_float64("drizzle_square")
 def test_propagate_variance_false_only_drops_variance(kernel, tile) -> None:
     observations = _observations(n=2)
     kwargs = dict(
@@ -548,9 +550,7 @@ def test_restore_to_compute_device_moves_and_warns(monkeypatch) -> None:
     assert kept[0].device.type == "cpu" and kept[1] is None and kept[2] is host[2]
 
     # Already on the device (or nothing to move): untouched, no warning.
-    same = coadd_mod._restore_to_compute_device(
-        torch.device("cpu"), host, label="maps"
-    )
+    same = coadd_mod._restore_to_compute_device(torch.device("cpu"), host, label="maps")
     assert same[0] is host[0]
 
 
@@ -570,7 +570,9 @@ def test_tiled_coadd_on_cuda_returns_cuda_maps(stacking, monkeypatch) -> None:
     tiled = coadd_image_plane(observations, spatial_tile_hw=(64, 70), **kwargs)
     for name in ("data", "weight", "overlap_count", "context"):
         t, u = getattr(tiled, name), getattr(untiled, name)
-        assert t.device == u.device == torch.device("cuda", torch.cuda.current_device()), name
+        assert (
+            t.device == u.device == torch.device("cuda", torch.cuda.current_device())
+        ), name
     assert torch.allclose(tiled.data, untiled.data, rtol=1e-5, atol=1e-6)
 
 

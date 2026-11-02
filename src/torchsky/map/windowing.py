@@ -199,9 +199,7 @@ def _prepare_target(
     center_dec_deg = float(target_wcs.delta0)
     h, w = int(target_shape[0]), int(target_shape[1])
     canvas_h, canvas_w = (
-        (h, w)
-        if canvas_shape is None
-        else (int(canvas_shape[0]), int(canvas_shape[1]))
+        (h, w) if canvas_shape is None else (int(canvas_shape[0]), int(canvas_shape[1]))
     )
     origin_y, origin_x = int(canvas_origin_yx[0]), int(canvas_origin_yx[1])
     if (
@@ -224,7 +222,10 @@ def _prepare_target(
 
     if include_world_grid:
         ra_deg, dec_deg = _build_target_world_grid(
-            target_wcs, h, w, device=device,
+            target_wcs,
+            h,
+            w,
+            device=device,
         )
     else:
         ra_deg, dec_deg = None, None
@@ -448,7 +449,11 @@ def _footprint_bbox_on_target(
         radius_deg = math.degrees(
             math.acos(max(-1.0, min(1.0, float((vec @ centre).min()))))
         )
-        if abs(math.degrees(math.asin(max(-1.0, min(1.0, float(centre[2])))))) + 2.0 * radius_deg >= 90.0:
+        if (
+            abs(math.degrees(math.asin(max(-1.0, min(1.0, float(centre[2]))))))
+            + 2.0 * radius_deg
+            >= 90.0
+        ):
             raise _FootprintUnavailable("footprint may enclose a pole")
 
     def _extent(sel_x: Tensor, sel_y: Tensor) -> tuple[float, float, float, float]:
@@ -464,10 +469,7 @@ def _footprint_bbox_on_target(
     coarse = torch.cat(
         [
             torch.cat(
-                [
-                    torch.arange(k * n_edge, (k + 1) * n_edge, 2)
-                    for k in range(4)
-                ]
+                [torch.arange(k * n_edge, (k + 1) * n_edge, 2) for k in range(4)]
             ),
             torch.arange(n_outline, int(x_tgt.numel())),
         ]
@@ -475,8 +477,10 @@ def _footprint_bbox_on_target(
     cxmin, cxmax, cymin, cymax = _extent(x_tgt[coarse], y_tgt[coarse])
     growth = max(cxmin - xmin, xmax - cxmax, cymin - ymin, ymax - cymax, 0.0)
     ratio = max(xmax - xmin, ymax - ymin) / float(max(h_src, w_src))
-    pad = int(margin) + math.ceil(kernel_half_width * max(ratio, 1.0)) + int(
-        math.ceil(growth)
+    pad = (
+        int(margin)
+        + math.ceil(kernel_half_width * max(ratio, 1.0))
+        + int(math.ceil(growth))
     )
     x0 = max(math.floor(xmin) - pad, 0)
     x1 = min(math.ceil(xmax) + pad + 1, width)
@@ -517,7 +521,10 @@ def _window_large_tan_target(
     footprint cannot be bounded safely.  Returns ``(None, (0, 0, 0, 0))`` when the
     footprint misses the target entirely.
     """
-    if int(target.shape[0]) * int(target.shape[1]) < _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS:
+    if (
+        int(target.shape[0]) * int(target.shape[1])
+        < _LARGE_TAN_WINDOWING_MIN_TARGET_PIXELS
+    ):
         return target, None
     if not _target_supports_window(target.wcs):
         return target, None
@@ -568,7 +575,9 @@ def _weight_map_to_moc(
         ra_deg, dec_deg = target.ra_deg, target.dec_deg
     else:
         ra_deg, dec_deg = _build_target_world_grid(
-            target.wcs, *target.shape, device=weight_map.device,
+            target.wcs,
+            *target.shape,
+            device=weight_map.device,
         )
     pix = _healpix.ang2pix(
         nside,

@@ -154,7 +154,11 @@ def test_invalid_nodes_fall_back_to_exact_and_keep_validity() -> None:
     assert torch.equal(oki, oke)
     good = oke & torch.isfinite(xe)
     assert float(torch.hypot(xi - xe, yi - ye)[good].max()) <= 1.0e-3
-    assert bool(torch.isnan(xi[(torch.arange(h)[:, None] + torch.arange(w)[None, :]) > 150]).all())
+    assert bool(
+        torch.isnan(
+            xi[(torch.arange(h)[:, None] + torch.arange(w)[None, :]) > 150]
+        ).all()
+    )
 
 
 def test_bounds_band_makes_in_bounds_decision_exact() -> None:
@@ -180,7 +184,9 @@ def test_small_window_uses_exact_evaluation() -> None:
         return x + 0.0, y + 0.0, torch.ones_like(x, dtype=torch.bool)
 
     stats: dict = {}
-    xi, yi, _ok = im.interpolated_inverse_mapping(ident, 20, 30, device=CPU, stats=stats)
+    xi, yi, _ok = im.interpolated_inverse_mapping(
+        ident, 20, 30, device=CPU, stats=stats
+    )
     assert calls == [600] and stats["exact_pixels"] == 600
 
 
@@ -193,7 +199,9 @@ def test_mapping_mode_validation_and_context() -> None:
         im.resolve_mapping_mode("nearest")
 
 
-def _resample(source_header, target_header, image, *, kernel, semantics, mapping, window=None):
+def _resample(
+    source_header, target_header, image, *, kernel, semantics, mapping, window=None
+):
     shape = (int(target_header["NAXIS2"]), int(target_header["NAXIS1"]))
     target = windowing_mod._prepare_target(
         header=target_header,
@@ -231,8 +239,22 @@ def test_resample_interpolated_matches_exact_for_sip_source(
     target_header = _target_header(300, 2.5e-5, dra=2.0e-4)
     gen = torch.Generator().manual_seed(3)
     image = torch.randn((src, src), generator=gen, dtype=torch.float32) + 10.0
-    ex = _resample(source_header, target_header, image, kernel=kernel, semantics=semantics, mapping="exact")
-    ip = _resample(source_header, target_header, image, kernel=kernel, semantics=semantics, mapping="interpolated")
+    ex = _resample(
+        source_header,
+        target_header,
+        image,
+        kernel=kernel,
+        semantics=semantics,
+        mapping="exact",
+    )
+    ip = _resample(
+        source_header,
+        target_header,
+        image,
+        kernel=kernel,
+        semantics=semantics,
+        mapping="interpolated",
+    )
     assert float(ex[1].sum()) > 0.0
     assert torch.equal(ex[1] > 0, ip[1] > 0), "coverage support must be identical"
     scale = float(ex[0][ex[1] > 0].std())
@@ -277,8 +299,22 @@ def test_resample_interpolated_matches_exact_for_tpv_source(monkeypatch) -> None
     gen = torch.Generator().manual_seed(5)
     image = torch.randn((src, src), generator=gen, dtype=torch.float32) + 10.0
     for semantics in ("surface_brightness", "flux"):
-        ex = _resample(source_header, target_header, image, kernel="lanczos3", semantics=semantics, mapping="exact")
-        ip = _resample(source_header, target_header, image, kernel="lanczos3", semantics=semantics, mapping="interpolated")
+        ex = _resample(
+            source_header,
+            target_header,
+            image,
+            kernel="lanczos3",
+            semantics=semantics,
+            mapping="exact",
+        )
+        ip = _resample(
+            source_header,
+            target_header,
+            image,
+            kernel="lanczos3",
+            semantics=semantics,
+            mapping="interpolated",
+        )
         assert float(ex[1].sum()) > 0.0
         assert torch.equal(ex[1] > 0, ip[1] > 0)
         scale = float(ex[0][ex[1] > 0].std())
@@ -308,7 +344,9 @@ def test_lattice_level_uses_one_evaluator_call_for_nodes_and_verification() -> N
     # one level (affine -> every cell accepted); no exact fallback call
     assert len(calls) == 1
     yy, xx = torch.meshgrid(
-        torch.arange(h, dtype=torch.float64), torch.arange(w, dtype=torch.float64), indexing="ij"
+        torch.arange(h, dtype=torch.float64),
+        torch.arange(w, dtype=torch.float64),
+        indexing="ij",
     )
     assert torch.allclose(xs, 0.5 * xx + 1.0, atol=1e-9)
     assert torch.allclose(ys, 2.0 * yy - 3.0, atol=1e-9)

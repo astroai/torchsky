@@ -307,7 +307,9 @@ def bind_joint_native_likelihood(
     snapshot.validate()
     operator = BoundObservationOperator(
         ObservationOperatorBundle(),
-        TargetRenderSpec(header={}, shape=(1, sum(sizes)), band_label="joint_native_likelihood"),
+        TargetRenderSpec(
+            header={}, shape=(1, sum(sizes)), band_label="joint_native_likelihood"
+        ),
         apply_operator=forward,
         apply_adjoint=adjoint,
         apply_noise=precision,

@@ -113,9 +113,7 @@ def test_curved_transverse_distance_matches_astropy(ok0: float) -> None:
     z = torch.tensor([0.1, 0.5, 1.0, 2.0], dtype=torch.float64)
     om0 = 0.3
     ref = astropy.LambdaCDM(H0=70.0, Om0=om0, Ode0=1.0 - om0 - ok0)
-    got = transverse_comoving_distance(
-        z, H0=70.0, om0=om0, ok0=ok0, w0=-1.0
-    )
+    got = transverse_comoving_distance(z, H0=70.0, om0=om0, ok0=ok0, w0=-1.0)
     want = torch.tensor(
         ref.comoving_transverse_distance(z.numpy()).value, dtype=torch.float64
     )
@@ -345,13 +343,9 @@ def test_flat_curvature_gradients_match_two_sided_limits() -> None:
     epsilon = 1.0e-4
     z = torch.tensor(1.1, dtype=dtype)
     ok0 = torch.tensor(0.0, dtype=dtype, requires_grad=True)
-    distance = FLRW(H0=70.0, Om0=0.3, Ok0=ok0).transverse_comoving_distance(
-        z
-    )
+    distance = FLRW(H0=70.0, Om0=0.3, Ok0=ok0).transverse_comoving_distance(z)
     (distance_gradient,) = torch.autograd.grad(distance, ok0)
-    distance_plus = FLRW(H0=70.0, Om0=0.3, Ok0=epsilon).transverse_comoving_distance(
-        z
-    )
+    distance_plus = FLRW(H0=70.0, Om0=0.3, Ok0=epsilon).transverse_comoving_distance(z)
     distance_minus = FLRW(H0=70.0, Om0=0.3, Ok0=-epsilon).transverse_comoving_distance(
         z
     )
@@ -409,6 +403,4 @@ def test_python_float_parameters_keep_float64_precision() -> None:
     ref = astropy.FlatLambdaCDM(H0=h0, Om0=om0, Tcmb0=0).comoving_distance(z.numpy())
     got = comoving_distance(z, H0=h0, om0=om0)
     assert got.dtype == torch.float64
-    torch.testing.assert_close(
-        got, torch.as_tensor(ref.value), rtol=1e-9, atol=0.0
-    )
+    torch.testing.assert_close(got, torch.as_tensor(ref.value), rtol=1e-9, atol=0.0)

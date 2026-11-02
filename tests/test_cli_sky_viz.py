@@ -127,7 +127,13 @@ def test_sky_match_output_without_index_placeholder_is_rejected(tmp_path: Path) 
     for path in sources:
         _write_image(path)
     args = build_parser().parse_args(
-        ["sky", "match", *(str(p) for p in sources), "--output", str(tmp_path / "out.fits")]
+        [
+            "sky",
+            "match",
+            *(str(p) for p in sources),
+            "--output",
+            str(tmp_path / "out.fits"),
+        ]
     )
     with pytest.raises(SystemExit, match=r"\{i\}"):
         args.handler(args)
@@ -159,7 +165,9 @@ def test_viz_forwards_every_public_option(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
-    monkeypatch.setitem(__import__("sys").modules, "uvicorn", types.ModuleType("uvicorn"))
+    monkeypatch.setitem(
+        __import__("sys").modules, "uvicorn", types.ModuleType("uvicorn")
+    )
     monkeypatch.setattr(
         "torchsky.viz.serve",
         lambda **kwargs: captured.update(kwargs),

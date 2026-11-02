@@ -172,7 +172,9 @@ class BlockPlan:
         items = tuple(operators)
         shapes = tuple(tuple(int(size) for size in shape) for shape in output_shapes)
         if not items or len(items) != len(shapes):
-            raise ValueError("block operators and output shapes must be nonempty and aligned")
+            raise ValueError(
+                "block operators and output shapes must be nonempty and aligned"
+            )
         if any(any(size < 0 for size in shape) for shape in shapes):
             raise ValueError("block output dimensions must be non-negative")
         object.__setattr__(self, "operators", items)
@@ -194,7 +196,9 @@ class BlockPlan:
         for operator, shape in zip(self.operators, self.output_shapes, strict=True):
             output = operator.apply(value)
             if tuple(output.shape) != shape:
-                raise ValueError("block operator output does not match its declared shape")
+                raise ValueError(
+                    "block operator output does not match its declared shape"
+                )
             outputs.append(output.reshape(-1))
         return torch.cat(outputs)
 
@@ -205,7 +209,9 @@ class BlockPlan:
         offset = 0
         for operator, shape in zip(self.operators, self.output_shapes, strict=True):
             count = DomainSpec(shape).numel
-            outputs.append(operator.adjoint(value[offset : offset + count].reshape(shape)))
+            outputs.append(
+                operator.adjoint(value[offset : offset + count].reshape(shape))
+            )
             offset += count
         if offset != value.numel():
             raise ValueError("block adjoint input has the wrong number of elements")
@@ -221,7 +227,9 @@ class RestrictionPlan:
 
     def __post_init__(self) -> None:
         if self.indices.dtype != torch.int64 or self.indices.ndim != 1:
-            raise TypeError("restriction indices must be a one-dimensional int64 tensor")
+            raise TypeError(
+                "restriction indices must be a one-dimensional int64 tensor"
+            )
         if bool(((self.indices < 0) | (self.indices >= self.domain.numel)).any()):
             raise ValueError("restriction index is outside the domain")
         if self.indices.numel() != torch.unique(self.indices).numel():
@@ -250,9 +258,9 @@ class RestrictionPlan:
         if value.ndim != 1 or value.numel() != self.indices.numel():
             raise ValueError("restriction adjoint input has the wrong shape")
         output = value.new_zeros(self.domain.numel)
-        return output.index_copy(0, self.indices.to(device=value.device), value).reshape(
-            self.domain.shape
-        )
+        return output.index_copy(
+            0, self.indices.to(device=value.device), value
+        ).reshape(self.domain.shape)
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,7 +338,9 @@ class PSFOp(ObservationOperator):
             not isinstance(self.pixel_response_provenance, str)
             or not self.pixel_response_provenance.strip()
         ):
-            raise TypeError("pixel_response_provenance must be a nonempty string or None")
+            raise TypeError(
+                "pixel_response_provenance must be a nonempty string or None"
+            )
 
 
 @dataclass

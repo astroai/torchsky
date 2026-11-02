@@ -56,7 +56,9 @@ def make_tangent_plane_header(
     }
 
 
-def _ifu_cube_spectral_to_leading(datacube: Tensor, *, spectral_axis: int = 0) -> Tensor:
+def _ifu_cube_spectral_to_leading(
+    datacube: Tensor, *, spectral_axis: int = 0
+) -> Tensor:
     """Move the spectral axis to index 0 so the tensor is ``(L, H, W)``."""
     return datacube.movedim(int(spectral_axis), 0)
 

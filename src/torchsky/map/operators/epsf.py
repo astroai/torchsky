@@ -301,6 +301,7 @@ def profile_native_star(
         valid_response=profile[valid].sum(),
     )
 
+
 __all__ = [
     "GaussianPixelResponse",
     "NativePixelStamp",

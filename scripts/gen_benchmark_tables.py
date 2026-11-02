@@ -86,7 +86,9 @@ def main(argv: list[str] | None = None) -> int:
     text = render()
     if args.check:
         if not PAGE.is_file() or PAGE.read_text(encoding="utf-8") != text:
-            print(f"{PAGE.relative_to(ROOT)} is stale; run `pixi run docs-bench-tables`.")
+            print(
+                f"{PAGE.relative_to(ROOT)} is stale; run `pixi run docs-bench-tables`."
+            )
             return 1
         print("Reference benchmark tables are current.")
         return 0

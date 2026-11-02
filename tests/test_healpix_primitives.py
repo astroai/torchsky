@@ -623,9 +623,7 @@ def test_query_disc_inclusive_fact_supersample_and_nest_power_of_two() -> None:
     radius = 0.25
     # fact!=4 supersamples at nside*fact then degrades to parents.
     fact = 8
-    hi = query_disc(
-        nside * fact, vec, radius, inclusive=True, fact=4, nest=True
-    )
+    hi = query_disc(nside * fact, vec, radius, inclusive=True, fact=4, nest=True)
     parent = torch.unique(torch.div(hi, fact * fact, rounding_mode="floor"))
     got = query_disc(nside, vec, radius, inclusive=True, fact=fact, nest=True)
     torch.testing.assert_close(torch.sort(got).values, torch.sort(parent).values)

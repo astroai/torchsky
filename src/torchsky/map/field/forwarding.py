@@ -38,7 +38,6 @@ def _method(model: nn.Module, name: str) -> Callable[..., Any]:
 
 
 def call_scalar_field_forward(
-
     model: nn.Module,
     ra: Tensor,
     dec: Tensor,

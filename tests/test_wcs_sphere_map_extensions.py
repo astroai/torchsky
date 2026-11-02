@@ -283,13 +283,20 @@ def test_coadd_healpix_and_resample_healpix() -> None:
     assert isinstance(hp_res, HealpixResult)
     cov = hp_res.weight > 0
     assert int(cov.sum().item()) > 0
-    assert torch.allclose(hp_res.image[cov], torch.full_like(hp_res.image[cov], 7.5), atol=1e-4)
+    assert torch.allclose(
+        hp_res.image[cov], torch.full_like(hp_res.image[cov], 7.5), atol=1e-4
+    )
 
-    hp_sparse = coadd_healpix([obs], nside=64, nest=True, sparse=True, nside_coverage=16)
+    hp_sparse = coadd_healpix(
+        [obs], nside=64, nest=True, sparse=True, nside_coverage=16
+    )
     assert hp_sparse.sparse_map is not None
     assert hp_sparse.sparse_map.valid_pixels.numel() == int(cov.sum().item())
 
-    target = Target(wcs=_make_tan_wcs(crval=(150.0, 2.0), cdelt=0.04, shape=(16, 16)), shape=(16, 16))
+    target = Target(
+        wcs=_make_tan_wcs(crval=(150.0, 2.0), cdelt=0.04, shape=(16, 16)),
+        shape=(16, 16),
+    )
     cutout = resample_healpix(hp_res, target)
     assert cutout.shape == (16, 16)
     assert torch.allclose(cutout.image, torch.full_like(cutout.image, 7.5), atol=1e-3)
@@ -308,7 +315,9 @@ def test_coadd_cube_3d_ifu_drizzle_and_emsm() -> None:
         wavelength_map=wave_map,
     )
     target = Target(wcs=w, shape=(12, 12))
-    wave_grid = torch.tensor([5020.0, 5060.0, 5100.0, 5140.0, 5180.0], dtype=torch.float32)
+    wave_grid = torch.tensor(
+        [5020.0, 5060.0, 5100.0, 5140.0, 5180.0], dtype=torch.float32
+    )
 
     cube_drz = coadd_cube(
         [obs],
@@ -378,7 +387,9 @@ def test_clean_api_aliases_across_wcs_sphere_catalogs_map() -> None:
     assert jac_fwd.shape == (1, 2, 2)
     assert jac_inv.shape == (1, 2, 2)
 
-    w_aff = w.with_affine(torch.eye(2, dtype=torch.float64), torch.zeros(2, dtype=torch.float64))
+    w_aff = w.with_affine(
+        torch.eye(2, dtype=torch.float64), torch.zeros(2, dtype=torch.float64)
+    )
     assert isinstance(w_aff, WCS)
 
     poly = sphere.SphericalPolygon(
@@ -396,11 +407,17 @@ def test_clean_api_aliases_across_wcs_sphere_catalogs_map() -> None:
     assert pix_cone.numel() > 0
 
     hp_map = torch.ones(sphere.nside2npix(16), dtype=torch.float64) * 3.5
-    sampled = sphere.sample_map(hp_map, torch.tensor([10.0, 20.0]), torch.tensor([0.0, 5.0]))
+    sampled = sphere.sample_map(
+        hp_map, torch.tensor([10.0, 20.0]), torch.tensor([0.0, 5.0])
+    )
     assert torch.allclose(sampled, torch.tensor([3.5, 3.5], dtype=sampled.dtype))
 
-    cat1 = catalogs.Catalog(lon=torch.tensor([10.0, 20.0]), lat=torch.tensor([0.0, 5.0]))
-    cat2 = catalogs.Catalog(lon=torch.tensor([10.0001, 50.0]), lat=torch.tensor([0.0, -5.0]))
+    cat1 = catalogs.Catalog(
+        lon=torch.tensor([10.0, 20.0]), lat=torch.tensor([0.0, 5.0])
+    )
+    cat2 = catalogs.Catalog(
+        lon=torch.tensor([10.0001, 50.0]), lat=torch.tensor([0.0, -5.0])
+    )
     assert cat1.state.lon.shape == (2,)
     xm1 = catalogs.crossmatch(cat1, cat2, 5.0)
     xm2 = catalogs.crossmatch(cat1.lon, cat1.lat, cat2.lon, cat2.lat, radius_arcsec=5.0)

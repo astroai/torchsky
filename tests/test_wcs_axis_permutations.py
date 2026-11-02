@@ -65,7 +65,9 @@ def test_permuted_reversed_4d_pc_cd_matches_wcslib(use_pc: bool) -> None:
     expected = AstropyWCS(header)
 
     world = actual.pixel_to_world(torch.from_numpy(pixels))
-    np.testing.assert_allclose(world.numpy(), expected.all_pix2world(pixels, 0), atol=2e-8)
+    np.testing.assert_allclose(
+        world.numpy(), expected.all_pix2world(pixels, 0), atol=2e-8
+    )
     torch.testing.assert_close(
         actual.world_to_pixel(world), torch.from_numpy(pixels), atol=2e-8, rtol=0
     )
@@ -197,9 +199,7 @@ def test_permuted_slice_affine_chain_serialization_and_celestial_extract() -> No
         rtol=0,
     )
     celestial_header = _permuted_header()
-    celestial_header.update(
-        {"CD1_3": 0.0, "CD3_1": 0.0}
-    )
+    celestial_header.update({"CD1_3": 0.0, "CD3_1": 0.0})
     celestial = WCS(celestial_header).celestial
     assert celestial.world_axis_names == ("DEC--TAN", "RA---TAN")
     assert celestial.pixel_shape == (48, 64)
@@ -226,15 +226,19 @@ def test_tpv_pc_cd_matches_wcslib_and_serializes(use_pc: bool) -> None:
         header.update({"CDELT1": -1.1e-3, "CDELT2": 8.0e-4})
     else:
         header.update(
-                {"CD1_1": -1.1e-3, "CD1_2": -3.0e-5, "CD2_1": 4.0e-5, "CD2_2": 8.0e-4}
+            {"CD1_1": -1.1e-3, "CD1_2": -3.0e-5, "CD2_1": 4.0e-5, "CD2_2": 8.0e-4}
         )
     pixels = np.array([[23.0, 31.0], [26.0, 35.0]])
     actual = WCS(header)
     expected = AstropyWCS(header).all_pix2world(pixels, 0)
 
-    np.testing.assert_allclose(actual.pixel_to_world(torch.from_numpy(pixels)).numpy(), expected, atol=3e-8)
+    np.testing.assert_allclose(
+        actual.pixel_to_world(torch.from_numpy(pixels)).numpy(), expected, atol=3e-8
+    )
     restored = WCS(actual.to_header(include_naxis=True))
-    np.testing.assert_allclose(restored.pixel_to_world(torch.from_numpy(pixels)).numpy(), expected, atol=3e-8)
+    np.testing.assert_allclose(
+        restored.pixel_to_world(torch.from_numpy(pixels)).numpy(), expected, atol=3e-8
+    )
 
 
 def test_reversed_sip_and_lookup_distortion_match_astropy() -> None:
@@ -292,7 +296,9 @@ def test_permuted_gradcheck_and_compile_preserve_fits_order() -> None:
     )
     pixels = torch.tensor([[20.25, 31.5]], dtype=torch.float64, requires_grad=True)
     assert torch.autograd.gradcheck(
-        lambda value: wcs.pixel_to_world_differentiable(value), (pixels,), fast_mode=True
+        lambda value: wcs.pixel_to_world_differentiable(value),
+        (pixels,),
+        fast_mode=True,
     )
     expected = wcs.pixel_to_world(pixels.detach())
     wcs.compile(backend="eager")

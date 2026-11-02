@@ -78,7 +78,10 @@ def test_every_command_has_inline_examples(
     command_parser: argparse.ArgumentParser,
 ) -> None:
     del argv
-    assert isinstance(command_parser.description, str) and command_parser.description.strip()
+    assert (
+        isinstance(command_parser.description, str)
+        and command_parser.description.strip()
+    )
     assert isinstance(command_parser.epilog, str)
     assert command_parser.epilog.count("torchsky ") >= 2
 

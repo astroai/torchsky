@@ -44,6 +44,7 @@ class _RotationMixin:
         _pole_radial_z: float
         _cpp_spherical_rotation_pole: Callable[..., Any] | None
         _cpp_inverse_spherical_rotation_pole: Callable[..., Any] | None
+
     def _project_tan(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Gnomonic (TAN) projection: intermediate (deg) -> spherical (deg).
@@ -57,8 +58,12 @@ class _RotationMixin:
 
         xi_rad = xi * rad
         eta_rad = eta * rad
-        crval1_rad = torch.as_tensor(self.alpha0 * rad, dtype=xi.dtype, device=xi.device)
-        crval2_rad = torch.as_tensor(self.delta0 * rad, dtype=xi.dtype, device=xi.device)
+        crval1_rad = torch.as_tensor(
+            self.alpha0 * rad, dtype=xi.dtype, device=xi.device
+        )
+        crval2_rad = torch.as_tensor(
+            self.delta0 * rad, dtype=xi.dtype, device=xi.device
+        )
 
         # Use the explicit rotation matrix method which is vectorizable.
         # 1. Construct vector in tangent plane (3D).
@@ -142,6 +147,7 @@ class _RotationMixin:
         ra_out = torch.remainder(ra_out, 360.0)
 
         return ra_out, dec_out
+
     def _spherical_rotation_optimized_base(
         self,
         phi: Tensor,
@@ -206,6 +212,7 @@ class _RotationMixin:
         dec = torch.asin(torch.clamp(z, -1.0, 1.0)) * r2d
 
         return ra, dec
+
     def _spherical_rotation(
         self, phi: Tensor, theta: Tensor, native_type: str = "pole"
     ) -> Tuple[Tensor, Tensor]:
@@ -305,6 +312,7 @@ class _RotationMixin:
         alpha = torch.remainder(alpha, 360.0)
 
         return alpha, delta
+
     def _inverse_spherical_rotation_base(
         self,
         ra: Tensor,
@@ -336,15 +344,9 @@ class _RotationMixin:
             # is wrong here whenever delta0 != 0 (it would map the reference
             # point to native latitude 90 - |delta0| instead of 0).
             u = x_cel * self._east_x + y_cel * self._east_y
-            w = (
-                x_cel * self._north_x
-                + y_cel * self._north_y
-                + z_cel * self._north_z
-            )
+            w = x_cel * self._north_x + y_cel * self._north_y + z_cel * self._north_z
             v = -(
-                x_cel * self._radial_x
-                + y_cel * self._radial_y
-                + z_cel * self._radial_z
+                x_cel * self._radial_x + y_cel * self._radial_y + z_cel * self._radial_z
             )
             theta = torch.atan2(w, torch.hypot(u, v)) * r2d
             phi = torch.remainder(torch.atan2(u, -v) * r2d, 360.0)
@@ -405,7 +407,6 @@ class _RotationMixin:
         phi = torch.remainder(torch.atan2(u, v) * r2d + self._phi_p_native, 360.0)
 
         return phi, theta
-
 
     def _apply_celestial_postrot(
         self, ra: Tensor, dec: Tensor, *, inverse: bool = False

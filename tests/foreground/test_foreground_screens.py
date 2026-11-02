@@ -46,13 +46,9 @@ def test_dust_profile_rejects_invalid_tables():
             torch.tensor([0.0, 5.0, 1.0]), torch.tensor([0.0, 0.1, 0.2])
         )
     with pytest.raises(ValueError, match="non-negative"):
-        build_dust_profile_table(
-            torch.tensor([0.0, 5.0]), torch.tensor([0.0, -0.1])
-        )
+        build_dust_profile_table(torch.tensor([0.0, 5.0]), torch.tensor([0.0, -0.1]))
     with pytest.raises(ValueError, match="distance 0"):
-        build_dust_profile_table(
-            torch.tensor([10.0, 50.0]), torch.tensor([0.0, 0.1])
-        )
+        build_dust_profile_table(torch.tensor([10.0, 50.0]), torch.tensor([0.0, 0.1]))
 
 
 def test_dib_optical_depth_peaks_at_rest_wavelengths():

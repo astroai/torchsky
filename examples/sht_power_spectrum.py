@@ -43,12 +43,14 @@ def main() -> None:
     # Per-multipole ratio is chi^2 distributed with 2l+1 degrees of freedom:
     # average over bands and compare against the expected sqrt(2/(2l+1)) scatter.
     lo, hi = 20, 200
-    ratio = (cl_out[lo:hi] / cl_in[lo:hi])
+    ratio = cl_out[lo:hi] / cl_in[lo:hi]
     band_mean = float(ratio.mean())
     expected_sigma = float((2.0 / (2 * ell[lo:hi] + 1)).sum().sqrt() / (hi - lo))
     assert abs(band_mean - 1.0) < 5 * expected_sigma + 0.02, band_mean
-    print(f"NSIDE={nside} lmax={lmax}: mean C_l(out)/C_l(in) over l={lo}..{hi} = "
-          f"{band_mean:.3f} (cosmic-variance sigma {expected_sigma:.3f})")
+    print(
+        f"NSIDE={nside} lmax={lmax}: mean C_l(out)/C_l(in) over l={lo}..{hi} = "
+        f"{band_mean:.3f} (cosmic-variance sigma {expected_sigma:.3f})"
+    )
 
     fwhm = torch.deg2rad(torch.tensor(2.0)).item()
     bl = sphere.gaussian_beam(fwhm, lmax=lmax).to(dev)
@@ -56,16 +58,38 @@ def main() -> None:
     smooth = sphere.alm2map(sphere.almxfl(alm, bl), nside=nside, lmax=lmax)
     cl_s = sphere.anafast(smooth, lmax=lmax)
     ratio_s = float((cl_s[lo:hi] / (cl_out[lo:hi] * bl[lo:hi] ** 2)).mean())
-    print(f"map std {float(sky.std()):.3e} -> {float(smooth.std()):.3e} after 2 deg beam; "
-          f"smoothed/(C_l b_l^2) = {ratio_s:.3f}")
+    print(
+        f"map std {float(sky.std()):.3e} -> {float(smooth.std()):.3e} after 2 deg beam; "
+        f"smoothed/(C_l b_l^2) = {ratio_s:.3f}"
+    )
     assert float(smooth.std()) < float(sky.std()) and abs(ratio_s - 1.0) < 0.1
 
     fig, ax = plt.subplots(figsize=(5.2, 3.6), constrained_layout=True)
     x = ell.cpu()[2:]
-    ax.loglog(x, (cl_in * ell * (ell + 1))[2:].cpu(), "k-", lw=1.5, label="input $C_\\ell$")
-    ax.loglog(x, (cl_out * ell * (ell + 1))[2:].cpu(), ".", ms=3, c="#4c78a8", label="anafast(synfast)")
-    ax.loglog(x, (cl_s * ell * (ell + 1))[2:].cpu(), ".", ms=3, c="#f58518", label="after 2° beam")
-    ax.set(xlabel=r"multipole $\ell$", ylabel=r"$\ell(\ell+1)C_\ell$", title="Power spectrum recovery")
+    ax.loglog(
+        x, (cl_in * ell * (ell + 1))[2:].cpu(), "k-", lw=1.5, label="input $C_\\ell$"
+    )
+    ax.loglog(
+        x,
+        (cl_out * ell * (ell + 1))[2:].cpu(),
+        ".",
+        ms=3,
+        c="#4c78a8",
+        label="anafast(synfast)",
+    )
+    ax.loglog(
+        x,
+        (cl_s * ell * (ell + 1))[2:].cpu(),
+        ".",
+        ms=3,
+        c="#f58518",
+        label="after 2° beam",
+    )
+    ax.set(
+        xlabel=r"multipole $\ell$",
+        ylabel=r"$\ell(\ell+1)C_\ell$",
+        title="Power spectrum recovery",
+    )
     ax.legend(fontsize=8)
     fig.savefig(out / "sht_power_spectrum.png", dpi=100)
     print(f"device={dev}  figure: {out / 'sht_power_spectrum.png'}")

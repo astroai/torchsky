@@ -680,9 +680,7 @@ def _decade_ticks(vmin: float, vmax: float, *, wanted: int = 4) -> list[float]:
     hi = int(math.floor(math.log10(vmax)))
     step = max(1, int(math.ceil((hi - lo + 1) / float(wanted))))
     return [
-        10.0**power
-        for power in range(lo, hi + 1, step)
-        if vmin <= 10.0**power <= vmax
+        10.0**power for power in range(lo, hi + 1, step) if vmin <= 10.0**power <= vmax
     ]
 
 
@@ -973,7 +971,11 @@ def plot_sky_grid(
     handles: list[Any] = []
     created = ax is None
     if created:
-        figsize = (figsize[0], figsize[1]) if figsize is not None else _auto_figsize(projection)
+        figsize = (
+            (figsize[0], figsize[1])
+            if figsize is not None
+            else _auto_figsize(projection)
+        )
         layout = _layout(
             figsize,
             aspect=1.0 if polar else _GEO_ASPECT[projection],

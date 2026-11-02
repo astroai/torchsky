@@ -124,9 +124,7 @@ def _zscale_bounds_tensor(
         # Dilate by a length-``ngrow`` box (np.convolve(..., mode="same")).
         after = (ngrow - 1) // 2
         before = ngrow - 1 - after
-        padded = torch.nn.functional.pad(
-            bad.to(dtype)[None, None], (before, after)
-        )
+        padded = torch.nn.functional.pad(bad.to(dtype)[None, None], (before, after))
         bad = torch.nn.functional.max_pool1d(padded, ngrow, stride=1)[0, 0] > 0
         last_ngood = ngood
         ngood = int((~bad).sum())
@@ -390,7 +388,9 @@ class RobustScale:
             tensor = tensor - _lower_upper_median(torch.sort(tensor.flatten()).values)
         if self.scale:
             dtype = (
-                tensor.dtype if tensor.is_floating_point() else torch.get_default_dtype()
+                tensor.dtype
+                if tensor.is_floating_point()
+                else torch.get_default_dtype()
             )
             levels = torch.tensor([0.25, 0.75], dtype=dtype, device=tensor.device)
             q25, q75 = torch.quantile(tensor, levels).unbind()
@@ -426,7 +426,9 @@ def create_training_transform(
     return Compose(transforms)
 
 
-def create_validation_transform(crop_size: int = 224, normalize: bool = True) -> Compose:
+def create_validation_transform(
+    crop_size: int = 224, normalize: bool = True
+) -> Compose:
     """Centre crop and optional zscale."""
     transforms: list[Any] = [CenterCrop(crop_size)]
     if normalize:

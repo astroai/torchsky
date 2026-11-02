@@ -40,7 +40,9 @@ def _stretch_unit(x: Tensor, stretch: str) -> Tensor:
     )
 
 
-def _limits(images: list[Tensor], percentile: tuple[float, float]) -> tuple[float, float]:
+def _limits(
+    images: list[Tensor], percentile: tuple[float, float]
+) -> tuple[float, float]:
     finite = torch.cat(
         [img[torch.isfinite(img)].flatten().detach().cpu() for img in images]
     )
@@ -146,7 +148,9 @@ def plot_pseudo_rgb(
         )
         return selected.mean(dim=spectral_axis_index)
 
-    channels = {name: band_image(idx) for name, idx in zip(("r", "g", "b"), groups[::-1])}
+    channels = {
+        name: band_image(idx) for name, idx in zip(("r", "g", "b"), groups[::-1])
+    }
     images = list(channels.values())
     lo, hi = _limits(images, percentile)
 

@@ -123,9 +123,7 @@ def _foam_constructor_metadata(model: SpectralPowerFoamField) -> dict[str, Any]:
         "log_intensity_spectra": bool(model.foam.log_intensity_spectra),
         "sites_requires_grad": bool(model.foam.sites.requires_grad),
         "radii_requires_grad": bool(model.foam.raw_radii.requires_grad),
-        "coefficients_requires_grad": bool(
-            model.foam.cell_coefficients.requires_grad
-        ),
+        "coefficients_requires_grad": bool(model.foam.cell_coefficients.requires_grad),
         "gradient_coefficients_requires_grad": (
             None if gradient is None else bool(gradient.requires_grad)
         ),
@@ -243,7 +241,9 @@ def _validate_artifact_model_kwargs(
         _validate_foam_constructor_metadata(reference)
     elif model_kind == "diffuse_foam_hybrid":
         if constructor != _DIFFUSE_FOAM_HYBRID_CONSTRUCTOR:
-            raise ValueError("diffuse/Foam artifact requires its tensor-safe constructor")
+            raise ValueError(
+                "diffuse/Foam artifact requires its tensor-safe constructor"
+            )
         hidden_dim = kwargs.get("diffuse_hidden_dim")
         hidden_layers = kwargs.get("diffuse_hidden_layers")
         if (
@@ -416,7 +416,10 @@ def restore_field_rng_state(state: Mapping[str, Any]) -> Tensor | None:
     cuda_state = state.get("cuda")
     if torch.cuda.is_available() and isinstance(cuda_state, (list, tuple)):
         torch.cuda.set_rng_state_all(
-            [torch.as_tensor(item, dtype=torch.uint8, device="cpu") for item in cuda_state]
+            [
+                torch.as_tensor(item, dtype=torch.uint8, device="cpu")
+                for item in cuda_state
+            ]
         )
     mps_state = state.get("mps")
     set_mps_state = getattr(torch.mps, "set_rng_state", None)
@@ -622,9 +625,7 @@ def load_field_artifact(
         optimizer = training_state.get("optimizer")
         optimizer_state = optimizer if isinstance(optimizer, dict) else None
         amp_scaler = training_state.get("amp_scaler")
-        amp_scaler_state = (
-            amp_scaler if isinstance(amp_scaler, dict) else None
-        )
+        amp_scaler_state = amp_scaler if isinstance(amp_scaler, dict) else None
         rng = training_state.get("rng")
         rng_state = rng if isinstance(rng, dict) else None
         if rng_state is not None:

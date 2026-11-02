@@ -81,7 +81,10 @@ def test_sdist_rejects_missing_cpp_input(tmp_path: Path) -> None:
     _write_sdist(sdist)
     missing = next(iter(check_distribution._expected_cpp_sources(REPO_ROOT)))
     rewritten = tmp_path / "rewritten.tar.gz"
-    with tarfile.open(sdist, "r:gz") as source, tarfile.open(rewritten, "w:gz") as target:
+    with (
+        tarfile.open(sdist, "r:gz") as source,
+        tarfile.open(rewritten, "w:gz") as target,
+    ):
         for member in source.getmembers():
             if member.name.endswith(missing):
                 continue

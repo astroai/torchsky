@@ -1931,7 +1931,9 @@ def _sparse_table_hdu(path: str) -> str:
     try:
         torchfits.read_header(path, "SPARSE")
     except ValueError as exc:
-        raise ValueError(f"No FITS extension with EXTNAME 'SPARSE' in {path!r}") from exc
+        raise ValueError(
+            f"No FITS extension with EXTNAME 'SPARSE' in {path!r}"
+        ) from exc
     return "SPARSE"
 
 
@@ -2012,6 +2014,7 @@ def sum_intersection(
 
 class WideBitMask:
     """Multiword bit mask for flag sets wider than one integer dtype."""
+
     def __init__(self, n_bits: int, device: torch.device | None = None):
         self.n_bits = n_bits
         self.n_words = (n_bits + 64 - 1) // 64
@@ -2025,6 +2028,7 @@ class WideBitMask:
 
 class SkyMaskPipe:
     """Composable HEALPix mask pipeline at a fixed resolution and ordering."""
+
     def __init__(self, nside: int, nest: bool = True):
         self.nside = nside
         self.nest = nest

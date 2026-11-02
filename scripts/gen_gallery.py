@@ -24,7 +24,9 @@ OUT = ROOT / "docs" / "assets" / "gallery"
 DPI = 130
 
 
-def _tan_header(shape: tuple[int, int], crval=(150.0, 2.0), cdelt=0.02) -> dict[str, object]:
+def _tan_header(
+    shape: tuple[int, int], crval=(150.0, 2.0), cdelt=0.02
+) -> dict[str, object]:
     height, width = shape
     return {
         "NAXIS": 2,
@@ -125,7 +127,7 @@ def _sht_figure(generator: torch.Generator) -> None:
     axis.loglog(ell.numpy(), input_cl.numpy(), label="input $C_\\ell$")
     axis.loglog(
         ell.numpy(),
-        recovered[: lmax].numpy(),
+        recovered[:lmax].numpy(),
         label="anafast(synfast($C_\\ell$))",
         alpha=0.8,
     )
@@ -159,8 +161,12 @@ def _photometry_figure(generator: torch.Generator) -> None:
     figure, axis = plt.subplots(figsize=(7, 3.6), constrained_layout=True)
     axis.plot(wavelength.numpy(), flux.numpy(), label="input $F_\\lambda$")
     for band, result in zip(bands, results):
-        axis.plot(band.wavelength.numpy(), band.throughput.numpy(), label=f"{band.name} band")
-        axis.axvline(float(result.value) * 0.0 + band.pivot_wavelength.item(), ls=":", lw=1)
+        axis.plot(
+            band.wavelength.numpy(), band.throughput.numpy(), label=f"{band.name} band"
+        )
+        axis.axvline(
+            float(result.value) * 0.0 + band.pivot_wavelength.item(), ls=":", lw=1
+        )
     axis.set_xlabel("wavelength [Angstrom]")
     axis.set_ylabel("flux / throughput")
     axis.set_title("synthetic photometry through two passbands")

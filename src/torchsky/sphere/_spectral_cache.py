@@ -203,7 +203,9 @@ class SpectralCacheManager:
             if flight.error is not None:
                 raise flight.error
             if flight.value is _MISSING:
-                raise RuntimeError("spectral cache construction completed without a value")
+                raise RuntimeError(
+                    "spectral cache construction completed without a value"
+                )
             return cast(T, flight.value)
 
         try:
@@ -224,7 +226,9 @@ class SpectralCacheManager:
         limit = self._max_entry_bytes
         if max_entry_bytes is not None:
             limit = min(limit, max(0, int(max_entry_bytes)))
-        estimate_too_large = estimated_bytes is not None and int(estimated_bytes) > limit
+        estimate_too_large = (
+            estimated_bytes is not None and int(estimated_bytes) > limit
+        )
 
         with self._lock:
             self._builds += 1
@@ -238,7 +242,9 @@ class SpectralCacheManager:
                 and size_bytes <= self._max_bytes
             )
             if can_publish:
-                while self._entries and self._total_bytes + size_bytes > self._max_bytes:
+                while (
+                    self._entries and self._total_bytes + size_bytes > self._max_bytes
+                ):
                     _, evicted = self._entries.popitem(last=False)
                     self._total_bytes -= evicted.size_bytes
                     self._evictions += 1

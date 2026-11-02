@@ -422,11 +422,15 @@ def sample_map(
         lon_val = nside_or_lon
         lat_val = lon_or_lat
         resolved_nside = (
-            int(nside) if nside is not None else _healpix.npix2nside(int(values.shape[-1]))
+            int(nside)
+            if nside is not None
+            else _healpix.npix2nside(int(values.shape[-1]))
         )
     else:
         if not isinstance(nside_or_lon, int):
-            raise TypeError("nside must be an int when 4 positional arguments are passed")
+            raise TypeError(
+                "nside must be an int when 4 positional arguments are passed"
+            )
         resolved_nside = int(nside_or_lon)
         lon_val = lon_or_lat
         lat_val = lat_deg

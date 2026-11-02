@@ -48,7 +48,7 @@ def synthetic_sky(
         amp = 0.05 + torch.rand(1, generator=g).item() * 0.32
         dlon = torch.remainder(lon - centre_lon + 180.0, 360.0) - 180.0
         clouds = clouds + amp * torch.exp(
-            -(dlon / sigma) ** 2 - ((lat - centre_lat) / sigma) ** 2
+            -((dlon / sigma) ** 2) - ((lat - centre_lat) / sigma) ** 2
         )
 
     bright = 1.10 * torch.exp(
@@ -59,7 +59,9 @@ def synthetic_sky(
     return values, lon, lat
 
 
-def footprint(nside: int, *, lon: float = 80.0, lat: float = -5.0, radius: float = 60.0):
+def footprint(
+    nside: int, *, lon: float = 80.0, lat: float = -5.0, radius: float = 60.0
+):
     """A circular survey footprint as a MOC, plus its nested pixels."""
     pixels = healpix.query_disc(
         nside, lonlat_to_unit_xyz(lon, lat), math.radians(radius), nest=True
@@ -101,9 +103,7 @@ def main() -> int:
     picked = pixels[torch.randperm(pixels.numel(), generator=g)[:150]]
     # ``pixels`` are nested, so ask for their coordinates directly rather than
     # indexing the ring-ordered arrays built above.
-    picked_lon, picked_lat = healpix.pix2ang(
-        args.nside, picked, nest=True, lonlat=True
-    )
+    picked_lon, picked_lat = healpix.pix2ang(args.nside, picked, nest=True, lonlat=True)
 
     plot_healpix_sky(
         values,

@@ -12,7 +12,10 @@ pytest.importorskip("reproject")
 
 from reproject import reproject_from_healpix, reproject_to_healpix  # noqa: E402
 
-from torchsky.map.healpix_image_plane import healpix_nside_from_map_len, sample_healpix_map_on_tan_header
+from torchsky.map.healpix_image_plane import (
+    healpix_nside_from_map_len,
+    sample_healpix_map_on_tan_header,
+)
 
 
 def test_healpix_nside_from_map_len_roundtrip() -> None:
@@ -45,7 +48,12 @@ def test_sample_healpix_map_on_tan_header_near_reproject_from_healpix() -> None:
         nside=nside,
         order="bilinear",
     )
-    rp, fp = reproject_from_healpix((hp_map, "icrs"), WCS(hdr), nested=False, shape_out=(hdr['NAXIS2'], hdr['NAXIS1']))
+    rp, fp = reproject_from_healpix(
+        (hp_map, "icrs"),
+        WCS(hdr),
+        nested=False,
+        shape_out=(hdr["NAXIS2"], hdr["NAXIS1"]),
+    )
     ts = sample_healpix_map_on_tan_header(
         torch.from_numpy(hp_map.astype(np.float64)),
         nside=nside,

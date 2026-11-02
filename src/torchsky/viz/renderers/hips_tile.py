@@ -121,14 +121,10 @@ def _world_to_sample_grid(
 
     # Normalize 0-based pixel centers [0, W-1] to [-1, 1] for grid_sample(align_corners=True)
     grid_x = (
-        x_pix / (image_w - 1) * 2.0 - 1.0
-        if image_w > 1
-        else torch.zeros_like(x_pix)
+        x_pix / (image_w - 1) * 2.0 - 1.0 if image_w > 1 else torch.zeros_like(x_pix)
     )
     grid_y = (
-        y_pix / (image_h - 1) * 2.0 - 1.0
-        if image_h > 1
-        else torch.zeros_like(y_pix)
+        y_pix / (image_h - 1) * 2.0 - 1.0 if image_h > 1 else torch.zeros_like(y_pix)
     )
 
     # Validity: pixels that fall inside the image

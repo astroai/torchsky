@@ -214,9 +214,13 @@ def fit_pose_correction(
         scale = torch.stack(
             (xi_s.abs().max(), eta_s.abs().max(), xi_d.abs().max(), eta_d.abs().max())
         ).max()
-        tolerance = torch.finfo(src_ra.dtype).eps * torch.maximum(
-            scale.square(), torch.full_like(scale, torch.finfo(src_ra.dtype).tiny)
-        ) * n
+        tolerance = (
+            torch.finfo(src_ra.dtype).eps
+            * torch.maximum(
+                scale.square(), torch.full_like(scale, torch.finfo(src_ra.dtype).tiny)
+            )
+            * n
+        )
         if bool(src_power <= tolerance) or bool(dst_power <= tolerance):
             raise ValueError("rshift matched pairs are degenerate in the tangent plane")
         # Maximize sum d @ R(theta) s with R = [[c, -s], [s, c]]:

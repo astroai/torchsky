@@ -62,7 +62,12 @@ def test_per_pixel_sigma_matches_uniform_and_supports_varying_dispersion() -> No
     out_per_pixel = convolve_log_lambda(flux, dln, sigma_pixel, kernel_radius=8)
     torch.testing.assert_close(out_per_pixel, out_uniform, atol=1e-12, rtol=1e-12)
 
-    sigma_px = torch.linspace(0.0, 2.5, 64, dtype=torch.float64).unsqueeze(0).expand(2, 64).clone()
+    sigma_px = (
+        torch.linspace(0.0, 2.5, 64, dtype=torch.float64)
+        .unsqueeze(0)
+        .expand(2, 64)
+        .clone()
+    )
     sigma_px[:, :8] = 0.0
     sigma_px.requires_grad_(True)
     out_px = convolve_log_lambda(flux, sigma_px=sigma_px, kernel_radius=8)
@@ -71,14 +76,18 @@ def test_per_pixel_sigma_matches_uniform_and_supports_varying_dispersion() -> No
     # Constant continuum must be preserved under spatially varying sigma_px
     flat = torch.ones_like(flux)
     out_flat = convolve_log_lambda(flat, sigma_px=sigma_px, kernel_radius=8)
-    torch.testing.assert_close(out_flat[:, 10:-10], flat[:, 10:-10], atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close(
+        out_flat[:, 10:-10], flat[:, 10:-10], atol=1e-12, rtol=1e-12
+    )
     loss = out_px.square().sum()
     loss.backward()
     assert sigma_px.grad is not None
     assert torch.isfinite(sigma_px.grad).all()
 
 
-def test_convolve_log_lambda_sigma_px_vectorization_identity_and_flux_conservation() -> None:
+def test_convolve_log_lambda_sigma_px_vectorization_identity_and_flux_conservation() -> (
+    None
+):
     torch.manual_seed(42)
     b, n_lam = 3, 128
     flux = torch.randn(b, n_lam, dtype=torch.float64)
@@ -104,7 +113,11 @@ def test_convolve_log_lambda_sigma_px_vectorization_identity_and_flux_conservati
     torch.testing.assert_close(zero_sigma_b, flux, atol=0.0, rtol=0.0)
 
     # Mixed per-pixel [B, L] with negative, zero, and positive values
-    mixed_sigma = torch.linspace(-1.0, 3.0, n_lam, dtype=torch.float64).unsqueeze(0).expand(b, n_lam)
+    mixed_sigma = (
+        torch.linspace(-1.0, 3.0, n_lam, dtype=torch.float64)
+        .unsqueeze(0)
+        .expand(b, n_lam)
+    )
     out_mixed = convolve_log_lambda(flux, sigma_px=mixed_sigma, kernel_radius=8)
     non_positive_mask = mixed_sigma <= 0.0
     torch.testing.assert_close(
@@ -117,12 +130,20 @@ def test_convolve_log_lambda_sigma_px_vectorization_identity_and_flux_conservati
     line_total = line.sum(dim=-1)
 
     out_line_uniform = convolve_log_lambda(line, sigma_px=2.0, kernel_radius=12)
-    torch.testing.assert_close(out_line_uniform.sum(dim=-1), line_total, atol=1e-12, rtol=1e-12)
+    torch.testing.assert_close(
+        out_line_uniform.sum(dim=-1), line_total, atol=1e-12, rtol=1e-12
+    )
 
     # Spatially varying sigma_px across line
-    sigma_profile = torch.linspace(1.0, 3.0, n_lam, dtype=torch.float64).unsqueeze(0).expand(b, n_lam)
-    out_line_varying = convolve_log_lambda(line, sigma_px=sigma_profile, kernel_radius=12)
+    sigma_profile = (
+        torch.linspace(1.0, 3.0, n_lam, dtype=torch.float64)
+        .unsqueeze(0)
+        .expand(b, n_lam)
+    )
+    out_line_varying = convolve_log_lambda(
+        line, sigma_px=sigma_profile, kernel_radius=12
+    )
     # Unit-integral kernel over smooth continuum/lines conserves integrated flux
-    torch.testing.assert_close(out_line_varying.sum(dim=-1), line_total, atol=1e-2, rtol=1e-2)
-
-
+    torch.testing.assert_close(
+        out_line_varying.sum(dim=-1), line_total, atol=1e-2, rtol=1e-2
+    )

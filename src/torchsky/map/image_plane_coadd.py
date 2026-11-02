@@ -985,7 +985,10 @@ def _coadd_image_plane_spatial_tiles(
                                 value_semantics=value_semantics,
                                 pixel_area_sr=pixel_area_sr,
                             )
-                            if v_w is not None and projected.variance_weight is not None:
+                            if (
+                                v_w is not None
+                                and projected.variance_weight is not None
+                            ):
                                 v_w.add_(projected.variance_weight)
                         _set_context_bit(
                             full_context[:, wy0:wy1, wx0:wx1],
@@ -1019,7 +1022,12 @@ def _coadd_image_plane_spatial_tiles(
             for x0 in range(0, W, tw):
                 y1, x1 = min(y0 + th, H), min(x0 + tw, W)
                 sl = (slice(y0, y1), slice(x0, x1))
-                with acc.window(y0, y1, x0, x1, writeback=False) as (n_w, d_w, _o_w, v_w):
+                with acc.window(y0, y1, x0, x1, writeback=False) as (
+                    n_w,
+                    d_w,
+                    _o_w,
+                    v_w,
+                ):
                     pixel_area_tile = (
                         None
                         if full_pixel_area_sr is None
@@ -1199,7 +1207,9 @@ def _propagate_observation_dq(
             if tile_hw is not None
             else None
         )
-        tile_targets: dict[tuple[int, int, int, int], tuple[dict, _PreparedImagePlaneTarget]] = {}
+        tile_targets: dict[
+            tuple[int, int, int, int], tuple[dict, _PreparedImagePlaneTarget]
+        ] = {}
         bit = 1
         while bit <= present:
             if present & bit:
@@ -1303,7 +1313,9 @@ def _propagate_observation_dq(
                             wx0, wx1 = tx0 + px0, tx0 + px1
                         if rejected:
                             flagged = flagged & (
-                                output_weight[wy0:wy1, wx0:wx1].to(device=flagged.device)
+                                output_weight[wy0:wy1, wx0:wx1].to(
+                                    device=flagged.device
+                                )
                                 <= 0.0
                             )
                         output[wy0:wy1, wx0:wx1].bitwise_or_(
@@ -1438,7 +1450,8 @@ def coadd_image_plane(
             n_observations=len(observations),
             source_pixels=int(first_image.shape[-2]) * int(first_image.shape[-1]),
             device=map_device,
-            propagate_variance=propagate_variance and stacking_method == "weighted_mean",
+            propagate_variance=propagate_variance
+            and stacking_method == "weighted_mean",
             budget_bytes=tile_memory_budget_bytes,
         )
     if (
@@ -1769,7 +1782,9 @@ def coadd_image_plane(
             if projected.variance_weight is None:
                 variance_available = False
             elif variance_available:
-                assert variance_weight is not None  # allocated whenever variance is available
+                assert (
+                    variance_weight is not None
+                )  # allocated whenever variance is available
                 _accumulate_variance_weight(
                     variance_weight,
                     projected.variance_weight,
@@ -1899,7 +1914,9 @@ def coadd_image_plane(
     inverse_variance = None
     correlation_factor = None
     if stacking_method != "median" and variance_available:
-        assert variance_weight is not None  # variance_available implies accumulated weights
+        assert (
+            variance_weight is not None
+        )  # variance_available implies accumulated weights
         inverse_variance = _linear_inverse_variance(
             normalization,
             variance_weight,
@@ -2072,9 +2089,7 @@ def _propagate_aperture_uncertainty(
     if tuple(inverse_variance.shape) != target_shape:
         raise ValueError("MapResult inverse variance must match its data shape")
 
-    map_device = _resolve_map_device(
-        device, observations, result, aperture_weights
-    )
+    map_device = _resolve_map_device(device, observations, result, aperture_weights)
     aperture = aperture.to(device=map_device, dtype=torch.float32)
     map_weight = result.weight.to(device=map_device, dtype=torch.float32)
     inverse_variance = inverse_variance.to(device=map_device, dtype=torch.float32)

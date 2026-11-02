@@ -104,12 +104,8 @@ def ccm89_ab(x_um_inv: Tensor) -> tuple[Tensor, Tensor]:
     b_fuv = 13.670 + 4.257 * y_fuv - 0.420 * y_fuv**2 + 0.374 * y_fuv**3
 
     # The four regions partition x > 0, so the IR branch is the remainder.
-    a = torch.where(
-        fuv, a_fuv, torch.where(uv, a_uv, torch.where(opt, a_opt, a_ir))
-    )
-    b = torch.where(
-        fuv, b_fuv, torch.where(uv, b_uv, torch.where(opt, b_opt, b_ir))
-    )
+    a = torch.where(fuv, a_fuv, torch.where(uv, a_uv, torch.where(opt, a_opt, a_ir)))
+    b = torch.where(fuv, b_fuv, torch.where(uv, b_uv, torch.where(opt, b_opt, b_ir)))
     return a, b
 
 
@@ -174,9 +170,9 @@ def _f99_kknots(r_v: Tensor) -> Tensor:
         - 4.45636e-05 * rv2 * rv2
         - rv
     )
-    x_uv = torch.as_tensor(
-        _F99_XKNOTS[7:9], device=r_v.device, dtype=r_v.dtype
-    ).expand(*rv.shape[:-1], 2)
+    x_uv = torch.as_tensor(_F99_XKNOTS[7:9], device=r_v.device, dtype=r_v.dtype).expand(
+        *rv.shape[:-1], 2
+    )
     return torch.cat([k0, k1, k2, k3, k4, k5, k6, _f99_uv_k(x_uv, rv)], dim=-1)
 
 
@@ -490,6 +486,7 @@ def apply_extinction(
         wavelength_unit=wavelength_unit,
     )
     return flux_t * factor
+
 
 __all__ = [
     "ExtinctionLaw",

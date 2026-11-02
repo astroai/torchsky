@@ -128,7 +128,6 @@ class _SortedContributionAccumulator:
         self.pixels = merged_pixels
 
 
-
 class _IcrsWorldView:
     """Present a non-ICRS celestial WCS through ICRS world coordinates.
 

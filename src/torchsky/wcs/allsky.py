@@ -51,9 +51,7 @@ def _hpx_facet_center(
     if k % 2.0 == 0.0:
         offset = torch.where(south, torch.zeros_like(coordinate), offset)
     return (
-        torch.floor(
-            (coordinate + 180.0 - offset + facet_half_width) / facet_spacing
-        )
+        torch.floor((coordinate + 180.0 - offset + facet_half_width) / facet_spacing)
         * facet_spacing
         - 180.0
         + offset
@@ -114,8 +112,8 @@ def project_allsky(
         denom = 2.0 * SQRT2 * cos_gamma
         denom_nonzero = denom.abs() > 0.0
         valid = valid & (denom_nonzero | (X == 0.0))
-        phi_rad = math.pi * X / torch.where(
-            denom_nonzero, denom, torch.ones_like(denom)
+        phi_rad = (
+            math.pi * X / torch.where(denom_nonzero, denom, torch.ones_like(denom))
         )
         phi_rad = torch.where(denom_nonzero, phi_rad, torch.zeros_like(phi_rad))
         valid = valid & torch.isfinite(phi_rad) & (phi_rad.abs() <= math.pi + tol)
@@ -125,8 +123,8 @@ def project_allsky(
         theta = torch.where(valid, theta, nan)
 
     elif projection_code == "HPX":
-        _, K, _, eta_scale, eta_boundary, eta_pole, facet_half_width = (
-            _hpx_parameters(pv1, pv2)
+        _, K, _, eta_scale, eta_boundary, eta_pole, facet_half_width = _hpx_parameters(
+            pv1, pv2
         )
         inv_eta_scale = 1.0 / eta_scale
         inv_polar_denom = 1.0 / facet_half_width
@@ -141,8 +139,11 @@ def project_allsky(
         theta = torch.asin(torch.clamp(s_theta, -1.0, 1.0)) * R2D
         xc = _hpx_facet_center(xi, eta < 0.0, K, facet_half_width)
         phi = torch.where(mask_eq, xi, xc + (xi - xc) / torch.clamp(sigma, min=1e-9))
-        invalid = (~torch.isfinite(xi)) | (~torch.isfinite(eta)) | (abs_eta > eta_pole) | (
-            (~mask_eq) & (torch.abs(xi - xc) > facet_half_width * sigma + 1e-8)
+        invalid = (
+            (~torch.isfinite(xi))
+            | (~torch.isfinite(eta))
+            | (abs_eta > eta_pole)
+            | ((~mask_eq) & (torch.abs(xi - xc) > facet_half_width * sigma + 1e-8))
         )
         if bool(invalid.any()):
             nan_phi = torch.full_like(phi, float("nan"))
@@ -263,7 +264,9 @@ def deproject_allsky(
         xc = _hpx_facet_center(phi_w, s_theta < 0.0, K, facet_half_width)
         xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
         eta = torch.where(mask_eq, eta_scale * s_theta, eta_pol)
-        valid = torch.isfinite(phi) & torch.isfinite(theta) & (theta.abs() <= 90.0 + 1e-12)
+        valid = (
+            torch.isfinite(phi) & torch.isfinite(theta) & (theta.abs() <= 90.0 + 1e-12)
+        )
         nan = torch.full_like(xi, float("nan"))
         xi = torch.where(valid, xi, nan)
         eta = torch.where(valid, eta, nan)
@@ -414,10 +417,16 @@ def _xph_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
     # Snap on axes
     phi_pol = torch.where(
         xr == 0.0,
-        torch.where(yr <= 0.0, torch.zeros_like(phi_pol), torch.full_like(phi_pol, 180.0)),
+        torch.where(
+            yr <= 0.0, torch.zeros_like(phi_pol), torch.full_like(phi_pol, 180.0)
+        ),
         torch.where(
             yr == 0.0,
-            torch.where(xr < 0.0, torch.full_like(phi_pol, -90.0), torch.full_like(phi_pol, 90.0)),
+            torch.where(
+                xr < 0.0,
+                torch.full_like(phi_pol, -90.0),
+                torch.full_like(phi_pol, 90.0),
+            ),
             phi_pol,
         ),
     )

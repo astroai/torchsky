@@ -249,8 +249,6 @@ def test_anafast_gal_cut_and_weights_run() -> None:
     assert torch.isfinite(cl).all()
 
 
-
-
 def test_map2alm_ring_weights_reduce_p2_leakage() -> None:
     nside = 8
     lmax = 4
@@ -312,9 +310,7 @@ def test_map2alm_iterative_ring_weights_match_weighted_operator() -> None:
     weights = spectral_mod._healpix_ring_quadrature_weights(nside)
 
     got = map2alm(m, nside=nside, lmax=lmax, iter=1, use_weights=True)
-    expected = _map2alm_iter1_reference(
-        m, weights, nside=nside, lmax=lmax
-    )
+    expected = _map2alm_iter1_reference(m, weights, nside=nside, lmax=lmax)
 
     torch.testing.assert_close(got, expected, atol=2e-12, rtol=2e-12)
 
@@ -341,9 +337,7 @@ def test_map2alm_iterative_pixel_weights_match_weighted_operator(tmp_path) -> No
         use_pixel_weights=True,
         datapath=tmp_path,
     )
-    expected = _map2alm_iter1_reference(
-        m, 1.0 + correction, nside=nside, lmax=lmax
-    )
+    expected = _map2alm_iter1_reference(m, 1.0 + correction, nside=nside, lmax=lmax)
 
     torch.testing.assert_close(got, expected, atol=2e-12, rtol=2e-12)
 
@@ -366,9 +360,7 @@ def test_map2alm_iterative_gal_cut_matches_masked_operator() -> None:
 def test_map2alm_iterative_weights_preserve_gradient() -> None:
     nside = 4
     lmax = 3
-    m = torch.randn(
-        hp.nside2npix(nside), dtype=torch.float64, requires_grad=True
-    )
+    m = torch.randn(hp.nside2npix(nside), dtype=torch.float64, requires_grad=True)
 
     alm = map2alm(m, nside=nside, lmax=lmax, iter=1, use_weights=True)
     torch.view_as_real(alm).square().sum().backward()
@@ -391,9 +383,7 @@ def test_map2alm_weighted_analysis_synthesis_adjoint() -> None:
     packed_weights = torch.where(m_index == 0, 1.0, 2.0)
 
     lhs = (4.0 * math.pi / npix) * torch.dot(m * weights, synthesized)
-    rhs = torch.sum(
-        packed_weights * torch.real(torch.conj(analyzed) * alm)
-    )
+    rhs = torch.sum(packed_weights * torch.real(torch.conj(analyzed) * alm))
 
     torch.testing.assert_close(lhs, rhs, atol=2e-11, rtol=2e-11)
 
@@ -422,14 +412,6 @@ def test_compat_spectral_wrappers() -> None:
     assert m.shape == (hp.nside2npix(nside),)
     assert rec.shape == alm.shape
     assert cl.shape == (lmax + 1,)  # type: ignore
-
-
-
-
-
-
-
-
 
 
 def test_synalm_zero_cls_returns_zero() -> None:
@@ -557,10 +539,6 @@ def test_map2alm_lsq_pol_shapes() -> None:
     assert 0 <= n_iter <= 4
 
 
-
-
-
-
 def test_alm2map_infer_lmax() -> None:
     lmax = 4
     nside = 8
@@ -610,9 +588,7 @@ def _scalar_alm2map_direct_at(
 def test_alm2map_scalar_cpp_direct_matches_scipy(lmax: int) -> None:
     scipy_special = pytest.importorskip("scipy.special")
     rng = np.random.default_rng(173 + lmax)
-    alm_np = rng.normal(size=alm_size(lmax)) + 1j * rng.normal(
-        size=alm_size(lmax)
-    )
+    alm_np = rng.normal(size=alm_size(lmax)) + 1j * rng.normal(size=alm_size(lmax))
     alm = torch.from_numpy(alm_np)
     x_np = np.array([0.0, 0.25, -0.7, 1.0 - 1e-12, -1.0 + 1e-12])
     phi_np = np.array([0.0, 0.3, 1.7, 2.1, 5.4])
@@ -628,9 +604,7 @@ def test_alm2map_scalar_cpp_direct_matches_scipy(lmax: int) -> None:
             a = alm_np[alm_index(ell, m, lmax)]
             ylm = scipy_special.sph_harm_y(ell, m, theta_np, phi_np)
             expected += weight * np.real(a * ylm)
-    torch.testing.assert_close(
-        got, torch.from_numpy(expected), atol=2e-12, rtol=2e-12
-    )
+    torch.testing.assert_close(got, torch.from_numpy(expected), atol=2e-12, rtol=2e-12)
 
 
 def test_alm2map_scalar_cpp_direct_l256_diagonal_basis_stable() -> None:
@@ -678,9 +652,7 @@ def test_alm2map_scalar_cpp_direct_random_linearity_and_conjugation() -> None:
     shape = (alm_size(lmax),)
     a = torch.from_numpy(rng.normal(size=shape) + 1j * rng.normal(size=shape))
     b = torch.from_numpy(rng.normal(size=shape) + 1j * rng.normal(size=shape))
-    x = torch.tensor(
-        [0.0, 0.2, -0.8, 1.0 - 1e-14, -1.0 + 1e-14], dtype=torch.float64
-    )
+    x = torch.tensor([0.0, 0.2, -0.8, 1.0 - 1e-14, -1.0 + 1e-14], dtype=torch.float64)
     phi = torch.tensor([0.0, 0.4, 1.3, 2.7, 5.8], dtype=torch.float64)
 
     direct_a = _scalar_alm2map_direct_at(a, x, phi, lmax)
@@ -688,9 +660,7 @@ def test_alm2map_scalar_cpp_direct_random_linearity_and_conjugation() -> None:
     direct_sum = _scalar_alm2map_direct_at(1.25 * a - 0.3 * b, x, phi, lmax)
     direct_conj = _scalar_alm2map_direct_at(torch.conj(a), x, phi, lmax)
     direct_reflected = _scalar_alm2map_direct_at(a, x, -phi, lmax)
-    stable = alm2lonlat(
-        a, torch.rad2deg(phi), torch.rad2deg(torch.asin(x)), lmax=lmax
-    )
+    stable = alm2lonlat(a, torch.rad2deg(phi), torch.rad2deg(torch.asin(x)), lmax=lmax)
 
     assert torch.isfinite(direct_sum).all()
     torch.testing.assert_close(
@@ -705,7 +675,9 @@ def test_alm2map_scalar_cpp_direct_rejects_nonfinite_inputs() -> None:
     x = torch.tensor([0.0], dtype=torch.float64)
     phi = torch.tensor([0.0], dtype=torch.float64)
     with pytest.raises(RuntimeError, match="finite alm_values"):
-        _scalar_alm2map_direct_at(alm.index_fill(0, torch.tensor([0]), math.nan), x, phi, 2)
+        _scalar_alm2map_direct_at(
+            alm.index_fill(0, torch.tensor([0]), math.nan), x, phi, 2
+        )
     with pytest.raises(RuntimeError, match="finite cos_theta and phi"):
         _scalar_alm2map_direct_at(alm, x.fill_(math.nan), phi, 2)
 
@@ -835,8 +807,6 @@ def test_gaussian_beam_monotonic() -> None:
     assert torch.all(b[1:] <= b[:-1])
 
 
-
-
 def test_smoothalm_reduces_high_l_power() -> None:
     lmax = 24
     alm = _random_alm(lmax, seed=21)
@@ -956,10 +926,6 @@ def test_smoothmap_pol_torch_shapes() -> None:
     assert getattr(sm, "shape", None) == getattr(maps, "shape", None)
 
 
-
-
-
-
 @pytest.mark.parametrize("spin", [1, 2, 3])
 def test_spin_torch_roundtrip_without_healpy_backend(spin: int) -> None:
     nside = 16
@@ -987,16 +953,10 @@ def test_map2alm_spin_iterative_weights_match_weighted_operator() -> None:
     maps = torch.randn((2, hp.nside2npix(nside)), dtype=torch.float64)
     weights = spectral_mod._healpix_ring_quadrature_weights(nside)
     weighted_maps = maps * weights.unsqueeze(0)
-    alm_e0, alm_b0 = map2alm_spin(
-        weighted_maps, spin=spin, nside=nside, lmax=lmax
-    )
-    reconstructed = alm2map_spin(
-        (alm_e0, alm_b0), nside=nside, spin=spin, lmax=lmax
-    )
+    alm_e0, alm_b0 = map2alm_spin(weighted_maps, spin=spin, nside=nside, lmax=lmax)
+    reconstructed = alm2map_spin((alm_e0, alm_b0), nside=nside, spin=spin, lmax=lmax)
     residual = (maps - reconstructed) * weights.unsqueeze(0)
-    delta_e, delta_b = map2alm_spin(
-        residual, spin=spin, nside=nside, lmax=lmax
-    )
+    delta_e, delta_b = map2alm_spin(residual, spin=spin, nside=nside, lmax=lmax)
 
     got_e, got_b = map2alm_spin(
         maps,
@@ -1324,8 +1284,11 @@ def test_native_spectral_bindings_reject_malformed_contracts() -> None:
             1.0,
         ),
         lambda: _ops._spectral_spin_map2alm_from_basis(
-            maps[:1], maps[1], torch.zeros((6, nalm), dtype=torch.complex128),
-            torch.zeros((6, nalm), dtype=torch.complex128), 1.0
+            maps[:1],
+            maps[1],
+            torch.zeros((6, nalm), dtype=torch.complex128),
+            torch.zeros((6, nalm), dtype=torch.complex128),
+            1.0,
         ),
     ]
     for case in cases:
@@ -1422,7 +1385,10 @@ def test_native_spectral_bindings_define_empty_contracts() -> None:
         1.0,
     )
     basis_interpolated = _ops._spectral_spin_alm2map_from_basis(
-        alms[0], alms[1], empty_basis, empty_basis,
+        alms[0],
+        alms[1],
+        empty_basis,
+        empty_basis,
         torch.empty((lmax + 1, 0), dtype=torch.complex128),
         torch.empty((lmax + 1, 0), dtype=torch.complex128),
     )
@@ -2047,15 +2013,9 @@ def test_spin_pool_thread_limit_honors_aten_cap() -> None:
             "TORCHSKY_SPIN_THREADS": "999999999",
         },
     )
-    match = re.search(
-        r"SpinMPool workers=(\d+) aten_threads=(\d+)", result.stderr
-    )
+    match = re.search(r"SpinMPool workers=(\d+) aten_threads=(\d+)", result.stderr)
     assert match is not None, result.stderr
     assert tuple(map(int, match.groups())) == (1, 1)
-
-
-
-
 
 
 def test_rotate_alm_identity_and_z_phase() -> None:
@@ -2129,8 +2089,6 @@ def test_rotate_alm_and_alm2lonlat_stay_on_accelerator() -> None:
         assert spin.device.type == device
         assert spin.dtype == rdtype
         torch.testing.assert_close(spin, torch.zeros_like(spin), atol=0.0, rtol=0.0)
-
-
 
 
 def test_alm2map_der1_matches_spin1_sqrt_ell() -> None:

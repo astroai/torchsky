@@ -93,9 +93,7 @@ def _basis_synthesis_reference(
         p_minus_m0 = coeff_minus[: y_minus_m0.shape[0]] @ y_minus_m0
         p_plus = p_plus_pos + (p_minus_pos - p_minus_m0).conj()
         p_minus = p_minus_pos + (p_plus_pos - p_plus_m0).conj()
-    return torch.stack(
-        (-0.5 * (p_plus + p_minus).real, -0.5 * (p_plus - p_minus).imag)
-    )
+    return torch.stack((-0.5 * (p_plus + p_minus).real, -0.5 * (p_plus - p_minus).imag))
 
 
 def test_spectral_dispatcher_schemas_are_clean_and_basis_schemas_are_private() -> None:
@@ -110,7 +108,9 @@ def test_spectral_dispatcher_schemas_are_clean_and_basis_schemas_are_private() -
     ):
         schema = str(getattr(torch.ops.torchsky, name).default._schema)
         assert schema.startswith(f"torchsky::{name}(")
-        assert torch._C._dispatch_has_kernel_for_dispatch_key(f"torchsky::{name}", "CPU")
+        assert torch._C._dispatch_has_kernel_for_dispatch_key(
+            f"torchsky::{name}", "CPU"
+        )
     assert hasattr(_ops, "_spectral_spin_map2alm_from_basis")
     assert hasattr(_ops, "_spectral_spin_alm2map_from_basis")
 
@@ -165,7 +165,9 @@ def test_private_basis_dispatcher_autograd_matches_tensor_adjoint() -> None:
         q, u, ycp_t, ycm_t, 0.4
     )
     expected = _basis_analysis_reference(q_ref, u_ref, ycp_t, ycm_t, 0.4)
-    torch.real(torch.vdot(probe_plus, actual[0]) + torch.vdot(probe_minus, actual[1])).backward()
+    torch.real(
+        torch.vdot(probe_plus, actual[0]) + torch.vdot(probe_minus, actual[1])
+    ).backward()
     torch.real(
         torch.vdot(probe_plus, expected[0]) + torch.vdot(probe_minus, expected[1])
     ).backward()
@@ -220,10 +222,14 @@ def test_spectral_dispatcher_parity_with_ops_helpers() -> None:
     )
     torch.testing.assert_close(
         direct,
-        _ops.spectral_scalar_alm2map_direct(cp.unsqueeze(0), cos_theta, phi, lmax, mmax),
+        _ops.spectral_scalar_alm2map_direct(
+            cp.unsqueeze(0), cos_theta, phi, lmax, mmax
+        ),
     )
 
-    fourier = torch.ops.torchsky.spectral_ring_fourier_modes(rows, starts, lengths, mmax)
+    fourier = torch.ops.torchsky.spectral_ring_fourier_modes(
+        rows, starts, lengths, mmax
+    )
     torch.testing.assert_close(
         fourier, _ops.spectral_ring_fourier_modes(rows, starts, lengths, mmax)
     )
@@ -420,7 +426,9 @@ def test_private_basis_dispatcher_gradcheck_opcheck_and_compile() -> None:
     y_plus_m0 = torch.randn((m0, npix), dtype=torch.complex128)
     y_minus_m0 = torch.randn((m0, npix), dtype=torch.complex128)
 
-    def analysis(first: torch.Tensor, second: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def analysis(
+        first: torch.Tensor, second: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         return torch.ops.torchsky._spectral_spin_map2alm_from_basis(
             first, second, ycp_t, ycm_t, 0.5
         )
@@ -549,7 +557,9 @@ def test_spectral_recurrence_gradcheck_opcheck_and_compile() -> None:
     coeff_minus = x["coeff_minus"].detach().clone().requires_grad_()
     basis_plus, basis_minus = x["y_plus"], x["y_minus"]
     assert isinstance(coeff_minus, torch.Tensor)
-    assert isinstance(basis_plus, torch.Tensor) and isinstance(basis_minus, torch.Tensor)
+    assert isinstance(basis_plus, torch.Tensor) and isinstance(
+        basis_minus, torch.Tensor
+    )
 
     def concat(
         first: torch.Tensor, second: torch.Tensor
@@ -600,7 +610,10 @@ def test_spectral_dispatcher_empty_malformed_device_and_no_alias() -> None:
 
     with pytest.raises(RuntimeError, match="complex128"):
         torch.ops.torchsky.spectral_scalar_interpolate_recurrence(
-            torch.zeros(1, dtype=torch.complex64), torch.zeros(1, dtype=torch.float64), 0, 0
+            torch.zeros(1, dtype=torch.complex64),
+            torch.zeros(1, dtype=torch.float64),
+            0,
+            0,
         )
     with pytest.raises(RuntimeError, match="ring"):
         torch.ops.torchsky.spectral_ring_fourier_modes(
@@ -626,7 +639,9 @@ def test_spectral_dispatcher_empty_malformed_device_and_no_alias() -> None:
     assert output.untyped_storage().data_ptr() != coeff.untyped_storage().data_ptr()
     basis_plus, basis_minus = x["y_plus"], x["y_minus"]
     coeff_minus = x["coeff_minus"]
-    assert isinstance(basis_plus, torch.Tensor) and isinstance(basis_minus, torch.Tensor)
+    assert isinstance(basis_plus, torch.Tensor) and isinstance(
+        basis_minus, torch.Tensor
+    )
     assert isinstance(coeff_minus, torch.Tensor)
     pair = torch.ops.torchsky.spectral_spin_interpolate_concat(
         coeff, coeff_minus, basis_plus, basis_minus, 2, 2

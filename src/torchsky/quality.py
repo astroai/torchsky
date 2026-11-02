@@ -109,7 +109,8 @@ def build_weight_product(
         # Striding bounds the quantile's working set; the percentile is a
         # display statistic, not a calibration claim.
         step = max(
-            1, (positive.numel() + _MAX_CONFIDENCE_SAMPLES - 1) // _MAX_CONFIDENCE_SAMPLES
+            1,
+            (positive.numel() + _MAX_CONFIDENCE_SAMPLES - 1) // _MAX_CONFIDENCE_SAMPLES,
         )
         normalization = torch.quantile(positive[::step], confidence_percentile / 100.0)
         if bool(torch.isfinite(normalization) & (normalization > 0)):
@@ -129,9 +130,7 @@ def quality_bit_names(value: int | QualityBit) -> frozenset[str]:
     integer = int(value)
     # ``IntFlag.name`` is typed optional, so the guard also narrows the type.
     return frozenset(
-        bit.name
-        for bit in QualityBit
-        if bit.name is not None and integer & int(bit)
+        bit.name for bit in QualityBit if bit.name is not None and integer & int(bit)
     )
 
 
@@ -146,6 +145,7 @@ def quality_bits_from_names(
         except KeyError as exc:
             raise ValueError(f"unknown quality-bit name: {name}") from exc
     return value
+
 
 __all__ = [
     "CONFIDENCE_SEMANTICS",

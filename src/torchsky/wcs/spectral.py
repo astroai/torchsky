@@ -129,9 +129,7 @@ def spectral_unit_scale(spectral_type: str, unit: str | None = None) -> float:
         if kind in {"VRAD", "VOPT", "VELO"}:
             return _VELOCITY_TO_M_S[u]
     except KeyError as exc:
-        raise ValueError(
-            f"unsupported spectral unit {unit!r} for type {kind}"
-        ) from exc
+        raise ValueError(f"unsupported spectral unit {unit!r} for type {kind}") from exc
     return 1.0
 
 

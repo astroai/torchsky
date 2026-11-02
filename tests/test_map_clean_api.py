@@ -54,7 +54,11 @@ def test_in_memory_observation_and_plan_projections_and_frames() -> None:
     img1 = torch.ones((24, 24), dtype=torch.float32) * 3.0
     img2 = torch.ones((24, 24), dtype=torch.float32) * 5.0
 
-    obs1 = Observation(data=img1, wcs=hdr1, device="cpu") if False else Observation(data=img1, wcs=hdr1)
+    obs1 = (
+        Observation(data=img1, wcs=hdr1, device="cpu")
+        if False
+        else Observation(data=img1, wcs=hdr1)
+    )
     obs2 = Observation(data=img2, wcs=hdr2)
 
     for proj in ("TAN", "SIN", "ZEA", "ARC", "CEA", "CAR", "AIT", "MOL", "GLS"):
@@ -274,7 +278,9 @@ def test_blot_and_detect_outliers_cosmic_ray_rejection() -> None:
 
     blotted = blot(clean_coadd, obs_list[0], kernel="lanczos3", device="cpu")
     assert isinstance(blotted, torch.Tensor)
-    torch.testing.assert_close(blotted[4:-4, 4:-4], true_sky[4:-4, 4:-4], atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(
+        blotted[4:-4, 4:-4], true_sky[4:-4, 4:-4], atol=1e-2, rtol=1e-2
+    )
 
 
 def test_match_sky_constant_planar_and_per_exposure() -> None:
@@ -413,7 +419,9 @@ def test_variance_flux_semantics_photometric_scale_and_stcal_sky_modes() -> None
     ]
     cr_masks, updated_obs = detect_outliers(
         obs_cr,
-        config=OutlierConfig(snr=(5.0, 3.0), scale=(1.2, 0.7), grow=0, mode="weight_zero"),
+        config=OutlierConfig(
+            snr=(5.0, 3.0), scale=(1.2, 0.7), grow=0, mode="weight_zero"
+        ),
         device="cpu",
     )
     assert int(cr_masks[0].sum().item()) == 1

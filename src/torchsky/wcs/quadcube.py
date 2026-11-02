@@ -254,6 +254,7 @@ def _lmn_to_native(lx: Tensor, m: Tensor, n: Tensor) -> Tuple[Tensor, Tensor]:
 # TSC
 # ---------------------------------------------------------------------------
 
+
 def _tsc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
     lx, m, n = _direction_cosines(phi, theta)
     # Face selection matching fitsy/WCSLIB (dominating absolute component).
@@ -367,6 +368,7 @@ def _tsc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
 # CSC
 # ---------------------------------------------------------------------------
 
+
 def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
     # WCSLIB cscs2x evaluates this polynomial in float32 (uncontracted Horner).
     chi_f = chi.to(dtype=torch.float32)
@@ -389,9 +391,7 @@ def _csc_forward_poly(chi: Tensor, psi: Tensor) -> Tensor:
     inner = _madd(inner, chi2.new_tensor(_CSC_C20), chi4)
     inner = _madd(inner, chi2.new_tensor(_CSC_C02), psi4)
     mid = _madd(
-        _madd(
-            chi2.new_tensor(_CSC_GAMMA) * chi2co, chi2.new_tensor(_CSC_M), chi2
-        ),
+        _madd(chi2.new_tensor(_CSC_GAMMA) * chi2co, chi2.new_tensor(_CSC_M), chi2),
         psi2co,
         inner,
     )
@@ -423,9 +423,7 @@ def _csc_inverse_poly(xf: Tensor, yf: Tensor) -> Tensor:
     return _madd(xf_f, xf_f * one_minus_xx, chi)
 
 
-def _csc_cpp_pair(
-    fn_name: str, a: Tensor, b: Tensor
-) -> Tuple[Tensor, Tensor] | None:
+def _csc_cpp_pair(fn_name: str, a: Tensor, b: Tensor) -> Tuple[Tensor, Tensor] | None:
     del fn_name, a, b
     return None
 
@@ -500,6 +498,7 @@ def _csc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
 # ---------------------------------------------------------------------------
 # QSC
 # ---------------------------------------------------------------------------
+
 
 def _qsc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
     north_pole = (theta - 90.0).abs() < 1e-12
@@ -608,17 +607,29 @@ def _qsc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
     omega = torch.where(
         zero,
         torch.zeros_like(xf),
-        torch.where(direct & (xf != 0.0), omega_d, torch.where((~direct) & (yf != 0.0), omega_i, torch.zeros_like(xf))),
+        torch.where(
+            direct & (xf != 0.0),
+            omega_d,
+            torch.where((~direct) & (yf != 0.0), omega_i, torch.zeros_like(xf)),
+        ),
     )
     tau = torch.where(
         zero,
         torch.ones_like(xf),
-        torch.where(direct & (xf != 0.0), tau_d, torch.where((~direct) & (yf != 0.0), tau_i, torch.ones_like(xf))),
+        torch.where(
+            direct & (xf != 0.0),
+            tau_d,
+            torch.where((~direct) & (yf != 0.0), tau_i, torch.ones_like(xf)),
+        ),
     )
     zeta = torch.where(
         zero,
         torch.ones_like(xf),
-        torch.where(direct & (xf != 0.0), zeta_d, torch.where((~direct) & (yf != 0.0), zeta_i, torch.ones_like(xf))),
+        torch.where(
+            direct & (xf != 0.0),
+            zeta_d,
+            torch.where((~direct) & (yf != 0.0), zeta_i, torch.ones_like(xf)),
+        ),
     )
     zeta = torch.clamp(zeta, -1.0, 1.0)
     zeco = 1.0 - zeta
@@ -636,28 +647,48 @@ def _qsc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
 
     # Face 1
     lx1 = zeta
-    m1 = torch.where(direct, torch.where(xf < 0.0, -w, w), torch.where(yf < 0.0, -w, w) * omega)
-    n1 = torch.where(direct, torch.where(xf < 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w))
+    m1 = torch.where(
+        direct, torch.where(xf < 0.0, -w, w), torch.where(yf < 0.0, -w, w) * omega
+    )
+    n1 = torch.where(
+        direct, torch.where(xf < 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w)
+    )
 
     # Face 2
     m2 = zeta
-    lx2 = torch.where(direct, torch.where(xf > 0.0, -w, w), -torch.where(yf < 0.0, -w, w) * omega)
-    n2 = torch.where(direct, -torch.where(xf > 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w))
+    lx2 = torch.where(
+        direct, torch.where(xf > 0.0, -w, w), -torch.where(yf < 0.0, -w, w) * omega
+    )
+    n2 = torch.where(
+        direct, -torch.where(xf > 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w)
+    )
 
     # Face 3
     lx3 = -zeta
-    m3 = torch.where(direct, torch.where(xf > 0.0, -w, w), -torch.where(yf < 0.0, -w, w) * omega)
-    n3 = torch.where(direct, -torch.where(xf > 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w))
+    m3 = torch.where(
+        direct, torch.where(xf > 0.0, -w, w), -torch.where(yf < 0.0, -w, w) * omega
+    )
+    n3 = torch.where(
+        direct, -torch.where(xf > 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w)
+    )
 
     # Face 4
     m4 = -zeta
-    lx4 = torch.where(direct, torch.where(xf < 0.0, -w, w), torch.where(yf < 0.0, -w, w) * omega)
-    n4 = torch.where(direct, torch.where(xf < 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w))
+    lx4 = torch.where(
+        direct, torch.where(xf < 0.0, -w, w), torch.where(yf < 0.0, -w, w) * omega
+    )
+    n4 = torch.where(
+        direct, torch.where(xf < 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w)
+    )
 
     # Face 5
     n5 = -zeta
-    m5 = torch.where(direct, torch.where(xf < 0.0, -w, w), torch.where(yf < 0.0, -w, w) * omega)
-    lx5 = torch.where(direct, torch.where(xf < 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w))
+    m5 = torch.where(
+        direct, torch.where(xf < 0.0, -w, w), torch.where(yf < 0.0, -w, w) * omega
+    )
+    lx5 = torch.where(
+        direct, torch.where(xf < 0.0, -w, w) * omega, torch.where(yf < 0.0, -w, w)
+    )
 
     lx = torch.where(
         face == 1,

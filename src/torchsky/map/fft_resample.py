@@ -56,9 +56,7 @@ def resample_translation_fft2d(
 def _shift_lastdim_periodic_fft(x: Tensor, shift: float) -> Tensor:
     n = int(x.shape[-1])
     spectrum = torch.fft.rfft(x, dim=-1)
-    freq = torch.arange(
-        spectrum.shape[-1], device=x.device, dtype=x.dtype
-    ) / float(n)
+    freq = torch.arange(spectrum.shape[-1], device=x.device, dtype=x.dtype) / float(n)
     phase = torch.exp((-2j * math.pi * shift) * freq).to(dtype=spectrum.dtype)
     if n % 2 == 0:
         phase[-1] = math.cos(math.pi * shift)

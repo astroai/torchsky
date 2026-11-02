@@ -584,7 +584,6 @@ class FieldObservation:
         if wl is None or tt is None:
             return
         if wl.ndim != 1 or tt.ndim != 1:
-
             raise ValueError(
                 "transmission_wavelength and transmission_throughput must be 1D"
             )

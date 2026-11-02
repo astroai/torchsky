@@ -76,9 +76,7 @@ def test_iau2006_altaz_handedness_matches_erfa_c2tcio() -> None:
         yp_arcsec * ARCSEC_TO_RAD,
         0.0,
     )
-    rotation = erfa.c2tcio(
-        erfa.c2i06a(JD0, TT_MJD), erfa.era00(JD0, ut1_mjd), rpom
-    )
+    rotation = erfa.c2tcio(erfa.c2i06a(JD0, TT_MJD), erfa.era00(JD0, ut1_mjd), rpom)
     lon = np.deg2rad(ra)
     lat = np.deg2rad(dec)
     icrs = np.stack(
@@ -107,9 +105,12 @@ def test_iau2006_altaz_handedness_matches_erfa_c2tcio() -> None:
         ),
         axis=-1,
     )
-    expected_az = np.rad2deg(
-        np.arctan2(np.sum(itrs * east, axis=-1), np.sum(itrs * north, axis=-1))
-    ) % 360.0
+    expected_az = (
+        np.rad2deg(
+            np.arctan2(np.sum(itrs * east, axis=-1), np.sum(itrs * north, axis=-1))
+        )
+        % 360.0
+    )
     expected_alt = np.rad2deg(np.arcsin(np.sum(itrs * up, axis=-1)))
 
     np.testing.assert_allclose(

@@ -352,7 +352,11 @@ def test_cpp_geometry_predicate_accepts_autograd_inputs() -> None:
 def _unit_xyz_rad(lon_rad: torch.Tensor, lat_rad: torch.Tensor) -> torch.Tensor:
     cos_lat = torch.cos(lat_rad)
     return torch.stack(
-        (cos_lat * torch.cos(lon_rad), cos_lat * torch.sin(lon_rad), torch.sin(lat_rad)),
+        (
+            cos_lat * torch.cos(lon_rad),
+            cos_lat * torch.sin(lon_rad),
+            torch.sin(lat_rad),
+        ),
         dim=-1,
     )
 
@@ -373,9 +377,7 @@ def test_short_great_circle_arcs_cross_at_two_e_minus_eight_radians(
     assert got.tolist() == [[True]]
 
     monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
-    got_python = geom._great_circle_arcs_intersect_matrix(
-        a0, a1, b0, b1, tol_rad=0.0
-    )
+    got_python = geom._great_circle_arcs_intersect_matrix(a0, a1, b0, b1, tol_rad=0.0)
     assert got_python.tolist() == [[True]]
 
 
@@ -395,9 +397,7 @@ def test_coincident_great_circle_arcs_overlap_touch_and_disjoint(
     assert got.tolist() == expected
 
     monkeypatch.setattr(geom._ops, "has_fixed_dispatcher", lambda: False)
-    got_python = geom._great_circle_arcs_intersect_matrix(
-        a0, a1, b0, b1, tol_rad=0.0
-    )
+    got_python = geom._great_circle_arcs_intersect_matrix(a0, a1, b0, b1, tol_rad=0.0)
     assert got_python.tolist() == expected
 
 
@@ -438,9 +438,7 @@ def test_planar_point_in_polygon_handles_shallow_and_horizontal_edges(
         [[0.0, 0.0], [2.0, 1e-16], [2.0, 1.0], [0.0, 1.0]],
         dtype=torch.float64,
     )
-    points = torch.tensor(
-        [[0.5, 5e-17], [1.5, 5e-17], [0.5, 0.5]], dtype=torch.float64
-    )
+    points = torch.tensor([[0.5, 5e-17], [1.5, 5e-17], [0.5, 0.5]], dtype=torch.float64)
     expected = [True, False, True]
 
     monkeypatch.setattr(geom, "_PLANAR_PIP_CPP_MIN_OPS", 0)
@@ -457,18 +455,14 @@ def test_geometry_predicates_reject_invalid_tolerances(bad: float) -> None:
     import torchsky.sphere.geom as geom
 
     points = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
-    polygon = torch.tensor(
-        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64
-    )
+    polygon = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64)
     arc0 = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
     arc1 = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64)
 
     with pytest.raises(ValueError, match="finite and nonnegative"):
         geom._planar_point_in_polygon(points, polygon, eps=bad)
     with pytest.raises(ValueError, match="finite and nonnegative"):
-        geom._great_circle_arcs_intersect_matrix(
-            arc0, arc1, arc0, arc1, tol_rad=bad
-        )
+        geom._great_circle_arcs_intersect_matrix(arc0, arc1, arc0, arc1, tol_rad=bad)
     with pytest.raises(ValueError, match="finite and nonnegative"):
         spherical_polygon_contains(
             0.1,
@@ -508,9 +502,7 @@ def test_cpp_geometry_predicates_reject_invalid_tolerances() -> None:
     from torchsky._native import cpp as cpp
 
     points = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
-    polygon = torch.tensor(
-        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64
-    )
+    polygon = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64)
     arc0 = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
     arc1 = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64)
 

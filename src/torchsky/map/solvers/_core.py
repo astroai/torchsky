@@ -188,6 +188,7 @@ def _solve_normal_system_cg(
     rhs_t = torch.as_tensor(rhs)
     if not (torch.is_floating_point(rhs_t) or torch.is_complex(rhs_t)):
         raise TypeError("rhs must have a floating-point or complex dtype")
+
     def _action(state: Tensor) -> Tensor:
         image = torch.as_tensor(normal_action(state)).to(
             dtype=state.dtype, device=state.device
@@ -365,7 +366,10 @@ class BoundObservationOperator:
         initial_solution: Tensor | None = None,
         iterations: int = 16,
         damping: float = 0.0,
-        preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+        preconditioner: Preconditioner[Tensor]
+        | PreconditionerFn
+        | Tensor
+        | None = None,
         rtol: float = 1.0e-11,
         atol: float = 0.0,
         projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
@@ -587,7 +591,10 @@ class BoundObservationOperator:
         initial_solution: Tensor | None = None,
         iterations: int = 16,
         damping: float = 0.0,
-        preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+        preconditioner: Preconditioner[Tensor]
+        | PreconditionerFn
+        | Tensor
+        | None = None,
         rtol: float = 1.0e-11,
         atol: float = 0.0,
         projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
@@ -701,7 +708,10 @@ class BoundObservationOperatorSet:
         initial_solution: Tensor | None = None,
         iterations: int = 16,
         damping: float = 0.0,
-        preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+        preconditioner: Preconditioner[Tensor]
+        | PreconditionerFn
+        | Tensor
+        | None = None,
         rtol: float = 1.0e-11,
         atol: float = 0.0,
         projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,
@@ -988,7 +998,10 @@ class BoundObservationOperatorSet:
         initial_solution: Tensor | None = None,
         iterations: int = 16,
         damping: float = 0.0,
-        preconditioner: Preconditioner[Tensor] | PreconditionerFn | Tensor | None = None,
+        preconditioner: Preconditioner[Tensor]
+        | PreconditionerFn
+        | Tensor
+        | None = None,
         rtol: float = 1.0e-11,
         atol: float = 0.0,
         projection: GaugeProjection[Tensor] | Callable[[Tensor], Tensor] | None = None,

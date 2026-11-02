@@ -35,9 +35,7 @@ def _load_or_validate_aux_plane(
     if tensor_or_none is not None:
         plane = validate_image_plane_2d(torch.as_tensor(tensor_or_none))
     elif path_or_none is not None:
-        plane = validate_image_plane_2d(
-            read(path_or_none, hdu=hdu, device=str(device))
-        )
+        plane = validate_image_plane_2d(read(path_or_none, hdu=hdu, device=str(device)))
     else:
         return None
     if tuple(plane.shape) != tuple(image_shape):

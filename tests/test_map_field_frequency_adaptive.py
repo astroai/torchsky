@@ -90,7 +90,9 @@ def test_bacon_is_nonnegative_multiscale_and_differentiable() -> None:
     multiscale_loss.backward()
     gradients = [parameter.grad for parameter in model.parameters()]
     assert gradients and all(gradient is not None for gradient in gradients)
-    assert all(torch.isfinite(gradient).all() for gradient in gradients if gradient is not None)
+    assert all(
+        torch.isfinite(gradient).all() for gradient in gradients if gradient is not None
+    )
 
 
 def test_bacon_validates_its_spectral_contract() -> None:
@@ -159,9 +161,13 @@ def test_sasnet_is_local_finite_differentiable_and_tensor_serializable() -> None
     assert ((masks > 0.0) & (masks < 1.0)).all()
     assert (prediction > 0.0).all()
     prediction.sum().backward()
-    gradients = [parameter.grad for parameter in model.parameters() if parameter.requires_grad]
+    gradients = [
+        parameter.grad for parameter in model.parameters() if parameter.requires_grad
+    ]
     assert gradients and all(gradient is not None for gradient in gradients)
-    assert all(torch.isfinite(gradient).all() for gradient in gradients if gradient is not None)
+    assert all(
+        torch.isfinite(gradient).all() for gradient in gradients if gradient is not None
+    )
 
     stream = io.BytesIO()
     torch.save(model.state_dict(), stream)
@@ -205,9 +211,7 @@ def test_sasnet_factory_artifact_roundtrip(tmp_path: Path, coord_mode: str) -> N
     assert isinstance(model, SASNetField)
     coordinates = _coordinates()
     prediction = model(*coordinates).detach()
-    save_field_artifact(
-        tmp_path, model=model, model_kind="sasnet", model_kwargs=kwargs
-    )
+    save_field_artifact(tmp_path, model=model, model_kind="sasnet", model_kwargs=kwargs)
     loaded = load_field_artifact(tmp_path, device="cpu")
     restored = loaded.model
     assert isinstance(restored, SASNetField)
@@ -242,7 +246,9 @@ def test_explicit_grid_factory_artifact_roundtrip(tmp_path: Path) -> None:
             "explicit_spectral_grid_field", _domain(coord_mode="sphere_xyz"), **kwargs
         )
     with pytest.raises(ValueError, match="at least 2"):
-        make_field_model("explicit_spectral_grid_field", _domain(), spatial_resolution=1)
+        make_field_model(
+            "explicit_spectral_grid_field", _domain(), spatial_resolution=1
+        )
 
 
 @pytest.mark.parametrize("beta", [0.05, 0.3])
@@ -252,22 +258,32 @@ def test_bla_equation_and_removable_singularity_gradients(beta: float) -> None:
     )
     regular = torch.tensor([-1.3, -0.1, 0.0, 0.8], dtype=torch.float64)
     u = regular / period
-    amplitude = torch.sinc(u) / period * torch.cos(math.pi * beta * u) / (
-        1 - (2 * beta * u).square()
-    ) * torch.exp(-0.5 * (regular / sigma).square())
+    amplitude = (
+        torch.sinc(u)
+        / period
+        * torch.cos(math.pi * beta * u)
+        / (1 - (2 * beta * u).square())
+        * torch.exp(-0.5 * (regular / sigma).square())
+    )
     phase = 2 * math.pi * shift * regular
     expected = torch.cat((amplitude * phase.cos(), amplitude * phase.sin()))
-    torch.testing.assert_close(_bla_features(regular, period, sigma, shift, beta), expected)
+    torch.testing.assert_close(
+        _bla_features(regular, period, sigma, shift, beta), expected
+    )
 
-    x = (torch.tensor([-1.0, 1.0], dtype=torch.float64) * period / (2 * beta)).requires_grad_()
+    x = (
+        torch.tensor([-1.0, 1.0], dtype=torch.float64) * period / (2 * beta)
+    ).requires_grad_()
     features = _bla_features(x, period, sigma, shift, beta)
     u = x.detach() / period
     sinc_derivative = (math.pi * u * (math.pi * u).cos() - (math.pi * u).sin()) / (
         math.pi * u.square()
     )
     rc = math.pi / (4 * period) * torch.sinc(u)
-    rc_derivative = math.pi / (4 * period.square()) * (
-        sinc_derivative - u.sign() * beta * torch.sinc(u)
+    rc_derivative = (
+        math.pi
+        / (4 * period.square())
+        * (sinc_derivative - u.sign() * beta * torch.sinc(u))
     )
     envelope = torch.exp(-0.5 * (x.detach() / sigma).square())
     amplitude = rc * envelope
@@ -277,8 +293,14 @@ def test_bla_equation_and_removable_singularity_gradients(beta: float) -> None:
     torch.testing.assert_close(features, expected)
     real_grad = torch.autograd.grad(features[:2].sum(), x, retain_graph=True)[0]
     imag_grad = torch.autograd.grad(features[2:].sum(), x)[0]
-    torch.testing.assert_close(real_grad, derivative * phase.cos() - amplitude * phase.sin() * 2 * math.pi * shift)
-    torch.testing.assert_close(imag_grad, derivative * phase.sin() + amplitude * phase.cos() * 2 * math.pi * shift)
+    torch.testing.assert_close(
+        real_grad,
+        derivative * phase.cos() - amplitude * phase.sin() * 2 * math.pi * shift,
+    )
+    torch.testing.assert_close(
+        imag_grad,
+        derivative * phase.sin() + amplitude * phase.cos() * 2 * math.pi * shift,
+    )
     assert torch.autograd.gradcheck(
         lambda value: _bla_features(value, period, sigma, shift, beta), (x,)
     )
@@ -292,9 +314,13 @@ def test_flair_bla_artifact_and_gradients(tmp_path: Path, coord_mode: str) -> No
     prediction = model(*_coordinates())
     assert torch.isfinite(prediction).all() and (prediction > 0).all()
     prediction.sum().backward()
-    assert all(parameter.grad is not None and torch.isfinite(parameter.grad).all()
-               for parameter in model.parameters())
-    save_field_artifact(tmp_path, model=model, model_kind="flair_bla", model_kwargs=kwargs)
+    assert all(
+        parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        for parameter in model.parameters()
+    )
+    save_field_artifact(
+        tmp_path, model=model, model_kind="flair_bla", model_kwargs=kwargs
+    )
     restored = load_field_artifact(tmp_path, device="cpu").model
     assert torch.equal(restored(*_coordinates()), prediction.detach())
     with pytest.raises(ValueError, match="period"):
@@ -357,9 +383,7 @@ def test_frequency_adaptive_models_accelerator_contract(
             hash_finest_resolution=8,
         )
     model = model.to(device)
-    ra, dec, wavelength = (
-        value.to(device) for value in _coordinates()
-    )
+    ra, dec, wavelength = (value.to(device) for value in _coordinates())
     output = model(ra, dec, wavelength)
     assert output.device.type == device_name
     assert torch.isfinite(output).all()
@@ -375,7 +399,5 @@ def test_bacon_kind_is_reachable_from_the_factory() -> None:
     from torchsky.map.field.registry import FIELD_MODEL_KINDS
 
     assert "bacon" in FIELD_MODEL_KINDS
-    model = make_field_model(
-        "bacon", _domain(), hidden_dim=8, bandwidths=(1.0, 2.0)
-    )
+    model = make_field_model("bacon", _domain(), hidden_dim=8, bandwidths=(1.0, 2.0))
     assert isinstance(model, BaconField)

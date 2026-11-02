@@ -21,7 +21,9 @@ from torchsky.sphere.moc import MOC, nest2uniq  # noqa: E402
 from torchsky.viz import allsky  # noqa: E402
 
 
-def _footprint(nside: int = 16, *, lon: float = 90.0, lat: float = 0.0, radius: float = 30.0):
+def _footprint(
+    nside: int = 16, *, lon: float = 90.0, lat: float = 0.0, radius: float = 30.0
+):
     """A MOC disc, built from nested pixels as the uniq encoding requires."""
     pixels = healpix.query_disc(
         nside, lonlat_to_unit_xyz(lon, lat), math.radians(radius), nest=True
@@ -67,12 +69,8 @@ def test_sky_grid_bins_points_and_keeps_empty_cells_empty() -> None:
     assert grid.data.shape == (18, 36)
     assert grid.sampling == "binned"
     assert int(grid.counts[0, 0]) == 2
-    torch.testing.assert_close(
-        grid.data[0, 0], torch.tensor(2.0, dtype=torch.float64)
-    )
-    torch.testing.assert_close(
-        grid.data[9, 18], torch.tensor(5.0, dtype=torch.float64)
-    )
+    torch.testing.assert_close(grid.data[0, 0], torch.tensor(2.0, dtype=torch.float64))
+    torch.testing.assert_close(grid.data[9, 18], torch.tensor(5.0, dtype=torch.float64))
     torch.testing.assert_close(
         grid.data[17, 35], torch.tensor(7.0, dtype=torch.float64)
     )
@@ -86,9 +84,7 @@ def test_sky_grid_drops_non_finite_samples() -> None:
 
     grid = allsky.sky_grid(lon, lat, values, resolution=(36, 18))
 
-    torch.testing.assert_close(
-        grid.data[9, 18], torch.tensor(2.0, dtype=torch.float64)
-    )
+    torch.testing.assert_close(grid.data[9, 18], torch.tensor(2.0, dtype=torch.float64))
     assert torch.isnan(grid.data[9, 19])
     assert int(grid.counts.sum()) == 1
 
@@ -127,9 +123,7 @@ def test_sparse_map_is_binned_and_can_force_resample_error() -> None:
     assert bool(torch.isnan(grid.data).any())
 
     with pytest.raises(ValueError, match="sparse maps must be binned"):
-        allsky.healpix_sky_grid(
-            values, nside=nside, pixels=pixels, resample=True
-        )
+        allsky.healpix_sky_grid(values, nside=nside, pixels=pixels, resample=True)
 
 
 def test_healpix_grid_rejects_wrong_shapes(toy_sky) -> None:
@@ -141,9 +135,7 @@ def test_healpix_grid_rejects_wrong_shapes(toy_sky) -> None:
     with pytest.raises(ValueError, match="nside is required"):
         allsky.healpix_sky_grid(values)
     with pytest.raises(ValueError, match="disagree"):
-        allsky.healpix_sky_grid(
-            values[:4], nside=nside, pixels=torch.arange(5)
-        )
+        allsky.healpix_sky_grid(values[:4], nside=nside, pixels=torch.arange(5))
 
 
 def test_plot_uses_astronomy_ticks_and_colorbar(toy_sky) -> None:
@@ -372,9 +364,7 @@ def test_legend_gets_its_own_band_under_every_projection() -> None:
         fig = ax.figure
         fig.canvas.draw()
         legend = fig.legends[0].get_window_extent()
-        assert legend.y1 <= ax.bbox.y0 + 1.0, (
-            f"{projection} legend overlaps the map"
-        )
+        assert legend.y1 <= ax.bbox.y0 + 1.0, f"{projection} legend overlaps the map"
 
 
 def test_colourbar_tick_labels_are_evenly_spaced_and_do_not_overlap() -> None:
@@ -413,9 +403,7 @@ def test_log_colourbar_uses_decade_ticks_when_the_range_allows() -> None:
     fig = ax.figure
     fig.canvas.draw()
     texts = [
-        label.get_text()
-        for label in fig.axes[1].get_xticklabels()
-        if label.get_text()
+        label.get_text() for label in fig.axes[1].get_xticklabels() if label.get_text()
     ]
 
     assert len(texts) == 3
@@ -430,9 +418,7 @@ def test_log_colourbar_falls_back_to_even_fractions_inside_a_narrow_range() -> N
     fig = ax.figure
     fig.canvas.draw()
     texts = [
-        label.get_text()
-        for label in fig.axes[1].get_xticklabels()
-        if label.get_text()
+        label.get_text() for label in fig.axes[1].get_xticklabels() if label.get_text()
     ]
 
     # A single decade tick would leave the bar almost unlabelled, so the ticks

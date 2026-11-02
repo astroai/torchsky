@@ -27,6 +27,7 @@ from typing import Any, Sequence
 import torch
 from torch import Tensor
 
+
 @dataclass(frozen=True)
 class PersistentFoamSiteInitialization:
     """Deterministic sites selected from coherent multi-exposure evidence."""
@@ -214,7 +215,6 @@ class SpectralPowerFoam(torch.nn.Module):
     evidence_updates: Tensor
 
     def __init__(
-
         self,
         sites: Tensor,
         radii: Tensor,

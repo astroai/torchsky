@@ -130,9 +130,7 @@ def _fake_query_disc(
         math.isfinite(cos_lim) and -1.0 <= cos_lim <= 1.0,
         lambda: "cos_lim must be finite and in [-1, 1]",
     )
-    count = torch.library.get_ctx().new_dynamic_size(
-        min=0, max=12 * nside * nside
-    )
+    count = torch.library.get_ctx().new_dynamic_size(min=0, max=12 * nside * nside)
     return torch.empty((count,), dtype=torch.int64, device=vec.device)
 
 

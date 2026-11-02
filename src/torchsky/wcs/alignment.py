@@ -70,12 +70,8 @@ class TangentPlaneFrame:
         r2d = torch.as_tensor(180.0 / torch.pi, dtype=dtype, device=ra_t.device)
         ra_rad = ra_t * d2r
         dec_rad = dec_t * d2r
-        ra0_rad = (
-            torch.as_tensor(self.ra0, dtype=dtype, device=ra_t.device) * d2r
-        )
-        dec0_rad = (
-            torch.as_tensor(self.dec0, dtype=dtype, device=ra_t.device) * d2r
-        )
+        ra0_rad = torch.as_tensor(self.ra0, dtype=dtype, device=ra_t.device) * d2r
+        dec0_rad = torch.as_tensor(self.dec0, dtype=dtype, device=ra_t.device) * d2r
 
         dra = torch.remainder(ra_rad - ra0_rad + torch.pi, 2.0 * torch.pi) - torch.pi
         sin_dec = torch.sin(dec_rad)
@@ -107,12 +103,8 @@ class TangentPlaneFrame:
         r2d = torch.as_tensor(180.0 / torch.pi, dtype=dtype, device=xi_t.device)
         x = xi_t * d2r
         y = eta_t * d2r
-        ra0_rad = (
-            torch.as_tensor(self.ra0, dtype=dtype, device=xi_t.device) * d2r
-        )
-        dec0_rad = (
-            torch.as_tensor(self.dec0, dtype=dtype, device=xi_t.device) * d2r
-        )
+        ra0_rad = torch.as_tensor(self.ra0, dtype=dtype, device=xi_t.device) * d2r
+        dec0_rad = torch.as_tensor(self.dec0, dtype=dtype, device=xi_t.device) * d2r
 
         rho = torch.sqrt(x * x + y * y)
         c = torch.atan(rho)
@@ -129,8 +121,12 @@ class TangentPlaneFrame:
             x * sin_c,
             rho * cos_dec0 * cos_c - y * sin_dec0 * sin_c,
         )
-        ra_rad = torch.where(rho <= 1e-30, torch.full_like(ra_rad, ra0_rad.item()), ra_rad)
-        dec_rad = torch.where(rho <= 1e-30, torch.full_like(dec_rad, dec0_rad.item()), dec_rad)
+        ra_rad = torch.where(
+            rho <= 1e-30, torch.full_like(ra_rad, ra0_rad.item()), ra_rad
+        )
+        dec_rad = torch.where(
+            rho <= 1e-30, torch.full_like(dec_rad, dec0_rad.item()), dec_rad
+        )
         return torch.remainder(ra_rad * r2d, 360.0), dec_rad * r2d
 
 

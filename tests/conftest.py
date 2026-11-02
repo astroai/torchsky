@@ -37,6 +37,7 @@ def _clear_torchfits_handles_after_test():
     yield
     try:
         import torchfits
+
         torchfits.clear_file_cache()
     except Exception:
         pass

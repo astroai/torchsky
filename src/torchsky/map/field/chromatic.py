@@ -40,7 +40,9 @@ _ARCSEC_PER_RAD = 180.0 / math.pi * 3600.0
 
 
 def _fourier(x: Tensor, num_frequencies: int) -> Tensor:
-    freqs = (2.0 ** torch.arange(num_frequencies, device=x.device, dtype=x.dtype)) * math.pi
+    freqs = (
+        2.0 ** torch.arange(num_frequencies, device=x.device, dtype=x.dtype)
+    ) * math.pi
     xf = x[..., None] * freqs
     return torch.cat([torch.sin(xf), torch.cos(xf)], -1).flatten(-2)
 
@@ -87,22 +89,31 @@ class ChromaticPSFField(nn.Module):
             raise ValueError("size must be odd")
         if num_kernels < 1:
             raise ValueError("num_kernels must be positive")
-        self.size, self.num_kernels, self.num_channels = int(size), int(num_kernels), int(num_channels)
+        self.size, self.num_kernels, self.num_channels = (
+            int(size),
+            int(num_kernels),
+            int(num_channels),
+        )
         self.pixel_scale_arcsec = float(pixel_scale_arcsec)
         self.aperture_m = float(aperture_m)
         self.max_diffraction_radius = float(max_diffraction_radius)
         self.lambda_ref_um = float(lambda_ref_um)
         cond = 1 + num_channels
         self.kernel_net = nn.Sequential(
-            nn.Linear(2 * 2 * 6 + 2 * 2 * 4 + cond, hidden), nn.SiLU(),
-            nn.Linear(hidden, hidden), nn.SiLU(),
-            nn.Linear(hidden, hidden), nn.SiLU(),
+            nn.Linear(2 * 2 * 6 + 2 * 2 * 4 + cond, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, hidden),
+            nn.SiLU(),
             nn.Linear(hidden, num_kernels),
         )
         self.detector_embedding = nn.Embedding(num_detectors, 4)
         self.weight_net = nn.Sequential(
-            nn.Linear(2 * 2 * 3 + cond + 4, 48), nn.SiLU(),
-            nn.Linear(48, 48), nn.SiLU(),
+            nn.Linear(2 * 2 * 3 + cond + 4, 48),
+            nn.SiLU(),
+            nn.Linear(48, 48),
+            nn.SiLU(),
             nn.Linear(48, max(num_kernels - 1, 1)),
         )
         weight_out = self.weight_net[-1]
@@ -111,7 +122,9 @@ class ChromaticPSFField(nn.Module):
         nn.init.zeros_(weight_out.bias)
         r = torch.arange(self.size, dtype=torch.float32) - self.size // 2
         yy, xx = torch.meshgrid(r, r, indexing="ij")
-        self.register_buffer("_offsets", torch.stack([xx, yy], -1).reshape(-1, 2), persistent=False)
+        self.register_buffer(
+            "_offsets", torch.stack([xx, yy], -1).reshape(-1, 2), persistent=False
+        )
 
     def _condition(self, lam_um: Tensor, channel: Tensor) -> Tensor:
         loglam = (torch.log(lam_um) - math.log(self.lambda_ref_um)) / 0.8
@@ -120,7 +133,9 @@ class ChromaticPSFField(nn.Module):
 
     def basis(self, lam_um: Tensor, channel: Tensor) -> Tensor:
         """Kernels at wavelengths ``lam_um`` (M,) and channels (M,): ``(M, num_kernels, size, size)``."""
-        lam_um = torch.as_tensor(lam_um, dtype=torch.float32, device=self._offsets.device).flatten()
+        lam_um = torch.as_tensor(
+            lam_um, dtype=torch.float32, device=self._offsets.device
+        ).flatten()
         channel = torch.as_tensor(channel, device=self._offsets.device).flatten()
         if lam_um.shape != channel.shape:
             raise ValueError("lam_um and channel must have the same length")
@@ -132,15 +147,30 @@ class ChromaticPSFField(nn.Module):
         rows = []
         for m in range(lam_um.shape[0]):
             rho = xy * pix_per_lod[m] / self.max_diffraction_radius
-            rows.append(torch.cat([_fourier(rho, 6), _fourier(xy / self.size, 4), cond[m].expand(num_offsets, -1)], 1))
-        k = self.kernel_net(torch.cat(rows, 0)).reshape(lam_um.shape[0], num_offsets, self.num_kernels)
-        k = k.permute(0, 2, 1).reshape(lam_um.shape[0], self.num_kernels, self.size, self.size)
+            rows.append(
+                torch.cat(
+                    [
+                        _fourier(rho, 6),
+                        _fourier(xy / self.size, 4),
+                        cond[m].expand(num_offsets, -1),
+                    ],
+                    1,
+                )
+            )
+        k = self.kernel_net(torch.cat(rows, 0)).reshape(
+            lam_um.shape[0], num_offsets, self.num_kernels
+        )
+        k = k.permute(0, 2, 1).reshape(
+            lam_um.shape[0], self.num_kernels, self.size, self.size
+        )
         core = F.softplus(k[:, 0])
         core = core / core.sum((-2, -1), keepdim=True)
         rest = 0.01 * (k[:, 1:] - k[:, 1:].mean((-2, -1), keepdim=True))
         return torch.cat([core[:, None], rest], 1)
 
-    def weights(self, lam_um: Tensor, channel: Tensor, detector: Tensor, u: Tensor, v: Tensor) -> Tensor:
+    def weights(
+        self, lam_um: Tensor, channel: Tensor, detector: Tensor, u: Tensor, v: Tensor
+    ) -> Tensor:
         """Mixing weights ``(N, num_kernels)`` at detector coordinates ``u, v`` in ``[-1, 1]``.
 
         ``lam_um``, ``channel`` and ``detector`` broadcast against ``u``.
@@ -149,11 +179,14 @@ class ChromaticPSFField(nn.Module):
         lam_um = torch.as_tensor(lam_um, dtype=u.dtype, device=u.device).expand(n)
         channel = torch.as_tensor(channel, device=u.device).expand(n)
         detector = torch.as_tensor(detector, device=u.device).long().expand(n)
-        inp = torch.cat([
-            _fourier(torch.stack([u, v], -1) * 0.5, 3),
-            self._condition(lam_um, channel),
-            self.detector_embedding(detector),
-        ], 1)
+        inp = torch.cat(
+            [
+                _fourier(torch.stack([u, v], -1) * 0.5, 3),
+                self._condition(lam_um, channel),
+                self.detector_embedding(detector),
+            ],
+            1,
+        )
         ones = torch.ones(n, 1, device=u.device, dtype=u.dtype)
         if self.num_kernels == 1:
             return ones
@@ -176,8 +209,14 @@ class LogLambdaRBFBasis(nn.Module):
 
     centres: Tensor
 
-    def __init__(self, num_basis: int,
- lam_min_um: float, lam_max_um: float, *, learned: bool = False) -> None:
+    def __init__(
+        self,
+        num_basis: int,
+        lam_min_um: float,
+        lam_max_um: float,
+        *,
+        learned: bool = False,
+    ) -> None:
         super().__init__()
         if num_basis < 2:
             raise ValueError("num_basis must be at least 2")
@@ -189,18 +228,23 @@ class LogLambdaRBFBasis(nn.Module):
         self.width = 1.0 / (num_basis - 1)
         self.correction: nn.Sequential | None = None
         if learned:
-            self.correction = nn.Sequential(nn.Linear(2 * 6, 32), nn.SiLU(), nn.Linear(32, num_basis))
+            self.correction = nn.Sequential(
+                nn.Linear(2 * 6, 32), nn.SiLU(), nn.Linear(32, num_basis)
+            )
             correction_out = self.correction[-1]
             assert isinstance(correction_out, nn.Linear)  # last layer built above
             nn.init.zeros_(correction_out.weight)
             nn.init.zeros_(correction_out.bias)
 
-
     def unit(self, lam_um: Tensor) -> Tensor:
         return (torch.log(lam_um) - self.log_min) / (self.log_max - self.log_min)
 
     def forward(self, lam_um: Tensor) -> Tensor:
-        u = self.unit(torch.as_tensor(lam_um, dtype=self.centres.dtype, device=self.centres.device).flatten())
+        u = self.unit(
+            torch.as_tensor(
+                lam_um, dtype=self.centres.dtype, device=self.centres.device
+            ).flatten()
+        )
         g = torch.exp(-0.5 * ((u[:, None] - self.centres[None]) / self.width) ** 2)
         phi = g / g.sum(1, keepdim=True)
         if self.correction is not None:
@@ -224,7 +268,6 @@ class SpectralSkyField(nn.Module):
 
     nodes_um: Tensor
     node_weights: Tensor
-
 
     def __init__(
         self,
@@ -291,8 +334,12 @@ def spectral_coefficients_from_bands(
         k = design.shape[1]
         d = torch.zeros(max(k - 2, 0), k, dtype=torch.float64)
         for i in range(k - 2):
-            d[i, i:i + 3] = torch.tensor([1.0, -2.0, 1.0], dtype=torch.float64)
+            d[i, i : i + 3] = torch.tensor([1.0, -2.0, 1.0], dtype=torch.float64)
         dm = design.double().cpu()
-        normal = dm.T @ dm + smoothness * d.T @ d + 1e-6 * torch.eye(k, dtype=torch.float64)
-        proj = torch.linalg.solve(normal, dm.T).to(device=band_images.device, dtype=band_images.dtype)
+        normal = (
+            dm.T @ dm + smoothness * d.T @ d + 1e-6 * torch.eye(k, dtype=torch.float64)
+        )
+        proj = torch.linalg.solve(normal, dm.T).to(
+            device=band_images.device, dtype=band_images.dtype
+        )
         return torch.einsum("kb,bhw->khw", proj, band_images)

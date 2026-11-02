@@ -540,7 +540,10 @@ def compute_field_fit_diagnostics(
                     psf_corr = float(r_num / r_den)
                     psf_residual_correlations.append(psf_corr)
 
-            if field_model_has_predictive_distribution(model) and spatial_tile_hw is None:
+            if (
+                field_model_has_predictive_distribution(model)
+                and spatial_tile_hw is None
+            ):
                 _pred_mean, pred_logvar = render_field_observation_distribution(
                     model,
                     observation,
@@ -1060,7 +1063,10 @@ def fit_field_model(
         or gradient_residual_weight > 0
         or pixel_sample_count > 0
         or (context_observations_per_step > 0 and context_loss_weight > 0)
-        or (spectral_anchor_observations_per_step > 0 and spectral_anchor_loss_weight > 0)
+        or (
+            spectral_anchor_observations_per_step > 0
+            and spectral_anchor_loss_weight > 0
+        )
         or bool(component_anchor_terms)
         or bool(component_centroid_anchor_terms)
     ):
@@ -1559,6 +1565,7 @@ def fit_field_model(
         selected_global_weight_sum = None
         selected_band_weight_sum: dict[tuple[object, ...], float] = {}
         if streaming_accumulation:
+
             def observation_normalizer(observation: FieldObservation) -> float:
                 if loss_kind == "structured_nll":
                     return float(_observation_support_mask(observation).sum())
@@ -1743,8 +1750,11 @@ def fit_field_model(
                 if recompute_structured:
                     render_cpu_rng = torch.get_rng_state()
                     render_device_rng = (
-                        None if train_device.type == "cpu"
-                        else torch.get_device_module(train_device).get_rng_state(train_device)
+                        None
+                        if train_device.type == "cpu"
+                        else torch.get_device_module(train_device).get_rng_state(
+                            train_device
+                        )
                     )
                 with torch.no_grad() if recompute_structured else nullcontext():
                     pred = render_field_observation(

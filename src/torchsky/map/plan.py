@@ -113,9 +113,13 @@ def _validate_input_identity(identity: Mapping[str, Any], label: str) -> None:
             not isinstance(card_value, str) or not card_value
             for card_value in cards_mapping.values()
         ):
-            raise ValueError(f"map plan {label}.fits_checksum_cards values must be strings")
+            raise ValueError(
+                f"map plan {label}.fits_checksum_cards values must be strings"
+            )
         if sha256 is not None:
-            raise ValueError(f"map plan {label} cannot contain both checksums and SHA-256")
+            raise ValueError(
+                f"map plan {label} cannot contain both checksums and SHA-256"
+            )
     else:
         if not isinstance(sha256, str) or len(sha256) != 64:
             raise ValueError(f"map plan {label} requires checksum cards or SHA-256")
@@ -185,7 +189,10 @@ def _validate_target(target: Any) -> None:
     if (
         not isinstance(shape, list)
         or len(shape) != 2
-        or any(isinstance(dim, bool) or not isinstance(dim, int) or dim <= 0 for dim in shape)
+        or any(
+            isinstance(dim, bool) or not isinstance(dim, int) or dim <= 0
+            for dim in shape
+        )
     ):
         raise ValueError("map plan target shape must contain two positive integers")
     header = _require_mapping(value.get("header"), "target.header")
@@ -205,7 +212,9 @@ def _validate_target(target: Any) -> None:
     if "union_footprint" in value:
         _require_bool(value["union_footprint"], "target.union_footprint")
     if "footprint_padding" in value:
-        _require_number(value["footprint_padding"], "target.footprint_padding", nonnegative=True)
+        _require_number(
+            value["footprint_padding"], "target.footprint_padding", nonnegative=True
+        )
         if value["footprint_padding"] < 1:
             raise ValueError("map plan target.footprint_padding must be at least 1")
     if "footprint_tolerance_px" in value:
@@ -243,11 +252,15 @@ def _validate_execution(execution: Any, method: str) -> None:
             MAP_VALUE_SEMANTICS,
         )
     if "drizzle_pixfrac" in value:
-        _require_number(value["drizzle_pixfrac"], "execution.drizzle_pixfrac", positive=True)
+        _require_number(
+            value["drizzle_pixfrac"], "execution.drizzle_pixfrac", positive=True
+        )
     if "clip_sigma" in value:
         _require_number(value["clip_sigma"], "execution.clip_sigma", positive=True)
     if "clip_iterations" in value:
-        _require_integer(value["clip_iterations"], "execution.clip_iterations", positive=True)
+        _require_integer(
+            value["clip_iterations"], "execution.clip_iterations", positive=True
+        )
     if "tile_hw" in value and value["tile_hw"] is not None:
         tile_hw = value["tile_hw"]
         if (
@@ -258,7 +271,9 @@ def _validate_execution(execution: Any, method: str) -> None:
                 for dim in tile_hw
             )
         ):
-            raise ValueError("map plan execution.tile_hw must contain two positive integers")
+            raise ValueError(
+                "map plan execution.tile_hw must contain two positive integers"
+            )
     for key in ("requested_device", "resolved_device"):
         if key in value:
             _require_string(value[key], f"execution.{key}", allow_none=True)
@@ -336,9 +351,10 @@ def _validate_execution(execution: Any, method: str) -> None:
             raise ValueError(
                 f"map plan coadd execution is missing {', '.join(missing)}"
             )
-        if value.get("stack") == "sigma_clipped" and value.get(
-            "background_mode"
-        ) == "overlap":
+        if (
+            value.get("stack") == "sigma_clipped"
+            and value.get("background_mode") == "overlap"
+        ):
             raise ValueError(
                 "map plan sigma_clipped execution cannot use overlap background"
             )
@@ -354,8 +370,7 @@ def _validate_runtime(runtime: Any) -> None:
     if device_parts[0] not in ("cpu", "mps", "cuda") or len(device_parts) > 2:
         raise ValueError("map plan runtime device must be cpu, mps, or cuda")
     if len(device_parts) == 2 and (
-        device_parts[0] != "cuda"
-        or not device_parts[1].isdigit()
+        device_parts[0] != "cuda" or not device_parts[1].isdigit()
     ):
         raise ValueError("map plan runtime device index is invalid")
     if "amp_dtype" in value:
@@ -366,7 +381,9 @@ def _validate_runtime(runtime: Any) -> None:
         _require_string(key, "runtime.seeds key")
         _require_integer(seed, f"runtime.seeds[{key!r}]", nonnegative=True)
     if "requested_device" in value:
-        _require_string(value["requested_device"], "runtime.requested_device", allow_none=True)
+        _require_string(
+            value["requested_device"], "runtime.requested_device", allow_none=True
+        )
     if "scratch" in value:
         _require_string(value["scratch"], "runtime.scratch", allow_none=True)
 
@@ -374,10 +391,11 @@ def _validate_runtime(runtime: Any) -> None:
 def _validate_requested_products(products: Any) -> None:
     if not isinstance(products, list) or not products:
         raise ValueError("map plan requires requested_products")
-    if any(not isinstance(product, str) or product not in _PLAN_PRODUCTS for product in products):
-        raise ValueError(
-            f"map plan requested_products must use only {_PLAN_PRODUCTS}"
-        )
+    if any(
+        not isinstance(product, str) or product not in _PLAN_PRODUCTS
+        for product in products
+    ):
+        raise ValueError(f"map plan requested_products must use only {_PLAN_PRODUCTS}")
     if len(set(products)) != len(products):
         raise ValueError("map plan requested_products must not contain duplicates")
     if "SCI" not in products:
@@ -426,7 +444,9 @@ def _validate_spectral(spectral: Any, *, inputs: list[dict[str, Any]]) -> None:
                     "map plan tabulated passband samples must have matching lengths"
                 )
             for index, sample in enumerate(sample_wavelength):
-                _require_number(sample, f"spectral.bands[].transmission_wavelength[{index}]")
+                _require_number(
+                    sample, f"spectral.bands[].transmission_wavelength[{index}]"
+                )
             for index, sample in enumerate(sample_throughput):
                 _require_number(
                     sample,
@@ -441,12 +461,18 @@ def _validate_spectral(spectral: Any, *, inputs: list[dict[str, Any]]) -> None:
                     "map plan tabulated passband wavelengths must be strictly increasing"
                 )
             if not any(float(sample) > 0.0 for sample in sample_throughput):
-                raise ValueError("map plan tabulated passband integral must be positive")
-    if any(not isinstance(label, str) or label not in labels for label in observation_bands):
+                raise ValueError(
+                    "map plan tabulated passband integral must be positive"
+                )
+    if any(
+        not isinstance(label, str) or label not in labels for label in observation_bands
+    ):
         raise ValueError("map plan observation_bands references an unknown band")
     for item, band in zip(inputs, observation_bands):
         if item.get("band") != band:
-            raise ValueError("map plan input band must match spectral observation_bands")
+            raise ValueError(
+                "map plan input band must match spectral observation_bands"
+            )
     _validate_optional_identity_pair(
         value,
         "transmission_path",

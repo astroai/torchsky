@@ -344,7 +344,12 @@ def test_transform_reproducibility():
 
 @pytest.mark.parametrize(
     ("shape", "seed", "contrast"),
-    [((30, 30), 4, 0.25), ((64, 64), 5, 0.25), ((100, 130), 6, 0.1), ((31, 33), 7, 0.5)],
+    [
+        ((30, 30), 4, 0.25),
+        ((64, 64), 5, 0.25),
+        ((100, 130), 6, 0.1),
+        ((31, 33), 7, 0.5),
+    ],
 )
 def test_zscale_limits_match_astropy_zscale_interval(shape, seed, contrast) -> None:
     visualization = pytest.importorskip("astropy.visualization")

@@ -206,8 +206,12 @@ def test_residual_grid_exactly_removes_constant_and_affine_modes() -> None:
     flat = projected.reshape(-1, 2)
     basis = residual.affine_basis
 
-    torch.testing.assert_close(projected, torch.zeros_like(projected), atol=2e-14, rtol=0)
-    torch.testing.assert_close(basis.T @ flat, torch.zeros(3, 2, dtype=flat.dtype), atol=2e-14, rtol=0)
+    torch.testing.assert_close(
+        projected, torch.zeros_like(projected), atol=2e-14, rtol=0
+    )
+    torch.testing.assert_close(
+        basis.T @ flat, torch.zeros(3, 2, dtype=flat.dtype), atol=2e-14, rtol=0
+    )
 
 
 def test_two_by_two_residual_grid_has_finite_zero_bending_energy() -> None:
@@ -243,8 +247,12 @@ def test_non_affine_residual_and_composite_jacobian_are_consistent(
     control = _sample_table(
         8,
         8,
-        lambda x, y: 1.0e-3
-        * torch.stack((torch.sin(x) * torch.sin(y), torch.cos(x) * torch.sin(y)), dim=-1),
+        lambda x, y: (
+            1.0e-3
+            * torch.stack(
+                (torch.sin(x) * torch.sin(y), torch.cos(x) * torch.sin(y)), dim=-1
+            )
+        ),
     )
     residual = AffineFreeResidualGrid2D(control, mode="bicubic")
     composite = DetectorToTangentTransform(
@@ -301,9 +309,7 @@ def test_composite_rejects_residual_that_changes_base_parity(parity: float) -> N
 
 
 def test_validate_sampled_transform_reports_mas_thresholds() -> None:
-    points = torch.tensor(
-        [[0.0, 0.0], [1.0, 0.5], [359.9, -0.2]], dtype=torch.float64
-    )
+    points = torch.tensor([[0.0, 0.0], [1.0, 0.5], [359.9, -0.2]], dtype=torch.float64)
 
     exact = validate_sampled_transform(lambda value: value, lambda value: value, points)
     assert exact.passed
@@ -348,8 +354,12 @@ def test_detector_to_sky_forward_and_pixel_to_world_freeze_attitude() -> None:
     points_result = transform(torch.stack((x, y), dim=-1))
     longitude.sum().backward()
 
-    torch.testing.assert_close(points_result, torch.stack((longitude, latitude), dim=-1))
-    torch.testing.assert_close(longitude, torch.tensor([359.5, 1.0], dtype=torch.float64))
+    torch.testing.assert_close(
+        points_result, torch.stack((longitude, latitude), dim=-1)
+    )
+    torch.testing.assert_close(
+        longitude, torch.tensor([359.5, 1.0], dtype=torch.float64)
+    )
     torch.testing.assert_close(latitude, torch.tensor([-0.5, 1.0], dtype=torch.float64))
     assert x.grad is not None
     assert not attitude.zero.requires_grad

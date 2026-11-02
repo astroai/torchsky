@@ -59,7 +59,9 @@ class HEALPixGeometry(SHTGeometry):
     nest: bool = False
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "spin_convention", SpinConvention(self.spin_convention))
+        object.__setattr__(
+            self, "spin_convention", SpinConvention(self.spin_convention)
+        )
         if int(self.nside) != self.nside or int(self.nside) <= 0:
             raise ValueError("nside must be a positive integer")
 
@@ -74,7 +76,9 @@ class HEALPixGeometry(SHTGeometry):
 
 def _cc_weights(size: int) -> tuple[float, ...]:
     if size < 2:
-        raise ValueError("Clenshaw-Curtis sampling requires at least two latitude rings")
+        raise ValueError(
+            "Clenshaw-Curtis sampling requires at least two latitude rings"
+        )
     n = size - 1
     theta = torch.arange(size, dtype=torch.float64) * (math.pi / n)
     weights = torch.empty(size, dtype=torch.float64)
@@ -134,14 +138,20 @@ def _axis_delta(header: Mapping[str, Any], axis: int) -> float:
     offdiag_other = _header_float(header, "PC2_1") if "PC2_1" in header else 0.0
     if offdiag != 0.0 or offdiag_other != 0.0:
         raise ValueError("CAR SHT requires a separable unrotated PC matrix")
-    diagonal = _header_float(header, f"PC{axis}_{axis}") if f"PC{axis}_{axis}" in header else 1.0
+    diagonal = (
+        _header_float(header, f"PC{axis}_{axis}")
+        if f"PC{axis}_{axis}" in header
+        else 1.0
+    )
     return _header_float(header, f"CDELT{axis}") * diagonal
 
 
 def _ctype_role(value: Any) -> str:
     ctype = str(value).strip().upper()
     if not ctype.endswith("-CAR") or len(ctype) < 8:
-        raise ValueError("CAR SHT requires two undistorted celestial CTYPEs ending in -CAR")
+        raise ValueError(
+            "CAR SHT requires two undistorted celestial CTYPEs ending in -CAR"
+        )
     prefix = ctype[:-4].replace("-", "")
     if prefix in {"RA", "GLON", "ELON", "HLON", "SLON", "TLON"}:
         return "longitude"
@@ -180,12 +190,16 @@ class CARGeometry(SHTGeometry):
     longitude_reversed: bool
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "spin_convention", SpinConvention(self.spin_convention))
+        object.__setattr__(
+            self, "spin_convention", SpinConvention(self.spin_convention)
+        )
         object.__setattr__(self, "sampling", CARSampling(self.sampling))
         if len(self.array_shape) != 2 or min(self.array_shape) < 1:
             raise ValueError("array_shape must contain two positive dimensions")
         if {int(self.latitude_axis), int(self.longitude_axis)} != {0, 1}:
-            raise ValueError("latitude_axis and longitude_axis must be distinct array axes")
+            raise ValueError(
+                "latitude_axis and longitude_axis must be distinct array axes"
+            )
         if len(self.latitude_radians) != self.nlat:
             raise ValueError("latitude_radians length does not match geometry")
         if len(self.quadrature_weights) != self.nlat:
@@ -231,14 +245,19 @@ class CARGeometry(SHTGeometry):
         if "WCSAXES" in normalized and int(normalized["WCSAXES"]) != 2:
             raise ValueError("CAR SHT requires exactly two WCS axes")
         _reject_distortion(normalized)
-        roles = (_ctype_role(normalized.get("CTYPE1", "")), _ctype_role(normalized.get("CTYPE2", "")))
+        roles = (
+            _ctype_role(normalized.get("CTYPE1", "")),
+            _ctype_role(normalized.get("CTYPE2", "")),
+        )
         if roles[0] == roles[1]:
             raise ValueError("CAR SHT requires one longitude and one latitude axis")
         for axis in (1, 2):
             _axis_unit(normalized, axis)
         if shape is None:
             if "NAXIS1" not in normalized or "NAXIS2" not in normalized:
-                raise ValueError("CAR header requires NAXIS1/NAXIS2 or an explicit shape")
+                raise ValueError(
+                    "CAR header requires NAXIS1/NAXIS2 or an explicit shape"
+                )
             array_shape = (int(normalized["NAXIS2"]), int(normalized["NAXIS1"]))
         else:
             array_shape = tuple(int(value) for value in shape)
@@ -261,29 +280,44 @@ class CARGeometry(SHTGeometry):
         if lon_delta == 0.0 or lat_delta == 0.0:
             raise ValueError("CAR pixel increments must be non-zero")
         tolerance = 2.0e-9
-        if not math.isclose(abs(lon_delta) * nlon, 360.0, rel_tol=0.0, abs_tol=tolerance):
+        if not math.isclose(
+            abs(lon_delta) * nlon, 360.0, rel_tol=0.0, abs_tol=tolerance
+        ):
             raise ValueError("CAR longitude axis must be exactly full-360 and periodic")
         lon_crpix = _header_float(normalized, f"CRPIX{lon_fits_axis}")
         lon_crval = _header_float(normalized, f"CRVAL{lon_fits_axis}")
         lat_crpix = _header_float(normalized, f"CRPIX{lat_fits_axis}")
         lat_crval = _header_float(normalized, f"CRVAL{lat_fits_axis}")
         if not math.isclose(lat_crval, 0.0, rel_tol=0.0, abs_tol=tolerance):
-            raise ValueError("CAR SHT requires an unrotated latitude reference at zero degrees")
+            raise ValueError(
+                "CAR SHT requires an unrotated latitude reference at zero degrees"
+            )
         if "LONPOLE" in normalized and not math.isclose(
             _header_float(normalized, "LONPOLE"), 0.0, rel_tol=0.0, abs_tol=tolerance
         ):
             raise ValueError("CAR SHT requires an unrotated native longitude pole")
         if "LATPOLE" in normalized and not math.isclose(
-            abs(_header_float(normalized, "LATPOLE")), 90.0, rel_tol=0.0, abs_tol=tolerance
+            abs(_header_float(normalized, "LATPOLE")),
+            90.0,
+            rel_tol=0.0,
+            abs_tol=tolerance,
         ):
             raise ValueError("CAR SHT requires an unrotated native latitude pole")
-        lon_values = tuple(lon_crval + ((index + 1.0) - lon_crpix) * lon_delta for index in range(nlon))
-        lat_values = tuple(lat_crval + ((index + 1.0) - lat_crpix) * lat_delta for index in range(nlat))
+        lon_values = tuple(
+            lon_crval + ((index + 1.0) - lon_crpix) * lon_delta for index in range(nlon)
+        )
+        lat_values = tuple(
+            lat_crval + ((index + 1.0) - lat_crpix) * lat_delta for index in range(nlat)
+        )
         lon_reversed = lon_delta < 0.0
         lat_reversed = lat_delta > 0.0
         canonical_lon = tuple(reversed(lon_values)) if lon_reversed else lon_values
         canonical_lat = tuple(reversed(lat_values)) if lat_reversed else lat_values
-        cc = tuple(90.0 - index * 180.0 / (nlat - 1) for index in range(nlat)) if nlat > 1 else ()
+        cc = (
+            tuple(90.0 - index * 180.0 / (nlat - 1) for index in range(nlat))
+            if nlat > 1
+            else ()
+        )
         f1 = tuple(90.0 - (index + 0.5) * 180.0 / nlat for index in range(nlat))
         if nlat > 1 and all(
             math.isclose(value, expected, rel_tol=0.0, abs_tol=tolerance)
@@ -355,13 +389,24 @@ class SHTBackendCapabilities:
     def supports(self, request: SHTRequest, value: Tensor | None = None) -> bool:
         if request.operation not in self.operations:
             return False
-        if request.geometry.kind not in self.geometry_kinds or request.spin not in self.spins:
+        if (
+            request.geometry.kind not in self.geometry_kinds
+            or request.spin not in self.spins
+        ):
             return False
-        if request.operation is SHTOperation.ANALYZE and SHTAnalysisKind.QUADRATURE not in self.analysis_kinds:
+        if (
+            request.operation is SHTOperation.ANALYZE
+            and SHTAnalysisKind.QUADRATURE not in self.analysis_kinds
+        ):
             return False
-        if request.operation is SHTOperation.PSEUDO_ANALYZE and SHTAnalysisKind.LEAST_SQUARES not in self.analysis_kinds:
+        if (
+            request.operation is SHTOperation.PSEUDO_ANALYZE
+            and SHTAnalysisKind.LEAST_SQUARES not in self.analysis_kinds
+        ):
             return False
-        if value is not None and (value.device.type not in self.devices or value.dtype not in self.dtypes):
+        if value is not None and (
+            value.device.type not in self.devices or value.dtype not in self.dtypes
+        ):
             return False
         return True
 
@@ -425,7 +470,9 @@ def _validate_real_alm(alm: Tensor, request: SHTRequest) -> None:
         int(request.lmax), _resolved_mmax(request)
     ):
         return
-    if torch.is_complex(alm) and bool(torch.any(alm[..., : int(request.lmax) + 1].imag != 0).item()):
+    if torch.is_complex(alm) and bool(
+        torch.any(alm[..., : int(request.lmax) + 1].imag != 0).item()
+    ):
         raise ValueError("real-field packed alms require real m=0 coefficients")
 
 
@@ -489,13 +536,18 @@ def _phase(request: SHTRequest, dtype: torch.dtype, device: torch.device) -> Ten
     return torch.polar(torch.ones_like(angle), angle).to(_complex_dtype(dtype))
 
 
-def _packed_phase(request: SHTRequest, dtype: torch.dtype, device: torch.device) -> Tensor:
+def _packed_phase(
+    request: SHTRequest, dtype: torch.dtype, device: torch.device
+) -> Tensor:
     m = _spectral._alm_m_array(int(request.lmax), _resolved_mmax(request)).to(device)
     return torch.index_select(_phase(request, dtype, device), 0, m)
 
 
 def _latitude_blocks(geometry: CARGeometry, size: int) -> tuple[tuple[int, int], ...]:
-    return tuple((start, min(start + size, geometry.nlat)) for start in range(0, geometry.nlat, size))
+    return tuple(
+        (start, min(start + size, geometry.nlat))
+        for start in range(0, geometry.nlat, size)
+    )
 
 
 def _legendre_sequence(m: int, x: Tensor, lmax: int) -> Tensor:
@@ -560,7 +612,9 @@ def _wigner_element(ell: int, m: int, mp: int, theta: Tensor) -> Tensor:
     return output
 
 
-def _wigner_sequence(ell_min: int, ell_max: int, m: int, mp: int, theta: Tensor) -> Tensor:
+def _wigner_sequence(
+    ell_min: int, ell_max: int, m: int, mp: int, theta: Tensor
+) -> Tensor:
     first = _wigner_element(ell_min, m, mp, theta)
     if ell_max == ell_min:
         return first.unsqueeze(0)
@@ -572,13 +626,10 @@ def _wigner_sequence(ell_min: int, ell_max: int, m: int, mp: int, theta: Tensor)
     for ell in range(ell_min + 2, ell_max + 1):
         current_scale = math.sqrt((ell * ell - m * m) * (ell * ell - mp * mp))
         previous_scale = math.sqrt(
-            (((ell - 1) * (ell - 1)) - m * m)
-            * (((ell - 1) * (ell - 1)) - mp * mp)
+            (((ell - 1) * (ell - 1)) - m * m) * (((ell - 1) * (ell - 1)) - mp * mp)
         )
         current = (ell / current_scale) * (
-            (2 * ell - 1)
-            * (cosine - (m * mp) / (ell * (ell - 1)))
-            * previous1
+            (2 * ell - 1) * (cosine - (m * mp) / (ell * (ell - 1))) * previous1
             - (previous_scale / (ell - 1)) * previous2
         )
         sequence.append(current)
@@ -599,16 +650,24 @@ def _scalar_modes_from_alm(alm: Tensor, request: SHTRequest) -> Tensor:
     complex_dtype = _complex_dtype(alm.dtype)
     real_dtype = _real_dtype(alm.dtype)
     coeff = alm.to(complex_dtype)
-    modes = torch.zeros((*coeff.shape[:-1], geometry.nlat, mm + 1), dtype=complex_dtype, device=alm.device)
+    modes = torch.zeros(
+        (*coeff.shape[:-1], geometry.nlat, mm + 1),
+        dtype=complex_dtype,
+        device=alm.device,
+    )
     latitudes = geometry.latitudes(dtype=real_dtype, device=alm.device)
     x = torch.sin(latitudes)
     for m in range(mm + 1):
         start = _spectral.alm_index(m, m, ll, mm)
         count = ll - m + 1
         coeff_m = coeff[..., start : start + count]
-        for ring_start, ring_end in _latitude_blocks(geometry, int(request.latitude_block_size)):
+        for ring_start, ring_end in _latitude_blocks(
+            geometry, int(request.latitude_block_size)
+        ):
             basis = _legendre_sequence(m, x[ring_start:ring_end], ll)
-            modes[..., ring_start:ring_end, m] = torch.einsum("...l,lr->...r", coeff_m, basis.to(complex_dtype))
+            modes[..., ring_start:ring_end, m] = torch.einsum(
+                "...l,lr->...r", coeff_m, basis.to(complex_dtype)
+            )
     return modes * _phase(request, alm.dtype, alm.device)
 
 
@@ -620,17 +679,29 @@ def _scalar_alm_from_modes(modes: Tensor, request: SHTRequest) -> Tensor:
     mm = _resolved_mmax(request)
     complex_dtype = _complex_dtype(modes.dtype)
     real_dtype = _real_dtype(modes.dtype)
-    modes = modes.to(complex_dtype) * torch.conj(_phase(request, modes.dtype, modes.device))
-    out = torch.zeros((*modes.shape[:-2], _spectral.alm_size(ll, mm)), dtype=complex_dtype, device=modes.device)
+    modes = modes.to(complex_dtype) * torch.conj(
+        _phase(request, modes.dtype, modes.device)
+    )
+    out = torch.zeros(
+        (*modes.shape[:-2], _spectral.alm_size(ll, mm)),
+        dtype=complex_dtype,
+        device=modes.device,
+    )
     x = torch.sin(geometry.latitudes(dtype=real_dtype, device=modes.device))
     for m in range(mm + 1):
         start = _spectral.alm_index(m, m, ll, mm)
         count = ll - m + 1
-        projected = torch.zeros((*modes.shape[:-2], count), dtype=complex_dtype, device=modes.device)
-        for ring_start, ring_end in _latitude_blocks(geometry, int(request.latitude_block_size)):
+        projected = torch.zeros(
+            (*modes.shape[:-2], count), dtype=complex_dtype, device=modes.device
+        )
+        for ring_start, ring_end in _latitude_blocks(
+            geometry, int(request.latitude_block_size)
+        ):
             basis = _legendre_sequence(m, x[ring_start:ring_end], ll)
             projected = projected + torch.einsum(
-                "...r,lr->...l", modes[..., ring_start:ring_end, m], basis.to(complex_dtype)
+                "...r,lr->...l",
+                modes[..., ring_start:ring_end, m],
+                basis.to(complex_dtype),
             )
         out[..., start : start + count] = projected
     return out
@@ -669,11 +740,17 @@ def _spin_modes_from_alm(alm: Tensor, request: SHTRequest) -> tuple[Tensor, Tens
     coeff = alm.to(complex_dtype)
     coeff_plus = coeff[..., 0, :] + 1j * coeff[..., 1, :]
     coeff_minus = coeff[..., 0, :] - 1j * coeff[..., 1, :]
-    plus = torch.zeros((*coeff.shape[:-2], geometry.nlat, mm + 1), dtype=complex_dtype, device=alm.device)
+    plus = torch.zeros(
+        (*coeff.shape[:-2], geometry.nlat, mm + 1),
+        dtype=complex_dtype,
+        device=alm.device,
+    )
     minus = torch.zeros_like(plus)
     theta = (math.pi * 0.5) - geometry.latitudes(dtype=real_dtype, device=alm.device)
     for m in range(mm + 1):
-        for ring_start, ring_end in _latitude_blocks(geometry, int(request.latitude_block_size)):
+        for ring_start, ring_end in _latitude_blocks(
+            geometry, int(request.latitude_block_size)
+        ):
             basis_plus, basis_minus, ell_start = _spin_bases(
                 m, int(request.spin), theta[ring_start:ring_end], ll
             )
@@ -682,16 +759,22 @@ def _spin_modes_from_alm(alm: Tensor, request: SHTRequest) -> tuple[Tensor, Tens
             start = _spectral.alm_index(ell_start, m, ll, mm)
             count = ll - ell_start + 1
             plus[..., ring_start:ring_end, m] = torch.einsum(
-                "...l,lr->...r", coeff_plus[..., start : start + count], basis_plus.to(complex_dtype)
+                "...l,lr->...r",
+                coeff_plus[..., start : start + count],
+                basis_plus.to(complex_dtype),
             )
             minus[..., ring_start:ring_end, m] = torch.einsum(
-                "...l,lr->...r", coeff_minus[..., start : start + count], basis_minus.to(complex_dtype)
+                "...l,lr->...r",
+                coeff_minus[..., start : start + count],
+                basis_minus.to(complex_dtype),
             )
     phase = _phase(request, alm.dtype, alm.device)
     return plus * phase, minus * phase
 
 
-def _spin_alm_from_mode_gradients(plus: Tensor, minus: Tensor, request: SHTRequest) -> Tensor:
+def _spin_alm_from_mode_gradients(
+    plus: Tensor, minus: Tensor, request: SHTRequest
+) -> Tensor:
     geometry = request.geometry
     if not isinstance(geometry, CARGeometry):
         raise TypeError("CAR geometry required")
@@ -703,7 +786,9 @@ def _spin_alm_from_mode_gradients(plus: Tensor, minus: Tensor, request: SHTReque
     plus = plus.to(complex_dtype) * phase_conj
     minus = minus.to(complex_dtype) * phase_conj
     nalm = _spectral.alm_size(ll, mm)
-    grad_plus = torch.zeros((*plus.shape[:-2], nalm), dtype=complex_dtype, device=plus.device)
+    grad_plus = torch.zeros(
+        (*plus.shape[:-2], nalm), dtype=complex_dtype, device=plus.device
+    )
     grad_minus = torch.zeros_like(grad_plus)
     theta = (math.pi * 0.5) - geometry.latitudes(dtype=real_dtype, device=plus.device)
     for m in range(mm + 1):
@@ -712,17 +797,25 @@ def _spin_alm_from_mode_gradients(plus: Tensor, minus: Tensor, request: SHTReque
             continue
         start = _spectral.alm_index(ell_start, m, ll, mm)
         count = ll - ell_start + 1
-        projected_plus = torch.zeros((*plus.shape[:-2], count), dtype=complex_dtype, device=plus.device)
+        projected_plus = torch.zeros(
+            (*plus.shape[:-2], count), dtype=complex_dtype, device=plus.device
+        )
         projected_minus = torch.zeros_like(projected_plus)
-        for ring_start, ring_end in _latitude_blocks(geometry, int(request.latitude_block_size)):
+        for ring_start, ring_end in _latitude_blocks(
+            geometry, int(request.latitude_block_size)
+        ):
             basis_plus, basis_minus, _ = _spin_bases(
                 m, int(request.spin), theta[ring_start:ring_end], ll
             )
             projected_plus = projected_plus + torch.einsum(
-                "...r,lr->...l", plus[..., ring_start:ring_end, m], basis_plus.to(complex_dtype)
+                "...r,lr->...l",
+                plus[..., ring_start:ring_end, m],
+                basis_plus.to(complex_dtype),
             )
             projected_minus = projected_minus + torch.einsum(
-                "...r,lr->...l", minus[..., ring_start:ring_end, m], basis_minus.to(complex_dtype)
+                "...r,lr->...l",
+                minus[..., ring_start:ring_end, m],
+                basis_minus.to(complex_dtype),
             )
         gain = 1.0 if m == 0 else 2.0
         grad_plus[..., start : start + count] = projected_plus / gain
@@ -749,9 +842,13 @@ def car_synthesize(alm: Tensor, request: SHTRequest) -> Tensor:
         result = torch.fft.irfft(spectrum, n=geometry.nlon, dim=-1)
         return _storage_scalar_map(result, geometry)
     if request.spin not in {1, 2, 3}:
-        raise SHTCapabilityError("native CAR synthesis currently supports spins 0 through 3")
+        raise SHTCapabilityError(
+            "native CAR synthesis currently supports spins 0 through 3"
+        )
     plus, minus = _spin_modes_from_alm(alm, request)
-    spectrum_plus = torch.zeros((*plus.shape[:-1], geometry.nlon), dtype=plus.dtype, device=plus.device)
+    spectrum_plus = torch.zeros(
+        (*plus.shape[:-1], geometry.nlon), dtype=plus.dtype, device=plus.device
+    )
     spectrum_minus = torch.zeros_like(spectrum_plus)
     spectrum_plus[..., : _resolved_mmax(request) + 1] = plus * geometry.nlon
     spectrum_minus[..., : _resolved_mmax(request) + 1] = minus * geometry.nlon
@@ -767,24 +864,36 @@ def car_synthesize(alm: Tensor, request: SHTRequest) -> Tensor:
 
 def car_adjoint_synthesize(map_values: Tensor, request: SHTRequest) -> Tensor:
     if request.operation is not SHTOperation.ADJOINT_SYNTHESIZE:
-        raise ValueError("car_adjoint_synthesize requires an adjoint_synthesize request")
+        raise ValueError(
+            "car_adjoint_synthesize requires an adjoint_synthesize request"
+        )
     geometry = request.geometry
     if not isinstance(geometry, CARGeometry):
         raise TypeError("car_adjoint_synthesize requires CARGeometry")
     if request.spin == 0:
-        canonical = _canonical_scalar_map(map_values, geometry).to(_real_dtype(map_values.dtype))
+        canonical = _canonical_scalar_map(map_values, geometry).to(
+            _real_dtype(map_values.dtype)
+        )
         modes = torch.fft.rfft(canonical, dim=-1)[..., : _resolved_mmax(request) + 1]
         return _scalar_alm_from_modes(modes, request)
     if request.spin not in {1, 2, 3}:
-        raise SHTCapabilityError("native CAR adjoint currently supports spins 0 through 3")
-    canonical = _canonical_spin_map(map_values, geometry).to(_real_dtype(map_values.dtype))
+        raise SHTCapabilityError(
+            "native CAR adjoint currently supports spins 0 through 3"
+        )
+    canonical = _canonical_spin_map(map_values, geometry).to(
+        _real_dtype(map_values.dtype)
+    )
     q = canonical[..., 0, :, :]
     u = canonical[..., 1, :, :]
     grad_field_plus = torch.complex(-0.5 * q, -0.5 * u)
     grad_field_minus = torch.complex(-0.5 * q, 0.5 * u)
     fft_plus = torch.fft.fft(grad_field_plus, dim=-1)
     fft_minus = torch.fft.fft(grad_field_minus, dim=-1)
-    plus = torch.empty((*q.shape[:-1], _resolved_mmax(request) + 1), dtype=fft_plus.dtype, device=q.device)
+    plus = torch.empty(
+        (*q.shape[:-1], _resolved_mmax(request) + 1),
+        dtype=fft_plus.dtype,
+        device=q.device,
+    )
     minus = torch.empty_like(plus)
     plus[..., 0] = fft_plus[..., 0]
     minus[..., 0] = fft_minus[..., 0]
@@ -801,7 +910,9 @@ def car_analyze(map_values: Tensor, request: SHTRequest) -> Tensor:
     if not isinstance(geometry, CARGeometry):
         raise TypeError("car_analyze requires CARGeometry")
     real_dtype = _real_dtype(map_values.dtype)
-    weights = geometry.ring_weights(dtype=real_dtype, device=map_values.device) * (2.0 * math.pi / geometry.nlon)
+    weights = geometry.ring_weights(dtype=real_dtype, device=map_values.device) * (
+        2.0 * math.pi / geometry.nlon
+    )
     adjoint_request = SHTRequest(
         geometry=geometry,
         lmax=request.lmax,
@@ -811,17 +922,25 @@ def car_analyze(map_values: Tensor, request: SHTRequest) -> Tensor:
         latitude_block_size=request.latitude_block_size,
     )
     if request.spin == 0:
-        canonical = _canonical_scalar_map(map_values, geometry) * weights.view(*((1,) * (map_values.ndim - 2)), -1, 1)
+        canonical = _canonical_scalar_map(map_values, geometry) * weights.view(
+            *((1,) * (map_values.ndim - 2)), -1, 1
+        )
         weighted = _storage_scalar_map(canonical, geometry)
     else:
-        canonical = _canonical_spin_map(map_values, geometry) * weights.view(*((1,) * (map_values.ndim - 3)), 1, -1, 1)
+        canonical = _canonical_spin_map(map_values, geometry) * weights.view(
+            *((1,) * (map_values.ndim - 3)), 1, -1, 1
+        )
         weighted = _storage_spin_map(canonical, geometry)
     return car_adjoint_synthesize(weighted, adjoint_request)
 
 
 def _packed_inner(left: Tensor, right: Tensor, request: SHTRequest) -> Tensor:
-    m = _spectral._alm_m_array(int(request.lmax), _resolved_mmax(request)).to(left.device)
-    gain = torch.where(m == 0, 1.0, 2.0).to(dtype=_real_dtype(left.dtype), device=left.device)
+    m = _spectral._alm_m_array(int(request.lmax), _resolved_mmax(request)).to(
+        left.device
+    )
+    gain = torch.where(m == 0, 1.0, 2.0).to(
+        dtype=_real_dtype(left.dtype), device=left.device
+    )
     value = gain * torch.real(torch.conj(left) * right)
     return value.sum(dim=(-2, -1)) if request.spin else value.sum(dim=-1)
 
@@ -850,19 +969,33 @@ def _pseudo_analyze_native(
         latitude_block_size=request.latitude_block_size,
     )
     backend = NativeSHTBackend()
-    rhs = backend.execute(map_values, adjoint_request, tolerance=tolerance, max_iterations=max_iterations).values
+    rhs = backend.execute(
+        map_values, adjoint_request, tolerance=tolerance, max_iterations=max_iterations
+    ).values
     estimate = torch.zeros_like(rhs)
     residual = rhs.clone()
     direction = residual.clone()
     residual_norm = _packed_inner(residual, residual, request)
-    initial = torch.sqrt(residual_norm).clamp_min(torch.finfo(_real_dtype(rhs.dtype)).tiny)
+    initial = torch.sqrt(residual_norm).clamp_min(
+        torch.finfo(_real_dtype(rhs.dtype)).tiny
+    )
     converged = bool(torch.all(initial == 0).item())
     iterations = 0
     for iteration in range(max_iterations):
         if converged:
             break
-        projected_map = backend.execute(direction, synthesis_request, tolerance=tolerance, max_iterations=max_iterations).values
-        applied = backend.execute(projected_map, adjoint_request, tolerance=tolerance, max_iterations=max_iterations).values
+        projected_map = backend.execute(
+            direction,
+            synthesis_request,
+            tolerance=tolerance,
+            max_iterations=max_iterations,
+        ).values
+        applied = backend.execute(
+            projected_map,
+            adjoint_request,
+            tolerance=tolerance,
+            max_iterations=max_iterations,
+        ).values
         denominator = _packed_inner(direction, applied, request)
         if bool(torch.any(denominator <= 0).item()):
             break
@@ -880,12 +1013,15 @@ def _pseudo_analyze_native(
             beta = beta.unsqueeze(-1)
         direction = residual + beta * direction
         residual_norm = next_norm
-    final_relative = float(torch.max(torch.sqrt(residual_norm) / initial).detach().cpu().item())
+    final_relative = float(
+        torch.max(torch.sqrt(residual_norm) / initial).detach().cpu().item()
+    )
     return estimate, converged, iterations, final_relative
 
 
 class NativeSHTBackend:
     """Spherical-harmonic backend implemented by torchsky native kernels."""
+
     name = "native"
     capabilities = SHTBackendCapabilities(
         backend=name,
@@ -893,10 +1029,14 @@ class NativeSHTBackend:
         geometry_kinds=frozenset({"healpix", "car"}),
         spins=frozenset({0, 1, 2, 3}),
         devices=frozenset({"cpu", "cuda", "mps"}),
-        dtypes=frozenset({torch.float32, torch.float64, torch.complex64, torch.complex128}),
+        dtypes=frozenset(
+            {torch.float32, torch.float64, torch.complex64, torch.complex128}
+        ),
         batched=True,
         autograd=True,
-        analysis_kinds=frozenset({SHTAnalysisKind.QUADRATURE, SHTAnalysisKind.LEAST_SQUARES}),
+        analysis_kinds=frozenset(
+            {SHTAnalysisKind.QUADRATURE, SHTAnalysisKind.LEAST_SQUARES}
+        ),
     )
 
     def execute(
@@ -933,7 +1073,9 @@ class NativeSHTBackend:
             )
         geometry = request.geometry
         if not isinstance(geometry, HEALPixGeometry):
-            raise SHTCapabilityError(f"native backend does not recognize {type(geometry).__name__}")
+            raise SHTCapabilityError(
+                f"native backend does not recognize {type(geometry).__name__}"
+            )
         output = self._healpix(values, request, geometry, tolerance, max_iterations)
         kind = None
         if request.operation is SHTOperation.ANALYZE:
@@ -942,7 +1084,15 @@ class NativeSHTBackend:
             kind = SHTAnalysisKind.LEAST_SQUARES
         if isinstance(output, tuple):
             tensor, residual, iterations = output
-            return SHTResult(tensor, request, self.name, kind, residual <= tolerance, iterations, residual)
+            return SHTResult(
+                tensor,
+                request,
+                self.name,
+                kind,
+                residual <= tolerance,
+                iterations,
+                residual,
+            )
         return SHTResult(output, request, self.name, kind)
 
     def _healpix(
@@ -958,12 +1108,21 @@ class NativeSHTBackend:
         if request.operation is SHTOperation.SYNTHESIZE:
             if request.spin == 0:
                 flat = values.reshape(-1, values.shape[-1])
-                maps = _spectral.alm2map(flat, geometry.nside, lmax=ll, mmax=mm, nest=geometry.nest)
+                maps = _spectral.alm2map(
+                    flat, geometry.nside, lmax=ll, mmax=mm, nest=geometry.nest
+                )
                 return maps.reshape(*values.shape[:-1], geometry.shape[0])
             flat = values.reshape(-1, 2, values.shape[-1])
             maps = torch.stack(
                 [
-                    _spectral.alm2map_spin((row[0], row[1]), geometry.nside, 2, lmax=ll, mmax=mm, nest=geometry.nest)
+                    _spectral.alm2map_spin(
+                        (row[0], row[1]),
+                        geometry.nside,
+                        2,
+                        lmax=ll,
+                        mmax=mm,
+                        nest=geometry.nest,
+                    )
                     for row in flat
                 ],
                 dim=0,
@@ -972,10 +1131,16 @@ class NativeSHTBackend:
                 maps = torch.stack((maps[:, 0], -maps[:, 1]), dim=1)
             return maps.reshape(*values.shape[:-2], 2, geometry.shape[0])
         if request.operation in {SHTOperation.ADJOINT_SYNTHESIZE, SHTOperation.ANALYZE}:
-            scale = geometry.shape[0] / (4.0 * math.pi) if request.operation is SHTOperation.ADJOINT_SYNTHESIZE else 1.0
+            scale = (
+                geometry.shape[0] / (4.0 * math.pi)
+                if request.operation is SHTOperation.ADJOINT_SYNTHESIZE
+                else 1.0
+            )
             if request.spin == 0:
                 flat = values.reshape(-1, values.shape[-1])
-                alms = _spectral.map2alm(flat, nside=geometry.nside, lmax=ll, mmax=mm, nest=geometry.nest)
+                alms = _spectral.map2alm(
+                    flat, nside=geometry.nside, lmax=ll, mmax=mm, nest=geometry.nest
+                )
                 return (alms * scale).reshape(*values.shape[:-1], -1)
             maps = values
             if geometry.spin_convention is SpinConvention.COSMO:
@@ -984,7 +1149,16 @@ class NativeSHTBackend:
             flat = maps.reshape(-1, 2, maps.shape[-1])
             alms = torch.stack(
                 [
-                    torch.stack(_spectral.map2alm_spin(row, 2, nside=geometry.nside, lmax=ll, mmax=mm, nest=geometry.nest))
+                    torch.stack(
+                        _spectral.map2alm_spin(
+                            row,
+                            2,
+                            nside=geometry.nside,
+                            lmax=ll,
+                            mmax=mm,
+                            nest=geometry.nest,
+                        )
+                    )
                     for row in flat
                 ],
                 dim=0,
@@ -1008,7 +1182,9 @@ class NativeSHTBackend:
 
 
 def _rectangular_alm(alm: Tensor, lmax: int, mmax: int) -> Tensor:
-    out = torch.zeros((*alm.shape[:-1], lmax + 1, mmax + 1), dtype=alm.dtype, device=alm.device)
+    out = torch.zeros(
+        (*alm.shape[:-1], lmax + 1, mmax + 1), dtype=alm.dtype, device=alm.device
+    )
     for m in range(mmax + 1):
         start = _spectral.alm_index(m, m, lmax, mmax)
         out[..., m:, m] = alm[..., start : start + lmax - m + 1]
@@ -1022,6 +1198,7 @@ def _packed_alm(alm: Tensor, lmax: int, mmax: int) -> Tensor:
 
 class TorchHarmonicsBackend:
     """Spherical-harmonic backend using the optional torch-harmonics package."""
+
     name = "torch-harmonics"
     capabilities = SHTBackendCapabilities(
         backend=name,
@@ -1029,7 +1206,9 @@ class TorchHarmonicsBackend:
         geometry_kinds=frozenset({"car"}),
         spins=frozenset({0}),
         devices=frozenset({"cpu", "cuda"}),
-        dtypes=frozenset({torch.float32, torch.float64, torch.complex64, torch.complex128}),
+        dtypes=frozenset(
+            {torch.float32, torch.float64, torch.complex64, torch.complex128}
+        ),
         batched=True,
         autograd=True,
         analysis_kinds=frozenset({SHTAnalysisKind.QUADRATURE}),
@@ -1081,18 +1260,22 @@ class TorchHarmonicsBackend:
         if not isinstance(geometry, CARGeometry):
             raise SHTCapabilityError("torch-harmonics supports only CARGeometry")
         if geometry.sampling is not CARSampling.CLENSHAW_CURTIS:
-            raise SHTCapabilityError("torch-harmonics equiangular adapter requires Clenshaw-Curtis rings")
+            raise SHTCapabilityError(
+                "torch-harmonics equiangular adapter requires Clenshaw-Curtis rings"
+            )
         module = self._module()
         ll = int(request.lmax)
         mm = _resolved_mmax(request)
         real_dtype = _real_dtype(values.dtype)
         if request.operation is SHTOperation.SYNTHESIZE:
-            rectangular = _rectangular_alm(values.to(_complex_dtype(values.dtype)), ll, mm)
+            rectangular = _rectangular_alm(
+                values.to(_complex_dtype(values.dtype)), ll, mm
+            )
             phase = _phase(request, values.dtype, values.device)
             rectangular = rectangular * phase.view(*((1,) * (rectangular.ndim - 1)), -1)
-            transform = self._transform(
-                module, "InverseRealSHT", geometry, ll, mm
-            ).to(device=values.device, dtype=real_dtype)
+            transform = self._transform(module, "InverseRealSHT", geometry, ll, mm).to(
+                device=values.device, dtype=real_dtype
+            )
             output = transform(rectangular)
             return SHTResult(_storage_scalar_map(output, geometry), request, self.name)
         canonical = _canonical_scalar_map(values, geometry).to(real_dtype)
@@ -1101,7 +1284,9 @@ class TorchHarmonicsBackend:
         )
         rectangular = transform(canonical)
         packed = _packed_alm(rectangular, ll, mm)
-        packed = packed * torch.conj(_packed_phase(request, values.dtype, values.device))
+        packed = packed * torch.conj(
+            _packed_phase(request, values.dtype, values.device)
+        )
         return SHTResult(packed, request, self.name, SHTAnalysisKind.QUADRATURE)
 
 
@@ -1132,8 +1317,15 @@ def _request(
     if isinstance(geometry_or_request, SHTRequest):
         if geometry_or_request.operation is not operation:
             raise ValueError(f"request operation must be {operation.value}")
-        if lmax is not None or mmax is not None or spin != 0 or latitude_block_size != 64:
-            raise ValueError("request and transform keywords cannot be supplied together")
+        if (
+            lmax is not None
+            or mmax is not None
+            or spin != 0
+            or latitude_block_size != 64
+        ):
+            raise ValueError(
+                "request and transform keywords cannot be supplied together"
+            )
         return geometry_or_request
     if lmax is None:
         raise ValueError("lmax is required when passing a geometry")

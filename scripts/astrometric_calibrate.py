@@ -44,12 +44,31 @@ import torchfits
 def _pixi_exec_solve_field() -> list[str]:
     """Return the pixi exec prefix for running solve-field."""
     import platform
+
     machine = platform.machine()
     if machine == "arm64":
-        return ["pixi", "exec", "--platform", "osx-64",
-                "--channel", "conda-forge", "-s", "astrometry", "--", "solve-field"]
-    return ["pixi", "exec", "--channel", "conda-forge",
-            "-s", "astrometry", "--", "solve-field"]
+        return [
+            "pixi",
+            "exec",
+            "--platform",
+            "osx-64",
+            "--channel",
+            "conda-forge",
+            "-s",
+            "astrometry",
+            "--",
+            "solve-field",
+        ]
+    return [
+        "pixi",
+        "exec",
+        "--channel",
+        "conda-forge",
+        "-s",
+        "astrometry",
+        "--",
+        "solve-field",
+    ]
 
 
 def _find_tool(name: str) -> str:
@@ -71,7 +90,10 @@ def _extract_ccd(mef_path: str, hdu_index: int, out_path: str) -> bool:
     try:
         with torchfits.open(mef_path) as hdul:
             if hdu_index < 0 or hdu_index >= len(hdul):
-                print(f"  HDU {hdu_index} out of range (max {len(hdul) - 1})", file=sys.stderr)
+                print(
+                    f"  HDU {hdu_index} out of range (max {len(hdul) - 1})",
+                    file=sys.stderr,
+                )
                 return False
             hdu = hdul[hdu_index]
             if (
@@ -99,7 +121,10 @@ def cmd_solve(args: argparse.Namespace) -> int:
     check = subprocess.run(solve_prefix + ["--version"], capture_output=True, text=True)
     if check.returncode != 0:
         print("error: solve-field not accessible via pixi exec", file=sys.stderr)
-        print("Install astrometry index files: pixi exec --platform osx-64 --channel conda-forge -s astrometry -- solve-field --default-index", file=sys.stderr)
+        print(
+            "Install astrometry index files: pixi exec --platform osx-64 --channel conda-forge -s astrometry -- solve-field --default-index",
+            file=sys.stderr,
+        )
         return 1
 
     exposures = list(map(str, args.exposures))
@@ -127,17 +152,26 @@ def cmd_solve(args: argparse.Namespace) -> int:
             "--no-plots",
             "--no-remove-lines",
             "--crpix-center",
-            "--scale-units", "arcsecperpix",
-            "--scale-low", str(args.scale_low),
-            "--scale-high", str(args.scale_high),
-            "--tweak-order", str(args.tweak_order),
-            "--cpulimit", str(args.cpulimit),
+            "--scale-units",
+            "arcsecperpix",
+            "--scale-low",
+            str(args.scale_low),
+            "--scale-high",
+            str(args.scale_high),
+            "--tweak-order",
+            str(args.tweak_order),
+            "--cpulimit",
+            str(args.cpulimit),
             ref_ccd_path,
-            "-o", solve_out,
+            "-o",
+            solve_out,
         ]
         result = _run(solve_cmd)
         if result.returncode != 0:
-            print(f"  solve-field failed (exit {result.returncode}), skipping", file=sys.stderr)
+            print(
+                f"  solve-field failed (exit {result.returncode}), skipping",
+                file=sys.stderr,
+            )
             continue
 
         # Locate the .wcs file
@@ -152,7 +186,9 @@ def cmd_solve(args: argparse.Namespace) -> int:
                 wcs_candidates = [Path(wcs_path)]
         wcs_path = str(wcs_candidates[0]) if wcs_candidates else ""
         if not wcs_path or not Path(wcs_path).exists():
-            print("  WARNING: .wcs file not found, skipping propagation", file=sys.stderr)
+            print(
+                "  WARNING: .wcs file not found, skipping propagation", file=sys.stderr
+            )
             continue
 
         # Propagate
@@ -161,13 +197,18 @@ def cmd_solve(args: argparse.Namespace) -> int:
             sys.executable,
             str(Path(__file__).parent / "apply_wcs_to_mef.py"),
             "propagate",
-            "--mef", mef_path,
-            "--solved-wcs", wcs_path,
-            "--output", propagated_path,
+            "--mef",
+            mef_path,
+            "--solved-wcs",
+            wcs_path,
+            "--output",
+            propagated_path,
         ]
         result = _run(prop_cmd)
         if result.returncode != 0:
-            print(f"  WCS propagation failed (exit {result.returncode})", file=sys.stderr)
+            print(
+                f"  WCS propagation failed (exit {result.returncode})", file=sys.stderr
+            )
             continue
 
         # Clean up extracted CCD
@@ -231,10 +272,14 @@ def cmd_full(args: argparse.Namespace) -> int:
             for ext_idx in ext_indices:
                 ext_cat = str(scamp_dir / f"{base}_ext{ext_idx}.cat")
                 sex_cmd = [
-                    sex, f"{prop_path}[{ext_idx}]",
-                    "-c", args.sex_config,
-                    "-CATALOG_NAME", ext_cat,
-                    "-CATALOG_TYPE", "FITS_LDAC",
+                    sex,
+                    f"{prop_path}[{ext_idx}]",
+                    "-c",
+                    args.sex_config,
+                    "-CATALOG_NAME",
+                    ext_cat,
+                    "-CATALOG_TYPE",
+                    "FITS_LDAC",
                 ]
                 result = _run(sex_cmd)
                 if result.returncode != 0:
@@ -250,14 +295,22 @@ def cmd_full(args: argparse.Namespace) -> int:
         scamp_cmd = [
             scamp,
             *[str(c) for c in ldac_cats],
-            "-c", args.scamp_config,
-            "-ASTREF_CATALOG", "GAIA-DR3",
-            "-POSITION_MAXERR", str(args.scamp_maxerr),
-            "-POSITION_TOPOUT_MAXERR_ARCSEC", str(args.scamp_maxerr),
-            "-DISTORT_DEGREES", str(args.scamp_distort_degree),
-            "-CROSSID_RADIUS", str(args.scamp_crossid_radius),
-            "-SOLUTION_METHOD", "RELATIVE",
-            "-MOSAIC_TYPE", "FIX_FOCAL_PLANE",
+            "-c",
+            args.scamp_config,
+            "-ASTREF_CATALOG",
+            "GAIA-DR3",
+            "-POSITION_MAXERR",
+            str(args.scamp_maxerr),
+            "-POSITION_TOPOUT_MAXERR_ARCSEC",
+            str(args.scamp_maxerr),
+            "-DISTORT_DEGREES",
+            str(args.scamp_distort_degree),
+            "-CROSSID_RADIUS",
+            str(args.scamp_crossid_radius),
+            "-SOLUTION_METHOD",
+            "RELATIVE",
+            "-MOSAIC_TYPE",
+            "FIX_FOCAL_PLANE",
         ]
         result = _run(scamp_cmd)
         if result.returncode != 0:
@@ -274,9 +327,12 @@ def cmd_full(args: argparse.Namespace) -> int:
                 sys.executable,
                 str(Path(__file__).parent / "apply_wcs_to_mef.py"),
                 "merge-scamp",
-                "--mef", str(prop_path),
-                "--scamp-prefix", head_prefix,
-                "--output", str(solved_dir / f"{base}_calibrated.fits"),
+                "--mef",
+                str(prop_path),
+                "--scamp-prefix",
+                head_prefix,
+                "--output",
+                str(solved_dir / f"{base}_calibrated.fits"),
             ]
             _run(merge_cmd)
 
@@ -289,14 +345,18 @@ def cmd_full(args: argparse.Namespace) -> int:
     if args.output:
         print(f"\nCoadding {len(coadd_inputs)} exposures with torchsky ...")
         coadd_cmd = [
-            sys.executable, "-c",
+            sys.executable,
+            "-c",
             "from torchsky.cli import main; main()",
             "map",
             str(args.output),
             *[str(f) for f in coadd_inputs],
-            "--hdu", "0",
-            "--kernel", args.kernel,
-            "--stack", args.stack,
+            "--hdu",
+            "0",
+            "--kernel",
+            args.kernel,
+            "--stack",
+            args.stack,
         ]
         if args.background_mode:
             coadd_cmd.extend(["--background-mode", args.background_mode])
@@ -322,24 +382,60 @@ def main() -> None:
     # --- solve ---
     p_solve = sub.add_parser("solve", help="Solve-field + propagate for each exposure")
     p_solve.add_argument("exposures", nargs="+", help="Exposure MEF files")
-    p_solve.add_argument("--solved-dir", default="solved", help="Output directory for solved files")
-    p_solve.add_argument("--ref-hdu", type=int, default=19, help="Reference CCD HDU index")
-    p_solve.add_argument("--scale-low", type=float, default=0.184, help="solve-field scale low (arcsec/pix)")
-    p_solve.add_argument("--scale-high", type=float, default=0.190, help="solve-field scale high (arcsec/pix)")
-    p_solve.add_argument("--tweak-order", type=int, default=3, help="SIP distortion order")
-    p_solve.add_argument("--cpulimit", type=int, default=120, help="solve-field CPU time limit (seconds)")
+    p_solve.add_argument(
+        "--solved-dir", default="solved", help="Output directory for solved files"
+    )
+    p_solve.add_argument(
+        "--ref-hdu", type=int, default=19, help="Reference CCD HDU index"
+    )
+    p_solve.add_argument(
+        "--scale-low",
+        type=float,
+        default=0.184,
+        help="solve-field scale low (arcsec/pix)",
+    )
+    p_solve.add_argument(
+        "--scale-high",
+        type=float,
+        default=0.190,
+        help="solve-field scale high (arcsec/pix)",
+    )
+    p_solve.add_argument(
+        "--tweak-order", type=int, default=3, help="SIP distortion order"
+    )
+    p_solve.add_argument(
+        "--cpulimit", type=int, default=120, help="solve-field CPU time limit (seconds)"
+    )
     p_solve.set_defaults(func=cmd_solve)
 
     # --- full ---
     p_full = sub.add_parser("full", help="Solve + SCAMP + coadd")
     p_full.add_argument("exposures", nargs="+", help="Exposure MEF files")
     p_full.add_argument("--output", "-o", help="Output coadd FITS file")
-    p_full.add_argument("--solved-dir", default="solved", help="Working directory for solved files")
-    p_full.add_argument("--ref-hdu", type=int, default=19, help="Reference CCD HDU index")
-    p_full.add_argument("--scale-low", type=float, default=0.184, help="solve-field scale low (arcsec/pix)")
-    p_full.add_argument("--scale-high", type=float, default=0.190, help="solve-field scale high (arcsec/pix)")
-    p_full.add_argument("--tweak-order", type=int, default=3, help="SIP distortion order")
-    p_full.add_argument("--cpulimit", type=int, default=120, help="solve-field CPU time limit (seconds)")
+    p_full.add_argument(
+        "--solved-dir", default="solved", help="Working directory for solved files"
+    )
+    p_full.add_argument(
+        "--ref-hdu", type=int, default=19, help="Reference CCD HDU index"
+    )
+    p_full.add_argument(
+        "--scale-low",
+        type=float,
+        default=0.184,
+        help="solve-field scale low (arcsec/pix)",
+    )
+    p_full.add_argument(
+        "--scale-high",
+        type=float,
+        default=0.190,
+        help="solve-field scale high (arcsec/pix)",
+    )
+    p_full.add_argument(
+        "--tweak-order", type=int, default=3, help="SIP distortion order"
+    )
+    p_full.add_argument(
+        "--cpulimit", type=int, default=120, help="solve-field CPU time limit (seconds)"
+    )
 
     # Coadd options
     p_full.add_argument("--kernel", default="lanczos3", help="Resampling kernel")
@@ -352,12 +448,33 @@ def main() -> None:
     p_full.add_argument("--device", help="Torch device (cpu, cuda, mps)")
 
     # SCAMP options
-    p_full.add_argument("--scamp", action="store_true", help="Run SCAMP refinement after solving")
-    p_full.add_argument("--sex-config", default="default.sex", help="SExtractor config file")
-    p_full.add_argument("--scamp-config", default="default.scamp", help="SCAMP config file")
-    p_full.add_argument("--scamp-maxerr", type=float, default=1.0, help="SCAMP position max error (arcsec)")
-    p_full.add_argument("--scamp-distort-degree", type=int, default=5, help="SCAMP distortion polynomial degree")
-    p_full.add_argument("--scamp-crossid-radius", type=float, default=45, help="SCAMP cross-ID radius (arcsec)")
+    p_full.add_argument(
+        "--scamp", action="store_true", help="Run SCAMP refinement after solving"
+    )
+    p_full.add_argument(
+        "--sex-config", default="default.sex", help="SExtractor config file"
+    )
+    p_full.add_argument(
+        "--scamp-config", default="default.scamp", help="SCAMP config file"
+    )
+    p_full.add_argument(
+        "--scamp-maxerr",
+        type=float,
+        default=1.0,
+        help="SCAMP position max error (arcsec)",
+    )
+    p_full.add_argument(
+        "--scamp-distort-degree",
+        type=int,
+        default=5,
+        help="SCAMP distortion polynomial degree",
+    )
+    p_full.add_argument(
+        "--scamp-crossid-radius",
+        type=float,
+        default=45,
+        help="SCAMP cross-ID radius (arcsec)",
+    )
     p_full.set_defaults(func=cmd_full)
 
     args = parser.parse_args()

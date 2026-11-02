@@ -137,7 +137,7 @@ def _normalized_kernel2d(reference: Tensor, kernel2d: Tensor) -> Tensor:
     if not bool(torch.isfinite(kernel).all()):
         raise ValueError("kernel2d PSF must contain only finite values")
     kernel_sum = kernel.sum()
-    tolerance = torch.finfo(kernel.dtype).eps**0.5 * kernel.abs().sum().clamp_min(1.0)
+    tolerance = torch.finfo(kernel.dtype).eps ** 0.5 * kernel.abs().sum().clamp_min(1.0)
     if bool(kernel_sum.abs() <= tolerance):
         raise ValueError("kernel2d PSF sum must not be zero or near zero")
     return kernel / kernel_sum

@@ -199,8 +199,7 @@ class ConditionedBackgroundField(nn.Module):
 
     def __init__(
         self,
-        encoder: SpatioSpectralTemporalEncoder
-        | AdaptiveSpatioSpectralTemporalEncoder,
+        encoder: SpatioSpectralTemporalEncoder | AdaptiveSpatioSpectralTemporalEncoder,
         *,
         hidden_dim: int = 32,
         hidden_layers: int = 2,
@@ -469,12 +468,7 @@ def fit_background_plane(
         weight = weight.to(device=residual.device, dtype=torch.float32)
         if weight.shape != residual.shape:
             raise ValueError("background weight must match residual shape")
-    mask = (
-        mask
-        & torch.isfinite(residual)
-        & torch.isfinite(weight)
-        & (weight > 0)
-    )
+    mask = mask & torch.isfinite(residual) & torch.isfinite(weight) & (weight > 0)
     if not bool(mask.any()):
         zeros = torch.zeros_like(residual)
         return BackgroundFitSummary(
@@ -512,9 +506,7 @@ def fit_background_plane(
             break
         detrended = residual - model
         center = torch.median(detrended[support])
-        robust_sigma = 1.4826 * torch.median(
-            torch.abs(detrended[support] - center)
-        )
+        robust_sigma = 1.4826 * torch.median(torch.abs(detrended[support] - center))
         tolerance = max(
             float(sigma_clip * robust_sigma),
             32.0 * torch.finfo(residual.dtype).eps,

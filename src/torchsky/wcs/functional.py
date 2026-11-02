@@ -287,15 +287,13 @@ def _world_to_native(
         u = x * east_x + y * east_y
         n = x * north_x + y * north_y + z * north_z
         w = x * radial_x + y * radial_y + z * radial_z
-        return _wrap360(
-            torch.atan2(u, n) * _R2D + phi_p_rad * _R2D
-        ), torch.atan2(w, torch.hypot(u, n)) * _R2D
+        return _wrap360(torch.atan2(u, n) * _R2D + phi_p_rad * _R2D), torch.atan2(
+            w, torch.hypot(u, n)
+        ) * _R2D
     u = x * east_x + y * east_y
     v = -(x * radial_x + y * radial_y + z * radial_z)
     w = x * north_x + y * north_y + z * north_z
-    return _wrap180(torch.atan2(u, -v) * _R2D), torch.atan2(
-        w, torch.hypot(u, v)
-    ) * _R2D
+    return _wrap180(torch.atan2(u, -v) * _R2D), torch.atan2(w, torch.hypot(u, v)) * _R2D
 
 
 def _wcs_reference(direction: str, *args: Any) -> tuple[Tensor, Tensor]:

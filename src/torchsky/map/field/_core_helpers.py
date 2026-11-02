@@ -4,7 +4,6 @@ Extracted from ``map/field/core.py`` so the model zoo and the helper layer can
 grow independently; ``core`` re-exports every name here for compatibility.
 """
 
-
 from __future__ import annotations
 
 import copy
@@ -43,9 +42,8 @@ from .types import (
 )
 
 
-
-
 _STRAINER_TRUNK_FORMAT = "torchsky.strainer_trunk.v1"
+
 
 def _point_bandpass_features(lam: Tensor, num_frequencies: int) -> Tensor:
     zeros = torch.zeros_like(lam)
@@ -459,7 +457,9 @@ def save_strainer_trunk_checkpoint(
         raise TypeError(
             "model must implement trunk_state_dict() (e.g. StrainerSkyEncoderMLPField)"
         )
-    trunk_fn = cast(Callable[[], Mapping[str, Tensor]], trunk_fn)  # duck-typed trunk API
+    trunk_fn = cast(
+        Callable[[], Mapping[str, Tensor]], trunk_fn
+    )  # duck-typed trunk API
 
     payload: dict[str, object] = {
         "format": _STRAINER_TRUNK_FORMAT,
@@ -523,7 +523,6 @@ def pretrain_strainer_trunk_synthetic(
             )
     else:
         if noise_kind == "none":
-
             raise ValueError(
                 "noise_kind must not be 'none' for synthetic trunk pretraining"
             )

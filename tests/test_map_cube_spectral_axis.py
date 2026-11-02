@@ -44,10 +44,10 @@ LOG_AXIS = torch.tensor(
 def _ifu_wcs() -> IFUSliceWCS:
     rows = torch.arange(N_WAVE, dtype=torch.float64)
     columns = torch.arange(N_SLICE, dtype=torch.float64)
-    ra_map = (150.0 + (columns - (N_SLICE - 1) / 2.0) * TARGET_CDELT_ARCSEC / 3600.0)
+    ra_map = 150.0 + (columns - (N_SLICE - 1) / 2.0) * TARGET_CDELT_ARCSEC / 3600.0
     ra_map = ra_map.unsqueeze(0).expand(N_WAVE, N_SLICE).clone()
     dec_map = torch.full((N_WAVE, N_SLICE), 2.0, dtype=torch.float64)
-    wave_map = (WAVE_START + WAVE_STEP * rows)
+    wave_map = WAVE_START + WAVE_STEP * rows
     wave_map = wave_map.unsqueeze(1).expand(N_WAVE, N_SLICE).clone()
     slice_map = columns.to(torch.int64).unsqueeze(0).expand(N_WAVE, N_SLICE).clone()
     return IFUSliceWCS(
@@ -134,7 +134,9 @@ def test_irregular_axis_line_localization(spectral_kernel: str) -> None:
 
 
 @pytest.mark.parametrize("spectral_kernel", ["drizzle", "linear"])
-def test_irregular_axis_off_grid_sample_spans_one_interval(spectral_kernel: str) -> None:
+def test_irregular_axis_off_grid_sample_spans_one_interval(
+    spectral_kernel: str,
+) -> None:
     row = int(round((5105.0 - WAVE_START) / WAVE_STEP))
 
     def spectrum(wave_map: torch.Tensor, row: int = row) -> torch.Tensor:
@@ -189,9 +191,7 @@ def test_regular_axis_interpolates_a_smooth_spectrum() -> None:
             assert error <= 2.5e-3
 
 
-@pytest.mark.parametrize(
-    "axis,envelope", [(IRREGULAR_AXIS, 0.10), (LOG_AXIS, 0.15)]
-)
+@pytest.mark.parametrize("axis,envelope", [(IRREGULAR_AXIS, 0.10), (LOG_AXIS, 0.15)])
 def test_irregular_axis_error_envelope(axis: torch.Tensor, envelope: float) -> None:
     """Irregular axes use an index-space kernel: pin its current error envelope.
 
@@ -217,5 +217,7 @@ def test_non_increasing_axis_is_rejected() -> None:
 
 
 def test_spectral_axis_reports_regularity_for_irregular_axis() -> None:
-    assert not SpectralAxis(values=IRREGULAR_AXIS, unit="Angstrom", type="WAVE").is_regular()
+    assert not SpectralAxis(
+        values=IRREGULAR_AXIS, unit="Angstrom", type="WAVE"
+    ).is_regular()
     assert SpectralAxis(values=REGULAR_AXIS, unit="Angstrom", type="WAVE").is_regular()

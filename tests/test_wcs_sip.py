@@ -32,10 +32,6 @@ def _sip_header() -> dict:
     return header
 
 
-
-
-
-
 def _high_order_sip_header(order: int) -> dict:
     """Dense SIP forward terms so ``distort`` uses the vectorized ``index_select`` path."""
     header = {}

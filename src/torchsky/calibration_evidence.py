@@ -15,6 +15,7 @@ from torchfits import read
 
 _ROLES = {"psf", "background"}
 
+
 def load_operator_calibration_split(
     manifest: Path | str | dict[str, Any],
     *,

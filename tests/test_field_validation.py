@@ -19,9 +19,7 @@ def test_completeness_limits_interpolate_m80_and_m50_without_extrapolation() -> 
     assert completeness_limit_magnitude(
         magnitude, completeness, target=0.5
     ) == pytest.approx(29.5)
-    assert math.isnan(
-        completeness_limit_magnitude(magnitude, completeness, target=0.2)
-    )
+    assert math.isnan(completeness_limit_magnitude(magnitude, completeness, target=0.2))
 
 
 def test_paired_bootstrap_reports_directional_held_out_improvement() -> None:
@@ -53,9 +51,7 @@ def test_paired_bootstrap_chunked_matches_seeded_materialized_reference(
     indices = torch.randint(11, (samples, 11), generator=generator)
     draws = difference[indices]
     bootstrap = (
-        draws.mean(dim=-1)
-        if statistic == "mean"
-        else draws.median(dim=-1).values
+        draws.mean(dim=-1) if statistic == "mean" else draws.median(dim=-1).values
     )
     expected = torch.quantile(
         bootstrap,
@@ -89,7 +85,11 @@ def test_paired_bootstrap_seed_is_deterministic() -> None:
 @pytest.mark.parametrize(
     ("device", "dtype"),
     [("cpu", torch.float32), ("cpu", torch.float64)]
-    + ([("cuda", torch.float32), ("cuda", torch.float64)] if torch.cuda.is_available() else [])
+    + (
+        [("cuda", torch.float32), ("cuda", torch.float64)]
+        if torch.cuda.is_available()
+        else []
+    )
     + ([("mps", torch.float32)] if torch.backends.mps.is_available() else []),
 )
 def test_paired_bootstrap_accepts_supported_device_and_dtype(

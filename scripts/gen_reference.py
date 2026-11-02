@@ -63,7 +63,9 @@ TIER_TEXT = {
         "    on them in production."
     ),
 }
-RST_ROLE = re.compile(r":(?:class|func|meth|mod|attr|data|obj|exc|py:class|py:func):`~?([^`]+)`")
+RST_ROLE = re.compile(
+    r":(?:class|func|meth|mod|attr|data|obj|exc|py:class|py:func):`~?([^`]+)`"
+)
 DOUBLE_BACKTICKS = re.compile(r"``([^`]+)``")
 
 
@@ -138,7 +140,8 @@ def _page_head(
         lines.extend([intro, ""])
     if related:
         links = ", ".join(
-            f"[{Path(target).stem.replace('_', ' ')}](../{target})" for target in related
+            f"[{Path(target).stem.replace('_', ' ')}](../{target})"
+            for target in related
         )
         lines.extend([f"**Guides:** {links}", ""])
     lines.extend(["---", "", body_intro, ""])
@@ -163,7 +166,12 @@ def _canonical_path(obj: object) -> str:
     return f"{module}.{qualname}"
 
 
-def _render_members(namespace: str, members: list[str], objects: dict[str, object], griffe_module: object) -> list[str]:
+def _render_members(
+    namespace: str,
+    members: list[str],
+    objects: dict[str, object],
+    griffe_module: object,
+) -> list[str]:
     """Render one group's members without losing dynamically exported names.
 
     mkdocstrings follows static imports. Names exported through a module
@@ -176,7 +184,18 @@ def _render_members(namespace: str, members: list[str], objects: dict[str, objec
     for name in members:
         obj = objects[name]
         if _is_typing_alias(obj):
-            lines.extend([f'<a id="{namespace}.{name}"></a>', "", f"**`{name}`**", "", "```python", str(obj), "```", ""])
+            lines.extend(
+                [
+                    f'<a id="{namespace}.{name}"></a>',
+                    "",
+                    f"**`{name}`**",
+                    "",
+                    "```python",
+                    str(obj),
+                    "```",
+                    "",
+                ]
+            )
             continue
         static_member = griffe_module.members.get(name)
         unresolved_alias = (
@@ -193,10 +212,15 @@ def _render_members(namespace: str, members: list[str], objects: dict[str, objec
         canonical = _canonical_path(obj)
         canonical_member = griffe_module
         try:
-            canonical_member = griffe.load(canonical.rsplit(".", 1)[0], search_paths=[str(SRC)])
+            canonical_member = griffe.load(
+                canonical.rsplit(".", 1)[0], search_paths=[str(SRC)]
+            )
         except Exception:
             canonical_member = None
-        if canonical_member is not None and canonical.rsplit(".", 1)[-1] in canonical_member.members:
+        if (
+            canonical_member is not None
+            and canonical.rsplit(".", 1)[-1] in canonical_member.members
+        ):
             lines.extend(
                 [
                     f'<a id="{namespace}.{name}"></a>',
@@ -213,7 +237,9 @@ def _render_members(namespace: str, members: list[str], objects: dict[str, objec
         else:
             lines.extend([f'<a id="{namespace}.{name}"></a>', "", f"### `{name}`", ""])
             try:
-                lines.extend(["```python", f"{name}{inspect.signature(obj)}", "```", ""])
+                lines.extend(
+                    ["```python", f"{name}{inspect.signature(obj)}", "```", ""]
+                )
             except (TypeError, ValueError):
                 pass
             summary = _clean_docstring(inspect.getdoc(obj))
@@ -244,16 +270,27 @@ def _render_root(entry: dict, manifest: dict[str, list[str]], registry: dict) ->
         lines.extend(["## Top-level namespace", ""])
         lines.extend(_member_directive(entry["name"], classes))
     if modules:
-        lines.extend(["## Public namespaces", "", "| Namespace | Tier | Reference |", "|---|---|---|"])
+        lines.extend(
+            [
+                "## Public namespaces",
+                "",
+                "| Namespace | Tier | Reference |",
+                "|---|---|---|",
+            ]
+        )
         for name in modules:
             full = f"{entry['name']}.{name}"
             target = namespaces[full]
-            lines.append(f"| `{full}` | {target['tier']} | [reference]({target['slug']}.md) |")
+            lines.append(
+                f"| `{full}` | {target['tier']} | [reference]({target['slug']}.md) |"
+            )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_namespace(entry: dict, manifest: dict[str, list[str]], registry: dict) -> str:
+def _render_namespace(
+    entry: dict, manifest: dict[str, list[str]], registry: dict
+) -> str:
     namespace = entry["name"]
     module = importlib.import_module(namespace)
     resolved = _resolve(namespace, manifest[namespace])
@@ -275,17 +312,28 @@ def _render_namespace(entry: dict, manifest: dict[str, list[str]], registry: dic
         ),
     )
     module_entries = {item["name"]: item for item in registry.get("module", [])}
-    ordered = sorted(groups, key=lambda key: (key != "Namespace", key == "Submodules", key))
+    ordered = sorted(
+        groups, key=lambda key: (key != "Namespace", key == "Submodules", key)
+    )
     for key in ordered:
         members = groups[key]
         if key == "Submodules":
-            lines.extend(["## Submodules", "", "| Module | Stability | Reference |", "|---|---|---|"])
+            lines.extend(
+                [
+                    "## Submodules",
+                    "",
+                    "| Module | Stability | Reference |",
+                    "|---|---|---|",
+                ]
+            )
             for member in members:
                 full = f"{namespace}.{member}"
                 target = module_entries.get(full)
                 if target is None:
                     raise SystemExit(f"missing [[module]] registry entry for {full}")
-                lines.append(f"| `{full}` | {target['tier']} | [reference]({target['slug']}.md) |")
+                lines.append(
+                    f"| `{full}` | {target['tier']} | [reference]({target['slug']}.md) |"
+                )
             lines.append("")
             continue
         title = (
@@ -360,12 +408,16 @@ def _render_module(entry: dict, registry: dict) -> str:
         if key == "Namespace":
             continue
         members = groups[key]
-        lines.extend([f"## {registry.get('group_titles', {}).get(key, _humanize(key))}", ""])
+        lines.extend(
+            [f"## {registry.get('group_titles', {}).get(key, _humanize(key))}", ""]
+        )
         lines.extend(_render_members(namespace, members, objects, griffe_module))
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_index(registry: dict, manifest: dict[str, list[str]], entries: list[dict]) -> str:
+def _render_index(
+    registry: dict, manifest: dict[str, list[str]], entries: list[dict]
+) -> str:
     lines = [
         HEADER,
         "",
@@ -396,7 +448,9 @@ def _render_index(registry: dict, manifest: dict[str, list[str]], entries: list[
         ]
     )
     order = {"core": 0, "compatibility": 1, "experimental": 2}
-    for entry in sorted(entries, key=lambda item: (order.get(item["tier"], 3), item["name"])):
+    for entry in sorted(
+        entries, key=lambda item: (order.get(item["tier"], 3), item["name"])
+    ):
         lines.append(
             f"| `{entry['name']}` | {entry['tier']} | {len(manifest[entry['name']])} | "
             f"[reference]({entry['slug']}.md) |"
@@ -413,7 +467,9 @@ def _render_index(registry: dict, manifest: dict[str, list[str]], entries: list[
             ]
         )
         for item in modules:
-            lines.append(f"| `{item['name']}` | {item['tier']} | [reference]({item['slug']}.md) |")
+            lines.append(
+                f"| `{item['name']}` | {item['tier']} | [reference]({item['slug']}.md) |"
+            )
     lines.extend(
         [
             "",
@@ -437,7 +493,9 @@ def _render_exceptions(manifest: dict[str, list[str]], entries: list[dict]) -> s
             obj = getattr(module, name)
             if inspect.isclass(obj) and issubclass(obj, BaseException):
                 summary = _clean_docstring(inspect.getdoc(obj)) or "No description."
-                by_namespace.setdefault((namespace, entry["slug"]), []).append((name, summary))
+                by_namespace.setdefault((namespace, entry["slug"]), []).append(
+                    (name, summary)
+                )
     lines = [
         HEADER,
         "",
@@ -485,7 +543,9 @@ def generate() -> dict[Path, str]:
         missing = sorted(set(manifest) - set(namespaces))
         extra = sorted(set(namespaces) - set(manifest))
         raise SystemExit(f"registry/manifest mismatch; missing={missing} extra={extra}")
-    slugs = [entry["slug"] for entry in entries] + [item["slug"] for item in registry.get("module", [])]
+    slugs = [entry["slug"] for entry in entries] + [
+        item["slug"] for item in registry.get("module", [])
+    ]
     if len(set(slugs)) != len(slugs):
         raise SystemExit("duplicate reference slug in registry")
 
@@ -497,7 +557,9 @@ def generate() -> dict[Path, str]:
         else:
             outputs[output] = _render_namespace(entry, manifest, registry)
     for module_entry in registry.get("module", []):
-        outputs[REFERENCE / f"{module_entry['slug']}.md"] = _render_module(module_entry, registry)
+        outputs[REFERENCE / f"{module_entry['slug']}.md"] = _render_module(
+            module_entry, registry
+        )
     outputs[REFERENCE / "index.md"] = _render_index(registry, manifest, entries)
     outputs[REFERENCE / "exceptions.md"] = _render_exceptions(manifest, entries)
     return outputs

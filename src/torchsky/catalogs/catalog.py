@@ -150,7 +150,11 @@ class Catalog:
         def _move(value: Tensor | None) -> Tensor | None:
             return None if value is None else value.to(device=device_t)
 
-        epoch = self.epoch.to(device=device_t) if isinstance(self.epoch, Tensor) else self.epoch
+        epoch = (
+            self.epoch.to(device=device_t)
+            if isinstance(self.epoch, Tensor)
+            else self.epoch
+        )
         return Catalog(
             lon=self.lon.to(device=device_t),
             lat=self.lat.to(device=device_t),
@@ -161,7 +165,9 @@ class Catalog:
             parallax_mas=_move(self.parallax_mas),
             radial_velocity_km_s=_move(self.radial_velocity_km_s),
             valid=_move(self.valid),
-            columns={name: col.to(device=device_t) for name, col in self.columns.items()},
+            columns={
+                name: col.to(device=device_t) for name, col in self.columns.items()
+            },
         )
 
     @property
@@ -190,7 +196,9 @@ class Catalog:
     def from_state(
         cls, state: CatalogState, *, columns: dict[str, Tensor] | None = None
     ) -> Catalog:
-        assert isinstance(state.epoch, Tensor)  # normalised by CatalogState.__post_init__
+        assert isinstance(
+            state.epoch, Tensor
+        )  # normalised by CatalogState.__post_init__
         return cls(
             lon=state.lon,
             lat=state.lat,
@@ -207,9 +215,7 @@ class Catalog:
     def _with_state(self, state: CatalogState) -> Catalog:
         return self.from_state(state, columns=self.columns)
 
-    def to_frame(
-        self, name: str, *, tt_mjd: Tensor | float | None = None
-    ) -> Catalog:
+    def to_frame(self, name: str, *, tt_mjd: Tensor | float | None = None) -> Catalog:
         dest = _normalize_frame(name)
         if dest in _OBSERVED_FRAMES and tt_mjd is None:
             raise ValueError(

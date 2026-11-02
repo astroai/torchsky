@@ -95,7 +95,9 @@ def pixel_area_sr_at(wcs, x: Tensor, y: Tensor) -> Tensor:
     wcs = _float64_wcs(wcs)
     wcs_dev = getattr(wcs, "device", None)
     if not isinstance(x, Tensor) and not isinstance(y, Tensor):
-        target_dev = wcs_dev if isinstance(wcs_dev, torch.device) else torch.device("cpu")
+        target_dev = (
+            wcs_dev if isinstance(wcs_dev, torch.device) else torch.device("cpu")
+        )
         # Results stay on the caller's WCS device even when evaluated on the CPU.
         out_dev = (
             caller_wcs_dev if isinstance(caller_wcs_dev, torch.device) else target_dev

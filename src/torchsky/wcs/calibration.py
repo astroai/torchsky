@@ -346,7 +346,9 @@ class CoupledCalibrationGraph:
             raise ValueError("at least one photometric measurement block is required")
         dtype = astrometry_graph.observed_plane.dtype
         device = astrometry_graph.observed_plane.device
-        if any(block.flux.dtype != dtype or block.flux.device != device for block in blocks):
+        if any(
+            block.flux.dtype != dtype or block.flux.device != device for block in blocks
+        ):
             raise ValueError("astrometry and photometry must share dtype and device")
         exposure_lookup = {
             identifier: index
@@ -359,9 +361,10 @@ class CoupledCalibrationGraph:
         associations = set(
             zip(
                 astrometry_graph.row_exposure.detach().cpu().tolist(),
-                astrometry_graph.source_ids[
-                    astrometry_graph.row_source
-                ].detach().cpu().tolist(),
+                astrometry_graph.source_ids[astrometry_graph.row_source]
+                .detach()
+                .cpu()
+                .tolist(),
                 strict=True,
             )
         )
@@ -380,7 +383,9 @@ class CoupledCalibrationGraph:
             if block.detector_id not in detector_lookup:
                 raise ValueError("photometry cannot introduce a detector")
             exposure = exposure_lookup[block.exposure_id]
-            locations = torch.searchsorted(astrometry_graph.source_ids, block.source_ids)
+            locations = torch.searchsorted(
+                astrometry_graph.source_ids, block.source_ids
+            )
             safe = locations.clamp(max=max(astrometry_graph.source_ids.numel() - 1, 0))
             valid = (locations < astrometry_graph.source_ids.numel()) & (
                 astrometry_graph.source_ids[safe] == block.source_ids
@@ -393,9 +398,7 @@ class CoupledCalibrationGraph:
                         "photometry association must exist in the astrometric graph"
                     )
             row_exposure.append(
-                torch.full(
-                    (block.count,), exposure, dtype=torch.int64, device=device
-                )
+                torch.full((block.count,), exposure, dtype=torch.int64, device=device)
             )
             row_source.append(locations)
             row_band.append(
@@ -417,7 +420,9 @@ class CoupledCalibrationGraph:
             stop = start + block.count
             block_slices.append(slice(start, stop))
             start = stop
-            max_star_flat = max(max_star_flat, int(_normalized(block.star_flat_basis).shape[1]))
+            max_star_flat = max(
+                max_star_flat, int(_normalized(block.star_flat_basis).shape[1])
+            )
         if sed_basis is None:
             basis = torch.eye(len(bands), dtype=dtype, device=device)
         else:
@@ -449,19 +454,26 @@ class CoupledCalibrationGraph:
         self.flux = torch.cat([block.flux for block in blocks])
         self.log_flux = torch.log(self.flux)
         self.weights = torch.cat([_normalized(block.weights) for block in blocks])
-        self.base_fit_mask = torch.cat([_normalized(block.fit_mask) for block in blocks])
-        self.extinction_basis = torch.cat([_normalized(block.extinction_basis) for block in blocks])
-        self.cloud_basis = torch.cat([_normalized(block.cloud_basis) for block in blocks])
+        self.base_fit_mask = torch.cat(
+            [_normalized(block.fit_mask) for block in blocks]
+        )
+        self.extinction_basis = torch.cat(
+            [_normalized(block.extinction_basis) for block in blocks]
+        )
+        self.cloud_basis = torch.cat(
+            [_normalized(block.cloud_basis) for block in blocks]
+        )
         star_flat_rows = []
         for block in blocks:
             padding = max_star_flat - int(_normalized(block.star_flat_basis).shape[1])
             star_flat_rows.append(
-                torch.nn.functional.pad(_normalized(block.star_flat_basis), (0, padding))
+                torch.nn.functional.pad(
+                    _normalized(block.star_flat_basis), (0, padding)
+                )
             )
         self.star_flat_basis = torch.cat(star_flat_rows)
         self.log_covariance = tuple(
-            block.flux_covariance
-            / (block.flux[:, None] * block.flux[None, :])
+            block.flux_covariance / (block.flux[:, None] * block.flux[None, :])
             for block in blocks
         )
 
@@ -474,7 +486,9 @@ class CoupledCalibrationGraph:
 
 
 class _PhotometrySolver:
-    def __init__(self, graph: CoupledCalibrationGraph, config: CoupledCalibrationConfig):
+    def __init__(
+        self, graph: CoupledCalibrationGraph, config: CoupledCalibrationConfig
+    ):
         self.graph = graph
         self.config = config
         self.dtype = graph.log_flux.dtype
@@ -495,9 +509,7 @@ class _PhotometrySolver:
         self.variable_mask = (
             self._id_mask(config.variable_source_ids)
             if config.fit_variability
-            else torch.zeros(
-                self.n_source, dtype=torch.bool, device=self.device
-            )
+            else torch.zeros(self.n_source, dtype=torch.bool, device=self.device)
         )
         self.source_holdout_mask = self._id_mask(config.holdout_source_ids)
         exposure_holdout = torch.tensor(
@@ -529,7 +541,10 @@ class _PhotometrySolver:
     def _id_mask(self, identifiers: Sequence[int]) -> Tensor:
         selected = set(int(value) for value in identifiers)
         return torch.tensor(
-            [int(value) in selected for value in self.graph.astrometry_graph.source_ids.cpu()],
+            [
+                int(value) in selected
+                for value in self.graph.astrometry_graph.source_ids.cpu()
+            ],
             dtype=torch.bool,
             device=self.device,
         )
@@ -564,11 +579,16 @@ class _PhotometrySolver:
                     torch.tensor(source_id, dtype=torch.int64, device=self.device),
                 ).item()
             )
-            if location >= self.n_source or int(source_ids[location].item()) != source_id:
+            if (
+                location >= self.n_source
+                or int(source_ids[location].item()) != source_id
+            ):
                 continue
             if bool(self.source_holdout_mask[location]):
                 continue
-            for band, graph_band in zip(self.graph.bands, range(self.n_band), strict=True):
+            for band, graph_band in zip(
+                self.graph.bands, range(self.n_band), strict=True
+            ):
                 if band not in reference_band:
                     continue
                 column = reference_band[band]
@@ -611,9 +631,7 @@ class _PhotometrySolver:
                 int(exposure),
                 self.n_exposure + int(source) * self.n_band + int(band),
             )
-        roots = sorted(
-            {union.find(int(exposure)) for exposure in active_exposure}
-        )
+        roots = sorted({union.find(int(exposure)) for exposure in active_exposure})
         active_nodes = sorted(
             {int(exposure) for exposure in active_exposure}
             | {
@@ -641,9 +659,7 @@ class _PhotometrySolver:
             grouped = groups[root]
             exp = tuple(node for node in grouped if node < self.n_exposure)
             nodes = tuple(
-                node - self.n_exposure
-                for node in grouped
-                if node >= self.n_exposure
+                node - self.n_exposure for node in grouped if node >= self.n_exposure
             )
             is_anchored = any(node in reference_nodes for node in nodes)
             components.append(nodes)
@@ -656,9 +672,7 @@ class _PhotometrySolver:
     def _global_activity(
         self, exposure_holdout: Tensor
     ) -> tuple[Tensor, dict[str, tuple[Any, ...]]]:
-        active = torch.ones(
-            self.global_dimension, dtype=self.dtype, device=self.device
-        )
+        active = torch.ones(self.global_dimension, dtype=self.dtype, device=self.device)
         dropped_extinction = []
         dropped_cloud = []
         dropped_flat = []
@@ -671,14 +685,19 @@ class _PhotometrySolver:
                 dropped_extinction.append(self.graph.exposure_ids[exposure])
                 dropped_cloud.append(self.graph.exposure_ids[exposure])
                 continue
-            columns = [torch.ones(int(rows.sum()), dtype=self.dtype, device=self.device)]
+            columns = [
+                torch.ones(int(rows.sum()), dtype=self.dtype, device=self.device)
+            ]
             if not self.config.fit_extinction:
                 active[base + 1] = 0
                 dropped_extinction.append(self.graph.exposure_ids[exposure])
             else:
                 candidate = self.extinction_basis[rows]
                 matrix = torch.stack(columns + [candidate], dim=-1)
-                if int(torch.linalg.matrix_rank(matrix, rtol=self.config.rank_rtol)) < 2:
+                if (
+                    int(torch.linalg.matrix_rank(matrix, rtol=self.config.rank_rtol))
+                    < 2
+                ):
                     active[base + 1] = 0
                     dropped_extinction.append(self.graph.exposure_ids[exposure])
                 else:
@@ -690,7 +709,10 @@ class _PhotometrySolver:
                 candidate = self.cloud_basis[rows]
                 previous = len(columns)
                 matrix = torch.stack(columns + [candidate], dim=-1)
-                if int(torch.linalg.matrix_rank(matrix, rtol=self.config.rank_rtol)) < previous + 1:
+                if (
+                    int(torch.linalg.matrix_rank(matrix, rtol=self.config.rank_rtol))
+                    < previous + 1
+                ):
                     active[base + 2] = 0
                     dropped_cloud.append(self.graph.exposure_ids[exposure])
         for exposure in self.gauge_exposure_indices:
@@ -698,11 +720,15 @@ class _PhotometrySolver:
         for detector in range(self.n_detector):
             rows = self.global_fit_mask & (self.graph.row_detector == detector)
             for column in range(self.graph.max_star_flat):
-                index = self.star_flat_offset + detector * self.graph.max_star_flat + column
+                index = (
+                    self.star_flat_offset + detector * self.graph.max_star_flat + column
+                )
                 if (
                     not self.config.fit_star_flat
                     or not bool(rows.any())
-                    or float(torch.linalg.vector_norm(self.star_flat_basis[rows, column]))
+                    or float(
+                        torch.linalg.vector_norm(self.star_flat_basis[rows, column])
+                    )
                     <= self.config.rank_rtol
                 ):
                     active[index] = 0
@@ -716,9 +742,11 @@ class _PhotometrySolver:
             if standards.numel() >= 2:
                 values = reference_color[standards]
                 finite = torch.isfinite(values)
-                identifiable = bool(finite.sum() >= 2) and float(
-                    torch.std(values[finite], correction=0)
-                ) > self.config.rank_rtol
+                identifiable = (
+                    bool(finite.sum() >= 2)
+                    and float(torch.std(values[finite], correction=0))
+                    > self.config.rank_rtol
+                )
             if not self.config.fit_color_terms or not identifiable:
                 active[index] = 0
                 dropped_color.append(self.graph.bands[band])
@@ -823,7 +851,10 @@ class _PhotometrySolver:
         return result.reshape(-1)
 
     def _colors(self, source_parameters: Tensor) -> Tensor:
-        log_flux = source_parameters.reshape(self.n_source, self.source_width) @ self.graph.sed_basis.mT
+        log_flux = (
+            source_parameters.reshape(self.n_source, self.source_width)
+            @ self.graph.sed_basis.mT
+        )
         if self.config.color_bands is None:
             return torch.zeros(self.n_source, dtype=self.dtype, device=self.device)
         left, right = self.config.color_bands
@@ -840,8 +871,12 @@ class _PhotometrySolver:
         right_index = self.graph.bands.index(right)
         observed_left = torch.zeros(self.n_source, dtype=torch.bool, device=self.device)
         observed_right = torch.zeros_like(observed_left)
-        observed_left[self.graph.row_source[self.fit_mask & (self.graph.row_band == left_index)]] = True
-        observed_right[self.graph.row_source[self.fit_mask & (self.graph.row_band == right_index)]] = True
+        observed_left[
+            self.graph.row_source[self.fit_mask & (self.graph.row_band == left_index)]
+        ] = True
+        observed_right[
+            self.graph.row_source[self.fit_mask & (self.graph.row_band == right_index)]
+        ] = True
         ref_source, ref_band, _, _ = self.reference_rows
         observed_left[ref_source[ref_band == left_index]] = True
         observed_right[ref_source[ref_band == right_index]] = True
@@ -860,9 +895,9 @@ class _PhotometrySolver:
         values = values + exposure[self.graph.row_exposure, 1] * self.extinction_basis
         values = values + exposure[self.graph.row_exposure, 2] * self.cloud_basis
         if self.graph.max_star_flat:
-            flat = parameters[
-                self.star_flat_offset : self.color_term_offset
-            ].reshape(self.n_detector, self.graph.max_star_flat)
+            flat = parameters[self.star_flat_offset : self.color_term_offset].reshape(
+                self.n_detector, self.graph.max_star_flat
+            )
             values = values + torch.sum(
                 flat[self.graph.row_detector] * self.star_flat_basis, dim=-1
             )
@@ -881,13 +916,11 @@ class _PhotometrySolver:
         exposure[:, 1].index_add_(
             0, self.graph.row_exposure, rows * self.extinction_basis
         )
-        exposure[:, 2].index_add_(
-            0, self.graph.row_exposure, rows * self.cloud_basis
-        )
+        exposure[:, 2].index_add_(0, self.graph.row_exposure, rows * self.cloud_basis)
         if self.graph.max_star_flat:
-            flat = result[
-                self.star_flat_offset : self.color_term_offset
-            ].reshape(self.n_detector, self.graph.max_star_flat)
+            flat = result[self.star_flat_offset : self.color_term_offset].reshape(
+                self.n_detector, self.graph.max_star_flat
+            )
             flat.index_add_(
                 0, self.graph.row_detector, rows.unsqueeze(-1) * self.star_flat_basis
             )
@@ -899,9 +932,7 @@ class _PhotometrySolver:
         )
         return result
 
-    def _precision_apply(
-        self, rows: Tensor, mask: Tensor, robust: Tensor
-    ) -> Tensor:
+    def _precision_apply(self, rows: Tensor, mask: Tensor, robust: Tensor) -> Tensor:
         result = torch.zeros_like(rows)
         for block_slice, covariance in zip(
             self.graph.block_slices, self.graph.log_covariance, strict=True
@@ -960,7 +991,11 @@ class _PhotometrySolver:
         variability: Tensor,
         robust: Tensor,
     ) -> tuple[Tensor, int, Any]:
-        target = self.graph.log_flux - self._global_forward(global_parameters, colors) - variability
+        target = (
+            self.graph.log_flux
+            - self._global_forward(global_parameters, colors)
+            - variability
+        )
         weighted_target = self._precision_apply(target, self.fit_mask, robust)
         rhs = self._source_vjp(weighted_target)
         ref_source, ref_band, ref_value, ref_variance = self.reference_rows
@@ -978,13 +1013,9 @@ class _PhotometrySolver:
                 output = output + self._reference_vjp(
                     self._reference_forward(vector) / ref_variance
                 )
-            return (
-                output + self.config.damping * vector
-            ) * self.source_active
+            return (output + self.config.damping * vector) * self.source_active
 
-        solution, iterations = self._solve_cg(
-            action, rhs, self.source_active
-        )
+        solution, iterations = self._solve_cg(action, rhs, self.source_active)
         return solution, iterations, action
 
     def _solve_global(
@@ -1000,13 +1031,9 @@ class _PhotometrySolver:
             output = self._global_vjp(
                 self._precision_apply(rows, self.global_fit_mask, robust), colors
             )
-            return (
-                output + self.config.damping * vector
-            ) * self.global_active
+            return (output + self.config.damping * vector) * self.global_active
 
-        solution, iterations = self._solve_cg(
-            action, rhs, self.global_active
-        )
+        solution, iterations = self._solve_cg(action, rhs, self.global_active)
         return solution, iterations, action
 
     def _solve_joint(
@@ -1025,9 +1052,7 @@ class _PhotometrySolver:
         )
         _, _, ref_value, ref_variance = self.reference_rows
         if ref_value.numel():
-            rhs[:source_dimension] += self._reference_vjp(
-                ref_value / ref_variance
-            )
+            rhs[:source_dimension] += self._reference_vjp(ref_value / ref_variance)
 
         def action(vector: Tensor) -> Tensor:
             vector = vector * active
@@ -1036,17 +1061,13 @@ class _PhotometrySolver:
             rows = self._source_forward(source) + self._global_forward(
                 global_parameters, colors
             )
-            weighted = self._precision_apply(
-                rows, self.global_fit_mask, robust
-            )
+            weighted = self._precision_apply(rows, self.global_fit_mask, robust)
             source_output = self._source_vjp(weighted)
             if ref_value.numel():
                 source_output = source_output + self._reference_vjp(
                     self._reference_forward(source) / ref_variance
                 )
-            output = torch.cat(
-                (source_output, self._global_vjp(weighted, colors))
-            )
+            output = torch.cat((source_output, self._global_vjp(weighted, colors)))
             return (output + self.config.damping * vector) * active
 
         solution, iterations = self._solve_cg(action, rhs, active)
@@ -1099,7 +1120,13 @@ class _PhotometrySolver:
     ) -> tuple[Tensor | None, int | None, float | None]:
         indices = torch.nonzero(active > 0, as_tuple=False).flatten()
         if indices.numel() == 0:
-            return torch.zeros((dimension, dimension), dtype=self.dtype, device=self.device), 0, None
+            return (
+                torch.zeros(
+                    (dimension, dimension), dtype=self.dtype, device=self.device
+                ),
+                0,
+                None,
+            )
         if int(indices.numel()) > self.config.covariance_max_parameters:
             return None, None, None
         columns = []
@@ -1122,9 +1149,9 @@ class _PhotometrySolver:
                 .cpu()
                 .item()
             )
-        inverse = torch.linalg.pinv(
-            analysis, rtol=self.config.rank_rtol
-        ).to(self.device)
+        inverse = torch.linalg.pinv(analysis, rtol=self.config.rank_rtol).to(
+            self.device
+        )
         full = torch.full(
             (dimension, dimension), float("nan"), dtype=self.dtype, device=self.device
         )
@@ -1171,8 +1198,7 @@ class _PhotometrySolver:
                 + torch.sum((global_parameters - previous_global).square())
                 + torch.sum(
                     (
-                        torch.nan_to_num(colors)
-                        - torch.nan_to_num(previous_colors)
+                        torch.nan_to_num(colors) - torch.nan_to_num(previous_colors)
                     ).square()
                 )
             )
@@ -1194,7 +1220,9 @@ class _PhotometrySolver:
         )
         residual = self.graph.log_flux - prediction
         robust = self._robust(residual)
-        log_flux = source.reshape(self.n_source, self.source_width) @ self.graph.sed_basis.mT
+        log_flux = (
+            source.reshape(self.n_source, self.source_width) @ self.graph.sed_basis.mT
+        )
         log_flux = torch.where(
             self.source_holdout_mask.unsqueeze(-1),
             torch.full_like(log_flux, float("nan")),
@@ -1243,8 +1271,7 @@ class _PhotometrySolver:
                 for component in self.component_exposures
             ),
             gauge_exposures=tuple(
-                self.graph.exposure_ids[index]
-                for index in self.gauge_exposure_indices
+                self.graph.exposure_ids[index] for index in self.gauge_exposure_indices
             ),
             reference_anchored_components=self.component_anchored,
             dropped_extinction_exposures=self.dropped["extinction"],
@@ -1293,7 +1320,9 @@ class _PhotometrySolver:
 
 
 class _CoupledSolver:
-    def __init__(self, graph: CoupledCalibrationGraph, config: CoupledCalibrationConfig):
+    def __init__(
+        self, graph: CoupledCalibrationGraph, config: CoupledCalibrationConfig
+    ):
         self.graph = graph
         self.config = config
 
@@ -1352,7 +1381,9 @@ class _CoupledSolver:
             pose_step = float(
                 (
                     torch.linalg.vector_norm(astrometry.pose_parameters - previous_pose)
-                    / torch.linalg.vector_norm(astrometry.pose_parameters).clamp_min(1.0)
+                    / torch.linalg.vector_norm(astrometry.pose_parameters).clamp_min(
+                        1.0
+                    )
                 )
                 .detach()
                 .cpu()
@@ -1371,7 +1402,9 @@ class _CoupledSolver:
                 photometric_step = math.inf
                 color_step = math.inf
             else:
-                assert previous_colors is not None  # assigned together with previous_global
+                assert (
+                    previous_colors is not None
+                )  # assigned together with previous_global
                 photometric_step = float(
                     (
                         torch.linalg.vector_norm(current_global - previous_global)
@@ -1386,7 +1419,9 @@ class _CoupledSolver:
                         torch.linalg.vector_norm(
                             torch.nan_to_num(colors) - torch.nan_to_num(previous_colors)
                         )
-                        / torch.linalg.vector_norm(torch.nan_to_num(colors)).clamp_min(1.0)
+                        / torch.linalg.vector_norm(torch.nan_to_num(colors)).clamp_min(
+                            1.0
+                        )
                     )
                     .detach()
                     .cpu()

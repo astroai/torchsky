@@ -226,7 +226,8 @@ def available_device_memory_bytes(device: torch.device | str) -> int | None:
         try:
             free, _total = torch.cuda.mem_get_info(device)
             reusable = max(
-                torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device),
+                torch.cuda.memory_reserved(device)
+                - torch.cuda.memory_allocated(device),
                 0,
             )
             return int(free) + int(reusable)
@@ -388,14 +389,22 @@ class TileAccumulators:
         self.shape = (int(shape[0]), int(shape[1]))
         self.compute_device = torch.device(compute_device)
         self.storage_device = (
-            self.compute_device if storage_device is None else torch.device(storage_device)
+            self.compute_device
+            if storage_device is None
+            else torch.device(storage_device)
         )
         self.staged = (
-            self.storage_device != self.compute_device if staged is None else bool(staged)
+            self.storage_device != self.compute_device
+            if staged is None
+            else bool(staged)
         )
-        self.numer = torch.zeros(self.shape, dtype=torch.float32, device=self.storage_device)
+        self.numer = torch.zeros(
+            self.shape, dtype=torch.float32, device=self.storage_device
+        )
         self.denom = torch.zeros_like(self.numer)
-        self.overlap = torch.zeros(self.shape, dtype=torch.int32, device=self.storage_device)
+        self.overlap = torch.zeros(
+            self.shape, dtype=torch.int32, device=self.storage_device
+        )
         self.variance: Tensor | None = (
             torch.zeros_like(self.numer) if with_variance else None
         )
@@ -417,9 +426,7 @@ class TileAccumulators:
             )
             return
         views = [field[sl] for field in fields]
-        tiles = [
-            view.to(device=self.compute_device, copy=True) for view in views
-        ]
+        tiles = [view.to(device=self.compute_device, copy=True) for view in views]
         yield (
             tiles[0],
             tiles[1],
@@ -924,7 +931,9 @@ def spilled_overlap_background_stack(
             ) in contributions:
                 obs_idx = int(observation_index)
                 if not 0 <= obs_idx < n_obs:
-                    raise ValueError("overlap contribution observation index is invalid")
+                    raise ValueError(
+                        "overlap contribution observation index is invalid"
+                    )
                 if numer.requires_grad or weight.requires_grad:
                     raise ValueError(
                         "disk-backed overlap correction does not support gradient-tracked inputs"
@@ -1058,12 +1067,12 @@ def spilled_overlap_background_stack(
                 del compact_model
 
             free_laplacian = laplacian[1:, 1:]
-            data = torch.zeros((height, width), dtype=torch.float32, device=result_device)
+            data = torch.zeros(
+                (height, width), dtype=torch.float32, device=result_device
+            )
             output_weight = torch.zeros_like(data)
             normalization = torch.zeros_like(data)
-            variance_out = (
-                torch.zeros_like(data) if variance_available else None
-            )
+            variance_out = torch.zeros_like(data) if variance_available else None
             overlap_out = torch.zeros(
                 (height, width), dtype=torch.int32, device=result_device
             )
@@ -1124,9 +1133,7 @@ def spilled_overlap_background_stack(
                                 device=result_device
                             )
                         )
-                        encoded = support.to(dtype=torch.int64) * (
-                            1 << (obs_idx % 32)
-                        )
+                        encoded = support.to(dtype=torch.int64) * (1 << (obs_idx % 32))
                         context[obs_idx // 32, y0:y1, x0:x1].bitwise_or_(encoded)
                         if stacking_method == "median":
                             median_images.append(corrected)

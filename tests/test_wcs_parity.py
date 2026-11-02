@@ -81,10 +81,6 @@ def _ra_wrap_delta(ra_a: np.ndarray, ra_b: np.ndarray) -> np.ndarray:
     return ((ra_a - ra_b + 180.0) % 360.0) - 180.0  # type: ignore
 
 
-
-
-
-
 @pytest.mark.parametrize("projection", PROJECTIONS)
 @pytest.mark.parametrize("origin", [0, 1])
 def test_projection_forward_stack_matches_separate_args(
@@ -100,16 +96,6 @@ def test_projection_forward_stack_matches_separate_args(
     world = twcs.pixel_to_world(torch.stack([xt, yt], dim=-1), origin=origin)  # type: ignore
     torch.testing.assert_close(world[..., 0], ra_a, atol=1e-9, rtol=1e-12)  # type: ignore
     torch.testing.assert_close(world[..., 1], dec_a, atol=1e-9, rtol=1e-12)  # type: ignore
-
-
-
-
-
-
-
-
-
-
 
 
 def test_off_equator_cea_fused_matches_python_fallback() -> None:
@@ -137,8 +123,6 @@ def test_off_equator_cea_fused_matches_python_fallback() -> None:
     np.testing.assert_allclose(
         dec_default.cpu().numpy(), dec_python.cpu().numpy(), atol=5e-9
     )
-
-
 
 
 def test_float32_two_arg_matches_stacked() -> None:

@@ -106,9 +106,7 @@ def test_fft_affine_splits_even_length_nyquist(n: int) -> None:
     x = torch.cos(torch.pi * k)
     scale = -0.75
     shift = 0.125
-    out = resample_lastdim_periodic_affine_fft(
-        x, scale=scale, shift=shift, upsample=64
-    )
+    out = resample_lastdim_periodic_affine_fft(x, scale=scale, shift=shift, upsample=64)
     expected = torch.cos(torch.pi * (k * scale + shift))
     torch.testing.assert_close(out, expected, atol=2e-14, rtol=2e-14)
 
@@ -119,9 +117,7 @@ def test_fft_translation_splits_nyquist_on_each_axis() -> None:
     image = torch.cos(torch.pi * y[:, None]) * torch.cos(torch.pi * x[None, :])
     shift_y = 0.25
     shift_x = -0.375
-    out = resample_translation_fft2d(
-        image, shift_y_pix=shift_y, shift_x_pix=shift_x
-    )
+    out = resample_translation_fft2d(image, shift_y_pix=shift_y, shift_x_pix=shift_x)
     expected = image * math.cos(math.pi * shift_y) * math.cos(math.pi * shift_x)
     torch.testing.assert_close(out, expected, atol=2e-14, rtol=2e-14)
 
@@ -170,7 +166,9 @@ def test_fft_affine_applies_same_field_semantics_to_signal_and_weight() -> None:
     sampled_weight = resample_diagonal_affine_fft2d(weight, **kwargs)
     sampled_signal = resample_diagonal_affine_fft2d(weighted_signal, **kwargs)
     torch.testing.assert_close(sampled_weight, weight)
-    torch.testing.assert_close(sampled_signal / sampled_weight, torch.full_like(weight, 3.5))
+    torch.testing.assert_close(
+        sampled_signal / sampled_weight, torch.full_like(weight, 3.5)
+    )
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])

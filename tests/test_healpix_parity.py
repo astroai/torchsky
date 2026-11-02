@@ -9,33 +9,12 @@ from torchsky.sphere.healpix import (
     ud_grade,
 )
 
+
 def _random_lonlat(n: int, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
     ra = rng.uniform(0.0, 360.0, n)
     dec = np.degrees(np.arcsin(rng.uniform(-1.0, 1.0, n)))
     return ra, dec
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def test_ud_grade_custom_badval_is_respected() -> None:
@@ -61,34 +40,6 @@ def test_ud_grade_custom_badval_is_respected() -> None:
     )
     assert out[0] == custom_bad
     np.testing.assert_allclose(out[1:], 1.0, atol=0.0, rtol=0.0)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

@@ -236,8 +236,12 @@ def test_mapping_graph_json_tensor_serialization_roundtrip() -> None:
     json.dumps(metadata)
     restored = GeneralizedWCS.from_state(metadata, tensors)
     points = torch.tensor([[1.0, 2.0], [-4.0, 3.0]], dtype=torch.float64)
-    torch.testing.assert_close(restored.pixel_to_world(points), generalized.pixel_to_world(points))
-    torch.testing.assert_close(restored.world_to_pixel(restored.pixel_to_world(points)), points)
+    torch.testing.assert_close(
+        restored.pixel_to_world(points), generalized.pixel_to_world(points)
+    )
+    torch.testing.assert_close(
+        restored.world_to_pixel(restored.pixel_to_world(points)), points
+    )
     restored_epoch = restored.graph.frames["world"].obstime
     assert restored_epoch is not None
     assert restored_epoch.spec.scale == "tt"
@@ -287,7 +291,9 @@ def test_mapping_gradcheck_gradgradcheck_and_compile() -> None:
         axes,
     )
     mapping = first | nonlinear
-    values = torch.tensor([[0.2, -0.4], [0.7, 0.3]], dtype=torch.float64, requires_grad=True)
+    values = torch.tensor(
+        [[0.2, -0.4], [0.7, 0.3]], dtype=torch.float64, requires_grad=True
+    )
     assert torch.autograd.gradcheck(mapping, (values,))
     assert torch.autograd.gradgradcheck(mapping, (values,))
     compiled = torch.compile(mapping, backend="eager", fullgraph=True)
@@ -300,12 +306,15 @@ def test_mapping_gradcheck_gradgradcheck_and_compile() -> None:
         "cpu",
         pytest.param(
             "cuda",
-            marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable"),
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA unavailable"
+            ),
         ),
         pytest.param(
             "mps",
             marks=pytest.mark.skipif(
-                not hasattr(torch.backends, "mps") or not torch.backends.mps.is_available(),
+                not hasattr(torch.backends, "mps")
+                or not torch.backends.mps.is_available(),
                 reason="MPS unavailable",
             ),
         ),
@@ -367,7 +376,9 @@ def test_wcs_as_mapping_and_generalized_wcs_match_astropy() -> None:
         rtol=0.0,
     )
     ra, dec = generalized.pixel_to_world_values(pixels[:, 0], pixels[:, 1])
-    torch.testing.assert_close(torch.stack((ra, dec), dim=-1), generalized.pixel_to_world(pixels))
+    torch.testing.assert_close(
+        torch.stack((ra, dec), dim=-1), generalized.pixel_to_world(pixels)
+    )
     metadata, tensors = mapping.to_state()
     json.dumps(metadata)
     restored = TransformMapping.from_state(metadata, tensors)
@@ -417,5 +428,7 @@ def test_linear_pipeline_matches_gwcs_when_available() -> None:
         )
     )
     values = torch.tensor([[0.0, 1.0], [2.0, -3.0]], dtype=torch.float64)
-    expected = torch.from_numpy(np.stack(reference(values[:, 0], values[:, 1]), axis=-1))
+    expected = torch.from_numpy(
+        np.stack(reference(values[:, 0], values[:, 1]), axis=-1)
+    )
     torch.testing.assert_close(native(values), expected)

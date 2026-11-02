@@ -242,8 +242,7 @@ def test_component_materialization_matches_order_under_many_row_permutations() -
     baseline = _AstrometrySolver(make_graph(False), config)
     permuted = _AstrometrySolver(make_graph(True), config)
     expected_exposures = tuple(
-        (2 * component, 2 * component + 1)
-        for component in range(component_count)
+        (2 * component, 2 * component + 1) for component in range(component_count)
     )
     expected_components = tuple(
         exposures
@@ -253,7 +252,9 @@ def test_component_materialization_matches_order_under_many_row_permutations() -
         )
         for component, exposures in enumerate(expected_exposures)
     )
-    expected_anchored = tuple(component % 3 == 0 for component in range(component_count))
+    expected_anchored = tuple(
+        component % 3 == 0 for component in range(component_count)
+    )
 
     assert baseline.fit_components == expected_components
     assert baseline.fit_component_exposures == expected_exposures

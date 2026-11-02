@@ -8,4 +8,3 @@ endif()
 
 # Add the actual CMake project as a subdirectory
 add_subdirectory(src/torchsky/cpp_src)
-

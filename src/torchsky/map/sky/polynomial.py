@@ -144,7 +144,9 @@ class PolynomialSkyModel:
         statistic: str = "huber",
     ):
         if statistic not in ("huber", "tukey"):
-            raise ValueError(f"unknown statistic '{statistic}'; choose 'huber' or 'tukey'")
+            raise ValueError(
+                f"unknown statistic '{statistic}'; choose 'huber' or 'tukey'"
+            )
         if order < 0:
             raise ValueError(f"order must be >= 0, got {order}")
         self.order = order
@@ -308,9 +310,7 @@ class PolynomialSkyModel:
             dtype=scratch.dtype,
             device=scratch.device,
         )
-        for y0, y1, x0, x1, difference, support in checked_tiles(
-            record_layout=False
-        ):
+        for y0, y1, x0, x1, difference, support in checked_tiles(record_layout=False):
             valid = support.to(dtype=torch.bool).reshape(-1)
             values = difference.reshape(-1)[valid]
             basis = _chebyshev_basis_2d_window(

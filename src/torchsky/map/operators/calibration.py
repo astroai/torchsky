@@ -100,14 +100,8 @@ def registered_image_stamps(
     yy, xx = torch.meshgrid(offsets, offsets, indexing="ij")
     grids = torch.stack(
         (
-            (positions[:, None, None, 0] + xx)
-            / max(width - 1, 1)
-            * 2.0
-            - 1.0,
-            (positions[:, None, None, 1] + yy)
-            / max(height - 1, 1)
-            * 2.0
-            - 1.0,
+            (positions[:, None, None, 0] + xx) / max(width - 1, 1) * 2.0 - 1.0,
+            (positions[:, None, None, 1] + yy) / max(height - 1, 1) * 2.0 - 1.0,
         ),
         dim=-1,
     )
@@ -146,12 +140,8 @@ class PSFCalibrationTerm:
             raise TypeError("PSFCalibrationTerm requires a conditioned kernel PSF")
         count = int(torch.as_tensor(self.detector_x).numel())
         self.detector_x = _as_vector(self.detector_x, name="detector_x")
-        self.detector_y = _as_vector(
-            self.detector_y, name="detector_y", length=count
-        )
-        self.wavelength = _as_vector(
-            self.wavelength, name="wavelength", length=count
-        )
+        self.detector_y = _as_vector(self.detector_y, name="detector_y", length=count)
+        self.wavelength = _as_vector(self.wavelength, name="wavelength", length=count)
         self.time_mjd = _as_vector(self.time_mjd, name="time_mjd", length=count)
         kernels = torch.as_tensor(self.target_kernels).detach()
         expected = (count, self.model.kernel_size, self.model.kernel_size)
@@ -160,9 +150,7 @@ class PSFCalibrationTerm:
         if self.pixel_weight is None:
             pixel_weight = torch.ones_like(kernels, dtype=torch.float64)
         else:
-            pixel_weight = (
-                torch.as_tensor(self.pixel_weight).detach().to(torch.float64)
-            )
+            pixel_weight = torch.as_tensor(self.pixel_weight).detach().to(torch.float64)
             if (
                 tuple(pixel_weight.shape) != expected
                 or not bool(torch.isfinite(pixel_weight).all())
@@ -201,9 +189,7 @@ class PSFCalibrationTerm:
 
     def raw_loss(self) -> Tensor:
         predicted = self.predicted_kernels()
-        target = self.target_kernels.to(
-            device=predicted.device, dtype=predicted.dtype
-        )
+        target = self.target_kernels.to(device=predicted.device, dtype=predicted.dtype)
         assert self.pixel_weight is not None
         pixel_weight = self.pixel_weight.to(
             device=predicted.device, dtype=predicted.dtype
@@ -213,13 +199,11 @@ class PSFCalibrationTerm:
         predicted = predicted / predicted.sum(dim=(-2, -1), keepdim=True).clamp_min(
             torch.finfo(predicted.dtype).tiny
         )
-        per_sample = (
-            torch.square(predicted - target) * pixel_weight
-        ).sum(dim=(-2, -1)) / pixel_weight.sum(dim=(-2, -1))
+        per_sample = (torch.square(predicted - target) * pixel_weight).sum(
+            dim=(-2, -1)
+        ) / pixel_weight.sum(dim=(-2, -1))
         assert self.sample_weight is not None
-        weights = self.sample_weight.to(
-            device=predicted.device, dtype=predicted.dtype
-        )
+        weights = self.sample_weight.to(device=predicted.device, dtype=predicted.dtype)
         return (per_sample * weights).sum() / weights.sum()
 
     def penalty(self) -> Tensor:
@@ -233,9 +217,7 @@ class PSFCalibrationTerm:
 
     def diagnostics(self) -> dict[str, float | int | str]:
         predicted = self.predicted_kernels().detach()
-        target = self.target_kernels.to(
-            device=predicted.device, dtype=predicted.dtype
-        )
+        target = self.target_kernels.to(device=predicted.device, dtype=predicted.dtype)
         assert self.pixel_weight is not None
         valid = self.pixel_weight.to(device=predicted.device) > 0.0
         predicted = torch.where(valid, predicted, torch.zeros_like(predicted))
@@ -326,12 +308,8 @@ class BackgroundCalibrationTerm:
             )
         count = int(torch.as_tensor(self.detector_x).numel())
         self.detector_x = _as_vector(self.detector_x, name="detector_x")
-        self.detector_y = _as_vector(
-            self.detector_y, name="detector_y", length=count
-        )
-        self.wavelength = _as_vector(
-            self.wavelength, name="wavelength", length=count
-        )
+        self.detector_y = _as_vector(self.detector_y, name="detector_y", length=count)
+        self.wavelength = _as_vector(self.wavelength, name="wavelength", length=count)
         self.time_mjd = _as_vector(self.time_mjd, name="time_mjd", length=count)
         self.target_values = _as_vector(
             self.target_values, name="target_values", length=count
@@ -347,13 +325,9 @@ class BackgroundCalibrationTerm:
             self.wavelength.to(device=parameter.device),
             self.time_mjd.to(device=parameter.device),
         )
-        target = self.target_values.to(
-            device=predicted.device, dtype=predicted.dtype
-        )
+        target = self.target_values.to(device=predicted.device, dtype=predicted.dtype)
         assert self.sample_weight is not None
-        weights = self.sample_weight.to(
-            device=predicted.device, dtype=predicted.dtype
-        )
+        weights = self.sample_weight.to(device=predicted.device, dtype=predicted.dtype)
         return (torch.square(predicted - target) * weights).sum() / weights.sum()
 
     def penalty(self) -> Tensor:
@@ -371,9 +345,7 @@ class BackgroundCalibrationTerm:
             device=predicted.device, dtype=predicted.dtype
         )
         assert self.sample_weight is not None
-        weights = self.sample_weight.to(
-            device=predicted.device, dtype=predicted.dtype
-        )
+        weights = self.sample_weight.to(device=predicted.device, dtype=predicted.dtype)
         return {
             "name": self.name,
             "kind": "background_value_mse",
@@ -382,9 +354,7 @@ class BackgroundCalibrationTerm:
             "raw_loss": float(
                 ((residual.square() * weights).sum() / weights.sum()).cpu()
             ),
-            "weighted_bias": float(
-                ((residual * weights).sum() / weights.sum()).cpu()
-            ),
+            "weighted_bias": float(((residual * weights).sum() / weights.sum()).cpu()),
             "weighted_mae": float(
                 ((residual.abs() * weights).sum() / weights.sum()).cpu()
             ),
@@ -466,8 +436,7 @@ def operator_calibration_identifiability_report(
                         "axis": axis_name,
                         "center": center,
                         "centered_raw_loss": ablated,
-                        "loss_increase_fraction": (ablated - baseline)
-                        / denominator,
+                        "loss_increase_fraction": (ablated - baseline) / denominator,
                     }
                 )
             ablations: list[dict[str, float | int | str]] = []
@@ -486,9 +455,7 @@ def operator_calibration_identifiability_report(
                                     axis.length_scales[band].detach().cpu()
                                 ),
                                 "ablated_raw_loss": ablated,
-                                "loss_increase_fraction": (
-                                    ablated - baseline
-                                )
+                                "loss_increase_fraction": (ablated - baseline)
                                 / denominator,
                             }
                         )
@@ -505,9 +472,7 @@ def operator_calibration_identifiability_report(
             .requires_grad_(),
             # Preserve small offsets from large wavelength/MJD origins until
             # the encoders subtract their float64 physical-axis centres.
-            term.wavelength.to(device=parameter.device)
-            .detach()
-            .requires_grad_(),
+            term.wavelength.to(device=parameter.device).detach().requires_grad_(),
             term.time_mjd.to(device=parameter.device).detach().requires_grad_(),
         ]
         if isinstance(term, PSFCalibrationTerm):
@@ -543,17 +508,14 @@ def operator_calibration_identifiability_report(
             )
             squared_gradients = [
                 total + gradient.detach().square()
-                for total, gradient in zip(
-                    squared_gradients, gradients, strict=True
-                )
+                for total, gradient in zip(squared_gradients, gradients, strict=True)
             ]
         sensitivities = {}
         for (axis_name, axis), squared in zip(axes, squared_gradients, strict=True):
             rms = float(torch.sqrt(squared.mean() / effective_probes).cpu())
             sensitivities[axis_name] = {
                 "rms_output_jacobian_per_axis_unit": rms,
-                "rms_output_change_per_reference_scale": rms
-                * axis.reference_scale,
+                "rms_output_change_per_reference_scale": rms * axis.reference_scale,
                 "reference_scale": axis.reference_scale,
             }
     finally:
@@ -675,7 +637,10 @@ def apply_operator_calibration_pruning(
     report: Mapping[str, object],
 ) -> dict[str, object]:
     """Apply a validation-selected Fourier pruning report to a fitted model."""
-    if report.get("schema_version") != 1 or report.get("selection_split") != "validation":
+    if (
+        report.get("schema_version") != 1
+        or report.get("selection_split") != "validation"
+    ):
         raise ValueError("expected a schema-1 validation pruning report")
     raw_items = report.get("pruned_bands")
     if not isinstance(raw_items, list):
@@ -714,8 +679,7 @@ def apply_operator_calibration_pruning(
         "selection_split": "validation",
         "applied_band_count": len(selected),
         "applied_bands": [
-            {"axis": axis_name, "band": band}
-            for axis_name, _axis, band in selected
+            {"axis": axis_name, "band": band} for axis_name, _axis, band in selected
         ],
     }
 
@@ -745,7 +709,9 @@ def fit_operator_calibration_terms(
         or gate_weight < 0.0
         or scale_shift_weight < 0.0
     ):
-        raise ValueError("conditioning regularization weights must be finite and non-negative")
+        raise ValueError(
+            "conditioning regularization weights must be finite and non-negative"
+        )
 
     models: list[nn.Module] = []
     seen_models: set[int] = set()
@@ -797,7 +763,9 @@ def fit_operator_calibration_terms(
                 and not bool(torch.isfinite(parameter.grad).all())
                 for parameter in parameters
             ):
-                raise FloatingPointError("operator calibration gradient became non-finite")
+                raise FloatingPointError(
+                    "operator calibration gradient became non-finite"
+                )
             optimizer.step()
             history.append(float(loss.detach().cpu()))
     finally:
@@ -862,7 +830,9 @@ def set_field_training_stage(
                 identifier = id(parameter)
                 parameters[identifier] = parameter
                 owners.setdefault(identifier, set()).add(role)
-                requested[identifier] = requested.get(identifier, False) or selected[role]
+                requested[identifier] = (
+                    requested.get(identifier, False) or selected[role]
+                )
     for identifier, parameter in parameters.items():
         parameter.requires_grad_(requested[identifier])
     return {

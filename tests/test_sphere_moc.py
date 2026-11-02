@@ -378,10 +378,6 @@ def test_moc_from_json_empty_pixels():
     assert MOC.from_json(js).uniq.numel() == 0
 
 
-
-
-
-
 def test_moc_empty_full_and_dateline_wrap() -> None:
     empty = MOC(torch.tensor([], dtype=torch.int64))
     assert empty.area == 0.0
@@ -460,16 +456,12 @@ def test_moc_from_circle_matches_leaf_construction() -> None:
 def test_uniq2nest_high_order_is_exact(order: int) -> None:
     nside = 1 << order
     npix = 12 * nside * nside
-    pix = torch.tensor(
-        [0, 1, npix // 2, npix - 2, npix - 1], dtype=torch.int64
-    )
+    pix = torch.tensor([0, 1, npix // 2, npix - 2, npix - 1], dtype=torch.int64)
     uniq = nest2uniq(nside, pix)
 
     got_nside, got_pix = uniq2nest(uniq)
 
-    torch.testing.assert_close(
-        got_nside, torch.full_like(pix, nside), rtol=0, atol=0
-    )
+    torch.testing.assert_close(got_nside, torch.full_like(pix, nside), rtol=0, atol=0)
     torch.testing.assert_close(got_pix, pix, rtol=0, atol=0)
 
 

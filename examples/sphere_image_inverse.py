@@ -46,17 +46,32 @@ NOISE = 0.01
 
 
 def tan_header(crval1: float, crval2: float) -> dict:
-    return {"NAXIS": 2, "NAXIS1": 72, "NAXIS2": 72, "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-            "CRPIX1": 36.5, "CRPIX2": 36.5, "CRVAL1": crval1, "CRVAL2": crval2,
-            "CDELT1": -0.15, "CDELT2": 0.15}
+    return {
+        "NAXIS": 2,
+        "NAXIS1": 72,
+        "NAXIS2": 72,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 36.5,
+        "CRPIX2": 36.5,
+        "CRVAL1": crval1,
+        "CRVAL2": crval2,
+        "CDELT1": -0.15,
+        "CDELT2": 0.15,
+    }
 
 
 def solve(operator_set, data, truth, iterations: int):
     diag = operator_set.estimate_normal_operator_diagonal(
-        data, initial_probe=torch.zeros_like(truth), damping=1e-4)
+        data, initial_probe=torch.zeros_like(truth), damping=1e-4
+    )
     return operator_set.solve_normal_equation_cg(
-        data, initial_solution=torch.zeros_like(truth), iterations=iterations, damping=1e-4,
-        preconditioner=make_diagonal_preconditioner(diag))
+        data,
+        initial_solution=torch.zeros_like(truth),
+        iterations=iterations,
+        damping=1e-4,
+        preconditioner=make_diagonal_preconditioner(diag),
+    )
 
 
 def main() -> None:
@@ -74,8 +89,10 @@ def main() -> None:
     truth[4] = complex(0.03, -0.01)
     truth[7] = complex(-0.02, 0.01)
 
-    targets = tuple(TargetRenderSpec.from_header(tan_header(*c), band_label="bg")
-                    for c in [(210.0, 54.0), (214.0, 52.5), (205.5, 55.5)])
+    targets = tuple(
+        TargetRenderSpec.from_header(tan_header(*c), band_label="bg")
+        for c in [(210.0, 54.0), (214.0, 52.5), (205.5, 55.5)]
+    )
     image_block = build_spherical_harmonic_solver_hooks(lmax=LMAX).bind_targets(targets)
     clean = image_block.apply(truth)
     observed = tuple(c + NOISE * torch.randn_like(c) for c in clean)
@@ -89,9 +106,13 @@ def main() -> None:
     def report(name, fit, op_set):
         rec = image_block.apply(fit.solution)
         rmse = [math.sqrt(float(((r - o) ** 2).mean())) for r, o in zip(rec, observed)]
-        hold = math.sqrt(float(((held_op.apply(fit.solution) - held_truth) ** 2).mean()))
-        print(f"{name:34s} fit RMSE {[round(v, 4) for v in rmse]}  held-out RMSE {hold:.4f}  "
-              f"CG residual {fit.residual_norm_history[0]:.3g} -> {fit.residual_norm_history[-1]:.3g}")
+        hold = math.sqrt(
+            float(((held_op.apply(fit.solution) - held_truth) ** 2).mean())
+        )
+        print(
+            f"{name:34s} fit RMSE {[round(v, 4) for v in rmse]}  held-out RMSE {hold:.4f}  "
+            f"CG residual {fit.residual_norm_history[0]:.3g} -> {fit.residual_norm_history[-1]:.3g}"
+        )
         return rec, hold
 
     # 1. Data only.
@@ -100,8 +121,12 @@ def main() -> None:
 
     # 2. Data + C_ell prior (beam-transferred).
     cl_block = build_harmonic_cl_prior_operator(
-        truth, lmax=LMAX, cls=torch.tensor([10.0, 1.5, 0.4, 0.15], dtype=torch.float64),
-        beam_transfer=gaussian_beam(math.radians(1.0), LMAX), apply_noise=lambda t: t * 0.1)
+        truth,
+        lmax=LMAX,
+        cls=torch.tensor([10.0, 1.5, 0.4, 0.15], dtype=torch.float64),
+        beam_transfer=gaussian_beam(math.radians(1.0), LMAX),
+        apply_noise=lambda t: t * 0.1,
+    )
     set2 = compose_bound_operators(image_block, cl_block)
     fit2 = solve(set2, (*observed, zero), truth, 10)
     _, d2 = report("data + C_ell prior", fit2, set2)
@@ -111,22 +136,46 @@ def main() -> None:
     anchor[2] += complex(0.02, -0.01)
     anchor_block = build_state_identity_operator(truth, apply_noise=lambda t: t * 0.2)
     smooth_block = build_harmonic_degree_prior_operator(
-        truth, lmax=LMAX, power=2.0, include_monopole=False, apply_noise=lambda t: t * 0.05)
+        truth,
+        lmax=LMAX,
+        power=2.0,
+        include_monopole=False,
+        apply_noise=lambda t: t * 0.05,
+    )
     dense_block = build_harmonic_dense_prior_operator(
-        truth, harmonic_dense_covariance(lmax=LMAX, ell_correlation_length=1.2, diagonal_jitter=1e-3,
-                                         amplitude=1.0, dtype=torch.complex128),
-        apply_noise=lambda t: t * 0.05)
-    set3 = compose_bound_operators(image_block, cl_block, anchor_block, smooth_block, dense_block)
+        truth,
+        harmonic_dense_covariance(
+            lmax=LMAX,
+            ell_correlation_length=1.2,
+            diagonal_jitter=1e-3,
+            amplitude=1.0,
+            dtype=torch.complex128,
+        ),
+        apply_noise=lambda t: t * 0.05,
+    )
+    set3 = compose_bound_operators(
+        image_block, cl_block, anchor_block, smooth_block, dense_block
+    )
     fit3 = solve(set3, (*observed, zero, anchor, zero, zero), truth, 12)
     rec3, d3 = report("mixed (C_ell+anchor+degree+dense)", fit3, set3)
-    print(f"lmax={LMAX} nalm={NALM} cutouts={len(targets)}; the cutouts fix the rendered image, "
-          f"not every alm, so extrapolation depends on the prior")
+    print(
+        f"lmax={LMAX} nalm={NALM} cutouts={len(targets)}; the cutouts fix the rendered image, "
+        f"not every alm, so extrapolation depends on the prior"
+    )
     assert max(d1, d2, d3) < 5.0
 
     fig, axes = plt.subplots(1, 3, figsize=(9, 3.1), constrained_layout=True)
-    for ax, (title, im) in zip(axes, [("observed", observed[0]), ("mixed-constraint fit", rec3[0]),
-                                      ("residual", observed[0] - rec3[0])]):
-        h = ax.imshow(im, origin="lower", cmap="viridis" if title != "residual" else "RdBu")
+    for ax, (title, im) in zip(
+        axes,
+        [
+            ("observed", observed[0]),
+            ("mixed-constraint fit", rec3[0]),
+            ("residual", observed[0] - rec3[0]),
+        ],
+    ):
+        h = ax.imshow(
+            im, origin="lower", cmap="viridis" if title != "residual" else "RdBu"
+        )
         ax.set_title(title, fontsize=9)
         ax.axis("off")
         fig.colorbar(h, ax=ax, shrink=0.8)

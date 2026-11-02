@@ -214,7 +214,9 @@ class UnitConversionMapping(Mapping):
         source = tuple(input_axes)
         destination = tuple(output_axes)
         if len(source) != len(destination):
-            raise ValueError("unit conversion requires equal input and output dimensions")
+            raise ValueError(
+                "unit conversion requires equal input and output dimensions"
+            )
         factors = []
         for input_axis, output_axis in zip(source, destination, strict=True):
             if not input_axis.compatible_with(output_axis, require_unit=False):
@@ -222,7 +224,9 @@ class UnitConversionMapping(Mapping):
                     f"incompatible unit-conversion axes {input_axis.name!r} and "
                     f"{output_axis.name!r}"
                 )
-            factors.append(input_axis.unit_spec.conversion_factor_to(output_axis.unit_spec))
+            factors.append(
+                input_axis.unit_spec.conversion_factor_to(output_axis.unit_spec)
+            )
         super().__init__(source, destination, domain=axes_domain(source))
         self.register_buffer("factors", torch.tensor(factors, dtype=torch.float64))
 
@@ -325,8 +329,18 @@ class ParallelMapping(Mapping):
         domain = None
         if all(item is not None for item in domains):
             domain = DomainSpec(
-                tuple(bound for item in domains if item is not None for bound in item.bounds),
-                tuple(flags for item in domains if item is not None for flags in item.closed),
+                tuple(
+                    bound
+                    for item in domains
+                    if item is not None
+                    for bound in item.bounds
+                ),
+                tuple(
+                    flags
+                    for item in domains
+                    if item is not None
+                    for flags in item.closed
+                ),
             )
         super().__init__(input_axes, output_axes, domain=domain)
         self.mappings = _mapping_list(mappings_tuple)
@@ -335,7 +349,10 @@ class ParallelMapping(Mapping):
     def _evaluate(self, inputs: Tensor) -> Tensor:
         chunks = torch.split(inputs, list(self._input_sizes), dim=-1)
         return torch.cat(
-            [mapping(chunk) for mapping, chunk in zip(self.mappings, chunks, strict=True)],
+            [
+                mapping(chunk)
+                for mapping, chunk in zip(self.mappings, chunks, strict=True)
+            ],
             dim=-1,
         )
 
@@ -383,16 +400,26 @@ class PortRoutingMapping(Mapping):
                 raise ValueError("route input ports must match mapping inputs")
             if len(route.outputs) != route.mapping.n_outputs:
                 raise ValueError("route output ports must match mapping outputs")
-            if any(index < 0 or index >= len(input_axes_tuple) for index in route.inputs):
+            if any(
+                index < 0 or index >= len(input_axes_tuple) for index in route.inputs
+            ):
                 raise ValueError("route input port is out of range")
-            if any(index < 0 or index >= len(output_axes_tuple) for index in route.outputs):
+            if any(
+                index < 0 or index >= len(output_axes_tuple) for index in route.outputs
+            ):
                 raise ValueError("route output port is out of range")
             for port, axis in zip(route.inputs, route.mapping.input_axes, strict=True):
                 if not input_axes_tuple[port].compatible_with(axis):
-                    raise ValueError("route input axis is incompatible with mapping input")
-            for port, axis in zip(route.outputs, route.mapping.output_axes, strict=True):
+                    raise ValueError(
+                        "route input axis is incompatible with mapping input"
+                    )
+            for port, axis in zip(
+                route.outputs, route.mapping.output_axes, strict=True
+            ):
                 if not axis.compatible_with(output_axes_tuple[port]):
-                    raise ValueError("route output axis is incompatible with mapping output")
+                    raise ValueError(
+                        "route output axis is incompatible with mapping output"
+                    )
             output_ports.extend(route.outputs)
         if sorted(output_ports) != list(range(len(output_axes_tuple))):
             raise ValueError("every route output port must be assigned exactly once")
@@ -447,12 +474,12 @@ class NumericalInverseMapping(Mapping):
         damping: float = 1.0e-8,
     ) -> None:
         if mapping.n_inputs != mapping.n_outputs:
-            raise UnsupportedInverseError(
-                "numerical inverse requires a square mapping"
-            )
+            raise UnsupportedInverseError("numerical inverse requires a square mapping")
         initial_tensor = torch.as_tensor(initial)
         if initial_tensor.shape != (mapping.n_inputs,):
-            raise ValueError("numerical inverse initial guess must have shape (n_inputs,)")
+            raise ValueError(
+                "numerical inverse initial guess must have shape (n_inputs,)"
+            )
         if not initial_tensor.is_floating_point():
             initial_tensor = initial_tensor.to(dtype=torch.float64)
         if bounds.n_dim != mapping.n_inputs:
@@ -521,7 +548,9 @@ class NumericalInverseMapping(Mapping):
 class WCSMapping(Mapping):
     def __init__(self, wcs: Any, *, direction: str = "pixel_to_world") -> None:
         if direction not in {"pixel_to_world", "world_to_pixel"}:
-            raise ValueError("WCS mapping direction must be pixel_to_world or world_to_pixel")
+            raise ValueError(
+                "WCS mapping direction must be pixel_to_world or world_to_pixel"
+            )
         pixel_axes = tuple(
             AxisSpec(f"pixel{axis + 1}", UnitSpec("pix"), "pixel")
             for axis in range(wcs.pixel_n_dim)
@@ -620,9 +649,7 @@ def _serialize_mapping(
                 {
                     "inputs": list(route.inputs),
                     "outputs": list(route.outputs),
-                    "mapping": _serialize_mapping(
-                        child, tensors, f"{prefix}.{index}"
-                    ),
+                    "mapping": _serialize_mapping(child, tensors, f"{prefix}.{index}"),
                 }
                 for index, (route, child) in enumerate(
                     zip(mapping.routes, mapping.route_mappings, strict=True)
@@ -653,7 +680,9 @@ def _serialize_mapping(
             or wcs.det2im1 is not None
             or wcs.det2im2 is not None
         ):
-            raise TypeError("WCS mappings with tabular or lookup state are not serializable")
+            raise TypeError(
+                "WCS mappings with tabular or lookup state are not serializable"
+            )
         return {
             "type": "wcs",
             **base,
@@ -701,9 +730,7 @@ def _deserialize_mapping(
             )
             for route in data["routes"]
         ]
-        return PortRoutingMapping(
-            input_axes, output_axes, routes, domain=domain
-        )
+        return PortRoutingMapping(input_axes, output_axes, routes, domain=domain)
     if mapping_type == "numerical_inverse":
         return NumericalInverseMapping(
             _deserialize_mapping(data["mapping"], tensors),

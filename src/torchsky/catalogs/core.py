@@ -970,9 +970,7 @@ def _crossmatch_sky_strips(
     if find == "best" and result.left_index.numel() > 1:
         # A left row's segments may fall in different candidate batches.
         result = CrossmatchResult(
-            *_best_hits(
-                result.left_index, result.right_index, result.separation_arcsec
-            )
+            *_best_hits(result.left_index, result.right_index, result.separation_arcsec)
         )
         stats.matched_rows = int(result.left_index.numel())
     if return_stats:
@@ -1027,9 +1025,7 @@ def crossmatch_sky(
         [0]
     """
     raw_left_ra = torch.as_tensor(left_ra_deg).reshape(-1)
-    work_device = (
-        torch.device(device) if device is not None else raw_left_ra.device
-    )
+    work_device = torch.device(device) if device is not None else raw_left_ra.device
     work_dtype = _work_dtype(work_device)
     left_ra = raw_left_ra.to(device=work_device, dtype=work_dtype)
     left_dec = torch.as_tensor(
@@ -1116,9 +1112,9 @@ def crossmatch_sky_streamed(
     device = raw_right_ra.device
     work_dtype = _work_dtype(device)
     right_ra = raw_right_ra.to(dtype=work_dtype)
-    right_dec = torch.as_tensor(
-        right_dec_deg, dtype=work_dtype, device=device
-    ).reshape(-1)
+    right_dec = torch.as_tensor(right_dec_deg, dtype=work_dtype, device=device).reshape(
+        -1
+    )
 
     if radius_arcsec <= 0.0:
         raise ValueError("radius_arcsec must be positive")
@@ -1143,12 +1139,10 @@ def crossmatch_sky_streamed(
     candidate_cache: dict[int, Tensor] = {}
 
     for left_ra, left_dec in left_batches:
-        left_ra = torch.as_tensor(left_ra, dtype=work_dtype, device=device).reshape(
+        left_ra = torch.as_tensor(left_ra, dtype=work_dtype, device=device).reshape(-1)
+        left_dec = torch.as_tensor(left_dec, dtype=work_dtype, device=device).reshape(
             -1
         )
-        left_dec = torch.as_tensor(
-            left_dec, dtype=work_dtype, device=device
-        ).reshape(-1)
         chunk_len = int(left_ra.numel())
         if chunk_len == 0:
             continue
@@ -1218,9 +1212,7 @@ def crossmatch_sky_streamed(
             if candidate_right_idx.numel() == 0:
                 continue
 
-            best_sep = torch.full(
-                (count,), torch.inf, dtype=work_dtype, device=device
-            )
+            best_sep = torch.full((count,), torch.inf, dtype=work_dtype, device=device)
             best_idx = torch.full((count,), -1, dtype=torch.int64, device=device)
             group_ra_col = group_ra.unsqueeze(1)
             group_dec_col = group_dec.unsqueeze(1)
@@ -1313,9 +1305,7 @@ def _tile_catalog_to_parquet(
             dec_np = batch.column(dec_col).to_numpy().astype("f8", copy=False)
             ra_t = torch.from_numpy(ra_np.copy())
             dec_t = torch.from_numpy(dec_np.copy())
-            pixels = _healpix.ang2pix(
-                coarse_nside, ra_t, dec_t, nest=True, lonlat=True
-            )
+            pixels = _healpix.ang2pix(coarse_nside, ra_t, dec_t, nest=True, lonlat=True)
             pixels_np = pixels.numpy().astype(np.int64)
 
             order = np.argsort(pixels_np, kind="stable")

@@ -37,7 +37,9 @@ def target_to_field_observation(
         spectral_max=target.spectral_max,
         transmission_center=target.transmission_center,
         transmission_sigma=target.transmission_sigma,
-        psf_spec=cast("PSFSpec | None", target.psf_spec),  # field targets carry a PSFSpec
+        psf_spec=cast(
+            "PSFSpec | None", target.psf_spec
+        ),  # field targets carry a PSFSpec
         band_name=target.band_label,
         passband=target.passband,
         value_semantics=target.value_semantics,

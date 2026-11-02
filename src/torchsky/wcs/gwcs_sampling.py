@@ -290,7 +290,9 @@ class IFUSliceWCS:
 
     def __post_init__(self) -> None:
         if self.ra_map.ndim != 2:
-            raise ValueError("ra_map, dec_map, wavelength_map, and slice_id_map must be 2D (H, W)")
+            raise ValueError(
+                "ra_map, dec_map, wavelength_map, and slice_id_map must be 2D (H, W)"
+            )
         shape = self.ra_map.shape
         if (
             self.dec_map.shape != shape
@@ -334,7 +336,9 @@ class IFUSliceWCS:
         if slices is None:
             slice_list = list(detector_shape_or_slices)
             if not slice_list:
-                raise ValueError("slices must not be empty when detector_shape is omitted")
+                raise ValueError(
+                    "slices must not be empty when detector_shape is omitted"
+                )
             first = slice_list[0]
             first_mask = first["mask"] if isinstance(first, dict) else first[0]
             m0 = torch.as_tensor(first_mask)
@@ -385,7 +389,9 @@ class IFUSliceWCS:
                 mask, spec = item
             m = torch.as_tensor(mask, dtype=torch.bool, device=dev)
             if m.shape != (h, w):
-                raise ValueError(f"slice {slice_idx} mask shape {tuple(m.shape)} != {(h, w)}")
+                raise ValueError(
+                    f"slice {slice_idx} mask shape {tuple(m.shape)} != {(h, w)}"
+                )
             if not bool(m.any()):
                 continue
             if callable(spec):
@@ -445,7 +451,9 @@ class IFUSliceWCS:
                 torch.full((h, w), -1, dtype=torch.int64, device=dev),
             )
         else:
-            sid = torch.as_tensor(slice_id_map, dtype=torch.int64, device=dev).reshape(h, w)
+            sid = torch.as_tensor(slice_id_map, dtype=torch.int64, device=dev).reshape(
+                h, w
+            )
             sid = torch.where(valid, sid, torch.full_like(sid, -1))
         return cls(
             ra_map=ra_t,
@@ -526,9 +534,13 @@ class IFUSliceWCS:
         w01 = w01 / safe_w
         w11 = w11 / safe_w
 
-        def _safe_gather(m_2d: Tensor, iy: Tensor, ix: Tensor, mask_b: Tensor) -> Tensor:
+        def _safe_gather(
+            m_2d: Tensor, iy: Tensor, ix: Tensor, mask_b: Tensor
+        ) -> Tensor:
             vals = m_2d[iy, ix]
-            return torch.where(mask_b & torch.isfinite(vals), vals, torch.zeros_like(vals))
+            return torch.where(
+                mask_b & torch.isfinite(vals), vals, torch.zeros_like(vals)
+            )
 
         ra_ref = _safe_gather(self.ra_map, yi_nn, xi_nn, valid_query)
 
@@ -572,4 +584,3 @@ __all__ = [
     "sample_gwcs_detector_epochs",
     "sample_gwcs_detector_to_tangent",
 ]
-

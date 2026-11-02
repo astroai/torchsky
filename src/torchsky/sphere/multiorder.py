@@ -59,7 +59,11 @@ class MultiOrderHealpixMap:
         if values_t.ndim == 0:
             raise ValueError("values must have at least one dimension")
         uniq_t = torch.as_tensor(uniq)
-        if uniq_t.dtype == torch.bool or uniq_t.dtype.is_floating_point or uniq_t.dtype.is_complex:
+        if (
+            uniq_t.dtype == torch.bool
+            or uniq_t.dtype.is_floating_point
+            or uniq_t.dtype.is_complex
+        ):
             raise ValueError("uniq must contain integers")
         uniq_t = uniq_t.to(device=values_t.device, dtype=torch.int64).reshape(-1)
         if values_t.shape[-1] != uniq_t.numel():
@@ -126,9 +130,9 @@ class MultiOrderHealpixMap:
             if self.values.dtype.is_floating_point or self.values.dtype.is_complex
             else weights.dtype
         )
-        return (
-            self.values.to(dtype=value_dtype) * weights.to(dtype=value_dtype)
-        ).sum(dim=-1)
+        return (self.values.to(dtype=value_dtype) * weights.to(dtype=value_dtype)).sum(
+            dim=-1
+        )
 
     def select(self, footprint: MOC) -> MultiOrderHealpixMap:
         keep = footprint.intersects_uniq(self.uniq)
@@ -166,9 +170,11 @@ class MultiOrderHealpixMap:
             return (output, valid) if return_valid else output
 
         max_order = self.max_order
-        pixels = _healpix.ang2pix(
-            1 << max_order, lon, lat, nest=True, lonlat=True
-        ).to(torch.int64).reshape(-1)
+        pixels = (
+            _healpix.ang2pix(1 << max_order, lon, lat, nest=True, lonlat=True)
+            .to(torch.int64)
+            .reshape(-1)
+        )
         matched = torch.zeros(count, dtype=torch.int64, device=self.uniq.device)
         valid = torch.zeros(count, dtype=torch.bool, device=self.uniq.device)
         n_cells = self.uniq.numel()
@@ -236,7 +242,9 @@ class MultiOrderHealpixMap:
         else:
             nside = int(nsides[0].item())
             if bool((nsides != nside).any()):
-                raise ValueError("fixed-resolution sparse interchange requires one order")
+                raise ValueError(
+                    "fixed-resolution sparse interchange requires one order"
+                )
         return SparseHealpixMap.from_pixels(
             pixels,
             self.values,

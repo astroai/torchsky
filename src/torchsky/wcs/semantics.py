@@ -253,7 +253,9 @@ class TimeSpec:
         object.__setattr__(self, "format", time_format)
         object.__setattr__(self, "scale", scale)
         if self.reference_position is not None:
-            object.__setattr__(self, "reference_position", self.reference_position.upper())
+            object.__setattr__(
+                self, "reference_position", self.reference_position.upper()
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -305,7 +307,11 @@ class Epoch:
     spec: TimeSpec = TimeSpec()
 
     def __init__(self, value: Any, spec: TimeSpec | None = None) -> None:
-        tensor = value if isinstance(value, Tensor) else torch.as_tensor(value, dtype=torch.float64)
+        tensor = (
+            value
+            if isinstance(value, Tensor)
+            else torch.as_tensor(value, dtype=torch.float64)
+        )
         if not tensor.is_floating_point():
             tensor = tensor.to(dtype=torch.float64)
         object.__setattr__(self, "value", tensor)
@@ -331,7 +337,9 @@ class Epoch:
     def from_state(
         cls, metadata: Mapping[str, Any], tensors: Mapping[str, Tensor]
     ) -> Epoch:
-        return cls(tensors[str(metadata["value"])], TimeSpec.from_dict(metadata["spec"]))
+        return cls(
+            tensors[str(metadata["value"])], TimeSpec.from_dict(metadata["spec"])
+        )
 
 
 @dataclass(frozen=True)
@@ -367,7 +375,9 @@ class FrameSpec:
         object.__setattr__(self, "equinox", equinox)
         object.__setattr__(self, "obstime", obstime)
         object.__setattr__(
-            self, "observer", None if observer is None else tuple(float(v) for v in observer)
+            self,
+            "observer",
+            None if observer is None else tuple(float(v) for v in observer),
         )
         object.__setattr__(
             self,

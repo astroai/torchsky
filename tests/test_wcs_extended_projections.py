@@ -77,16 +77,12 @@ def test_air_antipode_and_near_antipode_match_wcslib() -> None:
     theta = np.array([-89.999999, -89.9, -80.0], dtype=np.float64)
     x_ref, y_ref = projection.prjs2x(phi, theta)
 
-    xi, eta = deproject_zenithal(
-        torch.from_numpy(phi), torch.from_numpy(theta), "AIR"
-    )
+    xi, eta = deproject_zenithal(torch.from_numpy(phi), torch.from_numpy(theta), "AIR")
     np.testing.assert_allclose(xi.numpy(), -x_ref, rtol=2.0e-10, atol=1.0e-8)
     np.testing.assert_allclose(eta.numpy(), y_ref, rtol=3.0e-8, atol=1.0e-8)
 
     phi_back, theta_back = project_zenithal(xi, eta, "AIR")
-    np.testing.assert_allclose(
-        _ra_wrap_delta(phi_back.numpy(), phi), 0.0, atol=2.0e-10
-    )
+    np.testing.assert_allclose(_ra_wrap_delta(phi_back.numpy(), phi), 0.0, atol=2.0e-10)
     np.testing.assert_allclose(theta_back.numpy(), theta, atol=2.0e-9)
 
     xi_pole, eta_pole = deproject_zenithal(
@@ -101,19 +97,10 @@ def test_air_antipode_and_near_antipode_match_wcslib() -> None:
     assert torch.isnan(xi_pole) and torch.isnan(eta_pole)
 
 
-
-
-
 # --- Pseudocylindrical (PAR) ---
 
 
-
-
-
 # --- Bonne (BON) ---
-
-
-
 
 
 # --- Conic projections (COP, COE, COD, COO) ---
@@ -124,33 +111,21 @@ def test_air_antipode_and_near_antipode_match_wcslib() -> None:
 # and sigma + delta.
 
 
-
-
 # --- PCO (American polyconic) ---
-
-
-
 
 
 # --- XPH (HEALPix polar / butterfly) ---
 
 
-
-
-
 # --- NCP (obsolete SIN slant) ---
-
-
-
 
 
 # --- Quad-cube (TSC, CSC, QSC) ---
 
 
-
-
-
-@pytest.mark.skipif(os.environ.get('TORCHSKY_DISABLE_CPP') == '1', reason='Requires fused C++ backend')
+@pytest.mark.skipif(
+    os.environ.get("TORCHSKY_DISABLE_CPP") == "1", reason="Requires fused C++ backend"
+)
 def test_csc_python_matches_fused_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     """ATen and fused CSC must independently match WCSLIB float32 semantics."""
     header = _make_header("CSC", cd_scale=0.3)
@@ -177,8 +152,6 @@ def test_csc_python_matches_fused_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     np.testing.assert_allclose(ddec_a, 0.0, atol=1e-6)
     np.testing.assert_allclose(_ra_wrap_delta(ra_f.numpy(), ra_a), 0.0, atol=1e-6)
     np.testing.assert_allclose(dec_f.numpy() - dec_a, 0.0, atol=1e-6)
-
-
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
@@ -239,7 +212,6 @@ def test_csc_forward_poly_is_independent_of_tensor_length():
     full = quadcube._csc_forward_poly(c, p)
     for n in (7, 13, 1001):
         assert torch.equal(quadcube._csc_forward_poly(c[:n], p[:n]), full[:n])
-
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")

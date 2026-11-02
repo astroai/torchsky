@@ -23,4 +23,3 @@ def _wrap_lon360(angle: Tensor) -> Tensor:
 def _wrap_lon180(angle: Tensor) -> Tensor:
     """Wrap longitudes to [-180, 180)."""
     return torch.remainder(angle + 180.0, 360.0) - 180.0
-

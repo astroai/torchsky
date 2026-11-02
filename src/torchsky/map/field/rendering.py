@@ -87,16 +87,12 @@ def _integrate_marginal_variances(
         )
     if mode == "independent_aleatoric":
         return torch.sum(variances * torch.square(weight_view), dim=0)
-    raise ValueError(
-        "variance_mode must be 'coherent' or 'independent_aleatoric'"
-    )
+    raise ValueError("variance_mode must be 'coherent' or 'independent_aleatoric'")
 
 
 def _validate_variance_mode(mode: VarianceIntegrationMode) -> None:
     if mode not in ("coherent", "independent_aleatoric"):
-        raise ValueError(
-            "variance_mode must be 'coherent' or 'independent_aleatoric'"
-        )
+        raise ValueError("variance_mode must be 'coherent' or 'independent_aleatoric'")
 
 
 def _render_accumulation_dtype(
@@ -614,7 +610,9 @@ def _render_spatially_integrated_distribution(
             output_mean,
             **observation_background_components(
                 observation,
-                shape=cast(tuple[int, int], tuple(output_mean.shape)),  # 2-D (H, W) image
+                shape=cast(
+                    tuple[int, int], tuple(output_mean.shape)
+                ),  # 2-D (H, W) image
                 device=output_mean.device,
                 dtype=output_mean.dtype,
             ),
@@ -1091,9 +1089,7 @@ def render_field_observation(
     accumulation_dtype = _render_accumulation_dtype(model, image.dtype, device)
     rendered = torch.zeros((H, W), device=device, dtype=accumulation_dtype)
     for y0, y1, x0, x1 in tiles:
-        patch = torch.zeros(
-            (y1 - y0, x1 - x0), device=device, dtype=accumulation_dtype
-        )
+        patch = torch.zeros((y1 - y0, x1 - x0), device=device, dtype=accumulation_dtype)
         for offset_x, offset_y, spatial_weight in spatial_nodes:
             if center_ra is not None and center_dec is not None:
                 ra_p = center_ra[y0:y1, x0:x1]
@@ -1197,7 +1193,9 @@ def render_spectral_power_foam_observation_exact(
             "model must provide normalized_spatial_coordinates and render_exact"
         )
     # Duck-typed exact-render API; both return tensors.
-    normalized_spatial_coordinates = cast(Callable[..., Tensor], normalized_spatial_coordinates)
+    normalized_spatial_coordinates = cast(
+        Callable[..., Tensor], normalized_spatial_coordinates
+    )
     render_exact = cast(Callable[..., Tensor], render_exact)
     device = resolve_device(None, model)
 
@@ -1508,9 +1506,9 @@ def _evaluate_field_plane_func_vmap(
     wl0 = torch.as_tensor(wavelength, dtype=torch.float32, device=dev)
     cc = max(int(chunk), 1)
     if n == 0:
-        return evaluate_field_coordinates_vmapped(
-            model, ra_f, dec_f, wl0
-        ).reshape(shape)
+        return evaluate_field_coordinates_vmapped(model, ra_f, dec_f, wl0).reshape(
+            shape
+        )
     parts: list[Tensor] = []
     for i in range(0, n, cc):
         sl = slice(i, min(i + cc, n))
@@ -1677,11 +1675,7 @@ def render_field_healpix(
     """
     nside_i = int(nside)
     npix = _healpix_wcs.nside2npix(nside_i)
-    dev = (
-        device
-        if device is not None
-        else resolve_device(None, model)
-    )
+    dev = device if device is not None else resolve_device(None, model)
     wavelengths = spectral_axis.to_wavelength().to(device=dev, dtype=torch.float32)
     nw = int(wavelengths.shape[0])
     if nw == 0:
@@ -1741,11 +1735,7 @@ def render_field_cube_via_healpix(
     :func:`sample_healpix_map_on_image_header`); use :func:`render_field_cube` when
     you need gradients through pixel-center evaluation.
     """
-    dev = (
-        device
-        if device is not None
-        else resolve_device(None, model)
-    )
+    dev = device if device is not None else resolve_device(None, model)
     hp_cube = render_field_healpix(
         model,
         nside=nside,

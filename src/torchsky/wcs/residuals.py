@@ -1075,6 +1075,7 @@ class ResidualLadderPrediction:
 
 class AstrometricResidualLadder:
     """Compose global, local, and sparse astrometric residual corrections."""
+
     def __init__(self, gauge: TangentPlaneGauge, envelope: CorrectionEnvelope) -> None:
         self.gauge = gauge
         self.envelope = envelope

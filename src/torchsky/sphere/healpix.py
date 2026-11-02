@@ -1527,10 +1527,7 @@ def query_disc(
     )
     cos_lim = math.cos(radius_eff)
 
-    use_cpp = (
-        out_device.type != "mps"
-        and _ops.has_fixed_dispatcher()
-    )
+    use_cpp = out_device.type != "mps" and _ops.has_fixed_dispatcher()
     if use_cpp:
         vec_cpu = torch.stack(
             [

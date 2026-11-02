@@ -91,7 +91,12 @@ def test_parametric_variable_projection_refines_position_and_preserves_ids() -> 
     )
 
     torch.testing.assert_close(result.scene.component_ids, torch.tensor([41, 73]))
-    torch.testing.assert_close(result.flux[:, 0], torch.tensor([8.0, 0.8], dtype=torch.float64), rtol=2e-2, atol=2e-2)
+    torch.testing.assert_close(
+        result.flux[:, 0],
+        torch.tensor([8.0, 0.8], dtype=torch.float64),
+        rtol=2e-2,
+        atol=2e-2,
+    )
     assert torch.linalg.vector_norm(result.residuals[0]) < 2.0e-3
     assert result.provenance["source_detection"] is False
     assert result.provenance["source_birth_death"] is False
@@ -133,7 +138,9 @@ def test_bounded_sersic_render_and_refinement_are_finite() -> None:
     )
 
     assert bool(torch.isfinite(result.scene.sersic_parameters).all())
-    assert result.diagnostics[0].final_objective < result.diagnostics[0].initial_objective
+    assert (
+        result.diagnostics[0].final_objective < result.diagnostics[0].initial_objective
+    )
     assert result.scene.sersic_parameters[0, 3] >= 0.3
     assert result.scene.sersic_parameters[0, 3] <= 8.0
 
@@ -159,7 +166,9 @@ def test_morphology_spectrum_factorization_recovers_color_and_constraints() -> N
         band_labels=("g", "r"),
     )
     blanks = [_blank(header, band="g"), _blank(header, band="r", sigma=1.0)]
-    observations = [replace(item, image=truth.render_observation(item)) for item in blanks]
+    observations = [
+        replace(item, image=truth.render_observation(item)) for item in blanks
+    ]
     initial_templates = (truth_templates + 0.2).clone()
     initial = SourceCatalogScene(
         lon,
@@ -187,9 +196,13 @@ def test_morphology_spectrum_factorization_recovers_color_and_constraints() -> N
     torch.testing.assert_close(result.scene.component_ids, torch.tensor([3, 9]))
     assert bool((result.spectra >= 0).all())
     for morphology in result.morphologies:
-        torch.testing.assert_close(morphology.sum(), torch.tensor(1.0, dtype=morphology.dtype))
+        torch.testing.assert_close(
+            morphology.sum(), torch.tensor(1.0, dtype=morphology.dtype)
+        )
         torch.testing.assert_close(morphology, torch.flip(morphology, dims=(0, 1)))
-    assert result.diagnostics[0].final_objective < result.diagnostics[0].initial_objective
+    assert (
+        result.diagnostics[0].final_objective < result.diagnostics[0].initial_objective
+    )
 
 
 def test_missing_band_reports_spectrum_gauge_without_source_creation() -> None:
@@ -231,7 +244,12 @@ def test_inadequate_psf_fails_closed_and_carries_diagnostics() -> None:
     )
     blank = _blank(header, sigma=0.5)
     image = truth.render_observation(blank)
-    data = replace(blank, image=image, psf_spec=PSFSpec.gaussian(2.0), weight=torch.full_like(image, 1.0e5))
+    data = replace(
+        blank,
+        image=image,
+        psf_spec=PSFSpec.gaussian(2.0),
+        weight=torch.full_like(image, 1.0e5),
+    )
 
     with pytest.raises(KnownComponentFitError) as caught:
         fit_parametric_deblending(
@@ -358,8 +376,18 @@ def test_catastrophic_swap_and_monotonic_projection_oracles() -> None:
     "device",
     [
         "cpu",
-        pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")),
-        pytest.param("mps", marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")),
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA unavailable"
+            ),
+        ),
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason="MPS unavailable"
+            ),
+        ),
     ],
 )
 def test_parametric_fixed_geometry_preserves_device(device: str) -> None:
@@ -392,8 +420,18 @@ def test_parametric_fixed_geometry_preserves_device(device: str) -> None:
     "device",
     [
         "cpu",
-        pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")),
-        pytest.param("mps", marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")),
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA unavailable"
+            ),
+        ),
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason="MPS unavailable"
+            ),
+        ),
     ],
 )
 def test_factorization_preserves_device_and_nonnegative_gauge(device: str) -> None:

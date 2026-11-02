@@ -42,6 +42,7 @@ class ImageObservation:
         >>> tuple(observation.data.shape)
         (2, 2)
     """
+
     path: str | None = None
     hdu: int | str | None = None
     weight: float = 1.0

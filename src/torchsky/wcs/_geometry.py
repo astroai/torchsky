@@ -44,6 +44,7 @@ class _GeometryMixin:
         if self._pixel_shape is None:
             return None
         return [(0.0, float(n - 1)) for n in self._pixel_shape]
+
     @property
     def axis_correlation_matrix(self) -> np.ndarray:
         """Boolean matrix showing which world axes depend on which pixel axes."""
@@ -66,15 +67,21 @@ class _GeometryMixin:
             matrix[axis, :] = False
             matrix[axis, list(self.coupled_tabular_pixel_axes)] = True
         return matrix
+
     def in_image(self, pixels: Any, *, origin: int = 0) -> Tensor:
         """Return a boolean mask for pixels inside ``pixel_bounds``."""
         if self._pixel_shape is None:
             raise ValueError("in_image requires NAXISi image bounds")
-        pix = torch.as_tensor(pixels, dtype=self._wcs_coord_dtype(self.device), device=self.device)
+        pix = torch.as_tensor(
+            pixels, dtype=self._wcs_coord_dtype(self.device), device=self.device
+        )
         if pix.shape[-1] != self.naxis:
             raise ValueError(f"pixels must have trailing dimension {self.naxis}")
         lower = torch.full(
-            (self.naxis,), float(origin), dtype=self._wcs_coord_dtype(self.device), device=self.device
+            (self.naxis,),
+            float(origin),
+            dtype=self._wcs_coord_dtype(self.device),
+            device=self.device,
         )
         upper = torch.tensor(
             [float(n - 1 + origin) for n in self._pixel_shape[: self.naxis]],
@@ -82,19 +89,23 @@ class _GeometryMixin:
             device=self.device,
         )
         return torch.all((pix >= lower) & (pix <= upper), dim=-1)
+
     @property
     def pixel_shape(self) -> tuple[int, ...] | None:
         """Image dimensions in FITS axis order ``(NAXIS1, NAXIS2, ...)``."""
         return self._pixel_shape
+
     @pixel_shape.setter
     def pixel_shape(self, value: Sequence[int] | None) -> None:
         self._pixel_shape = None if value is None else tuple(int(v) for v in value)
+
     @property
     def array_shape(self) -> tuple[int, ...] | None:
         """Image dimensions in NumPy/PyTorch array order ``(..., NAXIS2, NAXIS1)``."""
         if self._pixel_shape is None:
             return None
         return tuple(reversed(self._pixel_shape))
+
     def pixel_scales(self) -> tuple[float, float]:
         """Return nominal pixel scales ``(scale_x_deg, scale_y_deg)`` in degrees/pixel at CRPIX."""
         rows = [self._celestial_lon_axis, self._celestial_lat_axis]
@@ -103,12 +114,14 @@ class _GeometryMixin:
         sx = float(torch.hypot(cd2[0, 0], cd2[1, 0]).item())
         sy = float(torch.hypot(cd2[0, 1], cd2[1, 1]).item())
         return (sx, sy)
+
     def pixel_area(self) -> float:
         """Return nominal projection-plane pixel solid angle in ``deg**2`` at CRPIX."""
         rows = [self._celestial_lon_axis, self._celestial_lat_axis]
         cols = list(self._celestial_axes)
         cd2 = self.cd_full[rows, :][:, cols].detach().cpu().to(torch.float64)
         return abs(float((cd2[0, 0] * cd2[1, 1] - cd2[0, 1] * cd2[1, 0]).item()))
+
     def position_angle(self) -> float:
         """Return position angle (degrees East of North) of the +y pixel axis at CRPIX."""
         rows = [self._celestial_lon_axis, self._celestial_lat_axis]
@@ -116,8 +129,11 @@ class _GeometryMixin:
         cd2 = self.cd_full[rows, :][:, cols].detach().cpu().to(torch.float64)
         det = float((cd2[0, 0] * cd2[1, 1] - cd2[0, 1] * cd2[1, 0]).item())
         east_sign = -1.0 if det < 0.0 else 1.0
-        pa_rad = math.atan2(east_sign * float(cd2[0, 1].item()), float(cd2[1, 1].item()))
+        pa_rad = math.atan2(
+            east_sign * float(cd2[0, 1].item()), float(cd2[1, 1].item())
+        )
         return math.degrees(pa_rad)
+
     def footprint(
         self,
         shape: tuple[int, int] | None = None,
@@ -166,12 +182,22 @@ class _GeometryMixin:
             )
         else:
             xs = torch.tensor(
-                [off - 0.5, off - 0.5, off + float(width) - 0.5, off + float(width) - 0.5],
+                [
+                    off - 0.5,
+                    off - 0.5,
+                    off + float(width) - 0.5,
+                    off + float(width) - 0.5,
+                ],
                 dtype=dt,
                 device=self.device,
             )
             ys = torch.tensor(
-                [off - 0.5, off + float(height) - 0.5, off + float(height) - 0.5, off - 0.5],
+                [
+                    off - 0.5,
+                    off + float(height) - 0.5,
+                    off + float(height) - 0.5,
+                    off - 0.5,
+                ],
                 dtype=dt,
                 device=self.device,
             )
@@ -185,6 +211,7 @@ class _GeometryMixin:
         corners[:, pixel_axes[1]] = ys
         world = self.pixel_to_world(corners, origin=origin)
         return world[:, [self._celestial_lon_axis, self._celestial_lat_axis]]
+
     def pixel_area_map(
         self,
         shape: tuple[int, int] | None = None,
@@ -348,7 +375,20 @@ class _HeaderIOMixin:
             "TIMEOFFS",
         ):
             if meta_key in self.wcs_params:
-                hdr[f"{meta_key}{sfx}" if meta_key in {"LONPOLE", "LATPOLE", "RADESYS", "EQUINOX", "RESTFRQ", "RESTWAV", "SPECSYS"} else meta_key] = self.wcs_params[meta_key]
+                hdr[
+                    f"{meta_key}{sfx}"
+                    if meta_key
+                    in {
+                        "LONPOLE",
+                        "LATPOLE",
+                        "RADESYS",
+                        "EQUINOX",
+                        "RESTFRQ",
+                        "RESTWAV",
+                        "SPECSYS",
+                    }
+                    else meta_key
+                ] = self.wcs_params[meta_key]
 
         for k, v in self.wcs_params.items():
             if k.startswith(("PV", "PS", "PROJP", "WAT")):
@@ -375,7 +415,10 @@ class _HeaderIOMixin:
                     for (p, q), coeff in self.sip.bp_coeffs.items():
                         hdr[f"BP_{p}_{q}"] = float(coeff)
 
-        if self._pixel_affine_matrix is not None and self._pixel_affine_offset is not None:
+        if (
+            self._pixel_affine_matrix is not None
+            and self._pixel_affine_offset is not None
+        ):
             mat = self._pixel_affine_matrix.detach().cpu().to(torch.float64)
             off = self._pixel_affine_offset.detach().cpu().to(torch.float64)
             hdr["TSKYAF0"] = "pixel_affine"
@@ -394,6 +437,7 @@ class _HeaderIOMixin:
                     hdr[str(key)] = value
 
         return hdr
+
     def to_head_string(self, *, relax: bool = True) -> str:
         """Format this WCS as a SCAMP/SWarp-compatible ``.head`` ASCII string."""
         hdr = self.to_header(relax=relax, include_naxis=False)

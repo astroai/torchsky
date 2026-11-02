@@ -125,7 +125,9 @@ class FLRW:
             n_steps=n_steps,
         )
 
-    def transverse_comoving_distance(self, z: Tensor, *, n_steps: int | None = None) -> Tensor:
+    def transverse_comoving_distance(
+        self, z: Tensor, *, n_steps: int | None = None
+    ) -> Tensor:
         return transverse_comoving_distance(
             z,
             H0=self.H0,
@@ -147,7 +149,9 @@ class FLRW:
             n_steps=n_steps,
         )
 
-    def angular_diameter_distance(self, z: Tensor, *, n_steps: int | None = None) -> Tensor:
+    def angular_diameter_distance(
+        self, z: Tensor, *, n_steps: int | None = None
+    ) -> Tensor:
         return angular_diameter_distance(
             z,
             H0=self.H0,
@@ -584,6 +588,7 @@ def distance_modulus(
     """
     d_l = luminosity_distance(z, H0=H0, om0=om0, ok0=ok0, w0=w0, wa=wa, n_steps=n_steps)
     return 5.0 * torch.log10((d_l * 1.0e6 / 10.0).clamp(min=1e-30))
+
 
 __all__ = [
     "APScaling",

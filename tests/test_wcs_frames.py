@@ -27,10 +27,6 @@ def _wrap_delta(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return ((a - b + 180.0) % 360.0) - 180.0
 
 
-
-
-
-
 def test_propagate_proper_motion_broadcasts_and_is_differentiable() -> None:
     ra = torch.tensor([10.0, 20.0], dtype=torch.float64, requires_grad=True)
     dec = torch.tensor([89.999, -89.999], dtype=torch.float64, requires_grad=True)
@@ -89,11 +85,7 @@ def test_proper_motion_jacobian_matches_central_difference() -> None:
             * 3_600_000.0
             / (2.0 * epsilon)
         )
-        north = (
-            (moved_plus[1] - moved_minus[1])
-            * 3_600_000.0
-            / (2.0 * epsilon)
-        )
+        north = (moved_plus[1] - moved_minus[1]) * 3_600_000.0 / (2.0 * epsilon)
         columns.append(torch.stack((east, north)))
     expected = torch.stack(columns, dim=-1)
     torch.testing.assert_close(actual, expected, rtol=2e-5, atol=2e-5)
@@ -173,14 +165,10 @@ def test_proper_motion_jacobian_batches_like_scalar_calls() -> None:
 def test_propagate_space_motion_matches_erfa_starpm() -> None:
     ra = np.array([10.0, 269.452075, 42.0, 359.9, 339.50019800605236])
     dec = np.array([20.0, 4.693391, -89.5, 70.0, 27.605252088646363])
-    pm_ra_cosdec = np.array(
-        [100.0, -801.551, 50.0, -30.0, -64_880.75716316896]
-    )
+    pm_ra_cosdec = np.array([100.0, -801.551, 50.0, -30.0, -64_880.75716316896])
     pm_dec = np.array([50.0, 10_362.394, -20.0, 40.0, 16_145.147314046984])
     parallax = np.array([100.0, 548.31, 2.0, 0.5, 3.911354729847825])
-    radial_velocity = np.array(
-        [20.0, -110.6, 300.0, -200.0, 70_595.04657621654]
-    )
+    radial_velocity = np.array([20.0, -110.6, 300.0, -200.0, 70_595.04657621654])
     source_epoch = np.array([2000.0, 2000.0, 2050.0, 2030.0, 2000.0])
     target_epoch = np.array([2100.0, 2025.0, 1950.0, 2200.0, 2100.0])
 
@@ -222,12 +210,8 @@ def test_propagate_space_motion_matches_erfa_starpm() -> None:
         np.testing.assert_allclose(value.numpy(), reference, rtol=2e-13, atol=2e-10)
 
 
-
-
 def test_propagate_space_motion_broadcasts_and_has_finite_jacobian() -> None:
-    state = torch.tensor(
-        [10.0, 20.0, 100.0, 50.0, 100.0, 20.0], dtype=torch.float64
-    )
+    state = torch.tensor([10.0, 20.0, 100.0, 50.0, 100.0, 20.0], dtype=torch.float64)
 
     def propagate(value: torch.Tensor) -> torch.Tensor:
         return torch.stack(
@@ -358,11 +342,7 @@ def test_space_motion_jacobian_matches_central_difference() -> None:
             * 3_600_000.0
             / (2.0 * epsilon)
         )
-        north = (
-            (moved_plus[1] - moved_minus[1])
-            * 3_600_000.0
-            / (2.0 * epsilon)
-        )
+        north = (moved_plus[1] - moved_minus[1]) * 3_600_000.0 / (2.0 * epsilon)
         columns.append(
             torch.stack(
                 (
@@ -413,14 +393,6 @@ def test_space_motion_jacobian_batches_like_scalar_calls() -> None:
     torch.testing.assert_close(batched, scalar, rtol=2e-12, atol=2e-12)
 
 
-
-
-
-
-
-
-
-
 def test_wcs_celestial_frame_metadata_and_helpers() -> None:
     header = {
         "NAXIS": 2,
@@ -451,10 +423,6 @@ def test_wcs_celestial_frame_metadata_and_helpers() -> None:
 
     np.testing.assert_allclose(_wrap_delta(ra_2000.numpy(), exp.ra.deg), 0.0, atol=5e-5)
     np.testing.assert_allclose(dec_2000.numpy(), exp.dec.deg, atol=5e-5)
-
-
-
-
 
 
 def test_ecliptic_of_date_roundtrip_and_erfa() -> None:
@@ -504,20 +472,30 @@ def test_icrs_galactic_fk5_ecliptic_match_astropy() -> None:
     for frame, torch_frame in cases:
         expected = coords.transform_to(frame)
         lon, lat = convert_celestial(
-            torch.tensor(ra), torch.tensor(dec),
-            from_frame="ICRS", to_frame=torch_frame,
+            torch.tensor(ra),
+            torch.tensor(dec),
+            from_frame="ICRS",
+            to_frame=torch_frame,
         )
         np.testing.assert_allclose(
             _wrap_delta(lon.numpy(), expected.spherical.lon.deg),
-            0.0, atol=1e-10,
+            0.0,
+            atol=1e-10,
         )
         np.testing.assert_allclose(
-            lat.numpy(), expected.spherical.lat.deg, atol=1e-10,
+            lat.numpy(),
+            expected.spherical.lat.deg,
+            atol=1e-10,
         )
         back_lon, back_lat = convert_celestial(
-            lon, lat, from_frame=torch_frame, to_frame="ICRS",
+            lon,
+            lat,
+            from_frame=torch_frame,
+            to_frame="ICRS",
         )
         np.testing.assert_allclose(
-            _wrap_delta(back_lon.numpy(), ra), 0.0, atol=1e-10,
+            _wrap_delta(back_lon.numpy(), ra),
+            0.0,
+            atol=1e-10,
         )
         np.testing.assert_allclose(back_lat.numpy(), dec, atol=1e-10)

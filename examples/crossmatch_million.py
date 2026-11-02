@@ -24,7 +24,9 @@ from torchsky.catalogs import crossmatch_sky
 
 def uniform_sky(n: int, g: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
     ra = torch.rand(n, generator=g, dtype=torch.float64) * 360.0
-    dec = torch.rad2deg(torch.asin(2.0 * torch.rand(n, generator=g, dtype=torch.float64) - 1.0))
+    dec = torch.rad2deg(
+        torch.asin(2.0 * torch.rand(n, generator=g, dtype=torch.float64) - 1.0)
+    )
     return ra, dec
 
 
@@ -46,7 +48,9 @@ def main() -> None:
     perm = torch.randperm(n, generator=g)
     ra_r = torch.cat([ra_t, ra_f])[perm]
     dec_r = torch.cat([dec_t, dec_f])[perm]
-    truth_of_right = torch.cat([torch.arange(n_true), torch.full((n - n_true,), -1)])[perm]
+    truth_of_right = torch.cat([torch.arange(n_true), torch.full((n - n_true,), -1)])[
+        perm
+    ]
 
     dev = args.device
     args_xy = [t.to(dev) for t in (ra_l, dec_l, ra_r, dec_r)]
@@ -56,14 +60,18 @@ def main() -> None:
         dt = time.perf_counter() - t0
         left, right = res.left_index.cpu(), res.right_index.cpu()
         correct = (truth_of_right[right] == left) & (left < n_true)
-        print(f"find={find:4s}: {left.numel():>8d} pairs in {dt:5.1f} s "
-              f"({n / dt / 1e6:.2f} M left rows/s); injected pairs recovered: "
-              f"{int(correct.sum())}/{n_true} ({correct.sum().item() / n_true:.4f})")
+        print(
+            f"find={find:4s}: {left.numel():>8d} pairs in {dt:5.1f} s "
+            f"({n / dt / 1e6:.2f} M left rows/s); injected pairs recovered: "
+            f"{int(correct.sum())}/{n_true} ({correct.sum().item() / n_true:.4f})"
+        )
         if find == "best":
             assert correct.sum().item() / n_true > 0.995
             sep = res.separation_arcsec.cpu()
-            print(f"          median separation {float(sep[correct].median()):.3f} arcsec "
-                  f"(expected {0.3 * 1.1774:.3f} for sigma=0.3 arcsec per axis)")
+            print(
+                f"          median separation {float(sep[correct].median()):.3f} arcsec "
+                f"(expected {0.3 * 1.1774:.3f} for sigma=0.3 arcsec per axis)"
+            )
     print(f"device={dev}")
 
 

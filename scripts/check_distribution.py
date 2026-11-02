@@ -80,7 +80,9 @@ def _assert_no_stale_native_content(payloads: dict[str, bytes]) -> None:
         if "extern/cfitsio" in lowered or "libcfitsio" in basename:
             raise AssertionError(f"stale CFITSIO content in distribution: {name}")
         if "/cpp_src/" in f"/{lowered}" and basename in STALE_CPP_NAMES:
-            raise AssertionError(f"stale FITS implementation source in distribution: {name}")
+            raise AssertionError(
+                f"stale FITS implementation source in distribution: {name}"
+            )
         if name.endswith(NATIVE_SUFFIXES) and b"cfitsio" in payload.lower():
             raise AssertionError(f"native extension contains a CFITSIO marker: {name}")
 
@@ -123,7 +125,9 @@ def _assert_no_build_prefixes(
                     f"native extension contains absolute build path marker {prefix.decode()!r}: {name}"
                 )
         if re.search(rb"[A-Za-z]:\\(?:Users|Temp|runneradmin)\\", payload):
-            raise AssertionError(f"native extension contains a Windows build path: {name}")
+            raise AssertionError(
+                f"native extension contains a Windows build path: {name}"
+            )
 
 
 def _inspect_linux_dependencies(native: Path) -> None:
@@ -132,11 +136,14 @@ def _inspect_linux_dependencies(native: Path) -> None:
     )
     if readelf.returncode != 0:
         return
-    if re.search(r"(?:RPATH|RUNPATH).*\[(?:/Users/|/home/runner/|/tmp/|/private/)", readelf.stdout):
-        raise AssertionError(f"native extension has an absolute build RPATH:\n{readelf.stdout}")
-    ldd = subprocess.run(
-        ["ldd", native], capture_output=True, text=True, check=False
-    )
+    if re.search(
+        r"(?:RPATH|RUNPATH).*\[(?:/Users/|/home/runner/|/tmp/|/private/)",
+        readelf.stdout,
+    ):
+        raise AssertionError(
+            f"native extension has an absolute build RPATH:\n{readelf.stdout}"
+        )
+    ldd = subprocess.run(["ldd", native], capture_output=True, text=True, check=False)
     if ldd.returncode != 0:
         return
     unresolved = []

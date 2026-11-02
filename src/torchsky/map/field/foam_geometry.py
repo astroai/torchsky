@@ -13,6 +13,7 @@ import math
 import torch
 from torch import Tensor
 
+
 @dataclass(frozen=True)
 class SparseCechGraph:
     """Experimental exact Čech graph plus its sparse-index diagnostics."""

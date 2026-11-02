@@ -31,9 +31,13 @@ class ResponsePlan(Protocol):
 
     def adjoint(self, value: Tensor, *, chunk_size: int | None = None) -> Tensor: ...
 
-    def apply_squared(self, value: Tensor, *, chunk_size: int | None = None) -> Tensor: ...
+    def apply_squared(
+        self, value: Tensor, *, chunk_size: int | None = None
+    ) -> Tensor: ...
 
-    def apply_flags(self, flags: Tensor, *, chunk_size: int | None = None) -> Tensor: ...
+    def apply_flags(
+        self, flags: Tensor, *, chunk_size: int | None = None
+    ) -> Tensor: ...
 
     def contributor_count(self, *, chunk_size: int | None = None) -> Tensor: ...
 
@@ -108,7 +112,11 @@ class IndexedResponsePlan:
             ("source_indices", self.source_indices, self.source.numel),
             ("target_indices", self.target_indices, self.target.numel),
         ):
-            if not isinstance(indices, Tensor) or indices.dtype != torch.int64 or indices.ndim != 1:
+            if (
+                not isinstance(indices, Tensor)
+                or indices.dtype != torch.int64
+                or indices.ndim != 1
+            ):
                 raise TypeError(f"{name} must be a one-dimensional int64 tensor")
             if bool(((indices < 0) | (indices >= limit)).any()):
                 raise ValueError(f"{name} contains an out-of-domain index")
@@ -121,15 +129,29 @@ class IndexedResponsePlan:
         size = self.coefficients.numel()
         if self.source_indices.numel() != size or self.target_indices.numel() != size:
             raise ValueError("response COO arrays must have matching lengths")
-        if self.coefficients.device != self.source_indices.device or self.coefficients.device != self.target_indices.device:
+        if (
+            self.coefficients.device != self.source_indices.device
+            or self.coefficients.device != self.target_indices.device
+        ):
             raise ValueError("response COO arrays must share a device")
         if not bool(torch.isfinite(self.coefficients).all()):
             raise ValueError("response coefficients must be finite")
-        contributor_ids = self.source_indices if self.contributor_ids is None else self.contributor_ids
-        if contributor_ids.dtype != torch.int64 or contributor_ids.shape != self.source_indices.shape:
+        contributor_ids = (
+            self.source_indices
+            if self.contributor_ids is None
+            else self.contributor_ids
+        )
+        if (
+            contributor_ids.dtype != torch.int64
+            or contributor_ids.shape != self.source_indices.shape
+        ):
             raise TypeError("contributor_ids must be int64 and match response entries")
-        if contributor_ids.device != self.coefficients.device or bool((contributor_ids < 0).any()):
-            raise ValueError("contributor_ids must share the response device and be non-negative")
+        if contributor_ids.device != self.coefficients.device or bool(
+            (contributor_ids < 0).any()
+        ):
+            raise ValueError(
+                "contributor_ids must share the response device and be non-negative"
+            )
         chunk = int(self.default_chunk_size)
         if chunk <= 0:
             raise ValueError("default_chunk_size must be positive")
@@ -156,7 +178,9 @@ class IndexedResponsePlan:
                     "source": self.source,
                     "target": self.target,
                     "entries": size,
-                    "contributors": 0 if size == 0 else int(contributor_ids.max().item()) + 1,
+                    "contributors": 0
+                    if size == 0
+                    else int(contributor_ids.max().item()) + 1,
                     "chunk": chunk,
                 },
             ),
@@ -194,7 +218,8 @@ class IndexedResponsePlan:
             local.scatter_add_(
                 0,
                 local_target,
-                source[self.source_indices[selected]] * self.coefficients[selected].to(dtype=value.dtype),
+                source[self.source_indices[selected]]
+                * self.coefficients[selected].to(dtype=value.dtype),
             )
             output[start:stop] = local
         return output.reshape(self.target.shape)
@@ -208,7 +233,8 @@ class IndexedResponsePlan:
             output.scatter_add_(
                 0,
                 self.source_indices[selected],
-                target[self.target_indices[selected]] * self.coefficients[selected].to(dtype=value.dtype),
+                target[self.target_indices[selected]]
+                * self.coefficients[selected].to(dtype=value.dtype),
             )
         return output.reshape(self.source.shape)
 
@@ -232,16 +258,26 @@ class IndexedResponsePlan:
         self._snapshot.validate()
         if flags.shape != self.source.shape or flags.device != self.coefficients.device:
             raise ValueError("flags must match the source shape and response device")
-        if flags.dtype not in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64):
+        if flags.dtype not in (
+            torch.uint8,
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.int64,
+        ):
             raise TypeError("flags must have an integer dtype")
         source = flags.reshape(-1)
         output = flags.new_zeros(self.target.numel)
         for start, stop in self._chunks(chunk_size):
-            selected = torch.nonzero(self._selected_entries(start, stop), as_tuple=False).flatten()
+            selected = torch.nonzero(
+                self._selected_entries(start, stop), as_tuple=False
+            ).flatten()
             for entry in selected.tolist():
                 target_index = int(self.target_indices[entry].item())
                 source_index = int(self.source_indices[entry].item())
-                output[target_index] = torch.bitwise_or(output[target_index], source[source_index])
+                output[target_index] = torch.bitwise_or(
+                    output[target_index], source[source_index]
+                )
         return output.reshape(self.target.shape)
 
     def contributor_count(self, *, chunk_size: int | None = None) -> Tensor:
@@ -266,7 +302,11 @@ class IndexedResponsePlan:
     def context(self, *, chunk_size: int | None = None) -> Tensor:
         self._snapshot.validate()
         assert self.contributor_ids is not None
-        contributor_count = 0 if self.contributor_ids.numel() == 0 else int(self.contributor_ids.max().item()) + 1
+        contributor_count = (
+            0
+            if self.contributor_ids.numel() == 0
+            else int(self.contributor_ids.max().item()) + 1
+        )
         planes = math.ceil(contributor_count / 32)
         output = torch.zeros(
             (planes, self.target.numel),
@@ -274,7 +314,9 @@ class IndexedResponsePlan:
             device=self.coefficients.device,
         )
         for start, stop in self._chunks(chunk_size):
-            selected = torch.nonzero(self._selected_entries(start, stop), as_tuple=False).flatten()
+            selected = torch.nonzero(
+                self._selected_entries(start, stop), as_tuple=False
+            ).flatten()
             for entry in selected.tolist():
                 contributor = int(self.contributor_ids[entry].item())
                 target = int(self.target_indices[entry].item())
@@ -323,13 +365,17 @@ class BilinearResponsePlan(IndexedResponsePlan):
         default_chunk_size: int = 65_536,
     ) -> None:
         if x_source.shape != y_source.shape or x_source.ndim < 1:
-            raise ValueError("bilinear coordinates must have matching non-scalar shapes")
+            raise ValueError(
+                "bilinear coordinates must have matching non-scalar shapes"
+            )
         if (
             x_source.device != y_source.device
             or not x_source.is_floating_point()
             or not y_source.is_floating_point()
         ):
-            raise TypeError("bilinear coordinates must be floating tensors on one device")
+            raise TypeError(
+                "bilinear coordinates must be floating tensors on one device"
+            )
         height, width = int(source_shape[0]), int(source_shape[1])
         if height < 0 or width < 0:
             raise ValueError("source dimensions must be non-negative")
@@ -407,12 +453,19 @@ class DrizzleResponsePlan:
     squared_action: ResponseAction = field(repr=False, compare=False)
     key: str
     flags_action: ResponseAction | None = field(default=None, repr=False, compare=False)
-    contributor_action: Callable[[int | None], Tensor] | None = field(default=None, repr=False, compare=False)
-    context_action: Callable[[int | None], Tensor] | None = field(default=None, repr=False, compare=False)
+    contributor_action: Callable[[int | None], Tensor] | None = field(
+        default=None, repr=False, compare=False
+    )
+    context_action: Callable[[int | None], Tensor] | None = field(
+        default=None, repr=False, compare=False
+    )
     fingerprint: PlanFingerprint = field(init=False)
 
     def __post_init__(self) -> None:
-        if not all(callable(action) for action in (self.apply_action, self.adjoint_action, self.squared_action)):
+        if not all(
+            callable(action)
+            for action in (self.apply_action, self.adjoint_action, self.squared_action)
+        ):
             raise TypeError("drizzle response actions must be callable")
         if not self.key:
             raise ValueError("drizzle response key must be nonempty")
@@ -427,15 +480,21 @@ class DrizzleResponsePlan:
 
     def apply(self, value: Tensor, *, chunk_size: int | None = None) -> Tensor:
         self.source.validate(value, name="drizzle input")
-        return self.target.validate(self.apply_action(value, chunk_size), name="drizzle output")
+        return self.target.validate(
+            self.apply_action(value, chunk_size), name="drizzle output"
+        )
 
     def adjoint(self, value: Tensor, *, chunk_size: int | None = None) -> Tensor:
         self.target.validate(value, name="drizzle adjoint input")
-        return self.source.validate(self.adjoint_action(value, chunk_size), name="drizzle adjoint output")
+        return self.source.validate(
+            self.adjoint_action(value, chunk_size), name="drizzle adjoint output"
+        )
 
     def apply_squared(self, value: Tensor, *, chunk_size: int | None = None) -> Tensor:
         self.source.validate(value, name="drizzle squared input")
-        return self.target.validate(self.squared_action(value, chunk_size), name="drizzle squared output")
+        return self.target.validate(
+            self.squared_action(value, chunk_size), name="drizzle squared output"
+        )
 
     def apply_flags(self, flags: Tensor, *, chunk_size: int | None = None) -> Tensor:
         if self.flags_action is None:

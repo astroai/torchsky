@@ -56,14 +56,17 @@ _B1950_TO_J2000_M = torch.tensor(
     dtype=torch.float64,
 )
 
-_FK4_CORR = torch.tensor(
-    [
-        [-0.0026455262, -1.1539918689, 2.1111346190],
-        [1.1540628161, -0.0129042997, 0.0236021478],
-        [-2.1112979048, -0.0056024448, 0.0102587734],
-    ],
-    dtype=torch.float64,
-) * 1.0e-6
+_FK4_CORR = (
+    torch.tensor(
+        [
+            [-0.0026455262, -1.1539918689, 2.1111346190],
+            [1.1540628161, -0.0129042997, 0.0236021478],
+            [-2.1112979048, -0.0056024448, 0.0102587734],
+        ],
+        dtype=torch.float64,
+    )
+    * 1.0e-6
+)
 
 
 def _to_device(value: Tensor, device: torch.device) -> Tensor:
@@ -189,9 +192,10 @@ def _fk4_no_e_to_fk5_vec(
     p1 = _fk4_precession_matrix(from_equinox, 1950.0, device=device)
     jyear = _besselian_epoch_to_julian_epoch(obstime)
     t = (jyear - 1950.0) / 100.0
-    b = _B1950_TO_J2000_M.to(device=device, dtype=vec.dtype) + _FK4_CORR.to(
-        device=device, dtype=vec.dtype
-    ) * t
+    b = (
+        _B1950_TO_J2000_M.to(device=device, dtype=vec.dtype)
+        + _FK4_CORR.to(device=device, dtype=vec.dtype) * t
+    )
     out = torch.matmul(vec, p1.T.to(dtype=vec.dtype))
     out = torch.matmul(out, b.T)
     if float(to_equinox) != 2000.0:
@@ -216,9 +220,10 @@ def _fk5_to_fk4_no_e_vec(
         vec = radec_to_unit(ra, dec)
     jyear = _besselian_epoch_to_julian_epoch(obstime)
     t = (jyear - 1950.0) / 100.0
-    b = _B1950_TO_J2000_M.to(device=device, dtype=vec.dtype) + _FK4_CORR.to(
-        device=device, dtype=vec.dtype
-    ) * t
+    b = (
+        _B1950_TO_J2000_M.to(device=device, dtype=vec.dtype)
+        + _FK4_CORR.to(device=device, dtype=vec.dtype) * t
+    )
     p2 = _fk4_precession_matrix(1950.0, to_equinox, device=device)
     out = torch.matmul(vec, b.to(dtype=vec.dtype))
     out = torch.matmul(out, p2.T.to(dtype=vec.dtype))
@@ -484,9 +489,10 @@ def galactocentric_to_icrs(
         xyz.new_tensor(float(galcen_ra_deg)),
         xyz.new_tensor(float(galcen_dec_deg)),
     )
-    r_helio = torch.matmul(
-        gal, _ICRS_TO_GAL.to(device=xyz.device, dtype=xyz.dtype)
-    ) + r0 * gc_hat
+    r_helio = (
+        torch.matmul(gal, _ICRS_TO_GAL.to(device=xyz.device, dtype=xyz.dtype))
+        + r0 * gc_hat
+    )
     dist = torch.linalg.vector_norm(r_helio, dim=-1).clamp_min(1.0e-30)
     ra, dec = unit_to_radec(r_helio / dist.unsqueeze(-1))
     return ra, dec, dist
@@ -579,10 +585,16 @@ def propagate_proper_motion(
     lon = _as_tensor(lon_deg)
     device = lon.device
     lat = _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device))
-    pm_lon = _as_tensor(pm_lon_coslat_mas_yr).to(device=device, dtype=_work_dtype(device))
+    pm_lon = _as_tensor(pm_lon_coslat_mas_yr).to(
+        device=device, dtype=_work_dtype(device)
+    )
     pm_lat = _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device))
-    source_epoch = _as_tensor(source_epoch_jyear).to(device=device, dtype=_work_dtype(device))
-    target_epoch = _as_tensor(target_epoch_jyear).to(device=device, dtype=_work_dtype(device))
+    source_epoch = _as_tensor(source_epoch_jyear).to(
+        device=device, dtype=_work_dtype(device)
+    )
+    target_epoch = _as_tensor(target_epoch_jyear).to(
+        device=device, dtype=_work_dtype(device)
+    )
     lon, lat, pm_lon, pm_lat, source_epoch, target_epoch = torch.broadcast_tensors(
         lon, lat, pm_lon, pm_lat, source_epoch, target_epoch
     )
@@ -591,13 +603,9 @@ def propagate_proper_motion(
     lat_rad = lat * D2R
     sin_lon, cos_lon = torch.sin(lon_rad), torch.cos(lon_rad)
     sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
-    position = torch.stack(
-        (cos_lat * cos_lon, cos_lat * sin_lon, sin_lat), dim=-1
-    )
+    position = torch.stack((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat), dim=-1)
     tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon)), dim=-1)
-    tangent_lat = torch.stack(
-        (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1
-    )
+    tangent_lat = torch.stack((-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1)
 
     velocity = MAS_TO_RAD * (
         pm_lon.unsqueeze(-1) * tangent_lon + pm_lat.unsqueeze(-1) * tangent_lat
@@ -625,9 +633,7 @@ def _proper_motion_position_delta(
     sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
     direction = torch.stack((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat))
     tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon_rad)))
-    tangent_lat = torch.stack(
-        (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat)
-    )
+    tangent_lat = torch.stack((-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat))
     perturbed_direction = direction + MAS_TO_RAD * (
         perturbation[0] * tangent_lon + perturbation[1] * tangent_lat
     )
@@ -805,30 +811,28 @@ def _propagate_space_motion(
     if _validate and not bool(torch.all((lat >= -90.0) & (lat <= 90.0))):
         raise ValueError("latitude must be within [-90, 90] degrees")
     if _validate and not bool(torch.all(parallax > 0.0)):
-        raise ValueError("parallax_mas must be positive; use angular propagation otherwise")
+        raise ValueError(
+            "parallax_mas must be positive; use angular propagation otherwise"
+        )
 
     lon_rad = lon * D2R
     lat_rad = lat * D2R
     sin_lon, cos_lon = torch.sin(lon_rad), torch.cos(lon_rad)
     sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
-    direction = torch.stack(
-        (cos_lat * cos_lon, cos_lat * sin_lon, sin_lat), dim=-1
-    )
+    direction = torch.stack((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat), dim=-1)
     tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon)), dim=-1)
-    tangent_lat = torch.stack(
-        (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1
-    )
+    tangent_lat = torch.stack((-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1)
 
     distance_pc = 1000.0 / parallax
     position = distance_pc.unsqueeze(-1) * direction
-    observed_tangent = distance_pc.unsqueeze(-1) * MAS_TO_RAD * (
-        pm_lon.unsqueeze(-1) * tangent_lon + pm_lat.unsqueeze(-1) * tangent_lat
+    observed_tangent = (
+        distance_pc.unsqueeze(-1)
+        * MAS_TO_RAD
+        * (pm_lon.unsqueeze(-1) * tangent_lon + pm_lat.unsqueeze(-1) * tangent_lat)
     )
     observed_radial = radial_velocity * KM_S_TO_PC_YR
     beta_radial = observed_radial / SPEED_OF_LIGHT_PC_YR
-    beta_tangent = (
-        torch.linalg.norm(observed_tangent, dim=-1) / SPEED_OF_LIGHT_PC_YR
-    )
+    beta_tangent = torch.linalg.norm(observed_tangent, dim=-1) / SPEED_OF_LIGHT_PC_YR
     if _validate and not bool(
         torch.all(beta_radial.square() + beta_tangent.square() < 0.25)
     ):
@@ -880,17 +884,16 @@ def _propagate_space_motion(
     inertial_velocity = (
         correction_scale.unsqueeze(-1) * observed_tangent
         + (
-            SPEED_OF_LIGHT_PC_YR
-            * (correction_scale * beta_radial + correction_delta)
+            SPEED_OF_LIGHT_PC_YR * (correction_scale * beta_radial + correction_delta)
         ).unsqueeze(-1)
         * direction
     )
 
     light_time_before = distance_pc / SPEED_OF_LIGHT_PC_YR
     dt_years = target_epoch - source_epoch
-    geometric_position = position + (
-        dt_years + light_time_before
-    ).unsqueeze(-1) * inertial_velocity
+    geometric_position = (
+        position + (dt_years + light_time_before).unsqueeze(-1) * inertial_velocity
+    )
     radius_squared = (geometric_position * geometric_position).sum(dim=-1)
     radial_dot = (geometric_position * inertial_velocity).sum(dim=-1)
     speed_squared = (inertial_velocity * inertial_velocity).sum(dim=-1)
@@ -900,14 +903,14 @@ def _propagate_space_motion(
     light_time_after = (
         -radial_dot
         + torch.sqrt(
-            torch.clamp_min(
-                radial_dot.square() + c2_minus_v2 * radius_squared, 0.0
-            )
+            torch.clamp_min(radial_dot.square() + c2_minus_v2 * radius_squared, 0.0)
         )
     ) / c2_minus_v2
-    propagated_position = position + (
-        dt_years + light_time_before - light_time_after
-    ).unsqueeze(-1) * inertial_velocity
+    propagated_position = (
+        position
+        + (dt_years + light_time_before - light_time_after).unsqueeze(-1)
+        * inertial_velocity
+    )
 
     distance_out = torch.linalg.norm(propagated_position, dim=-1)
     if _validate and not bool(torch.all(distance_out > 0.0)):
@@ -928,11 +931,13 @@ def _propagate_space_motion(
     observed_delta = -beta_squared_out / (
         torch.sqrt(torch.clamp_min(1.0 - beta_squared_out, 0.0)) + 1.0
     )
-    observed_velocity = inertial_tangent / observed_scale.unsqueeze(-1) + (
-        SPEED_OF_LIGHT_PC_YR
-        * (beta_radial_out - observed_delta)
-        / observed_scale
-    ).unsqueeze(-1) * direction_out
+    observed_velocity = (
+        inertial_tangent / observed_scale.unsqueeze(-1)
+        + (
+            SPEED_OF_LIGHT_PC_YR * (beta_radial_out - observed_delta) / observed_scale
+        ).unsqueeze(-1)
+        * direction_out
+    )
 
     lon_out, lat_out = unit_to_radec(direction_out)
     lon_out_rad = lon_out * D2R
@@ -957,9 +962,9 @@ def _propagate_space_motion(
         distance_out * MAS_TO_RAD
     )
     parallax_out = 1000.0 / distance_out
-    radial_velocity_out = (
-        (observed_velocity * direction_out).sum(dim=-1) / KM_S_TO_PC_YR
-    )
+    radial_velocity_out = (observed_velocity * direction_out).sum(
+        dim=-1
+    ) / KM_S_TO_PC_YR
     return (
         lon_out,
         lat_out,
@@ -1039,9 +1044,7 @@ def _space_motion_local_delta(
     sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
     direction = torch.stack((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat))
     tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon_rad)))
-    tangent_lat = torch.stack(
-        (-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat)
-    )
+    tangent_lat = torch.stack((-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat))
     perturbed_direction = direction + MAS_TO_RAD * (
         perturbation[0] * tangent_lon + perturbation[1] * tangent_lat
     )

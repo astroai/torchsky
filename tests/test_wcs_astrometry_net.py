@@ -87,7 +87,9 @@ def _header(cd: tuple[tuple[float, float], tuple[float, float]]) -> dict[str, ob
     }
 
 
-def _external(tmp_path: Path, *, timeout: float = 30.0, version: str = "0.97") -> AstrometryNetConfig:
+def _external(
+    tmp_path: Path, *, timeout: float = 30.0, version: str = "0.97"
+) -> AstrometryNetConfig:
     executable = tmp_path / "solve-field"
     executable.write_text(FAKE_EXECUTABLE, encoding="utf-8")
     executable.chmod(0o755)
@@ -214,7 +216,10 @@ def _solve(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    cd: tuple[tuple[float, float], tuple[float, float]] = ((-0.0001, 0.0), (0.0, 0.0001)),
+    cd: tuple[tuple[float, float], tuple[float, float]] = (
+        (-0.0001, 0.0),
+        (0.0, 0.0001),
+    ),
     external: AstrometryNetConfig | None = None,
 ):
     header = _header(cd)
@@ -246,7 +251,9 @@ def test_fake_executable_contract_bundle_refinement_and_provenance(
 
     result = _solve(tmp_path, monkeypatch)
 
-    records = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    records = [
+        json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()
+    ]
     bootstrap_table = read_torch(str(tmp_path / "captured" / "bootstrap.xyls"), hdu=1)
     assert len(records) == 2
     assert records[0]["verify"] is False
@@ -279,7 +286,10 @@ def test_fake_executable_contract_bundle_refinement_and_provenance(
     assert result.provenance.index.index_id == "fake-gaia-index"
     assert result.provenance.index.astrometry_index_ids == (42,)
     assert result.provenance.runtime_downloads is False
-    assert all("<temporary>" in value or "torchsky-astrometry-net" not in value for value in result.provenance.bootstrap_arguments)
+    assert all(
+        "<temporary>" in value or "torchsky-astrometry-net" not in value
+        for value in result.provenance.bootstrap_arguments
+    )
 
 
 def test_flux_and_covariance_are_optional(
@@ -360,7 +370,10 @@ def test_heldout_verification_rejects_replacement_solution(
         _solve(tmp_path, monkeypatch)
 
 
-@pytest.mark.parametrize(("environment", "message"), [("FAKE_EXIT", "exit code 7"), ("FAKE_UNSOLVED", "no accepted solution")])
+@pytest.mark.parametrize(
+    ("environment", "message"),
+    [("FAKE_EXIT", "exit code 7"), ("FAKE_UNSOLVED", "no accepted solution")],
+)
 def test_external_error_contracts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -23,21 +23,23 @@ def test_torchsky_wcs_from_torchfits_header() -> None:
 
     hdr = get_header(_FIXTURE, 0)
     d = dict(hdr)
-    d.update({
-        "NAXIS": 2,
-        "NAXIS1": 100,
-        "NAXIS2": 200,
-        "CTYPE1": "RA---TAN",
-        "CTYPE2": "DEC--TAN",
-        "CRPIX1": 50.0,
-        "CRPIX2": 100.0,
-        "CRVAL1": 180.0,
-        "CRVAL2": 0.0,
-        "CDELT1": -0.01,
-        "CDELT2": 0.01,
-        "CUNIT1": "deg",
-        "CUNIT2": "deg",
-    })
+    d.update(
+        {
+            "NAXIS": 2,
+            "NAXIS1": 100,
+            "NAXIS2": 200,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": 50.0,
+            "CRPIX2": 100.0,
+            "CRVAL1": 180.0,
+            "CRVAL2": 0.0,
+            "CDELT1": -0.01,
+            "CDELT2": 0.01,
+            "CUNIT1": "deg",
+            "CUNIT2": "deg",
+        }
+    )
     wcs = WCS(d)
     ra, dec = wcs.pixel_to_world(50.0, 100.0)
     # Verify the transform is sensible

@@ -30,7 +30,9 @@ MANIFEST = ROOT / "docs" / "api-manifest.json"
 TIER1 = ROOT / "docs" / "data" / "tier1.txt"
 BASELINE = ROOT / "docs" / "data" / "docstring-baseline.json"
 REGISTRY = ROOT / "docs" / "reference" / "_registry.toml"
-SECTION = re.compile(r"^\s*(Args|Arguments|Parameters|Returns|Yields|Raises|Example|Examples):\s*$", re.M)
+SECTION = re.compile(
+    r"^\s*(Args|Arguments|Parameters|Returns|Yields|Raises|Example|Examples):\s*$", re.M
+)
 
 
 def _requires_returns(obj: object) -> bool:
@@ -74,7 +76,9 @@ def _registered_type_alias_docs() -> dict[str, str]:
         raise TypeError("public_type_aliases must be a TOML table")
     for name, summary in docs.items():
         if not isinstance(summary, str) or not summary.strip() or "\n" in summary:
-            raise ValueError(f"public type-alias summary must be one non-empty line: {name}")
+            raise ValueError(
+                f"public type-alias summary must be one non-empty line: {name}"
+            )
     return docs
 
 
@@ -103,7 +107,9 @@ def collect() -> dict[str, list[str]]:
             doc = inspect.getdoc(obj) or ""
             if full in alias_docs:
                 if getattr(obj, "__module__", None) != "typing":
-                    raise TypeError(f"registered public type alias is not a typing object: {full}")
+                    raise TypeError(
+                        f"registered public type alias is not a typing object: {full}"
+                    )
                 doc = alias_docs[full]
             present = _present_sections(doc)
             if full in tier1:
@@ -121,7 +127,9 @@ def collect() -> dict[str, list[str]]:
 
 def write_baseline(debt: dict[str, list[str]]) -> None:
     BASELINE.parent.mkdir(parents=True, exist_ok=True)
-    BASELINE.write_text(json.dumps(debt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    BASELINE.write_text(
+        json.dumps(debt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def check(debt: dict[str, list[str]]) -> int:
@@ -141,7 +149,9 @@ def check(debt: dict[str, list[str]]) -> int:
         for name in added:
             print(f"  new: {name} missing {debt[name]}")
         for name in grown:
-            print(f"  worse: {name} now missing {sorted(set(debt[name]) - set(baseline[name]))}")
+            print(
+                f"  worse: {name} now missing {sorted(set(debt[name]) - set(baseline[name]))}"
+            )
         print("Document the new API or explain why it belongs in the baseline.")
         return 1
     print(

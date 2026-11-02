@@ -132,7 +132,9 @@ def test_query_disc_dispatcher_matches_public_and_ops_helper(nest: bool) -> None
     vec = torch.tensor([0.3, -0.4, 0.5], dtype=torch.float64)
     cos_lim = 0.25
     actual = torch.ops.torchsky.healpix_query_disc(8, vec, cos_lim, nest)
-    expected = healpix.query_disc(8, vec, torch.acos(torch.tensor(cos_lim)).item(), nest=nest)
+    expected = healpix.query_disc(
+        8, vec, torch.acos(torch.tensor(cos_lim)).item(), nest=nest
+    )
     helper = _ops.healpix_query_disc(8, vec, cos_lim, nest)
     torch.testing.assert_close(actual, expected)
     torch.testing.assert_close(actual, helper)
@@ -311,9 +313,7 @@ def test_public_fixed_shape_paths_use_dispatcher(
         nside_coverage=1,
     )
     sparse.get_values(torch.tensor([0], dtype=torch.int64))
-    healpix.query_disc(
-        2, torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64), 0.25
-    )
+    healpix.query_disc(2, torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64), 0.25)
     assert {
         "healpix_ring2nest",
         "healpix_neighbors_ring",

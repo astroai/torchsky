@@ -37,6 +37,7 @@ def _working_dtype(tensor: torch.Tensor) -> torch.dtype:
         return torch.float64
     return tensor.dtype if tensor.is_floating_point() else torch.get_default_dtype()
 
+
 WavelengthUnit = Literal["angstrom", "nm"]
 PhotometryOutput = Literal["mean_f_lambda", "f_nu_microjy", "ab_mag"]
 
@@ -617,7 +618,9 @@ def _covered_grid(
     spectrum_inside = wave[(wave > left) & (wave < right)]
     # Sorted, not deduplicated: coincident spectrum and passband samples must
     # each keep their own gradient path into the integral.
-    grid = torch.sort(torch.cat((left[None], pb_inside, spectrum_inside, right[None]))).values
+    grid = torch.sort(
+        torch.cat((left[None], pb_inside, spectrum_inside, right[None]))
+    ).values
     response = _linear_interpolate(pb_wave, pb_response.unsqueeze(0), grid).squeeze(0)
     coverage = torch.trapezoid(response * grid, grid) / full_weight
     return grid, response, coverage
@@ -645,6 +648,7 @@ def _linear_interpolate(
         return y[index - 1] + fraction * (y[index] - y[index - 1])
     y0, y1 = y[:, index - 1], y[:, index]
     return y0 + fraction.unsqueeze(0) * (y1 - y0)
+
 
 __all__ = [
     "Passband",

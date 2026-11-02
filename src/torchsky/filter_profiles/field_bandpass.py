@@ -393,9 +393,7 @@ def bandpass_from_svo(
             else None
         )
         if rows is None:
-            rows = _svo_fps().get_filter_list(
-                facility=facility, instrument=instrument
-            )
+            rows = _svo_fps().get_filter_list(facility=facility, instrument=instrument)
             if cdir is not None:
                 _save_cached_filter_list(
                     cdir, facility=facility, instrument=instrument, table=rows
@@ -493,6 +491,7 @@ def resolve_field_bandpass(
         )
     raise AssertionError("unreachable")
 
+
 def photon_quadrature(
     wavelength: torch.Tensor,
     throughput: torch.Tensor,
@@ -514,7 +513,9 @@ def photon_quadrature(
     w = torch.as_tensor(wavelength, dtype=torch.float64).flatten()
     t = torch.as_tensor(throughput, dtype=torch.float64).flatten().clamp(min=0.0)
     if w.shape != t.shape or w.numel() < 2:
-        raise ValueError("wavelength and throughput must be 1-D curves of equal length >= 2")
+        raise ValueError(
+            "wavelength and throughput must be 1-D curves of equal length >= 2"
+        )
     order = torch.argsort(w)
     w, t = w[order], t[order]
     if not bool((w > 0).all()):

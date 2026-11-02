@@ -230,10 +230,7 @@ class TestHipsTile:
         h = w = 256
         # FITS y=0 is the southern row, so values increase northward.
         image = (
-            torch.arange(h, dtype=torch.float32)
-            .reshape(h, 1)
-            .expand(h, w)
-            .contiguous()
+            torch.arange(h, dtype=torch.float32).reshape(h, 1).expand(h, w).contiguous()
         )
         header = {
             "NAXIS1": w,

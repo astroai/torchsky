@@ -99,7 +99,10 @@ def test_forward_box_splat_conserves_flux_and_centroid(
 
     def axis(c):
         lo, hi = c - width / 2, c + width / 2
-        ov = (torch.minimum(pix + 0.5, torch.tensor(hi)) - torch.maximum(pix - 0.5, torch.tensor(lo))).clamp_min(0)
+        ov = (
+            torch.minimum(pix + 0.5, torch.tensor(hi))
+            - torch.maximum(pix - 0.5, torch.tensor(lo))
+        ).clamp_min(0)
         return ov / width
 
     expected = axis(ey.item()).unsqueeze(1) * axis(ex.item()).unsqueeze(0)
@@ -121,15 +124,26 @@ def test_cube_drizzle_pixfrac_exact_box_overlap(pixfrac):
     )
     axis = torch.tensor([4000.0, 5000.0, 6000.0], dtype=torch.float64)
     r = _coadd_ifu_3d_cube(
-        [obs], h, spectral_axis=axis, spectral_bin_edges=None, spectral_unit="Angstrom",
-        spectral_type="WAVE", spectral_kernel="drizzle", pixfrac=pixfrac,
-        spectral_pixfrac=1.0, emsm_scale=1.0, device="cpu",
+        [obs],
+        h,
+        spectral_axis=axis,
+        spectral_bin_edges=None,
+        spectral_unit="Angstrom",
+        spectral_type="WAVE",
+        spectral_kernel="drizzle",
+        pixfrac=pixfrac,
+        spectral_pixfrac=1.0,
+        emsm_scale=1.0,
+        device="cpu",
     )
     w = r.weight.double()
     assert w.sum().item() == pytest.approx(1.0, abs=1e-6)
     plane = w[1]
     pix = torch.arange(9, dtype=torch.float64)
-    ov = (torch.minimum(pix + 0.5, torch.tensor(4 + pixfrac / 2)) - torch.maximum(pix - 0.5, torch.tensor(4 - pixfrac / 2))).clamp_min(0) / pixfrac
+    ov = (
+        torch.minimum(pix + 0.5, torch.tensor(4 + pixfrac / 2))
+        - torch.maximum(pix - 0.5, torch.tensor(4 - pixfrac / 2))
+    ).clamp_min(0) / pixfrac
     assert (plane - ov.unsqueeze(1) * ov.unsqueeze(0)).abs().max().item() < 1e-6
 
 
@@ -144,9 +158,15 @@ def test_coadd_cube_accepts_cube_target_for_ifu_frames():
     rows = torch.arange(n_wave, dtype=torch.float64)
     cols = torch.arange(n_slice, dtype=torch.float64)
     ifu_wcs = IFUSliceWCS(
-        ra_map=(150.0 + (cols - 7.5) * 0.001).unsqueeze(0).expand(n_wave, n_slice).clone(),
+        ra_map=(150.0 + (cols - 7.5) * 0.001)
+        .unsqueeze(0)
+        .expand(n_wave, n_slice)
+        .clone(),
         dec_map=torch.full((n_wave, n_slice), 2.0, dtype=torch.float64),
-        wavelength_map=(5000.0 + 2.0 * rows).unsqueeze(1).expand(n_wave, n_slice).clone(),
+        wavelength_map=(5000.0 + 2.0 * rows)
+        .unsqueeze(1)
+        .expand(n_wave, n_slice)
+        .clone(),
         slice_id_map=cols.to(torch.int64).unsqueeze(0).expand(n_wave, n_slice).clone(),
     )
     frame = Observation(
@@ -167,9 +187,7 @@ def test_coadd_cube_accepts_cube_target_for_ifu_frames():
     assert float(cube.weight.sum()) > 0.0
 
 
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="MPS not available"
-)
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
 def test_pixel_area_sin_wcs_on_mps_matches_cpu_float64():
     from torchsky.map.operators.pixel_area import pixel_area_sr_map
 
@@ -201,8 +219,15 @@ def _run_quad_accumulate(shift, offset):
     n = torch.ones(xs.shape[0], dtype=torch.float32)
     fn, fw = torch.zeros(w * h), torch.zeros(w * h)
     _accumulate_quadrilateral_overlaps(
-        qx, qy, n, torch.ones_like(n), width=w, height=h,
-        flat_numer=fn, flat_weight=fw, flat_variance_weight=None,
+        qx,
+        qy,
+        n,
+        torch.ones_like(n),
+        width=w,
+        height=h,
+        flat_numer=fn,
+        flat_weight=fw,
+        flat_variance_weight=None,
     )
     return fn
 
@@ -235,8 +260,12 @@ def test_point_drizzle_edge_acceptance_is_symmetric_in_x_and_y(dx, dy):
     tgt = types.SimpleNamespace(shape=(8, 8), wcs=torchsky.WCS(_hdr(8, 4.0 + dx, 1e-4)))
     tgt.wcs = torchsky.WCS({**_hdr(8, 4.0 + dx, 1e-4), "CRPIX2": 4.0 + dy})
     _, weight = exact_point_drizzle_project(
-        torch.ones(8, 8), torch.ones(8, 8), src, tgt,
-        value_semantics="surface_brightness", pixel_area_sr_map_fn=None,
+        torch.ones(8, 8),
+        torch.ones(8, 8),
+        src,
+        tgt,
+        value_semantics="surface_brightness",
+        pixel_area_sr_map_fn=None,
         chunk_pixels=1 << 16,
     )
     assert weight.sum().item() == 64.0
@@ -277,7 +306,10 @@ def test_native_drizzle_accumulate_rejects_bad_shapes_and_layouts():
 
 
 def test_lanczos_sinc_gradients_are_finite_at_integer_positions():
-    from torchsky.map.operators.resampling import custom_separable_sample, lanczos_weight
+    from torchsky.map.operators.resampling import (
+        custom_separable_sample,
+        lanczos_weight,
+    )
 
     x = torch.tensor([0.0, 0.5, 1.0], dtype=torch.float64, requires_grad=True)
     lanczos_weight(x, a=3).sum().backward()
@@ -459,9 +491,11 @@ def test_coadd_healpix_converts_galactic_wcs_to_icrs_pixels():
         weight_map=torch.ones(16, 16),
     )
     result = coadd_healpix([obs], nside=64, nest=True)
-    covered = torch.nonzero(result.overlap_count > 0).reshape(-1) if hasattr(
-        result, "overlap_count"
-    ) else None
+    covered = (
+        torch.nonzero(result.overlap_count > 0).reshape(-1)
+        if hasattr(result, "overlap_count")
+        else None
+    )
     if covered is None:
         covered = torch.nonzero(result.weights > 0).reshape(-1)
     assert covered.numel() > 0

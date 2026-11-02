@@ -216,9 +216,7 @@ def test_nearest_grid_indices_chunked_matches_eager() -> None:
         [[-1.0, 0.0], [0.0, 0.0], [0.0, 0.0], [1.0, 1.0], [3.0, -2.0]],
         dtype=torch.float64,
     )
-    expected = torch.sum((target[:, None] - grid[None, :]) ** 2, dim=-1).argmin(
-        dim=-1
-    )
+    expected = torch.sum((target[:, None] - grid[None, :]) ** 2, dim=-1).argmin(dim=-1)
 
     got = tabular_module._nearest_grid_indices(target, grid, max_pairs=3)
 
@@ -231,9 +229,7 @@ def test_coupled_tabular_inverse_dtype_and_empty_contract(dtype: torch.dtype) ->
     y = torch.linspace(-1.0, 1.0, 5, dtype=dtype)
     xx = x[:, None].expand(4, 5)
     yy = y[None, :].expand(4, 5)
-    lookup = CoupledTabularLookupWCS(
-        (x, y), torch.stack((xx, yy), dim=-1)
-    )
+    lookup = CoupledTabularLookupWCS((x, y), torch.stack((xx, yy), dim=-1))
     empty = torch.empty((2, 0, 2), dtype=dtype)
 
     empty_out = lookup.world_to_pixel(empty)
@@ -267,8 +263,7 @@ def test_coupled_tabular_inverse_dtype_and_empty_contract(dtype: torch.dtype) ->
             "mps",
             marks=pytest.mark.skipif(
                 not (
-                    hasattr(torch.backends, "mps")
-                    and torch.backends.mps.is_available()
+                    hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
                 ),
                 reason="MPS not available",
             ),
@@ -280,9 +275,7 @@ def test_coupled_tabular_inverse_empty_device_contract(device: str) -> None:
     axis = torch.tensor([0.0, 1.0], dtype=dtype, device=device)
     xx = axis[:, None].expand(2, 2)
     yy = axis[None, :].expand(2, 2)
-    lookup = CoupledTabularLookupWCS(
-        (axis, axis), torch.stack((xx, yy), dim=-1)
-    )
+    lookup = CoupledTabularLookupWCS((axis, axis), torch.stack((xx, yy), dim=-1))
     target = torch.empty((3, 0, 2), dtype=dtype, device=device)
 
     got = lookup.world_to_pixel(target)
@@ -1224,7 +1217,9 @@ def test_wcs_mixed_coupled_tabular_partial_pixel_and_world() -> None:
     pixels_true = torch.tensor([[1.0, 5.0]], dtype=torch.float64)
     world_true = wcs.pixel_to_world(pixels_true)
     pix_in = torch.tensor([[1.0, float("nan")]], dtype=torch.float64)
-    world_in = torch.tensor([[float("nan"), float(world_true[0, 1])]], dtype=torch.float64)
+    world_in = torch.tensor(
+        [[float("nan"), float(world_true[0, 1])]], dtype=torch.float64
+    )
     solved_p, solved_w = wcs.mixed_pixel_world(pixel=pix_in, world=world_in)
     torch.testing.assert_close(solved_p, pixels_true, atol=1e-6, rtol=1e-6)
     torch.testing.assert_close(solved_w, world_true, atol=1e-6, rtol=1e-6)
@@ -1321,7 +1316,6 @@ def test_coupled_tabular_wcs_cuda_roundtrip() -> None:
     torch.testing.assert_close(pix_g.cpu(), pixels, atol=1e-8, rtol=0.0)
 
 
-
 def test_tabular_fits_default_index_vector_is_one_based(tmp_path) -> None:
     """FITS -TAB default indexing vector is 1..N, matching astropy/WCSLIB.
 
@@ -1370,7 +1364,9 @@ def test_tabular_fits_default_index_vector_is_one_based(tmp_path) -> None:
 
     pixel = torch.tensor([0.0, 1.0, 3.0], dtype=torch.float64)
     ra, dec, wave = wcs.pixel_to_world(pixel, pixel, pixel)
-    assert torch.allclose(wave, torch.tensor([500.0, 501.0, 503.0], dtype=torch.float64))
+    assert torch.allclose(
+        wave, torch.tensor([500.0, 501.0, 503.0], dtype=torch.float64)
+    )
     assert torch.isfinite(ra).all() and torch.isfinite(dec).all()
 
 
@@ -1418,4 +1414,6 @@ def test_tabular_tables_accept_torchfits_hdu_list() -> None:
             )
         if isinstance(world, tuple):
             world = world[0]
-        assert torch.allclose(world, torch.tensor([100.0, 200.0, 300.0], dtype=torch.float64))
+        assert torch.allclose(
+            world, torch.tensor([100.0, 200.0, 300.0], dtype=torch.float64)
+        )

@@ -23,7 +23,9 @@ from torchsky.sphere import MOC
 def _random_sky(n: int, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
     g = torch.Generator().manual_seed(seed)
     lon = torch.rand(n, generator=g, dtype=torch.float64) * 360.0 - 180.0
-    lat = torch.asin(torch.rand(n, generator=g, dtype=torch.float64) * 2.0 - 1.0).rad2deg()
+    lat = torch.asin(
+        torch.rand(n, generator=g, dtype=torch.float64) * 2.0 - 1.0
+    ).rad2deg()
     return lon, lat
 
 
@@ -33,7 +35,7 @@ def test_catalog_self_crossmatch_recovers_identity() -> None:
     result = catalogs.crossmatch(catalog, catalog, radius_arcsec=0.01)
 
     assert torch.equal(result.left_index, result.right_index)
-    assert int(result.separation_arcsec.abs().max() * 3600.0 ** 2) < 1
+    assert int(result.separation_arcsec.abs().max() * 3600.0**2) < 1
 
 
 def test_crossmatch_all_pairs_is_symmetric() -> None:
@@ -59,9 +61,13 @@ def test_flux_conserving_rebin_preserves_a_constant_flux() -> None:
 
 def test_flux_conserving_rebin_preserves_the_integral_on_a_nonuniform_grid() -> None:
     g = torch.Generator().manual_seed(2)
-    edges = torch.sort(torch.rand(9, generator=g, dtype=torch.float64) * 4000.0 + 5000.0).values
+    edges = torch.sort(
+        torch.rand(9, generator=g, dtype=torch.float64) * 4000.0 + 5000.0
+    ).values
     flux = torch.rand(8, generator=g, dtype=torch.float64) + 0.5
-    output_edges = torch.linspace(float(edges[0]), float(edges[-1]), 5, dtype=torch.float64)
+    output_edges = torch.linspace(
+        float(edges[0]), float(edges[-1]), 5, dtype=torch.float64
+    )
 
     result = spectral.flux_conserving_rebin(flux, edges, output_edges)
     total_in = float((flux * (edges[1:] - edges[:-1])).sum())
@@ -84,9 +90,9 @@ def test_extinction_curve_normalisation_and_limits() -> None:
     k = extinction.k_lambda(wavelength)
     assert bool(torch.isfinite(k).all())
     assert float(k.min()) > 0.0
-    assert float(extinction.k_lambda(torch.tensor([5500.0], dtype=torch.float64))) == pytest.approx(
-        1.0, abs=0.01
-    )
+    assert float(
+        extinction.k_lambda(torch.tensor([5500.0], dtype=torch.float64))
+    ) == pytest.approx(1.0, abs=0.01)
 
 
 def test_flat_wcdm_distance_relations() -> None:
@@ -99,12 +105,16 @@ def test_flat_wcdm_distance_relations() -> None:
         distance_modulus, 5.0 * torch.log10(luminosity_distance * 1e5), atol=1e-10
     )
     assert torch.allclose(
-        model.distance_modulus(z), cosmology.distance_modulus(z, H0=70.0, om0=0.3), atol=1e-10
+        model.distance_modulus(z),
+        cosmology.distance_modulus(z, H0=70.0, om0=0.3),
+        atol=1e-10,
     )
     angular = model.angular_diameter_distance(z)
     comoving = model.comoving_distance(z)
     assert torch.allclose(angular, comoving / (1.0 + z), rtol=1e-10)
-    assert float(model.e(torch.tensor([0.0], dtype=torch.float64))) == pytest.approx(1.0)
+    assert float(model.e(torch.tensor([0.0], dtype=torch.float64))) == pytest.approx(
+        1.0
+    )
     assert bool(torch.all(torch.diff(comoving) > 0))
 
 
@@ -123,7 +133,9 @@ def test_healpix_interpolation_is_linear_in_map_values() -> None:
     map_a = torch.rand(12 * nside * nside, generator=g, dtype=torch.float64)
     map_b = torch.rand(12 * nside * nside, generator=g, dtype=torch.float64)
     lon = torch.rand(100, generator=g, dtype=torch.float64) * 360.0 - 180.0
-    lat = torch.asin(torch.rand(100, generator=g, dtype=torch.float64) * 2.0 - 1.0).rad2deg()
+    lat = torch.asin(
+        torch.rand(100, generator=g, dtype=torch.float64) * 2.0 - 1.0
+    ).rad2deg()
 
     value_a = get_interp_val(map_a, lon, lat, nside, lonlat=True)
     value_b = get_interp_val(map_b, lon, lat, nside, lonlat=True)

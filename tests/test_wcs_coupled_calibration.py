@@ -42,7 +42,9 @@ def _coupled_problem(
     source = torch.stack(
         (
             torch.linspace(-18.0, 21.0, 10, dtype=DTYPE),
-            torch.tensor([-9.0, 6.0, 13.0, -15.0, 3.0, 18.0, -4.0, 9.0, -17.0, 1.0], dtype=DTYPE),
+            torch.tensor(
+                [-9.0, 6.0, 13.0, -15.0, 3.0, 18.0, -4.0, 9.0, -17.0, 1.0], dtype=DTYPE
+            ),
         ),
         dim=-1,
     )
@@ -402,8 +404,7 @@ def test_photometric_components_match_order_under_many_row_permutations() -> Non
     baseline = _PhotometrySolver(make_graph(False), config)
     permuted = _PhotometrySolver(make_graph(True), config)
     expected_exposures = tuple(
-        (2 * component, 2 * component + 1)
-        for component in range(component_count)
+        (2 * component, 2 * component + 1) for component in range(component_count)
     )
     expected_components = tuple(
         tuple(
@@ -412,7 +413,9 @@ def test_photometric_components_match_order_under_many_row_permutations() -> Non
         )
         for component in range(component_count)
     )
-    expected_anchored = tuple(component % 3 == 0 for component in range(component_count))
+    expected_anchored = tuple(
+        component % 3 == 0 for component in range(component_count)
+    )
 
     assert baseline.components == expected_components
     assert baseline.component_exposures == expected_exposures
@@ -533,4 +536,7 @@ def test_compact_sed_basis_and_proper_motion_color_confounding_are_separated() -
     inferred = solution.photometry.source_band_log_flux @ torch.linalg.inv(sed_basis).mT
     torch.testing.assert_close(inferred, recovered, atol=2.0e-3, rtol=0)
     assert solution.astrometry.proper_motion_mas_per_year is not None
-    assert torch.linalg.vector_norm(solution.astrometry.proper_motion_mas_per_year) < 1.0e-2
+    assert (
+        torch.linalg.vector_norm(solution.astrometry.proper_motion_mas_per_year)
+        < 1.0e-2
+    )

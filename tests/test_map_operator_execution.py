@@ -425,9 +425,9 @@ def test_tpv_pixel_area_uses_spherical_polygons_and_chunking() -> None:
     torch.testing.assert_close(area_small_chunks, area_single_chunk)
     torch.testing.assert_close(
         samples,
-        area_small_chunks[
-            torch.tensor([0, 8, 16]), torch.tensor([0, 9, 18])
-        ].to(torch.float64),
+        area_small_chunks[torch.tensor([0, 8, 16]), torch.tensor([0, 9, 18])].to(
+            torch.float64
+        ),
         rtol=2e-7,
         atol=0.0,
     )

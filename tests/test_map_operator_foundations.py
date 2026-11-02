@@ -41,7 +41,9 @@ def _matrix_operator(matrix: torch.Tensor, key: str) -> CallableLinearOperator:
     )
 
 
-def _assert_adjoint(operator: LinearOperator, source: torch.Tensor, target: torch.Tensor) -> None:
+def _assert_adjoint(
+    operator: LinearOperator, source: torch.Tensor, target: torch.Tensor
+) -> None:
     torch.testing.assert_close(
         torch.sum(operator.apply(source) * target),
         torch.sum(source * operator.adjoint(target)),
@@ -105,12 +107,18 @@ def test_restriction_mask_noncontiguous_and_empty_domains() -> None:
         torch.tensor([0, 4, 11], dtype=torch.int64),
     )
     selected = restriction.apply(base)
-    torch.testing.assert_close(selected, torch.tensor([0.0, 5.0, 11.0], dtype=torch.float64))
-    _assert_adjoint(restriction, base, torch.tensor([2.0, -1.0, 4.0], dtype=torch.float64))
+    torch.testing.assert_close(
+        selected, torch.tensor([0.0, 5.0, 11.0], dtype=torch.float64)
+    )
+    _assert_adjoint(
+        restriction, base, torch.tensor([2.0, -1.0, 4.0], dtype=torch.float64)
+    )
 
     mask = MaskPlan(torch.tensor([[True, False], [False, True]]))
     value = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
-    torch.testing.assert_close(mask.apply(value), torch.tensor([[1.0, 0.0], [0.0, 4.0]]))
+    torch.testing.assert_close(
+        mask.apply(value), torch.tensor([[1.0, 0.0], [0.0, 4.0]])
+    )
     _assert_adjoint(mask, value, torch.ones_like(value))
 
     empty = direct_copy_response((0,), dtype=torch.float32)
@@ -141,20 +149,35 @@ def test_indexed_response_dense_squared_dq_context_and_chunk_parity() -> None:
     assert not source.is_contiguous()
 
     for chunk_size in (1, 2, 17):
-        torch.testing.assert_close(plan.apply(source, chunk_size=chunk_size), (dense @ source.reshape(-1)).reshape(2, 2))
+        torch.testing.assert_close(
+            plan.apply(source, chunk_size=chunk_size),
+            (dense @ source.reshape(-1)).reshape(2, 2),
+        )
         target = torch.tensor([[1.0, -2.0], [0.5, 3.0]], dtype=torch.float64)
-        torch.testing.assert_close(plan.adjoint(target, chunk_size=chunk_size), (dense.mT @ target.reshape(-1)).reshape(3, 3))
+        torch.testing.assert_close(
+            plan.adjoint(target, chunk_size=chunk_size),
+            (dense.mT @ target.reshape(-1)).reshape(3, 3),
+        )
         variance = torch.linspace(0.5, 2.5, 9, dtype=torch.float64).reshape(3, 3)
-        torch.testing.assert_close(plan.apply_squared(variance, chunk_size=chunk_size), (dense.square() @ variance.reshape(-1)).reshape(2, 2))
+        torch.testing.assert_close(
+            plan.apply_squared(variance, chunk_size=chunk_size),
+            (dense.square() @ variance.reshape(-1)).reshape(2, 2),
+        )
 
-    _assert_adjoint(plan, source, torch.tensor([[1.0, -2.0], [0.5, 3.0]], dtype=torch.float64))
+    _assert_adjoint(
+        plan, source, torch.tensor([[1.0, -2.0], [0.5, 3.0]], dtype=torch.float64)
+    )
     flags = torch.tensor([[1, 2, 4], [8, 16, 32], [64, 128, 256]], dtype=torch.int64)
     propagated = plan.apply_flags(flags, chunk_size=1)
     expected = torch.zeros(4, dtype=torch.int64)
-    for target_index, source_index in zip(plan.target_indices.tolist(), plan.source_indices.tolist(), strict=True):
+    for target_index, source_index in zip(
+        plan.target_indices.tolist(), plan.source_indices.tolist(), strict=True
+    ):
         expected[target_index] |= flags.reshape(-1)[source_index]
     torch.testing.assert_close(propagated.reshape(-1), expected)
-    assert torch.equal(plan.contributor_count(chunk_size=1), plan.contributor_count(chunk_size=19))
+    assert torch.equal(
+        plan.contributor_count(chunk_size=1), plan.contributor_count(chunk_size=19)
+    )
     assert torch.equal(plan.context(chunk_size=1), plan.context(chunk_size=19))
 
     exact = bilinear_response(
@@ -162,19 +185,42 @@ def test_indexed_response_dense_squared_dq_context_and_chunk_parity() -> None:
         torch.tensor([0.0]),
         torch.tensor([0.0]),
     )
-    assert exact.apply_flags(torch.tensor([[1, 2], [4, 8]], dtype=torch.int64)).item() == 1
+    assert (
+        exact.apply_flags(torch.tensor([[1, 2], [4, 8]], dtype=torch.int64)).item() == 1
+    )
     assert exact.contributor_count().item() == 1
 
 
-@pytest.mark.parametrize("device", ["cpu", pytest.param("mps", marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable"))])
-def test_direct_response_preserves_device_gradient_and_chunk_parity(device: str) -> None:
-    plan = direct_copy_response((3, 4), dtype=torch.float32, device=device, default_chunk_size=3)
-    value = torch.arange(12, dtype=torch.float32, device=device).reshape(3, 4).requires_grad_()
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason="MPS unavailable"
+            ),
+        ),
+    ],
+)
+def test_direct_response_preserves_device_gradient_and_chunk_parity(
+    device: str,
+) -> None:
+    plan = direct_copy_response(
+        (3, 4), dtype=torch.float32, device=device, default_chunk_size=3
+    )
+    value = (
+        torch.arange(12, dtype=torch.float32, device=device)
+        .reshape(3, 4)
+        .requires_grad_()
+    )
     output = plan.apply(value, chunk_size=2)
     torch.testing.assert_close(output, value)
     output.square().sum().backward()
     torch.testing.assert_close(value.grad, 2.0 * value)
-    torch.testing.assert_close(plan.apply_squared(value.detach(), chunk_size=99), value.detach())
+    torch.testing.assert_close(
+        plan.apply_squared(value.detach(), chunk_size=99), value.detach()
+    )
 
 
 def test_existing_drizzle_actions_adapt_without_conflating_squared_response() -> None:
@@ -203,15 +249,21 @@ def test_covariance_capabilities_match_dense_and_monte_carlo_query_variance() ->
     dense = torch.diag(variance) + factor @ factor.mT
     value = torch.tensor([1.0, -2.0, 0.5], dtype=dtype)
     torch.testing.assert_close(covariance.apply_covariance(value), dense @ value)
-    torch.testing.assert_close(covariance.apply_precision(value), torch.linalg.solve(dense, value))
+    torch.testing.assert_close(
+        covariance.apply_precision(value), torch.linalg.solve(dense, value)
+    )
     torch.testing.assert_close(covariance.diagonal(), torch.diagonal(dense))
-    torch.testing.assert_close(covariance.logdet(), torch.linalg.slogdet(dense).logabsdet)
+    torch.testing.assert_close(
+        covariance.logdet(), torch.linalg.slogdet(dense).logabsdet
+    )
     torch.testing.assert_close(covariance.query_variance(value), value @ dense @ value)
 
     generator = torch.Generator().manual_seed(1234)
     samples = covariance.sample((80_000,), generator=generator)
     empirical = torch.var(samples @ value, unbiased=True)
-    torch.testing.assert_close(empirical, covariance.query_variance(value), rtol=0.025, atol=0.0)
+    torch.testing.assert_close(
+        empirical, covariance.query_variance(value), rtol=0.025, atol=0.0
+    )
 
 
 def test_diagonal_block_and_nuisance_capabilities_are_explicit() -> None:
@@ -219,11 +271,23 @@ def test_diagonal_block_and_nuisance_capabilities_are_explicit() -> None:
     second = DiagonalCovariance(torch.tensor([9.0], dtype=torch.float64))
     block = BlockDiagonalCovariance((first, second))
     value = torch.tensor([2.0, 3.0, 4.0], dtype=torch.float64)
-    torch.testing.assert_close(block.apply_covariance(value), torch.tensor([2.0, 12.0, 36.0], dtype=torch.float64))
-    torch.testing.assert_close(block.apply_precision(value), torch.tensor([2.0, 0.75, 4.0 / 9.0], dtype=torch.float64))
-    torch.testing.assert_close(block.whiten(value), torch.tensor([2.0, 1.5, 4.0 / 3.0], dtype=torch.float64))
-    torch.testing.assert_close(block.diagonal(), torch.tensor([1.0, 4.0, 9.0], dtype=torch.float64))
-    torch.testing.assert_close(block.logdet(), torch.log(torch.tensor(36.0, dtype=torch.float64)))
+    torch.testing.assert_close(
+        block.apply_covariance(value),
+        torch.tensor([2.0, 12.0, 36.0], dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        block.apply_precision(value),
+        torch.tensor([2.0, 0.75, 4.0 / 9.0], dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        block.whiten(value), torch.tensor([2.0, 1.5, 4.0 / 3.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(
+        block.diagonal(), torch.tensor([1.0, 4.0, 9.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(
+        block.logdet(), torch.log(torch.tensor(36.0, dtype=torch.float64))
+    )
 
     nuisance = NuisancePrecisionAdapter(lambda tensor: 2.0 * tensor)
     torch.testing.assert_close(nuisance.apply_precision(value), 2.0 * value)

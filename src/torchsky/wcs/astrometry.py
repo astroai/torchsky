@@ -826,9 +826,7 @@ class _AstrometrySolver:
         self.n_exposure = len(graph.exposure_ids)
         self.n_source = int(graph.source_ids.numel())
         if fit_mask is None:
-            self.fit_mask = torch.ones(
-                self.n_row, dtype=torch.bool, device=self.device
-            )
+            self.fit_mask = torch.ones(self.n_row, dtype=torch.bool, device=self.device)
         else:
             self.fit_mask = torch.as_tensor(
                 fit_mask, dtype=torch.bool, device=self.device
@@ -916,9 +914,7 @@ class _AstrometrySolver:
         active_source = self.graph.row_source[active_rows].detach().cpu().tolist()
         for exposure, source in zip(active_exposure, active_source, strict=True):
             union.union(int(exposure), self.n_exposure + int(source))
-        roots = sorted(
-            {union.find(int(exposure)) for exposure in active_exposure}
-        )
+        roots = sorted({union.find(int(exposure)) for exposure in active_exposure})
         active_nodes = sorted(
             {int(exposure) for exposure in active_exposure}
             | {self.n_exposure + int(source) for source in active_source}
@@ -933,7 +929,9 @@ class _AstrometrySolver:
         for root in roots:
             nodes = groups[root]
             exp = tuple(node for node in nodes if node < self.n_exposure)
-            src = tuple(node - self.n_exposure for node in nodes if node >= self.n_exposure)
+            src = tuple(
+                node - self.n_exposure for node in nodes if node >= self.n_exposure
+            )
             components.append(tuple(nodes))
             exposures.append(exp)
             anchored.append(any(reference_mask[index] for index in src))
@@ -960,8 +958,12 @@ class _AstrometrySolver:
             color = observation.color
             if self.source_colors is not None:
                 if observation.source_ids is None:
-                    raise ValueError("source_ids are required for source color coupling")
-                locations = torch.searchsorted(self.graph.source_ids, observation.source_ids)
+                    raise ValueError(
+                        "source_ids are required for source color coupling"
+                    )
+                locations = torch.searchsorted(
+                    self.graph.source_ids, observation.source_ids
+                )
                 color = self.source_colors[locations]
             basis = observation.dcr_basis
             lateral_basis = observation.lateral_color_basis
@@ -1275,9 +1277,7 @@ class _AstrometrySolver:
                 observed + (row_coefficient * self.color).unsqueeze(-1) * self.dcr_basis
             )
         if self.config.fit_lateral_color:
-            coefficient = global_parameters[
-                self.lateral_offset : self.grid_offset
-            ]
+            coefficient = global_parameters[self.lateral_offset : self.grid_offset]
             row_coefficient = (
                 coefficient[self.graph.row_detector]
                 * lateral_active[self.graph.row_detector]
@@ -1806,9 +1806,9 @@ class _AstrometrySolver:
                 .item()
             )
         inverse_matrix = matrix.cpu() if self.device.type == "mps" else matrix
-        inverse = torch.linalg.pinv(
-            inverse_matrix, rtol=self.config.rank_rtol
-        ).to(self.device)
+        inverse = torch.linalg.pinv(inverse_matrix, rtol=self.config.rank_rtol).to(
+            self.device
+        )
         full = torch.zeros(
             (self.global_dimension, self.global_dimension),
             dtype=self.dtype,

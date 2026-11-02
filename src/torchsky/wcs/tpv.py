@@ -210,7 +210,12 @@ class TPV:
             nan = torch.full_like(u, torch.nan)
             return torch.where(valid, u, nan), torch.where(valid, v, nan)
         xi, eta = self._distort_impl(u, v)
-        valid = torch.isfinite(u) & torch.isfinite(v) & torch.isfinite(xi) & torch.isfinite(eta)
+        valid = (
+            torch.isfinite(u)
+            & torch.isfinite(v)
+            & torch.isfinite(xi)
+            & torch.isfinite(eta)
+        )
         nan = torch.full_like(xi, torch.nan)
         return torch.where(valid, xi, nan), torch.where(valid, eta, nan)
 
@@ -333,16 +338,14 @@ class TPV:
         )
         active = viable
         for _ in range(max_iter):
-            xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = (
-                self._distort_and_jacobian_impl(u, v)
+            xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
+                u, v
             )
             fx0 = xi - xi_f
             fx1 = eta - eta_f
             res_norm = torch.hypot(fx0, fx1)
             det = dxi_du * deta_dv - dxi_dv * deta_du
-            conditioned = self._well_conditioned(
-                dxi_du, dxi_dv, deta_du, deta_dv
-            )
+            conditioned = self._well_conditioned(dxi_du, dxi_dv, deta_du, deta_dv)
             good = (
                 torch.isfinite(res_norm)
                 & torch.isfinite(u)
@@ -361,8 +364,8 @@ class TPV:
             active = update & torch.isfinite(u) & torch.isfinite(v)
             viable = viable & (~update | active)
 
-        xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = (
-            self._distort_and_jacobian_impl(u, v)
+        xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
+            u, v
         )
         final_residual = torch.hypot(xi - xi_f, eta - eta_f)
         valid = (
@@ -433,8 +436,11 @@ class TPV:
         else:
             u, v = self._initial_guess_affine(xi_t, eta_t)
             xi, eta = self._distort_impl(u, v)
-            valid = finite & torch.isfinite(u) & torch.isfinite(v) & (
-                torch.hypot(xi - xi_t, eta - eta_t) <= 1e-11
+            valid = (
+                finite
+                & torch.isfinite(u)
+                & torch.isfinite(v)
+                & (torch.hypot(xi - xi_t, eta - eta_t) <= 1e-11)
             )
         nan = torch.full_like(u, torch.nan)
         u, v = torch.where(valid, u, nan), torch.where(valid, v, nan)

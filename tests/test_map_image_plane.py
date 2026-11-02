@@ -873,7 +873,7 @@ def test_coadd_image_plane_does_not_reuse_overwritten_input(tmp_path) -> None:
         ("conservative_polygon", "surface_brightness", "weighted_mean"),
     ],
 )
-@pytest.mark.needs_float64('conservative_polygon', 'drizzle_square')
+@pytest.mark.needs_float64("conservative_polygon", "drizzle_square")
 def test_exposure_major_tiles_match_shifted_wcs_coadd(
     tmp_path, kernel, value_semantics, stacking_method
 ) -> None:
@@ -906,7 +906,7 @@ def test_exposure_major_tiles_match_shifted_wcs_coadd(
 
 
 @pytest.mark.parametrize("kernel", ["bilinear", "conservative_polygon", "splat_box"])
-@pytest.mark.needs_float64('conservative_polygon', 'splat_box')
+@pytest.mark.needs_float64("conservative_polygon", "splat_box")
 def test_tiled_squared_coefficient_variance_matches_full_projection(
     tmp_path,
     kernel,
@@ -2460,7 +2460,7 @@ def test_finite_aperture_uncertainty_device_parity(
     "kernel",
     ["bilinear", "drizzle_square", "conservative_polygon", "splat_box"],
 )
-@pytest.mark.needs_float64('conservative_polygon', 'drizzle_square', 'splat_box')
+@pytest.mark.needs_float64("conservative_polygon", "drizzle_square", "splat_box")
 def test_finite_aperture_uncertainty_matches_source_basis_oracle(
     tmp_path: Path,
     kernel: str,
@@ -2521,7 +2521,17 @@ def test_finite_aperture_uncertainty_matches_source_basis_oracle(
     "kernel",
     sorted(image_plane_coadd_mod._FINITE_APERTURE_COVARIANCE_KERNELS),
 )
-@pytest.mark.needs_float64('conservative_polygon', 'drizzle_gaussian', 'drizzle_lanczos2', 'drizzle_lanczos3', 'drizzle_point', 'drizzle_square', 'drizzle_turbo', 'splat_box', 'splat_point')
+@pytest.mark.needs_float64(
+    "conservative_polygon",
+    "drizzle_gaussian",
+    "drizzle_lanczos2",
+    "drizzle_lanczos3",
+    "drizzle_point",
+    "drizzle_square",
+    "drizzle_turbo",
+    "splat_box",
+    "splat_point",
+)
 def test_finite_aperture_uncertainty_single_pixel_matches_diagonal_plane(
     tmp_path: Path,
     kernel: str,
@@ -2849,7 +2859,9 @@ def test_finite_aperture_uncertainty_rejects_missing_noise_and_global_kernels(
         "splat_box",
     ],
 )
-@pytest.mark.needs_float64('drizzle_point', 'drizzle_square', 'splat_box', 'splat_point')
+@pytest.mark.needs_float64(
+    "drizzle_point", "drizzle_square", "splat_box", "splat_point"
+)
 def test_coadd_image_plane_accepts_custom_high_accuracy_kernels(
     tmp_path, kernel: str
 ) -> None:
@@ -4364,14 +4376,10 @@ def test_coadd_image_plane_multiband_real_astropy_fixture(tmp_path) -> None:
         result.wavelength,
         torch.tensor([4800.0, 6500.0], dtype=torch.float64),
     )
-    assert_close_on_device(
-        result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4
-    )
+    assert_close_on_device(result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4)
     assert_close_on_device(result.data[0, :, 50:], torch.zeros_like(image[:, 50:]))
     assert_close_on_device(result.data[1, :, :50], torch.zeros_like(image[:, :50]))
-    assert_close_on_device(
-        result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4
-    )
+    assert_close_on_device(result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4)
     assert result.overlap_count is not None
     assert_close_on_device(
         result.overlap_count[0, :, :50],
@@ -4390,12 +4398,8 @@ def test_coadd_image_plane_multiband_real_astropy_fixture(tmp_path) -> None:
         torch.ones_like(result.overlap_count[1, :, 50:]),
     )
     assert_close_on_device(result.weight[0, :, :50], torch.ones_like(image[:, :50]))
-    assert_close_on_device(
-        result.weight[0, :, 50:], torch.zeros_like(image[:, 50:])
-    )
-    assert_close_on_device(
-        result.weight[1, :, :50], torch.zeros_like(image[:, :50])
-    )
+    assert_close_on_device(result.weight[0, :, 50:], torch.zeros_like(image[:, 50:]))
+    assert_close_on_device(result.weight[1, :, :50], torch.zeros_like(image[:, :50]))
     assert_close_on_device(result.weight[1, :, 50:], torch.ones_like(image[:, 50:]))
     assert result.coverage_mocs is not None
     assert len(result.coverage_mocs) == 2
@@ -4742,14 +4746,10 @@ def test_coadd_image_plane_cube_real_astropy_fixture_to_data_cube(tmp_path) -> N
     )
 
     assert tuple(result.data.shape) == (2, 50, 100)
-    assert_close_on_device(
-        result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4
-    )
+    assert_close_on_device(result.data[0, :, :50], image[:, :50], atol=1e-4, rtol=1e-4)
     assert_close_on_device(result.data[0, :, 50:], torch.zeros_like(image[:, 50:]))
     assert_close_on_device(result.data[1, :, :50], torch.zeros_like(image[:, :50]))
-    assert_close_on_device(
-        result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4
-    )
+    assert_close_on_device(result.data[1, :, 50:], image[:, 50:], atol=1e-4, rtol=1e-4)
     cube = result.to_data_cube()
     assert cube.spatial_wcs is not None
     assert_close_on_device(cube.spectral_axis.values, result.spectral_axis.values)
@@ -4862,7 +4862,13 @@ _STACKING_METHODS_DETERMINISTIC = [
 
 @pytest.mark.parametrize("kernel", _KERNELS_DETERMINISTIC)
 @pytest.mark.parametrize("stacking_method", _STACKING_METHODS_DETERMINISTIC)
-@pytest.mark.needs_float64('conservative_polygon', 'drizzle_point', 'drizzle_square', 'splat_box', 'splat_point')
+@pytest.mark.needs_float64(
+    "conservative_polygon",
+    "drizzle_point",
+    "drizzle_square",
+    "splat_box",
+    "splat_point",
+)
 def test_coadd_image_plane_deterministic_accumulation(
     tmp_path, kernel: str, stacking_method: str
 ) -> None:

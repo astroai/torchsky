@@ -35,16 +35,27 @@ def sky_model(lon, lat, gain: float):
     """Smooth band-dependent sky: gradient plus two Gaussian clumps."""
     x = (lon - CENTRE[0]) * torch.cos(torch.deg2rad(lat))
     y = lat - CENTRE[1]
-    clump = torch.exp(-((x - 0.6) ** 2 + (y + 0.4) ** 2) / 0.18) + 0.6 * torch.exp(-((x + 0.7) ** 2 + (y - 0.5) ** 2) / 0.1)
+    clump = torch.exp(-((x - 0.6) ** 2 + (y + 0.4) ** 2) / 0.18) + 0.6 * torch.exp(
+        -((x + 0.7) ** 2 + (y - 0.5) ** 2) / 0.1
+    )
     return gain * (1.0 + 0.1 * x + 0.05 * y + clump)
 
 
 def tile_header(dx: float, dy: float) -> dict:
     return {
-        "NAXIS": 2, "NAXIS1": TILE, "NAXIS2": TILE, "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-        "CRPIX1": TILE / 2 + 0.5, "CRPIX2": TILE / 2 + 0.5,
-        "CRVAL1": CENTRE[0] + dx, "CRVAL2": CENTRE[1] + dy,
-        "CDELT1": -SCALE, "CDELT2": SCALE, "CUNIT1": "deg", "CUNIT2": "deg",
+        "NAXIS": 2,
+        "NAXIS1": TILE,
+        "NAXIS2": TILE,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": TILE / 2 + 0.5,
+        "CRPIX2": TILE / 2 + 0.5,
+        "CRVAL1": CENTRE[0] + dx,
+        "CRVAL2": CENTRE[1] + dy,
+        "CDELT1": -SCALE,
+        "CDELT2": SCALE,
+        "CUNIT1": "deg",
+        "CUNIT2": "deg",
     }
 
 
@@ -68,25 +79,40 @@ def main() -> None:
             h = tile_header(dx * 0.9, dy * 0.9)
             world = WCS(h).pixel_to_world(pix, origin=0)
             data = sky_model(world[:, 0], world[:, 1], gain).reshape(TILE, TILE).float()
-            observations.append(Observation(data=data, wcs=h, weight_map=torch.ones_like(data)))
-        res = coadd_healpix(observations, NSIDE, nest=True, sparse=True, kernel="bilinear", device=args.device)
+            observations.append(
+                Observation(data=data, wcs=h, weight_map=torch.ones_like(data))
+            )
+        res = coadd_healpix(
+            observations,
+            NSIDE,
+            nest=True,
+            sparse=True,
+            kernel="bilinear",
+            device=args.device,
+        )
         dense = res.data.to_dense() if hasattr(res.data, "to_dense") else res.data
         w = res.weight.to_dense() if hasattr(res.weight, "to_dense") else res.weight
         covered = torch.nonzero(w.cpu() > 0).flatten()
         lon, lat = sphere.pix2ang(NSIDE, covered, nest=True, lonlat=True)
         truth = sky_model(lon, lat, gain)
-        rel = ((dense.cpu()[covered].double() - truth).abs() / truth)
+        rel = (dense.cpu()[covered].double() - truth).abs() / truth
         inner = rel.sort().values[: int(0.95 * rel.numel())]
-        print(f"band {band}: {covered.numel()} pixels covered, median |rel err| = "
-              f"{float(rel.median()):.4f}, 95th pct = {float(inner[-1]):.4f}")
+        print(
+            f"band {band}: {covered.numel()} pixels covered, median |rel err| = "
+            f"{float(rel.median()):.4f}, 95th pct = {float(inner[-1]):.4f}"
+        )
         assert float(rel.median()) < 0.02
         maps[band] = (lon, lat, dense.cpu()[covered])
         counts = res.overlap_count
     depth = counts.to_dense() if hasattr(counts, "to_dense") else counts
-    print(f"overlap depth up to {int(depth.max())} tiles per pixel; NSIDE={NSIDE}, "
-          f"pixel size {sphere.nside2resol(NSIDE, arcmin=True):.2f} arcmin, device={args.device}")
+    print(
+        f"overlap depth up to {int(depth.max())} tiles per pixel; NSIDE={NSIDE}, "
+        f"pixel size {sphere.nside2resol(NSIDE, arcmin=True):.2f} arcmin, device={args.device}"
+    )
 
-    fig, axes = plt.subplots(1, 3, figsize=(10, 3.3), constrained_layout=True, sharey=True)
+    fig, axes = plt.subplots(
+        1, 3, figsize=(10, 3.3), constrained_layout=True, sharey=True
+    )
     for ax, (band, (lon, lat, val)) in zip(axes, maps.items()):
         ax.scatter(lon, lat, c=val, s=1.2, cmap="viridis", marker="s")
         ax.set_title(f"band {band}", fontsize=9)

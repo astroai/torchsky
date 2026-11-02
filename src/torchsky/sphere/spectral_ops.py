@@ -18,6 +18,7 @@ from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLE
 
 def _spectral():
     from . import spectral
+
     return spectral
 
 
@@ -380,9 +381,7 @@ def synalm(
     # We use eigh to be robust for theoretical spectra with zeros
     eigvals, eigvecs = torch.linalg.eigh(cov)
     scale = eigvals.abs().amax(dim=-1)
-    tolerance = (
-        torch.finfo(eigvals.dtype).eps * max(n_fields, 1) * scale
-    )
+    tolerance = torch.finfo(eigvals.dtype).eps * max(n_fields, 1) * scale
     invalid = eigvals[..., 0] < -tolerance
     if bool(torch.any(invalid).item()):
         first_ell = int(torch.nonzero(invalid, as_tuple=False)[0, 0].item())

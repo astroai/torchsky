@@ -54,12 +54,8 @@ def test_hips_tile_world_to_sample_grid_origin_zero() -> None:
     dec = torch.tensor([[0.0]], dtype=torch.float64)
     gx, gy, valid = _world_to_sample_grid(ra, dec, wcs, image_h=11, image_w=11)
     assert bool(valid.all())
-    torch.testing.assert_close(
-        gx, torch.zeros_like(gx), atol=1e-6, rtol=1e-6
-    )
-    torch.testing.assert_close(
-        gy, torch.zeros_like(gy), atol=1e-6, rtol=1e-6
-    )
+    torch.testing.assert_close(gx, torch.zeros_like(gx), atol=1e-6, rtol=1e-6)
+    torch.testing.assert_close(gy, torch.zeros_like(gy), atol=1e-6, rtol=1e-6)
 
 
 def test_zscale_limits_matches_transform_zscale() -> None:
@@ -130,7 +126,9 @@ def test_synthetic_photometry_2d_close_wavelengths_and_coincident_knot_grad() ->
     assert float(w1d.grad[1].abs()) > 0.0
 
 
-def test_marginalize_association_logits_zero_weight_grad_and_float32_spectral_encoding() -> None:
+def test_marginalize_association_logits_zero_weight_grad_and_float32_spectral_encoding() -> (
+    None
+):
     from torchsky.encoders import log_spectral_encoding
     from torchsky.encoders.photometry import marginalize_association_logits
 
@@ -186,7 +184,9 @@ def test_sphere_box_wrap_moc_downshift_and_sparse_interpolate() -> None:
     from torchsky.sphere.sparse import SparseHealpixMap
 
     box = SphericalBox(lon_min=350.0, lon_max=10.0, lat_min=-5.0, lat_max=5.0)
-    assert bool(box.contains(torch.tensor([355.0, 5.0]), torch.tensor([0.0, 0.0])).all())
+    assert bool(
+        box.contains(torch.tensor([355.0, 5.0]), torch.tensor([0.0, 0.0])).all()
+    )
     assert not bool(box.contains(torch.tensor([180.0]), torch.tensor([0.0])).any())
     pix = box.query_pixels(nside=8)
     assert pix.numel() > 0
@@ -317,7 +317,11 @@ def test_map_field_and_sky_regressions() -> None:
 
     # LowRankChromaticPSF.filter_image preserves gradients to model parameters
     psf = LowRankChromaticPSF(
-        grid_side=2, spectral_degree=1, base_sigma_pix=1.2, extent_pix=16.0, kernel_size=5
+        grid_side=2,
+        spectral_degree=1,
+        base_sigma_pix=1.2,
+        extent_pix=16.0,
+        kernel_size=5,
     )
     img = torch.ones((8, 8), dtype=torch.float32, requires_grad=True)
     yy, xx = torch.meshgrid(
@@ -351,4 +355,3 @@ def test_map_field_and_sky_regressions() -> None:
     fit_plane.sum().backward()
     assert clean_plane.grad is not None
     assert bool(torch.isfinite(clean_plane.grad).all())
-

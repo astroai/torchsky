@@ -71,9 +71,7 @@ def paired_bootstrap_improvement(
         )
         draws = difference[indices]
         bootstrap[start:stop] = (
-            draws.mean(dim=-1)
-            if statistic == "mean"
-            else draws.median(dim=-1).values
+            draws.mean(dim=-1) if statistic == "mean" else draws.median(dim=-1).values
         )
     alpha = 0.5 * (1.0 - float(confidence))
     quantiles = torch.quantile(
@@ -125,7 +123,9 @@ def completeness_limit_magnitude(
     if float(c0) == float(c1):
         return float(magnitude[index + 1])
     fraction = (float(target) - c0) / (c1 - c0)
-    return float(magnitude[index] + fraction * (magnitude[index + 1] - magnitude[index]))
+    return float(
+        magnitude[index] + fraction * (magnitude[index + 1] - magnitude[index])
+    )
 
 
 __all__ = [

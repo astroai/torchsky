@@ -152,10 +152,6 @@ def test_temporal_tai_minus_utc_leap_table_current_offset() -> None:
     np.testing.assert_allclose(offsets.numpy(), np.array([36.999, 37.0, 37.0]))
 
 
-
-
-
-
 def test_temporal_header_scale_helpers() -> None:
     twcs = TemporalWCS({"MJDREF": 57754.0, "TIMEUNIT": "s", "TIMESYS": "UTC"})
     rel = torch.tensor([0.0, 86400.0], dtype=torch.float64)
@@ -206,10 +202,6 @@ def test_temporal_geocenter_reference_requires_no_ephemeris() -> None:
 
     assert not twcs.requires_ephemeris
     torch.testing.assert_close(twcs.apply_corrections(mjd, ra, dec), mjd)
-
-
-
-
 
 
 def test_temporal_reference_metadata_and_observatory_location() -> None:

@@ -78,9 +78,7 @@ def _context_cards(result: ProductResult) -> dict[str, str]:
             raise ValueError("FITS CTX mapping supports at most 10,000 observations")
         path = Path(str(item.get("path", ""))).name
         hdu = item.get("hdu")
-        cards[f"CTX{index:04d}"] = (
-            f"{index // 32}:{index % 32}:{index}:{path}[{hdu}]"
-        )
+        cards[f"CTX{index:04d}"] = f"{index // 32}:{index % 32}:{index}:{path}[{hdu}]"
     return cards
 
 
@@ -134,13 +132,9 @@ def write_map_product(
             )
         )
     if "CTX" in requested and result.context is not None:
-        planes.append(
-            ("CTX", _product_plane(result.context), _context_cards(result))
-        )
+        planes.append(("CTX", _product_plane(result.context), _context_cards(result)))
     if "MASK" in requested and result.mask is not None:
-        planes.append(
-            ("MASK", _product_plane(result.mask).to(dtype=torch.uint8), {})
-        )
+        planes.append(("MASK", _product_plane(result.mask).to(dtype=torch.uint8), {}))
     if "NEXP" in requested and result.overlap_count is not None:
         planes.append(("NEXP", _product_plane(result.overlap_count), {}))
     if (

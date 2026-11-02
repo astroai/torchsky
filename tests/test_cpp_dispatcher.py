@@ -57,7 +57,9 @@ def _functional(
     parameters = _parameters(direction)
     parameters.update(overrides)
     function = (
-        _pixel_to_world_fused if direction == "pixel_to_world" else _world_to_pixel_fused
+        _pixel_to_world_fused
+        if direction == "pixel_to_world"
+        else _world_to_pixel_fused
     )
     return function(first, second, **parameters)
 

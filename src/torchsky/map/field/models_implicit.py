@@ -32,6 +32,7 @@ from ...wcs import WCS
 if TYPE_CHECKING:
     from ..product import ProductResult
 
+
 class ExplicitSpectralGridField(_BaseFieldModel):
     """Explicit multiframe spatial and spectral grid baseline."""
 
@@ -45,7 +46,9 @@ class ExplicitSpectralGridField(_BaseFieldModel):
     ) -> None:
         super().__init__(domain)
         if self.coord_mode != "local_tangent":
-            raise ValueError("ExplicitSpectralGridField requires local_tangent coordinates")
+            raise ValueError(
+                "ExplicitSpectralGridField requires local_tangent coordinates"
+            )
         self.spatial_resolution = int(spatial_resolution)
         self.spectral_resolution = int(spectral_resolution)
         if self.spatial_resolution < 2 or self.spectral_resolution < 2:
@@ -59,7 +62,9 @@ class ExplicitSpectralGridField(_BaseFieldModel):
                 raise ValueError("spatial_bounds_local_deg must be finite")
             if bounds[0] >= bounds[1] or bounds[2] >= bounds[3]:
                 raise ValueError("spatial_bounds_local_deg bounds must be increasing")
-            self.spatial_bounds_local_deg = cast(tuple[float, float, float, float], bounds)  # length checked above
+            self.spatial_bounds_local_deg = cast(
+                tuple[float, float, float, float], bounds
+            )  # length checked above
         self.grid = nn.Parameter(
             1.0e-3
             * torch.randn(
@@ -85,12 +90,20 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             torch.zeros((), device=device, dtype=dtype),
         )
         if self.spatial_bounds_local_deg is None:
-            xs = torch.linspace(
-                -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
-            ).clamp(-bound, bound).atanh()
-            ys = torch.linspace(
-                -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
-            ).clamp(-bound, bound).atanh()
+            xs = (
+                torch.linspace(
+                    -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
+                )
+                .clamp(-bound, bound)
+                .atanh()
+            )
+            ys = (
+                torch.linspace(
+                    -1.0, 1.0, steps=self.spatial_resolution, device=device, dtype=dtype
+                )
+                .clamp(-bound, bound)
+                .atanh()
+            )
             spatial_scale = float(self.domain.spatial_scale_deg)
             xs = xs * spatial_scale
             ys = ys * spatial_scale
@@ -102,9 +115,13 @@ class ExplicitSpectralGridField(_BaseFieldModel):
             ys = torch.linspace(
                 y_min, y_max, steps=self.spatial_resolution, device=device, dtype=dtype
             )
-        ls = torch.linspace(
-            -1.0, 1.0, steps=self.spectral_resolution, device=device, dtype=dtype
-        ).clamp(-bound, bound).atanh()
+        ls = (
+            torch.linspace(
+                -1.0, 1.0, steps=self.spectral_resolution, device=device, dtype=dtype
+            )
+            .clamp(-bound, bound)
+            .atanh()
+        )
         yy, xx = torch.meshgrid(ys, xs, indexing="ij")
         wavelengths = float(self.domain.wavelength_center) + ls * float(
             self.domain.wavelength_scale
@@ -381,13 +398,21 @@ class GaussianBasisField(_BaseFieldModel):
             if domain.coord_mode != "local_tangent":
                 raise ValueError("Gaussian splats require local_tangent coordinates")
             if spectral_resolution < 2 or query_chunk_size < 1:
-                raise ValueError("spectral_resolution >= 2 and query_chunk_size >= 1 required")
+                raise ValueError(
+                    "spectral_resolution >= 2 and query_chunk_size >= 1 required"
+                )
             self.query_chunk_size = int(query_chunk_size)
             self.centers = nn.Parameter(torch.empty(int(num_basis), 2))
-            self.log_scales = nn.Parameter(torch.full((int(num_basis), 2), math.log(init_scale)))
+            self.log_scales = nn.Parameter(
+                torch.full((int(num_basis), 2), math.log(init_scale))
+            )
             self.shear = nn.Parameter(torch.zeros(int(num_basis)))
-            self.amplitudes = nn.Parameter(torch.full((int(num_basis), int(spectral_resolution)), -5.0))
-            self.register_buffer("spectral_knots", torch.linspace(-1.0, 1.0, int(spectral_resolution)))
+            self.amplitudes = nn.Parameter(
+                torch.full((int(num_basis), int(spectral_resolution)), -5.0)
+            )
+            self.register_buffer(
+                "spectral_knots", torch.linspace(-1.0, 1.0, int(spectral_resolution))
+            )
             nn.init.uniform_(self.centers, -1.0, 1.0)
             return
         self.centers = nn.Parameter(torch.empty(int(num_basis), 3))
@@ -411,8 +436,12 @@ class GaussianBasisField(_BaseFieldModel):
             2.0 * math.pi * scales.prod(dim=-1)
         )
         lam = coords[:, 2].clamp(self.spectral_knots[0], self.spectral_knots[-1])
-        upper = torch.searchsorted(self.spectral_knots, lam.contiguous()).clamp(1, self.spectral_knots.numel() - 1)
-        alpha = (lam - self.spectral_knots[upper - 1]) / (self.spectral_knots[upper] - self.spectral_knots[upper - 1])
+        upper = torch.searchsorted(self.spectral_knots, lam.contiguous()).clamp(
+            1, self.spectral_knots.numel() - 1
+        )
+        alpha = (lam - self.spectral_knots[upper - 1]) / (
+            self.spectral_knots[upper] - self.spectral_knots[upper - 1]
+        )
         # Sum sources before interpolation to avoid repeated spectral-index
         # scatter-adds over every source during the backward pass.
         spectrum = basis @ F.softplus(self.amplitudes)
@@ -434,11 +463,17 @@ class GaussianBasisField(_BaseFieldModel):
             if band.transmission_center is not None:
                 bands.append(float(band.transmission_center))
             elif band.spectral_min is not None and band.spectral_max is not None:
-                bands.append(0.5 * (float(band.spectral_min) + float(band.spectral_max)))
+                bands.append(
+                    0.5 * (float(band.spectral_min) + float(band.spectral_max))
+                )
             else:
                 raise ValueError("initialization bands require centers or bounds")
         wavelengths = torch.tensor(bands, device=device, dtype=dtype)
-        if len(bands) != data.shape[0] or not bands or not torch.isfinite(wavelengths).all():
+        if (
+            len(bands) != data.shape[0]
+            or not bands
+            or not torch.isfinite(wavelengths).all()
+        ):
             raise ValueError("initialization requires one finite wavelength per image")
         wavelengths, order = wavelengths.sort()
         if wavelengths.numel() > 1 and torch.any(wavelengths.diff() <= 0):
@@ -458,22 +493,50 @@ class GaussianBasisField(_BaseFieldModel):
         # detector operator and subsequent optimization recover intrinsic widths.
         ra_x, dec_x = wcs.pixel_to_world((px + width / columns).double(), py.double())
         ra_y, dec_y = wcs.pixel_to_world(px.double(), (py + height / rows).double())
-        dx = self._encoded_coords(ra_x, dec_x, self.domain.wavelength_center).to(dtype)[:, :2] - coords[:, :2]
-        dy = self._encoded_coords(ra_y, dec_y, self.domain.wavelength_center).to(dtype)[:, :2] - coords[:, :2]
-        area = (dx[:, 0] * dy[:, 1] - dx[:, 1] * dy[:, 0]).abs().clamp_min(torch.finfo(dtype).tiny)
+        dx = (
+            self._encoded_coords(ra_x, dec_x, self.domain.wavelength_center).to(dtype)[
+                :, :2
+            ]
+            - coords[:, :2]
+        )
+        dy = (
+            self._encoded_coords(ra_y, dec_y, self.domain.wavelength_center).to(dtype)[
+                :, :2
+            ]
+            - coords[:, :2]
+        )
+        area = (
+            (dx[:, 0] * dy[:, 1] - dx[:, 1] * dy[:, 0])
+            .abs()
+            .clamp_min(torch.finfo(dtype).tiny)
+        )
         spacing = torch.stack((dx.norm(dim=-1), dy.norm(dim=-1)), dim=-1)
         self.log_scales.copy_((0.5 * spacing).clamp_min(torch.finfo(dtype).eps).log())
         self.shear.zero_()
-        grid = torch.stack((2 * (px + 0.5) / width - 1, 2 * (py + 0.5) / height - 1), dim=-1).view(1, 1, count, 2)
-        samples = F.grid_sample(data[order].unsqueeze(0), grid, align_corners=False, padding_mode="border")[0, :, 0].T.clamp_min(0)
-        knots = torch.linspace(wavelengths[0], wavelengths[-1], self.spectral_knots.numel(), device=device, dtype=dtype)
+        grid = torch.stack(
+            (2 * (px + 0.5) / width - 1, 2 * (py + 0.5) / height - 1), dim=-1
+        ).view(1, 1, count, 2)
+        samples = F.grid_sample(
+            data[order].unsqueeze(0), grid, align_corners=False, padding_mode="border"
+        )[0, :, 0].T.clamp_min(0)
+        knots = torch.linspace(
+            wavelengths[0],
+            wavelengths[-1],
+            self.spectral_knots.numel(),
+            device=device,
+            dtype=dtype,
+        )
         if len(bands) == 1:
             sampled = samples.expand(-1, knots.numel())
         else:
             upper = torch.searchsorted(wavelengths, knots).clamp(1, len(bands) - 1)
-            alpha = (knots - wavelengths[upper - 1]) / (wavelengths[upper] - wavelengths[upper - 1])
+            alpha = (knots - wavelengths[upper - 1]) / (
+                wavelengths[upper] - wavelengths[upper - 1]
+            )
             sampled = samples[:, upper - 1] * (1 - alpha) + samples[:, upper] * alpha
-            self.spectral_knots.copy_((knots - self.domain.wavelength_center) / self.domain.wavelength_scale)
+            self.spectral_knots.copy_(
+                (knots - self.domain.wavelength_center) / self.domain.wavelength_scale
+            )
         flux = (sampled * area[:, None]).clamp_min(torch.finfo(dtype).eps)
         self.amplitudes.copy_(flux + torch.log(-torch.expm1(-flux)))
 
@@ -495,7 +558,8 @@ class GaussianBasisField(_BaseFieldModel):
 
             outputs = [
                 checkpoint(self._splat_values, chunk, use_reentrant=False)
-                if torch.is_grad_enabled() else self._splat_values(chunk)
+                if torch.is_grad_enabled()
+                else self._splat_values(chunk)
                 for chunk in flat.split(self.query_chunk_size)
             ]
             return torch.cat(outputs).reshape(coords.shape[:-1])
@@ -811,9 +875,7 @@ class BandpassConditionedField(_BaseFieldModel):
         nn.init.constant_(self.output.bias, -3.0)
 
     def _spatial_fourier_features(self, spatial: Tensor) -> Tensor:
-        return _fourier_features_vectorized(
-            spatial, self.num_spatial_frequencies
-        )
+        return _fourier_features_vectorized(spatial, self.num_spatial_frequencies)
 
     def _bandpass_features(self, wavelengths: Tensor, weights: Tensor) -> Tensor:
         lam = (

@@ -57,7 +57,9 @@ def linear_at(container: nn.Sequential | nn.ModuleList, index: int) -> nn.Linear
     """Return ``container[index]`` typed as :class:`nn.Linear` (torch types items as Module)."""
     layer = container[index]
     if not isinstance(layer, nn.Linear):
-        raise TypeError(f"expected nn.Linear at index {index}, got {type(layer).__name__}")
+        raise TypeError(
+            f"expected nn.Linear at index {index}, got {type(layer).__name__}"
+        )
     return layer
 
 
@@ -83,7 +85,6 @@ __all__ = [
     "ResidualStack",
     "linear_at",
     "linear_layers",
-
     "reset_logflux_readout_linear",
     "reset_silu_mlp_linears",
     "silu_mlp_sequential",

@@ -91,7 +91,9 @@ class EvidenceSnapshot:
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("plan dependency names must be nonempty strings")
             fingerprint = (
-                plan if isinstance(plan, PlanFingerprint) else getattr(plan, "fingerprint", None)
+                plan
+                if isinstance(plan, PlanFingerprint)
+                else getattr(plan, "fingerprint", None)
             )
             if not isinstance(fingerprint, PlanFingerprint):
                 raise TypeError("plan dependencies must expose a PlanFingerprint")

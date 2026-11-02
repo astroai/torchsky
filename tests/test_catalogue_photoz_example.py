@@ -11,7 +11,9 @@ import torch
 
 
 def _example():
-    path = Path(__file__).parents[1] / "examples" / "applications" / "catalogue_photoz.py"
+    path = (
+        Path(__file__).parents[1] / "examples" / "applications" / "catalogue_photoz.py"
+    )
     assert path.exists(), "Missing runnable catalogue photo-z example"
     spec = importlib.util.spec_from_file_location("catalogue_photoz", path)
     assert spec is not None and spec.loader is not None

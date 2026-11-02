@@ -452,9 +452,7 @@ def _nearest_grid_indices(
             chunk_distance, chunk_index = torch.min(distances, dim=-1)
             improve = chunk_distance < best_distance
             best_distance = torch.where(improve, chunk_distance, best_distance)
-            best_index = torch.where(
-                improve, chunk_index + grid_start, best_index
-            )
+            best_index = torch.where(improve, chunk_index + grid_start, best_index)
         nearest[target_start : target_start + target_chunk.shape[0]] = best_index
     return nearest
 
@@ -829,12 +827,8 @@ def _solve_coupled_tabular_2d_global_batch(
         cell_lo = corners.amin(dim=0).reshape(n_cells, lookup.world_n_dim)
         cell_hi = corners.amax(dim=0).reshape(n_cells, lookup.world_n_dim)
 
-    candidate_count = torch.zeros(
-        n_points, dtype=torch.int64, device=target.device
-    )
-    candidate_index = torch.zeros(
-        n_points, dtype=torch.int64, device=target.device
-    )
+    candidate_count = torch.zeros(n_points, dtype=torch.int64, device=target.device)
+    candidate_index = torch.zeros(n_points, dtype=torch.int64, device=target.device)
     max_pairs = _MAX_PAIRWISE_ENTRIES
     n_dimensions = max(1, lookup.world_n_dim)
     target_chunk_size = min(n_points, max(1, max_pairs // n_dimensions))
@@ -880,12 +874,12 @@ def _solve_coupled_tabular_2d_global_batch(
             take_first = (count_chunk == 0) & (local_count > 0)
             index_chunk = torch.where(take_first, first, index_chunk)
             count_chunk = count_chunk + local_count
-        candidate_count[
-            target_start : target_start + target_chunk.shape[0]
-        ] = count_chunk
-        candidate_index[
-            target_start : target_start + target_chunk.shape[0]
-        ] = index_chunk
+        candidate_count[target_start : target_start + target_chunk.shape[0]] = (
+            count_chunk
+        )
+        candidate_index[target_start : target_start + target_chunk.shape[0]] = (
+            index_chunk
+        )
 
     unique = candidate_count == 1
     unique_idx = torch.nonzero(unique, as_tuple=False).reshape(-1)
@@ -1336,9 +1330,7 @@ def tabular_axes_from_fits(
             # FITS -TAB default index vector is 1..N (the table index is a
             # 1-based coordinate), not 0..N-1. The CRVAL/CDELT/CD linear
             # transform produces that index directly.
-            pixel = torch.arange(
-                1, coord.shape[0] + 1, dtype=torch.float64
-            )
+            pixel = torch.arange(1, coord.shape[0] + 1, dtype=torch.float64)
         else:
             index_col = str(index_col_raw).strip()
             pixel = _as_tab_coordinate_array(

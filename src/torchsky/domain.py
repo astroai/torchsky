@@ -45,7 +45,9 @@ class DomainSpec:
         if not isinstance(tensor, Tensor):
             raise TypeError(f"{name} must be a tensor")
         if tuple(tensor.shape) != self.shape:
-            raise ValueError(f"{name} shape {tuple(tensor.shape)} does not match {self.shape}")
+            raise ValueError(
+                f"{name} shape {tuple(tensor.shape)} does not match {self.shape}"
+            )
         if self.dtype is not None and tensor.dtype != self.dtype:
             raise TypeError(f"{name} dtype {tensor.dtype} does not match {self.dtype}")
         return tensor

@@ -108,9 +108,7 @@ def test_visualizers_raise_importerror_when_matplotlib_missing(
         viz.plot_pixel_spectrum(cube, axis, 2, 3)
 
 
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="MPS not available"
-)
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
 def test_display_limits_accept_mps_tensors() -> None:
     from torchsky.viz.plots import _limits
 

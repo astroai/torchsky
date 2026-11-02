@@ -273,9 +273,7 @@ def test_field_observation_coordinate_cache_tracks_header_mutation() -> None:
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
 def test_field_coordinate_grid_mps_matches_cpu() -> None:
     header = _tan_header(5, crval1=150.0, crval2=2.0, scale_deg=0.01)
-    ra_cpu, dec_cpu = coordinate_grid(
-        header, shape=(5, 5), device=torch.device("cpu")
-    )
+    ra_cpu, dec_cpu = coordinate_grid(header, shape=(5, 5), device=torch.device("cpu"))
     observation = FieldObservation(
         image=torch.ones((5, 5), dtype=torch.float32),
         header=header,
@@ -302,13 +300,18 @@ def test_feature_plane_mps_border_sampling_matches_cpu() -> None:
     coord_u = torch.tensor([-0.5, 0.25, 1.5], requires_grad=True)
     coord_v = torch.tensor([0.5, 0.75, -0.5], requires_grad=True)
     grid = torch.stack([2.0 * coord_u - 1.0, 2.0 * coord_v - 1.0], dim=-1)
-    expected = F.grid_sample(
-        plane.unsqueeze(0),
-        grid.view(1, -1, 1, 2),
-        mode="bilinear",
-        padding_mode="border",
-        align_corners=True,
-    ).squeeze(0).squeeze(-1).transpose(0, 1)
+    expected = (
+        F.grid_sample(
+            plane.unsqueeze(0),
+            grid.view(1, -1, 1, 2),
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=True,
+        )
+        .squeeze(0)
+        .squeeze(-1)
+        .transpose(0, 1)
+    )
     expected.sum().backward()
 
     plane_mps = plane.detach().to("mps").requires_grad_()
@@ -413,7 +416,11 @@ def test_field_quality_aggregate_pools_residual_primitives() -> None:
 @pytest.mark.parametrize(
     ("device", "dtype"),
     [("cpu", torch.float32), ("cpu", torch.float64)]
-    + ([("cuda", torch.float32), ("cuda", torch.float64)] if torch.cuda.is_available() else [])
+    + (
+        [("cuda", torch.float32), ("cuda", torch.float64)]
+        if torch.cuda.is_available()
+        else []
+    )
     + ([("mps", torch.float32)] if torch.backends.mps.is_available() else []),
 )
 def test_field_quality_metrics_preserve_device_and_dtype_semantics(
@@ -532,7 +539,6 @@ def test_field_quality_scorecard_groups_bands_and_tracks_extrema() -> None:
     assert scorecard["extrema"]["highest_weighted_rmse"]["index"] == 1
     assert scorecard["extrema"]["lowest_residual_snr"]["index"] == 1
     assert scorecard["extrema"]["lowest_support_fraction"]["index"] == 2
-
 
 
 def test_select_field_residual_tiles_ranks_weighted_residual_energy() -> None:
@@ -687,9 +693,12 @@ def test_render_field_quality_and_residual_helpers() -> None:
         "residual_products",
     }
     assert len(quality_with_products["residual_products"]) == 1
-    assert quality_with_products["scorecard"]["extrema"]["lowest_support_fraction"][
-        "index"
-    ] == 0
+    assert (
+        quality_with_products["scorecard"]["extrema"]["lowest_support_fraction"][
+            "index"
+        ]
+        == 0
+    )
 
 
 def test_render_field_quality_helpers_accept_operator_bundles() -> None:

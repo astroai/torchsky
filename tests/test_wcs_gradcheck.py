@@ -121,9 +121,7 @@ def test_pixel_to_world_differentiable_gradgradcheck(projection: str) -> None:
     def f(p: torch.Tensor) -> torch.Tensor:
         return wcs.pixel_to_world_differentiable(p)
 
-    assert torch.autograd.gradgradcheck(
-        f, (pixels,), atol=1e-3, rtol=1e-3, eps=1e-6
-    )
+    assert torch.autograd.gradgradcheck(f, (pixels,), atol=1e-3, rtol=1e-3, eps=1e-6)
 
 
 @pytest.mark.parametrize("projection", _ANALYTIC_INVERSE_PROJECTIONS)
@@ -144,9 +142,7 @@ def test_world_to_pixel_differentiable_gradgradcheck(projection: str) -> None:
     def f(w: torch.Tensor) -> torch.Tensor:
         return wcs.world_to_pixel_differentiable(w)
 
-    assert torch.autograd.gradgradcheck(
-        f, (world,), atol=1e-3, rtol=1e-3, eps=1e-6
-    )
+    assert torch.autograd.gradgradcheck(f, (world,), atol=1e-3, rtol=1e-3, eps=1e-6)
 
 
 def test_tan_with_sip_gradcheck() -> None:

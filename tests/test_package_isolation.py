@@ -105,7 +105,10 @@ def test_native_extension_keeps_optimized_isa_out_of_baseline_sources() -> None:
 
     assert "list(APPEND TORCHSKY_COMPILE_OPTIONS -mavx2 -mfma)" not in cmake
     assert "torchsky_ishioka_avx2" in cmake
-    assert "target_compile_options(torchsky_ishioka_avx2 PRIVATE -O3 -mavx2 -mfma)" in cmake
+    assert (
+        "target_compile_options(torchsky_ishioka_avx2 PRIVATE -O3 -mavx2 -mfma)"
+        in cmake
+    )
     assert "$<TARGET_OBJECTS:torchsky_ishioka_avx2>" in cmake
     assert "torchsky_ishioka_neon" in cmake
     assert "TORCHSKY_ENABLE_IPO" in cmake
@@ -114,9 +117,7 @@ def test_native_extension_keeps_optimized_isa_out_of_baseline_sources() -> None:
 
 
 def test_native_extension_uses_supported_torch_linkage() -> None:
-    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(
-        encoding="utf-8"
-    )
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
 
     assert "if(TARGET torch)" in cmake
     assert "target_link_libraries(_cpp_ext PRIVATE torch)" in cmake

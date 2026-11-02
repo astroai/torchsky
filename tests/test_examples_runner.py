@@ -26,7 +26,13 @@ def test_every_example_script_runs() -> None:
 
 def test_runner_discovers_only_standalone_scripts() -> None:
     result = subprocess.run(
-        [sys.executable, "-c", "import runpy; runpy.run_path(" + repr(str(RUNNER)) + ", run_name='not_main')"],
+        [
+            sys.executable,
+            "-c",
+            "import runpy; runpy.run_path("
+            + repr(str(RUNNER))
+            + ", run_name='not_main')",
+        ],
         cwd=ROOT,
         check=False,
         capture_output=True,

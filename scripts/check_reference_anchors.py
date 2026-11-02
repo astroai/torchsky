@@ -32,7 +32,9 @@ def main() -> int:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     registry = _read_registry()
     pages = {entry["name"]: entry["slug"] for entry in registry["namespace"]}
-    module_pages = {entry["name"]: entry["slug"] for entry in registry.get("module", [])}
+    module_pages = {
+        entry["name"]: entry["slug"] for entry in registry.get("module", [])
+    }
 
     missing: list[str] = []
     checked = 0
@@ -59,11 +61,17 @@ def main() -> int:
         html_path = SITE / "reference" / slug / "index.html"
         if not html_path.is_file():
             missing.append(f"{namespace}: built page missing ({html_path})")
-        elif f'id="{namespace}"' not in html_path.read_text(encoding="utf-8", errors="replace"):
-            missing.append(f"{namespace} (module anchor missing on reference/{slug}.md)")
+        elif f'id="{namespace}"' not in html_path.read_text(
+            encoding="utf-8", errors="replace"
+        ):
+            missing.append(
+                f"{namespace} (module anchor missing on reference/{slug}.md)"
+            )
 
     if missing:
-        print(f"[FAIL] {len(missing)} public name(s) have no rendered reference anchor:")
+        print(
+            f"[FAIL] {len(missing)} public name(s) have no rendered reference anchor:"
+        )
         for item in missing:
             print(f"  - {item}")
         return 1

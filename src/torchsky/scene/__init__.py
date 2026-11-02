@@ -47,6 +47,7 @@ from .sources import (
     SourceStamp,
 )
 
+
 def image_observation(*args: Any, **kwargs: Any) -> ImageObservation:
     """Construct an image-plane observation for classical map products.
 

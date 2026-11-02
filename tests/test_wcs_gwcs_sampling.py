@@ -109,7 +109,9 @@ def test_gwcs_frozen_evaluate_and_inverse_on_device() -> None:
     out = tables.evaluate(pts, 0.0)
     assert out.device.type == device.type
     recovered = tables.inverse(out, 0.0, atol=1e-5)
-    torch.testing.assert_close(recovered.cpu().double(), pts.cpu().double(), atol=1e-5, rtol=0.0)
+    torch.testing.assert_close(
+        recovered.cpu().double(), pts.cpu().double(), atol=1e-5, rtol=0.0
+    )
 
 
 def test_gwcs_sampling_module_does_not_import_gwcs() -> None:

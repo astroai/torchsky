@@ -960,7 +960,8 @@ def _group_inputs_by_filter(
     distinct_units = sorted(set(bunits.values()))
     if len(distinct_units) > 1:
         detail = ", ".join(
-            f"{Path(inputs[index]).name}: {unit}" for index, unit in sorted(bunits.items())
+            f"{Path(inputs[index]).name}: {unit}"
+            for index, unit in sorted(bunits.items())
         )
         raise SystemExit(
             "torchsky map: inputs declare different BUNIT units "
@@ -1093,7 +1094,9 @@ def _run_field_single(args: argparse.Namespace) -> int:
     else:
         field_paths = [str(item["identity"]["path"]) for item in resolved_plan_inputs]
         field_hdus = [int(item["hdu"]) for item in resolved_plan_inputs]
-        field_weights = [float(item.get("weight", 1.0)) for item in resolved_plan_inputs]
+        field_weights = [
+            float(item.get("weight", 1.0)) for item in resolved_plan_inputs
+        ]
         field_backgrounds = [
             float(item.get("background_offset", 0.0)) for item in resolved_plan_inputs
         ]

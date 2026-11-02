@@ -8,7 +8,13 @@ import torchfits
 
 import torchsky
 from torchsky.domain import DomainSpec
-from torchsky.map import DQPolicy, Observation, OutlierConfig, ResampleConfig, StackConfig
+from torchsky.map import (
+    DQPolicy,
+    Observation,
+    OutlierConfig,
+    ResampleConfig,
+    StackConfig,
+)
 from torchsky.map.io_utils import write_map_product
 from torchsky.map.operators import IndexedResponsePlan, apply_response_products
 from torchsky.quality import QualityBit
@@ -248,14 +254,14 @@ def test_certified_outlier_mode_preserves_dq_and_reports_rejections() -> None:
             (result.data * yy).sum() / measured_flux,
         )
     )
-    torch.testing.assert_close(measured_centroid, expected_centroid, atol=1.0e-2, rtol=0.0)
+    torch.testing.assert_close(
+        measured_centroid, expected_centroid, atol=1.0e-2, rtol=0.0
+    )
 
 
 def test_certified_outlier_mode_rejects_undeclared_noise() -> None:
     header = _header((8, 8))
-    observations = [
-        Observation(data=torch.ones((8, 8)), wcs=header) for _ in range(3)
-    ]
+    observations = [Observation(data=torch.ones((8, 8)), wcs=header) for _ in range(3)]
     with pytest.raises(ValueError, match="declared detector variance"):
         torchsky.map.detect_outliers(
             observations,

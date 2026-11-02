@@ -35,7 +35,10 @@ def _median_seconds(fn, *, warmup: int = 1, iters: int = 3) -> float:
     for _ in range(iters):
         start = time.perf_counter()
         result = fn()
-        if torch.cuda.is_available() and torch.cuda.is_current_stream_capturing() is False:
+        if (
+            torch.cuda.is_available()
+            and torch.cuda.is_current_stream_capturing() is False
+        ):
             torch.cuda.synchronize()
         samples.append(time.perf_counter() - start)
         del result
@@ -88,7 +91,9 @@ def _environment(device: torch.device) -> dict[str, object]:
     }
 
 
-def _tan_header(shape: tuple[int, int], crval=(150.0, 2.0), cdelt=0.001) -> dict[str, object]:
+def _tan_header(
+    shape: tuple[int, int], crval=(150.0, 2.0), cdelt=0.001
+) -> dict[str, object]:
     height, width = shape
     return {
         "NAXIS": 2,
@@ -177,7 +182,9 @@ def _healpix_cases(device: torch.device) -> list[dict[str, object]]:
 
     center = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64, device=device)
     disc = sphere.query_disc(512, center, radius=0.5, nest=True)
-    seconds = _median_seconds(lambda: sphere.query_disc(512, center, radius=0.5, nest=True))
+    seconds = _median_seconds(
+        lambda: sphere.query_disc(512, center, radius=0.5, nest=True)
+    )
     npix = int(disc.numel())
     cases.append(
         {
@@ -226,7 +233,9 @@ def _catalog_cases(device: torch.device) -> list[dict[str, object]]:
     left_ra = torch.rand(n, generator=generator, dtype=torch.float64) * 10.0
     left_dec = torch.rand(n, generator=generator, dtype=torch.float64) * 10.0
     right_ra = left_ra + torch.randn(n, generator=generator, dtype=torch.float64) * 1e-4
-    right_dec = left_dec + torch.randn(n, generator=generator, dtype=torch.float64) * 1e-4
+    right_dec = (
+        left_dec + torch.randn(n, generator=generator, dtype=torch.float64) * 1e-4
+    )
     if device.type != "cpu":
         left_ra, left_dec = left_ra.to(device), left_dec.to(device)
         right_ra, right_dec = right_ra.to(device), right_dec.to(device)
@@ -306,7 +315,9 @@ def collect(device: torch.device) -> dict[str, object]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cpu", help="cpu, cuda, or mps")
-    parser.add_argument("--write", action="store_true", help=f"Write {OUT.relative_to(ROOT)}")
+    parser.add_argument(
+        "--write", action="store_true", help=f"Write {OUT.relative_to(ROOT)}"
+    )
     args = parser.parse_args(argv)
 
     if str(ROOT / "src") not in sys.path:

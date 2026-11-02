@@ -136,7 +136,9 @@ def test_chained_boolean_regions() -> None:
 @pytest.mark.parametrize("nside", [0, 3, -2])
 def test_pixelized_region_rejects_invalid_nside(nside: int) -> None:
     with pytest.raises(ValueError):
-        PixelizedRegion(nside=nside, nest=False, pixels=torch.tensor([], dtype=torch.int64))
+        PixelizedRegion(
+            nside=nside, nest=False, pixels=torch.tensor([], dtype=torch.int64)
+        )
 
 
 def test_pixelized_region_validates_order_and_pixel_domain() -> None:

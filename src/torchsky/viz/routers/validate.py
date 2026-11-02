@@ -219,4 +219,3 @@ async def val_chi2_map(pid: str, request: Request) -> Response:
     from .._blocking import run_in_thread
 
     return await run_in_thread(_chi2_map_sync, pid, request)
-

@@ -174,13 +174,16 @@ def _aggregate_quality_metrics(
     keys = sorted({key for metrics in per_observation for key in metrics})
     weights: list[float] = []
     for metrics in per_observation:
-
         weight = float(metrics.get("effective_weight_sum", 0.0))
         weights.append(max(weight, 0.0) if math.isfinite(weight) else 0.0)
     total_weight = sum(weights)
     aggregate: dict[str, float] = {"effective_weight_sum": total_weight}
-    support_count = sum(float(metrics.get("support_count", 0.0)) for metrics in per_observation)
-    pixel_count = sum(float(metrics.get("pixel_count", 0.0)) for metrics in per_observation)
+    support_count = sum(
+        float(metrics.get("support_count", 0.0)) for metrics in per_observation
+    )
+    pixel_count = sum(
+        float(metrics.get("pixel_count", 0.0)) for metrics in per_observation
+    )
     if "support_count" in keys:
         aggregate["support_count"] = support_count
     if "pixel_count" in keys:
@@ -194,13 +197,19 @@ def _aggregate_quality_metrics(
         if total_weight <= 0.0:
             return math.nan
         values = [float(item.get(metric, math.nan)) for item in per_observation]
-        if any(weight > 0.0 and not math.isfinite(value) for value, weight in zip(values, weights, strict=True)):
-            return math.nan
-        return sum(
-            value * weight
+        if any(
+            weight > 0.0 and not math.isfinite(value)
             for value, weight in zip(values, weights, strict=True)
-            if weight > 0.0
-        ) / total_weight
+        ):
+            return math.nan
+        return (
+            sum(
+                value * weight
+                for value, weight in zip(values, weights, strict=True)
+                if weight > 0.0
+            )
+            / total_weight
+        )
 
     if pixel_count <= 0.0 and "support_fraction" in keys:
         aggregate["support_fraction"] = _pooled_mean("support_fraction")
@@ -230,27 +239,41 @@ def _aggregate_quality_metrics(
         aggregate["weighted_rmse"] = math.sqrt(mean_squared_error)
     if "weighted_mae" in keys:
         absolute_sum = sum(
-            float(metrics.get("weighted_absolute_residual_sum", metrics["weighted_mae"] * weight))
+            float(
+                metrics.get(
+                    "weighted_absolute_residual_sum", metrics["weighted_mae"] * weight
+                )
+            )
             for metrics, weight in zip(per_observation, weights, strict=True)
             if weight > 0.0
         )
         aggregate["weighted_absolute_residual_sum"] = absolute_sum
-        aggregate["weighted_mae"] = absolute_sum / total_weight if total_weight > 0.0 else math.nan
+        aggregate["weighted_mae"] = (
+            absolute_sum / total_weight if total_weight > 0.0 else math.nan
+        )
     if "residual_bias" in keys:
         residual_sum = sum(
-            float(metrics.get("weighted_residual_sum", metrics["residual_bias"] * weight))
+            float(
+                metrics.get("weighted_residual_sum", metrics["residual_bias"] * weight)
+            )
             for metrics, weight in zip(per_observation, weights, strict=True)
             if weight > 0.0
         )
         aggregate["weighted_residual_sum"] = residual_sum
-        aggregate["residual_bias"] = residual_sum / total_weight if total_weight > 0.0 else math.nan
+        aggregate["residual_bias"] = (
+            residual_sum / total_weight if total_weight > 0.0 else math.nan
+        )
     if "residual_std" in keys:
         bias = aggregate.get("residual_bias", _pooled_mean("residual_bias"))
         second_moment = _pooled_square(
             "weighted_rmse",
             "weighted_squared_residual_sum",
         )
-        aggregate["residual_std"] = math.sqrt(max(second_moment - bias * bias, 0.0)) if math.isfinite(second_moment) else math.nan
+        aggregate["residual_std"] = (
+            math.sqrt(max(second_moment - bias * bias, 0.0))
+            if math.isfinite(second_moment)
+            else math.nan
+        )
     for metric in ("target_rms", "prediction_rms"):
         if metric in keys:
             primitive = f"weighted_{metric.removesuffix('_rms')}_squared_sum"
@@ -258,10 +281,16 @@ def _aggregate_quality_metrics(
     if "residual_snr" in keys:
         rmse = aggregate.get("weighted_rmse", math.nan)
         target_rms = aggregate.get("target_rms", math.nan)
-        aggregate["residual_snr"] = target_rms / max(rmse, 1.0e-12) if math.isfinite(target_rms) and math.isfinite(rmse) else math.nan
+        aggregate["residual_snr"] = (
+            target_rms / max(rmse, 1.0e-12)
+            if math.isfinite(target_rms) and math.isfinite(rmse)
+            else math.nan
+        )
     if "residual_snr_db" in keys:
         snr = aggregate.get("residual_snr", math.nan)
-        aggregate["residual_snr_db"] = 20.0 * math.log10(max(snr, 1.0e-12)) if math.isfinite(snr) else math.nan
+        aggregate["residual_snr_db"] = (
+            20.0 * math.log10(max(snr, 1.0e-12)) if math.isfinite(snr) else math.nan
+        )
     for key in keys:
         if key.startswith("residual_rmse_scale_"):
             pooled = _pooled_mean(key)
@@ -269,7 +298,9 @@ def _aggregate_quality_metrics(
                 pooled = math.sqrt(
                     sum(
                         float(metrics[key]) ** 2 * weight
-                        for metrics, weight in zip(per_observation, weights, strict=True)
+                        for metrics, weight in zip(
+                            per_observation, weights, strict=True
+                        )
                         if weight > 0.0
                     )
                     / total_weight
@@ -309,10 +340,7 @@ def _aggregate_quality_metrics(
         key_weight = sum(weight for _, weight in available)
         if key_weight > 0.0:
             aggregate[key] = (
-                sum(
-                    float(metrics[key]) * weight
-                    for metrics, weight in available
-                )
+                sum(float(metrics[key]) * weight for metrics, weight in available)
                 / key_weight
             )
         else:
@@ -331,10 +359,7 @@ def _observation_quality_group_key(
     if observation.wavelength is not None:
         return f"lambda={float(observation.wavelength):.8g}"
     if observation.spectral_min is not None or observation.spectral_max is not None:
-        return (
-            f"range={observation.spectral_min!s}:"
-            f"{observation.spectral_max!s}"
-        )
+        return f"range={observation.spectral_min!s}:{observation.spectral_max!s}"
     return f"observation_{int(index)}"
 
 
@@ -392,7 +417,6 @@ def field_quality_scorecard(
             ),
         },
     }
-
 
 
 def field_image_quality_metrics(
@@ -562,8 +586,12 @@ def select_field_residual_tiles(
         raise ValueError("min_support_fraction must satisfy 0 <= value <= 1")
 
     residual = torch.as_tensor(product.residual)
-    weight = torch.as_tensor(product.weight, device=residual.device, dtype=residual.dtype)
-    support = torch.as_tensor(product.support, device=residual.device).to(dtype=torch.bool)
+    weight = torch.as_tensor(
+        product.weight, device=residual.device, dtype=residual.dtype
+    )
+    support = torch.as_tensor(product.support, device=residual.device).to(
+        dtype=torch.bool
+    )
     if residual.ndim != 2:
         raise ValueError("residual product must contain a 2D residual map")
     if weight.shape != residual.shape or support.shape != residual.shape:
@@ -590,7 +618,13 @@ def select_field_residual_tiles(
             )
             energy = torch.sum(valid_weight * residual_tile * residual_tile)
             weight_sum = valid_weight.sum()
-            rmse = torch.sqrt(energy / weight_sum) if bool(weight_sum > 0.0) else torch.full((), float("nan"), device=residual.device, dtype=residual.dtype)
+            rmse = (
+                torch.sqrt(energy / weight_sum)
+                if bool(weight_sum > 0.0)
+                else torch.full(
+                    (), float("nan"), device=residual.device, dtype=residual.dtype
+                )
+            )
             tiles.append(
                 FieldResidualTile(
                     y0=int(y0),

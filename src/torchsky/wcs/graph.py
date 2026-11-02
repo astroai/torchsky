@@ -239,7 +239,11 @@ class TransformGraph(nn.Module):
         adjacency = self._adjacency()
         mappings = []
         for source, target in zip(path, path[1:]):
-            matches = [mapping for neighbour, mapping in adjacency[source] if neighbour == target]
+            matches = [
+                mapping
+                for neighbour, mapping in adjacency[source]
+                if neighbour == target
+            ]
             if not matches:
                 raise UnsupportedPathError(
                     f"explicit path contains unsupported edge {source!r}->{target!r}"

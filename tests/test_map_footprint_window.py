@@ -71,7 +71,9 @@ def _prepared(header: dict, *, quadrature: bool = False):
     )
 
 
-def _project(source_header, target_header, image, *, kernel, semantics, window, monkeypatch):
+def _project(
+    source_header, target_header, image, *, kernel, semantics, window, monkeypatch
+):
     # Cropping is bit-identical for a fixed per-pixel mapping.  (The verified-lattice
     # mapping is anchored to the window origin, so its sub-1e-5 px interpolation
     # differences between windows are covered in test_map_interpolated_mapping.py.)
@@ -81,7 +83,9 @@ def _project(source_header, target_header, image, *, kernel, semantics, window, 
         )
 
 
-def _project_impl(source_header, target_header, image, kernel, semantics, window, monkeypatch):
+def _project_impl(
+    source_header, target_header, image, kernel, semantics, window, monkeypatch
+):
     target = _prepared(target_header, quadrature=semantics == "flux")
     monkeypatch.setattr(
         windowing_mod,
@@ -130,7 +134,9 @@ def test_footprint_crop_is_identical_to_full_target_for_partial_sip_coverage(
     source_header = _sip_header(size)
     # ~25% of the 160^2 target is covered by the exposure.
     if target_kind == "tan":
-        target_header = _tan_target(160, crval1=120.0 + 0.012, crval2=5.0 + 0.014, scale=0.0003)
+        target_header = _tan_target(
+            160, crval1=120.0 + 0.012, crval2=5.0 + 0.014, scale=0.0003
+        )
     else:
         target_header = {
             **_sip_header(160, crval1=120.0 + 0.012, crval2=5.0 + 0.014),
@@ -143,10 +149,22 @@ def test_footprint_crop_is_identical_to_full_target_for_partial_sip_coverage(
     image = torch.randn((size, size), generator=gen, dtype=torch.float32) + 5.0
 
     chunk, cropped = _project(
-        source_header, target_header, image, kernel=kernel, semantics=semantics, window=True, monkeypatch=monkeypatch
+        source_header,
+        target_header,
+        image,
+        kernel=kernel,
+        semantics=semantics,
+        window=True,
+        monkeypatch=monkeypatch,
     )
     _, full = _project(
-        source_header, target_header, image, kernel=kernel, semantics=semantics, window=False, monkeypatch=monkeypatch
+        source_header,
+        target_header,
+        image,
+        kernel=kernel,
+        semantics=semantics,
+        window=False,
+        monkeypatch=monkeypatch,
     )
 
     assert chunk.target_window is not None
@@ -166,7 +184,9 @@ def test_footprint_bbox_contains_exact_footprint_of_curved_sip_source() -> None:
     size = 96
     source_header = _sip_header(size)
     source_wcs = torchsky.WCS(source_header)
-    target_header = _tan_target(220, crval1=120.0 + 0.004, crval2=5.0 - 0.006, scale=0.0003)
+    target_header = _tan_target(
+        220, crval1=120.0 + 0.004, crval2=5.0 - 0.006, scale=0.0003
+    )
     target_wcs = torchsky.WCS(target_header)
     shape = (220, 220)
     bbox = windowing_mod._footprint_bbox_on_target(
@@ -273,10 +293,22 @@ def test_window_cylindrical_target_matches_full(monkeypatch) -> None:
     car["CRVAL2"] = 18.0
     image = torch.rand((size, size), dtype=torch.float32) + 1.0
     chunk, cropped = _project(
-        source_header, car, image, kernel="bilinear", semantics="surface_brightness", window=True, monkeypatch=monkeypatch
+        source_header,
+        car,
+        image,
+        kernel="bilinear",
+        semantics="surface_brightness",
+        window=True,
+        monkeypatch=monkeypatch,
     )
     _, full = _project(
-        source_header, car, image, kernel="bilinear", semantics="surface_brightness", window=False, monkeypatch=monkeypatch
+        source_header,
+        car,
+        image,
+        kernel="bilinear",
+        semantics="surface_brightness",
+        window=False,
+        monkeypatch=monkeypatch,
     )
     assert chunk.target_window is not None
     torch.testing.assert_close(cropped[0], full[0], atol=0.0, rtol=0.0)

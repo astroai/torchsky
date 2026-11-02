@@ -28,7 +28,9 @@ class _OnesField(torch.nn.Module):
 
 class _DistributionOnesField(_OnesField):
     def forward_distribution(self, ra, dec, wavelength):
-        return self.forward(ra, dec, wavelength), torch.zeros_like(ra, dtype=torch.float32)
+        return self.forward(ra, dec, wavelength), torch.zeros_like(
+            ra, dtype=torch.float32
+        )
 
 
 def _simple_header() -> dict:

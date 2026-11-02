@@ -99,8 +99,12 @@ def test_projected_cg_solves_singular_gauge_system() -> None:
         rtol=1.0e-12,
     )
 
-    torch.testing.assert_close(result.solution, torch.tensor([1.0, -1.0], dtype=torch.float64))
-    torch.testing.assert_close(result.solution.mean(), torch.tensor(0.0, dtype=torch.float64))
+    torch.testing.assert_close(
+        result.solution, torch.tensor([1.0, -1.0], dtype=torch.float64)
+    )
+    torch.testing.assert_close(
+        result.solution.mean(), torch.tensor(0.0, dtype=torch.float64)
+    )
     assert result.diagnostics is not None and result.diagnostics.projected
 
 
@@ -111,7 +115,10 @@ def test_complex_nullspace_projection_uses_hermitian_geometry() -> None:
 
     projected = projection.project(state)
 
-    torch.testing.assert_close(torch.sum(torch.conj(basis[0]) * projected), torch.zeros((), dtype=torch.complex128))
+    torch.testing.assert_close(
+        torch.sum(torch.conj(basis[0]) * projected),
+        torch.zeros((), dtype=torch.complex128),
+    )
 
 
 def test_lsqr_matches_dense_rectangular_and_minimum_norm_oracles() -> None:
@@ -154,9 +161,7 @@ def test_lsqr_matches_dense_rectangular_and_minimum_norm_oracles() -> None:
 
 
 def test_lsqr_damping_matches_augmented_dense_oracle() -> None:
-    matrix = torch.tensor(
-        [[1.0, 2.0], [3.0, -1.0], [0.5, 4.0]], dtype=torch.float64
-    )
+    matrix = torch.tensor([[1.0, 2.0], [3.0, -1.0], [0.5, 4.0]], dtype=torch.float64)
     rhs = torch.tensor([1.0, -2.0, 0.5], dtype=torch.float64)
     damping = 0.25
 
@@ -203,7 +208,9 @@ def test_state_tree_cg_supports_blocks_and_preserves_adjoint_identity() -> None:
         result.solution["calibration"][0], rhs["calibration"][0] / 3.0
     )
     probe = action(rhs)
-    torch.testing.assert_close(tree_inner(action(rhs), probe), tree_inner(rhs, action(probe)))
+    torch.testing.assert_close(
+        tree_inner(action(rhs), probe), tree_inner(rhs, action(probe))
+    )
 
 
 def test_state_tree_lsqr_supports_rectangular_block_operators() -> None:
@@ -231,7 +238,9 @@ def test_state_tree_lsqr_supports_rectangular_block_operators() -> None:
     )
 
     torch.testing.assert_close(result.solution["x"], rhs[0])
-    torch.testing.assert_close(result.solution["offset"], torch.tensor([-4.0], dtype=torch.float64))
+    torch.testing.assert_close(
+        result.solution["offset"], torch.tensor([-4.0], dtype=torch.float64)
+    )
 
 
 def test_solver_inputs_handle_empty_and_noncontiguous_tensors() -> None:
@@ -283,7 +292,9 @@ def test_nonfinite_inputs_fail_closed_and_operator_nonfinite_is_diagnosed() -> N
         "cpu",
         pytest.param(
             "cuda",
-            marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable"),
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA unavailable"
+            ),
         ),
         pytest.param(
             "mps",
@@ -303,9 +314,7 @@ def test_cg_and_lsqr_preserve_device(device: str) -> None:
         max_iterations=4,
         rtol=1.0e-5,
     )
-    rectangular = torch.tensor(
-        [[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], device=device
-    )
+    rectangular = torch.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], device=device)
     data = rectangular @ rhs
     lsqr_result = lsqr(
         lambda state: rectangular @ state,
@@ -413,9 +422,9 @@ def test_implicit_differentiation_policy_is_separate_and_fail_closed() -> None:
     )
     ImplicitDifferentiationPolicy().validate(result)
     with pytest.raises(NotImplementedError, match="policy-only"):
-        ImplicitDifferentiationPolicy(
-            mode=SolverDifferentiationMode.IMPLICIT
-        ).validate(result)
+        ImplicitDifferentiationPolicy(mode=SolverDifferentiationMode.IMPLICIT).validate(
+            result
+        )
 
 
 def test_cg_and_lsqr_apply_operator_once_per_iteration() -> None:
@@ -434,7 +443,9 @@ def test_cg_and_lsqr_apply_operator_once_per_iteration() -> None:
         calls["op"] += 1
         return m @ x
 
-    cg = conjugate_gradient(op, rhs, operator_is_hpd=True, max_iterations=200, rtol=1e-12)
+    cg = conjugate_gradient(
+        op, rhs, operator_is_hpd=True, max_iterations=200, rtol=1e-12
+    )
     assert torch.linalg.norm(cg.solution - reference) < 1e-9
     # initial residual + one per iteration + one convergence certification
     assert calls["op"] == cg.diagnostics.iterations + 2
@@ -448,7 +459,9 @@ def test_cg_and_lsqr_apply_operator_once_per_iteration() -> None:
 
     for damping in (0.0, 0.3):
         ops["n"] = 0
-        res = lsqr(fwd, lambda y: a.T @ y, b, max_iterations=200, rtol=1e-12, damping=damping)
+        res = lsqr(
+            fwd, lambda y: a.T @ y, b, max_iterations=200, rtol=1e-12, damping=damping
+        )
         ref = torch.linalg.solve(m + damping * torch.eye(25, dtype=torch.float64), rhs)
         assert torch.linalg.norm(res.solution - ref) < 1e-9
         assert ops["n"] == res.diagnostics.iterations + 2

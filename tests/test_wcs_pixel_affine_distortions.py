@@ -6,7 +6,12 @@ import torch
 from astropy.wcs import DistortionLookupTable as AstropyDistortionLookupTable
 from astropy.wcs import WCS as AstropyWCS
 
-from torchsky.wcs import CoupledTabularLookupWCS, DistortionLookupTable, TabularAxis, WCS
+from torchsky.wcs import (
+    CoupledTabularLookupWCS,
+    DistortionLookupTable,
+    TabularAxis,
+    WCS,
+)
 
 
 def _tan_header(*, distortion: str = "") -> dict[str, float | int | str]:
@@ -86,15 +91,15 @@ def test_polynomial_distortion_slice_matches_parent_astropy_and_serialized_heade
     header = _tan_header(distortion=distortion)
     parent = WCS(header)
     child = parent.slice(view)
-    pixels = torch.tensor(
-        [[0.25, 0.5], [4.0, 3.0], [9.5, 7.25]], dtype=torch.float64
-    )
+    pixels = torch.tensor([[0.25, 0.5], [4.0, 3.0], [9.5, 7.25]], dtype=torch.float64)
     source = _slice_pixel_map(view, (72, 56), pixels)
     expected = parent.pixel_to_world(source)
     astropy_parent = AstropyWCS(header)
     astropy_expected = astropy_parent.all_pix2world(source.numpy(), 0)
 
-    torch.testing.assert_close(child.pixel_to_world(pixels), expected, atol=3e-10, rtol=0)
+    torch.testing.assert_close(
+        child.pixel_to_world(pixels), expected, atol=3e-10, rtol=0
+    )
     np.testing.assert_allclose(expected.numpy(), astropy_expected, atol=3e-8, rtol=0)
     serialized = child.to_header(relax=True, include_naxis=True)
     np.testing.assert_allclose(
@@ -105,7 +110,10 @@ def test_polynomial_distortion_slice_matches_parent_astropy_and_serialized_heade
     )
     restored = WCS(serialized)
     torch.testing.assert_close(
-        restored.pixel_to_world(pixels), child.pixel_to_world(pixels), atol=3e-10, rtol=0
+        restored.pixel_to_world(pixels),
+        child.pixel_to_world(pixels),
+        atol=3e-10,
+        rtol=0,
     )
 
 
@@ -168,14 +176,14 @@ def test_lookup_distortion_slice_rebases_grid_without_resampling(
 ) -> None:
     parent, astropy_parent, tables = _lookup_wcs(kind)
     child = parent.slice(view)
-    pixels = torch.tensor(
-        [[0.5, 0.25], [3.0, 4.0], [8.25, 6.5]], dtype=torch.float64
-    )
+    pixels = torch.tensor([[0.5, 0.25], [3.0, 4.0], [8.25, 6.5]], dtype=torch.float64)
     source = _slice_pixel_map(view, (72, 56), pixels)
     expected = parent.pixel_to_world(source)
     astropy_expected = astropy_parent.all_pix2world(source.numpy(), 0)
 
-    torch.testing.assert_close(child.pixel_to_world(pixels), expected, atol=3e-10, rtol=0)
+    torch.testing.assert_close(
+        child.pixel_to_world(pixels), expected, atol=3e-10, rtol=0
+    )
     np.testing.assert_allclose(expected.numpy(), astropy_expected, atol=3e-8, rtol=0)
     rebased = getattr(child, f"{kind}1")
     assert rebased is not None
@@ -193,7 +201,10 @@ def test_lookup_distortion_slice_rebases_grid_without_resampling(
     }
     restored = WCS(child.to_header(include_naxis=True), **restored_kwargs)
     torch.testing.assert_close(
-        restored.pixel_to_world(pixels), child.pixel_to_world(pixels), atol=3e-10, rtol=0
+        restored.pixel_to_world(pixels),
+        child.pixel_to_world(pixels),
+        atol=3e-10,
+        rtol=0,
     )
 
 
@@ -204,8 +215,14 @@ def _affine_cases() -> list[tuple[torch.Tensor, torch.Tensor]]:
         dtype=torch.float64,
     )
     return [
-        (torch.eye(2, dtype=torch.float64), torch.tensor([2.5, -1.75], dtype=torch.float64)),
-        (torch.diag(torch.tensor([1.08, 0.93], dtype=torch.float64)), torch.zeros(2, dtype=torch.float64)),
+        (
+            torch.eye(2, dtype=torch.float64),
+            torch.tensor([2.5, -1.75], dtype=torch.float64),
+        ),
+        (
+            torch.diag(torch.tensor([1.08, 0.93], dtype=torch.float64)),
+            torch.zeros(2, dtype=torch.float64),
+        ),
         (rotation, torch.tensor([-0.4, 1.2], dtype=torch.float64)),
         (
             torch.tensor([[1.03, 0.06], [-0.04, 0.97]], dtype=torch.float64),
@@ -252,9 +269,7 @@ def _family_wcs(family: str) -> WCS:
 def _family_source_pixels(family: str) -> torch.Tensor:
     if family in {"tabular", "coupled"}:
         return torch.tensor([[3.0, 3.0], [5.0, 4.0], [8.0, 6.0]], dtype=torch.float64)
-    return torch.tensor(
-        [[22.0, 18.0], [35.0, 27.0], [48.0, 39.0]], dtype=torch.float64
-    )
+    return torch.tensor([[22.0, 18.0], [35.0, 27.0], [48.0, 39.0]], dtype=torch.float64)
 
 
 @pytest.mark.parametrize(
@@ -296,7 +311,10 @@ def test_chained_affine_and_serialized_live_state_are_exact(family: str) -> None
     chained = parent.with_affine(matrix1, offset1).with_affine(matrix2, offset2)
 
     torch.testing.assert_close(
-        chained.pixel_to_world(corrected2), parent.pixel_to_world(source), atol=4e-10, rtol=0
+        chained.pixel_to_world(corrected2),
+        parent.pixel_to_world(source),
+        atol=4e-10,
+        rtol=0,
     )
     restored_kwargs = {
         name: getattr(chained, name)
@@ -318,7 +336,10 @@ def test_chained_affine_and_serialized_live_state_are_exact(family: str) -> None
     )
     restored = WCS(chained.to_header(include_naxis=True), **restored_kwargs)
     torch.testing.assert_close(
-        restored.pixel_to_world(corrected2), chained.pixel_to_world(corrected2), atol=4e-10, rtol=0
+        restored.pixel_to_world(corrected2),
+        chained.pixel_to_world(corrected2),
+        atol=4e-10,
+        rtol=0,
     )
 
 
@@ -358,7 +379,9 @@ def test_coupled_tabular_slice_and_affine_preserve_lookup_state() -> None:
     pixels = torch.tensor([[0.25, 0.5], [2.0, 1.5]], dtype=torch.float64)
     source = _slice_pixel_map(view, (12, 10), pixels)
     sliced = parent.slice(view)
-    torch.testing.assert_close(sliced.pixel_to_world(pixels), parent.pixel_to_world(source))
+    torch.testing.assert_close(
+        sliced.pixel_to_world(pixels), parent.pixel_to_world(source)
+    )
     assert sliced.coupled_tabular is not None
 
     matrix, offset = _affine_cases()[3]
@@ -377,13 +400,17 @@ def test_separable_tabular_slice_and_roundtrip_preserve_lookup_state() -> None:
     source = _slice_pixel_map(view, (12, 10), pixels)
     sliced = parent.slice(view)
 
-    torch.testing.assert_close(sliced.pixel_to_world(pixels), parent.pixel_to_world(source))
+    torch.testing.assert_close(
+        sliced.pixel_to_world(pixels), parent.pixel_to_world(source)
+    )
     assert set(sliced.tabular_axes) == {0, 1}
     restored = WCS(
         sliced.to_header(include_naxis=True),
         tabular_axes={axis + 1: table for axis, table in sliced.tabular_axes.items()},
     )
-    torch.testing.assert_close(restored.pixel_to_world(pixels), sliced.pixel_to_world(pixels))
+    torch.testing.assert_close(
+        restored.pixel_to_world(pixels), sliced.pixel_to_world(pixels)
+    )
 
 
 def test_nonidentity_slice_composes_existing_pixel_affine_state() -> None:
@@ -396,12 +423,18 @@ def test_nonidentity_slice_composes_existing_pixel_affine_state() -> None:
     sliced = corrected.slice(view)
 
     torch.testing.assert_close(
-        sliced.pixel_to_world(pixels), corrected.pixel_to_world(source), atol=4e-10, rtol=0
+        sliced.pixel_to_world(pixels),
+        corrected.pixel_to_world(source),
+        atol=4e-10,
+        rtol=0,
     )
     assert sliced._pixel_affine_matrix is not None
     restored = WCS(sliced.to_header(include_naxis=True))
     torch.testing.assert_close(
-        restored.pixel_to_world(pixels), sliced.pixel_to_world(pixels), atol=4e-10, rtol=0
+        restored.pixel_to_world(pixels),
+        sliced.pixel_to_world(pixels),
+        atol=4e-10,
+        rtol=0,
     )
 
 
@@ -419,7 +452,9 @@ def test_identity_slice_and_affine_are_bit_exact_for_all_state() -> None:
 
     for identity in (
         parent.slice((slice(None), slice(None))),
-        parent.with_affine(torch.eye(2, dtype=torch.float64), torch.zeros(2, dtype=torch.float64)),
+        parent.with_affine(
+            torch.eye(2, dtype=torch.float64), torch.zeros(2, dtype=torch.float64)
+        ),
     ):
         assert torch.equal(identity.pixel_to_world(pixels), expected)
         assert torch.equal(identity._pixel_affine_matrix, parent._pixel_affine_matrix)
@@ -432,17 +467,26 @@ def test_identity_slice_and_affine_are_bit_exact_for_all_state() -> None:
     "device",
     [
         "cpu",
-        pytest.param("cuda", marks=pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")),
+        pytest.param(
+            "cuda",
+            marks=pytest.mark.skipif(
+                not torch.cuda.is_available(), reason="CUDA unavailable"
+            ),
+        ),
         pytest.param(
             "mps",
             marks=pytest.mark.skipif(
-                not (hasattr(torch.backends, "mps") and torch.backends.mps.is_available()),
+                not (
+                    hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                ),
                 reason="MPS unavailable",
             ),
         ),
     ],
 )
-def test_sliced_lookup_distortion_preserves_gradient_device_and_dtype(device: str) -> None:
+def test_sliced_lookup_distortion_preserves_gradient_device_and_dtype(
+    device: str,
+) -> None:
     dtype = torch.float32 if device == "mps" else torch.float64
     first, second = _lookup_tables(dtype=dtype)
     parent = WCS(_tan_header(), cpdis1=first, cpdis2=second).to(device)

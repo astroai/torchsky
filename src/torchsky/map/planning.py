@@ -568,9 +568,7 @@ def plan_image_plane_target(
     read_dev = str(_resolve_map_device(device, observations))
     image, header = load_observation_image_and_header(ref, device=read_dev)
     shape_out = (
-        image_shape_hw(image.shape)
-        if shape is None
-        else (int(shape[0]), int(shape[1]))
+        image_shape_hw(image.shape) if shape is None else (int(shape[0]), int(shape[1]))
     )
     shape_out = target_shape_from_header(header_overrides or {}, fallback=shape_out)
     normalized_header = normalized_header_for_shape(

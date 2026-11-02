@@ -2,6 +2,7 @@ import torch
 from torch import Tensor
 from typing import Dict, Any
 
+
 class SIP:
     """
     Simple Imaging Polynomial (SIP) distortion correction.

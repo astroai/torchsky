@@ -99,7 +99,9 @@ def main(argv: list[str]) -> int:
         elif status == "SKIP":
             skipped += 1
             print(f"      {detail}")
-    print(f"\n{len(names) - failures - skipped}/{len(names)} examples passed, {skipped} skipped")
+    print(
+        f"\n{len(names) - failures - skipped}/{len(names)} examples passed, {skipped} skipped"
+    )
     return 0 if failures == 0 else 1
 
 

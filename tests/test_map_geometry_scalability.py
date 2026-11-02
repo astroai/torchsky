@@ -65,9 +65,7 @@ def _project(
         "chunk_pixels": chunk_pixels,
     }
     if kernel == "point":
-        return exact_point_drizzle_project(
-            image, weight, source_wcs, target, **kwargs
-        )
+        return exact_point_drizzle_project(image, weight, source_wcs, target, **kwargs)
     function = (
         exact_square_drizzle_project
         if kernel == "square"
@@ -135,12 +133,8 @@ def test_extreme_magnification_streams_bounded_candidate_pairs(
     # The candidate-pair batching belongs to the pure-torch overlap path; the native CPU
     # kernel streams per quad without materialising pairs.
     monkeypatch.setattr(drizzle_geometry, "_NATIVE_OVERLAP_ENABLED", False)
-    monkeypatch.setattr(
-        drizzle_geometry, "_MAX_OVERLAP_CANDIDATE_PAIRS", pair_limit
-    )
-    monkeypatch.setattr(
-        drizzle_geometry, "_batch_quads_pixel_areas", bounded_areas
-    )
+    monkeypatch.setattr(drizzle_geometry, "_MAX_OVERLAP_CANDIDATE_PAIRS", pair_limit)
+    monkeypatch.setattr(drizzle_geometry, "_batch_quads_pixel_areas", bounded_areas)
     numer, projected_weight = _project(
         kernel,
         image,
@@ -211,9 +205,9 @@ def test_streamed_polygon_projection_preserves_gradients_and_device(
     kernel: str, device: str
 ) -> None:
     execution_device = torch.device(device)
-    image = torch.arange(
-        1, 17, dtype=torch.float32, device=execution_device
-    ).reshape(4, 4)
+    image = torch.arange(1, 17, dtype=torch.float32, device=execution_device).reshape(
+        4, 4
+    )
     image.requires_grad_()
     weight = torch.ones_like(image)
     source_wcs = _IdentityWCS()

@@ -86,7 +86,9 @@ def _run_in(label: str, source: str, timeout: float, workdir: str) -> tuple[bool
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
-    parser.add_argument("--filter", default="", help="Only run labels containing this text")
+    parser.add_argument(
+        "--filter", default="", help="Only run labels containing this text"
+    )
     args = parser.parse_args(argv)
 
     blocks = [(label, source) for label, source in discover() if args.filter in label]

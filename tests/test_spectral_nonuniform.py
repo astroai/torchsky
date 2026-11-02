@@ -114,7 +114,6 @@ def test_write_cube_fits_nonuniform_table() -> None:
         assert header_out["PS3_0"] == "WCS-TAB"
         assert header_out["PS3_1"] == "WAVE"
 
-
         with torchfits.open(str(path)) as hdul:
             assert len(hdul) == 2
             assert hdul[1].header["EXTNAME"] == "WCS-TAB"

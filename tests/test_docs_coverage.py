@@ -44,6 +44,8 @@ def test_tier1_list_is_not_stale() -> None:
     import json
 
     manifest = json.loads((DOCS / "api-manifest.json").read_text(encoding="utf-8"))
-    known = {f"{namespace}.{name}" for namespace, names in manifest.items() for name in names}
+    known = {
+        f"{namespace}.{name}" for namespace, names in manifest.items() for name in names
+    }
     stale = sorted(name for name in _tier1_names() if name not in known)
     assert not stale, f"Tier-1 list contains unknown public names: {stale}"

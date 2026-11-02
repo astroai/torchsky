@@ -38,9 +38,7 @@ def _dense_reference(
     penalty: Tensor | None = None,
 ) -> dict[str, Tensor]:
     y = data.to(dtype=torch.float64, device="cpu").reshape(-1)
-    t = templates.to(dtype=torch.float64, device="cpu").reshape(
-        templates.shape[0], -1
-    )
+    t = templates.to(dtype=torch.float64, device="cpu").reshape(templates.shape[0], -1)
     w = weights.to(dtype=torch.float64, device="cpu").reshape(-1)
     design = t.T
     information = design.T @ (w[:, None] * design)
@@ -64,7 +62,9 @@ def _dense_reference(
     }
 
 
-def _watch_linalg(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, tuple[int, ...], str]]:
+def _watch_linalg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, tuple[int, ...], str]]:
     calls: list[tuple[str, tuple[int, ...], str]] = []
     for name in ("matrix_norm", "eigvalsh", "eigh", "cholesky_ex"):
         original = getattr(torch.linalg, name)
@@ -117,7 +117,9 @@ def _assert_compact_query_copies(
     allowed_shapes = {(), (parameter_count,), (parameter_count, parameter_count)}
     assert all(shape in allowed_shapes for shape, _, _ in copies)
     assert any(
-        shape == (parameter_count, parameter_count) and source == "mps" and target == "cpu"
+        shape == (parameter_count, parameter_count)
+        and source == "mps"
+        and target == "cpu"
         for shape, source, target in copies
     )
 
@@ -249,7 +251,10 @@ def test_mps_rank_deficient_query_with_penalty_matches_dense_transfer(monkeypatc
         result.penalty_precision.cpu().double(), penalty_cpu, rtol=1e-6, atol=1e-6
     )
     torch.testing.assert_close(
-        result.coefficients.cpu().double(), expected["coefficients"], rtol=3e-4, atol=3e-4
+        result.coefficients.cpu().double(),
+        expected["coefficients"],
+        rtol=3e-4,
+        atol=3e-4,
     )
     torch.testing.assert_close(
         result.mean_response.cpu().double(), expected["transfer"], rtol=3e-4, atol=3e-4

@@ -6,7 +6,14 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from torchsky.sphere import alm2lonlat, alm2lonlat_spin, alm2map, alm_index, alm_size, map2alm
+from torchsky.sphere import (
+    alm2lonlat,
+    alm2lonlat_spin,
+    alm2map,
+    alm_index,
+    alm_size,
+    map2alm,
+)
 from torchsky.sphere.sht import (
     CARGeometry,
     CARSampling,
@@ -35,7 +42,9 @@ def _car_header(
     reverse_longitude: bool = False,
     swap_axes: bool = False,
 ) -> dict[str, float | int | str]:
-    latitude_step = 180.0 / (nlat - 1) if sampling == "clenshaw-curtis" else 180.0 / nlat
+    latitude_step = (
+        180.0 / (nlat - 1) if sampling == "clenshaw-curtis" else 180.0 / nlat
+    )
     latitude_crpix = (nlat + 1.0) / 2.0
     longitude_step = 360.0 / nlon
     if reverse_latitude:
@@ -104,8 +113,12 @@ def _geometry(
 def _random_real_field_alm(lmax: int, *, spin: int = 0, seed: int = 4) -> torch.Tensor:
     generator = torch.Generator().manual_seed(seed)
     leading = (2,) if spin else ()
-    real = torch.randn((*leading, alm_size(lmax)), dtype=torch.float64, generator=generator)
-    imag = torch.randn((*leading, alm_size(lmax)), dtype=torch.float64, generator=generator)
+    real = torch.randn(
+        (*leading, alm_size(lmax)), dtype=torch.float64, generator=generator
+    )
+    imag = torch.randn(
+        (*leading, alm_size(lmax)), dtype=torch.float64, generator=generator
+    )
     for ell in range(lmax + 1):
         imag[..., alm_index(ell, 0, lmax)] = 0.0
     alm = torch.complex(real, imag)
@@ -199,7 +212,9 @@ def test_scalar_analytic_ylm_and_longitude_origin() -> None:
     alm = torch.zeros(alm_size(lmax), dtype=torch.complex128)
     alm[alm_index(3, 2, lmax)] = torch.tensor(0.7 - 0.2j)
     output = synthesize(alm, geometry, lmax=lmax).values
-    lon = 37.0 + torch.arange(geometry.nlon, dtype=torch.float64) * (360.0 / geometry.nlon)
+    lon = 37.0 + torch.arange(geometry.nlon, dtype=torch.float64) * (
+        360.0 / geometry.nlon
+    )
     lat = torch.linspace(90.0, -90.0, geometry.nlat, dtype=torch.float64)
     expected = alm2lonlat(
         alm,
@@ -224,7 +239,9 @@ def test_scalar_quadrature_recovers_bandlimited_alms(sampling: str, nlat: int) -
 def test_scalar_discrete_adjoint_is_exact_for_batches() -> None:
     geometry = _geometry(nlat=9, nlon=16, longitude_origin=19.0)
     lmax = 3
-    alm = torch.stack((_random_real_field_alm(lmax, seed=2), _random_real_field_alm(lmax, seed=3)))
+    alm = torch.stack(
+        (_random_real_field_alm(lmax, seed=2), _random_real_field_alm(lmax, seed=3))
+    )
     map_values = torch.randn(2, *geometry.shape, dtype=torch.float64)
     synthesized = synthesize(alm, geometry, lmax=lmax).values
     adjoint = adjoint_synthesize(map_values, geometry, lmax=lmax).values
@@ -268,7 +285,9 @@ def test_spin2_discrete_adjoint_and_quadrature() -> None:
     synthesized = synthesize(alm, geometry, lmax=lmax, spin=2).values
     adjoint = adjoint_synthesize(map_values, geometry, lmax=lmax, spin=2).values
     lhs = torch.sum(synthesized * map_values)
-    rhs = _packed_inner(alm[0], adjoint[0], lmax) + _packed_inner(alm[1], adjoint[1], lmax)
+    rhs = _packed_inner(alm[0], adjoint[0], lmax) + _packed_inner(
+        alm[1], adjoint[1], lmax
+    )
     torch.testing.assert_close(lhs, rhs, atol=3.0e-11, rtol=3.0e-11)
     recovered = analyze(synthesized, geometry, lmax=lmax, spin=2).values
     torch.testing.assert_close(recovered, alm, atol=2.0e-11, rtol=2.0e-11)
@@ -278,7 +297,9 @@ def test_pseudo_analyze_is_explicit_least_squares() -> None:
     geometry = _geometry(nlat=9, nlon=16)
     alm = _random_real_field_alm(3)
     map_values = synthesize(alm, geometry, lmax=3).values
-    result = pseudo_analyze(map_values, geometry, lmax=3, tolerance=1.0e-11, max_iterations=30)
+    result = pseudo_analyze(
+        map_values, geometry, lmax=3, tolerance=1.0e-11, max_iterations=30
+    )
     assert result.analysis_kind is SHTAnalysisKind.LEAST_SQUARES
     assert result.converged is True
     assert result.iterations is not None and result.iterations > 0
@@ -290,25 +311,33 @@ def test_car_scalar_gradcheck() -> None:
     geometry = _geometry(nlat=7, nlon=12)
     request = SHTRequest(geometry, 2, SHTOperation.SYNTHESIZE)
     alm = _random_real_field_alm(2).requires_grad_(True)
-    assert torch.autograd.gradcheck(lambda value: car_synthesize(value, request), (alm,), atol=1.0e-5, rtol=1.0e-5)
+    assert torch.autograd.gradcheck(
+        lambda value: car_synthesize(value, request), (alm,), atol=1.0e-5, rtol=1.0e-5
+    )
 
 
 def test_car_spin_gradcheck() -> None:
     geometry = _geometry(nlat=7, nlon=12)
     request = SHTRequest(geometry, 2, SHTOperation.SYNTHESIZE, spin=2)
     alm = _random_real_field_alm(2, spin=2).requires_grad_(True)
-    assert torch.autograd.gradcheck(lambda value: car_synthesize(value, request), (alm,), atol=2.0e-5, rtol=2.0e-5)
+    assert torch.autograd.gradcheck(
+        lambda value: car_synthesize(value, request), (alm,), atol=2.0e-5, rtol=2.0e-5
+    )
 
 
 def test_car_synthesis_compiles_fullgraph() -> None:
     geometry = _geometry(nlat=7, nlon=12)
     request = SHTRequest(geometry, 2, SHTOperation.SYNTHESIZE)
     alm = _random_real_field_alm(2)
-    compiled = torch.compile(lambda value: car_synthesize(value, request), backend="eager", fullgraph=True)
+    compiled = torch.compile(
+        lambda value: car_synthesize(value, request), backend="eager", fullgraph=True
+    )
     torch.testing.assert_close(compiled(alm), car_synthesize(alm, request))
 
 
-def test_car_paths_do_not_use_pixel_by_alm_bases(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_car_paths_do_not_use_pixel_by_alm_bases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     geometry = _geometry(nlat=9, nlon=16)
     alm = _random_real_field_alm(3)
 
@@ -348,7 +377,9 @@ def test_torch_harmonics_adapter_fails_for_missing_semantics() -> None:
     geometry = _geometry(nlat=9, nlon=16)
     backend = TorchHarmonicsBackend()
     with pytest.raises(SHTCapabilityError, match="cannot provide adjoint_synthesize"):
-        adjoint_synthesize(torch.zeros(geometry.shape), geometry, lmax=3, backend=backend)
+        adjoint_synthesize(
+            torch.zeros(geometry.shape), geometry, lmax=3, backend=backend
+        )
     with pytest.raises(SHTCapabilityError, match="cannot provide pseudo_analyze"):
         pseudo_analyze(torch.zeros(geometry.shape), geometry, lmax=3, backend=backend)
 

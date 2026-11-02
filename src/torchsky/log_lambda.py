@@ -127,7 +127,9 @@ def convolve_log_lambda(
     offsets = torch.arange(
         -radius, radius + 1, device=flux_t.device, dtype=flux_t.dtype
     )
-    per_pixel = (sigma_px_t.shape[1] == n_pix or mean_px.shape[1] == n_pix) and n_pix > 1
+    per_pixel = (
+        sigma_px_t.shape[1] == n_pix or mean_px.shape[1] == n_pix
+    ) and n_pix > 1
     if per_pixel:
         sigma_px_grid = sigma_px_t.expand(batch, n_pix).unsqueeze(-1)
         mean_px_grid = mean_px.expand(batch, n_pix).unsqueeze(-1)
@@ -168,6 +170,7 @@ def _unit_gaussian_kernel(
     delta = torch.zeros_like(kernel)
     delta.scatter_(-1, nearest, 1.0)
     return torch.where(tiny, delta, kernel)
+
 
 __all__ = [
     "C_KM_S",

@@ -154,14 +154,6 @@ def _real_catalog_tables() -> tuple[Table, Table]:
     return left_table, right_table
 
 
-
-
-
-
-
-
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 def test_crossmatch_sky_matches_cpu_results_on_cuda() -> None:
     left_ra, left_dec, right_ra, right_dec = _real_catalogs()
@@ -201,7 +193,9 @@ def test_crossmatch_sky_matches_cpu_results_on_cuda() -> None:
 def test_crossmatch_sky_per_row_radius() -> None:
     left_ra = torch.tensor([10.0, 10.0], dtype=torch.float64)
     left_dec = torch.tensor([0.0, 0.0], dtype=torch.float64)
-    right_ra = torch.tensor([10.0 + 0.5 / 3600.0, 10.0 + 2.0 / 3600.0], dtype=torch.float64)
+    right_ra = torch.tensor(
+        [10.0 + 0.5 / 3600.0, 10.0 + 2.0 / 3600.0], dtype=torch.float64
+    )
     right_dec = torch.tensor([0.0, 0.0], dtype=torch.float64)
     radii = torch.tensor([1.0, 3.0], dtype=torch.float64)
     all_hits = crossmatch_sky(

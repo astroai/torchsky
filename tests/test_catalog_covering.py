@@ -22,9 +22,9 @@ def test_chord_radius_right_angle() -> None:
 def test_nside_for_cap_is_covering_derived() -> None:
     wide = nside_for_cap(math.radians(30.0))
     tight = nside_for_cap(math.radians(1.0 / 3600.0))
-    assert wide == 1 or _healpix.max_pixel_radius(
-        wide, degrees=False
-    ) <= math.radians(30.0)
+    assert wide == 1 or _healpix.max_pixel_radius(wide, degrees=False) <= math.radians(
+        30.0
+    )
     assert tight >= wide
     assert tight <= 65536
 

@@ -61,7 +61,9 @@ class _BandpassSource(_NarrowSource):
 class _PreciseConstant(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.value = torch.nn.Parameter(torch.tensor(1.0 + 1.0e-10, dtype=torch.float64))
+        self.value = torch.nn.Parameter(
+            torch.tensor(1.0 + 1.0e-10, dtype=torch.float64)
+        )
 
     def forward(self, ra, dec, wavelength):
         ra, dec, wavelength = torch.broadcast_tensors(ra, dec, wavelength)

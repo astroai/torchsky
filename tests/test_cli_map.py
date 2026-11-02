@@ -331,7 +331,9 @@ def test_run_coadd_accepts_cli_weight_and_mask_maps(tmp_path) -> None:
     output = tmp_path / "out.fits"
     header = _simple_header()
     torchfits.write(str(path_a), torch.full((8, 8), 2.0), header=header, overwrite=True)
-    torchfits.write(str(path_b), torch.full((8, 8), 10.0), header=header, overwrite=True)
+    torchfits.write(
+        str(path_b), torch.full((8, 8), 10.0), header=header, overwrite=True
+    )
     wmap = torch.ones((8, 8), dtype=torch.float32)
     wmap[:, :4] = 3.0
     mask = torch.ones((8, 8), dtype=torch.float32)
@@ -1267,7 +1269,9 @@ def test_paths_to_field_observations_keep_each_passband(monkeypatch) -> None:
     ]
 
 
-def test_run_field_per_filter_keeps_group_weights_and_maps(monkeypatch, tmp_path) -> None:
+def test_run_field_per_filter_keeps_group_weights_and_maps(
+    monkeypatch, tmp_path
+) -> None:
     from torchsky.cli import map_command
 
     paths = [str(tmp_path / name) for name in ("a.fits", "b.fits", "c.fits")]
@@ -1381,7 +1385,9 @@ def test_cli_map_per_filter_coadd_writes_one_product_per_filter(
         header = _simple_header()
         header["FILTER"] = band
         path = tmp_path / f"{name}.fits"
-        torchfits.write(str(path), torch.full((8, 8), value), header=header, overwrite=True)
+        torchfits.write(
+            str(path), torch.full((8, 8), value), header=header, overwrite=True
+        )
         paths.append(str(path))
     output = tmp_path / "coadd.fits"
 
@@ -1414,7 +1420,9 @@ def test_cli_map_per_filter_coadd_writes_one_product_per_filter(
         )
 
 
-def test_cli_map_rejects_mixed_filters_without_per_filter(monkeypatch, tmp_path) -> None:
+def test_cli_map_rejects_mixed_filters_without_per_filter(
+    monkeypatch, tmp_path
+) -> None:
     from torchsky.cli import main
 
     paths = []
@@ -1448,9 +1456,7 @@ def test_cli_map_no_overwrite_preserves_existing_product(monkeypatch, tmp_path) 
     input_path = tmp_path / "input.fits"
     output_path = tmp_path / "coadd.fits"
     header = _simple_header()
-    torchfits.write(
-        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
-    )
+    torchfits.write(str(input_path), torch.ones((8, 8)), header=header, overwrite=True)
     argv = [
         "torchsky",
         "map",
@@ -1473,9 +1479,7 @@ def test_cli_map_no_overwrite_preserves_existing_product(monkeypatch, tmp_path) 
     with pytest.raises(SystemExit, match="no-overwrite"):
         main()
 
-    torch.testing.assert_close(
-        torchfits.read(str(output_path), device="cpu"), first
-    )
+    torch.testing.assert_close(torchfits.read(str(output_path), device="cpu"), first)
 
 
 def test_cli_map_ivar_header_scales_science_bunit(monkeypatch, tmp_path) -> None:
@@ -1487,9 +1491,7 @@ def test_cli_map_ivar_header_scales_science_bunit(monkeypatch, tmp_path) -> None
     header = _simple_header()
     header["BUNIT"] = "nJy"
     for path in (input_path, second_path):
-        torchfits.write(
-            str(path), torch.ones((8, 8)), header=header, overwrite=True
-        )
+        torchfits.write(str(path), torch.ones((8, 8)), header=header, overwrite=True)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -1523,9 +1525,7 @@ def test_cli_map_dq_map_zeroes_rejected_pixels(monkeypatch, tmp_path) -> None:
     dq_path = tmp_path / "dq.fits"
     output_path = tmp_path / "coadd.fits"
     header = _simple_header()
-    torchfits.write(
-        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
-    )
+    torchfits.write(str(input_path), torch.ones((8, 8)), header=header, overwrite=True)
     dq = torch.zeros((8, 8), dtype=torch.int16)
     dq[0, 0] = 1
     torchfits.write(str(dq_path), dq, header=header, overwrite=True)
@@ -1563,9 +1563,7 @@ def test_cli_map_good_bits_reads_mask_map_as_bitmask(monkeypatch, tmp_path) -> N
     mask_path = tmp_path / "mask.fits"
     output_path = tmp_path / "coadd.fits"
     header = _simple_header()
-    torchfits.write(
-        str(input_path), torch.ones((8, 8)), header=header, overwrite=True
-    )
+    torchfits.write(str(input_path), torch.ones((8, 8)), header=header, overwrite=True)
     torchfits.write(
         str(mask_path),
         torch.full((8, 8), 2.0),

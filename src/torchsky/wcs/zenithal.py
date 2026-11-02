@@ -171,14 +171,18 @@ def project_zenithal(
                             val, der = _poly_and_slope(w0)
                             safe = der.abs() > 1e-15
                             step = torch.where(
-                                safe, (val - r_rad_target.detach()) / torch.where(safe, der, torch.ones_like(der)), torch.zeros_like(der)
+                                safe,
+                                (val - r_rad_target.detach())
+                                / torch.where(safe, der, torch.ones_like(der)),
+                                torch.zeros_like(der),
                             )
                             w0 = w0 - step
                         val, der = _poly_and_slope(w0)
                         safe = der.abs() > 1e-15
                         w = w0 - torch.where(
                             safe,
-                            (val - r_rad_target) / torch.where(safe, der, torch.ones_like(der)),
+                            (val - r_rad_target)
+                            / torch.where(safe, der, torch.ones_like(der)),
                             torch.zeros_like(der),
                         )
 
@@ -227,7 +231,9 @@ def project_zenithal(
         theta = torch.where(a > b, a, b)
         valid = (r != 0.0) & torch.isfinite(theta) & (t_clamped.abs() <= 1.0 + 1e-13)
         theta = torch.where(r == 0.0, torch.full_like(r, 90.0), theta)
-        theta = torch.where(valid | (r == 0.0), theta, torch.full_like(theta, float("nan")))
+        theta = torch.where(
+            valid | (r == 0.0), theta, torch.full_like(theta, float("nan"))
+        )
         phi = torch.where(valid | (r == 0.0), phi, torch.full_like(phi, float("nan")))
 
     elif projection_code == "SZP":
@@ -266,8 +272,12 @@ def project_zenithal(
         phi_small = torch.atan2(xr, -yr) * R2D
         theta = torch.where(r2 < 1e-10, theta_small, theta_val)
         phi_out = torch.where(r2 < 1e-10, phi_small, phi_val)
-        theta = torch.where(valid | (r2 < 1e-10), theta, torch.full_like(theta, float("nan")))
-        phi_out = torch.where(valid | (r2 < 1e-10), phi_out, torch.full_like(phi_out, float("nan")))
+        theta = torch.where(
+            valid | (r2 < 1e-10), theta, torch.full_like(theta, float("nan"))
+        )
+        phi_out = torch.where(
+            valid | (r2 < 1e-10), phi_out, torch.full_like(phi_out, float("nan"))
+        )
         phi = phi_out
 
     elif projection_code == "AIR":
@@ -418,7 +428,7 @@ def deproject_zenithal(
         cos_g = math.cos(float(gamma.item()) * D2R)
         sin_g = math.sin(float(gamma.item()) * D2R)
         w1 = sin_g / cos_g  # tan(gamma)
-        w2 = 1.0 / cos_g     # sec(gamma)
+        w2 = 1.0 / cos_g  # sec(gamma)
         phi_rad = phi * D2R
         sin_phi, cos_phi = _sincos(phi_rad)
         theta_rad = theta * D2R
@@ -442,8 +452,16 @@ def deproject_zenithal(
         theta_c = _pv_param(pv2, 3, 90.0, like=phi)
         r0 = R2D
         zp = float(mu.item()) * math.sin(float(theta_c.item()) * D2R) + 1.0
-        xp = float(mu.item()) * math.cos(float(theta_c.item()) * D2R) * math.sin(float(phi_c.item()) * D2R)
-        yp = float(mu.item()) * math.cos(float(theta_c.item()) * D2R) * math.cos(float(phi_c.item()) * D2R)
+        xp = (
+            float(mu.item())
+            * math.cos(float(theta_c.item()) * D2R)
+            * math.sin(float(phi_c.item()) * D2R)
+        )
+        yp = (
+            float(mu.item())
+            * math.cos(float(theta_c.item()) * D2R)
+            * math.cos(float(phi_c.item()) * D2R)
+        )
         w4 = r0 * xp
         w5 = r0 * yp
         w6 = r0 * zp

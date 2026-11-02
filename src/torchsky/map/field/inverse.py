@@ -170,7 +170,9 @@ def bind_linear_band_grid_observation_operator(
     if observation.value_semantics != "surface_brightness":
         raise ValueError("linear band grid requires surface_brightness semantics")
     if observation.weight is None:
-        raise ValueError("linear band grid requires an explicit inverse-variance weight")
+        raise ValueError(
+            "linear band grid requires an explicit inverse-variance weight"
+        )
     initial_support = observation_support_mask(observation)
     initial_weight = torch.nan_to_num(
         observation.weight.detach(), nan=0.0, posinf=0.0, neginf=0.0
@@ -360,9 +362,7 @@ def bind_linear_band_grid_observation_operator(
             return torch.cat(row_chunks, dim=0)
         output = torch.empty(obs_shape, device=state_t.device, dtype=state_t.dtype)
         for y0, y1, x0, x1 in _iter_detector_tiles(height, width, tile_h, tile_w):
-            output[y0:y1, x0:x1] = _forward_tile(
-                state_t, sample_grid, y0, y1, x0, x1
-            )
+            output[y0:y1, x0:x1] = _forward_tile(state_t, sample_grid, y0, y1, x0, x1)
         return output
 
     def _apply_operator(
@@ -615,12 +615,8 @@ class _LinearBandGridOperatorSet(BoundObservationOperatorSet):
             stacked_flipped_kernels: Tensor | None = None
         else:
             raw_kernels = [spec.kernel_fn(device, dtype) for spec in specs]
-            max_ky = max(
-                int(k.shape[2]) if k is not None else 1 for k in raw_kernels
-            )
-            max_kx = max(
-                int(k.shape[3]) if k is not None else 1 for k in raw_kernels
-            )
+            max_ky = max(int(k.shape[2]) if k is not None else 1 for k in raw_kernels)
+            max_kx = max(int(k.shape[3]) if k is not None else 1 for k in raw_kernels)
             padded_kernels: list[Tensor] = []
             for k in raw_kernels:
                 if k is None:
@@ -961,9 +957,7 @@ class LinearBandGridField(_BaseFieldModel):
     ) -> None:
         super().__init__(domain)
         if self.coord_mode != "local_tangent":
-            raise ValueError(
-                "LinearBandGridField requires local_tangent coordinates"
-            )
+            raise ValueError("LinearBandGridField requires local_tangent coordinates")
         self.spatial_resolution = int(spatial_resolution)
         if self.spatial_resolution < 2:
             raise ValueError("spatial_resolution must be at least 2")
@@ -1309,14 +1303,10 @@ def linear_band_grid_diagonal_majorizer(
         raise ValueError("smoothness_weight must be finite and non-negative")
     if isinstance(operator_or_set, BoundObservationOperator):
         if isinstance(data, Sequence) and not isinstance(data, Tensor):
-            raise TypeError(
-                "single BoundObservationOperator requires a 2D data tensor"
-            )
+            raise TypeError("single BoundObservationOperator requires a 2D data tensor")
         datum = torch.as_tensor(data)
         ones = torch.ones_like(datum)
-        sensitivity = operator_or_set.adjoint(
-            operator_or_set.apply_noise_model(ones)
-        )
+        sensitivity = operator_or_set.adjoint(operator_or_set.apply_noise_model(ones))
     elif isinstance(operator_or_set, BoundObservationOperatorSet):
         if not isinstance(data, Sequence) or isinstance(data, Tensor):
             raise TypeError(
@@ -1349,7 +1339,10 @@ def solve_linear_band_grid_cg(
     relative_regularization: bool = False,
     prior_reference: Literal["zero", "initial"] = "zero",
     preconditioner: (
-        Literal["diagonal_majorizer", "none"] | Callable[[Tensor], Tensor] | Tensor | None
+        Literal["diagonal_majorizer", "none"]
+        | Callable[[Tensor], Tensor]
+        | Tensor
+        | None
     ) = "diagonal_majorizer",
     tolerance: float = 1.0e-6,
     irls_steps: int = 1,
@@ -1394,9 +1387,11 @@ def solve_linear_band_grid_cg(
         raise ValueError("prior_reference must be 'zero' or 'initial'")
     if not math.isfinite(float(tolerance)) or tolerance < 0.0:
         raise ValueError("tolerance must be finite and non-negative")
-    if (
-        not callable(data_weight_fn)
-        and data_weight_fn not in ("none", "huber", "tukey", "power")
+    if not callable(data_weight_fn) and data_weight_fn not in (
+        "none",
+        "huber",
+        "tukey",
+        "power",
     ):
         raise ValueError(
             "data_weight_fn must be 'none', 'huber', 'tukey', 'power', or a callable"
@@ -1412,9 +1407,7 @@ def solve_linear_band_grid_cg(
 
     if is_single_op:
         if isinstance(data, Sequence) and not isinstance(data, Tensor):
-            raise TypeError(
-                "single BoundObservationOperator requires a 2D data tensor"
-            )
+            raise TypeError("single BoundObservationOperator requires a 2D data tensor")
         data_t = torch.as_tensor(data)
         rhs_base = operator_or_set.adjoint(operator_or_set.apply_noise_model(data_t))
         if use_data_irls:
@@ -1433,9 +1426,7 @@ def solve_linear_band_grid_cg(
         rhs_base = operator_or_set.weighted_adjoint(data_tuple)
         if use_data_irls:
             init_prec_tuple = tuple(
-                torch.clamp(
-                    op.apply_noise_model(torch.ones_like(d)).detach(), min=0.0
-                )
+                torch.clamp(op.apply_noise_model(torch.ones_like(d)).detach(), min=0.0)
                 for op, d in zip(operator_or_set.operators, data_tuple, strict=True)
             )
     else:
@@ -1524,23 +1515,15 @@ def solve_linear_band_grid_cg(
     base_damp_weight: Tensor | None = None
     base_wx: Tensor | None = None
     base_wy: Tensor | None = None
-    if (
-        relative_regularization
-        and sensitivity_diag is not None
-        and median_sens > 0.0
-    ):
+    if relative_regularization and sensitivity_diag is not None and median_sens > 0.0:
         base_damp_weight = torch.clamp(
             sensitivity_diag.detach() / median_sens,
             min=1.0e-3,
         )
         if base_damp_weight.shape[1] > 1:
-            base_wx = torch.minimum(
-                base_damp_weight[:, 1:], base_damp_weight[:, :-1]
-            )
+            base_wx = torch.minimum(base_damp_weight[:, 1:], base_damp_weight[:, :-1])
         if base_damp_weight.shape[0] > 1:
-            base_wy = torch.minimum(
-                base_damp_weight[1:, :], base_damp_weight[:-1, :]
-            )
+            base_wy = torch.minimum(base_damp_weight[1:, :], base_damp_weight[:-1, :])
 
     t_solve0 = time.perf_counter()
     num_stages = int(irls_steps)
@@ -1693,12 +1676,18 @@ def solve_linear_band_grid_cg(
                 wy = base_wy * stage_wy if base_wy is not None else stage_wy
             if effective_non_negative_weight > 0.0:
                 u_neg_sq = torch.square(torch.clamp(-u, min=0.0))
-                neg_weight = effective_non_negative_weight * (u_neg_sq / (1.0 + u_neg_sq))
+                neg_weight = effective_non_negative_weight * (
+                    u_neg_sq / (1.0 + u_neg_sq)
+                )
                 if base_damp_weight is not None:
                     neg_weight = neg_weight * base_damp_weight
 
         rhs = stage_rhs_base
-        if prior_reference == "initial" and effective_damping > 0.0 and has_nonzero_init:
+        if (
+            prior_reference == "initial"
+            and effective_damping > 0.0
+            and has_nonzero_init
+        ):
             if damp_weight is not None:
                 rhs = rhs + (effective_damping * damp_weight) * init_ref
             else:
@@ -1723,12 +1712,16 @@ def solve_linear_band_grid_cg(
                 total_diag = total_diag + neg_weight
             if effective_smoothness_weight > 0.0:
                 if wx is not None or wy is not None:
-                    total_diag = total_diag + effective_smoothness_weight * _grid_weighted_laplacian_diagonal_majorizer(
-                        cast(tuple[int, int], rhs.shape),  # 2-D (H, W) target
-                        wx,
-                        wy,
-                        device=rhs.device,
-                        dtype=rhs.dtype,
+                    total_diag = (
+                        total_diag
+                        + effective_smoothness_weight
+                        * _grid_weighted_laplacian_diagonal_majorizer(
+                            cast(tuple[int, int], rhs.shape),  # 2-D (H, W) target
+                            wx,
+                            wy,
+                            device=rhs.device,
+                            dtype=rhs.dtype,
+                        )
                     )
                 else:
                     total_diag = total_diag + 8.0 * effective_smoothness_weight
@@ -1762,7 +1755,9 @@ def solve_linear_band_grid_cg(
             preconditioner_name = "tensor_diagonal"
             diag_t = preconditioner.to(device=rhs.device, dtype=rhs.dtype)
             if diag_t.shape != rhs.shape:
-                raise ValueError("diagonal preconditioner shape must match target shape")
+                raise ValueError(
+                    "diagonal preconditioner shape must match target shape"
+                )
             inv_diag = torch.where(
                 diag_t > 0.0,
                 1.0 / torch.clamp(diag_t, min=1.0e-12),
@@ -1775,7 +1770,6 @@ def solve_linear_band_grid_cg(
             _apply_prec = _tensor_diag_prec
 
         elif callable(preconditioner):
-
             preconditioner_name = "callable"
             _apply_prec = cast(Callable[[Tensor], Tensor], preconditioner)
 
@@ -1804,9 +1798,7 @@ def solve_linear_band_grid_cg(
                 assert isinstance(operator_or_set, BoundObservationOperatorSet)
                 preds = operator_or_set.apply(state)
                 image = operator_or_set.weighted_adjoint(
-                    tuple(
-                        p_e * w_e for p_e, w_e in zip(preds, _det_w, strict=True)
-                    )
+                    tuple(p_e * w_e for p_e, w_e in zip(preds, _det_w, strict=True))
                 )
             if effective_damping > 0.0:
                 if _damp_w is not None:
@@ -1816,8 +1808,10 @@ def solve_linear_band_grid_cg(
             if _neg_w is not None:
                 image = image + _neg_w * state
             if effective_smoothness_weight > 0.0:
-                image = image + effective_smoothness_weight * _grid_weighted_laplacian_action(
-                    state, _wx, _wy
+                image = (
+                    image
+                    + effective_smoothness_weight
+                    * _grid_weighted_laplacian_action(state, _wx, _wy)
                 )
             return image
 
@@ -1843,9 +1837,7 @@ def solve_linear_band_grid_cg(
         rz_old = float(rz_old_t.detach().item())
         ref_norm = max(rhs_norm, r0_norm, 1.0e-30)
         stage_tol = (
-            float(tolerance)
-            if stage_idx == num_stages - 1
-            else float(tolerance) * 10.0
+            float(tolerance) if stage_idx == num_stages - 1 else float(tolerance) * 10.0
         )
         converged = r0_norm <= stage_tol * (ref_norm if stage_idx > 0 else 1.0)
         if num_stages == 1:
@@ -1906,9 +1898,7 @@ def solve_linear_band_grid_cg(
     assert initial_r0_norm is not None
     final_r_norm = history[-1]
     rel_residual = (
-        final_r_norm / max(initial_r0_norm, 1.0e-30)
-        if initial_r0_norm > 0.0
-        else 0.0
+        final_r_norm / max(initial_r0_norm, 1.0e-30) if initial_r0_norm > 0.0 else 0.0
     )
     if diagnostics is not None:
         effective_fn_name = (
@@ -1962,9 +1952,7 @@ def solve_linear_band_grid_cg(
                 p50 = float(torch.quantile(pos_sens.double(), 0.50).item())
                 p90 = float(torch.quantile(pos_sens.double(), 0.90).item())
                 diagnostics["grid_sensitivity_median"] = p50
-                diagnostics["grid_sensitivity_p10_p90_ratio"] = p10 / max(
-                    p90, 1.0e-30
-                )
+                diagnostics["grid_sensitivity_p10_p90_ratio"] = p10 / max(p90, 1.0e-30)
             else:
                 diagnostics["grid_sensitivity_median"] = 0.0
                 diagnostics["grid_sensitivity_p10_p90_ratio"] = 0.0
@@ -1976,7 +1964,9 @@ def solve_linear_band_grid_cg(
 
 
 def solve_joint_multiband_grid_cg(
-    operators_by_band: Mapping[str, BoundObservationOperator | BoundObservationOperatorSet],
+    operators_by_band: Mapping[
+        str, BoundObservationOperator | BoundObservationOperatorSet
+    ],
     data_by_band: Mapping[str, Tensor | Sequence[Tensor]],
     *,
     initial_solutions: Mapping[str, Tensor] | None = None,
@@ -2012,14 +2002,18 @@ def solve_joint_multiband_grid_cg(
         raise ValueError("irls_steps must be positive")
     band_keys = tuple(operators_by_band.keys())
     if set(band_keys) != set(data_by_band.keys()):
-        raise ValueError("operators_by_band and data_by_band must have matching band keys")
+        raise ValueError(
+            "operators_by_band and data_by_band must have matching band keys"
+        )
 
     num_stages = int(irls_steps)
     if num_stages == 1 or not edge_preserving or len(band_keys) == 1:
         results: dict[str, LinearSolveResult] = {}
         for band in band_keys:
             band_diag: dict[str, Any] = {}
-            init_b = initial_solutions.get(band) if initial_solutions is not None else None
+            init_b = (
+                initial_solutions.get(band) if initial_solutions is not None else None
+            )
             results[band] = solve_linear_band_grid_cg(
                 operators_by_band[band],
                 data_by_band[band],
@@ -2106,7 +2100,9 @@ def solve_joint_multiband_grid_cg(
             if (irls_config is not None and data_weight_fn == "none")
             else data_weight_fn
         )
-        stage_weight_fn: Literal["none", "huber", "tukey", "power"] | Callable[..., Tensor] = (
+        stage_weight_fn: (
+            Literal["none", "huber", "tukey", "power"] | Callable[..., Tensor]
+        ) = (
             "none"
             if stage_idx == 0
             else ("huber" if (is_warmup and req_fn == "tukey") else data_weight_fn)
@@ -2170,9 +2166,7 @@ def solve_joint_multiband_grid_cg(
             total_rhs_sec_by_band[band] += float(
                 stage_diag.get("rhs_and_preconditioner_seconds", 0.0)
             )
-            total_solve_sec_by_band[band] += float(
-                stage_diag.get("solve_seconds", 0.0)
-            )
+            total_solve_sec_by_band[band] += float(stage_diag.get("solve_seconds", 0.0))
             per_band_diags[band] = stage_diag
 
     final_results: dict[str, LinearSolveResult] = {}
@@ -2280,8 +2274,7 @@ def solve_linear_band_grid_lsqr(
         else:
             preds = (operators[0].apply(v),)
         weighted = tuple(
-            sw * p.to(dtype=sw.dtype)
-            for sw, p in zip(sqrt_weights, preds, strict=True)
+            sw * p.to(dtype=sw.dtype) for sw, p in zip(sqrt_weights, preds, strict=True)
         )
         reg = v * sqrt_damp if sqrt_damp > 0.0 else torch.zeros_like(v)
         return weighted, reg
@@ -2291,8 +2284,7 @@ def solve_linear_band_grid_lsqr(
         u_reg: Tensor,
     ) -> Tensor:
         scaled = tuple(
-            sw * u.to(dtype=sw.dtype)
-            for sw, u in zip(sqrt_weights, u_obs, strict=True)
+            sw * u.to(dtype=sw.dtype) for sw, u in zip(sqrt_weights, u_obs, strict=True)
         )
         adj = (
             operator_or_set.adjoint(scaled)
@@ -2305,7 +2297,9 @@ def solve_linear_band_grid_lsqr(
 
     def _obs_norm(u_obs: tuple[Tensor, ...], u_reg: Tensor) -> float:
         # ``u_obs`` holds one residual block per operator (non-empty), so the sum is a Tensor.
-        sq = cast(Tensor, sum(torch.sum(u.to(dtype=torch.float64).square()) for u in u_obs))
+        sq = cast(
+            Tensor, sum(torch.sum(u.to(dtype=torch.float64).square()) for u in u_obs)
+        )
         if sqrt_damp > 0.0:
             sq = sq + torch.sum(u_reg.to(dtype=torch.float64).square())
         return float(torch.sqrt(sq).item())
@@ -2321,9 +2315,7 @@ def solve_linear_band_grid_lsqr(
         return tuple(u * inv for u in u_obs), u_reg * inv
 
     t_solve0 = time.perf_counter()
-    pred0 = (
-        operator_or_set.apply(x0) if is_set else (operators[0].apply(x0),)
-    )
+    pred0 = operator_or_set.apply(x0) if is_set else (operators[0].apply(x0),)
     u_obs = tuple(
         sw * (d.to(dtype=p.dtype) - p)
         for sw, d, p in zip(sqrt_weights, data_tuple, pred0, strict=True)
@@ -2356,9 +2348,7 @@ def solve_linear_band_grid_lsqr(
             converged = True
             break
         av_obs, av_reg = _forward_augmented(v)
-        u_obs = tuple(
-            av - alpha * u for av, u in zip(av_obs, u_obs, strict=True)
-        )
+        u_obs = tuple(av - alpha * u for av, u in zip(av_obs, u_obs, strict=True))
         u_reg = av_reg - alpha * u_reg
         beta = _obs_norm(u_obs, u_reg)
         u_obs, u_reg = _scale_obs(u_obs, u_reg, beta)
@@ -2439,9 +2429,13 @@ def _extract_stationary_effective_psf(
 ) -> tuple[Tensor, str]:
     psf_op = operator_bundle.psf
     if psf_op is None:
-        raise ValueError("stationary calibration adapter requires a calibrated PSF operator")
+        raise ValueError(
+            "stationary calibration adapter requires a calibrated PSF operator"
+        )
     if not psf_op.frozen:
-        raise ValueError("stationary calibration adapter requires a frozen PSF operator")
+        raise ValueError(
+            "stationary calibration adapter requires a frozen PSF operator"
+        )
     if psf_op.pixel_response_included is not True:
         raise ValueError(
             "stationary calibration adapter requires PSF pixel_response_included=True"
@@ -2471,7 +2465,9 @@ def _extract_stationary_effective_psf(
                 "stationary LearnedPSFOp must wrap a ConditionedKernelPSF model"
             )
         if any(p.requires_grad for p in model.parameters()):
-            raise ValueError("stationary ConditionedKernelPSF parameters must be frozen")
+            raise ValueError(
+                "stationary ConditionedKernelPSF parameters must be frozen"
+            )
         height, width = map(int, observation.image.shape)
         param = next(model.parameters())
         probe_x = torch.tensor(
@@ -2488,7 +2484,8 @@ def _extract_stationary_effective_psf(
             observation.wavelength
             if observation.wavelength is not None
             else (
-                0.5 * (float(observation.spectral_min) + float(observation.spectral_max))
+                0.5
+                * (float(observation.spectral_min) + float(observation.spectral_max))
                 if observation.spectral_min is not None
                 and observation.spectral_max is not None
                 else 0.0
@@ -2502,7 +2499,9 @@ def _extract_stationary_effective_psf(
         with torch.no_grad():
             kernels = model.effective_kernels(probe_x, probe_y, wl, time_mjd)
         ref_kernel = kernels[0]
-        if not torch.allclose(kernels, ref_kernel.expand_as(kernels), rtol=1.0e-6, atol=1.0e-7):
+        if not torch.allclose(
+            kernels, ref_kernel.expand_as(kernels), rtol=1.0e-6, atol=1.0e-7
+        ):
             raise ValueError(
                 "calibrated PSF varies across detector coordinates; stationary adapter requires a coordinate-invariant PSF"
             )
@@ -2537,7 +2536,10 @@ def _extract_stationary_calibrated_background(
     forward_context: ForwardContext | None,
     background_gauge_policy: str,
 ) -> tuple[Tensor, float]:
-    if not isinstance(background_gauge_policy, str) or not background_gauge_policy.strip():
+    if (
+        not isinstance(background_gauge_policy, str)
+        or not background_gauge_policy.strip()
+    ):
         raise ValueError("background_gauge_policy must be an explicit non-empty string")
     bg_op = operator_bundle.background
     if bg_op is None:
@@ -2556,7 +2558,9 @@ def _extract_stationary_calibrated_background(
             "stationary LearnedBackgroundOp must wrap a ConditionedBackgroundField"
         )
     if any(p.requires_grad for p in model.parameters()):
-        raise ValueError("stationary ConditionedBackgroundField parameters must be frozen")
+        raise ValueError(
+            "stationary ConditionedBackgroundField parameters must be frozen"
+        )
     height, width = map(int, observation.image.shape)
     param = next(model.parameters())
     probe_x = torch.tensor(
@@ -2589,7 +2593,9 @@ def _extract_stationary_calibrated_background(
     if not bool(torch.isfinite(values).all()):
         raise ValueError("stationary calibrated background evaluation must be finite")
     scalar_val = float(values[0].item())
-    if not torch.allclose(values, values[:1].expand_as(values), rtol=1.0e-6, atol=1.0e-7):
+    if not torch.allclose(
+        values, values[:1].expand_as(values), rtol=1.0e-6, atol=1.0e-7
+    ):
         raise ValueError(
             "calibrated background varies across detector coordinates; stationary adapter requires a constant pedestal"
         )
@@ -2625,7 +2631,9 @@ def adapt_stationary_calibrated_band_observation(
             f"observation.value_unit {unit!r} does not match expected {expected_value_unit!r}"
         )
     if not isinstance(observation.band_name, str) or not observation.band_name.strip():
-        raise ValueError("stationary calibration adapter requires an explicit band_name")
+        raise ValueError(
+            "stationary calibration adapter requires an explicit band_name"
+        )
     if (
         float(getattr(observation, "photometric_scale", 1.0)) != 1.0
         or observation.gain_electrons_per_adu is not None
@@ -2967,7 +2975,7 @@ def load_stationary_calibrated_band_observations(
             psf=LearnedPSFOp(
                 psf_model,
                 frozen=True,
-                pixel_response_included= bool(
+                pixel_response_included=bool(
                     getattr(psf_model, "_torchsky_pixel_response_included", False)
                 ),
                 pixel_response_provenance=str(
@@ -3013,4 +3021,3 @@ __all__ = [
     "solve_linear_band_grid_cg",
     "solve_linear_band_grid_lsqr",
 ]
-

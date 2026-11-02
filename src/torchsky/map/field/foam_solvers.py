@@ -17,6 +17,7 @@ from typing import Callable, Literal, Sequence
 import torch
 from torch import Tensor
 
+
 def spectral_basis_whitening_transform(
     response_basis: Tensor,
     *,

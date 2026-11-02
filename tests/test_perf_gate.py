@@ -16,6 +16,7 @@ pytest.importorskip("torchsky._cpp")
 import torchsky  # noqa: E402
 from torchsky.sphere import healpix  # noqa: E402
 
+
 def _median_seconds(fn, *, warmup: int = 1, iters: int = 3) -> float:
     for _ in range(warmup):
         fn()

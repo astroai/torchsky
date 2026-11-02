@@ -125,7 +125,9 @@ def _pad_nodes(g: Tensor, dim: int) -> Tensor:
     """Add one ghost node at each end by cubic extrapolation (3 p0 - 3 p1 + p2)."""
     n = g.shape[dim]
     first = 3.0 * g.select(dim, 0) - 3.0 * g.select(dim, 1) + g.select(dim, 2)
-    last = 3.0 * g.select(dim, n - 1) - 3.0 * g.select(dim, n - 2) + g.select(dim, n - 3)
+    last = (
+        3.0 * g.select(dim, n - 1) - 3.0 * g.select(dim, n - 2) + g.select(dim, n - 3)
+    )
     return torch.cat([first.unsqueeze(dim), g, last.unsqueeze(dim)], dim=dim)
 
 
@@ -163,7 +165,9 @@ def _evaluate_exact_chunked(
 ) -> tuple[Tensor, Tensor, Tensor]:
     xs, ys, oks = [], [], []
     for start in range(0, x.numel(), _EXACT_CHUNK):
-        a, b, c = evaluate(x[start : start + _EXACT_CHUNK], y[start : start + _EXACT_CHUNK])
+        a, b, c = evaluate(
+            x[start : start + _EXACT_CHUNK], y[start : start + _EXACT_CHUNK]
+        )
         xs.append(a)
         ys.append(b)
         oks.append(c)
@@ -218,14 +222,20 @@ def _level(
     for k, (u_y, u_x) in enumerate(verify_u):
         interp = _interpolate_points(padded, u_y, u_x, ny, nx)
         lo = n_nodes + k * n_cells
-        ex, ey, eok = all_x[lo : lo + n_cells], all_y[lo : lo + n_cells], all_ok[lo : lo + n_cells]
+        ex, ey, eok = (
+            all_x[lo : lo + n_cells],
+            all_y[lo : lo + n_cells],
+            all_ok[lo : lo + n_cells],
+        )
         err = torch.hypot(interp[0] - ex, interp[1] - ey)
         err = torch.where(
             eok & torch.isfinite(err), err, torch.full_like(err, float("inf"))
         )
         cell_err = torch.maximum(cell_err, err.reshape(ny - 1, nx - 1))
     # A cell is only as good as every node of its 4 x 4 Catmull-Rom stencil.
-    bad_f = F.pad(node_bad.to(torch.float32)[None, None], (1, 1, 1, 1), mode="replicate")
+    bad_f = F.pad(
+        node_bad.to(torch.float32)[None, None], (1, 1, 1, 1), mode="replicate"
+    )
     cell_bad = F.max_pool2d(bad_f, kernel_size=4, stride=1)[0, 0] > 0.0
     cell_ok = (cell_err <= tolerance * _VERIFY_SAFETY) & ~cell_bad
     if stats is not None:
@@ -243,7 +253,11 @@ def _level(
     accepted = cell_ok[cy[:, None], cx[None, :]]
     if stats is not None:
         stats.setdefault("levels", []).append(
-            {"stride": stride, "cells": int(cell_ok.numel()), "accepted_cells": int(cell_ok.sum())}
+            {
+                "stride": stride,
+                "cells": int(cell_ok.numel()),
+                "accepted_cells": int(cell_ok.sum()),
+            }
         )
     return dense, accepted
 
@@ -275,7 +289,9 @@ def interpolated_inverse_mapping(
     tolerance = MAPPING_TOLERANCE_PX if tolerance is None else float(tolerance)
     min_stride = MAPPING_MIN_STRIDE if min_stride is None else int(min_stride)
     if stats is not None:
-        stats.update({"pixels": height * width, "exact_pixels": 0, "max_verified_error_px": 0.0})
+        stats.update(
+            {"pixels": height * width, "exact_pixels": 0, "max_verified_error_px": 0.0}
+        )
 
     out = torch.zeros((2, height, width), dtype=torch.float64, device=device)
     ok = torch.zeros((height, width), dtype=torch.bool, device=device)
@@ -292,7 +308,9 @@ def interpolated_inverse_mapping(
     if lattice_possible:
         level_stride = stride
         while level_stride >= max(min_stride, 1):
-            if (height - 1) / float(level_stride) < 2.0 or (width - 1) / float(level_stride) < 2.0:
+            if (height - 1) / float(level_stride) < 2.0 or (width - 1) / float(
+                level_stride
+            ) < 2.0:
                 break
             dense, accepted = _level(
                 evaluate, height, width, level_stride, tolerance, device, stats

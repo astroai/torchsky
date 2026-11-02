@@ -332,6 +332,7 @@ def apply_redshift(
         one_plus_z = one_plus_z_from_redshift(velocity_or_z)
     return apply_redshift_f_lambda(flux_rest, lambda_rest, one_plus_z)
 
+
 __all__ = [
     "C_KM_S",
     "C_M_S",

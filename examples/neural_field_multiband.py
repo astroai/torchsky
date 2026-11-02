@@ -122,7 +122,10 @@ def main() -> None:
         for row, obs in enumerate(observations):
             clean = _synthetic_band(size, obs.transmission_center)
             fit_img = field.render(result.model, obs).detach().cpu()
-            for ax, (title, im) in zip(axes[row], [("data", obs.image), ("field fit", fit_img), ("truth", clean)]):
+            for ax, (title, im) in zip(
+                axes[row],
+                [("data", obs.image), ("field fit", fit_img), ("truth", clean)],
+            ):
                 ax.imshow(im.cpu(), origin="lower", cmap="magma", vmin=0, vmax=1.3)
                 ax.set_title(f"{obs.band_name}: {title}", fontsize=8)
                 ax.axis("off")

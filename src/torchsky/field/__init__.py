@@ -191,7 +191,9 @@ def distribution(
 ) -> tuple[_Tensor, _Tensor]:
     """Render predictive mean and log-variance."""
     if target == "observation":
-        return _render_field_observation_distribution(field_model, observation, **kwargs)
+        return _render_field_observation_distribution(
+            field_model, observation, **kwargs
+        )
     if target == "samples":
         return _render_field_samples_distribution(field_model, observation, **kwargs)
     raise ValueError(f"unsupported field distribution target {target!r}")

@@ -104,7 +104,12 @@ def test_resolve_gaussian() -> None:
     assert spec["transmission_sigma"] == 100.0
 
 
-def _install_fake_astroquery(monkeypatch: pytest.MonkeyPatch, fake_table: list[Any], wl_curve: np.ndarray, tr_curve: np.ndarray) -> None:
+def _install_fake_astroquery(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_table: list[Any],
+    wl_curve: np.ndarray,
+    tr_curve: np.ndarray,
+) -> None:
     aq_mod = types.ModuleType("astroquery")
     svo_mod = types.ModuleType("astroquery.svo_fps")
 
@@ -195,7 +200,9 @@ def test_svo_cache_hit_offline(tmp_path: Path) -> None:
     import json
 
     with open(filter_file, "w", encoding="utf-8") as f:
-        json.dump({"filter_id": "Subaru/HSC.g", "wavelength": wl, "transmission": tr}, f)
+        json.dump(
+            {"filter_id": "Subaru/HSC.g", "wavelength": wl, "transmission": tr}, f
+        )
 
     # 1. Direct by filter_id
     spec = bandpass_from_svo(
@@ -262,7 +269,9 @@ def test_svo_truncated_cache_entry_is_refetched(
     assert spec["transmission_wavelength"].numel() == wl_curve.size
 
 
-def test_svo_cache_write_and_reload(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_svo_cache_write_and_reload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Verify SvoFps download populates cache and second call reloads without SvoFps."""
     cache_dir = tmp_path / "svo_cache"
 
@@ -381,7 +390,9 @@ def test_resolve_field_bandpass_svo_cache(tmp_path: Path) -> None:
     wl = [7000.0, 7600.0, 8200.0]
     tr = [0.05, 0.9, 0.05]
     with open(filter_file, "w", encoding="utf-8") as f:
-        json.dump({"filter_id": "Subaru/HSC.i", "wavelength": wl, "transmission": tr}, f)
+        json.dump(
+            {"filter_id": "Subaru/HSC.i", "wavelength": wl, "transmission": tr}, f
+        )
 
     spec = resolve_field_bandpass(
         source="svo",
@@ -414,8 +425,11 @@ def test_photon_quadrature_matches_fine_integral() -> None:
     wl = torch.linspace(1.0, 2.0, 2001, dtype=torch.float64)
     tr = torch.exp(-0.5 * ((wl - 1.5) / 0.15) ** 2)
     nodes, weights = photon_quadrature(wl, tr, 8)
-    assert nodes.shape == (8,) and torch.allclose(weights.sum(), torch.tensor(1.0, dtype=torch.float64))
+    assert nodes.shape == (8,) and torch.allclose(
+        weights.sum(), torch.tensor(1.0, dtype=torch.float64)
+    )
     assert bool((nodes[1:] > nodes[:-1]).all())
+
     # smooth spectrum: equal-mass quadrature reproduces the photon-weighted band average
     def g(lam):
         return 1.0 + 0.7 * lam**2
@@ -436,7 +450,9 @@ def test_photon_quadrature_conventions_and_validation() -> None:
     tr = torch.ones_like(wl)
     fnu, _ = photon_quadrature(wl, tr, 1, flux_convention="fnu")
     flam, _ = photon_quadrature(wl, tr, 1, flux_convention="flambda")
-    assert float(fnu) < 2.0 < float(flam)  # 1/lambda weighting pulls the median blueward
+    assert (
+        float(fnu) < 2.0 < float(flam)
+    )  # 1/lambda weighting pulls the median blueward
     with pytest.raises(ValueError):
         photon_quadrature(wl, torch.zeros_like(wl), 4)
     with pytest.raises(ValueError):
