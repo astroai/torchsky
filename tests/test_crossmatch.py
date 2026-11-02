@@ -298,11 +298,15 @@ def test_many_pairs_mode() -> None:
     n_ref = cats[1][0].numel()
     assert out.index[:n_ref, 1].tolist() == list(range(n_ref))
     for k in (0, 2):
-        ref = crossmatch_sky(*cats[1], *cats[k], radius_arcsec=3.0, find="symmetric")
+        # STILTS semantics: best1 partner per reference row, non-exclusive.
+        ref = crossmatch_sky(*cats[1], *cats[k], radius_arcsec=3.0, find="best1")
         got = out.index[:n_ref, k]
         assert {(int(i), int(j)) for i, j in enumerate(got) if j >= 0} == _pairs(ref)
-        col = out.index[:, k]
-        assert sorted(col[col >= 0].tolist()) == list(range(cats[k][0].numel()))
+        col = out.index[n_ref:, k]
+        alone = sorted(col[col >= 0].tolist())
+        assert alone == sorted(
+            set(range(cats[k][0].numel())) - set(ref.right_index.tolist())
+        )
     assert out.index.shape[0] >= n_ref
     assert (out.n_members >= 1).all()
     assert (out.index[n_ref:, 1] == -1).all()
@@ -387,3 +391,70 @@ def test_mps_options_run_float32() -> None:
     assert res.left_index.device.type == "mps"
     assert res.left_index.tolist() == [0, 1]
     assert crossmatch_self(x, z, 5.0, group=True).group_size.tolist() == [2, 2]
+
+
+def test_find_mutual_oracle_wrap_poles_and_ties() -> None:
+    for seed in (3, 8):
+        la, lb, ra, rb = _data(seed=seed)
+        r = 6.0
+        sep = _sep_matrix(la, lb, ra, rb)
+        masked = torch.where(sep <= r, sep, torch.full_like(sep, float("inf")))
+        b1 = masked.argmin(1)  # first minimum = lowest right index
+        b2 = masked.argmin(0)
+        want = {
+            (i, int(b1[i]))
+            for i in range(la.numel())
+            if torch.isfinite(masked[i, b1[i]]) and int(b2[b1[i]]) == i
+        }
+        res = crossmatch_sky(la, lb, ra, rb, radius_arcsec=r, find="mutual")
+        assert len(want) > 20
+        assert _pairs(res) == want
+        assert res.left_index.tolist() == sorted(res.left_index.tolist())
+        sym = _pairs(crossmatch_sky(la, lb, ra, rb, radius_arcsec=r, find="symmetric"))
+        assert want <= sym  # greedy one-to-one contains every mutual-best pair
+    # Left A (0") sees only right R (1.1"); R is closer to left B (2.0": 0.9") but B
+    # prefers right S (2.5": 0.5"). Greedy keeps A-R after B-S; mutual drops both.
+    args = (
+        torch.zeros(2, dtype=D) + 10.0,
+        torch.tensor([0.0, 2.0], dtype=D) / 3600,
+        torch.zeros(2, dtype=D) + 10.0,
+        torch.tensor([1.1, 2.5], dtype=D) / 3600,
+    )
+    x = crossmatch_sky(*args, radius_arcsec=1.5, find="mutual")
+    s = crossmatch_sky(*args, radius_arcsec=1.5, find="symmetric")
+    assert _pairs(x) == {(1, 1)}
+    assert _pairs(s) == {(1, 1), (0, 0)}
+    # Equal-score ties: best1 -> lowest right, best2 -> lowest left.
+    tie = crossmatch_sky(
+        torch.tensor([10.0, 10.0], dtype=D),
+        torch.tensor([0.001, -0.001], dtype=D),
+        torch.tensor([10.0], dtype=D),
+        torch.tensor([0.0], dtype=D),
+        radius_arcsec=10.0,
+        find="mutual",
+    )
+    assert _pairs(tie) == {(0, 0)}
+
+
+def test_many_pairs_mode_non_exclusive_oracle() -> None:
+    # Two reference rows share one nearest partner; wrap and pole rows included.
+    ref = (
+        torch.tensor([359.99995, 0.00005, 10.0, 20.0], dtype=D),
+        torch.tensor([0.0, 0.0, 89.99999, -89.99999], dtype=D),
+    )
+    oth = (
+        torch.tensor([0.0, 10.0, 200.0, 100.0], dtype=D),
+        torch.tensor([0.0, 89.99999, 89.9999, 5.0], dtype=D),
+    )
+    out = crossmatch_many([ref, oth], 1.0, mode="pairs", reference=0)
+    sep = _sep_matrix(*ref, *oth)
+    masked = torch.where(sep <= 1.0, sep, torch.full_like(sep, float("inf")))
+    best = masked.argmin(1)
+    expect = [
+        int(best[i]) if torch.isfinite(masked[i, best[i]]) else -1 for i in range(4)
+    ]
+    assert expect[:2] == [0, 0]
+    assert out.index[:4, 1].tolist() == expect
+    served = {e for e in expect if e >= 0}
+    assert out.index[4:, 1].tolist() == sorted(set(range(4)) - served)
+    assert (out.index[4:, 0] == -1).all()

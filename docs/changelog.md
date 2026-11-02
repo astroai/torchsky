@@ -50,6 +50,18 @@ owned by `torchfits`.
 - `cosmology` distance functions no longer take `n_steps` (the quadrature is a fixed Gauss-Legendre rule).
 
 ### Added
+- `torchsky.catalogs` STILTS-style matching: `crossmatch_sky`/`Catalog.crossmatch` gain
+  `find="best1"|"best2"|"mutual"|"symmetric"|"all"` (`mutual` = STILTS `find=best`,
+  `symmetric` = greedy one-to-one) and per-row errors on both sides (`skyerr`); new
+  `join_rows` (1and2, 1or2, all1, all2, 1not2, 2not1), `crossmatch_exact`, `crossmatch_self`
+  (friends-of-friends groups, STILTS `tmatch1 action=identify`) and `crossmatch_many`
+  (`tmatchn` pairs/group). Exact pair-set parity with STILTS on Gaia DR3 x 2MASS x AllWISE.
+- WCS: `PV1_1`/`PV1_2` native fiducial point (WCSLIB `celset`); `PrecisionWarning` when MPS
+  float32 cannot reach half a pixel at the WCS pixel scale.
+- Observed place: ERFA `epv00` Earth ephemeris, light deflection, annual and diurnal
+  aberration and ERFA `refco` refraction (default; Saemundsson optional) through
+  `observed_altaz`, `transform` and `Catalog.observe` (0.012 mas vs `erfa.atco13`); `Site`
+  gains `relative_humidity` and `wavelength_um`.
 - `torchsky.filter_profiles.photon_quadrature`: photon-weighted equal-mass
   quadrature nodes of a bandpass for band-integrated forward models.
 - `torchsky.map.field.chromatic`: `ChromaticPSFField` (one PSF field smooth in
@@ -114,6 +126,17 @@ owned by `torchfits`.
   variance pass; data, weight, overlap and context are unchanged.
 
 ### Changed
+- Exact WCS Jacobians at the reference pixel for every projection family; CSC reproduces
+  WCSLIB's float32 evaluation on every platform and device.
+- SHT kernels carry exponent scaling (correct to `lmax = 3*nside-1` at nside 2048) and run at
+  about healpy CPU speed; spin SHT works on MPS.
+- Nested `query_disc`, `query_polygon` and `query_strip` descend the HEALPix quadtree (ranges
+  without enumerating interior pixels); native CPU kernels for MOC set operations.
+- Poisson-Gaussian NLL/CDF: bounded memory at any frame size, observation-aware support window
+  (no truncated outliers) and streaming analytic gradients (backward ~2x forward).
+- `IndexedResponsePlan` groups entries once (sort + searchsorted); `detect_outliers` takes an
+  explicit `gain`.
+- Large modules split into private submodules (no API change).
 - `map2alm`/`alm2map` at `lmax >= 1024` no longer fall back to a dense basis (the native
   Legendre seed overflowed to NaN); they match healpy to ~1e-11 up to `lmax = 3*nside-1`. The
   non-native SHT path uses a chunked, exponent-scaled recurrence (memory O(chunk x nring)).
@@ -320,6 +343,11 @@ owned by `torchfits`.
   and the scripts are copied into the built site so their links work.
 
 ### Fixed
+- Drizzle: exact square-drizzle gradients at pixel-aligned geometry; IFU cube footprints follow
+  the detector-to-cube Jacobian; `drizzle_turbo`/`splat_box` exact for rotated or sheared WCS
+  pairs and skip non-finite pixels.
+- `MultiOrderHealpixMap.from_mhealpy` read mhealpy's `density()` method as always true.
+- `RandomRotation` was not rigid for non-square images.
 - Flux-semantics image-plane coadds evaluated the exact solid angle of every
   source pixel (a spherical pixel polygon per pixel on distorted WCS) for each
   target window an observation touched, and the target quadrature world grids

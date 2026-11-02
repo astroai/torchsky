@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     pass
 
 
-
 class _WCSStateMixin:
     if TYPE_CHECKING:
         # State and methods supplied by the host class.

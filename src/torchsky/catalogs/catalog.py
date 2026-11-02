@@ -387,7 +387,7 @@ class Catalog:
             or right_err is not None
             or find not in ("best", "best1", "all")
         ):
-            # Error radii, best2 and symmetric use the strip index directly.
+            # Error radii, best2, mutual and symmetric use the strip index directly.
             return crossmatch_sky(
                 left.lon,
                 left.lat,

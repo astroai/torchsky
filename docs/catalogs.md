@@ -135,7 +135,7 @@ input row order.
 | `crossmatch_sky(..., left_err_arcsec=, right_err_arcsec=)` | `tmatch2 matcher=skyerr` (match if `sep <= err1 + err2`) |
 | `crossmatch_sky(..., left_distance=, right_distance=, distance_tol=)` | sky plus a 1-d cut (not the Euclidean metric of `sky3d`) |
 | `crossmatch_exact(key1, key2)` | `tmatch2 matcher=exact` |
-| `find="best1"` / `"best2"` / `"symmetric"` / `"all"` | `find=best1` / `best2` / `best` / `all` |
+| `find="best1"` / `"best2"` / `"mutual"` / `"all"` | `find=best1` / `best2` / `best` / `all` |
 | `join_rows(result, n1, n2, join)` | `join=1and2`, `1or2`, `all1`, `all2`, `1not2`, `2not1` |
 | `crossmatch_self(..., group=True)` | `tmatch1 action=identify` |
 | `crossmatch_many(cats, r, mode="pairs")` / `"group"` | `tmatchn multimode=pairs` / `group` |
@@ -144,11 +144,14 @@ Not provided: `skyellipse`, and error-normalised scores (ranking always uses
 plain separation in arcseconds).
 
 **`find`.** The name `"best"` keeps its older torchsky meaning (`best1`), which
-differs from STILTS `find=best`; the STILTS one is `"symmetric"`.
+differs from STILTS `find=best`; the STILTS one is `"mutual"`.
 
 - `best1`: nearest right row per left row; ties go to the lowest right index.
 - `best2`: nearest left row per right row; ties go to the lowest left index.
-- `symmetric`: one-to-one, greedy by ascending separation (ties by lowest left,
+- `mutual`: STILTS `find=best`; exactly the mutual-best pairs (`best1` and
+  `best2` agree, same tie rules). A row whose best partner prefers another row
+  stays unmatched. Computed from the streamed `best1` and `best2` pair sets.
+- `symmetric`: greedy one-to-one (not STILTS; maximal) by ascending separation (ties by lowest left,
   then lowest right index); each row appears at most once. Rounds resolve all
   locally dominant pairs at once, which equals the sequential greedy pass.
   Typical inputs need a few `O(K)` rounds; only an adversarial chain of strictly
@@ -175,9 +178,10 @@ union-find): per-row `group_id` (`-1` for rows with no partner, otherwise
 **Many catalogues.** `crossmatch_many` returns one output row per group and an
 `index[g, c]` row of catalogue `c` (`-1` if absent).
 
-- `mode="pairs"`: each other catalogue is matched to `catalogs[reference]`
-  one-to-one (`symmetric`). Rows are all reference rows, then each other
-  catalogue's reference-unmatched rows alone. Two non-reference rows are never
+- `mode="pairs"` (STILTS `multimode=pairs`): each reference row takes its
+  `best1` partner in every other catalogue, so one entry may serve several
+  reference rows. Rows are all reference rows (`-1` where no partner), then
+  each other catalogue's rows that are no reference row's partner, alone. Two non-reference rows are never
   linked directly.
 - `mode="group"`: friends-of-friends over all cross-catalogue pairs (same-catalogue
   pairs are not links), one row per group ordered by its smallest stacked row. A
@@ -204,6 +208,8 @@ z1, z2 = torch.zeros(4, dtype=d), torch.zeros(3, dtype=d)
 
 sym = crossmatch_sky(ra1, z1, ra2, z2, radius_arcsec=2.0, find="symmetric")
 assert sym.left_index.tolist() == [0, 2] and sym.right_index.tolist() == [0, 1]
+mut = crossmatch_sky(ra1, z1, ra2, z2, radius_arcsec=2.0, find="mutual")
+assert mut.left_index.tolist() == [0, 2] and mut.right_index.tolist() == [0, 1]
 left, right = join_rows(sym, 4, 3, "1or2")
 assert left.tolist() == [0, 2, 1, 3, -1] and right.tolist() == [0, 1, -1, -1, 2]
 
@@ -221,7 +227,7 @@ keys = crossmatch_exact(torch.tensor([1, 2, 2]), torch.tensor([2, 3]))
 assert keys.left_index.tolist() == [1, 2] and keys.right_index.tolist() == [0, 0]
 
 pairs = crossmatch_many([(ra1, z1), (ra2, z2)], 2.0, mode="pairs")
-assert pairs.index.tolist() == [[0, 0], [1, -1], [2, 1], [3, -1], [-1, 2]]
+assert pairs.index.tolist() == [[0, 0], [1, 0], [2, 1], [3, -1], [-1, 2]]  # non-exclusive best1
 groups = crossmatch_many([(ra1, z1), (ra2, z2)], 2.0, mode="group")
 assert groups.index.tolist() == [[0, 0], [2, 1], [3, -1], [-1, 2]]
 assert groups.group_size.tolist() == [3, 2, 1, 1]

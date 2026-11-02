@@ -230,11 +230,12 @@ def crossmatch_many(
     (one scalar/tensor/``None`` per catalogue), ``<= err_a + err_b``.
 
     ``mode="pairs"`` (``multimode=pairs``): every other catalogue is matched to
-    ``catalogs[reference]`` one-to-one (``find="symmetric"``: ascending
-    separation, ties by lowest rows). Output rows are all reference rows in
-    order, then, for each other catalogue in order, its rows that matched no
-    reference row (alone in their row). Two non-reference rows are never
-    linked directly, so each output row holds at most one row per catalogue.
+    ``catalogs[reference]`` with ``find="best1"``: each reference row takes its
+    nearest partner (ties by lowest row) in every other catalogue, so one
+    entry may serve several reference rows. Output rows are all reference rows
+    in order (``-1`` where no partner), then, for each other catalogue in
+    order, its rows that are no reference row's partner (alone in their row).
+    Two non-reference rows are never linked directly.
 
     ``mode="group"`` (``multimode=group``): friends-of-friends over *all*
     cross-catalogue pairs; one output row per group, ordered by the group's
@@ -288,7 +289,7 @@ def crossmatch_many(
     if mode == "pairs":
         n_ref = sizes[reference]
         matched = {
-            k: pairs(reference, k, "symmetric") for k in range(n_cat) if k != reference
+            k: pairs(reference, k, "best1") for k in range(n_cat) if k != reference
         }
         extra = {}
         for k, res in matched.items():

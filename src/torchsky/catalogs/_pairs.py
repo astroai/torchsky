@@ -10,7 +10,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-FIND_MODES = ("best", "best1", "best2", "all", "symmetric")
+FIND_MODES = ("best", "best1", "best2", "all", "symmetric", "mutual")
 JOIN_MODES = ("1and2", "1or2", "all1", "all2", "1not2", "2not1")
 
 
@@ -47,7 +47,7 @@ def best_per_key(key: Tensor, other: Tensor, sep: Tensor) -> Tensor:
 
 
 def greedy_one_to_one(left: Tensor, right: Tensor, sep: Tensor) -> Tensor:
-    """Indices of the greedy one-to-one assignment (STILTS ``find=best``).
+    """Indices of the greedy one-to-one assignment (not STILTS ``find=best``; see ``mutual``).
 
     Pairs are ranked by ``(sep, left, right)``; the best pair is taken, every
     pair touching a used row is discarded, and the process repeats. The result
@@ -91,6 +91,12 @@ def select_pairs(
         idx = best_per_key(right, left, sep)
     elif find == "symmetric":
         idx = greedy_one_to_one(left, right, sep)
+    elif find == "mutual":
+        keep = torch.zeros(left.numel(), dtype=torch.bool, device=left.device)
+        keep[best_per_key(left, right, sep)] = True
+        keep2 = torch.zeros_like(keep)
+        keep2[best_per_key(right, left, sep)] = True
+        idx = torch.nonzero(keep & keep2, as_tuple=True)[0]
     else:
         idx = torch.arange(left.numel(), device=left.device)
     left, right, sep = left[idx], right[idx], sep[idx]

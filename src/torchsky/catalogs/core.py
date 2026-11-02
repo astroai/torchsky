@@ -1068,8 +1068,9 @@ def sky_pairs(
 ) -> CrossmatchResult:
     """Strip-index pairs with ``sep <= radius_left + radius_right`` for any ``find``.
 
-    ``best2`` and ``symmetric`` are derived without an ``N * M`` step:
-    ``best2`` swaps the roles so the streamed best-hit path still applies, and
+    ``best2``, ``mutual`` and ``symmetric`` are derived without an ``N * M``
+    step: ``best2`` swaps the roles so the streamed best-hit path still applies,
+    ``mutual`` intersects the streamed ``best1`` and ``best2`` pair sets, and
     ``symmetric`` resolves the (``K`` pair) candidate list greedily.
     """
     from ._pairs import select_pairs
@@ -1077,6 +1078,23 @@ def sky_pairs(
     device = left_ra.device
     if left_ra.numel() == 0 or right_ra.numel() == 0:
         return _empty_crossmatch(device)
+    if find == "mutual":
+        kw = dict(
+            radius_left=radius_left,
+            radius_right=radius_right,
+            accept=accept,
+            left_chunk_size=left_chunk_size,
+            right_chunk_size=right_chunk_size,
+        )
+        b1 = sky_pairs(left_ra, left_dec, right_ra, right_dec, find="best1", **kw)  # type: ignore[arg-type]
+        b2 = sky_pairs(left_ra, left_dec, right_ra, right_dec, find="best2", **kw)  # type: ignore[arg-type]
+        n_right = int(right_ra.numel())
+        k1 = b1.left_index * n_right + b1.right_index
+        k2 = b2.left_index * n_right + b2.right_index
+        both = torch.isin(k1, k2)
+        return CrossmatchResult(
+            b1.left_index[both], b1.right_index[both], b1.separation_arcsec[both]
+        )
     if find == "best2":
         zeros = torch.zeros_like(right_ra)
         swapped_accept = None if accept is None else (lambda r, l_: accept(l_, r))
@@ -1160,9 +1178,12 @@ def crossmatch_sky(
       repeat); ties go to the lowest right index.
     - ``"best2"``: nearest left row per right row (left rows may repeat); ties
       go to the lowest left index.
-    - ``"symmetric"``: STILTS ``find=best``. One-to-one, greedy by ascending
-      separation, ties by lowest left then lowest right index; every row is
-      used at most once.
+    - ``"mutual"``: STILTS ``find=best``. Exactly the mutual-best pairs
+      (``best1`` intersected with ``best2``, same tie rules); a row whose best
+      partner prefers another row is left unmatched.
+    - ``"symmetric"``: greedy one-to-one (not STILTS). Ascending separation,
+      ties by lowest left then lowest right index; every row is used at most
+      once and the assignment is maximal.
     - ``"all"``: every pair inside the threshold.
 
     ``"all"`` is ordered by left index, separation, then right index; the other
@@ -1183,7 +1204,7 @@ def crossmatch_sky(
         radius_arcsec: Scalar or per-left-row match radius in arcseconds.
         left_chunk_size: Maximum left rows processed per outer chunk.
         right_chunk_size: Maximum candidate right rows processed per chunk.
-        find: ``"best"``, ``"best1"``, ``"best2"``, ``"symmetric"`` or ``"all"``.
+        find: ``"best"``, ``"best1"``, ``"best2"``, ``"mutual"``, ``"symmetric"`` or ``"all"``.
         right_index: Reusable nested HEALPix index for the right catalog.
         device: Optional compute device.
         left_err_arcsec: Per-left-row error radius (skyerr matcher).
@@ -1246,7 +1267,7 @@ def crossmatch_sky(
     if right_ra.numel() == 0 or left_ra.numel() == 0:
         return _empty_crossmatch(work_device)
 
-    advanced = has_err or accept is not None or find in ("best2", "symmetric")
+    advanced = has_err or accept is not None or find in ("best2", "symmetric", "mutual")
     if right_index is not None and advanced:
         raise ValueError(
             "right_index supports only the sky matcher with find='best' or 'all'"
