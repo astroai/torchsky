@@ -70,20 +70,28 @@ def _fit_sorted_line(x: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
     return slope, y_mean - slope * x_mean
 
 
+def _lower_upper_median(sorted_values: Tensor) -> Tensor:
+    """Median of a sorted 1-D tensor; mean of the two middle values if even."""
+    n = int(sorted_values.numel())
+    return 0.5 * (sorted_values[(n - 1) // 2] + sorted_values[n // 2])
+
+
 def _zscale_bounds_tensor(
     tensor: Tensor,
     *,
     contrast: float = 0.25,
-    n_samples: int = 600,
+    n_samples: int = 1000,
     max_reject: float = 0.5,
     min_npixels: int = 5,
     krej: float = 2.5,
     max_iterations: int = 5,
 ) -> tuple[Tensor, Tensor] | None:
-    """Sample ``(z1, z2)`` display limits from a robust linear fit of the CDF.
+    """IRAF zscale ``(z1, z2)`` display limits (as in ``astropy``'s ``ZScaleInterval``).
 
-    The fit ranks the finite samples, so a heavily skewed or partially masked
-    pixel distribution still yields a stable range.
+    Finite pixels are strided to at most ``n_samples`` and sorted; a line is
+    fitted to the sorted samples with iterative ``krej``-sigma rejection (the
+    rejection mask is dilated by 1% of the samples), and the slope sets the
+    limits around the median.
     """
     flat = tensor.flatten()
     valid = flat[torch.isfinite(flat)]
@@ -91,55 +99,50 @@ def _zscale_bounds_tensor(
     if n_valid == 0:
         return None
 
-    if n_valid > n_samples:
-        step = -(-n_valid // n_samples)
-        sample = valid[::step]
-    else:
-        sample = valid
-
-    sample = torch.sort(sample).values
-    n = int(sample.numel())
-    if n < min_npixels:
-        return sample[0], sample[-1]
+    stride = int(max(1.0, n_valid / n_samples))
+    sample = torch.sort(valid[::stride][:n_samples]).values
+    npix = int(sample.numel())
+    vmin, vmax = sample[0], sample[-1]
 
     dtype = work_dtype(tensor.device)
-    x = torch.arange(n, dtype=dtype, device=sample.device)
+    x = torch.arange(npix, dtype=dtype, device=sample.device)
     y = sample.to(dtype, copy=True)
 
-    good = torch.ones(n, dtype=torch.bool, device=sample.device)
+    minpix = max(min_npixels, int(npix * max_reject))
+    ngrow = max(1, int(npix * 0.01))
+    bad = torch.zeros(npix, dtype=torch.bool, device=sample.device)
+    ngood, last_ngood = npix, npix + 1
+    slope: Tensor | None = None
     for _ in range(max_iterations):
-        if int(good.sum()) < min_npixels:
+        if ngood >= last_ngood or ngood < minpix:
             break
+        good = ~bad
         slope, intercept = _fit_sorted_line(x[good], y[good])
-        residuals = y - (slope * x + intercept)
-        sigma = residuals[good].std()
-        if not bool(sigma > _EPS):
-            break
-        new_good = residuals.abs() < krej * sigma
-        if int(new_good.sum()) < min_npixels:
-            break
-        if float(new_good.sum()) / n < 1.0 - max_reject:
-            break
-        good = new_good
+        flat_res = y - (slope * x + intercept)
+        threshold = krej * flat_res[good].std(unbiased=False)
+        bad = bad | (flat_res < -threshold) | (flat_res > threshold)
+        # Dilate by a length-``ngrow`` box (np.convolve(..., mode="same")).
+        after = (ngrow - 1) // 2
+        before = ngrow - 1 - after
+        padded = torch.nn.functional.pad(
+            bad.to(dtype)[None, None], (before, after)
+        )
+        bad = torch.nn.functional.max_pool1d(padded, ngrow, stride=1)[0, 0] > 0
+        last_ngood = ngood
+        ngood = int((~bad).sum())
 
-    if int(good.sum()) < 2:
-        return sample[n // 4], sample[3 * n // 4]
-
-    slope, intercept = _fit_sorted_line(x[good], y[good])
-    centre = n / 2.0
-    z1 = torch.maximum(
-        sample[0],
-        (intercept + slope * (0.0 - centre) / contrast).to(sample.dtype),
-    )
-    z2 = torch.minimum(
-        sample[-1],
-        (intercept + slope * (n - centre) / contrast).to(sample.dtype),
-    )
-    if bool(z2 > z1):
-        return z1, z2
-    median = torch.median(sample)
-    spread = sample.std().to(sample.dtype)
-    return median - 3.0 * spread, median + 3.0 * spread
+    if ngood >= minpix and slope is not None:
+        if contrast > 0:
+            slope = slope / contrast
+        centre_pixel = (npix - 1) // 2
+        median = _lower_upper_median(sample).to(dtype)
+        vmin = torch.maximum(
+            vmin, (median - (centre_pixel - 1) * slope).to(sample.dtype)
+        )
+        vmax = torch.minimum(
+            vmax, (median + (npix - centre_pixel) * slope).to(sample.dtype)
+        )
+    return vmin, vmax
 
 
 class ZScale:
@@ -382,7 +385,9 @@ class RobustScale:
 
     def __call__(self, tensor: Tensor) -> Tensor:
         if self.center:
-            tensor = tensor - torch.median(tensor)
+            if not tensor.is_floating_point():
+                tensor = tensor.to(torch.get_default_dtype())
+            tensor = tensor - _lower_upper_median(torch.sort(tensor.flatten()).values)
         if self.scale:
             dtype = (
                 tensor.dtype if tensor.is_floating_point() else torch.get_default_dtype()

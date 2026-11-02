@@ -340,3 +340,35 @@ def test_transform_reproducibility():
     result2 = transform2(data)
 
     assert torch.equal(result1, result2)
+
+
+@pytest.mark.parametrize(
+    ("shape", "seed", "contrast"),
+    [((30, 30), 4, 0.25), ((64, 64), 5, 0.25), ((100, 130), 6, 0.1), ((31, 33), 7, 0.5)],
+)
+def test_zscale_limits_match_astropy_zscale_interval(shape, seed, contrast) -> None:
+    visualization = pytest.importorskip("astropy.visualization")
+    import numpy as np
+
+    from torchsky.transforms import _zscale_bounds_tensor
+
+    image = np.random.default_rng(seed).normal(100.0, 5.0, shape)
+    image[3:5, 3:5] = 5000.0
+    image[10, 10] = np.nan
+    ref = visualization.ZScaleInterval(contrast=contrast).get_limits(image)
+    bounds = _zscale_bounds_tensor(
+        torch.tensor(image, dtype=torch.float64), contrast=contrast
+    )
+    assert bounds is not None
+    assert float(bounds[0]) == pytest.approx(float(ref[0]), rel=1e-9)
+    assert float(bounds[1]) == pytest.approx(float(ref[1]), rel=1e-9)
+
+
+def test_robust_scale_centres_on_the_mean_of_the_two_middle_values() -> None:
+    import numpy as np
+
+    from torchsky.transforms import RobustScale
+
+    x = torch.tensor([1.0, 2.0, 10.0, 100.0], dtype=torch.float64)
+    out = RobustScale(scale=False)(x)
+    np.testing.assert_allclose(out.numpy(), x.numpy() - np.median(x.numpy()))

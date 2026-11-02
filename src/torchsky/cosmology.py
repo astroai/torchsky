@@ -45,6 +45,20 @@ def _floating_tensor(value: Tensor | float) -> Tensor:
     )
 
 
+def _as_parameter(
+    value: Tensor | float, *, device: torch.device, dtype: torch.dtype
+) -> Tensor:
+    """Cast a cosmology parameter to ``dtype`` without a float32 detour.
+
+    ``torch.as_tensor(0.6766)`` is float32 under the default dtype, which loses
+    ~6e-8 before a later cast to float64; Python scalars are built directly in
+    the target dtype instead.
+    """
+    if isinstance(value, Tensor):
+        return value.to(device=device, dtype=dtype)
+    return torch.as_tensor(value, device=device, dtype=dtype)
+
+
 @dataclass(frozen=True)
 class APScaling:
     """Alcock--Paczynski geometry at a redshift.
@@ -175,10 +189,10 @@ def e_of_z(
 ) -> Tensor:
     """Dimensionless Hubble function ``E(z) = H(z)/H0`` for CPL FLRW."""
     z_t = _floating_tensor(z)
-    om = torch.as_tensor(om0).to(device=z_t.device, dtype=z_t.dtype)
-    ok = torch.as_tensor(ok0).to(device=z_t.device, dtype=z_t.dtype)
-    w = torch.as_tensor(w0).to(device=z_t.device, dtype=z_t.dtype)
-    w_a = torch.as_tensor(wa).to(device=z_t.device, dtype=z_t.dtype)
+    om = _as_parameter(om0, device=z_t.device, dtype=z_t.dtype)
+    ok = _as_parameter(ok0, device=z_t.device, dtype=z_t.dtype)
+    w = _as_parameter(w0, device=z_t.device, dtype=z_t.dtype)
+    w_a = _as_parameter(wa, device=z_t.device, dtype=z_t.dtype)
     one_plus_z = 1.0 + z_t
     if z_t.numel() and (
         not bool(torch.isfinite(z_t).all()) or bool((one_plus_z <= 0.0).any())
@@ -209,7 +223,7 @@ def hubble_parameter(
 ) -> Tensor:
     """Hubble parameter ``H(z)`` in km/s/Mpc."""
     z_t = _floating_tensor(z)
-    h0 = torch.as_tensor(H0).to(device=z_t.device, dtype=z_t.dtype)
+    h0 = _as_parameter(H0, device=z_t.device, dtype=z_t.dtype)
     if not bool(torch.isfinite(h0).all()) or bool((h0 <= 0.0).any()):
         raise ValueError("H0 must be finite and positive")
     return h0 * e_of_z(z_t, om0=om0, ok0=ok0, w0=w0, wa=wa)
@@ -218,7 +232,7 @@ def hubble_parameter(
 def _hubble_distance_mpc(
     H0: Tensor | float, *, device: torch.device, dtype: torch.dtype
 ) -> Tensor:
-    h0 = torch.as_tensor(H0).to(device=device, dtype=dtype)
+    h0 = _as_parameter(H0, device=device, dtype=dtype)
     if not bool(torch.isfinite(h0).all()) or bool((h0 <= 0.0).any()):
         raise ValueError("H0 must be finite and positive")
     return SPEED_OF_LIGHT_KM_S / h0
@@ -315,7 +329,7 @@ def transverse_comoving_distance(
         wa=wa,
         n_steps=n_steps,
     )
-    ok = torch.as_tensor(ok0).to(device=z_t.device, dtype=z_t.dtype)
+    ok = _as_parameter(ok0, device=z_t.device, dtype=z_t.dtype)
     d_h = _hubble_distance_mpc(H0, device=z_t.device, dtype=z_t.dtype)
     chi = d_c / d_h
     abs_ok = torch.abs(ok)
@@ -474,7 +488,7 @@ def comoving_separation(
     d_b = cosmology.comoving_distance(z_b_t, n_steps=n_steps)
     flat_squared = torch.square(d_a - d_b) + 4.0 * d_a * d_b * half_chord_squared
 
-    ok = torch.as_tensor(cosmology.Ok0).to(device=unit_a.device, dtype=unit_a.dtype)
+    ok = _as_parameter(cosmology.Ok0, device=unit_a.device, dtype=unit_a.dtype)
     d_h = _hubble_distance_mpc(cosmology.H0, device=unit_a.device, dtype=unit_a.dtype)
     abs_ok = torch.abs(ok)
     epsilon = torch.as_tensor(torch.finfo(unit_a.dtype).eps, device=unit_a.device)

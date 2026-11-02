@@ -406,3 +406,15 @@ def test_comoving_position_rejects_curvature_and_non_unit_directions() -> None:
         )
     with pytest.raises(ValueError, match="unit vectors"):
         comoving_position(torch.tensor([2.0, 0.0, 0.0]), torch.tensor(0.5))
+
+
+def test_python_float_parameters_keep_float64_precision() -> None:
+    astropy = pytest.importorskip("astropy.cosmology")
+    z = torch.tensor([0.1, 0.5, 1.0, 3.0], dtype=torch.float64)
+    h0, om0 = 67.66, 0.3111
+    ref = astropy.FlatLambdaCDM(H0=h0, Om0=om0, Tcmb0=0).comoving_distance(z.numpy())
+    got = comoving_distance(z, H0=h0, om0=om0)
+    assert got.dtype == torch.float64
+    torch.testing.assert_close(
+        got, torch.as_tensor(ref.value), rtol=1e-9, atol=0.0
+    )

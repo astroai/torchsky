@@ -300,10 +300,10 @@ def coadd_healpix(
             in_b = (
                 torch.isfinite(x_2d[0])
                 & torch.isfinite(y_2d[0])
-                & (x_2d[0] >= -0.5)
-                & (x_2d[0] <= (W_s - 0.5))
-                & (y_2d[0] >= -0.5)
-                & (y_2d[0] <= (H_s - 0.5))
+                & (x_2d[0] >= 0.0)
+                & (x_2d[0] <= (W_s - 1))
+                & (y_2d[0] >= 0.0)
+                & (y_2d[0] <= (H_s - 1))
             )
             hit = in_b & (s_sup > 0.0) & (s_den > 0.0) & torch.isfinite(s_num)
             if bool(hit.any()):

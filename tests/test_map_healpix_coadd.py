@@ -343,3 +343,30 @@ def test_coadd_rejects_invalid_reduction_chunk_size(chunk_size: object) -> None:
             nside=16,
             reduction_chunk_size=cast(int, chunk_size),
         )
+
+
+def test_coadd_linear_ramp_is_exact_on_every_covered_cell() -> None:
+    # Bilinear sampling is only defined between the outermost pixel centres;
+    # a half-pixel window would extrapolate zero-padded edge values.
+    from torchsky.sphere import pix2ang
+
+    shape = (16, 16)
+    header = _header(shape, cdelt=0.1)
+    wcs = WCS(header)
+    yy, xx = torch.meshgrid(
+        torch.arange(16, dtype=torch.float64),
+        torch.arange(16, dtype=torch.float64),
+        indexing="ij",
+    )
+    image = (2.0 + 0.5 * xx + 0.25 * yy).to(torch.float32)
+    obs = Observation(data=image, wcs=wcs, weight=torch.ones_like(image))
+    result = coadd_healpix([obs], nside=512, nest=True, sparse=True)
+    pixels = result.data.valid_pixels.to(torch.int64)
+    assert pixels.numel() > 0
+    values = result.data.get_values(pixels).to(torch.float64)
+    ra, dec = pix2ang(512, pixels, nest=True, lonlat=True)
+    x, y = wcs.world_to_pixel(ra, dec)
+    assert float(x.min()) >= -1e-4 and float(x.max()) <= 15 + 1e-4
+    assert float(y.min()) >= -1e-4 and float(y.max()) <= 15 + 1e-4
+    truth = 2.0 + 0.5 * x.to(torch.float64) + 0.25 * y.to(torch.float64)
+    assert float((values - truth).abs().max()) < 1e-3
