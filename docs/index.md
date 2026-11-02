@@ -235,8 +235,8 @@ tensors, on whatever device you ask for.
 
 ---
 
-`torchsky` 0.5 is the first public release candidate, distributed as a GitHub
-pre-release (not on PyPI until 0.5.0); [Install](install.md) covers source builds. Coming from Astropy, healpy, or
+torchsky 0.5.0rc1 is a GitHub pre-release (not on PyPI until 0.5.0);
+[Install](install.md) covers source builds. Coming from Astropy, healpy, or
 reproject? See [the porting guide](coming-from.md).
 
 </div>

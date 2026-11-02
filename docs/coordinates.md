@@ -136,8 +136,7 @@ assert bool((altaz.lat.abs() <= 90.0).all())
   float64 on the CPU). Measured against `erfa.atco13` without refraction over
   4000 random sky positions and epochs (2017-2026, polar motion, DUT1, 4.2 km
   height), alt/az agrees to 0.012 mas at the maximum (median 0.009 mas); the
-  residual is the TIO locator s' (taken as 0) and TT used for TDB. The earlier
-  Keplerian Earth velocity was off by about 540 m/s, up to 0.37 arcsec.
+  residual is the TIO locator s' (taken as 0) and TT used for TDB.
 - `refraction=True` applies the ERFA `refco` model, `A tan z + B tan^3 z`, to the
   topocentric direction as `atioq` does (`Site.relative_humidity` and
   `Site.wavelength_um` enter `refco`; wavelengths above 100 micrometres select the

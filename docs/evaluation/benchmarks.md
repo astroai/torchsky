@@ -1,7 +1,8 @@
 # Reference benchmarks
 
-!!! warning "Historical baseline (torch 2.13 / torchsky 0.4 pre-release)"
-    Snapshot measured 2026-10-23 on one Apple M2 with torch 2.13 and torchsky 0.4.0. Current-lane results (torch 2.14, torchsky 0.5) come from the
+!!! note "Measurement environment"
+    Measured 2026-10-23 on one Apple M2 (single thread, no GPU) with PyTorch 2.13.
+    Larger-scale results on the supported PyTorch 2.14 lane come from the
     `torchsky-harness` CANFAR evaluation campaigns; see the
     [CANFAR guide](https://github.com/astroai/torchsky-harness/blob/main/docs/canfar.md).
 

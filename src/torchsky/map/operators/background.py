@@ -299,8 +299,7 @@ class SpatialSkyBackgroundOp(ExplicitBackgroundOp):
     shape.  The result is subtracted from the calibrated image before
     geometry projection.
 
-    This op replaces the standalone ``background_estimator`` parameter
-    formerly handled inline in ``coadd_image_plane``.
+    This op is the background estimator used by ``coadd_image_plane``.
     """
 
     background_estimator: Callable[[Tensor, Tensor | None], Tensor] | None = None

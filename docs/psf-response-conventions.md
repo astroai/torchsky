@@ -50,21 +50,20 @@ does not affect them. A normalized output blend has unit interior row response;
 it does not generally have unit column sums. It must not be substituted for the
 source-conditioned operator under a source-flux claim.
 
-## Migration for asymmetric kernels
+## Asymmetric kernels and imported conventions
 
-Earlier detector-grid rendering passed image-shaped kernels directly to
-`conv2d`, reversing asymmetric stamps. Symmetric kernels produce the same
-rendered result with the corrected convention. Image-shaped calibration stamps
-now render in their measured orientation and need no conversion.
+Image-shaped kernels are applied as impulse responses: the renderer converts
+`conv2d` cross-correlation to convolution, so asymmetric stamps render in their
+measured orientation. Symmetric kernels are unaffected, and image-shaped
+calibration stamps need no conversion.
 
-If an explicit array was deliberately stored as a cross-correlation weight to
-preserve the old rendered behavior, convert it with `kernel.flip(-2, -1)` before
-constructing `PSFSpec`. For learned checkpoints trained against rendered images
-under the old convention, rotate `raw_kernels` across their last two dimensions
-to retain that rendered response; rotate the extended model's fixed
-`baseline_kernel` as well. Checkpoints calibrated directly against measured
-star stamps already have the intended stamp orientation and should not be
-rotated. Record which convention an imported calibration used.
+An array stored as a cross-correlation weight must be converted with
+`kernel.flip(-2, -1)` before constructing `PSFSpec`. For learned checkpoints
+trained against rendered images under a cross-correlation convention, rotate
+`raw_kernels` across their last two dimensions (and the extended model's fixed
+`baseline_kernel`). Checkpoints calibrated directly against measured star
+stamps already have the intended stamp orientation and should not be rotated.
+Record which convention an imported calibration used.
 
 `tests/test_psf_transport_invariants.py` checks these bounded discrete contracts
 against independent source scattering and a dense transport matrix. It checks

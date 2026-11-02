@@ -426,7 +426,7 @@ class BoundObservationOperator:
     ) -> Tensor:
         """Estimate the inverse-curvature diagonal with signed Hutchinson probes.
 
-        The historical name is retained. The target is
+        The target is
         ``diag((A^T N^-1 A + damping I)^-1)``; damping changes curvature and
         does not give the sampling covariance of a regularized estimator.
         Negative finite-probe estimates remain signed, without a positive floor.

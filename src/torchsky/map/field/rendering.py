@@ -1464,10 +1464,10 @@ def evaluate_field_coordinates_vmapped(
 ) -> Tensor:
     """Evaluate a field over broadcast coordinates using stateless module state.
 
-    The historical implementation applied ``torch.func.vmap`` to scalar calls,
-    which fails for valid field models containing tensor-value validation. Field
-    models already accept tensor batches, so this compatibility entry point uses
-    one ``functional_call`` over the broadcast batch and remains differentiable.
+    Field models accept tensor batches, so this entry point uses one
+    ``functional_call`` over the broadcast batch (not scalar ``torch.func.vmap``
+    calls, which fail for models with tensor-value validation) and remains
+    differentiable.
     """
     try:
         from torch.func import functional_call
@@ -1602,7 +1602,7 @@ def render_field_cube(
     """Render a (nλ, H, W) cube on the target WCS grid.
 
     ``spectral_chunk`` controls how many wavelength planes are evaluated per
-    ``model`` forward. The default ``1`` matches the legacy one-λ loop (lowest
+    ``model`` forward. The default ``1`` evaluates one wavelength per forward (lowest
     peak memory). Set to ``0`` or any value ``>= nλ`` to fuse all wavelengths
     into a single batched forward (usually faster on GPU for moderate grids).
 
@@ -1612,7 +1612,7 @@ def render_field_cube(
     ``use_func_vmap=True`` routes each wavelength slice through the stateless
     compatibility path :func:`evaluate_field_coordinates_vmapped` in sub-batches
     of ``func_vmap_chunk`` pixels. Field models are already batch-vectorized; the
-    compatibility path no longer applies scalar ``vmap`` because tensor-value
+    compatibility path does not apply scalar ``vmap`` because tensor-value
     validation inside otherwise valid models is incompatible with that transform.
     """
     fallback = (

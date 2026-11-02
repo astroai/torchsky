@@ -1,15 +1,16 @@
 # Parity and correctness evidence
 
-!!! warning "Historical baseline (torch 2.13 / torchsky 0.4 pre-release)"
-    The tables below summarize the 0.4.0 release-candidate baseline (torch 2.13, measured 2026-10). Current-lane results (torch 2.14, torchsky 0.5) come from the
+!!! note "Measurement environment"
+    The tables below summarize a harness baseline measured in 2026-10 with
+    PyTorch 2.13. Results on the supported PyTorch 2.14 lane come from the
     `torchsky-harness` CANFAR evaluation campaigns; see the
     [CANFAR guide](https://github.com/astroai/torchsky-harness/blob/main/docs/canfar.md).
 
 Scientific correctness is evaluated against trusted references in
 [`torchsky-harness`](https://github.com/astroai/torchsky-harness), not in this
 repository. This page records what that evidence covers, where it lives, and
-what it does **not** prove. The tables summarize the 0.4.0 release-candidate
-baseline linked below; they are reported by the harness, not re-measured here.
+what it does **not** prove. The tables summarize the
+baseline record linked below; they are reported by the harness, not re-measured here.
 
 ## What is compared, and against what
 
@@ -22,7 +23,7 @@ baseline linked below; they are reported by the harness, not re-measured here.
 | Catalog crossmatch | Astropy `SkyCoord` | Separation parity | Max difference `1.13e-10 asec` |
 | CUDA WCS | Astropy | 17 cases including offset cases | All pass; max angular parity `8.2e-3 asec` |
 
-Source: the 0.4.0 release-candidate baseline in
+Source: the harness baseline record in
 [`torchsky-harness/docs/releases/0.1.0/baseline.md`](https://github.com/astroai/torchsky-harness/blob/main/docs/releases/0.1.0/baseline.md).
 That document carries the subject artifact identity, the environment, and each
 gate's status.

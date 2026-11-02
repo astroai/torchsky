@@ -170,10 +170,8 @@ def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
     """Return the temperature and polarization pixel window tables for ``nside``.
 
     Only the reference rows embedded in ``_pixwin_embedded`` are distributed
-    with torchsky; the historical code path that read optional FITS tables from
-    ``sphere/data/pixel_window_functions`` never had those files in the tree or
-    in wheels, so it could only fail. Clone the arrays so callers cannot mutate
-    the shared reference.
+    with torchsky; no external FITS tables are read. Clone the arrays so callers
+    cannot mutate the shared reference.
     """
     ref = _REFERENCE_PIXWIN_TABLES.get(int(nside))
     if ref is None:

@@ -10,8 +10,8 @@ Run a subset with positional names::
     python examples/test_examples.py wcs_tour.py healpix_and_moc.py
 
 An example that exits with status 77 (``SKIP``) has an opt-in data
-requirement that is not met (see ``real_data_cutout.py``); it is reported as
-SKIP and does not fail the gate. Examples under ``examples/applications/`` need
+requirement that is not met (see ``real_data_cutout.py``: sample not cached under
+``TORCHSKY_EXAMPLE_FAST=1`` or no network); it is reported as SKIP and does not fail the gate. Examples under ``examples/applications/`` need
 external data or checkpoints and are not run here.
 """
 
@@ -64,6 +64,10 @@ def run_example(name: str) -> tuple[str, str]:
     timeout = TIMEOUTS.get(name, DEFAULT_TIMEOUT)
     env = os.environ.copy()
     env.pop("PYTHONOPTIMIZE", None)
+    # CI never touches the network: real-data examples skip (exit 77) unless
+    # their samples are already cached. Locally the default is unchanged.
+    if os.environ.get("GITHUB_ACTIONS"):
+        env["TORCHSKY_EXAMPLE_FAST"] = "1"
     try:
         result = subprocess.run(
             [*python_cmd(), str(path)],

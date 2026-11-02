@@ -120,7 +120,6 @@ def test_committed_changelog_has_the_rc_section_and_no_duplicate_headings() -> N
     headings = re.findall(r"^### (.+)$", body, flags=re.MULTILINE)
     assert len(headings) == len(set(headings))
     assert "## [0.4.0]" not in text
-    assert "migration.md#migrating-to-05" in body
 
 
 def _wheel(directory: Path, python: str, platform: str, version: str) -> Path:

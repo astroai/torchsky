@@ -25,7 +25,6 @@ REQUIRED_PAGES = (
     "quickstart.md",
     "concepts.md",
     "coming-from.md",
-    "migration.md",
     "wcs.md",
     "coordinates.md",
     "sphere.md",

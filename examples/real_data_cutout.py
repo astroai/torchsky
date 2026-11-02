@@ -1,110 +1,111 @@
-"""Coadd real survey cutouts (opt-in; skips cleanly when no data is present).
+"""Coadd overlapping pieces of a real CFHT MegaPipe cutout onto one TAN grid.
 
-Reads 2D FITS cutouts with ``torchfits`` from a data directory (``--data`` or
-``$TORCHSKY_DATA``; default pattern ``*.fits``), builds one target grid with
-``plan`` and combines them with a Lanczos3 ``coadd``. Prints per-file and
-coadd statistics and saves one figure. No network access happens unless you
-pass ``--fetch URL ...``, which downloads the given FITS URLs (for example a
-MAST ``Download/file?uri=...`` link or a CADC cutout service URL) into the data
-directory first. The SMACS J0723 JWST mini-cutouts used by the harness
-notebooks are produced by ``scripts/build_smacs0723_minicutout.py --download``
-in ``torchsky-harness`` and are picked up with
-``--data $TORCHSKY_DATA/smacs0723_minicutout --glob 'smacs0723_*_cutout_*.fits'``.
-Exits with status 77 (skip) when no FITS files are found. Runtime a few
-seconds for small cutouts.
+Fetches the registry sample ``cadc_megapipe_cutout`` (a 512x512 g-band cutout of
+the CFHT MegaPipe stack MegaPipe.712.165 from the CADC cutout service, cached in
+``~/.cache/torchsky/samples``), splits it into two overlapping sub-images with
+their own shifted WCS, plans a target grid, coadds with a Lanczos3 kernel and
+compares the result to the original pixels. Prints statistics and saves one
+figure. Exits with status 77 (skip) when the sample is not cached and the
+network is unavailable or ``TORCHSKY_EXAMPLE_FAST=1``. Pre-fetch with
+``pixi run fetch-example-samples``. Pass ``--data DIR`` to coadd your own
+``*.fits`` cutouts instead. Runtime a few seconds.
 
-    pixi run -e test -- python examples/real_data_cutout.py --data DIR [--fetch URL ...]
+    pixi run -e test -- python examples/real_data_cutout.py [--data DIR]
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 import sys
 import tempfile
-import urllib.request
 
 import torch
 
-SKIP = 77
+from _sample_data import SKIP, fetch_sample, skip_if_unavailable
 
 
-def fetch(urls: list[str], dest: Path) -> None:
-    dest.mkdir(parents=True, exist_ok=True)
-    for url in urls:
-        name = Path(url.split("?")[0]).name or "download.fits"
-        if "uri=" in url:
-            name = Path(url.split("uri=")[-1]).name
-        target = dest / name
-        if not target.exists():
-            print(f"fetching {url} -> {target}")
-            urllib.request.urlretrieve(url, target)  # noqa: S310 - user-supplied URL
+def pieces(path: Path, hdu: int):
+    """Return ``[(image, header, valid)]``; the sample is split into two overlapping column ranges."""
+    import torchfits
+
+    image = torchfits.read(str(path), hdu).to(torch.float32)
+    header = dict(torchfits.read_header(str(path), hdu))
+    if image.ndim != 2 or "CTYPE1" not in header:
+        print(f"  skipping {path.name}: need a 2D image with a celestial WCS")
+        return []
+    valid = torch.isfinite(image)
+    image = torch.where(valid, image, torch.zeros_like(image))
+    print(
+        f"  {path.name}: shape {tuple(image.shape)}, median {float(image[valid].median()):.4g}"
+    )
+    return [(image, header, valid)]
+
+
+def split_columns(image, header, valid, bounds):
+    out = []
+    for x0, x1 in bounds:
+        sub = dict(header)
+        sub["CRPIX1"] = float(header["CRPIX1"]) - x0
+        sub["NAXIS1"] = x1 - x0
+        out.append((image[:, x0:x1], sub, valid[:, x0:x1]))
+    return out
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
-        "--data", type=Path, default=None, help="directory with FITS cutouts"
+        "--data", type=Path, default=None, help="directory of your own cutouts"
     )
     ap.add_argument("--glob", default="*.fits")
-    ap.add_argument("--fetch", nargs="*", default=None, metavar="URL")
     ap.add_argument("--hdu", type=int, default=0)
     ap.add_argument("--kernel", default="lanczos3")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
-    data_dir = args.data or (
-        Path(os.environ["TORCHSKY_DATA"]) if os.environ.get("TORCHSKY_DATA") else None
-    )
-    if args.fetch:
-        if data_dir is None:
-            data_dir = Path(tempfile.mkdtemp(prefix="torchsky-real-data-"))
-        fetch(args.fetch, data_dir)
-    files = sorted(data_dir.glob(args.glob)) if data_dir and data_dir.is_dir() else []
-    if not files:
-        print(
-            "SKIP: no FITS cutouts found. Pass --data DIR (or set TORCHSKY_DATA), "
-            "or --fetch URL ... to download some; see the module docstring."
-        )
+    if args.data is not None:
+        files = sorted(args.data.glob(args.glob)) if args.data.is_dir() else []
+        if not files:
+            print(f"SKIP: no files matching {args.glob} in {args.data}")
+            return SKIP
+        items = [p for f in files for p in pieces(f, args.hdu)]
+        reference = None
+    else:
+        with skip_if_unavailable():
+            path = fetch_sample("cadc_megapipe_cutout")
+        ((image, header, valid),) = pieces(path, 0)
+        reference = image
+        items = split_columns(image, header, valid, [(0, 320), (192, 512)])
+    if not items:
+        print("SKIP: no usable 2D celestial images among the files found.")
         return SKIP
 
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import torchfits
 
     from torchsky.map import Observation, coadd, plan
 
-    observations = []
-    for path in files:
-        image = torchfits.read(str(path), args.hdu).to(torch.float32)
-        header = dict(torchfits.read_header(str(path), args.hdu))
-        if image.ndim != 2 or "CTYPE1" not in header:
-            print(f"  skipping {path.name}: need a 2D image with a celestial WCS")
-            continue
-        finite = torch.isfinite(image)
-        image = torch.where(finite, image, torch.zeros_like(image))
-        print(
-            f"  {path.name}: shape {tuple(image.shape)}, median {float(image[finite].median()):.4g}"
-        )
-        observations.append(
-            Observation(data=image, wcs=header, weight_map=finite.float())
-        )
-    if not observations:
-        print("SKIP: no usable 2D celestial images among the files found.")
-        return SKIP
-
+    observations = [
+        Observation(data=img, wcs=hdr, weight_map=ok.float()) for img, hdr, ok in items
+    ]
     target = plan(observations, projection="TAN")
     result = coadd(observations, target, kernel=args.kernel, device=args.device)
     data = result.data.cpu()
     covered = result.weight.cpu() > 0
     print(
-        f"coadd of {len(observations)} cutouts: shape {tuple(data.shape)}, "
+        f"coadd of {len(observations)} images: shape {tuple(data.shape)}, "
         f"{int(covered.sum())} covered pixels, mean {float(data[covered].mean()):.4g}, device={args.device}"
     )
+    if reference is not None and data.shape == reference.shape:
+        both = covered & (reference != 0)
+        resid = (data - reference)[both]
+        print(
+            f"coadd vs original: rms residual {float(resid.pow(2).mean().sqrt()):.3g} "
+            f"(original std {float(reference.std()):.3g})"
+        )
 
     out = args.out or Path(tempfile.mkdtemp(prefix="torchsky-real-cutout-"))
     out.mkdir(parents=True, exist_ok=True)
