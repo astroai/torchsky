@@ -139,6 +139,7 @@ For a survey-sized region, build a sparse product instead of allocating 12 ×
 `nside²` pixels (continuing the example above):
 
 ```python
+# fragment: continues from the example above
 result = coadd_healpix(
     observations,
     nside=4096,

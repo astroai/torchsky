@@ -45,5 +45,5 @@ them without recording both environments.
   [parity and correctness evidence](parity.md) for what is checked against
   trusted references.
 
-See also: [performance guide](performance.md) and the
+See also: [scaling guide](scaling.md) and the
 [runtime contract](../reference/runtime-contract.md).

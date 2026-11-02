@@ -23,18 +23,15 @@ REQUIRED_PAGES = (
     "index.md",
     "install.md",
     "quickstart.md",
-    "getting-started.md",
+    "concepts.md",
+    "coming-from.md",
     "migration.md",
-    "compatibility.md",
     "wcs.md",
     "coordinates.md",
-    "astrometry.md",
     "sphere.md",
     "sht.md",
     "moc-and-sparse.md",
     "catalogs.md",
-    "crossmatch.md",
-    "catalogue-foundations.md",
     "spectral.md",
     "spectrophotometry.md",
     "extinction.md",
@@ -46,18 +43,11 @@ REQUIRED_PAGES = (
     "field.md",
     "field-formulation.md",
     "encoders.md",
-    "photometry-encoders.md",
-    "ml.md",
-    "io.md",
-    "table.md",
     "cli.md",
-    "cli-recipes.md",
     "viz.md",
     "gallery.md",
     "native-likelihood.md",
-    "implicit_forward.md",
     "psf-response-conventions.md",
-    "architecture.md",
     "examples.md",
     "changelog.md",
     "roadmap.md",
@@ -66,9 +56,10 @@ REQUIRED_PAGES = (
     "authoring.md",
     "reference/index.md",
     "reference/runtime-contract.md",
+    "evaluation/highlights.md",
     "evaluation/benchmarks.md",
     "evaluation/parity.md",
-    "evaluation/performance.md",
+    "evaluation/scaling.md",
 )
 
 # Non-published trees that must stay outside docs/.
@@ -124,6 +115,8 @@ def test_site_configuration_and_assets_exist() -> None:
     for stylesheet in config["project"].get("extra_css", []):
         assert (DOCS / stylesheet).is_file(), stylesheet
     assert (ROOT / "overrides" / "home.html").is_file()
+    assert (ROOT / "overrides" / "main.html").is_file()
+    assert (ROOT / "overrides" / "partials" / "actions.html").is_file()
 
 
 def test_notes_are_outside_the_published_tree() -> None:

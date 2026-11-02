@@ -1,13 +1,11 @@
-# INR and Power Foam reconstruction: formulation and objectives
+# Field formulation
 
 This page is background for the implemented `torchsky.field` models (INRs,
 spectral Power Foam, and their hybrids). It defines the inverse problem and
 modelling assumptions behind the map/field APIs; it is not a scientific
 acceptance claim. Current API contracts live in [Continuous fields](field.md)
-and [Implicit forward modelling](implicit_forward.md). Measured validation and
+and the [implicit forward scaffold](field.md#implicit-forward-scaffold). Measured validation and
 campaign status live in `torchsky-harness`.
-
-# INR and Power Foam sky reconstruction: problem formulation and objectives
 
 ## Purpose
 
@@ -23,7 +21,7 @@ The central point is simple:
 > continuous sky. They should be compared through the same instrument model,
 > the same detector samples, and the same scientific endpoints.
 
-Our immediate experiment asks whether fitting all exposures and wavelengths
+The motivating experiment asks whether fitting all exposures and wavelengths
 jointly can recover fainter sources than conventional per-band coaddition. The
 claim is not that a model creates information. The hypothesis is that a shared
 spatial-spectral representation can use real correlations between bands while
@@ -886,7 +884,7 @@ Useful diagnostics include:
 - forward/adjoint dot-product checks for every linear operator;
 - results stratified by band, magnitude, colour, crowding, and field quadrant.
 
-## 12–13. Campaign objectives and method matrix
+## 12–13. Evaluation contracts
 
 The SMACS depth endpoint, recovery thresholds, bootstrap protocol, comparator
 matrix, and ablation rows are maintained in the
@@ -1065,7 +1063,7 @@ metric.
 
 - [Continuous fields](field.md): current field APIs, models, observation
   operators, and training workflow.
-- [Implicit forward modelling](implicit_forward.md): compact multi-survey
+- [Implicit forward scaffold](field.md#implicit-forward-scaffold): compact multi-survey
   prediction and robust-loss scaffold.
 - [UPDec depth evaluation campaign](https://github.com/astroai/torchsky-harness/blob/main/docs/adass_updec_depth_week.md):
   frozen data split, method matrix, claim gates, and campaign evidence.

@@ -38,13 +38,12 @@ def test_documented_version_floors_match_pyproject() -> None:
         if dep.lower().startswith("torchfits")
     )
     install = (DOCS / "install.md").read_text(encoding="utf-8")
-    getting_started = (DOCS / "getting-started.md").read_text(encoding="utf-8")
     assert requires_python.replace(">=", ">=") in "".join(install.split())
     assert f">={torch_floor}" in install
     torchfits_short = ".".join(torchfits_floor.split(".")[:2])
     assert f"torchfits {torchfits_floor}" in install
-    assert torch_floor in getting_started
-    assert torchfits_short in "".join(getting_started.split())
+    assert torch_floor in install
+    assert torchfits_short in "".join(install.split())
 
 
 def test_release_status_is_consistent() -> None:

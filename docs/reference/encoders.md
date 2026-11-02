@@ -6,7 +6,7 @@
 
 Coordinate-aware encoders for implicit sky models.
 
-**Guides:** [encoders](../encoders.md), [photometry-encoders](../photometry-encoders.md), [ml](../ml.md)
+**Guides:** [encoders](../encoders.md)
 
 ---
 

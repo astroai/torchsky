@@ -1,4 +1,4 @@
-# Native likelihood and calibration foundations
+# Native likelihood
 
 These primitives support exposure tasks without a global field and retain full
 information for field queries. They are bounded, tested components; they do not
@@ -198,13 +198,17 @@ Conditional measurement noise is independent, fixed and diagonal in each native 
 
 Parent response/data evidence and nuisance bases, mean and covariance are guarded at use and in cached normal/query reports. Declare hidden dependencies and genuine caller revisions for inference tensors or alias changes; rebuild after changes or new autograd graphs. Packed data and bases remain resident, with matrix-free response/precision actions and no dense pixel covariance. This is a bounded group primitive, not a whole-survey sparse calibration solver or a measured throughput claim.
 
-## Run an exposure example
+## Run an example
 
-Run `pixi run -e default -- python examples/native_exposure_calibration.py`. It demonstrates native star profiling, calibrated background precision, normalized likelihood and a requested flux uncertainty with no global field. It generates a controlled Gaussian reference and is not independent validation. Bounded tests use independent SciPy Gaussian integrals, dense GLS/covariance references, gradient/curvature checks and regression cases; real-data science comparisons belong in torchsky-harness.
-
-`pixi run -e default -- python examples/native_response_moments.py` demonstrates continuous source transport and ordered photon/dark/charge/read moments with explicit units. It does not approximate those moments as a calibrated Gaussian likelihood.
-
-`pixi run -e default -- python examples/native_field_response.py` demonstrates source-node radiance, response/calibration ownership, an opt-in native image prediction and a conditional field-template query. Its small planar quadrature and chosen Gaussian noise are illustrative, not a calibrated instrument or accuracy certificate.
+The native operators example ([native_operators.py](published-examples/native_operators.py))
+demonstrates native star profiling, calibrated background precision, a
+normalized likelihood, a requested flux uncertainty with no global field, and
+continuous source transport with ordered photon/dark/charge/read moments in
+explicit units. It generates a controlled Gaussian reference and is not
+independent validation, and it does not approximate the detector moments as a
+calibrated Gaussian likelihood. Bounded tests use independent SciPy Gaussian
+integrals, dense GLS/covariance references, gradient/curvature checks, and
+regression cases; real-data science comparisons belong in torchsky-harness.
 
 ## Implementation status and open gates
 
@@ -239,7 +243,6 @@ Open gates (none are implied by the bounded tests above):
 - verified real native-data science references: HST/ACS, JWST/NIRCam, and
   CFHT/MegaCam products currently have bounded byte/header/geometry/calibration
   checks only (`training_ready=false`);
-- broader CUDA/MPS execution evidence and independent chromatic PSF/background
-  calibration (M1), field-reconstruction discovery gates (M2), nonlinear
-  detector evidence (M3), interface proofs (M4), and all-available-data
-  federation (M5).
+- broader CUDA/MPS execution evidence, independent chromatic PSF/background
+  calibration, field-reconstruction discovery gates, nonlinear detector
+  evidence, and federation across all available survey data.

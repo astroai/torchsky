@@ -13,7 +13,7 @@ Before a release:
 1. Run `pixi run preflight-push` and targeted tests for changed behavior.
 2. Run `pixi run typecheck` when Python types or public signatures changed.
 3. Confirm GitHub package CI is green. Full local test runs remain opt-in as
-   described in [AGENTS.md](https://github.com/astroai/torchsky/blob/main/AGENTS.md).
+   described in [Contributing](contributing.md).
 4. For performance claims, cite a scoped harness run with its subject and
    harness revisions and the resulting scorecard. Do not treat a completed
    process as scientific acceptance without the documented criteria.

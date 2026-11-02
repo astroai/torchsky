@@ -1,4 +1,4 @@
-"""Implicit forward-modeling shell aligned with ``docs/implicit_forward.md``.
+"""Implicit forward-modeling shell aligned with ``docs/field.md``.
 
 This module is the **code counterpart** to the architectural note: shared scene INR
 ``F_θ``, optional kinematics ``ζ``, context ``c``, and instrument-side rendering
@@ -54,7 +54,7 @@ class KinematicState:
 
 @dataclass(frozen=True)
 class SurveyDataTerm:
-    """One modular likelihood term ``L_s`` (``implicit_forward.md`` §8.2)."""
+    """One modular likelihood term ``L_s`` (see ``docs/field.md``)."""
 
     name: str
     observations: tuple[FieldObservation, ...]

@@ -6,7 +6,7 @@ deliberately, not during the docs build: examples are deterministic and cheap,
 but running all of them at build time would make documentation depend on a
 working scientific stack.
 
-    pixi run docs-example-output -- example_healpix.py example_wcs_transform.py
+    pixi run docs-example-output -- frames_and_motion.py sed_photometry.py
 """
 
 from __future__ import annotations
@@ -51,7 +51,9 @@ def main(argv: list[str] | None = None) -> int:
             print((result.stderr or "")[-1000:])
             return 1
         target = OUTPUTS / f"{path.stem}.txt"
-        target.write_text(result.stdout, encoding="utf-8")
+        # Figure paths are temporary directories; keep the excerpt portable.
+        lines = [line for line in result.stdout.splitlines() if "figure:" not in line]
+        target.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"[ok] {name} -> {target.relative_to(ROOT)}")
     return 0
 

@@ -24,7 +24,7 @@ REQUIRED_TASKS: Mapping[str, tuple[str, ...]] = {
 }
 
 REQUIRED_FILES = (
-    "docs/architecture.md",
+    "docs/concepts.md",
     "docs/evaluation/benchmarks.md",
     "docs/map.md",
     "docs/field.md",
@@ -49,7 +49,7 @@ DOC_REQUIRED_PHRASES: Mapping[str, tuple[str, ...]] = {
         "field.sample",
         "operator_constrained",
     ),
-    "docs/architecture.md": ("scene", "world", "io"),
+    "docs/concepts.md": ("scene", "world", "io"),
 }
 
 REQUIRED_SOURCE_EXPORTS: Mapping[str, tuple[str, ...]] = {

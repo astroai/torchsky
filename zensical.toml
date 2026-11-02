@@ -25,46 +25,44 @@ extra_javascript = [
 
 nav = [
   {"Home" = "index.md"},
-  {"Getting Started" = [
+  {"Get Started" = [
     "install.md",
     "quickstart.md",
-    "getting-started.md",
-    "migration.md",
-    "compatibility.md",
+    "concepts.md",
+    "coming-from.md",
   ]},
   {"User Guide" = [
-    {"Coordinates and WCS" = ["wcs.md", "coordinates.md", "astrometry.md"]},
-    {"Sphere and HEALPix" = ["sphere.md", "sht.md", "moc-and-sparse.md"]},
-    {"Catalogs" = ["catalogs.md", "crossmatch.md", "catalogue-foundations.md"]},
-    {"Mapmaking" = ["map.md", "cubes.md", "healpix-maps.md"]},
-    {"Scenes and operators" = [
-      "scene.md",
-      "psf-response-conventions.md",
-      "native-likelihood.md",
-      "implicit_forward.md",
-    ]},
-    {"Fields and models" = [
-      "field.md",
-      "field-formulation.md",
-      "encoders.md",
-      "photometry-encoders.md",
-      "ml.md",
-    ]},
-    {"Spectral and photometry" = [
+    {"Coordinates and WCS" = ["wcs.md", "coordinates.md"]},
+    {"Sphere and HEALPix" = ["sphere.md", "moc-and-sparse.md", "sht.md"]},
+    "catalogs.md",
+    {"Mapmaking" = ["map.md", "healpix-maps.md", "cubes.md"]},
+    {"Spectra and Photometry" = [
       "spectral.md",
       "spectrophotometry.md",
       "extinction.md",
       "cosmology.md",
     ]},
-    {"I/O boundary" = ["io.md", "table.md"]},
-    {"CLI and visualization" = ["cli.md", "cli-recipes.md", "viz.md"]},
-    {"Gallery and examples" = ["gallery.md", "examples.md"]},
+    {"Fields and Forward Models (Experimental)" = [
+      "field.md",
+      "scene.md",
+      "native-likelihood.md",
+      "psf-response-conventions.md",
+      "encoders.md",
+    ]},
+    "cli.md",
+    "viz.md",
   ]},
-  {"Reference" = [
+  {"Examples" = ["examples.md", "gallery.md"]},
+  {"Performance" = [
+    "evaluation/highlights.md",
+    "evaluation/scaling.md",
+    "evaluation/benchmarks.md",
+    "evaluation/parity.md",
+  ]},
+  {"API Reference" = [
     "reference/index.md",
-    "reference/cli.md",
     "reference/torchsky.md",
-    {"Core namespaces" = [
+    {"Core" = [
       "reference/wcs.md",
       "reference/coords.md",
       "reference/sphere.md",
@@ -81,7 +79,7 @@ nav = [
       "reference/encoders.md",
       "reference/quality.md",
     ]},
-    {"Experimental namespaces" = [
+    {"Experimental" = [
       "reference/scene.md",
       "reference/field.md",
       "reference/filter-profiles.md",
@@ -100,26 +98,23 @@ nav = [
       "reference/map-field-native-response.md",
       "reference/viz.md",
     ]},
-    {"Compatibility modules" = [
-      "reference/sphere-compat.md",
-    ]},
+    {"Compatibility" = ["reference/sphere-compat.md"]},
+    "reference/cli.md",
     "reference/exceptions.md",
     "reference/runtime-contract.md",
-    "architecture.md",
   ]},
-  {"Evaluation" = [
-    "evaluation/benchmarks.md",
-    "evaluation/parity.md",
-    "evaluation/performance.md",
-  ]},
+  {"Background" = ["field-formulation.md"]},
   {"Project" = [
     "changelog.md",
+    "migration.md",
     "roadmap.md",
-    "release.md",
-    "contributing.md",
-    "authoring.md",
+    {"Contributing" = ["contributing.md", "authoring.md", "release.md"]},
   ]},
 ]
+
+[project.extra]
+# Set docs_channel = "edge" when building the tip-of-main site (shows a banner).
+docs_channel = "stable"
 
 [project.theme]
 name = "material"

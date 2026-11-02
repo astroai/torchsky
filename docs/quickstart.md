@@ -1,22 +1,23 @@
 # Quick start
 
 Get from an in-memory sky image to tensor science products in a few minutes.
-Every snippet on this page is self-contained and runs in CI; none of them needs
-a FITS file on disk. When you are ready to read real data, the
-[I/O boundary](io.md) shows the `torchfits` calls that produce the same tensors
+Every snippet on this page except the last one is self-contained and runs in CI;
+none of those needs a FITS file on disk. When you are ready to read real data, the
+[file boundary](concepts.md#file-boundary) shows the `torchfits` calls that produce the same tensors
 and header metadata.
 
 ## 1. Install
 
-The 0.4.0 line is not on PyPI yet. Install a wheel from this repository, build
-from source, or use the Pixi environment — [install.md](install.md) has the
-exact commands. `torchfits>=1.0` comes with torchsky and owns FITS I/O.
+0.5 is not on PyPI yet. Build from source or use the Pixi environment; once it is
+published, `pip install torchsky` will do ([Install](install.md) has the exact
+commands). `torchfits>=1.3.1` comes with torchsky and owns FITS I/O.
 
 <!-- docs: run -->
 ```python
 import torch
+import torchsky
 
-print(torch.__version__)
+print(torch.__version__, torchsky.__name__)
 ```
 
 ## 2. Build an image and a WCS header
@@ -190,13 +191,29 @@ For 3D IFU frames, pass observations with per-pixel wavelengths; `coadd_cube`
 routes to the 3D path automatically. See [spectral data](spectral.md) and
 [cubes](cubes.md).
 
-## 7. Where to go next
+## 7. Read real data
 
+The tensors and headers above are what `torchfits` returns from a file, so the
+same calls work on real images:
+
+```python
+# fragment: needs a FITS file on disk
+import torch
+import torchfits
+from torchsky.wcs import WCS
+
+image, header = torchfits.read("science.fits", hdu="auto", return_header=True)
+ra, dec = WCS(header).pixel_to_world(torch.arange(10.0), torch.arange(10.0))
+```
+
+## 8. Where to go next
+
+- [Concepts](concepts.md) for the file boundary, devices, and ecosystem.
 - [Examples](examples.md) — every runnable script, grouped by domain.
 - [Scenes and operators](scene.md) and [continuous fields](field.md) for
   modelling.
-- [Compatibility](compatibility.md) for the parity boundary with Astropy,
+- [Coming from Astropy, healpy, and reproject](coming-from.md) for the parity boundary with Astropy,
   healpy, and other ecosystem packages.
-- [Reference benchmarks](evaluation/benchmarks.md) for measured kernel costs,
+- [Performance highlights](evaluation/highlights.md), [kernel benchmarks](evaluation/benchmarks.md),
   and [parity evidence](evaluation/parity.md) for correctness against trusted
   references.

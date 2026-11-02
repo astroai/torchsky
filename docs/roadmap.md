@@ -8,10 +8,10 @@ tracks the package's own direction, not experiment queues.
 
 ---
 
-## Current focus: 0.4.0
+## Current focus: 0.5
 
-The 0.4.0 line is the first public-quality release of the package. It is not on
-PyPI yet; it ships when the goals below are met.
+0.5 is the first public release of the package under the name `torchsky`. It is
+not on PyPI yet; it ships when the goals below are met.
 
 | Goal | What "done" means |
 |---|---|
@@ -28,13 +28,13 @@ PyPI yet; it ships when the goals below are met.
 
 | Area | Ownership | Guide |
 |---|---|---|
-| WCS and coordinates | Tensor transforms, coordinate frames, distortion, spectral and time axes | [WCS](wcs.md), [coordinates](coordinates.md) |
+| WCS and coordinates | Tensor transforms, coordinate frames, distortion, spectral and time axes | [WCS](wcs.md), [frames and motion](coordinates.md) |
 | Sphere and HEALPix | Spherical predicates, coverage maps, sparse maps, harmonic primitives | [Sphere](sphere.md) |
 | Catalogs | Sky-domain indexing, crossmatch, cone search, Arrow/tensor batches | [Catalogs](catalogs.md) |
 | Map and scenes | Product planning and rendering, coadds, observation operators, bounded-memory execution | [Map](map.md), [scene](scene.md) |
 | Continuous fields | Differentiable field models and calibration-fit operators | [Field](field.md), [encoders](encoders.md) |
-| Spectral data | Spectral axes, cubes, transforms, and photometric utilities | [Spectral data](spectral.md) |
-| Runtime and interchange | `torchfits` boundary, transforms, datasets, visualization adapters | [I/O](io.md), [ML/runtime](ml.md) |
+| Spectral data | Spectral axes, cubes, transforms, and photometric utilities | [Spectra](spectral.md) |
+| Runtime and interchange | `torchfits` boundary, transforms, visualization adapters | [Concepts](concepts.md), [Encoders and ML](encoders.md) |
 
 ---
 
@@ -90,9 +90,17 @@ boundary while focused upstream PRs are reviewed and released.
 
 ---
 
+## Ideas under consideration
+
+- Differentiable astrometric solver. Today, accurate relative astrometry for
+  multi-CCD cameras (for example CFHT MegaCam, where the pipeline WCS is good to
+  about 0.5-1 arcsec) comes from an external tool such as SCAMP or astrometry.net
+  that writes TPV headers, which `torchsky.wcs` consumes natively. A native
+  solver is a large effort and is not scheduled.
+
 ## Open items carried over from the retired planning notes
 
-Release 0.4.0:
+Release 0.5:
 
 - Review `torchsky.viz` (FastAPI server, routers, frontend, cache, renderer) for
   obsolete endpoints and untested branches; decide whether it stays an optional
@@ -103,7 +111,7 @@ Release 0.4.0:
 - Keep a single canonical trusted-publishing workflow for `v*` tags, merging the
   useful verification steps of any overlapping workflow.
 
-Calibrated-field work (post-0.4.0 unless promoted):
+Calibrated-field work (post-0.5 unless promoted):
 
 - Adaptive chromatic response, physical radiometric/flat calibration, and
   photon/charge/read additive-stage renderer integration.

@@ -421,7 +421,7 @@ def _render_index(registry: dict, manifest: dict[str, list[str]], entries: list[
             "`api-manifest.json` artifact is the frozen name-level contract checked in CI.",
             "",
             "See also: [errors and exceptions](exceptions.md), "
-            "[runtime contract](runtime-contract.md), and [architecture](../architecture.md).",
+            "[runtime contract](runtime-contract.md), and [concepts](../concepts.md).",
             "",
         ]
     )

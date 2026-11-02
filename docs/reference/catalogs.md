@@ -6,7 +6,7 @@
 
 Catalog streaming, indexing, and crossmatching helpers.
 
-**Guides:** [catalogs](../catalogs.md), [crossmatch](../crossmatch.md), [catalogue-foundations](../catalogue-foundations.md)
+**Guides:** [catalogs](../catalogs.md)
 
 ---
 

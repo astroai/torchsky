@@ -2,7 +2,7 @@
 **HEALPix / healpy compatibility layer** (one slice of torchsky’s broader ecosystem
 compatibility story). torchsky also documents migration paths vs **Astropy**,
 **spherical_geometry**, and other common packages at their respective API layers; see
-``docs/compatibility.md``.
+``docs/coming-from.md``.
 
 This module implements healpy’s NumPy-oriented HEALPix API with
 :class:`torch.Tensor` inputs/outputs and **torchsky-native** kernels (no optional

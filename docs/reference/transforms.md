@@ -6,7 +6,7 @@
 
 Display stretches, normalisation, cropping, and augmentation transforms.
 
-**Guides:** [ml](../ml.md)
+**Guides:** [encoders](../encoders.md)
 
 ---
 

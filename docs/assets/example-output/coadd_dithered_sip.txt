@@ -1,0 +1,3 @@
+lanczos3 : shape (99, 99), 12 stars: median |dF/F| = 0.001, max centroid error = 0.025 pix
+drizzle  : shape (99, 99), 12 stars: median |dF/F| = 0.002, max centroid error = 0.036 pix
+background rms: single exposure 0.0201 -> coadd 0.0068 (expect ~0.0071 before correlated-noise inflation)

@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -59,10 +60,16 @@ def _environment() -> dict[str, str]:
 
 
 def run_block(label: str, source: str, timeout: float) -> tuple[bool, str]:
+    # Snippets run in a scratch directory so files they write never land in the repo.
+    with tempfile.TemporaryDirectory(prefix="torchsky-docs-snippet-") as workdir:
+        return _run_in(label, source, timeout, workdir)
+
+
+def _run_in(label: str, source: str, timeout: float, workdir: str) -> tuple[bool, str]:
     try:
         result = subprocess.run(
             [sys.executable, "-c", source],
-            cwd=ROOT,
+            cwd=workdir,
             capture_output=True,
             text=True,
             timeout=timeout,

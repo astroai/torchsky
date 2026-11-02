@@ -24,13 +24,14 @@
         <a class="ts-btn ts-btn--ghost" href="{{ 'map/' | url }}">Mapmaking</a>
         <a class="ts-btn ts-btn--ghost" href="{{ 'reference/' | url }}">API</a>
       </div>
-      <pre class="ts-hero__code" tabindex="0"><code>import torchfits
+      <pre class="ts-hero__code" tabindex="0"><code>import torch
 from torchsky.wcs import WCS
-from torchsky.map import Observation, coadd, plan
+import torchsky.sphere as sphere
 
-image, header = torchfits.read("science.fits", return_header=True)
-ra, dec = WCS(header).pixel_to_world(x, y)
-result = coadd([Observation("science.fits")], plan([Observation("science.fits")]))</code></pre>
+wcs = WCS(header)  # header: a plain dict, e.g. from torchfits
+x = y = torch.arange(0.0, 512.0, 64.0)
+ra, dec = wcs.pixel_to_world(x, y)
+pix = sphere.ang2pix(1024, ra, dec, lonlat=True, nest=True)</code></pre>
     </div>
   </section>
 {% endblock %}

@@ -1,7 +1,7 @@
 """Torch-native spherical geometry plus healpy-shaped HEALPix compatibility APIs.
 
 Broader astronomy-stack compatibility (Astropy, spherical_geometry, …) is
-documented in ``docs/compatibility.md``; healpy-shaped entry points live in
+documented in ``docs/coming-from.md``; healpy-shaped entry points live in
 :mod:`torchsky.sphere.compat`.
 """
 

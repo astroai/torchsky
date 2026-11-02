@@ -23,6 +23,7 @@ without the server dependencies.
 ## All-sky figures
 
 ```python
+# fragment: needs matplotlib
 import torch
 from torchsky.sphere import healpix
 from torchsky.viz import plot_healpix_sky
@@ -49,6 +50,7 @@ empty cells. Pass `resolution=(width, height)` to change it, or
 Sparse maps keep their real holes:
 
 ```python
+# fragment: needs matplotlib and your own arrays
 plot_healpix_sky(values, nside=nside, pixels=pixels, cmap="magma")
 ```
 
@@ -57,6 +59,7 @@ through `sky_grid` directly. Longitude wraps, latitude must be in `[-90, 90]`,
 and non-finite samples are dropped:
 
 ```python
+# fragment: needs matplotlib and your own arrays
 from torchsky.viz import plot_sky_grid, sky_grid
 
 grid = sky_grid(ra_deg, dec_deg, density, resolution=(1440, 720))
@@ -82,6 +85,7 @@ sets the clockwise/counter-clockwise direction.
 ### Footprints and catalogs
 
 ```python
+# fragment: needs matplotlib and your own arrays
 import math
 from torchsky.sphere import healpix
 from torchsky.sphere.core import lonlat_to_unit_xyz
@@ -126,15 +130,16 @@ display range clips the data, and their ticks stay readable:
 
 `save=` writes PNG/PDF/SVG with the themed background, padding included.
 
-`examples/example_viz_allsky.py` renders the four-figure gallery used in talks:
+`examples/allsky_figures.py` renders the four-figure gallery used in talks:
 
 ```bash
-python examples/example_viz_allsky.py --outdir allsky_figures --nside 256
+python examples/allsky_figures.py --outdir allsky_figures --nside 256
 ```
 
 ## Cube quick-looks
 
 ```python
+# fragment: needs matplotlib and your own arrays
 import torchsky.viz as viz
 
 viz.plot_pseudo_rgb(cube, spectral_axis, title="Pseudo-RGB", save="rgb.png")
@@ -154,6 +159,7 @@ torchsky viz --root /path/to/data --port 8822
 ```
 
 ```python
+# fragment: needs matplotlib and your own arrays
 from torchsky.viz import serve
 
 serve(root="/path/to/data", port=8822)
@@ -171,6 +177,6 @@ serve(root="/path/to/data", port=8822)
 
 ## Related Guides
 
-- [cli.md](cli.md)
-- [io.md](io.md)
-- [map.md](map.md)
+- [CLI](cli.md)
+- [Concepts](concepts.md#file-boundary)
+- [Coadds and resampling](map.md)

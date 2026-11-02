@@ -6,7 +6,7 @@
 
 The lean package root. `torchsky.WCS` is the one promoted class; everything else is a domain namespace that loads on first access, so importing the package never pulls in compiled kernels, map models, or optional astronomy packages.
 
-**Guides:** [index](../reference/index.md), [architecture](../architecture.md)
+**Guides:** [index](../reference/index.md), [concepts](../concepts.md)
 
 ---
 

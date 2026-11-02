@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+
+{% block announce %}
+  {% if config.extra.docs_channel == "edge" %}
+  <aside class="ts-edge-banner">
+    <strong>Edge docs</strong> — tip of <code>main</code>, not a release.
+    <a href="https://astroai.github.io/torchsky/">Stable (latest tag)</a>
+  </aside>
+  {% endif %}
+{% endblock %}

@@ -186,3 +186,19 @@ body,
 .md-typeset details {
   border-radius: 0.5rem;
 }
+
+/* Edge docs channel banner (overrides/main.html announce block) */
+.ts-edge-banner {
+  display: block;
+  width: 100%;
+  padding: 0.55rem 1rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #132238;
+  background: linear-gradient(90deg, #ffe8c2, #ffd18a);
+  border-bottom: 1px solid rgba(11, 31, 58, 0.12);
+}
+.ts-edge-banner a {
+  color: #14345c;
+  font-weight: 600;
+}

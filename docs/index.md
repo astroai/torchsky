@@ -66,38 +66,65 @@ tensors, on whatever device you ask for.
 
 === "Coordinates and WCS"
 
+    <!-- docs: run -->
     ```python
     import torch
     from torchsky.wcs import WCS
 
-    wcs = WCS(header)               # header is a torchfits mapping
+    header = {
+        "NAXIS": 2, "NAXIS1": 256, "NAXIS2": 256,
+        "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+        "CRPIX1": 128.5, "CRPIX2": 128.5, "CRVAL1": 150.0, "CRVAL2": 2.0,
+        "CDELT1": -2.8e-4, "CDELT2": 2.8e-4,
+    }
+    x = torch.tensor([10.0, 200.0], dtype=torch.float64)
+    y = torch.tensor([20.0, 240.0], dtype=torch.float64)
+
+    wcs = WCS(header)
     ra, dec = wcs.pixel_to_world(x, y)
     x_back, y_back = wcs.world_to_pixel(ra, dec)
+    torch.testing.assert_close(x_back, x, atol=1e-6, rtol=0.0)
     ```
 
     Device moves, dtype, and differentiability follow the tensors you pass in.
-    Compiled small-N paths keep per-object inference cheap.
 
 === "HEALPix"
 
+    <!-- docs: run -->
     ```python
     import torch
     import torchsky.sphere as sphere
 
-    pix = sphere.ang2pix(1024, lon_deg, lat_deg, lonlat=True)
-    neighbours = sphere.neighbors(1024, pix, nest=False)
+    lon_deg = torch.tensor([10.0, 120.0], dtype=torch.float64)
+    lat_deg = torch.tensor([5.0, -40.0], dtype=torch.float64)
+
+    pix = sphere.ang2pix(1024, lon_deg, lat_deg, lonlat=True, nest=True)
+    neighbours = sphere.neighbors(1024, pix, nest=True)
+    assert neighbours.shape == (2, 8)
     ```
 
     Same kernels on CPU or GPU; no NumPy round trips inside a loop.
 
 === "Coadd images"
 
+    <!-- docs: run -->
     ```python
+    import torch
     from torchsky.map import Observation, coadd, plan
 
-    observations = [Observation("exposure.fits")]
+    header = {
+        "NAXIS": 2, "NAXIS1": 64, "NAXIS2": 64,
+        "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+        "CRPIX1": 32.5, "CRPIX2": 32.5, "CRVAL1": 150.0, "CRVAL2": 2.0,
+        "CDELT1": -1e-3, "CDELT2": 1e-3,
+    }
+    observations = [
+        Observation(data=torch.randn(64, 64), wcs={**header, "CRVAL1": c})
+        for c in (150.0, 150.01)
+    ]
     target = plan(observations, projection="TAN")
-    result = coadd(observations, target)
+    result = coadd(observations, target, kernel="bilinear")
+    assert result.data.shape == target.shape
     ```
 
     `result.data`, `result.weight`, and `result.header` are tensors and metadata;
@@ -105,15 +132,28 @@ tensors, on whatever device you ask for.
 
 === "Spectral cubes"
 
+    <!-- docs: run -->
     ```python
-    from torchsky.map import ResampleConfig, coadd_cube
+    import torch
+    from torchsky.map import Observation, ResampleConfig, coadd_cube
 
+    header = {
+        "NAXIS": 2, "NAXIS1": 16, "NAXIS2": 16,
+        "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+        "CRPIX1": 8.5, "CRPIX2": 8.5, "CRVAL1": 150.0, "CRVAL2": 2.0,
+        "CDELT1": -1e-3, "CDELT2": 1e-3,
+    }
+    wavelengths = [5000.0, 6000.0, 7000.0]
+    bands = [
+        Observation(data=torch.full((16, 16), 1.0 + i), wcs=header, wavelength=w)
+        for i, w in enumerate(wavelengths)
+    ]
     cube = coadd_cube(
-        observations,
-        target,
-        wavelengths=wavelengths,
-        resample=ResampleConfig(spectral_kernel="drizzle"),
+        bands,
+        wavelengths=torch.tensor(wavelengths),
+        resample=ResampleConfig(spectral_kernel="linear"),
     )
+    assert cube.data.ndim == 3
     ```
 
     Coadd 2D filter-band images into a cube, or assemble 3D IFU detector frames
@@ -166,38 +206,37 @@ tensors, on whatever device you ask for.
 
     ---
 
-    [Quick start](quickstart.md) · [Install](install.md) ·
-    [Getting started](getting-started.md) · [Examples](examples.md)
+    [Install](install.md) · [Quick start](quickstart.md) ·
+    [Concepts](concepts.md) · [Examples](examples.md)
 
--   **Domain guides**
-
-    ---
-
-    [WCS](wcs.md) · [Sphere](sphere.md) · [Map](map.md) ·
-    [Catalogs](catalogs.md) · [Spectral](spectral.md) · [Scene](scene.md) ·
-    [Field](field.md)
-
--   **API and architecture**
+-   **User guide**
 
     ---
 
-    [API reference](reference/index.md) · [Architecture](architecture.md) ·
-    [Compatibility](compatibility.md) ·
-    [PSF conventions](psf-response-conventions.md)
+    [WCS](wcs.md) · [Sphere](sphere.md) · [Catalogs](catalogs.md) ·
+    [Coadds](map.md) · [Spectra](spectral.md) · [Fields](field.md)
+
+-   **Performance**
+
+    ---
+
+    [Highlights](evaluation/highlights.md) ·
+    [Scaling and tuning](evaluation/scaling.md) ·
+    [Parity evidence](evaluation/parity.md)
 
 -   **Project**
 
     ---
 
-    [Changelog](changelog.md) · [Roadmap](roadmap.md) ·
-    [Release process](release.md) · [Contributing](contributing.md)
+    [API reference](reference/index.md) · [Changelog](changelog.md) ·
+    [Roadmap](roadmap.md) · [Contributing](contributing.md)
 
 </div>
 
 ---
 
-`torchsky` is under active development toward its 0.4.0 release. It is not yet
-published on PyPI; installation instructions cover the available source and wheel
-builds.
+`torchsky` 0.5 is the first public release candidate. It is not yet published on
+PyPI; [Install](install.md) covers source builds. Coming from Astropy, healpy, or
+reproject? See [the porting guide](coming-from.md).
 
 </div>

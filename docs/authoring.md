@@ -11,7 +11,7 @@ request is mergeable.
 | Task-oriented workflows, concepts, recipes, caveats | Domain guide in `docs/` (`wcs.md`, `map.md`, `sphere.md`, …) |
 | Signatures, parameters, return contracts, per-name docstrings | Generated reference under `docs/reference/` |
 | Page title, stability tier, grouping order, cross-links, quick paths | `docs/reference/_registry.toml` |
-| Measured performance tables and parity summaries | `docs/evaluation/` plus its committed data artifacts |
+| Measured performance tables and parity summaries | `docs/evaluation/` (highlights, scaling, kernel benchmarks, parity) plus its committed data artifacts |
 | Historical design notes, audits, research, scratch analysis | `notes/` — never inside `docs/` |
 | Release history | `docs/changelog.md` |
 
@@ -111,7 +111,11 @@ Rules for a marked block:
 - If it needs an optional package (`matplotlib`, `astropy`, `polars`, …), leave
   it unmarked; unmarked fences are still import-checked but not executed.
 
-Unmarked Python fences are validated for import resolution. Prefer real
+Unmarked Python fences are validated for import resolution. A block that cannot
+run standalone (it needs a FITS file, an optional package, or variables from the
+text) is a fragment: begin it with a `# fragment: <why>` comment so the reader
+knows it is illustrative. User guides should contain only marked blocks and
+labelled fragments. Prefer real
 self-contained inputs over placeholder filenames: a tutorial that cannot be run
 is not a tutorial.
 

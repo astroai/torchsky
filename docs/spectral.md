@@ -1,110 +1,108 @@
-# `torchsky.spectral`
+# Spectra
 
-`torchsky.spectral` contains experimental helpers for 1D spectra, spectral axes,
-and IFU-style data cubes. It complements, but does not replace, the lower-level
-spectral coordinate transforms in `torchsky.wcs`.
-
-## What This Namespace Is For
-
-Use this namespace when you want containers and readers for spectra or cubes.
-Use [wcs.md](wcs.md) for FITS-WCS spectral coordinate transforms and
-[io.md](io.md) for the `torchfits` file-I/O boundary.
+!!! note "Stability"
+    `torchsky.spectral` is an experimental surface for 1D spectra, spectral axes,
+    and IFU-style cubes. It complements the spectral coordinate transforms in
+    [`torchsky.wcs`](wcs.md); generic FITS I/O belongs to `torchfits`.
 
 ## Core Concepts
 
-- `SpectralAxis` carries values plus unit/type metadata.
-- `Spectrum1D` couples flux, wavelength/frequency accessors, uncertainty, and
-  masks.
-- `DataCube` represents spatial plus spectral arrays with helpers for slices,
-  collapse, and spectrum extraction.
-- `flux_conserving_rebin(...)` rebins flux density on explicit bin edges while
+- `SpectralAxis` carries values plus unit and type metadata (`WAVE`, `FREQ`, ...)
+  and converts between wavelength, frequency, energy, and wavenumber.
+- `Spectrum1D` couples flux, a spectral axis, optional inverse variance, and a
+  mask (`True` = good).
+- `DataCube` holds spatial plus spectral arrays with slice, collapse, and
+  spectrum-extraction helpers. The spectral axis is axis 0 by default.
+- `flux_conserving_rebin` rebins flux density onto explicit bin edges while
   propagating masks and inverse variance.
-- `relativistic_doppler_shift(...)` applies signed physical radial velocities
-  and optionally rebins batches onto one observed wavelength grid.
-- Sample-wise redshift helpers live in `torchsky.redshift` and are re-exported
-  here: `apply_redshift` shifts a spectrum by an explicit velocity kind, while
-  `shift_wavelength`, `dimming_f_lambda` (`F_λ` densities, `1/(1+z)`),
-  and `dimming_tolman_sb` (surface brightness, `(1+z)^-4`). Do not mix them.
-  Rapidity helpers (`zeta_from_redshift`, `compose_rapidities`,
-  `shift_ln_wavelength`) and `los_barycentric_beta` live in the same module:
-  `ln λ_topo = ln λ_rest + ζ_sys + ζ_BERV`, with `v_BERV > 0` when the observer
-  recedes. LOSVD and published-`R` LSF share `convolve_log_lambda` /
-  `sigma_R_kms` (`σ = c / (2.355 R)`).
-- Passbands and synthetic photometry are `torchsky.spectrophotometry`.
-  Dust laws are `torchsky.extinction` (CCM89, O'Donnell94, Fitzpatrick 1999,
-  Calzetti 2000). Differentiable FLRW distances and protected comoving
-  geometry are `torchsky.cosmology`.
-- This surface is experimental; generic FITS I/O belongs to `torchfits`.
+- `relativistic_doppler_shift` applies signed physical radial velocities and can
+  rebin a batch onto one observed grid.
 
-## Recipes
+## Spectra And Cubes In Memory
 
-### Read A 1D Spectrum
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.spectral import DataCube, SpectralAxis, Spectrum1D
+
+wave = torch.linspace(5000.0, 5100.0, 101, dtype=torch.float64)
+axis = SpectralAxis(values=wave, unit="Angstrom", type="WAVE")
+
+flux = torch.exp(-0.5 * ((wave - 5050.0) / 3.0) ** 2) + 0.1
+spectrum = Spectrum1D(flux=flux, spectral_axis=axis, ivar=torch.full_like(flux, 100.0))
+assert spectrum.wavelength.shape == (101,)
+
+cube = DataCube(data=torch.rand(101, 8, 8, dtype=torch.float64), spectral_axis=axis)
+one = cube.extract_spectrum(y=3, x=4)
+line = cube.extract_slice(wavelength=5050.0, width=5)
+collapsed = cube.collapse_spectral(method="mean")
+assert one.flux.shape == (101,)
+assert line.shape == collapsed.shape == (8, 8)
+```
+
+With files, read through `torchfits` and construct the containers from the
+decoded tensors and header; `SpectralReader.read_spectrum_1d` and
+`SpectralReader.read_data_cube` do this for you, and `write_cube_fits` writes a
+`(L, H, W)` tensor with a 3-axis FITS WCS (`CTYPE3` spectral):
 
 ```python
+# fragment: needs FITS files on disk
 from torchsky.spectral import SpectralReader
 
 spec = SpectralReader.read_spectrum_1d(
-    "spec.fits",
-    hdu=1,
-    flux_col="FLUX",
-    wave_col="WAVELENGTH",
-    ivar_col="IVAR",
+    "spec.fits", hdu=1, flux_col="FLUX", wave_col="WAVELENGTH", ivar_col="IVAR"
 )
-```
-
-### Work With A Cube
-
-```python
 cube = SpectralReader.read_data_cube("cube.fits", hdu=0)
-spectrum = cube.extract_spectrum(y=100, x=100)
-halpha = cube.extract_slice(wavelength=6563.0, width=5)
-collapsed = cube.collapse_spectral(method="mean")
 ```
 
-### Rebin Or Doppler-Shift A Spectrum
+## Rebin Or Doppler-Shift
 
+Flux values are densities within the supplied bins. Positive radial velocity is
+receding and velocities are in metres per second. Invalid or incompletely
+covered output bins are marked in the returned mask rather than renormalized.
+
+<!-- docs: run -->
 ```python
 import torch
+
 from torchsky.spectral import flux_conserving_rebin, relativistic_doppler_shift
 
 edges = torch.tensor([5000.0, 5001.0, 5003.0, 5006.0])
 flux = torch.tensor([1.0, 2.0, 1.0])
-rebinned = flux_conserving_rebin(
-    flux,
-    edges,
-    torch.tensor([5000.0, 5002.0, 5006.0]),
-)
+new_edges = torch.tensor([5000.0, 5002.0, 5006.0])
+
+rebinned = flux_conserving_rebin(flux, edges, new_edges)
+# Mean density in each new bin: (1*1 + 2*1)/2 and (2*1 + 1*3)/4.
+torch.testing.assert_close(rebinned.flux, torch.tensor([1.5, 1.25]))
+# The integral of flux density over the covered range is conserved.
+integral_in = (flux * (edges[1:] - edges[:-1])).sum()
+integral_out = (rebinned.flux * (new_edges[1:] - new_edges[:-1])).sum()
+torch.testing.assert_close(integral_in, integral_out)
+
 shifted = relativistic_doppler_shift(flux, edges, 30_000.0)
+assert bool(shifted.mask.all()) and shifted.spectral_edges[0] > edges[0]
 ```
 
-Flux values are densities within the supplied bins. Positive radial velocity
-is receding, velocities are metres per second, and invalid or incompletely
-covered output bins are marked in the returned mask rather than renormalized.
+## Redshift Helpers
 
-## API Surface
+Sample-wise helpers live in `torchsky.redshift` and are re-exported here.
+`apply_redshift` shifts a spectrum by an explicit velocity kind;
+`shift_wavelength`, `dimming_f_lambda` (\(F_\lambda\) densities, \(1/(1+z)\)), and
+`dimming_tolman_sb` (surface brightness, \((1+z)^{-4}\)) are different
+operations, so do not mix them. Rapidity helpers (`zeta_from_redshift`,
+`compose_rapidities`, `shift_ln_wavelength`) and `los_barycentric_beta` follow
+\(\ln\lambda_\mathrm{topo} = \ln\lambda_\mathrm{rest} + \zeta_\mathrm{sys} + \zeta_\mathrm{BERV}\)
+with \(v_\mathrm{BERV} > 0\) when the observer recedes. LOSVD and published-\(R\)
+line-spread convolution share `convolve_log_lambda` and `sigma_R_kms`
+(\(\sigma = c / (2.355\,R)\)).
 
-- `Spectrum1D`
-- `DataCube`
-- `SpectralAxis`
-- `SpectralReader`
-- `SpectralRebinResult`
-- `flux_conserving_rebin(...)`
-- `relativistic_doppler_shift(...)`
-- `shift_wavelength(...)`, `dimming_f_lambda(...)`, `dimming_tolman_sb(...)`
-- `zeta_from_redshift(...)`, `compose_rapidities(...)`, `shift_ln_wavelength(...)`
-- `los_barycentric_beta(...)`
-- `convolve_log_lambda(...)`, `sigma_R_kms(...)`
-- `FLRW`, `FlatWCDM`, `hubble_parameter(...)`,
-  `transverse_comoving_distance(...)`
-- `comoving_position(...)`, `comoving_separation(...)`,
-  `alcock_paczynski_scaling(...)`
-- `write_cube_fits(...)` — write a `(L, H, W)` tensor with a 3-axis FITS WCS
-  (spectral axis `CTYPE3`); pair with `SpectralReader.read_data_cube` for round-trips.
+## Neighbouring Modules
 
-## Related Guides
-
-- [io.md](io.md) for loading FITS files and HDUs through `torchfits`.
-- [wcs.md](wcs.md) for spectral WCS transforms.
-- [map.md](map.md) for cube and multiband map products.
-- [field.md](field.md) for fitting continuous spectral fields and writing cubes with
-  `write_cube_fits`.
+- Passbands and synthetic photometry: [Synthetic photometry](spectrophotometry.md).
+- Dust laws (CCM89, O'Donnell94, Fitzpatrick 1999, Calzetti 2000):
+  [Extinction](extinction.md).
+- Differentiable FLRW distances and comoving geometry:
+  [Cosmology and redshift](cosmology.md).
+- Cubes from images and IFU frames: [Spectral cubes](cubes.md).
+- Spectral WCS transforms: [WCS](wcs.md).

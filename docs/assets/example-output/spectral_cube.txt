@@ -1,0 +1,2 @@
+cube shape (20, 16, 16) (wave, y, x); spectral range 5002-5078 A
+line peak at 5038 A (truth 5040); continuum 1.000 (truth 1.0); moment-0 centroid (6.01, 8.99) (truth 6.0, 9.0)

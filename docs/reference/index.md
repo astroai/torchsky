@@ -22,7 +22,7 @@ reference pages carry the contracts.
 | Spectral axes, cubes, Doppler shifts | [`torchsky.spectral.SpectralAxis`](spectral.md#torchsky.spectral.SpectralAxis) | [spectral](../spectral.md) |
 | Synthetic photometry and dust laws | [`torchsky.spectrophotometry.synthetic_photometry`](spectrophotometry.md#torchsky.spectrophotometry.synthetic_photometry) | [spectrophotometry](../spectrophotometry.md) |
 | FLRW distances and AP scaling | [`torchsky.cosmology.comoving_distance`](cosmology.md#torchsky.cosmology.comoving_distance) | [cosmology](../cosmology.md) |
-| Display and training transforms | [`torchsky.transforms.Compose`](transforms.md#torchsky.transforms.Compose) | [ml](../ml.md) |
+| Display and training transforms | [`torchsky.transforms.Compose`](transforms.md#torchsky.transforms.Compose) | [encoders](../encoders.md) |
 | Quality and inverse-variance contracts | [`torchsky.quality.build_weight_product`](quality.md#torchsky.quality.build_weight_product) | [map](../map.md) |
 | Native likelihood and forced photometry | [`torchsky.map.likelihood.GaussianLikelihoodFactor`](map-likelihood.md#torchsky.map.likelihood.GaussianLikelihoodFactor) | [native-likelihood](../native-likelihood.md) |
 | Browser viewer | [`torchsky.viz.serve`](viz.md#torchsky.viz.serve) | [viz](../viz.md) |
@@ -74,4 +74,4 @@ reference pages carry the contracts.
 Every public name in these namespaces is listed exactly once. The
 `api-manifest.json` artifact is the frozen name-level contract checked in CI.
 
-See also: [errors and exceptions](exceptions.md), [runtime contract](runtime-contract.md), and [architecture](../architecture.md).
+See also: [errors and exceptions](exceptions.md), [runtime contract](runtime-contract.md), and [concepts](../concepts.md).

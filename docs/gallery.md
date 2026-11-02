@@ -76,6 +76,6 @@ print(result.unit, result.value, result.coverage, result.valid)
 
 ## More runnable demonstrations
 
-Every script under [`examples/`](../examples/) is standalone and is exercised by
-the example smoke runner. The [examples index](examples.md) groups them by
-domain and links the API each one demonstrates.
+The [examples gallery](examples.md) collects the curated, runnable scripts under
+[`examples/`](https://github.com/astroai/torchsky/tree/main/examples), grouped by science scenario with
+thumbnails, runtimes, and links to each script.

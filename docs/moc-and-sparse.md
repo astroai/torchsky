@@ -321,5 +321,5 @@ targets, never runtime backends.
 - [Sphere and HEALPix guide](sphere.md)
 - [`torchsky.sphere` reference](reference/sphere.md)
 - [Spherical harmonic transforms](sht.md)
-- [Catalog crossmatching](crossmatch.md)
+- [Catalogs and crossmatch](catalogs.md)
 - [Scientific evaluation ownership](evaluation/benchmarks.md)

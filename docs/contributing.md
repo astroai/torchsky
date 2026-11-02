@@ -1,8 +1,7 @@
 # Contributing
 
 This guide is for contributors and maintainers.
-User-facing usage lives in `../README.md`.
-Repository-specific coding-agent and engineering guidance lives in `../AGENTS.md`.
+The short checklist is [CONTRIBUTING.md](https://github.com/astroai/torchsky/blob/main/CONTRIBUTING.md) in the repository root; this page is the full guide. Documentation authoring is in [Authoring docs](authoring.md) and releases in [Release process](release.md).
 
 ## Engineering Doctrine
 

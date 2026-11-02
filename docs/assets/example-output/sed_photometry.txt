@@ -1,0 +1,8 @@
+z      D_L [Mpc]  D_A [Mpc]  DM [mag]
+ 0.1      475.8      393.2    38.387
+ 0.5     2919.7     1297.7    42.327
+ 1.0     6791.7     1697.9    44.160
+ 2.0    15926.6     1769.6    46.011
+flat-f_nu m(z=0.5) = [20.887, 20.887, 20.887, 20.887] vs closed form 20.886: max err 0.0001 mag
+band dust dimming [mag]: {'g': 0.36, 'r': 0.275, 'i': 0.211, 'z': 0.159}  CCM89 A_lambda at pivot: [0.367, 0.274, 0.212, 0.158]
+g-r: 0.11 at z=0.02, peaks at 0.85 (z=0.41) as the 4000 A break crosses g and r

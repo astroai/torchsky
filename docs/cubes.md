@@ -68,9 +68,9 @@ cube = coadd_cube(
     device="cpu",
 )
 
-print("cube shape:", tuple(cube.data.shape))
-print("spectral centers:", [round(float(value), 1) for value in cube.wavelength])
-print("central spectrum:", [round(float(value), 2) for value in cube.data[:, 8, 8]])
+assert tuple(cube.data.shape) == (3, 16, 16)
+central = [round(float(value), 2) for value in cube.data[:, 8, 8]]
+assert central == [1.0, 1.5, 2.0], central
 ```
 
 `plan_cube` derives a spatial grid covering the observations and records the
@@ -79,6 +79,7 @@ spectral axis and bin edges. When you already know the grid, build a
 the example above):
 
 ```python
+# fragment: continues from the previous block
 from torchsky.map import CubeTarget
 from torchsky.wcs import WCS
 
@@ -103,6 +104,7 @@ An IFU frame carries a spatial coordinate and a wavelength per detector pixel.
 `Observation` accepts that mapping through `ifu_wcs` (an `IFUSliceWCS`) or
 `wavelength_map`; `coadd_cube` then routes to the 3D path automatically.
 
+<!-- docs: run -->
 ```python
 import torch
 
@@ -151,6 +153,7 @@ cube = coadd_cube(
     target,
     resample=ResampleConfig(spectral_kernel="drizzle", spectral_pixfrac=0.8),
 )
+assert cube.data.shape == (3, 16, 16)
 ```
 
 For a physical instrument product, construct

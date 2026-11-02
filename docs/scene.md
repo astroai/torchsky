@@ -1,120 +1,136 @@
-# `torchsky.scene`
+# Scenes and operators
 
-`torchsky.scene` is an **experimental** namespace for scene representations and
-operator adapters. Production map verbs live in `torchsky.map`; field
-model/fit/render/sample verbs live in `torchsky.field`.
+!!! warning "Experimental surface"
+    `torchsky.scene` is experimental. Production map verbs live in
+    [`torchsky.map`](map.md) and field model, fit, render, and sample verbs in
+    [`torchsky.field`](field.md).
 
-Use this namespace for:
+`torchsky.scene` lets you describe an observation, a target product, and a scene
+representation without knowing which lower-level module owns the current
+implementation. It provides:
 
-- `scene.FieldObservation` and `scene.ImageObservation`
-- `scene.TargetRenderSpec`
-- `scene.ProductSpec` and `scene.BandpassSpec`
-- `scene.SceneRepresentation` plus tensor, HEALPix, harmonic, and field-model adapters
-- `scene.ObservationOperatorAdapter`, `scene.operator_bundle_for_observation(...)`, and image-plane operator-set binding
+- `scene.FieldObservation`, `scene.ImageObservation`;
+- `scene.TargetRenderSpec`, `scene.ProductSpec`, `scene.BandpassSpec`;
+- `scene.SceneRepresentation` with tensor, HEALPix, harmonic, and field-model
+  adapters;
+- `scene.ObservationOperatorAdapter`,
+  `scene.operator_adapter_for_observation(...)`, and image-plane operator-set
+  binding.
 
-The intent is that users can describe an observation, a target product, and a scene representation without needing to know which lower-level map module owns the current implementation.
+## Render A Scene
 
-## Minimal Example
-
+<!-- docs: run -->
 ```python
 import torch
+
 from torchsky import scene
 
-# Define a WCS header dictionary
 header = {
-    "NAXIS": 2,
-    "NAXIS1": 32,
-    "NAXIS2": 32,
-    "CTYPE1": "RA---TAN",
-    "CTYPE2": "DEC--TAN",
-    "CRPIX1": 16.5,
-    "CRPIX2": 16.5,
-    "CRVAL1": 150.0,
-    "CRVAL2": 2.0,
-    "CDELT1": -0.05 / 3600.0,
-    "CDELT2": 0.05 / 3600.0,
+    "NAXIS": 2, "NAXIS1": 32, "NAXIS2": 32,
+    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+    "CRPIX1": 16.5, "CRPIX2": 16.5, "CRVAL1": 150.0, "CRVAL2": 2.0,
+    "CDELT1": -0.05 / 3600.0, "CDELT2": 0.05 / 3600.0,
 }
-
-# Construct render target spec and render a zero scene to it
 target = scene.target_from_header(header, value_semantics="surface_brightness")
 prediction = scene.render(torch.zeros(target.shape), target)
+assert prediction.shape == target.shape
 ```
 
-For differentiable field models, `scene.predict(...)` and `scene.predict_observation_mean(...)` call the same current field-observation path used by `torchsky.map.field`.
+For differentiable field models, `scene.predict(...)` and
+`scene.predict_observation_mean(...)` call the same field-observation path as
+`torchsky.field`.
 
-## Operator Adapter
+`scene.image_observation(path)` builds an `ImageObservation` from a file path
+(read with `torchfits`) when you start from FITS rather than tensors.
 
-`scene.operator_adapter_for_observation(...)` wraps the existing `ObservationOperatorBundle` used by map and field rendering. It exposes enabled operator names, slot checks, and the deterministic prediction path while keeping the underlying bundle available through `.bundle` for lower-level integrations.
+## Operators With Exact Adjoints
 
-The adapter also binds the bundle to a `TargetRenderSpec` through the same normal-equation substrate used by the map solvers:
+`scene.operator_adapter_for_observation` wraps the `ObservationOperatorBundle`
+used by map and field rendering. It exposes enabled operator names, slot checks,
+and the deterministic prediction path, with the bundle available as `.bundle`.
+Binding it to a target gives a matrix-free operator \(A\) whose adjoint is an
+exact vector-Jacobian product of the same projection, so normal-equation solves
+use \(A^T N^{-1} A\) without forming a matrix.
 
+<!-- docs: run -->
 ```python
-adapter = scene.operator_adapter_for_observation(observation)
-operator = adapter.bind_target(
-    target,
-    apply_operator=my_forward_model,
-    apply_adjoint=my_exact_adjoint,
-    apply_noise=my_inverse_noise,
-)
+import torch
 
-probe = operator.normal_equation_probe(scene_tensor, data)
-result = operator.solve_normal_equation_cg(data, iterations=8)
-```
+from torchsky import scene
+from torchsky.map import ImageObservation
 
-Exact adjoints are explicit: pass `apply_adjoint` or a target binder for the operator family being solved. The default render path remains available for prediction-only workflows.
+header = {
+    "NAXIS": 2, "NAXIS1": 32, "NAXIS2": 32,
+    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+    "CRPIX1": 16.5, "CRPIX2": 16.5, "CRVAL1": 150.0, "CRVAL2": 2.0,
+    "CDELT1": -0.05 / 3600.0, "CDELT2": 0.05 / 3600.0,
+}
+target = scene.target_from_header(header, value_semantics="surface_brightness")
 
-For image-plane inverse problems, `ObservationOperatorAdapter.bind_image_plane_target(...)` binds one `ImageObservation` to a latent target grid and uses an exact vector-Jacobian product as the adjoint of the same projection:
+yy, xx = torch.meshgrid(torch.arange(32.0), torch.arange(32.0), indexing="ij")
+sky = torch.exp(-((xx - 16) ** 2 + (yy - 16) ** 2) / 18.0)
 
-```python
-observation = scene.image_observation("science.fits")
-target = scene.target_from_header(target_header)
+# An exposure offset by a fraction of a pixel from the target grid.
+shifted = {**header, "CRVAL1": 150.0 + 0.4 * 0.05 / 3600.0}
+observation = ImageObservation(data=sky, wcs=shifted)
 operator = scene.operator_adapter_for_observation(
-    observation,
-    resampling_kernel="bilinear",
+    observation, resampling_kernel="bilinear"
 ).bind_image_plane_target(target)
 
-result = operator.solve_normal_equation_cg(observed_image, iterations=8)
+# Dot-product test: <A u, v> == <u, A^T v>.
+u, v = torch.randn(32, 32), torch.randn(32, 32)
+lhs = (operator.apply(u) * v).sum()
+rhs = (u * operator.apply_adjoint(v)).sum()
+torch.testing.assert_close(lhs, rhs, rtol=1e-4, atol=1e-4)
+
+data = operator.apply(sky)
+solved = operator.solve_normal_equation_cg(data, iterations=8)
+assert solved.solution.shape == sky.shape
 ```
 
-Scalar observation weights and explicit weight/mask/primary-beam maps feed the bound operator's inverse-noise hook. Use `scene.bind_image_plane_observations_to_target(...)` when several image-plane observations share the same latent target grid. It returns the multi-observation operator set used by the map solver substrate, so `A^T N^-1 A` and `A^T N^-1 y` are summed across observations. Set `exposure_chunk_size` to cap the number of prediction tensors retained at once; iterative solves use this matrix-free path while preserving exposure-order accumulation. `iter_apply_chunks(...)` exposes the same bounded execution for consumers that do not need all predictions materialized as one tuple.
+Exact adjoints are explicit. Pass `apply_adjoint` or a target binder when you bring
+your own forward model through `adapter.bind_target(target, apply_operator=...,
+apply_adjoint=..., apply_noise=...)`; the default render path stays available for
+prediction-only work. Scalar weights and explicit weight, mask, and primary-beam
+maps feed the inverse-noise hook.
 
-The same bound operator can estimate an inverse-curvature diagonal without
-forming a dense covariance matrix. The historical method name is retained:
+For several observations on one latent grid use
+`scene.bind_image_plane_observations_to_target(...)`: the normal equation is
+summed across observations in exposure order, and `exposure_chunk_size` caps how
+many predictions are retained at once. `iter_apply_chunks(...)` exposes the same
+bounded execution.
+
+## Inverse-Curvature Diagonal
+
+The bound operator estimates a diagonal of \((H + \epsilon I)^{-1}\), with
+\(H = A^T N^{-1} A\), by seeded Hutchinson probing, each solved by matrix-free
+CG:
 
 ```python
+# fragment: operator_set from bind_image_plane_observations_to_target
 inverse_curvature_diagonal = operator_set.estimate_posterior_variance_diagonal(
-    reference_map,
-    num_probes=64,
-    seed=7,
-    iterations=32,
-    damping=1.0e-6,
-    rtol=1.0e-5,
-    atol=0.0,
+    reference_map, num_probes=64, seed=7, iterations=32, damping=1.0e-6,
 )
 ```
 
-This is a seeded Hutchinson estimate of
-`diag((H + damping I)^-1)`, where `H = A^T N^-1 A`, for a fixed Hermitian
-positive-definite system on the declared state space. Each probe is solved
-independently by matrix-free CG, so memory stays bounded by one probe and the
-solver workspace. Every solution is checked against the actual normal action:
-`||(H + damping I)x - z|| <= max(atol, rtol ||z||)`. An inadequate or non-finite
-solve raises instead of returning uncertainty. Shape, dtype and device must
-agree with the reference state. Finite residual checks and a finite probe set
-do not certify global identifiability; a small residual also does not bound
-inverse error without conditioning information.
+Every solve is checked against the actual normal action and an inadequate or
+non-finite solve raises instead of returning an uncertainty. Caveats worth
+internalizing:
 
-Finite-probe Hutchinson estimates can be negative even when the true inverse
-diagonal is positive. Returned estimates preserve those signed values; clipping
-would bias them and turn Monte Carlo noise into false tiny variances. Increase
-the probe budget or evaluate selected functionals when that noise is too large
-for the query. The raw signed estimate is not a per-pixel uncertainty guarantee.
+- The method name is historical: this is inverse curvature, not automatically a
+  posterior variance. A sampling-covariance reading needs an estimable,
+  explicitly gauge-fixed subspace and the declared noise assumptions; with a
+  penalty \(P\) the estimator covariance is \((H+P)^{-1}H(H+P)^{-1}\).
+- Finite-probe estimates can be negative where the true diagonal is positive.
+  They are returned signed because clipping would bias them. Increase
+  `num_probes` or evaluate selected functionals if the Monte Carlo noise matters.
+- A small residual does not bound inverse error without conditioning information,
+  and finite probes do not certify global identifiability.
 
-With no regularization, inverse information has the usual fixed-model sampling
-covariance interpretation only on an estimable, explicitly gauge-fixed
-subspace and under the declared noise/nuisance assumptions. Damping or composing
-a quadratic penalty operator changes the target to inverse penalized curvature.
-For a penalty `P`, the regularized estimator's sampling covariance is
-`(H + P)^-1 H (H + P)^-1`, not `(H + P)^-1`; mean transfer and possible bias
-must also be considered. A Bayesian posterior interpretation requires its
-declared prior and likelihood assumptions.
+## Related
+
+- [Native likelihood](native-likelihood.md) for Gaussian likelihood factors on
+  bound operators.
+- [PSF conventions](psf-response-conventions.md) for kernel orientation and
+  flux semantics.
+- [Fields](field.md) for continuous scene models.
