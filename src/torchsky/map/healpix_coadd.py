@@ -10,6 +10,7 @@ from torch import Tensor
 
 from ..sphere.moc import MOC
 from ..wcs import WCS
+from ..wcs.frames import warn_frame_bias_conversion
 from .calibration import (
     _apply_observation_calibration,
     _load_observation_weight_map,
@@ -132,11 +133,16 @@ class _IcrsWorldView:
     """Present a non-ICRS celestial WCS through ICRS world coordinates.
 
     HEALPix pixelization and ``pix2ang`` are expressed in ICRS lon/lat, while a
-    WCS with GLON/GLAT (or ELON/ELAT, FK4) axes works in its own native frame.
+    WCS with GLON/GLAT (or ELON/ELAT, FK4, FK5) axes works in its own native
+    frame. FK5 J2000 input gets the FK5 to ICRS frame bias, with the same
+    ``CelestialFrameBiasWarning`` as the image-plane path.
     """
 
     def __init__(self, wcs: WCS) -> None:
         self._wcs = wcs
+        warn_frame_bias_conversion(
+            wcs.celestial_frame, "ICRS", wcs.celestial_equinox, None, stacklevel=4
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._wcs, name)
@@ -160,7 +166,7 @@ class _IcrsWorldView:
 
 
 def _icrs_view(wcs: WCS) -> Any:
-    if wcs.celestial_frame in ("ICRS", "FK5"):
+    if wcs.celestial_frame == "ICRS":
         return wcs
     return _IcrsWorldView(wcs)
 
@@ -185,6 +191,10 @@ def coadd_healpix(
     ``reduction_chunk_size`` bounds sampled contributions retained before each
     incremental reduction. Sparse accumulation retains merged output support;
     dense accumulation writes each chunk directly into the output tensors.
+
+    Cells are sampled at their centres. An observation whose footprint overlaps
+    cells but contains none of their centres (cells larger than the image)
+    raises ``ValueError``; use a higher ``nside``.
 
     Args:
         observations: Image observations to project and combine.
@@ -245,7 +255,7 @@ def coadd_healpix(
         None if sparse else torch.zeros(npix, dtype=torch.int32, device=map_device)
     )
 
-    for obs in obs_list:
+    for obs_index, obs in enumerate(obs_list):
         if obs.data is not None:
             raw_img = obs.data.to(device=map_device, dtype=torch.float32)
             hdr_obs = dict(obs.header) if obs.header is not None else {}
@@ -279,6 +289,7 @@ def coadd_healpix(
             ],
             dim=0,
         )
+        centre_in_image = False
         for pixel_chunk in obs_pix.split(reduction_chunk_size):
             ra_p, dec_p = _hp.pix2ang(nside_i, pixel_chunk, nest=nest, lonlat=True)
             x_src, y_src = obs_wcs.world_to_pixel(ra_p, dec_p)
@@ -305,6 +316,7 @@ def coadd_healpix(
                 & (y_2d[0] >= 0.0)
                 & (y_2d[0] <= (H_s - 1))
             )
+            centre_in_image = centre_in_image or bool(in_b.any())
             hit = in_b & (s_sup > 0.0) & (s_den > 0.0) & torch.isfinite(s_num)
             if bool(hit.any()):
                 hit_pixels = pixel_chunk[hit]
@@ -323,6 +335,14 @@ def coadd_healpix(
                         hit_pixels,
                         torch.ones_like(hit_pixels, dtype=torch.int32),
                     )
+        if not centre_in_image:
+            raise ValueError(
+                f"the footprint of observation {obs_index} overlaps HEALPix "
+                f"cells but contains no cell centre at nside={nside_i} "
+                f"(cells are about {58.6 / nside_i:.4g} deg across, larger than "
+                "the image); cells are sampled at their centres, so use a "
+                "higher nside"
+            )
 
     if not sparse:
         assert (

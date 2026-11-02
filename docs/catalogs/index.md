@@ -10,16 +10,18 @@ sphere, selects rows by cone or footprint, and crossmatches tables of any size.
 ## The Core Idea: Prune, Then Test Exactly
 
 A crossmatch pairs each row of one catalog with rows of another that lie within
-a radius. Comparing every pair is \(O(NM)\). torchsky first buckets the right
-catalog by NESTED HEALPix pixel, uses the buckets to produce a small set of
-candidate pairs, and then applies the exact great-circle distance test to each
-candidate. The buckets are padded by the maximum pixel radius, so pruning never
-drops a true match inside the radius.
+a radius. Comparing every pair is \(O(NM)\). torchsky first sorts the right
+catalog by declination strip and right ascension, uses binary search to produce
+a small set of candidate pairs per left row, and then applies the exact
+great-circle distance test to each candidate. The strips are at least one radius
+high, so pruning never drops a true match inside the radius. When you pass a
+prebuilt `HealpixIndex` as `right_index=`, candidates come from nested HEALPix
+cells (padded by the maximum pixel radius) instead.
 
 ```mermaid
 flowchart LR
-    L["left catalog"] --> C["candidate pairs<br/>from nearby cells"]
-    R["right catalog"] -->|"HealpixIndex<br/>(build once)"| C
+    L["left catalog"] --> C["candidate ranges<br/>binary search"]
+    R["right catalog"] -->|"sort by<br/>(dec strip, RA)"| C
     C -->|"exact great-circle<br/>test"| M["CrossmatchResult<br/>left_index, right_index,<br/>separation_arcsec"]
 ```
 

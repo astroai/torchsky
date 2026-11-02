@@ -370,3 +370,51 @@ def test_coadd_linear_ramp_is_exact_on_every_covered_cell() -> None:
     assert float(y.min()) >= -1e-4 and float(y.max()) <= 15 + 1e-4
     truth = 2.0 + 0.5 * x.to(torch.float64) + 0.25 * y.to(torch.float64)
     assert float((values - truth).abs().max()) < 1e-3
+
+
+def test_coadd_healpix_cells_larger_than_image_fail_closed() -> None:
+    header = _header((32, 32), cdelt=0.02)
+    obs = Observation(data=torch.ones(32, 32), header=header, wcs=WCS(header))
+    with pytest.raises(ValueError, match="higher nside"):
+        coadd_healpix([obs], nside=32)
+    with pytest.raises(ValueError, match="higher nside"):
+        coadd_healpix([obs], nside=32, sparse=True, nest=True)
+    result = coadd_healpix([obs], nside=1024)
+    assert float(result.weight.sum()) > 0.0
+
+
+def _fk5_obs(radesys: str | None) -> Observation:
+    import warnings
+
+    header = _header((24, 24), cdelt=0.01)
+    if radesys is not None:
+        header["RADESYS"] = radesys
+        header["EQUINOX"] = 2000.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        yy, xx = torch.meshgrid(torch.arange(24.0), torch.arange(24.0), indexing="ij")
+        blob = torch.exp(-((xx - 11.5) ** 2 + (yy - 11.5) ** 2) / (2 * 3.0**2))
+        return Observation(data=blob, header=header, wcs=WCS(header))
+
+
+def test_coadd_healpix_fk5_header_gets_frame_bias() -> None:
+    from torchsky.sphere import healpix as hp
+    from torchsky.wcs import CelestialFrameBiasWarning
+
+    nside = 2**15
+    with pytest.warns(CelestialFrameBiasWarning):
+        fk5 = coadd_healpix([_fk5_obs("FK5")], nside=nside, sparse=True, nest=True)
+    icrs = coadd_healpix([_fk5_obs("ICRS")], nside=nside, sparse=True, nest=True)
+
+    def centroid(res: Any) -> tuple[torch.Tensor, torch.Tensor]:
+        pix = res.data.valid_pixels
+        w = res.data.values.double()
+        ra, dec = hp.pix2ang(nside, pix, nest=True, lonlat=True)
+        return (ra.double() * w).sum() / w.sum(), (dec.double() * w).sum() / w.sum()
+
+    ra0, dec0 = centroid(icrs)
+    ra1, dec1 = centroid(fk5)
+    offset_mas = (
+        torch.hypot((ra1 - ra0) * torch.cos(torch.deg2rad(dec0)), dec1 - dec0) * 3.6e6
+    )
+    assert 10.0 < float(offset_mas) < 40.0

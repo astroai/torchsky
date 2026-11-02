@@ -1,17 +1,119 @@
 # Frames and time
-<!-- TODO(0.5.0 docs): intro -->
 
+A celestial *frame* fixes the axes against which a direction is measured: the
+pole, the origin of longitude, and, for frames tied to the Earth's orbit or
+equator, the date those axes refer to. A catalog position also has an
+*epoch*: the time at which the star was at that position. Converting between
+frames rotates the axes; propagating to a new epoch moves the star.
+`torchsky.coords` does both on batched tensors, keeps gradients, and refuses
+to invent quantities the catalog does not have.
 
-torchsky does not clone Astropy `SkyCoord`. Catalog geometry is a batch of
-tensors with explicit missing data, frame conversion is a function, and observed
-place is a separate step that never runs unless you supply Earth orientation.
+## Frames
 
-## CatalogState
+| Frame | Name in torchsky | Defined by | Needs |
+|---|---|---|---|
+| ICRS | `ICRS` | Extragalactic radio sources; the frame of Gaia and of modern headers (`RADESYS = 'ICRS'`) | — |
+| FK5 | `FK5` | Mean equator and equinox of a date, conventionally J2000 | `to_equinox` / `from_equinox` for other equinoxes |
+| FK4 | `FK4` | Pre-1984 Besselian system with E-terms | Positions only |
+| Galactic | `GALACTIC` | IAU 1958 pole and centre, tied to ICRS | — |
+| Ecliptic (J2000) | `ECLIPTIC` | Mean ecliptic and equinox of J2000 | — |
+| Ecliptic of date | `ECLIPTIC_OF_DATE` | IAU 2006 precession-nutation at the given date | TT MJD |
+| Galactocentric | [`icrs_to_galactocentric`](../reference/coords.md#torchsky.coords.icrs_to_galactocentric) | Cartesian frame centred on the Galactic centre | A distance; Sun distance and height are explicit arguments |
+| LSR | [`heliocentric_rv_to_lsr`](../reference/coords.md#torchsky.coords.heliocentric_rv_to_lsr) | Local standard of rest velocity | Solar UVW (explicit arguments) |
 
-`CatalogState` (also importable from `torchsky.coords`) carries `lon`, `lat`,
-the `frame`, an `epoch`, and optional proper motion, parallax, and radial
-velocity. Missing components stay `None`; nothing is imputed, and there is no
-`pmsafe`-style distance override.
+ICRS and FK5 J2000 differ by a frame bias of a few tens of mas; Galactic is defined
+as a fixed rotation of ICRS. Representations are layouts, not classes:
+`lonlat_deg`, `unit_xyz`, and `barycentric_au` (which needs a positive
+parallax). Earth-tied frames for a site and an instant (`GCRS`, `CIRS`,
+`TETE`, `ITRS`, `ALTAZ`) are covered in [Observed place](observed-place.md).
+
+## Motion
+
+Stars move. Over a span \(\Delta t\), *proper motion*
+\((\mu_{\alpha*}, \mu_\delta)\) shifts the direction on the sky; *parallax*
+\(\varpi\) and *radial velocity* \(v_r\) complete the six-parameter space
+motion. Two propagation models are available:
+
+- **Angular** ([`propagate_proper_motion`](../reference/coords.md#torchsky.coords.propagate_proper_motion),
+  `CatalogState.propagate_angular`): moves the direction with constant proper
+  motion along a great circle. It needs both proper-motion components and
+  nothing else.
+- **Physical** ([`propagate_space_motion`](../reference/coords.md#torchsky.coords.propagate_space_motion),
+  `CatalogState.propagate_physical`): the ERFA/SOFA `starpm` model. The star
+  moves on a straight line in space at constant velocity, so its proper motion
+  and parallax change with time (perspective acceleration), and the changing
+  light travel time is included. It needs all six parameters.
+
+The difference matters for nearby, fast stars and long baselines. Missing
+components stay `None`: torchsky never imputes a parallax or a radial velocity,
+and there is no `pmsafe`-style fallback, so an incomplete state raises
+`ValueError` rather than silently propagating with a guessed distance.
+
+## Time Scales and Epochs
+
+| Scale | Meaning | Use |
+|---|---|---|
+| UTC | Civil time with leap seconds | Observation timestamps (`MJD-OBS`, `DATE-OBS`) |
+| TAI | Atomic time, UTC + leap seconds | Intermediate |
+| TT | TAI + 32.184 s | Precession-nutation, ecliptic of date |
+| GPS | TAI − 19 s | Instrument clocks |
+| UT1 | Earth rotation angle; UTC + DUT1 | Observed place (needs Earth orientation) |
+| TCB, TDB | Barycentric coordinate / dynamical time | Catalog epochs (Gaia uses TCB Julian years) |
+
+[`Epoch`](../reference/wcs.md#torchsky.wcs.Epoch) pairs a value with a
+[`TimeSpec`](../reference/wcs.md#torchsky.wcs.TimeSpec) (format `jd`, `mjd`,
+`jyear`, `byear`, or `unix`, plus a scale) and converts among UTC, TAI, TT, and
+GPS with the built-in leap-second table. A `CatalogState` epoch defaults to a
+TCB Julian year, the Gaia convention, and physical propagation requires it.
+
+## Minimal Example: Barnard's Star
+
+Barnard's star has the largest proper motion of any star, 10.4 arcsec per
+year. The values are Gaia DR3 astrometry (epoch J2016.0) with the radial
+velocity rounded.
+
+<!-- docs: run -->
+```python
+import math
+
+import torch
+
+from torchsky.coords import CatalogState
+
+f64 = dict(dtype=torch.float64)
+star = CatalogState(
+    lon=torch.tensor([269.44850253], **f64), lat=torch.tensor([4.73942005], **f64),
+    frame="ICRS", epoch=2016.0,
+    pm_lon_coslat_mas_yr=torch.tensor([-801.551], **f64),
+    pm_lat_mas_yr=torch.tensor([10362.394], **f64),
+    parallax_mas=torch.tensor([546.976], **f64),
+    radial_velocity_km_s=torch.tensor([-110.4], **f64),
+)
+
+linear = star.propagate_angular(2050.0)      # constant proper motion
+rigorous = star.propagate_physical(2050.0)   # straight line in space
+
+moved = float(rigorous.lat - star.lat) * 3600
+assert 350.0 < moved < 355.0                   # about 352 arcsec north in 34 years
+gap_mas = 3.6e6 * math.hypot(
+    float(linear.lon - rigorous.lon) * math.cos(math.radians(float(rigorous.lat))),
+    float(linear.lat - rigorous.lat),
+)
+assert 700.0 < gap_mas < 800.0                 # perspective acceleration: ~0.74 arcsec
+assert float(rigorous.parallax_mas) > 546.976  # the star is approaching
+```
+
+A 0.74 arcsec error is four pixels of a 0.19 arcsec camera; for a typical
+field star the two models differ by far less than a milliarcsecond. The
+[frames and motion example](../published-examples/frames_and_motion.py) runs
+the same comparison and the frame conversions below on several sources.
+
+## Recipes
+
+### Convert Frames
+
+[`transform`](../reference/coords.md#torchsky.coords.transform) works on bare
+tensors; `CatalogState.to_frame` also rotates the proper-motion vector.
 
 <!-- docs: run -->
 ```python
@@ -19,97 +121,102 @@ import torch
 
 from torchsky.coords import CatalogState, transform
 
-ra = torch.tensor([10.0, 266.4], dtype=torch.float64)
-dec = torch.tensor([-5.0, -28.9], dtype=torch.float64)
+ra = torch.tensor([266.41683, 83.63308], dtype=torch.float64)   # Sgr A*, Crab
+dec = torch.tensor([-29.00781, 22.01450], dtype=torch.float64)
 
-# Frame conversion on bare tensors ...
 l, b = transform(ra, dec, from_frame="ICRS", to_frame="GALACTIC")
-ra_back, _ = transform(l, b, from_frame="GALACTIC", to_frame="ICRS")
+assert abs(float(l[0]) - 359.944) < 1e-3 and abs(float(b[0]) + 0.046) < 1e-3
+ra_back, dec_back = transform(l, b, from_frame="GALACTIC", to_frame="ICRS")
 torch.testing.assert_close(ra_back, ra, atol=1e-9, rtol=0.0)
 
-# ... or on a state, which rotates proper motion with the position.
 state = CatalogState(
     lon=ra, lat=dec, frame="ICRS", epoch=2016.0,
-    pm_lon_coslat_mas_yr=torch.tensor([50.0, -20.0], dtype=torch.float64),
-    pm_lat_mas_yr=torch.tensor([10.0, 5.0], dtype=torch.float64),
+    pm_lon_coslat_mas_yr=torch.tensor([-3.2, -11.0], dtype=torch.float64),
+    pm_lat_mas_yr=torch.tensor([-5.6, 2.0], dtype=torch.float64),
 )
 gal = state.to_frame("galactic")
-assert gal.frame == "GALACTIC"
-torch.testing.assert_close(
+torch.testing.assert_close(       # the total proper motion is frame-independent
     torch.hypot(gal.pm_lon_coslat_mas_yr, gal.pm_lat_mas_yr),
     torch.hypot(state.pm_lon_coslat_mas_yr, state.pm_lat_mas_yr),
 )
 ```
 
-Supported geometric frames are ICRS, Galactic, FK4, FK5, mean ecliptic of J2000,
-ecliptic of date (TT MJD with IAU 2006 precession-nutation), Galactocentric
-(explicit `galcen_distance_kpc` and `z_sun_pc`), and LSR (explicit solar UVW).
-Representations are layouts (`lonlat_deg`, `unit_xyz`, `barycentric_au`), not
-Astropy representation classes; `barycentric_au` needs a positive parallax.
-FK4 proper-motion conversion is rejected because no complete time-dependent
-transform is implemented; position-only FK4 conversion works. The conversion is
-differentiable.
-
-## Propagating motion
-
-The free functions `propagate_proper_motion` and `propagate_space_motion` do the
-same on bare tensors. `CatalogState.propagate_angular` moves positions with proper motion only; it needs both
-components. `propagate_physical` is the six-parameter ERFA/SOFA model with
-changing light-time and needs proper motion, parallax, and radial velocity. An
-incomplete state raises `ValueError`.
+### Precess to Another Equinox
 
 <!-- docs: run -->
 ```python
 import torch
 
-from torchsky.coords import CatalogState
+from torchsky.coords import convert_celestial
 
-ra = torch.tensor([10.0, 266.4], dtype=torch.float64)
-dec = torch.tensor([-5.0, -28.9], dtype=torch.float64)
-pm = torch.tensor([50.0, -20.0], dtype=torch.float64)
-state = CatalogState(
-    lon=ra, lat=dec, frame="ICRS", epoch=2016.0,
-    pm_lon_coslat_mas_yr=pm, pm_lat_mas_yr=torch.tensor([10.0, 5.0], dtype=torch.float64),
-)
-
-earlier = state.propagate_angular(2000.0)
-assert earlier.epoch == 2000.0 and not torch.equal(earlier.lon, state.lon)
-
-try:
-    state.propagate_physical(2000.0)
-except ValueError:
-    pass
-else:
-    raise AssertionError("physical propagation must not impute parallax")
-
-full = CatalogState(
-    lon=ra, lat=dec, frame="ICRS", epoch=2016.0,
-    pm_lon_coslat_mas_yr=pm, pm_lat_mas_yr=torch.tensor([10.0, 5.0], dtype=torch.float64),
-    parallax_mas=torch.tensor([10.0, 5.0], dtype=torch.float64),
-    radial_velocity_km_s=torch.tensor([20.0, -30.0], dtype=torch.float64),
-)
-assert full.propagate_physical(2000.0).lon.shape == (2,)
+ra = torch.tensor([83.63308], dtype=torch.float64)
+dec = torch.tensor([22.01450], dtype=torch.float64)
+ra_1975, dec_1975 = convert_celestial(ra, dec, from_frame="ICRS", to_frame="FK5", to_equinox=1975.0)
+assert 0.3 < float(ra - ra_1975) < 0.4    # 25 years of precession: about 0.38 degree in RA
 ```
 
-`propagate_proper_motion_with_jacobian` and `propagate_space_motion_with_jacobian`
-also return the local Jacobian (2x4 and 6x6) in east/north tangent-plane
-offsets, so you can propagate a covariance with `J @ C @ J.mT`. The 6x6 form
-lets you select Gaia's correlated astrometric subspace without inventing joint
-radial-velocity covariance. Catalog covariance modelling, blends, and
-association probabilities are out of scope.
+### Convert a Timestamp Between Scales
 
-## Optional interop
+<!-- docs: run -->
+```python
+import torch
 
-Opt-in extras are never imported by `torchsky.wcs`: `astropy_interop`
-(`from_astropy`, `to_astropy`), `ephemeris.get_body` (`jplephem` and a DE
-kernel; the small DE440s kernel covers the Sun, Moon and inner planets, Mars and the
-outer planets need the full DE440), `tle.catalog_state_from_tle` (`sgp4`, frame `TEME`), and
-`gwcs_live.freeze_live_gwcs`. Astropy and ERFA are the oracles for geometric
-frames and space motion; observed-place parity is only meaningful once both
-sides pin the same EOP values.
+from torchsky.wcs import Epoch, TimeSpec
 
-## See also
+utc = Epoch(60000.0, TimeSpec(format="mjd", scale="utc"))   # 2023-02-25 00:00 UTC
+tt = utc.to(TimeSpec(format="mjd", scale="tt"))
+torch.testing.assert_close((tt.value - utc.value) * 86400.0, torch.tensor(69.184, dtype=torch.float64))
+jyear = utc.to(TimeSpec(format="jyear", scale="tt")).value
+assert 2023.14 < float(jyear) < 2023.16
+```
 
-- [WCS](index.md) for FITS-WCS transforms.
-- [Catalogs and crossmatch](../catalogs/index.md) for epoch-aware matching.
-- [`torchsky.coords` reference](../reference/coords.md).
+### Propagate Uncertainties
+
+`propagate_proper_motion_with_jacobian` and
+`propagate_space_motion_with_jacobian` (in `torchsky.wcs`) also return the
+local Jacobian, 2 × 4 and 6 × 6, in east/north tangent-plane offsets.
+Propagate a covariance with `J @ C @ J.mT`. The 6 × 6 form lets you keep
+Gaia's correlated five-parameter block without inventing a joint
+radial-velocity covariance. Gradients through every function above come from
+autograd as usual.
+
+### Use Ephemerides and Satellites
+
+Opt-in extras are never imported by `torchsky.wcs` at import time:
+
+- `torchsky.wcs.ephemeris.get_body` reads a JPL DE kernel through
+  `jplephem`. DE440s covers the Sun, Moon, and inner planets; Mars and the
+  outer planets need the full DE440.
+- `torchsky.wcs.tle.catalog_state_from_tle` propagates a two-line element set
+  with `sgp4` into a `TEME` state.
+- `torchsky.wcs.astropy_interop` converts a `CatalogState` to and from an
+  Astropy `SkyCoord` (`catalog_state_from_astropy`, `catalog_state_to_astropy`)
+  at a boundary.
+
+## Accuracy and Validation
+
+Geometric frames and space motion are checked against Astropy and ERFA in
+[torchsky-harness](https://github.com/astroai/torchsky-harness); see the
+[parity page](../performance/parity.md). Galactic round trips close to below
+1e-6 mas in float64.
+
+## Pitfalls
+
+- **FK4 proper motions.** FK4 conversion is position-only; a state with proper
+  motion is rejected because the time-dependent E-term transform is not
+  implemented.
+- **Epoch is not equinox.** `epoch=` says when the star was there;
+  `to_equinox=` says which FK5 axes to use. A J2000 catalog in ICRS has no
+  equinox at all.
+- **Mixed scales.** `MJD-OBS` is UTC unless `TIMESYS` says otherwise; Gaia
+  epochs are TCB. Convert explicitly; nothing is guessed from the magnitude of
+  the number.
+- **Ecliptic of date** takes a TT date. Without one, `transform` raises.
+
+## See Also
+
+- [Observed place](observed-place.md): alt/az, aberration, and refraction.
+- [Catalogs](../catalogs/index.md): epoch-aware crossmatch uses `CatalogState`.
+- [Kinematics](../spectra/kinematics.md): radial velocity frames and Doppler shifts.
+- Reference: [`torchsky.coords`](../reference/coords.md),
+  [`CatalogState`](../reference/coords.md#torchsky.coords.CatalogState).

@@ -1,42 +1,102 @@
 # Dust extinction
-<!-- TODO(0.5.0 docs): intro -->
 
+Interstellar dust absorbs and scatters starlight, more strongly in the blue than
+in the red. The dimming at wavelength \(\lambda\) is the **extinction**
+\(A(\lambda)\), in magnitudes, so the observed flux is
 
-`torchsky.extinction` evaluates Milky Way and host-galaxy dust laws on torch
-tensors. It returns **attenuation in magnitudes** (`A(λ)`) and multiplicative
-**transmission** (`10**(-0.4 A)`), never a reddened spectrum with hidden
-assumptions.
+\[
+F_\mathrm{obs}(\lambda) = F_\mathrm{int}(\lambda)\, 10^{-0.4\,A(\lambda)} .
+\]
 
-Use this page before synthetic photometry ([spectrophotometry.md](photometry.md))
-or when building spectral models ([spectral.md](index.md)). The reference is
-[`torchsky.extinction`](../reference/extinction.md).
+An **extinction law** gives the shape of \(A(\lambda)\). Its amount is set by
+the extinction in the V band, \(A_V\), or by the **colour excess**
+\(E(B-V) = A_B - A_V\), the reddening of the B−V colour. The two are linked by
+\(R_V = A_V / E(B-V)\), which describes the grain-size distribution: 3.1 for the
+average diffuse Milky Way, larger in dense clouds.
 
-## Units and conventions
+`torchsky.extinction` evaluates these laws on tensors and returns either
+\(A(\lambda)\) ([`a_lambda`](../reference/extinction.md#torchsky.extinction.a_lambda))
+or the multiplicative factor \(10^{-0.4A}\)
+([`transmission`](../reference/extinction.md#torchsky.extinction.transmission)).
+\(E(B-V)\), \(A_V\), and \(R_V\) may be tensors with gradients, one per object.
 
-- Wavelengths are **Angstrom** by default; pass `wavelength_unit="nm"` at the
-  boundary and the conversion happens once.
-- `A(λ)` is in **magnitudes**. `transmission = 10**(-0.4 A)` with `A` clamped at
-  zero, so a dust screen can never amplify flux.
-- Supply **exactly one** of `ebv` or `a_v`; `A_V = R_V E(B-V)`. `R_V` defaults
-  to `3.1`, except Calzetti, whose default is `4.05`.
-- A per-object `ebv` broadcasts as a **leading batch axis**: a `(B,)` scale
-  against an `(L,)` wavelength grid produces `(B, L)`, not a last-axis match.
-- `k_lambda` is `A(λ)/A_V` (`a_v=1`), so `k(λ_V) ≈ 1`. Use it for host screens
-  evaluated at rest-frame wavelength.
+Use it to correct spectra and photometry for Milky Way foreground dust, and to
+model dust in the source itself (a host galaxy) as part of a fit.
 
-## Laws
+## How It Works
 
-| `law` | Reference | Notes |
-|---|---|---|
-| `"ccm89"` | Cardelli, Clayton & Mathis (1989) | IR power law, optical and UV polynomials; IR extrapolated below `x=1/λ_µm = 0.3`; far-UV frozen at `x=10`. |
-| `"odonnell94"` (`"odonnell"`) | O'Donnell (1994) | Substitutes for the CCM89 optical polynomials only; UV and IR follow CCM89. |
-| `"f99"` (`"fitzpatrick99"`) | Fitzpatrick (1999) | FM90 UV plus a natural cubic spline through the F99 knots; calibrated over the knot range, extrapolation outside it is not a claim. |
-| `"calzetti"` | Calzetti (2000) | Starburst law for `0.12–2.20 µm`; wavelengths outside that interval are clamped. |
+The Milky Way laws are parameterized by \(R_V\) in inverse wavelength
+\(x = 1/\lambda\) (µm⁻¹). For CCM89 and O'Donnell (1994),
 
-No dust emission, geometry mixing, or attenuation-free ("gray") component is
-included: a screen is a screen.
+\[
+\frac{A(\lambda)}{A_V} = a(x) + \frac{b(x)}{R_V},
+\]
 
-## Magnitudes at a wavelength
+with \(a\) and \(b\) piecewise polynomials in the infrared, optical, and
+ultraviolet. F99 uses the Fitzpatrick and Massa ultraviolet form plus a cubic
+spline through optical and infrared anchor points that also depend on \(R_V\).
+Calzetti (2000) is an empirical attenuation curve for star-forming galaxies,
+which mixes dust and stars rather than placing a screen in front of them.
+
+| `law` | Reference | Use for | Range |
+|---|---|---|---|
+| `"ccm89"` | Cardelli, Clayton & Mathis (1989) | Milky Way, default | 0.1–3.3 µm (\(x = 0.3\)–10); IR power law extrapolated below, far-UV frozen above |
+| `"odonnell94"` | O'Donnell (1994) | Milky Way, improved optical | Optical polynomial replaced; UV and IR as CCM89 |
+| `"f99"` | Fitzpatrick (1999) | Milky Way, the law behind SFD/SF11 recalibrations | Calibrated over its spline knots; outside is extrapolation |
+| `"calzetti"` | Calzetti et al. (2000) | Star-forming host galaxies, \(R_V = 4.05\) default | 0.12–2.2 µm; clamped outside |
+
+Later laws such as Gordon et al. (2023, G23) are not included.
+
+## Assumptions and Accuracy
+
+- One foreground screen per object: no scattering into the beam, no emission,
+  no mixing of dust and stars (Calzetti aside, which is empirical).
+- Wavelengths are Angstrom unless `wavelength_unit="nm"`; for a host-galaxy
+  screen they are **rest-frame** wavelengths.
+- \(A(\lambda)\) is clamped at zero in `transmission`, so a screen never
+  brightens a source.
+- F99 agrees with the [`dust_extinction`](https://dust-extinction.readthedocs.io)
+  package to 2 per cent from 1500 to 8000 Å, and CCM89 matches its V-band
+  anchor, in the test suite.
+
+## A Real Spectrum: Galactic Dust Correction
+
+The Schlafly & Finkbeiner (2011) map gives \(E(B-V) = 0.0698\) toward the SDSS
+quasar on plate 0751, fibre 160. Removing the dust is a multiplication by
+\(10^{+0.4A}\):
+
+```python
+# fragment: needs spec-0751-52251-0160.fits, SDSS.g.dat and SDSS.r.dat (see photometry.md)
+import torch
+import torchfits
+
+from torchsky.extinction import a_lambda
+from torchsky.filter_profiles import bandpass_from_transmission_file
+from torchsky.spectrophotometry import Passband, synthetic_photometry_bands
+
+coadd = torchfits.read("spec-0751-52251-0160.fits", hdu=1)
+wave = 10.0 ** coadd["loglam"].to(torch.float64)
+flux = coadd["flux"].to(torch.float64) * 1e-17
+good = coadd["ivar"] > 0
+
+dereddened = flux * 10.0 ** (0.4 * a_lambda(wave, ebv=0.0698, law="f99"))
+
+bands = []
+for name in "gr":
+    curve = bandpass_from_transmission_file(f"SDSS.{name}.dat", band_name=name)
+    bands.append(Passband.from_samples(curve["transmission_wavelength"].double(),
+                                       curve["transmission_throughput"].double(), name=name))
+mags = synthetic_photometry_bands(wave, torch.stack([flux, dereddened]), bands,
+                                  output="ab_mag", mask=good.expand(2, -1), min_coverage=0.9)
+print(mags.value)   # [[17.470, 16.776], [17.213, 16.597]]: g-r is 0.077 mag bluer
+```
+
+The g band brightens by 0.26 mag and r by 0.18 mag. The complete analysis is
+[`examples/sdss_spectrum_photometry.py`](https://github.com/astroai/torchsky/blob/main/examples/sdss_spectrum_photometry.py).
+
+## Recipes
+
+### Extinction at Given Wavelengths
 
 <!-- docs: run -->
 ```python
@@ -45,116 +105,118 @@ import torch
 from torchsky.extinction import a_lambda
 
 wave = torch.tensor([3500.0, 5510.0, 8000.0], dtype=torch.float64)
-a_v = a_lambda(wave, ebv=0.5, r_v=3.1)
+a = a_lambda(wave, ebv=0.5, r_v=3.1)                # CCM89 by default
+assert abs(float(a[1]) - 1.55) < 0.1               # A_V = R_V E(B-V) at 5510 A
+assert a[0] > a[1] > a[2]                          # blue is extinguished more
 
-# A_V = R_V * E(B-V) = 1.55 mag at the V-band anchor.
-assert abs(float(a_v[1]) - 1.55) < 0.1
-print(a_v.tolist())
+same = a_lambda(torch.tensor([551.0]), ebv=0.5, r_v=3.1, wavelength_unit="nm")
+torch.testing.assert_close(same, a[1:2].float(), atol=1e-5, rtol=0.0)
 ```
 
-The same value in nanometres is identical; only the boundary unit changes.
+### Redden or Deredden a Batch
+
+A per-object `ebv` of shape `(B,)` broadcasts against a shared `(L,)` grid to
+`(B, L)`. [`apply_extinction`](../reference/extinction.md#torchsky.extinction.apply_extinction)
+is the one-call form of the multiplication by `transmission`.
 
 <!-- docs: run -->
 ```python
 import torch
 
-from torchsky.extinction import a_lambda
-
-mag_angstrom = a_lambda(torch.tensor([5510.0]), ebv=1.0, r_v=3.1)
-mag_nm = a_lambda(torch.tensor([551.0]), ebv=1.0, r_v=3.1, wavelength_unit="nm")
-torch.testing.assert_close(mag_angstrom, mag_nm, atol=1e-6, rtol=0.0)
-print(mag_angstrom.item())
-```
-
-## Transmission and applying a screen
-
-`transmission` is the multiplicative factor for a flux density; zero `E(B-V)`
-is the identity.
-
-<!-- docs: run -->
-```python
-import torch
-
-from torchsky.extinction import apply_extinction, transmission
-
-wave = torch.tensor([3500.0, 5510.0, 8000.0], dtype=torch.float64)
-flux = torch.ones_like(wave)
-
-identity = transmission(wave, 0.0)
-torch.testing.assert_close(identity, torch.ones_like(wave))
-
-reddened = apply_extinction(flux, wave, ext_params=torch.tensor(0.5, dtype=torch.float64))
-assert torch.all(reddened <= 1.0)
-assert reddened[0] < reddened[2]  # blue light is attenuated more
-print(identity.tolist(), reddened.tolist())
-```
-
-For a batch of objects sharing a wavelength grid, pass one `E(B-V)` per object:
-
-<!-- docs: run -->
-```python
-import torch
-
-from torchsky.extinction import apply_extinction, transmission
+from torchsky.extinction import a_lambda, transmission
 
 wave = torch.linspace(4000.0, 8000.0, 5, dtype=torch.float64)
-flux = torch.ones(2, wave.numel(), dtype=torch.float64)
+intrinsic = torch.ones(2, wave.numel(), dtype=torch.float64)
 ebv = torch.tensor([0.0, 1.0], dtype=torch.float64)
 
-attenuated = apply_extinction(flux, wave, ebv)
-assert attenuated.shape == flux.shape
-torch.testing.assert_close(attenuated[0], flux[0])
-assert torch.all(attenuated[1] < attenuated[0])
-print(transmission(wave, ebv).shape)
+reddened = intrinsic * transmission(wave, ebv, law="f99")
+assert reddened.shape == (2, 5) and torch.all(reddened[1] < reddened[0])
+restored = reddened * 10.0 ** (0.4 * a_lambda(wave, ebv=ebv, law="f99"))
+torch.testing.assert_close(restored, intrinsic)
 ```
 
-`apply_extinction` accepts either `lambda_obs` or its USPM spelling
-`lambda_obs_angstrom`, but not both; `wavelength_unit` then applies to
-`lambda_obs`.
-
-## Choosing a law
-
-The laws agree in the infrared and diverge in the ultraviolet, which is exactly
-where the choice matters for stellar and AGN spectra. The Milky Way laws
-(`ccm89`, `odonnell94`, `f99`) describe a foreground screen; `calzetti`
-describes a starburst attenuation curve and is the usual choice for host-galaxy
-dust at high redshift.
+### Fit E(B−V) by Gradient Descent
 
 <!-- docs: run -->
 ```python
 import torch
 
-from torchsky.extinction import calzetti, fitzpatrick99
+from torchsky.extinction import a_lambda, transmission
+
+wave = torch.linspace(3500.0, 9000.0, 300, dtype=torch.float64)
+intrinsic = (wave / 5500.0) ** -1.0
+observed = intrinsic * transmission(wave, 0.3, law="f99")
+
+ebv = torch.tensor(0.0, dtype=torch.float64, requires_grad=True)
+optimizer = torch.optim.LBFGS([ebv], max_iter=50, line_search_fn="strong_wolfe")
+
+
+def closure():
+    optimizer.zero_grad()
+    model = intrinsic * 10.0 ** (-0.4 * a_lambda(wave, ebv=ebv, law="f99"))
+    loss = (torch.log(model) - torch.log(observed)).square().sum()
+    loss.backward()
+    return loss
+
+
+optimizer.step(closure)
+assert abs(float(ebv) - 0.3) < 1e-4
+```
+
+### Host-Galaxy Dust Before Redshifting
+
+Evaluate a host screen at rest-frame wavelength, then shift. The normalized
+curve [`k_lambda`](../reference/extinction.md#torchsky.extinction.k_lambda),
+\(A(\lambda)/A_V\), is convenient as a prior shape.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.extinction import calzetti, k_lambda
+from torchsky.redshift import shift_wavelength
+
+rest = torch.linspace(1500.0, 9000.0, 200, dtype=torch.float64)
+sed = (rest / 5500.0) ** -2.0
+attenuated = sed * 10.0 ** (-0.4 * calzetti(rest, a_v=0.8))   # host dust, rest frame
+observed_wave = shift_wavelength(rest, 1.0 + 1.5)               # then redshift to z = 1.5
+
+k = k_lambda(torch.tensor([5510.0], dtype=torch.float64), law="ccm89")
+assert abs(float(k) - 1.0) < 0.1 and observed_wave[0] == 3750.0
+```
+
+### Compare Laws
+
+The laws agree in the optical and diverge in the ultraviolet, where the choice
+matters most.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.extinction import a_lambda
 
 uv = torch.tensor([2000.0], dtype=torch.float64)
-f99 = fitzpatrick99(uv, a_v=1.0, r_v=3.1)
-cal = calzetti(uv, a_v=1.0)
-assert abs(float(f99) - float(cal)) > 0.02 * abs(float(cal))
-print(f99.item(), cal.item())
+values = {law: float(a_lambda(uv, a_v=1.0, law=law)) for law in ("ccm89", "odonnell94", "f99", "calzetti")}
+assert max(values.values()) - min(values.values()) > 0.1
+print(values)
 ```
 
-Use `k_lambda` when you need the normalized curve `A(λ)/A_V`, for example to
-attach a host-screen prior to a spectral model:
+## Pitfalls
 
-<!-- docs: run -->
-```python
-import torch
+- **Magnitudes, not factors.** `a_lambda` returns magnitudes; the flux factor
+  is \(10^{-0.4A}\).
+- **Frame.** Milky Way dust acts at observed wavelength; host dust at rest
+  wavelength. Mixing them shifts features by \(1+z\).
+- **\(E(B-V)\) maps are calibrated for one law.** The Schlafly & Finkbeiner
+  (2011) recalibration of the SFD map assumes F99 with \(R_V = 3.1\); use the
+  same law when applying it.
+- **Range.** Check that your wavelengths lie within the calibrated interval of
+  the law before relying on far-UV or infrared corrections.
 
-from torchsky.extinction import k_lambda
+## See Also
 
-wave = torch.tensor([3000.0, 5510.0, 8000.0], dtype=torch.float64)
-k = k_lambda(wave, law="ccm89", r_v=3.1)
-assert abs(float(k[1]) - 1.0) < 0.1
-print(k.tolist())
-```
-
-## Caveats
-
-- An attenuation law returns magnitudes; converting to transmission is
-  `10**(-0.4 A)` and the implementation clamps negative `A` to zero. Do not
-  reuse `A` as a multiplicative factor.
-- `E(B-V)` is not a flux ratio and does not depend on the object's redshift;
-  evaluate host-screen curves at **rest-frame** wavelength.
-- Wavelengths outside a law's calibrated interval are extrapolated or clamped
-  as listed above. Check the interval before publishing a fit that relies on
-  the far-UV or far-IR behavior.
+- [Synthetic photometry](photometry.md): magnitudes after dust correction.
+- [Kinematics](kinematics.md): shift between rest and observed frames.
+- [Spectra and photometry overview](index.md): the full SED observation chain.
+- Reference: [`torchsky.extinction`](../reference/extinction.md).

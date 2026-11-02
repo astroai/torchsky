@@ -1,58 +1,62 @@
 # Spherical harmonic transforms
-<!-- TODO(0.5.0 docs): intro -->
 
+A spherical harmonic transform (SHT) is the Fourier transform of the sphere.
+Any band-limited map \(f(\theta, \phi)\) is a sum of spherical harmonics
+\(Y_{\ell m}\), each a pattern with angular wavelength about
+\(180^\circ / \ell\):
 
-`torchsky.sphere` analyzes and synthesizes HEALPix maps in spherical harmonic
-space on CPU, CUDA, and MPS. The same namespace carries power spectra, beam and
-pixel windows, spin-2 transforms, and explicit CAR/HEALPix SHT contracts, so a
-mapmaking or field-fitting pipeline never needs healpy at runtime.
+\[
+f(\theta, \phi) = \sum_{\ell=0}^{\ell_\mathrm{max}} \sum_{m=-\ell}^{\ell}
+a_{\ell m}\, Y_{\ell m}(\theta, \phi),
+\qquad
+C_\ell = \frac{1}{2\ell + 1} \sum_{m} |a_{\ell m}|^2 .
+\]
 
-## Choosing an entry point
+*Synthesis* (`alm2map`) evaluates the sum on a HEALPix grid; *analysis*
+(`map2alm`) recovers the coefficients \(a_{\ell m}\); the *angular power
+spectrum* \(C_\ell\) measures the variance per multipole. `torchsky.sphere`
+runs all three, plus beams, spin-2 (polarization) transforms, and masked-sky
+spectra, on CPU, CUDA, and MPS without healpy at runtime.
 
-| Goal | Call | Returns |
-|---|---|---|
-| Analyze a map into coefficients | [`map2alm`](../reference/sphere.md#torchsky.sphere.map2alm) | `(nalm,)` or `(3, nalm)` for polarization |
-| Synthesize a map from coefficients | [`alm2map`](../reference/sphere.md#torchsky.sphere.alm2map) | `(npix,)` or `(3, npix)` |
-| Auto/cross power spectrum | [`anafast`](../reference/sphere.md#torchsky.sphere.anafast) | `(lmax+1,)` |
-| Spectrum from existing coefficients | [`alm2cl`](../reference/sphere.md#torchsky.sphere.alm2cl) | `(lmax+1,)` or stacked spectra |
-| Random realization from C_ell | [`synfast`](../reference/sphere.md#torchsky.sphere.synfast) / [`synalm`](../reference/sphere.md#torchsky.sphere.synalm) | map(s) / alm |
-| Smooth in harmonic space | [`smoothmap`](../reference/sphere.md#torchsky.sphere.smoothmap) / [`smoothalm`](../reference/sphere.md#torchsky.sphere.smoothalm) | map(s) / alm |
-| Apply an ell-dependent filter | [`almxfl`](../reference/sphere.md#torchsky.sphere.almxfl) | filtered alm |
-| Spin-2 Q/U analysis and synthesis | [`map2alm_spin`](../reference/sphere.md#torchsky.sphere.map2alm_spin) / [`alm2map_spin`](../reference/sphere.md#torchsky.sphere.alm2map_spin) | `(alm_p, alm_m)` / `(2, npix)` |
-| Least-squares analysis | [`map2alm_lsq`](../reference/sphere.md#torchsky.sphere.map2alm_lsq) | `(alm, rel_res, n_iter)` |
-| Explicit geometry/backend contract | [`SHTRequest`](../reference/sphere.md#torchsky.sphere.SHTRequest), [`synthesize`](../reference/sphere.md#torchsky.sphere.synthesize), [`analyze`](../reference/sphere.md#torchsky.sphere.analyze) | capability-checked results |
+## When to Use It
 
-The healpy-shaped aliases live in
-[`torchsky.sphere.compat`](../reference/sphere-compat.md); use the
-`torchsky.sphere` names in new code.
+- Measure the power spectrum of a full-sky or large-area map (CMB, Galactic
+  foregrounds, galaxy density).
+- Smooth, deconvolve, or filter a map by a function of \(\ell\) (beams, Wiener
+  filters).
+- Represent a sky model by its coefficients and fit them with gradients.
 
-## Coefficient ordering
+For a small patch of sky, a flat-sky FFT of a WCS image is cheaper and
+simpler. For local operations (a top-hat average, a point source) work in
+pixel space.
 
-Alm arrays use healpy ordering: packed `m >= 0` blocks, complex dtype, with
-`m = 0` real by convention. `lmax` defaults to `3 * nside - 1` and `mmax`
-defaults to `lmax`. The flat index helpers are the contract for anything that
-indexes coefficients directly:
+## How It Works
 
-<!-- docs: run -->
-```python
-import torch
-import torchsky.sphere as sphere
+On HEALPix the analysis integral \(a_{\ell m} = \int f\, Y^*_{\ell m}\, d\Omega\)
+becomes a sum over pixels. Pixels lie on iso-latitude rings, so the sum over
+longitude on each ring is an FFT, and the latitude part is an associated
+Legendre recurrence: cost \(O(N_\mathrm{side}^3)\) instead of
+\(O(N_\mathrm{side}^4)\).
 
-lmax = 8
-nalm = sphere.alm_size(lmax, lmax)
-alm = torch.zeros(nalm, dtype=torch.complex128)
+- **`lmax`.** It defaults to \(3N_\mathrm{side} - 1\), the largest
+  multipole HEALPix can represent at all. Below about \(2N_\mathrm{side}\)
+  the pixel sum is an accurate quadrature; between \(2N_\mathrm{side}\) and
+  \(3N_\mathrm{side}\) aliasing grows. Choose `lmax` from the map's beam
+  rather than from the grid when you can.
+- **Iterations.** HEALPix quadrature is not exact. `iter=n` runs \(n\) Jacobi
+  refinements: synthesize, subtract, analyze the residual, add. Each costs one
+  extra transform pair. `use_weights=True` (computed ring weights) and
+  `use_pixel_weights=True` (HEALPix full-pixel weight files read through
+  torchfits from `datapath` or `TORCHSKY_HEALPIX_DATAPATH`) improve the
+  quadrature instead; missing weight files raise.
+  [`map2alm_lsq`](../reference/sphere.md#torchsky.sphere.map2alm_lsq) iterates
+  to a residual tolerance and returns `(alm, rel_res, n_iter)` as a diagnostic.
+- **Ordering.** Coefficients use the healpy layout: complex, \(m \ge 0\) only,
+  in blocks of constant \(m\); `alm_index(ell, m, lmax)` and `alm_size(lmax)`
+  are the contract for indexing them. Real maps imply
+  \(a_{\ell,-m} = (-1)^m a^*_{\ell m}\).
 
-assert sphere.alm_index(0, 0, lmax, lmax) == 0
-assert sphere.alm_index(1, 0, lmax, lmax) == 1
-assert sphere.alm_index(1, 1, lmax, lmax) == lmax + 1
-assert nalm == (lmax + 1) * (lmax + 2) // 2
-```
-
-## Analyze and synthesize
-
-`map2alm` accepts a HEALPix map shaped `(npix,)`, or `(3, npix)` with
-`pol=True` in `(T, E, B)` order. `alm2map` is the inverse. Both dispatch on the
-tensor device and keep the map on it; CUDA and MPS use the ATen ring path.
+## Minimal Example: Analysis, Synthesis, and Iterations
 
 <!-- docs: run -->
 ```python
@@ -60,35 +64,59 @@ import torch
 import torchsky.sphere as sphere
 
 torch.manual_seed(0)
-nside, lmax = 16, 8
+nside, lmax = 32, 64                              # lmax = 2 nside
 ell = torch.arange(lmax + 1, dtype=torch.float64)
-cl = torch.exp(-ell * (ell + 1) * 0.05**2)
+cl = torch.zeros(lmax + 1, dtype=torch.float64)
+cl[2:] = 1.0 / ell[2:] ** 2
 
-sky = sphere.synfast(cl, nside=nside, lmax=lmax, mmax=lmax, pol=False)
-alm = sphere.map2alm(sky, nside=nside, lmax=lmax, mmax=lmax)
-recon = sphere.alm2map(alm, nside=nside, lmax=lmax, mmax=lmax)
+alm = sphere.synalm(cl, lmax=lmax)                # Gaussian a_lm with spectrum C_ell
+sky = sphere.alm2map(alm, nside, lmax=lmax)       # (12 nside^2,) RING map
 
-assert sky.shape == (12 * nside**2,)
-assert alm.shape == (sphere.alm_size(lmax, lmax),)
-assert recon.shape == sky.shape
-print(sky.shape, alm.shape, float(recon.std()))
+def error(n_iter: int) -> float:
+    back = sphere.map2alm(sky, nside=nside, lmax=lmax, iter=n_iter)
+    return float((back - alm).abs().max() / alm.abs().max())
+
+assert error(0) < 1e-2 and error(3) < 1e-4       # 3e-3 -> 7e-6 with three iterations
+assert alm.shape == (sphere.alm_size(lmax),)
+assert sphere.alm_index(1, 1, lmax) == lmax + 1
 ```
 
-Analysis uses quadrature weights only when asked. `use_weights=True` applies
-computed RING quadrature with mean 1; `use_pixel_weights=True` loads HEALPix
-full-pixel weight FITS through `torchfits` from `datapath` or
-`TORCHSKY_HEALPIX_DATAPATH` and multiplies by `1 + w`. The two flags are
-mutually exclusive, and missing weight files raise rather than silently
-approximating. `gal_cut` zeros pixels below the given latitude in degrees.
+## Real Data: Planck Synchrotron on a Masked Sky
 
-`iter` runs the same iterative refinement as healpy: analyze, synthesize, and
-correct the residual. It costs one extra transform pair per iteration.
+The [Planck power spectrum example](../published-examples/planck_power_spectrum.py)
+reads the Commander synchrotron map (`nside = 256`, NESTED, Galactic), builds a
+\(|b| > 20^\circ\) cut with `query_strip`, takes \(f_\mathrm{sky}\) from the
+area of the cut's MOC, and compares full-sky and masked spectra:
 
-## Power spectra
+```python
+# fragment: needs the cached sample; `pixi run fetch-example-samples` downloads it
+from pathlib import Path
 
-`anafast` is the convenience path from maps to C_ell; `alm2cl` works on
-coefficients you already have, including cross-spectra between two maps or
-between T/E/B components.
+import torch
+import torchfits
+import torchsky.sphere as sphere
+
+path = Path.home() / ".cache/torchsky/samples/planck_commander_sync_256.fits"
+sky = torchfits.read(str(path), hdu=1)["I_MEAN"].to(torch.float64)
+cl_full = sphere.anafast(sky, nest=True, lmax=383)            # C_ell ~ ell^-1.8
+cl_cut = sphere.anafast(sky * mask, nest=True, lmax=383) / f_sky   # mask: |b| > 20 deg
+```
+
+![Planck synchrotron map with a Galactic cut and its pseudo-C_ell](../assets/gallery/examples/planck_power_spectrum.png)
+
+For a Gaussian simulation with the same spectrum, the \(f_\mathrm{sky}\)
+correction recovers the full-sky spectrum to a few percent. For the real map
+it falls 10–40 times low: synchrotron power is concentrated in the Galactic
+plane, and the correction assumes a statistically isotropic sky.
+
+## Recipes
+
+### Power Spectra and Cross-Spectra
+
+`anafast(map1, map2=None, ...)` goes from maps to \(C_\ell\); `alm2cl` works on
+coefficients you already have. Polarized input is `(3, npix)` in `(T, Q, U)`
+order and returns spectra in healpy's stacked order (TT, EE, BB, TE, EB, TB);
+pass `alm=True` to receive the coefficients too.
 
 <!-- docs: run -->
 ```python
@@ -97,69 +125,60 @@ import torchsky.sphere as sphere
 
 torch.manual_seed(1)
 nside, lmax = 16, 8
-cl_in = torch.ones(lmax + 1, dtype=torch.float64)
-sky = sphere.synfast(cl_in, nside=nside, lmax=lmax, pol=False)
+a = sphere.synfast(torch.ones(lmax + 1, dtype=torch.float64), nside=nside, lmax=lmax, pol=False)
+b = a + 0.1 * torch.randn_like(a)
 
-cl_map = sphere.anafast(sky, nside=nside, lmax=lmax, pol=False)
-alm = sphere.map2alm(sky, nside=nside, lmax=lmax)
-cl_alm = sphere.alm2cl(alm, lmax=lmax)
+cl_map = sphere.anafast(a, nside=nside, lmax=lmax, pol=False)
+cl_alm = sphere.alm2cl(sphere.map2alm(a, nside=nside, lmax=lmax), lmax=lmax)
+torch.testing.assert_close(cl_map, cl_alm, rtol=1e-10, atol=1e-12)
 
-assert cl_map.shape == (lmax + 1,)
-assert torch.allclose(cl_map, cl_alm, rtol=1e-10, atol=1e-12)
-print(cl_map[:4])
+cross = sphere.anafast(a, b, nside=nside, lmax=lmax, pol=False)
+assert cross.shape == (lmax + 1,)
 ```
 
-Polarized input is `(3, npix)` and returns spectra in healpy's stacked ordering;
-pass `alm=True` to also receive the analyzed coefficients. For a cross-spectrum,
-call `anafast(map1, map2, ...)` or `alm2cl(alm1, alm2)`.
+### Beams, Filters, and Smoothing
 
-## Beams, filters, and smoothing
-
-`gaussian_beam(fwhm_rad, lmax)` returns the harmonic beam `B_ell`. Multiply
-coefficients with `almxfl`, or smooth end-to-end with `smoothmap`. The pixel
-window `pixwin(nside, lmax=...)` is embedded package data, not a healpy or FITS
-dependency.
+`gaussian_beam(fwhm_rad, lmax)` returns \(B_\ell\); `almxfl(alm, f_ell)`
+multiplies coefficients by any function of \(\ell\); `smoothmap` analyzes,
+filters, and synthesizes in one call and also takes a measured `beam=` or
+`beam_window=`. `smoothalm` keeps a coefficient-space pipeline.
 
 <!-- docs: run -->
 ```python
+import math
+
 import torch
 import torchsky.sphere as sphere
 
 torch.manual_seed(2)
-nside, lmax = 16, 8
+nside, lmax = 16, 32
 ell = torch.arange(lmax + 1, dtype=torch.float64)
-sky = sphere.synfast(torch.exp(-ell), nside=nside, lmax=lmax, pol=False)
-alm = sphere.map2alm(sky, nside=nside, lmax=lmax)
+sky = sphere.synfast(torch.exp(-ell / 10), nside=nside, lmax=lmax, pol=False)
 
-fwhm_rad = float(torch.deg2rad(torch.tensor(2.0)))
-beam = sphere.gaussian_beam(fwhm_rad, lmax)
-filtered = sphere.almxfl(alm, beam)
-smoothed = sphere.alm2map(filtered, nside=nside, lmax=lmax)
-
-assert beam.shape == (lmax + 1,)
-assert filtered.shape == alm.shape
+fwhm = math.radians(5.0)
+beam = sphere.gaussian_beam(fwhm, lmax)
+smoothed = sphere.alm2map(sphere.almxfl(sphere.map2alm(sky, nside=nside, lmax=lmax), beam),
+                          nside, lmax=lmax)
 assert float(smoothed.std()) < float(sky.std())
+one_call = sphere.smoothmap(sky, nside=nside, lmax=lmax, mmax=lmax, fwhm_rad=fwhm)
+assert one_call.shape == sky.shape
 
-window = sphere.pixwin(nside, lmax=lmax)
-assert window.shape == (lmax + 1,)
-
-smoothed_map = sphere.smoothmap(
-    sky, nside=nside, lmax=lmax, mmax=lmax, fwhm_rad=fwhm_rad
-)
-assert smoothed_map.shape == sky.shape
-print(float(window[0]), float(smoothed_map.std()))
+window = sphere.pixwin(nside, lmax=lmax)          # HEALPix pixel window function
+assert abs(float(window[0]) - 1.0) < 1e-6 and float(window[-1]) < 0.9
 ```
 
-Use `smoothalm` when you want to keep a coefficient-space pipeline;
-`smoothmap` analyzes, filters, and synthesizes in one call. `smoothmap` also
-accepts `beam=` or `beam_window=` when the transfer function is measured rather
-than Gaussian.
+The pixel window \(W_\ell\) is the transfer function of averaging over a
+HEALPix pixel. Its tables are embedded package data for `nside` 8 and 16;
+other `nside` values raise rather than approximate.
 
-## Spin transforms
+### Polarization (Spin 2)
 
-Spin-2 (Q/U) analysis takes a `(2, npix)` tensor and returns the two coefficient
-sets. Synthesis takes that pair back to maps. Only integer, non-negative spins
-are accepted.
+Polarization \(Q \pm iU\) has spin \(\pm 2\); its transform yields gradient
+(E) and curl (B) coefficients, which, unlike \(Q\) and \(U\), do not depend
+on the coordinate frame. `map2alm(iqu, pol=True)` returns `(3, nalm)`
+coefficients in `(T, E, B)` order.
+`map2alm_spin(qu, spin=2)` works on a `(2, npix)` Q/U pair and returns the
+(E, B) pair; `alm2map_spin` goes back. Spins must be non-negative integers.
 
 <!-- docs: run -->
 ```python
@@ -167,92 +186,120 @@ import torch
 import torchsky.sphere as sphere
 
 torch.manual_seed(3)
-nside, lmax = 16, 8
-npix = 12 * nside**2
-qu = torch.randn(2, npix, dtype=torch.float64)
+nside, lmax = 16, 24
+cl = torch.ones(lmax + 1, dtype=torch.float64)
+cl[:2] = 0.0
+teb = torch.zeros(3, sphere.alm_size(lmax), dtype=torch.complex128)
+teb[1] = sphere.synalm(cl, lmax=lmax)                   # pure E mode
+iqu = sphere.alm2map(teb, nside, lmax=lmax, pol=True)
 
-alm_p, alm_m = sphere.map2alm_spin(qu, spin=2, nside=nside, lmax=lmax)
-qu_back = sphere.alm2map_spin(
-    (alm_p, alm_m), nside=nside, spin=2, lmax=lmax
-)
-
-assert alm_p.shape == alm_m.shape
-assert qu_back.shape == qu.shape
-print(float(alm_p.abs().max()))
+e, b = sphere.map2alm_spin(iqu[1:], 2, nside=nside, lmax=lmax, iter=3)
+assert float((e - teb[1]).abs().max()) < 1e-3          # E recovered
+assert float(b.abs().max()) < 1e-3                      # no B leaks in
+assert sphere.alm2map_spin((e, b), nside=nside, spin=2, lmax=lmax).shape == (2, 12 * nside**2)
 ```
 
-## Bandlimit, precision, and devices
+### Masked Skies: Pseudo-\(C_\ell\)
 
-`lmax` up to `3 * nside - 1` is supported at every `nside` (checked against
-healpy at `nside` 512, 1024 and 2048, `lmax = 6143`). The scalar Legendre
-recurrence carries a per-(m, ring) power-of-`2**256` exponent, so the sectoral
-seed `sin(theta)**m` never underflows float64 (it did for `lmax` above about
-1900 when `mmax` was large); rings in the classically forbidden region
-`m > lmax * sin(theta) + margin` are skipped with a WKB-derived margin (the
-dropped weight is below `e**-90`). The torch path used on other devices applies
-the same scaling in chunks.
+A mask couples multipoles: the spectrum of a masked map, the *pseudo*-\(C_\ell\),
+is \(\tilde C_\ell = \sum_{\ell'} M_{\ell\ell'} C_{\ell'}\), with a coupling
+matrix \(M\) set by the mask's own spectrum. Dividing by \(f_\mathrm{sky}\)
+(as in the Planck example) is the zeroth-order correction. The MASTER method
+inverts \(M\) on bandpowers:
+[`ModeCouplingWorkspace`](../reference/sphere.md#torchsky.sphere.ModeCouplingWorkspace)
+computes it exactly in correlation space, without an \(\ell \times \ell\)
+kernel, for scalar and spin-2 fields on CAR grids
+([`CARGeometry`](../reference/sphere.md#torchsky.sphere.CARGeometry)).
+[`PseudoClField`](../reference/sphere.md#torchsky.sphere.PseudoClField)
+carries the map, mask, beam, pixel window, and optional E/B purification and
+template deprojection.
 
-MPS has no float64: the Legendre recurrence of the spin-weighted transforms
-(`map2alm_spin`, `alm2map_spin`, and the `pol=True` paths) runs on the host in
-float64 and returns float32/complex64 tensors on the MPS device.
+<!-- docs: run -->
+```python
+import torch
 
-## Least-squares analysis
+import torchsky.sphere as sphere
+from torchsky.sphere import (BandpowerBinning, CARGeometry, ModeCouplingWorkspace,
+                             PseudoClField, coupled_spectra, synthesize)
 
-`map2alm_lsq(map_values, lmax, mmax=None, *, nside=None, pol=True, tol=1e-10,
-maxiter=20, nest=False)` iterates until the map-domain residual meets `tol`.
-It returns `(alm, rel_res, n_iter)`, which is useful when quadrature accuracy is
-the bottleneck or when you need the residual as a diagnostic. The default
-`pol=True` expects `(3, npix)` input; pass `pol=False` for a scalar map.
+torch.manual_seed(0)
+lmax = 16
+nlat, nlon = 2 * lmax + 1, 4 * lmax + 1
+geometry = CARGeometry.from_header({
+    "NAXIS1": nlon, "NAXIS2": nlat, "CTYPE1": "RA---CAR", "CTYPE2": "DEC--CAR",
+    "CRVAL1": 0.0, "CRVAL2": 0.0, "CRPIX1": 1.0, "CRPIX2": (nlat + 1.0) / 2.0,
+    "CDELT1": 360.0 / nlon, "CDELT2": -180.0 / (nlat - 1),
+}, spin_convention="iau")
 
-## Explicit SHT contracts
+lat = geometry.latitudes(dtype=torch.float64, device="cpu")       # one per row
+mask = torch.sigmoid((lat.abs() - 0.44) / 0.15).reshape(-1, 1).expand(geometry.shape)  # |b| > 25 deg
 
-The low-level SHT surface separates geometry, operation, and backend instead of
-assuming HEALPix everywhere. `SHTRequest` binds a geometry
-([`HEALPixGeometry`](../reference/sphere.md#torchsky.sphere.HEALPixGeometry) or
-[`CARGeometry`](../reference/sphere.md#torchsky.sphere.CARGeometry)), a bandlimit,
-and a convention; `synthesize`, `adjoint_synthesize`, `analyze`, and
-`pseudo_analyze` dispatch through a backend that reports
-`SHTBackendCapabilities`. Unsupported combinations fail explicitly: for example
-`CARGeometry` accepts only separable, unrotated, full-longitude CAR grids with
-Clenshaw-Curtis or Fejer-1 latitude centers.
+ell = torch.arange(lmax + 1, dtype=torch.float64)
+cl_true = 1.0 / (ell + 3.0) ** 2
+binning = BandpowerBinning.from_edges([2, 6, 10, 17], lmax)
+estimates, workspace = [], None
+for _ in range(30):
+    sky = synthesize(sphere.synalm(cl_true, lmax=lmax), geometry, lmax=lmax).values
+    field = PseudoClField(sky, mask, geometry, lmax)
+    if workspace is None:                         # the mask fixes the coupling
+        workspace = ModeCouplingWorkspace.from_fields(field, None, binning)
+    estimates.append(workspace.decouple(coupled_spectra(field)))
 
-This is the entry point for matrix-free and differentiable workflows that cannot
-be expressed as a HEALPix map, and for checking that an optional backend supports
-the operation before running it.
+ratio = torch.stack(estimates).mean(0) / binning.bin(cl_true)
+assert bool(((ratio - 1.0).abs() < 0.25).all())   # unbiased within the scatter of 30 skies
+```
 
-## Execution and memory
+### Explicit Geometry and Backends
 
-The scalar path uses ring FFTs plus Legendre recurrences, with an optional fused
-CPU kernel and a pure-PyTorch fallback. The spin path keeps the map on the
-device and uses in-process FFTs on CPU. Tuning knobs:
+[`SHTRequest`](../reference/sphere.md#torchsky.sphere.SHTRequest) binds a
+geometry ([`HEALPixGeometry`](../reference/sphere.md#torchsky.sphere.HEALPixGeometry)
+or `CARGeometry`), a bandlimit, and a spin convention; `synthesize`,
+`adjoint_synthesize`, `analyze`, and `pseudo_analyze` dispatch through a
+backend that reports its `SHTBackendCapabilities`. Unsupported combinations
+fail: `CARGeometry`, for example, accepts only separable, unrotated,
+full-longitude grids with Clenshaw-Curtis or Fejér-1 latitude rings. This is
+the entry point for matrix-free and differentiable solvers whose maps are not
+HEALPix.
 
-| Variable | Default | Effect |
-|---|---|---|
-| `TORCHSKY_SCALAR_MAX_CACHE_BYTES` | `512 MiB` | Basis-matrix cache budget |
-| `TORCHSKY_SCALAR_RING_AUTO_MIN_BYTES` | `64 MiB` | Map size above which the ring path is chosen |
-| `TORCHSKY_SPIN_RING_AUTO_MIN_BYTES` | `32 MiB` | Spin ring-path threshold |
-| `TORCHSKY_SPIN_THREADS` | unset | Cap the CPU spin `m`-pool |
-| `TORCHSKY_SHT_PROFILE` | unset | Print spin timing diagnostics to stderr |
+## Devices, Precision, and Memory
 
-Memory grows with `nside` and `lmax`; the cache knobs bound the reusable basis
-matrices rather than the maps or coefficients. Comparative throughput evidence
-is maintained in `torchsky-harness`, not here.
+CPU uses fused C++ kernels; CUDA and MPS use an ATen ring-FFT path and keep
+maps on the device. `TORCHSKY_DISABLE_CPP=1` selects the pure-torch path with
+the same results. `lmax` up to \(3N_\mathrm{side} - 1\) works at every `nside`: the Legendre
+recurrence carries a power-of-\(2^{256}\) exponent per (m, ring), so the
+sectoral seed \(\sin^m\theta\) never underflows float64, and rings where
+\(m > \ell_\mathrm{max} \sin\theta\) plus a WKB margin are skipped (dropped
+weight below \(e^{-90}\)). MPS has no float64: the spin-weighted Legendre
+recurrence runs on the host in float64 and returns float32/complex64 tensors
+on the MPS device.
 
-## Boundaries and gotchas
+`TORCHSKY_SCALAR_MAX_CACHE_BYTES` (default 512 MiB) bounds the cached basis
+matrices; `TORCHSKY_SPIN_THREADS` caps the CPU spin thread pool.
 
-- `pol=True` requires `(3, npix)` maps and `(3, nalm)` alms in `(T, E, B)`
-  order; the shapes are validated, not inferred.
-- `rotate_alm` requires `mmax == lmax` and uses the healpy zyz Euler convention.
-- `map2alm_spin` and `alm2map_spin` accept non-negative integer spins only.
-- `pixwin` uses bundled tables for standard `nside` values and rejects unsupported
-  sizes instead of approximating.
-- `TORCHSKY_DISABLE_CPP=1` keeps identical semantics with the pure-PyTorch
-  fallback; do not quote native performance numbers from that run.
+## Accuracy and Validation
 
-## See also
+Transforms, spectra, beams, and pixel windows are checked against healpy in
+[torchsky-harness](https://github.com/astroai/torchsky-harness), at
+`nside` 512, 1024, and 2048 up to `lmax = 6143`; see the
+[parity page](../performance/parity.md). Mode-coupling matrices are tested
+against direct Wigner-3j sums.
 
-- [Sphere and HEALPix guide](index.md)
-- [`torchsky.sphere` reference](../reference/sphere.md)
-- [healpy compatibility reference](../reference/sphere-compat.md)
-- [Multi-order coverage and sparse maps](moc.md)
-- [Scientific evaluation ownership](../performance/benchmarks.md)
+## Pitfalls
+
+- **`pol=True` shapes are validated, not inferred:** `(3, npix)` maps and
+  `(3, nalm)` coefficients in `(T, E, B)` order.
+- **Monopole and dipole** dominate many real maps and leak under a mask;
+  remove them first with `remove_monopole_dipole`.
+- **`rotate_alm`** requires `mmax == lmax` and uses the healpy ZYZ Euler
+  convention.
+- **NESTED maps** need `nest=True`; analysis reorders internally.
+
+## See Also
+
+- [HEALPix](healpix.md), [MOC](moc.md) (masks and \(f_\mathrm{sky}\)), [Celestial sphere overview](index.md).
+- [Fields](../models/fields.md): harmonic sky models fitted with gradients.
+- Reference: [`torchsky.sphere`](../reference/sphere.md),
+  [healpy-shaped `compat`](../reference/sphere-compat.md).
+- Examples: [Planck power spectrum](../published-examples/planck_power_spectrum.py),
+  [SHT power spectrum](../published-examples/sht_power_spectrum.py),
+  [T/E/B polarization](../published-examples/polarization_teb.py).

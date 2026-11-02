@@ -1,322 +1,193 @@
-# Encoders and ML
-<!-- TODO(0.5.0 docs): intro -->
+# Encoders
 
+!!! warning "Experimental surface"
+    `torchsky.encoders` is experimental. Feature layouts, constructor
+    arguments, and the contents of saved buffers may change between minor
+    releases without a deprecation period, which makes old checkpoints
+    unloadable. There are no pretrained weights and no claim of accuracy on
+    real catalogues.
 
-`torchsky.encoders` provides differentiable feature encoders and measurement-set
-primitives; `torchsky.transforms` provides tensor image transforms for training
-pipelines. File-backed datasets belong to `torchfits` or to your application.
+An **encoder** turns astronomical inputs into fixed-length feature vectors
+that a neural network can use. Neural networks learn fine structure poorly
+from raw coordinates or from catalogue rows with missing values; an encoder
+supplies multi-scale features of sky position and wavelength, or a single
+latent vector summarizing a variable-length set of photometric measurements.
+All encoders are `torch.nn.Module`s or tensor functions: they run on the input's
+device and pass gradients.
 
-!!! note "Stability"
-    Encoders sit closer to the experimental field work than to the core WCS and
-    mapmaking API. There are no pretrained weights and no demonstrated
-    astronomical accuracy claims.
+| Encoder | Input | Output |
+|---|---|---|
+| [`harmonic_sky_encoding`](../reference/encoders.md#torchsky.encoders.harmonic_sky_encoding) | RA, Dec | 9 low-order polynomials on the unit sphere |
+| [`log_spectral_encoding`](../reference/encoders.md#torchsky.encoders.log_spectral_encoding) | wavelength or frequency | sines and cosines of \(\ln\lambda\) at octave scales |
+| [`SkyCoordinateEncoder`](../reference/encoders.md#torchsky.encoders.SkyCoordinateEncoder) | RA, Dec, optional λ | both of the above plus spherical Fourier features |
+| [`PhotometryEncoder`](../reference/encoders.md#torchsky.encoders.PhotometryEncoder) | a set of flux measurements per object | one latent vector per object and a support flag |
+| [`MaskedSetFusion`](../reference/encoders.md#torchsky.encoders.MaskedSetFusion) | a set of latent vectors (bands, surveys, modalities) | one fused latent |
+| [`BinnedRedshiftHead`](../reference/encoders.md#torchsky.encoders.BinnedRedshiftHead) | a latent vector | a binned redshift probability distribution |
 
-## Sky And Wavelength Encoders
+Use sky encoders when you build your own continuous sky model; most users meet
+them inside [fields](fields.md). Use the photometry encoder and redshift head
+for catalogue-level learning such as photometric redshifts, where each object
+has a different set of bands, surveys, and upper limits.
 
-Use encoders when building continuous fields or learned models that need
-sky-aware, harmonic, Fourier, or wavelength-aware features: `SkyCoordinateEncoder`,
-`SirenImplicitField`, `harmonic_sky_encoding`, and `log_spectral_encoding`.
-Encoders preserve tensor-native execution and device placement, and coordinate
-and wavelength features should be scaled to the domain being modelled rather than
-copied blindly from generic vision models. Most users meet them through
-[`torchsky.field`](fields.md) models:
+## How It Works
 
-```python
-# fragment: field_observations is a list of torchsky.field.FieldObservation
-from torchsky import field
+**Sky and wavelength features.** Positions become unit vectors
+\((x, y, z)\) on the sphere, which have no wrap at RA = 360° and no
+singularity at the poles. Fourier features
+\(\sin(2^k \omega_0 \cdot), \cos(2^k \omega_0 \cdot)\) at octave scales
+\(k = 0, \dots, K-1\) let a small network represent structure at many angular
+scales. The lowest frequency \(\omega_0\) (`min_frequency`) should match the
+field: about \(2\pi/\theta\) for a patch of angular size \(\theta\), so that the
+octaves cover structure inside the patch rather than whole-sky modes.
 
-domain = field.estimate_domain(field_observations, coord_mode="sphere_xyz")
-model = field.model("sky_encoder_mlp", domain)
+**Measurement sets.** An object's photometry is a set of **tokens**, one per
+measurement: a flux, its error, and integer identifiers of passband, survey,
+measurement method, and detection status. Each token is embedded by a small
+network and the set is pooled with learned attention over the valid tokens, so
+the result does not depend on token order or on how many measurements an
+object has.
+
+```mermaid
+flowchart LR
+    T["tokens: flux, error,<br/>passband, survey, status, epoch"] --> E["per-token MLP<br/>asinh(flux/scale)"]
+    E --> P["masked attention pooling"]
+    P --> L["latent + supported"]
+    L --> H["BinnedRedshiftHead<br/>p(z) over bins"]
 ```
 
-`field_observations` must be `FieldObservation` objects, not the image-plane
-`ImageObservation` used for coadds.
+## Assumptions
 
-## Photometry Encoding And Fusion
+- Encoders compute features only. Matching sources between catalogues,
+  choosing training labels and splits, and recording provenance are the
+  application's responsibility.
+- Integer identifiers (passband, survey, method) index the caller's
+  vocabularies. They are not global, so save the vocabulary with the model.
+- Flux scales and epoch normalization are model buffers saved in
+  `state_dict`. Fit any data-dependent scale on training data only.
 
-`torchsky.encoders` provides differentiable measurement-set primitives. They consume
-already selected observation tensors; catalogue association, release provenance,
-training splits, and label policy remain application responsibilities.
+## Sky Features for a Small Field
 
-### Measurement tokens
+<!-- docs: run -->
+```python
+import math
 
-`PhotometryEncoder` accepts tensors of shape `(..., measurements)` and returns
-`(latent, supported)` with shapes `(..., latent_dim)` and `(...)`. The leading
-dimensions can be objects, objects × association hypotheses, or ordinary batches.
-Its content representation has no absolute sky coordinates.
+import torch
+
+from torchsky.encoders import SkyCoordinateEncoder
+
+ra = 150.0 + 0.01 * torch.rand(1000, dtype=torch.float64)          # 36 arcsec patch
+dec = 2.0 + 0.01 * torch.rand(1000, dtype=torch.float64)
+wave = torch.full((1000,), 6000.0, dtype=torch.float64)
+
+encoder = SkyCoordinateEncoder(num_fourier_frequencies=6, min_frequency=2 * math.pi / math.radians(0.01))
+features = encoder(ra, dec, wavelength=wave)
+network = torch.nn.Sequential(torch.nn.Linear(features.shape[-1], 32), torch.nn.SiLU(), torch.nn.Linear(32, 1)).double()
+assert network(features).shape == (1000, 1)
+```
+
+## Recipes
+
+### Encode Photometry and Predict a Redshift Distribution
 
 <!-- docs: run -->
 ```python
 import torch
-from torchsky.encoders import PhotometryEncoder, BinnedRedshiftHead
 
-encoder = PhotometryEncoder(
-    num_passbands=3, num_surveys=2, flux_scale=[10., 10., 20.], latent_dim=32
-)
-flux = torch.tensor([[8., -2., 30.], [float("nan"), 6., 0.]])
-error = torch.tensor([[1., 2., float("nan")], [float("nan"), 1., 0.]])
-mask = torch.tensor([[True, True, True], [False, True, False]])
+from torchsky.encoders import BinnedRedshiftHead, PhotometryEncoder
+
+encoder = PhotometryEncoder(num_passbands=3, num_surveys=2, flux_scale=[10.0, 10.0, 20.0], latent_dim=32)
+flux = torch.tensor([[8.0, -2.0, 30.0], [float("nan"), 6.0, 0.0]])
+error = torch.tensor([[1.0, 2.0, float("nan")], [float("nan"), 1.0, 0.0]])
+mask = torch.tensor([[True, True, True], [False, True, False]])     # False = padding
 latent, supported = encoder(
     flux, error,
     passband_id=torch.tensor([[0, 1, 2], [-1, 1, -1]]),
     survey_id=torch.tensor([[0, 0, 1], [-1, 0, -1]]),
-    status=torch.tensor([[0, 0, 1], [-1, 0, -1]]),
-    epoch=torch.tensor([[2016., 2016., float("nan")], [0., 2016., 0.]]),
+    status=torch.tensor([[0, 0, 1], [-1, 0, -1]]),                  # 1 = upper limit
+    epoch=torch.tensor([[2016.0, 2016.0, float("nan")], [0.0, 2016.0, 0.0]]),
     mask=mask,
 )
-head = BinnedRedshiftHead(32, [0., 0.2, 0.5, 1., 2., 4.])
+head = BinnedRedshiftHead(32, [0.0, 0.2, 0.5, 1.0, 2.0, 4.0])
 logits = head(latent, supported=supported)
 loss = -head.log_prob(logits, torch.tensor([0.4, 1.2])).mean()
 loss.backward()
 ```
 
-The observation contract is explicit:
-
 | Input | Meaning |
 |---|---|
-| `flux` | Measured signed flux, or an upper-limit threshold. Observed values must be finite. |
-| `error` | Positive finite uncertainty in the same unit as flux; NaN or `None` means unknown. |
-| `passband_id` | Integer index into the caller's passband vocabulary. |
-| `survey_id` | Integer index into the caller's survey/release vocabulary. |
-| `method_id` | Integer measurement-method vocabulary; omitted values default to method zero. |
-| `status` | Zero for a detection, one for an upper-limit threshold. Default is detection. |
-| `epoch` | Decimal observation year; NaN or `None` means unknown. Never substitute coordinate equinox. |
-| `mask` | Boolean observation availability. False means padding, not a nondetection or unknown error. |
+| `flux` | Signed flux, or the threshold of an upper limit; finite where observed |
+| `error` | Positive uncertainty in the same unit; `NaN` means unknown |
+| `passband_id`, `survey_id`, `method_id` | Indices into the caller's vocabularies |
+| `status` | 0 for a detection, 1 for an upper limit |
+| `epoch` | Decimal year of the observation; `NaN` means unknown |
+| `mask` | `False` for padding, not for a non-detection |
 
-An upper limit must already have been expressed as a flux threshold. Its
-confidence convention must be fixed in the application schema or distinguished
-through the measurement-method vocabulary. Unknown errors and epochs each have
-their own availability feature; their placeholder zero does not mean zero noise
-or the reference epoch. Non-observation reasons such as outside footprint,
-masked image, or unavailable processing belong in the catalogue coverage table;
-this content encoder excludes those tokens rather than treating them as zero flux.
+Continuous features are \(\operatorname{asinh}(f/s)\) and
+\(\ln(1 + \sigma/s)\) with one scale \(s\) per passband (`flux_scale`), so
+negative and very bright fluxes stay finite. Unknown errors and epochs carry
+their own availability flag; a placeholder zero never means zero noise.
 
-`flux_scale` supplies one positive value per passband, in that passband's flux
-unit. Continuous token features use signed `asinh(flux / scale)`,
-`log1p(error / scale)`, error availability, scaled epoch, and epoch availability.
-Categorical embeddings retain filter, survey, method, and detection status.
-An MLP followed by learned masked set pooling produces the object latent. Pooling
-also receives measurement count. Its work is linear in the number of tokens for
-a fixed latent size; batching remains the application's responsibility.
+`log_prob` evaluates a piecewise-uniform density: bin probability divided by
+bin width. Bins are left-closed, the last also right-closed; a target outside
+the bins has log probability \(-\infty\).
 
-Save the passband definitions, physical units, survey release IDs, method and
-limit conventions, and vocabulary ordering alongside the model checkpoint.
-Scaling values and epoch reference/scale are model buffers saved in `state_dict`.
-Fit any data-dependent scaling on training data only. New vocabulary entries need
-an explicit checkpoint migration or retraining; integer IDs are not global IDs.
+### Fuse Other Modalities
 
-### Fusion and optional sky context
+[`MaskedSetFusion`](../reference/encoders.md#torchsky.encoders.MaskedSetFusion)
+pools any set of latent vectors of shape `(..., items, latent_dim)` with a
+mask, for example image, spectrum, and photometry latents mapped to a common
+size. Fully masked sets give a zero latent with `supported=False`; pass that
+flag on, because the head rejects unsupported rows.
 
-`MaskedSetFusion(latent_dim)` also accepts arbitrary modality embeddings with
-shape `(..., items, latent_dim)` and an optional boolean mask `(..., items)`.
-This can fuse externally encoded image/spectrum/time-series or per-survey
-latents after they have been mapped to a shared dimension. It is permutation
-invariant and padding-safe. Its learned attention weights do not establish
-counterpart identity and are not calibrated association probabilities.
+### Average Over Cross-Match Hypotheses
 
-Empty or fully masked sets produce a finite zero latent and `supported=False`.
-Pass support into a prediction head, or select supported rows before prediction;
-`BinnedRedshiftHead(...)(latent, supported=supported)` rejects unsupported rows.
-An unsupported zero latent is not an astrophysical prior.
-
-For an optional position branch, reuse `harmonic_sky_encoding` or
-`SkyCoordinateEncoder` from the same namespace and concatenate projected context
-in application code. Preserve original astrometric coordinates and covariances
-for matching. Compare content-only, simple positional context, and multiscale
-context using spatial and survey holdouts before choosing a positional encoding.
-Preserve gradient/device behavior by moving the model and input tensors together;
-photometry pooling operates in the model dtype.
-
-### Conditional redshift distributions
-
-`BinnedRedshiftHead(latent_dim, bin_edges)` returns logits representing bin
-probability masses. `log_prob(logits, redshift)` evaluates a piecewise-uniform
-density, including division by bin width. Bins are left-closed/right-open, except
-the final edge is included in the final bin. Finite targets outside the bin
-support have log probability `-inf`; reject such targets or expand the scientific
-support before training. Probability density can exceed one for narrow bins.
-The head supports nonuniform bins and does not collapse multimodal redshift
-uncertainty to a point. Model fitting alone does not establish calibration.
-
-`marginalize_association_logits(logits, association_weights, hypothesis_mask=None)`
-combines conditional distributions for mutually exclusive association hypotheses.
-Its shapes are `(..., hypotheses, bins)`, `(..., hypotheses)`, and an optional
-boolean `(..., hypotheses)`; its result is log bin masses `(..., bins)`.
+When a source has several possible counterparts,
+[`marginalize_association_logits`](../reference/encoders.md#torchsky.encoders.marginalize_association_logits)
+mixes the redshift distributions of each hypothesis with their weights. This
+averages probabilities, not embeddings, which would give a different answer.
 
 <!-- docs: run -->
 ```python
 import torch
+
 from torchsky.encoders import marginalize_association_logits
 
-conditional_logits = torch.tensor([[[2., 0.], [0., 2.]]])
-association_weights = torch.tensor([[0.75, 0.25]])
-log_bin_mass = marginalize_association_logits(
-    conditional_logits, association_weights
-)
-assert torch.allclose(log_bin_mass.exp().sum(-1), torch.ones(1))
+conditional_logits = torch.tensor([[[2.0, 0.0], [0.0, 2.0]]])      # 2 hypotheses x 2 bins
+weights = torch.tensor([[0.75, 0.25]])
+log_mass = marginalize_association_logits(conditional_logits, weights)
+torch.testing.assert_close(log_mass.exp().sum(-1), torch.ones(1))
 ```
 
-Weights must be finite, nonnegative, and contain positive mass per object; they
-are normalized over supplied hypotheses. Include no-match and blend hypotheses
-when scientifically required, with their own supported conditional models.
-If omitted, the result is conditional on the retained hypotheses. Ranking scores
-cannot become calibrated association probabilities through normalization.
-Masked or zero-weight hypotheses may contain arbitrary logits; positive-weight
-hypotheses must have finite logits. All hypotheses must share the same redshift
-bins. Averaging embeddings instead would generally predict a different distribution.
+Include "no match" and blend hypotheses with their own models when they are
+possible; otherwise the result is conditional on the hypotheses supplied.
 
-Real-data evaluation still needs reviewed association truth, representative
-spectroscopic labels, lineage/spatial/survey splits, missing-modality tests,
-out-of-distribution checks, and probability calibration. These primitives do not
-provide an automatic scientific training pipeline.
+### A Catalogue Photometric-Redshift Application
 
-### Runnable catalogue photo-z pilot
-
-[`examples/applications/catalogue_photoz.py`](https://github.com/astroai/torchsky/blob/main/examples/applications/catalogue_photoz.py) is a small CPU
-application demonstrating training, prediction and evaluation against a pinned
-`xmatch.observations.release.v1` directory. It requires the existing optional
-Polars/PyArrow dependencies (`pixi run -e test`) and never imports `xmatch`.
-
-Two application-selected Parquet inputs make identity and supervision explicit:
-
-| File | Required columns |
-|---|---|
-| Memberships | `source_id`, `object_id`, `split`, `split_group` (strings) |
-| Labels | `object_id`, `redshift`, `evidence_id`, `category` |
-
-`source_id` must match the namespaced identity in the observation inventory.
-Each native source occurs once, each object has one split and lineage group,
-and every lineage group stays within one split. Allowed splits are `train`,
-`validation`, and `test`. Assign `split_group` from complete object/association/
-blend lineage before exporting memberships; the example validates the supplied
-groups but cannot discover missing lineage information. Memberships select one
-association hypothesis per source. Ambiguous alternatives need an explicit
-application policy or the hypothesis-mixture primitive above.
-
-Labels require finite redshifts, nonempty evidence IDs, and category
-`inferred_spectroscopy`. Select one reviewed redshift per object explicitly;
-the application rejects duplicate labels and labels outside the membership set.
-Photometric predictions are rejected as label evidence for this benchmark.
-The evidence ID is an audit reference, not independent proof of spectroscopic
-quality: selection, spectral quality and source-population suitability remain
-the application's responsibility. An object can have no label; its target mask
-then remains false, while its photometry remains available for prediction.
+[`examples/applications/catalogue_photoz.py`](https://github.com/astroai/torchsky/blob/main/examples/applications/catalogue_photoz.py)
+trains, predicts, and evaluates a photo-z model from a directory of photometry
+shards, a membership table (`source_id`, `object_id`, `split`, `split_group`),
+and spectroscopic labels (`object_id`, `redshift`, `evidence_id`, `category`).
+It streams a Parquet feature cache through Polars and Arrow, keeps lineage
+groups within one split, pins every input by hash in the checkpoint, and reports
+NLL, outlier fraction, PIT histograms, and interval coverage on the test split.
+It needs the `test` environment and your own data:
 
 ```bash
 pixi run -e test -- python examples/applications/catalogue_photoz.py train \
-  --release /data/observations-dr1 \
-  --memberships /data/memberships.parquet --labels /data/spec-labels.parquet \
-  --feature-cache /data/photoz-features \
-  --checkpoint /data/photoz.pt --epochs 20 --bin-edges 0,0.2,0.5,1,2,4,6
-
-pixi run -e test -- python examples/applications/catalogue_photoz.py predict \
-  --release /data/observations-dr1 --memberships /data/memberships.parquet \
-  --feature-cache /data/photoz-features \
-  --checkpoint /data/photoz.pt --output /data/predictions.parquet
-
-pixi run -e test -- python examples/applications/catalogue_photoz.py evaluate \
-  --release /data/observations-dr1 \
-  --memberships /data/memberships.parquet --labels /data/spec-labels.parquet \
-  --feature-cache /data/photoz-features \
-  --checkpoint /data/photoz.pt --split test --output /data/test-metrics.json
+  --release /data/observations-dr1 --memberships memberships.parquet \
+  --labels spec-labels.parquet --feature-cache photoz-features \
+  --checkpoint photoz.pt --epochs 20 --bin-edges 0,0.2,0.5,1,2,4,6
 ```
 
-The loader verifies manifest shard checksums, schemas and counts, and validates
-membership/label identities. Native photometry is the only model input. Raw
-inventory fields, redshift/type proxies and label evidence never become feature
-columns. Only measured flux and explicit upper limits enter the content encoder;
-other availability states remain absent observations. Epoch features are used
-only for declared `jyear` times; other time conventions remain unknown in this
-pilot. Passband IDs are namespace-qualified, conservatively preserving filters
-with identical names in different instruments.
+The bundled synthetic check shows the pipeline learns and reloads correctly;
+it does not establish photo-z accuracy on a real survey.
 
-The workflow builds an object-sorted Parquet feature cache once through a lazy
-left join of selected memberships with whitelisted photometry columns. The left
-join preserves sources with no usable measurements. Cache construction uses
-Polars' streaming sink and global object/measurement ordering. Each epoch then
-reads that cache once through sequential Arrow batches, reconstructing complete
-objects across batch boundaries. Labels are sorted separately and joined through
-a sequential cursor; they never enter the feature cache.
+### Image Transforms for Training
 
-Use `--feature-cache` to persist and reuse the cache across train/predict/evaluate
-commands. Its manifest records selection/schema conventions, input-release and
-membership hashes, row count, schema and content checksum. Reuse requires matching
-input identities and an unchanged cache checksum; mismatches fail without replacing
-the cache. A new cache is published atomically after successful materialization.
-Without the option, a temporary cache is built once per command and reused across
-its epochs. Persistent caches are preferable for large releases and exact artifact
-reproducibility.
-
-Set `--batch-size` and `--max-measurements` to fit the tensor memory budget. The cap
-applies to both source-membership count and active measurement count per object;
-exceeded caps fail rather than truncate. Active measurement tensors are bounded
-by object batch size times measurement cap; source bookkeeping is also capped.
-This is not a process-RSS guarantee: global validation, joins, sorting, codec
-buffers and scratch disk still need appropriate resources. No full-sky throughput
-or distributed-cache performance has been measured.
-
-The fixed scale `--flux-scale-jy` defaults to `1e-5` Jy per passband, so no
-validation/test observations enter scaling estimation. Checkpoints include model
-weights, explicit bin edges, scales, deterministic vocabularies, seed, training
-NLL history, label policy, and SHA-256 identities of the manifest, memberships and
-label snapshot. Version-2 checkpoints also pin the feature-cache logical identity,
-content checksum and inference-field selection. Reload requires those frozen
-input identities; adding a release
-or remapping vocabularies needs a deliberate migration or retraining. Evaluation
-uses the same frozen labels and only a validation or test split. Output artifacts
-are published atomically without replacing existing files.
-
-Prediction Parquet retains every selected object and stores `supported`, bin
-probability masses `p_z`, and the distribution mean `z_mean`. Unsupported objects
-have null distributions and null means. Support here means at least one usable
-photometry token; it does not establish training-population or out-of-distribution
-support. The footer pins the checkpoint hash,
-input metadata and bin edges. Evaluation reports mean NLL, normalized residual
-bias/RMS, the fraction with `abs(delta_z)/(1+z) > 0.15`, PIT histogram counts, and
-central 50/90-percent interval coverage. Metrics explicitly exclude unsupported
-and unlabelled objects and report their counts; they do not claim calibration.
-
-The synthetic integration check proves that training can learn a simple signal,
-checkpoint reload preserves predictions, token permutation preserves inference,
-labels/proxies do not enter the feature tensors, and invalid identities or
-leaking split groups fail. Cache checks park the original survey shard after
-materialization and verify repeated epochs still work, verify cross-batch group
-assembly and persistent reuse, and reject changed cache contents or memberships.
-It does not establish real-survey photo-z accuracy.
-
-
-## Transforms And Data Boundary
-
-Build a PyTorch `Dataset` or `IterableDataset` that loads with `torchfits`, then
-apply torchsky tensor transforms. Do not hide file I/O inside geometry or model
-objects.
-
-```python
-# fragment: needs FITS files on disk
-import torchfits
-from torch.utils.data import Dataset
-from torchsky.transforms import Compose, RandomCrop, ZScale
-
-
-class ImageDataset(Dataset):
-    def __init__(self, paths):
-        self.paths = paths
-        self.transform = Compose([RandomCrop(256), ZScale()])
-
-    def __len__(self):
-        return len(self.paths)
-
-    def __getitem__(self, index):
-        image, header = torchfits.read(self.paths[index], hdu="auto", return_header=True)
-        return self.transform(image), header
-```
-
-Available transforms are `ZScale`, `AsinhStretch`, `LogStretch`, `PowerStretch`,
-`Normalize`, `MinMaxScale`, `RobustScale`, `RandomCrop`, `CenterCrop`,
-`RandomFlip`, `RandomRotation`, `GaussianNoise`, `PoissonNoise`,
-`PerturbByError`, `ToDevice`, `Compose`, and the factories
-`create_training_transform`, `create_validation_transform`,
-`create_inference_transform`, and `create_display_transform`.
+`torchsky.transforms` holds tensor transforms for image training pipelines
+(`ZScale`, `AsinhStretch`, `RandomCrop`, `RandomFlip`, `PoissonNoise`,
+`PerturbByError`, `Compose`, and others). Load files with torchfits in your
+`Dataset`, then transform:
 
 <!-- docs: run -->
 ```python
@@ -326,14 +197,29 @@ from torchsky.transforms import Compose, MinMaxScale, ZScale
 
 image = torch.randn(64, 64) * 3.0 + 100.0
 scaled = Compose([ZScale(), MinMaxScale()])(image)
-assert scaled.shape == image.shape
-assert float(scaled.min()) >= 0.0 and float(scaled.max()) <= 1.0
+assert scaled.shape == image.shape and 0.0 <= float(scaled.min()) <= float(scaled.max()) <= 1.0
 ```
 
-For massive datasets prefer manifest-backed iterable datasets with explicit
-sharding, bounded prefetch, and deterministic worker partitioning. Measure
-input-pipeline throughput separately from model throughput and report worker
-count, batch size, transfer volume, and peak memory. Wavelength-aware rebinning
-and Doppler shifts live in [Spectra](../spectra/index.md); they are not image
-augmentations. Model comparisons and real-data campaigns live in
-[`torchsky-harness`](https://github.com/astroai/torchsky-harness).
+Wavelength-aware operations (rebinning, Doppler shifts) are spectral
+operations, not augmentations; see [Spectral axes](../spectra/spectral-axes.md).
+
+## Pitfalls
+
+- **Coordinates in float32.** Encode absolute RA/Dec in float64, or subtract
+  the field centre first, as [fields](fields.md) do through their `Domain`.
+- **Equinox is not epoch.** `epoch` is when a flux was measured, not the
+  coordinate equinox of the catalogue.
+- **Vocabulary drift.** Adding a band or survey changes the meaning of integer
+  identifiers; retrain or migrate the checkpoint explicitly.
+- **Unsupported rows.** An object with no usable measurement gets a zero
+  latent; that is not a prior, and its prediction must be skipped.
+
+## See Also
+
+- [Fields](fields.md): continuous sky models built on these features.
+- [Synthetic photometry](../spectra/photometry.md): model fluxes for training
+  sets.
+- [Formulation](formulation.md#implicit-neural-representations): why
+  multi-scale features matter for INRs.
+- Reference: [`torchsky.encoders`](../reference/encoders.md),
+  [`torchsky.transforms`](../reference/transforms.md).
