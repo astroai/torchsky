@@ -2649,12 +2649,20 @@ def test_fit_field_model_supports_bandpass_mc_training() -> None:
         ),
     ]
     observations = []
+    truth_images = []
     for template in templates:
         image = render_field_observation(
             truth_model,
             template,
             num_spectral_samples=7,
         ).detach()
+        truth_images.append(image)
+    # The untrained truth field renders at ~1e-3; at that scale the initial loss
+    # (~3e-6) is already at the optimizer's step noise and "training improves the
+    # fit" is ill-posed on any device. Normalise to unit amplitude.
+    scale = torch.cat([im.reshape(-1) for im in truth_images]).abs().max()
+    for template, image in zip(templates, truth_images, strict=True):
+        image = image / scale
         observations.append(
             FieldObservation(
                 image=image,
