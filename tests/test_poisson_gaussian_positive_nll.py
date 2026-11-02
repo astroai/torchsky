@@ -8,6 +8,7 @@ from scipy.special import gammaln, logsumexp
 from scipy.stats import norm
 import torch
 
+from pg_oracle import law_nll, window
 from torchsky.map.operators.noise import poisson_gaussian_cdf, poisson_gaussian_nll
 
 
@@ -23,6 +24,27 @@ def test_two_count_positive_nll_value_score_and_curvature(dtype, value, rate):
     curvature = torch.autograd.grad(score, r)[0]
     represented_rate = float(r.detach())
     represented_value = float(r.new_tensor(value))
+    lo, hi, side = window(represented_value, represented_rate, 1.0, 1.0, 0.0, 0.5)
+    if (lo, hi, side) != (0, 1, 0):
+        # Support widened by the observation-conditioned window: compare with
+        # an independent autograd sum over exactly the library window.
+        r64 = r.detach().double().requires_grad_()
+        one = r64.new_tensor(1.0)
+        reference = law_nll(
+            r64.new_tensor(represented_value), r64, one, one, one * 0, lo, hi, side
+        )
+        ref_score = torch.autograd.grad(reference, r64, create_graph=True)[0]
+        ref_curvature = torch.autograd.grad(ref_score, r64)[0]
+        tol = 3e-5 if dtype == torch.float32 else 3e-12
+        for a, b in (
+            (actual, reference),
+            (score, ref_score),
+            (curvature, ref_curvature),
+        ):
+            torch.testing.assert_close(
+                a, r.new_tensor(float(b.detach())), rtol=tol, atol=0
+            )
+        return
     ratio = math.exp(represented_value - 0.5)
     expected = -norm.logpdf(represented_value) + math.log1p(represented_rate)
     expected -= math.log1p(represented_rate * ratio)
@@ -44,9 +66,8 @@ def test_two_count_positive_nll_value_score_and_curvature(dtype, value, rate):
 @pytest.mark.parametrize("rate", (1e-30, 1e-6, 0.2, 3.4, 7.3))
 def test_positive_nll_full_mixed_hessian_and_jvp_match_finite_polynomial(dtype, rate):
     parameters = torch.tensor([rate, 0.64, 0.7, -0.2, 0.7 * rate + 0.4], dtype=dtype)
-    radius = 0.5 * (parameters[0] + 1).sqrt() + 0.25
-    lower = int((parameters[0] - radius).clamp_min(0).floor())
-    upper = int((parameters[0] + radius).ceil())
+    lower, upper, side = window(float(parameters[4]), rate, 0.64, 0.7, -0.2, 0.5)
+    assert side == 0
     counts = torch.arange(lower, upper + 1, dtype=dtype)
 
     def actual(p):
@@ -118,7 +139,11 @@ def test_nll_wide_shifted_support_values_match_scipy(dtype, rate, tail_sigma):
 
 def test_joint_mode_retains_density_when_prior_and_gaussian_terms_underflow():
     rate, value = 1e-30, 71.0
-    counts = np.arange(3)
+    # The observation-conditioned window follows the posterior mode (count 3),
+    # not the prior window {0, 1, 2}.
+    lo, hi, _ = window(value, rate, 1.0, 1.0, 0.0, 0.8)
+    assert hi >= 3
+    counts = np.arange(lo, hi + 1)
     expected = _scipy_finite_nll(value, rate, counts)
     # All absolute Gaussian densities underflow, and the Float32 count-two
     # Poisson term underflows too. Their relative joint contribution matters.
@@ -153,13 +178,15 @@ def test_joint_mode_retains_density_when_prior_and_gaussian_terms_underflow():
     torch.testing.assert_close(
         curvature, r.new_tensor(expected_curvature), rtol=3e-12, atol=0
     )
+    # First derivatives stream from posterior moments; only the any-order
+    # modal path (create_graph) rejects its out-of-range intermediates.
+    narrow = torch.tensor(rate, requires_grad=True)
+    loss = poisson_gaussian_nll(
+        torch.tensor(value), narrow, torch.tensor(1.0), tail_sigma=0.8
+    )
+    assert torch.isfinite(torch.autograd.grad(loss, narrow, retain_graph=True)[0])
     with pytest.raises(ValueError, match="modal derivative intermediates"):
-        poisson_gaussian_nll(
-            torch.tensor(value),
-            torch.tensor(rate, requires_grad=True),
-            torch.tensor(1.0),
-            tail_sigma=0.8,
-        )
+        torch.autograd.grad(loss, narrow, create_graph=True)
 
 
 def test_modal_range_value_only_and_forward_ad_contract():
@@ -167,7 +194,8 @@ def test_modal_range_value_only_and_forward_ad_contract():
     # Subnormal modal reference scaling may round before division. The value
     # uses log sums; a requested unrepresentable derivative fails closed.
     value = torch.tensor(93.0)
-    expected = _scipy_finite_nll(float(value), float(rate), np.arange(2))
+    lo, hi, _ = window(float(value), float(rate), 1.0, 1.0, 0.0, 0.5)
+    expected = _scipy_finite_nll(float(value), float(rate), np.arange(lo, hi + 1))
     for context in (torch.no_grad(), torch.inference_mode()):
         with context:
             torch.testing.assert_close(
@@ -204,29 +232,57 @@ def test_device_positive_nll_curvature(device):
 @pytest.mark.parametrize("value", (-1000.0, 1000.0))
 def test_underflowing_modal_reference_conservatively_rejects_derivatives(dtype, value):
     rate = torch.tensor(1e-6, dtype=dtype, requires_grad=True)
-    with pytest.raises(ValueError, match="modal derivative intermediates"):
-        poisson_gaussian_nll(
+    lo, hi, side = window(value, float(rate.detach()), 1.0, 1.0, 0.0, 0.5)
+    if value > 0:
+        # A far outlier has its own window and the exact log pmf: finite
+        # derivatives are available instead of failing closed.
+        assert side == 1 and lo > 100
+        loss = poisson_gaussian_nll(
             rate.new_tensor(value), rate, rate.new_tensor(1.0), tail_sigma=0.5
         )
+        assert torch.isfinite(torch.autograd.grad(loss, rate)[0])
+        counts = np.arange(lo, hi + 1)
+        log_terms = counts * math.log(float(rate)) - float(rate) - gammaln(counts + 1)
+        reference = -logsumexp(log_terms + norm.logpdf(value - counts))
+        torch.testing.assert_close(
+            loss.detach(),
+            rate.new_tensor(reference),
+            rtol=3e-5 if dtype == torch.float32 else 3e-12,
+            atol=0,
+        )
+        return
+    loss = poisson_gaussian_nll(
+        rate.new_tensor(value), rate, rate.new_tensor(1.0), tail_sigma=0.5
+    )
+    assert torch.isfinite(torch.autograd.grad(loss, rate, retain_graph=True)[0])
+    with pytest.raises(ValueError, match="modal derivative intermediates"):
+        torch.autograd.grad(loss, rate, create_graph=True)
     with torch.no_grad():
         torch.testing.assert_close(
             poisson_gaussian_nll(
                 rate.new_tensor(value), rate, rate.new_tensor(1.0), tail_sigma=0.5
             ),
-            rate.new_tensor(_scipy_finite_nll(value, float(rate), np.arange(2))),
+            rate.new_tensor(
+                _scipy_finite_nll(value, float(rate), np.arange(lo, hi + 1))
+            ),
         )
 
 
 def test_shifted_power_intermediate_overflow_fails_closed_for_finite_final_curvature():
     r = torch.tensor(1.2e-19, requires_grad=True)
+    lo, hi, _ = window(50.0, float(r.detach()), 1.0, 1.0, 0.0, 2.0)
+    loss = poisson_gaussian_nll(
+        r.new_tensor(50.0), r, r.new_tensor(1.0), tail_sigma=2.0
+    )
+    assert torch.isfinite(torch.autograd.grad(loss, r, retain_graph=True)[0])
     with pytest.raises(ValueError, match="modal derivative intermediates"):
-        poisson_gaussian_nll(r.new_tensor(50.0), r, r.new_tensor(1.0), tail_sigma=2.0)
+        torch.autograd.grad(loss, r, create_graph=True)
     with torch.no_grad():
         torch.testing.assert_close(
             poisson_gaussian_nll(
                 r.new_tensor(50.0), r, r.new_tensor(1.0), tail_sigma=2.0
             ),
-            r.new_tensor(_scipy_finite_nll(50.0, float(r), np.arange(7))),
+            r.new_tensor(_scipy_finite_nll(50.0, float(r), np.arange(lo, hi + 1))),
         )
     wider = r.detach().double().requires_grad_()
     loss = poisson_gaussian_nll(
@@ -234,7 +290,7 @@ def test_shifted_power_intermediate_overflow_fails_closed_for_finite_final_curva
     )
     score = torch.autograd.grad(loss, wider, create_graph=True)[0]
     curvature = torch.autograd.grad(score, wider)[0]
-    counts = np.arange(7)
+    counts = np.arange(lo, hi + 1)
     logits = counts * math.log(float(wider.detach())) - gammaln(counts + 1)
     prior = np.exp(logits - logsumexp(logits))
     joint = logits + norm.logpdf(50.0 - counts)

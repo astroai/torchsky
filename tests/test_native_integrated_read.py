@@ -911,9 +911,9 @@ def test_checkpoint_bounds_mixture_calls_and_saved_tensors(monkeypatch):
     chunked, chunk_shapes = capture(7)
     assert full_sizes == [64]
     assert call_sizes == [7] * 9 + [1]
-    assert any(
-        len(shape) == 2 and shape[0] == 64 and shape[1] > 12 for shape in full_shapes
-    )
+    # The streaming Poisson--Gaussian Function saves O(pixels) moments, never
+    # (pixel, count) tensors, with or without outer chunking.
+    assert not any(len(shape) == 2 and shape[1] > 12 for shape in full_shapes)
     # Reverse-mode checkpoints save only row inputs, never mixture count axes.
     assert not any(len(shape) == 2 and shape[1] > 12 for shape in chunk_shapes)
     torch.testing.assert_close(chunked, full, rtol=1e-13, atol=1e-13)

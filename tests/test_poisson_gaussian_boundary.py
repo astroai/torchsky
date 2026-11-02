@@ -7,6 +7,7 @@ import pytest
 from scipy.stats import norm, poisson
 import torch
 
+from pg_oracle import law_cdf, window
 from torchsky.map.operators.noise import (
     poisson_gaussian_cdf,
     poisson_gaussian_nll,
@@ -135,8 +136,19 @@ def test_inference_zero_value_survives_unrepresentable_boundary_derivatives(dtyp
     ).log_prob(value)
     torch.testing.assert_close(actual, reference)
     assert bool(torch.isfinite(actual))
-    with pytest.raises(ValueError, match="derivatives exceed the dtype range"):
-        poisson_gaussian_nll(value, rate.requires_grad_(), variance)
+    # First-order right derivative -expm1(450) is representable in float64 only;
+    # the second-order jet (any-order path) overflows in both dtypes.
+    rate.requires_grad_()
+    if dtype == torch.float32:
+        with pytest.raises(ValueError, match="derivatives exceed the dtype range"):
+            poisson_gaussian_nll(value, rate, variance)
+    else:
+        loss = poisson_gaussian_nll(value, rate, variance)
+        assert bool(
+            torch.isfinite(torch.autograd.grad(loss, rate, retain_graph=True)[0])
+        )
+        with pytest.raises(ValueError, match="derivatives exceed the dtype range"):
+            torch.autograd.grad(loss, rate, create_graph=True)
     for context in (torch.no_grad, torch.inference_mode):
         with context():
             torch.testing.assert_close(
@@ -325,10 +337,13 @@ def test_positive_and_zero_rate_lower_cdf_tail_matches_scipy(dtype, rate):
     actual = poisson_gaussian_cdf(
         value, value.new_tensor(rate), value.new_tensor(1.0), tail_sigma=0.5
     )
-    # All these rates retain exactly counts zero and one.
-    counts = np.array([0, 1])
+    lower, upper, side = window(-10.0, rate, 1.0, 1.0, 0.0, 0.5, cdf=True)
+    # Far-below pixels use their own window and the exact unrenormalised pmf;
+    # otherwise the prior window is merged in and renormalised.
+    counts = np.arange(lower, upper + 1)
     weights = poisson.pmf(counts, rate)
-    weights /= weights.sum()
+    if not side:
+        weights /= weights.sum()
     expected = weights @ norm.cdf(-10.0 - counts)
     torch.testing.assert_close(
         actual,
@@ -348,6 +363,25 @@ def test_positive_rate_cdf_tail_first_second_derivatives(dtype, value, rate):
     )
     score = torch.autograd.grad(actual, r, create_graph=True)[0]
     curvature = torch.autograd.grad(score, r)[0]
+    lower, upper, side = window(value, float(r.detach()), 1.0, 1.0, 0.0, 0.5, cdf=True)
+    if (lower, upper, side) != (0, 1, 0):
+        r64 = r.detach().double().requires_grad_()
+        one = r64.new_tensor(1.0)
+        reference = law_cdf(
+            r64.new_tensor(value), r64, one, one, one * 0, lower, upper, side
+        )
+        ref_score = torch.autograd.grad(reference, r64, create_graph=True)[0]
+        ref_curv = torch.autograd.grad(ref_score, r64)[0]
+        tol = 3e-5 if dtype == torch.float32 else 3e-12
+        for got, want in (
+            (actual, reference),
+            (score, ref_score),
+            (curvature, ref_curv),
+        ):
+            torch.testing.assert_close(
+                got, r.new_tensor(float(want.detach())), rtol=tol, atol=0
+            )
+        return
     difference = (
         norm.sf(value) - norm.sf(value - 1)
         if value > 0
@@ -407,9 +441,8 @@ def test_central_cdf_derivative_matches_normalized_density(dtype, rate):
 def test_positive_cdf_mixed_hessian_and_jvp_match_finite_polynomial(dtype, rate):
     parameters = torch.tensor([rate, 0.64, 0.7, -0.2], dtype=dtype)
     value = parameters.new_tensor(0.7 * rate + 0.4)
-    radius = 0.5 * (parameters[0] + 1).sqrt() + 0.25
-    lower = int((parameters[0] - radius).clamp_min(0).floor())
-    upper = int((parameters[0] + radius).ceil())
+    lower, upper, side = window(float(value), rate, 0.64, 0.7, -0.2, 0.5, cdf=True)
+    assert side == 0
     counts = torch.arange(lower, upper + 1, dtype=dtype)
     factorials = parameters.new_tensor(
         [math.factorial(k) for k in range(lower, upper + 1)]
@@ -457,20 +490,23 @@ def test_mode_scaled_cdf_matches_scipy_for_shifted_and_wide_support(
     dtype, rate, tail_sigma
 ):
     r = torch.tensor(rate, dtype=dtype)
-    radius = tail_sigma * (r + 1).sqrt() + tail_sigma**2
-    lower, upper = int((r - radius).clamp_min(0).floor()), int((r + radius).ceil())
-    counts = np.arange(lower, upper + 1)
     # Compare exactly the supplied floating-point rate and retained support.
     values = r + torch.tensor([-2.0, 0.0, 2.0], dtype=dtype) * (r + 1).sqrt()
-    weights = poisson.pmf(counts, float(r))
-    weights /= weights.sum()
-    expected = norm.cdf(values.double().numpy()[:, None] - counts) @ weights
-    torch.testing.assert_close(
-        poisson_gaussian_cdf(values, r, torch.ones_like(r), tail_sigma=tail_sigma),
-        values.new_tensor(expected),
-        rtol=3e-5 if dtype == torch.float32 else 3e-12,
-        atol=0,
-    )
+    for index, value in enumerate(values):
+        lower, upper, side = window(
+            float(value), float(r), 1.0, 1.0, 0.0, tail_sigma, cdf=True
+        )
+        counts = np.arange(lower, upper + 1)
+        weights = poisson.pmf(counts, float(r))
+        if side == 0:
+            weights /= weights.sum()
+        expected = norm.cdf(float(value) - counts) @ weights
+        torch.testing.assert_close(
+            poisson_gaussian_cdf(value, r, torch.ones_like(r), tail_sigma=tail_sigma),
+            value.new_tensor(expected),
+            rtol=3e-5 if dtype == torch.float32 else 3e-12,
+            atol=0,
+        )
 
 
 def test_batched_cdf_support_masks_preserve_scalar_values_and_rate_derivatives():
