@@ -51,6 +51,10 @@ Second release candidate for 0.5.0. Changes since 0.5.0rc1:
 
 ### Fixed
 
+- Integer `amin`/`amax` scatters on MPS (MOC normalisation, one-to-one
+  crossmatch, connected components, response bit planes) no longer need 64-bit
+  Metal atomics, which some Apple GPUs lack ("Failed to create pipeline state
+  object"); they reduce in int32 when values fit and on the CPU otherwise.
 - Without the compiled extension (and on MPS), `query_disc`, RING
   `query_polygon` and `SphericalPolygon.pixelize` no longer scan every sky
   pixel: a torch quadtree descent selects the same pixels as the native path

@@ -14,7 +14,7 @@ from .core import great_circle_distance, lonlat_to_unit_xyz
 from .geom import PixelizedRegion, spherical_polygon_contains
 from .randoms import PreparedRandomSampler, _prepare_moc_random_sampler, sample_randoms
 from .sparse import SparseHealpixMap
-from ..device import _to
+from ..device import _scatter_reduce_int, _to
 
 
 def _order_from_nside(nside: int, *, name: str = "nside") -> int:
@@ -393,8 +393,8 @@ def _normalize_bmoc(uniq: Tensor, flag: Tensor) -> tuple[Tensor, Tensor]:
     group = torch.cumsum(top.to(torch.int64), dim=0) - 1
     ngroups = int(group[-1].item()) + 1
     group_flag = torch.full((ngroups,), 255, dtype=torch.int64, device=s.device)
-    group_flag = group_flag.scatter_reduce(
-        0, group, flag.to(s.device)[idx].to(torch.int64), reduce="amin"
+    group_flag = _scatter_reduce_int(
+        group_flag, 0, group, flag.to(s.device)[idx].to(torch.int64), "amin"
     )
     normalized_uniq = uniq[idx[top]]
     normalized_flag = _to(group_flag, device=flag.device, dtype=torch.uint8)

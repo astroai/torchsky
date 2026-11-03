@@ -295,3 +295,24 @@ def test_public_to_methods_leave_mps_for_cpu_float64() -> None:
     kernel = torch.rand(5, 5)
     psf = PSFSpec(mode="kernel2d", kernel2d=kernel.to("mps"))
     torch.testing.assert_close(psf.to("cpu", torch.float64).kernel2d, kernel.double())
+
+
+@pytest.mark.parametrize("reduce", ["amin", "amax"])
+@pytest.mark.parametrize("big", [False, True])
+def test_scatter_reduce_int_matches_cpu(reduce: str, big: bool) -> None:
+    """int64 min/max scatters agree with CPU on every device, incl. > int32 values."""
+    from torchsky.device import _scatter_reduce_int
+
+    gen = torch.Generator().manual_seed(3)
+    offset = 2**40 if big else 0
+    src = torch.randint(0, 1000, (500,), generator=gen, dtype=torch.int64) + offset
+    index = torch.randint(0, 37, (500,), generator=gen)
+    target = torch.full((37,), 10**6 + offset, dtype=torch.int64)
+    expected = target.scatter_reduce(0, index, src, reduce)
+    devices = ["cpu"] + (["mps"] if torch.backends.mps.is_available() else [])
+    for device in devices:
+        got = _scatter_reduce_int(
+            target.to(device), 0, index.to(device), src.to(device), reduce
+        )
+        assert got.device.type == device and got.dtype == torch.int64
+        assert torch.equal(got.cpu(), expected)

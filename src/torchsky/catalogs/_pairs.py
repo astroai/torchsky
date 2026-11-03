@@ -10,6 +10,8 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
+from ..device import _scatter_reduce_int
+
 FIND_MODES = ("best", "best1", "best2", "all", "symmetric", "mutual")
 JOIN_MODES = ("1and2", "1or2", "all1", "all2", "1not2", "2not1")
 
@@ -69,8 +71,8 @@ def greedy_one_to_one(left: Tensor, right: Tensor, sep: Tensor) -> Tensor:
     big = torch.tensor(n, dtype=torch.int64, device=device)
     while alive.numel() > 0:
         lcur, rcur = lc[alive], rc[alive]
-        min_l = big.expand(n_l).clone().scatter_reduce_(0, lcur, alive, "amin")
-        min_r = big.expand(n_r).clone().scatter_reduce_(0, rcur, alive, "amin")
+        min_l = _scatter_reduce_int(big.expand(n_l).clone(), 0, lcur, alive, "amin")
+        min_r = _scatter_reduce_int(big.expand(n_r).clone(), 0, rcur, alive, "amin")
         take = (min_l[lcur] == alive) & (min_r[rcur] == alive)
         chosen.append(alive[take])
         used_l = torch.zeros(n_l, dtype=torch.bool, device=device)
@@ -160,7 +162,7 @@ def connected_components(n: int, u: Tensor, v: Tensor) -> Tensor:
             return parent
         pu, pv = pu[differ], pv[differ]
         lo, hi = torch.minimum(pu, pv), torch.maximum(pu, pv)
-        parent.scatter_reduce_(0, hi, lo, "amin")
+        parent = _scatter_reduce_int(parent, 0, hi, lo, "amin")
         while True:
             jumped = parent[parent]
             if bool((jumped == parent).all()):

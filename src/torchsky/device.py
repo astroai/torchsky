@@ -204,3 +204,45 @@ def _as_tensor(
     if isinstance(data, torch.Tensor):
         return _to(data, device=device, dtype=dtype)
     return torch.as_tensor(data, dtype=dtype, device=device)
+
+
+_INT32_MIN = -(2**31)
+_INT32_MAX = 2**31 - 1
+
+
+def _scatter_reduce_int(
+    target: torch.Tensor,
+    dim: int,
+    index: torch.Tensor,
+    src: torch.Tensor,
+    reduce: str,
+    *,
+    include_self: bool = True,
+) -> torch.Tensor:
+    """Out-of-place ``target.scatter_reduce`` that is portable for int64 on MPS.
+
+    An int64 ``"amin"``/``"amax"`` scatter on MPS compiles a Metal kernel that
+    needs 64-bit atomics, which some Apple GPUs (and the virtualised GPU of
+    GitHub's macOS runners) lack: pipeline creation fails with
+    ``CompilerError``. On MPS, int64 operands are reduced in int32 when every
+    value fits, which only needs 32-bit atomics and gives identical results;
+    otherwise the reduction runs on the CPU and the result is moved back. Every
+    other device and dtype calls ``scatter_reduce`` unchanged.
+    """
+    if target.device.type != "mps" or target.dtype != torch.int64:
+        return target.scatter_reduce(dim, index, src, reduce, include_self=include_self)
+    src = src.to(torch.int64)
+    fits = True
+    for values in (target, src):
+        if values.numel():
+            lo, hi = torch.aminmax(values)
+            fits = fits and int(lo) >= _INT32_MIN and int(hi) <= _INT32_MAX
+    if fits:
+        reduced = target.to(torch.int32).scatter_reduce(
+            dim, index, src.to(torch.int32), reduce, include_self=include_self
+        )
+        return reduced.to(torch.int64)
+    reduced = target.cpu().scatter_reduce(
+        dim, index.cpu(), src.cpu(), reduce, include_self=include_self
+    )
+    return reduced.to(target.device)
