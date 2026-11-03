@@ -105,16 +105,16 @@ Surveys publish their coverage as MOC files. The
 the SDSS DR9, GALEX AIS NUV, and eROSITA eFEDS coverage MOCs:
 
 ```python
-# fragment: sdss, galex, efeds are MOCs read from the published MOC FITS files
+# fragment: sdss, galex, efeds = MOC.read_fits(...) on the published MOC files
 both = sdss & galex                      # 12994.4 deg^2
 either = sdss | galex                    # 34538.5 deg^2 = 14693.1 + 32839.7 - 12994.4
 triple = both & efeds                    # 137.0 deg^2 of the 159.7 deg^2 eFEDS field
 ```
 
 Areas count cells at the deepest order, so inclusion–exclusion holds exactly.
-`MOC.read_fits` expects an extension named `MOC`; the files published by CDS
-have none, so the example reads the `UNIQ` column with torchfits and calls
-`MOC(uniq)`.
+`MOC.read_fits` reads IVOA MOC files as published by CDS: the `UNIQ` table in
+the extension named `MOC`, or else in the first extension with
+`ORDERING = 'NUNIQ'`. Time MOCs and non-ICRS coverage raise.
 
 ![All-sky survey depth from the SDSS, GALEX and eFEDS MOCs, and a zoom on the eFEDS field](../assets/gallery/examples/survey_footprints_moc.png)
 

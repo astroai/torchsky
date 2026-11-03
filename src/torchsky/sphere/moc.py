@@ -606,15 +606,43 @@ def _hierarchical_polygon_uniq(
     return torch.cat([interior, bndry[c_in]])
 
 
-def _moc_table_hdu(path: str) -> str:
-    """Return the EXTNAME of the IVOA MOC binary table extension, checking it exists."""
+def _moc_table_hdu(path: str, *, spatial_only: bool = False) -> str | int:
+    """Locate the IVOA MOC binary table: ``EXTNAME='MOC'`` or the first extension.
+
+    The IVOA MOC standard puts the table in the first extension and identifies
+    it by ``ORDERING='NUNIQ'`` (``TTYPE1='UNIQ'``); it does not require an
+    ``EXTNAME``. With ``spatial_only``, time and space-time MOCs (``MOCDIM``
+    other than ``SPACE``) and non-ICRS ``COORDSYS`` are rejected.
+    """
     import torchfits
 
     try:
-        torchfits.read_header(path, "MOC")
-    except ValueError as exc:
-        raise ValueError(f"No FITS extension with EXTNAME 'MOC' in {path!r}") from exc
-    return "MOC"
+        header = torchfits.read_header(path, "MOC")
+        hdu: str | int = "MOC"
+    except ValueError:
+        try:
+            header = torchfits.read_header(path, 1)
+        except (ValueError, OSError, IndexError) as exc:
+            raise ValueError(f"No MOC binary table extension in {path!r}") from exc
+        hdu = 1
+        is_table = str(header.get("XTENSION", "")).strip() == "BINTABLE"
+        is_nuniq = str(header.get("ORDERING", "")).strip().upper() == "NUNIQ" or (
+            str(header.get("TTYPE1", "")).strip().upper() == "UNIQ"
+        )
+        if not (is_table and is_nuniq):
+            raise ValueError(
+                f"No MOC table in {path!r}: expected EXTNAME 'MOC' or a first "
+                "binary-table extension with ORDERING='NUNIQ' or a UNIQ column"
+            )
+    dim = str(header.get("MOCDIM", "SPACE") or "SPACE").strip().upper()
+    if spatial_only and dim != "SPACE":
+        raise ValueError(f"{path!r} is a {dim} MOC; only spatial MOCs are supported")
+    coordsys = str(header.get("COORDSYS", "C") or "C").strip().upper()
+    if spatial_only and coordsys != "C":
+        raise ValueError(
+            f"{path!r} has COORDSYS={coordsys!r}; only ICRS ('C') MOCs are supported"
+        )
+    return hdu
 
 
 def _uniq_column_from_table_dict(table: dict) -> Tensor:
@@ -1159,7 +1187,7 @@ class MOC:
         """Read a MOC from an IVOA FITS file through :mod:`torchfits`."""
         from torchfits.table import read_torch as read_table
 
-        hdu = _moc_table_hdu(filename)
+        hdu = _moc_table_hdu(filename, spatial_only=True)
         table = read_table(filename, hdu=hdu)
         uniqs = _uniq_column_from_table_dict(table)
         return cls(uniqs)

@@ -5,7 +5,7 @@ Imaging Survey (NUV) and the eROSITA eFEDS field share, so that a joint
 optical, ultraviolet and X-ray sample can be planned? The three published
 coverage MOCs (IVOA MOC FITS files from the CDS HiPS of each survey, mirrored
 by IRSA and ESASky; deepest cells at orders 12, 8 and 7) are read with
-torchfits into ``torchsky.sphere.MOC`` and combined exactly: union,
+``MOC.read_fits`` and combined exactly: union,
 intersection and difference are range operations on NESTED cells, and
 ``area_sq_deg`` counts cells, so inclusion-exclusion |A u B| = |A| + |B| - |A
 n B| holds exactly. A circle of radius 1 degree checks the MOC area
@@ -40,7 +40,6 @@ import torch
 
 from _sample_data import fetch_sample, skip_if_unavailable
 
-import torchfits
 import torchsky.sphere as sphere
 from torchsky.sphere import MOC, sum_union
 from torchsky.viz import healpix_sky_grid
@@ -54,18 +53,6 @@ DEPTH_ORDER = 8
 SQ_DEG_SKY = 4.0 * math.pi * (180.0 / math.pi) ** 2
 
 
-def read_moc(path: Path) -> MOC:
-    """Read the UNIQ column of an IVOA MOC FITS file (first table extension).
-
-    ``MOC.read_fits`` requires ``EXTNAME = 'MOC'``, which the IVOA standard does
-    not mandate and these CDS-built files do not carry, so the table is read here.
-    """
-    header = dict(torchfits.read_header(str(path), 1))
-    assert header["ORDERING"] == "NUNIQ" and header.get("COORDSYS", "C") == "C"
-    table = torchfits.read(str(path), hdu=1)
-    return MOC(table["UNIQ"].to(torch.int64))
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", type=Path, default=None)
@@ -73,7 +60,7 @@ def main() -> None:
 
     with skip_if_unavailable():
         paths = {name: fetch_sample(key) for name, key in SURVEYS.items()}
-    mocs = {name: read_moc(path) for name, path in paths.items()}
+    mocs = {name: MOC.read_fits(str(path)) for name, path in paths.items()}
     for name, moc in mocs.items():
         print(
             f"{name:14s} {moc.uniq.numel():7d} cells, max order {moc.max_order:2d}, "
