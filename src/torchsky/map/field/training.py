@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...device import resolve_device, resolve_fit_device
+from ...device import _as_tensor, resolve_device, resolve_fit_device, _to
 
 from ..exposure_pose import ExposurePose, create_exposure_poses
 from ..operators.bundle import (
@@ -199,7 +199,7 @@ def _noise_pretrain_field_model(
                 sample_dec_deg,
                 sample_wavelength,
             )
-            weight = sample_weight.to(device=pred.device, dtype=pred.dtype)
+            weight = _to(sample_weight, device=pred.device, dtype=pred.dtype)
             # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
             diff_pt = pred - target.to(dtype=pred.dtype)
             loss = torch.sum(weight * (diff_pt * diff_pt))
@@ -415,9 +415,9 @@ def compute_field_fit_diagnostics(
                 spatial_tile_hw=spatial_tile_hw,
             )
 
-            obs_img = observation.image.to(device=pred.device, dtype=pred.dtype)
+            obs_img = _to(observation.image, device=pred.device, dtype=pred.dtype)
             weight = (
-                observation.weight.to(device=pred.device, dtype=pred.dtype)
+                _to(observation.weight, device=pred.device, dtype=pred.dtype)
                 if observation.weight is not None
                 else torch.ones_like(pred)
             )
@@ -574,8 +574,8 @@ def fit_structured_noise_crossfit(
         ):
             if prediction.shape != observation.image.shape:
                 raise ValueError("cross-fitted prediction shape must match observation")
-            pred = prediction.detach().to(target_device, dtype=torch.float32)
-            image = observation.image.to(target_device, dtype=pred.dtype)
+            pred = _to(prediction.detach(), target_device, dtype=torch.float32)
+            image = _to(observation.image, target_device, dtype=pred.dtype)
             valid = _observation_support_mask(observation).to(target_device)
             residual = torch.where(valid, pred - image, torch.zeros_like(pred))
             losses.append(
@@ -1038,7 +1038,7 @@ def fit_field_model(
         sampling_generator.manual_seed(12345)
     else:
         sampling_generator.set_state(
-            torch.as_tensor(sampling_rng_state, dtype=torch.uint8, device="cpu")
+            _as_tensor(sampling_rng_state, dtype=torch.uint8, device="cpu")
         )
     ema_params: list[Tensor] | None = None
     if use_ema:
@@ -1380,12 +1380,18 @@ def fit_field_model(
                     **render_kwargs,
                 ):
                     valid_tile = support[ys, xs].to(device=prediction.device)
-                    data_tile = observation.image[ys, xs].to(prediction)
+                    data_tile = _to(
+                        observation.image[ys, xs], prediction.device, prediction.dtype
+                    )
                     residual_tile = torch.where(valid_tile, prediction - data_tile, 0.0)
                     weight_tile = (
                         torch.ones_like(prediction)
                         if observation.weight is None
-                        else observation.weight[ys, xs].to(prediction)
+                        else _to(
+                            observation.weight[ys, xs],
+                            prediction.device,
+                            prediction.dtype,
+                        )
                     )
                     weight_tile = torch.where(valid_tile, weight_tile, 0.0)
                     tile_loss = (
@@ -1437,8 +1443,8 @@ def fit_field_model(
                         **render_kwargs,
                     )
                     pred_logvar = None
-                image = image.to(device=pred.device, dtype=pred.dtype)
-                weight = weight.to(device=pred.device, dtype=pred.dtype)
+                image = _to(image, device=pred.device, dtype=pred.dtype)
+                weight = _to(weight, device=pred.device, dtype=pred.dtype)
                 residual = pred - image
                 sample_element_loss = _field_residual_loss(
                     residual,
@@ -1488,7 +1494,7 @@ def fit_field_model(
                 if recompute_structured:
                     pred.requires_grad_()
                 pred_logvar = None
-                image = observation.image.to(device=pred.device, dtype=pred.dtype)
+                image = _to(observation.image, device=pred.device, dtype=pred.dtype)
                 valid = _observation_support_mask(observation).to(device=pred.device)
                 image = torch.where(valid, image, torch.zeros_like(image))
                 residual = torch.where(valid, pred - image, torch.zeros_like(pred))
@@ -1510,12 +1516,12 @@ def fit_field_model(
                     spatial_sampling=spatial_sampling,
                     **render_kwargs,
                 )
-                image = observation.image.to(device=pred.device, dtype=pred.dtype)
+                image = _to(observation.image, device=pred.device, dtype=pred.dtype)
                 valid = _observation_support_mask(observation).to(device=pred.device)
                 image = torch.where(valid, image, torch.zeros_like(image))
                 residual = torch.where(valid, pred - image, torch.zeros_like(pred))
                 weight = (
-                    observation.weight.to(device=pred.device, dtype=pred.dtype)
+                    _to(observation.weight, device=pred.device, dtype=pred.dtype)
                     if observation.weight is not None
                     else torch.ones_like(pred)
                 )
@@ -1547,12 +1553,12 @@ def fit_field_model(
                     **render_kwargs,
                 )
                 pred_logvar = None
-                image = observation.image.to(device=pred.device, dtype=pred.dtype)
+                image = _to(observation.image, device=pred.device, dtype=pred.dtype)
                 valid = _observation_support_mask(observation).to(device=pred.device)
                 image = torch.where(valid, image, torch.zeros_like(image))
                 residual = torch.where(valid, pred - image, torch.zeros_like(pred))
                 weight = (
-                    observation.weight.to(device=pred.device, dtype=pred.dtype)
+                    _to(observation.weight, device=pred.device, dtype=pred.dtype)
                     if observation.weight is not None
                     else torch.ones_like(pred)
                 )
@@ -1751,12 +1757,14 @@ def fit_field_model(
                         exposure_pose=anchor_pose,
                         operator_bundle=anchor_bundle,
                     )
-                    anchor_image = anchor_observation.image.to(
+                    anchor_image = _to(
+                        anchor_observation.image,
                         device=anchor_pred.device,
                         dtype=anchor_pred.dtype,
                     )
                     anchor_weight = (
-                        anchor_observation.weight.to(
+                        _to(
+                            anchor_observation.weight,
                             device=anchor_pred.device,
                             dtype=anchor_pred.dtype,
                         )
@@ -1876,12 +1884,14 @@ def fit_field_model(
                     num_spectral_samples=num_spectral_samples,
                     **context_render_kwargs,
                 )
-                context_image = context_observation.image.to(
+                context_image = _to(
+                    context_observation.image,
                     device=context_pred.device,
                     dtype=context_pred.dtype,
                 )
                 context_weight_map = (
-                    context_observation.weight.to(
+                    _to(
+                        context_observation.weight,
                         device=context_pred.device,
                         dtype=context_pred.dtype,
                     )

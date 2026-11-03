@@ -10,6 +10,7 @@ from .._dtype import work_dtype as _float_dtype
 from torch import Tensor
 
 from . import healpix as _healpix
+from ..device import _as_tensor, _to
 
 
 def _as_float_tensor(x: Tensor | float) -> Tensor:
@@ -141,7 +142,7 @@ def slerp_lonlat(
     """
     v1 = lonlat_to_unit_xyz(lon1_deg, lat1_deg)
     v2 = lonlat_to_unit_xyz(lon2_deg, lat2_deg)
-    t_t = _as_float_tensor(t).to(device=v1.device, dtype=v1.dtype)
+    t_t = _to(_as_float_tensor(t), device=v1.device, dtype=v1.dtype)
 
     dot = torch.clamp((v1 * v2).sum(dim=-1), -1.0, 1.0)
     omega = torch.acos(dot)
@@ -190,11 +191,15 @@ def sample_healpix_map(
             f"values last dimension must be npix={expected_npix} for nside={nside}"
         )
 
-    lon_t = _as_float_tensor(lon_deg).to(
-        device=values.device, dtype=_float_dtype(values.device)
+    lon_t = _to(
+        _as_float_tensor(lon_deg),
+        device=values.device,
+        dtype=_float_dtype(values.device),
     )
-    lat_t = _as_float_tensor(lat_deg).to(
-        device=values.device, dtype=_float_dtype(values.device)
+    lat_t = _to(
+        _as_float_tensor(lat_deg),
+        device=values.device,
+        dtype=_float_dtype(values.device),
     )
     lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
     coord_shape = lon_t.shape
@@ -214,7 +219,7 @@ def sample_healpix_map(
         gathered = vals[:, pix4.reshape(-1)].reshape(
             vals.shape[0], 4, lon_flat.shape[0]
         )
-        weights = w4.to(device=gathered.device, dtype=gathered.dtype)
+        weights = _to(w4, device=gathered.device, dtype=gathered.dtype)
         out = (gathered * weights.unsqueeze(0)).sum(dim=1)
 
     return out.reshape(values.shape[:-1] + coord_shape)
@@ -254,10 +259,10 @@ def _interpolate_wavelength_axis(
     axis: int = -1,
 ) -> Tensor:
     """Linearly interpolate `values` along a wavelength axis."""
-    src = torch.as_tensor(
+    src = _as_tensor(
         source_wavelength, dtype=_float_dtype(values.device), device=values.device
     )
-    tgt = torch.as_tensor(
+    tgt = _as_tensor(
         target_wavelength, dtype=_float_dtype(values.device), device=values.device
     )
     if src.ndim != 1 or tgt.ndim != 1:
@@ -363,7 +368,7 @@ def fit_monopole_dipole(
     if valid_mask is None:
         valid = torch.isfinite(vals)
     else:
-        valid = torch.as_tensor(valid_mask, dtype=torch.bool, device=vals.device)
+        valid = _as_tensor(valid_mask, dtype=torch.bool, device=vals.device)
         if valid.shape != vals.shape:
             raise ValueError("valid_mask must have shape (npix,)")
         valid = valid & torch.isfinite(vals)

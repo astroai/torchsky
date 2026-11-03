@@ -20,6 +20,7 @@ from ..operators.bundle import (
 from ..operators.psf import apply_psf_spec
 from .rendering import render_field_observation
 from .types import FieldFitResult, FieldObservation, ForwardContext
+from ...device import _as_tensor, _to
 
 
 @dataclass(frozen=True)
@@ -59,13 +60,13 @@ def _as_prediction_tensors(
     pred = torch.as_tensor(prediction)
     if pred.ndim != 2:
         raise ValueError("prediction and target must be 2D images")
-    tgt = torch.as_tensor(target, device=pred.device, dtype=pred.dtype)
+    tgt = _as_tensor(target, device=pred.device, dtype=pred.dtype)
     if pred.shape != tgt.shape:
         raise ValueError("prediction and target must have the same shape")
     if weight is None:
         w = torch.ones_like(pred)
     else:
-        w = torch.as_tensor(weight, device=pred.device, dtype=pred.dtype)
+        w = _as_tensor(weight, device=pred.device, dtype=pred.dtype)
         if w.shape != pred.shape:
             raise ValueError("weight must match prediction shape")
     if mask is None:
@@ -586,9 +587,7 @@ def select_field_residual_tiles(
         raise ValueError("min_support_fraction must satisfy 0 <= value <= 1")
 
     residual = torch.as_tensor(product.residual)
-    weight = torch.as_tensor(
-        product.weight, device=residual.device, dtype=residual.dtype
-    )
+    weight = _as_tensor(product.weight, device=residual.device, dtype=residual.dtype)
     support = torch.as_tensor(product.support, device=residual.device).to(
         dtype=torch.bool
     )
@@ -665,7 +664,7 @@ def render_field_residual(
         operator_bundle=operator_bundle,
         **render_kwargs,
     )
-    image = observation.image.to(device=prediction.device, dtype=prediction.dtype)
+    image = _to(observation.image, device=prediction.device, dtype=prediction.dtype)
     residual = prediction - image
     if masked and observation.mask is not None:
         valid = observation.mask.to(device=prediction.device) > 0

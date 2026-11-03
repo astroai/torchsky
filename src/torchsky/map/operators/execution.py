@@ -25,6 +25,7 @@ from .geometry import (
 from .geometry_conservative import conservative_polygon_project
 from .geometry_drizzle import exact_point_drizzle_project, exact_square_drizzle_project
 from ..sky.corrector import CrossExposureSkyCorrector
+from ...device import _as_tensor, _to
 
 
 class LoadWeightMapFn(Protocol):
@@ -618,10 +619,10 @@ def spilled_exact_median_stack(
                 if result_device is None:
                     result_device = values.device
                 mapped_values[seen].copy_(
-                    values.detach().to(device="cpu", dtype=torch.float32)
+                    _to(values.detach(), device="cpu", dtype=torch.float32)
                 )
                 mapped_support[seen].copy_(
-                    support.detach().to(device="cpu", dtype=torch.uint8)
+                    _to(support.detach(), device="cpu", dtype=torch.uint8)
                 )
                 seen += 1
             if seen != n_obs:
@@ -647,7 +648,7 @@ def spilled_exact_median_stack(
                 )
                 median[start:stop].copy_(reduced.to(device=result_device))
                 counts[start:stop].copy_(
-                    count.to(device=result_device, dtype=torch.float32)
+                    _to(count, device=result_device, dtype=torch.float32)
                 )
             del flat_values, flat_support
         finally:
@@ -958,13 +959,13 @@ def spilled_overlap_background_stack(
                         "overlap contribution shape does not match target window"
                     )
                 mapped_numer[obs_idx, y0:y1, x0:x1].copy_(
-                    numer.detach().to(device="cpu", dtype=torch.float32)
+                    _to(numer.detach(), device="cpu", dtype=torch.float32)
                 )
                 mapped_weight[obs_idx, y0:y1, x0:x1].copy_(
-                    weight.detach().to(device="cpu", dtype=torch.float32)
+                    _to(weight.detach(), device="cpu", dtype=torch.float32)
                 )
                 mapped_overlap[obs_idx, y0:y1, x0:x1].copy_(
-                    overlap.detach().to(device="cpu", dtype=torch.int32)
+                    _to(overlap.detach(), device="cpu", dtype=torch.int32)
                 )
                 if mapped_variance is not None:
                     if variance_weight is None:
@@ -975,8 +976,10 @@ def spilled_overlap_background_stack(
                                 "overlap variance shape does not match target window"
                             )
                         mapped_variance[obs_idx, y0:y1, x0:x1].copy_(
-                            variance_weight.detach().to(
-                                device="cpu", dtype=torch.float32
+                            _to(
+                                variance_weight.detach(),
+                                device="cpu",
+                                dtype=torch.float32,
                             )
                         )
                 seen.add(obs_idx)
@@ -1294,8 +1297,8 @@ def spilled_sigma_clipped_stack(
                     )
                 if result_device is None:
                     result_device = values.device
-                values_cpu = values.detach().to(device="cpu", dtype=torch.float32)
-                weights_cpu = weights.detach().to(device="cpu", dtype=torch.float32)
+                values_cpu = _to(values.detach(), device="cpu", dtype=torch.float32)
+                weights_cpu = _to(weights.detach(), device="cpu", dtype=torch.float32)
                 valid = (
                     torch.isfinite(values_cpu)
                     & torch.isfinite(weights_cpu)
@@ -1314,8 +1317,8 @@ def spilled_sigma_clipped_stack(
                         raise ValueError(
                             "sigma-clipped variance shape does not match target window"
                         )
-                    variance_cpu = variance_weight.detach().to(
-                        device="cpu", dtype=torch.float32
+                    variance_cpu = _to(
+                        variance_weight.detach(), device="cpu", dtype=torch.float32
                     )
                     if bool(
                         (~torch.isfinite(variance_cpu[valid])).any()
@@ -1512,7 +1515,7 @@ def accumulate_projected_observation(
             stacking_method=stacking_method,
         )
         return
-    coeffs_t = torch.as_tensor(
+    coeffs_t = _as_tensor(
         coeffs,
         dtype=contrib_numer.dtype,
         device=contrib_numer.device,
@@ -1640,7 +1643,7 @@ def prepare_image_observation_data(
     if operator_bundle.mask_weight is not None or operator_bundle.noise is not None:
         source_weight = load_weight_map_fn(observation, image, device=device)
     else:
-        source_weight = torch.isfinite(image).to(dtype=torch.float32, device=device)
+        source_weight = _to(torch.isfinite(image), dtype=torch.float32, device=device)
     if operator_bundle.radiometry is not None or operator_bundle.background is not None:
         prepared_image, prepared_weight = apply_calibration_fn(
             observation,

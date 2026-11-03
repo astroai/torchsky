@@ -114,7 +114,7 @@ def test_release_notes_parse_torchsky_headings() -> None:
 
 
 def test_committed_changelog_has_the_rc_section_and_no_duplicate_headings() -> None:
-    text = (ROOT / "docs" / "changelog.md").read_text(encoding="utf-8")
+    text = (ROOT / "docs" / "project" / "changelog.md").read_text(encoding="utf-8")
     label, body = release_notes.extract(text, lane.committed_version())
     assert label == f"[{lane.committed_version()}]"
     headings = re.findall(r"^### (.+)$", body, flags=re.MULTILINE)

@@ -1,0 +1,5 @@
+SFD E(B-V): nside 512, 3145728 pixels, NESTED, Galactic; all-sky median 0.070 mag
+4831 Gaia stars at l = 169.8, b = -16.7: E(B-V) 5/50/95% = 0.26 / 0.46 / 1.09 mag
+G23, R_V = 3.1: A_G, A_BP, A_RP per E(B-V) = 2.681, 3.409, 1.916; E(BP-RP)/E(B-V) = 1.493
+main-sequence colour width (NMAD) behind the clouds (4721 stars): 0.190 mag uncorrected, 0.104 with 0.86 x SFD, 0.080 with the fitted scale s = 0.60
+fitted reddening is 0.60 x the Schlafly-Finkbeiner-scaled SFD (0.51 x raw SFD) for these stars

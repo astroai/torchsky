@@ -722,3 +722,99 @@ class TestSpectralReader:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def _manga_like_header() -> dict:
+    # MaNGA LOGCUBE: log-sampled vacuum wavelengths with a CD matrix and no CDELT3.
+    return {
+        "NAXIS": 3,
+        "NAXIS1": 34,
+        "NAXIS2": 34,
+        "NAXIS3": 4563,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CTYPE3": "WAVE-LOG",
+        "CUNIT1": "deg",
+        "CUNIT2": "deg",
+        "CUNIT3": "Angstrom",
+        "CRVAL1": 205.4384,
+        "CRVAL2": 27.0048,
+        "CRVAL3": 3621.6,
+        "CRPIX1": 18.0,
+        "CRPIX2": 18.0,
+        "CRPIX3": 1.0,
+        "CD1_1": -0.000138889,
+        "CD2_2": 0.000138889,
+        "CD3_3": 0.8339,
+    }
+
+
+def _astropy_spectral_world(header: dict, axis: int) -> torch.Tensor:
+    wcs_module = pytest.importorskip("astropy.wcs")
+    import numpy as np
+
+    naxis = int(header["NAXIS"])
+    reference = wcs_module.WCS(header)
+    length = int(header[f"NAXIS{axis}"])
+    pixels = [np.zeros(length) for _ in range(naxis)]
+    pixels[axis - 1] = np.arange(length, dtype=np.float64)
+    world = reference.wcs_pix2world(np.stack(pixels, axis=1), 0)[:, axis - 1]
+    unit = str(header.get(f"CUNIT{axis}", "")).lower()
+    # astropy.wcs normalizes spectral units to SI.
+    if unit in {"angstrom", "aa"}:
+        world = world * 1.0e10
+    return torch.as_tensor(world, dtype=torch.float64)
+
+
+def test_spectral_axis_from_header_reads_wave_log_with_cd_matrix() -> None:
+    from torchsky.spectral import spectral_axis_from_header
+
+    header = _manga_like_header()
+    axis, tensor_index = spectral_axis_from_header(header)
+    assert tensor_index == 0 and axis.values.shape == (4563,)
+    crval, cd = 3621.6, 0.8339
+    expected = crval * torch.exp(torch.arange(4563, dtype=torch.float64) * cd / crval)
+    torch.testing.assert_close(axis.values, expected, rtol=1e-13, atol=0.0)
+    assert float(axis.values[-1]) == pytest.approx(10353.76, abs=0.01)
+    torch.testing.assert_close(
+        axis.values, _astropy_spectral_world(header, 3), rtol=1e-12, atol=0.0
+    )
+
+
+@pytest.mark.parametrize(
+    ("ctype", "extra"),
+    [
+        ("WAVE", {"PC3_3": 2.0, "CDELT3": 0.5}),
+        ("WAVE-F2W", {"CDELT3": 0.5}),
+        ("WAVE-V2W", {"CDELT3": 0.5, "RESTWAV": 6.5e-7}),
+        ("WAVE-LOG", {"CDELT3": 0.5}),
+    ],
+)
+def test_spectral_axis_from_header_matches_astropy_algorithms(ctype, extra) -> None:
+    from torchsky.spectral import spectral_axis_from_header
+
+    header = _manga_like_header()
+    del header["CD1_1"], header["CD2_2"], header["CD3_3"]
+    header.update({"CDELT1": -0.000138889, "CDELT2": 0.000138889, "NAXIS3": 400})
+    header.update({"CTYPE3": ctype, "CRVAL3": 5000.0, "CRPIX3": 10.0, **extra})
+    axis, _ = spectral_axis_from_header(header)
+    torch.testing.assert_close(
+        axis.values, _astropy_spectral_world(header, 3), rtol=1e-11, atol=0.0
+    )
+
+
+def test_spectral_axis_from_header_fails_closed() -> None:
+    from torchsky.spectral import spectral_axis_from_header
+
+    header = _manga_like_header()
+    header["CTYPE3"] = "WAVE-XYZ"
+    with pytest.raises(ValueError, match="WAVE-XYZ"):
+        spectral_axis_from_header(header)
+    header = _manga_like_header()
+    header["CD3_1"] = 1.0e-3
+    with pytest.raises(ValueError, match="coupled"):
+        spectral_axis_from_header(header)
+    header = _manga_like_header()
+    header["CTYPE3"] = "WAVE-TAB"
+    with pytest.raises(ValueError, match="tables"):
+        spectral_axis_from_header(header)

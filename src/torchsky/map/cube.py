@@ -52,6 +52,7 @@ from .spectral_projection import (
     _validated_spectral_axis,
     _validated_spectral_bin_edges,
 )
+from ..device import _to
 
 
 def _has_3d_ifu_observations(
@@ -66,6 +67,42 @@ def _has_3d_ifu_observations(
         or isinstance(obs.wcs, IFUSliceWCS)
         for obs in observations
     )
+
+
+def _same_slice_steps(
+    slice_ids: Tensor, rows: Tensor, columns: Tensor
+) -> tuple[Tensor, Tensor]:
+    """Per-sample ``+1``/``-1`` detector steps for the drizzle Jacobian.
+
+    The step stays inside the sample's slice whenever the slice has a neighbour
+    along that detector axis (forward first, then backward), so pixels on a slice
+    edge are not differenced against the next slice. A one-pixel-wide slice has
+    no such neighbour: it then follows the slicer convention of this path, in
+    which adjacent slices are adjacent on the sky, and steps to the neighbouring
+    slice. Row-stacked fibre spectra break that convention; they need
+    ``IFUObservation(aperture_diameter_arcsec=...)``.
+    """
+    height, width = slice_ids.shape
+    own = slice_ids[rows, columns]
+    steps = []
+    for axis, (size, coordinate) in enumerate(((width, columns), (height, rows))):
+        usable = []
+        for step in (1, -1):
+            neighbour = coordinate + step
+            clamped = neighbour.clamp(0, size - 1)
+            other = (
+                slice_ids[rows, clamped] if axis == 0 else slice_ids[clamped, columns]
+            )
+            usable.append((neighbour >= 0) & (neighbour < size) & (other == own))
+        forward, backward = usable
+        steps.append(
+            torch.where(
+                forward | (~backward & (coordinate + 1 < size)),
+                1,
+                -1,
+            )
+        )
+    return steps[0], steps[1]
 
 
 def _coadd_ifu_3d_cube(
@@ -120,7 +157,7 @@ def _coadd_ifu_3d_cube(
     s_axis = _validated_spectral_axis(
         spectral_axis, default_unit=spectral_unit, default_type=spectral_type
     )
-    wave_centers = s_axis.values.to(device=map_device, dtype=torch.float32)
+    wave_centers = _to(s_axis.values, device=map_device, dtype=torch.float32)
     N_wave = int(wave_centers.numel())
 
     target_wcs = WCS(header_dict).to(map_device)
@@ -141,11 +178,11 @@ def _coadd_ifu_3d_cube(
 
     for obs in observations:
         if obs.data is not None:
-            raw_img = obs.data.to(device=map_device, dtype=torch.float32)
+            raw_img = _to(obs.data, device=map_device, dtype=torch.float32)
             hdr_obs = dict(obs.header) if obs.header is not None else {}
         else:
             raw_img, hdr_obs = load_observation_image_and_header(obs, device=read_dev)
-            raw_img = raw_img.to(device=map_device, dtype=torch.float32)
+            raw_img = _to(raw_img, device=map_device, dtype=torch.float32)
         src_w = _load_observation_weight_map(obs, raw_img, device=map_device)
         cal_img, cal_w = _apply_observation_calibration(obs, raw_img, src_w)
 
@@ -156,7 +193,7 @@ def _coadd_ifu_3d_cube(
             else (obs.wcs if isinstance(obs.wcs, IFUSliceWCS) else None)
         )
         if ifu_obj is not None and getattr(ifu_obj, "valid_mask", None) is not None:
-            valid = valid & ifu_obj.valid_mask.to(device=map_device, dtype=torch.bool)
+            valid = valid & _to(ifu_obj.valid_mask, device=map_device, dtype=torch.bool)
         if not bool(valid.any()):
             continue
 
@@ -194,7 +231,7 @@ def _coadd_ifu_3d_cube(
                 else:
                     ra_d, dec_d = obs_wcs.pixel_to_world(xd, yd)
                     if obs.wavelength_map is not None:
-                        lam_d = obs.wavelength_map.to(device=dev, dtype=dtype)[iy, ix]
+                        lam_d = _to(obs.wavelength_map, device=dev, dtype=dtype)[iy, ix]
                     else:
                         assert obs.wavelength is not None
                         lam_d = torch.full_like(ra_d, float(obs.wavelength))
@@ -246,20 +283,27 @@ def _coadd_ifu_3d_cube(
             mapper = make_detector_to_cube(jdev, jdtype)
             xxj, yyj = xx.to(jdev), yy.to(jdev)
             xj, yj = xxj.to(jdtype), yyj.to(jdtype)
-            step_x = torch.where(xxj + 1 < raw_img.shape[1], 1, -1)
-            step_y = torch.where(yyj + 1 < raw_img.shape[0], 1, -1)
+            if ifu_obj is None:
+                step_x = torch.where(xxj + 1 < raw_img.shape[1], 1, -1)
+                step_y = torch.where(yyj + 1 < raw_img.shape[0], 1, -1)
+            else:
+                step_x, step_y = _same_slice_steps(
+                    ifu_obj.slice_id_map.to(device=jdev), yyj, xxj
+                )
             x0, y0, z0_ = mapper(xj, yj, xxj, yyj)
             xp, yp, zp = mapper(xj + step_x.to(jdtype), yj, xxj + step_x, yyj)
             xq, yq, zq = mapper(xj, yj + step_y.to(jdtype), xxj, yyj + step_y)
             sx, sy = step_x.to(jdtype), step_y.to(jdtype)
-            jac = torch.stack(
-                [
-                    torch.stack([(xp - x0) / sx, (xq - x0) / sy]),
-                    torch.stack([(yp - y0) / sx, (yq - y0) / sy]),
-                    torch.stack([(zp - z0_) / sx, (zq - z0_) / sy]),
-                ]
-            ).to(
-                device=map_device, dtype=torch.float32
+            jac = _to(
+                torch.stack(
+                    [
+                        torch.stack([(xp - x0) / sx, (xq - x0) / sy]),
+                        torch.stack([(yp - y0) / sx, (yq - y0) / sy]),
+                        torch.stack([(zp - z0_) / sx, (zq - z0_) / sy]),
+                    ]
+                ),
+                device=map_device,
+                dtype=torch.float32,
             )  # (cube axis, detector axis, n)
         xt, yt, zt = (v.to(torch.float32) for v in (xt, yt, zt))
         ok = torch.isfinite(xt) & torch.isfinite(yt) & torch.isfinite(zt)

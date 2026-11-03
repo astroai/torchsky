@@ -7,9 +7,9 @@
     objects may change between minor releases; pin a version if you depend
     on them in production.
 
-Continuous sky models: domains, field model kinds and presets, observation encoding, fitting, rendering, residual diagnostics, and portable artifacts. The formulation behind these APIs is in the [field formulation guide](../field-formulation.md).
+Continuous sky models: domains, field model kinds and presets, observation encoding, fitting, rendering, residual diagnostics, and portable artifacts. The formulation behind these APIs is in the [field formulation guide](../models/formulation.md).
 
-**Guides:** [field](../field.md), [field-formulation](../field-formulation.md), [encoders](../encoders.md)
+**Guides:** [fields](../models/fields.md), [formulation](../models/formulation.md), [encoders](../models/encoders.md)
 
 ---
 

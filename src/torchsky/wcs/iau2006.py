@@ -28,6 +28,7 @@ from .iau2000a import (
     iau2006_nutation,
     julian_centuries_tt,
 )
+from ..device import _as_tensor, _to
 
 MJD_J2000 = 51544.5
 AU_M = 1.495978707e11
@@ -293,10 +294,10 @@ def cio_locator_s06(tt_mjd: Tensor, cip_x: Tensor, cip_y: Tensor) -> Tensor:
         ),
         dim=-1,
     )
-    w = [torch.as_tensor(c, dtype=t.dtype, device=t.device) for c in _S06_SP]
+    w = [_as_tensor(c, dtype=t.dtype, device=t.device) for c in _S06_SP]
     for k, (nfa, sc) in enumerate(zip(_S06_NFA, _S06_SC, strict=True)):
-        nfa_t = nfa.to(device=t.device, dtype=t.dtype)
-        sc_t = sc.to(device=t.device, dtype=t.dtype)
+        nfa_t = _to(nfa, device=t.device, dtype=t.dtype)
+        sc_t = _to(sc, device=t.device, dtype=t.dtype)
         arg = (fa.unsqueeze(-2) * nfa_t).sum(dim=-1)
         w[k] = w[k] + (sc_t[:, 0] * torch.sin(arg) + sc_t[:, 1] * torch.cos(arg)).sum(
             dim=-1
@@ -426,12 +427,12 @@ def apparent_gcrs_unit(
     """
     dev, dtype = unit_xyz.device, unit_xyz.dtype
     helio, _, vel_au_day = earth_pv_icrs(tt_mjd)
-    helio = helio.to(device=dev, dtype=dtype)
+    helio = _to(helio, device=dev, dtype=dtype)
     if observer_position_m is not None:
-        helio = helio + observer_position_m.to(device=dev, dtype=dtype) / AU_M
-    vel = vel_au_day.to(device=dev, dtype=dtype) / _C_AU_PER_DAY
+        helio = helio + _to(observer_position_m, device=dev, dtype=dtype) / AU_M
+    vel = _to(vel_au_day, device=dev, dtype=dtype) / _C_AU_PER_DAY
     if observer_velocity_m_s is not None:
-        vel = vel + observer_velocity_m_s.to(device=dev, dtype=dtype) / C_M_S
+        vel = vel + _to(observer_velocity_m_s, device=dev, dtype=dtype) / C_M_S
     em = torch.linalg.vector_norm(helio, dim=-1, keepdim=True)
     eh = helio / em
     unit_xyz, eh = torch.broadcast_tensors(unit_xyz, eh)
@@ -473,8 +474,8 @@ def apply_refraction(
     alt_deg: Tensor, *, pressure_mbar: Tensor | float, temperature_c: Tensor | float
 ) -> Tensor:
     """Apply atmospheric refraction to altitude in degrees."""
-    p = torch.as_tensor(pressure_mbar, dtype=alt_deg.dtype, device=alt_deg.device)
-    t = torch.as_tensor(temperature_c, dtype=alt_deg.dtype, device=alt_deg.device)
+    p = _as_tensor(pressure_mbar, dtype=alt_deg.dtype, device=alt_deg.device)
+    t = _as_tensor(temperature_c, dtype=alt_deg.dtype, device=alt_deg.device)
     return alt_deg + refraction_arcmin(alt_deg, pressure_mbar=p, temperature_c=t) / 60.0
 
 
@@ -581,12 +582,12 @@ def dcr_offset(
     )
     dt = torch.float32 if ref_tensor.device.type == "mps" else torch.float64
     dev = ref_tensor.device
-    lam = torch.as_tensor(wavelength_angstrom, dtype=dt, device=dev)
-    lam_ref = torch.as_tensor(ref_wavelength_angstrom, dtype=dt, device=dev)
-    zen = torch.as_tensor(zenith_deg, dtype=dt, device=dev).clamp(0.0, 89.0)
-    pa = torch.as_tensor(parallactic_deg, dtype=dt, device=dev)
-    p = torch.as_tensor(pressure_mbar, dtype=dt, device=dev)
-    t = torch.as_tensor(temperature_c, dtype=dt, device=dev)
+    lam = _as_tensor(wavelength_angstrom, dtype=dt, device=dev)
+    lam_ref = _as_tensor(ref_wavelength_angstrom, dtype=dt, device=dev)
+    zen = _as_tensor(zenith_deg, dtype=dt, device=dev).clamp(0.0, 89.0)
+    pa = _as_tensor(parallactic_deg, dtype=dt, device=dev)
+    p = _as_tensor(pressure_mbar, dtype=dt, device=dev)
+    t = _as_tensor(temperature_c, dtype=dt, device=dev)
 
     dn = _air_refractive_index_minus_one(
         lam, pressure_mbar=p, temperature_c=t
@@ -622,11 +623,11 @@ def apply_dcr(
     sign = -1.0 if inverse else 1.0
     cos_dec = torch.cos(torch.deg2rad(dec_deg)).clamp_min(1e-12)
     ra_out = torch.remainder(
-        ra_deg + sign * d_east.to(dtype=ra_deg.dtype, device=ra_deg.device) / cos_dec,
+        ra_deg + sign * _to(d_east, dtype=ra_deg.dtype, device=ra_deg.device) / cos_dec,
         360.0,
     )
     dec_out = (
-        dec_deg + sign * d_north.to(dtype=dec_deg.dtype, device=dec_deg.device)
+        dec_deg + sign * _to(d_north, dtype=dec_deg.dtype, device=dec_deg.device)
     ).clamp(-90.0, 90.0)
     return ra_out, dec_out
 

@@ -16,6 +16,7 @@ from torch import Tensor
 
 from . import spectral as _spectral
 from .sht import CARGeometry, SHTBackend, _wigner_sequence, analyze, synthesize
+from ..device import _as_tensor, _to
 
 
 class ModeCouplingError(RuntimeError):
@@ -35,7 +36,7 @@ def _validate_window(
 ) -> Tensor:
     if value is None:
         return torch.ones(lmax + 1, dtype=field_value.dtype, device=field_value.device)
-    result = torch.as_tensor(value, dtype=field_value.dtype, device=field_value.device)
+    result = _as_tensor(value, dtype=field_value.dtype, device=field_value.device)
     if result.ndim != 1 or int(result.shape[0]) != lmax + 1:
         raise ValueError(f"{name} must have shape ({lmax + 1},)")
     if not bool(torch.all(torch.isfinite(result)).item()):
@@ -236,7 +237,7 @@ class PseudoClField:
             raise ValueError("spin-2 values require Q/U component axis of length 2")
         if self.geometry.nlat < int(self.lmax) + 1:
             raise ValueError("CAR latitude sampling requires nlat >= lmax + 1")
-        mask = torch.as_tensor(self.mask, dtype=values.dtype, device=values.device)
+        mask = _as_tensor(self.mask, dtype=values.dtype, device=values.device)
         if tuple(mask.shape) != self.geometry.shape:
             raise ValueError(f"mask must have shape {self.geometry.shape}")
         if not bool(torch.all(torch.isfinite(mask)).item()):
@@ -247,7 +248,7 @@ class PseudoClField:
         )
         templates = None
         if self.templates is not None:
-            templates = torch.as_tensor(
+            templates = _as_tensor(
                 self.templates, dtype=values.dtype, device=values.device
             )
             map_shape = geometry_shape = self.geometry.shape
@@ -363,9 +364,7 @@ def pure_alms(field: PseudoClField, *, values: Tensor | None = None) -> Tensor:
     maps = (
         field.values
         if values is None
-        else torch.as_tensor(
-            values, dtype=field.values.dtype, device=field.values.device
-        )
+        else _as_tensor(values, dtype=field.values.dtype, device=field.values.device)
     )
     if tuple(maps.shape[-3:]) != (2, *field.geometry.shape):
         raise ValueError(
@@ -436,7 +435,7 @@ def template_deprojection_bias(
     """
 
     other = field_a if field_b is None else field_b
-    simulations_a = torch.as_tensor(
+    simulations_a = _as_tensor(
         signal_realizations_a, dtype=field_a.values.dtype, device=field_a.values.device
     )
     map_ndim_a = 2 if field_a.spin == 0 else 3
@@ -446,7 +445,7 @@ def template_deprojection_bias(
     if field_b is not None:
         if signal_realizations_b is None:
             raise ValueError("signal_realizations_b is required for a cross-field bias")
-        simulations_b = torch.as_tensor(
+        simulations_b = _as_tensor(
             signal_realizations_b, dtype=other.values.dtype, device=other.values.device
         )
     elif signal_realizations_b is not None:
@@ -557,7 +556,7 @@ class BandpowerBinning:
 
     def __post_init__(self) -> None:
         binning = torch.as_tensor(self.binning_matrix)
-        unbinning = torch.as_tensor(
+        unbinning = _as_tensor(
             self.unbinning_matrix, dtype=binning.dtype, device=binning.device
         )
         _require_real_floating(binning, "binning_matrix")
@@ -631,14 +630,14 @@ class BandpowerBinning:
     def bin(self, spectra: Tensor) -> Tensor:
         if int(spectra.shape[-1]) != self.lmax + 1:
             raise ValueError(f"spectra must end in shape ({self.lmax + 1},)")
-        matrix = self.binning_matrix.to(dtype=spectra.dtype, device=spectra.device)
+        matrix = _to(self.binning_matrix, dtype=spectra.dtype, device=spectra.device)
         return torch.einsum("bl,...l->...b", matrix, spectra)
 
     def unbin(self, bandpowers: Tensor) -> Tensor:
         if int(bandpowers.shape[-1]) != self.nband:
             raise ValueError(f"bandpowers must end in shape ({self.nband},)")
-        matrix = self.unbinning_matrix.to(
-            dtype=bandpowers.dtype, device=bandpowers.device
+        matrix = _to(
+            self.unbinning_matrix, dtype=bandpowers.dtype, device=bandpowers.device
         )
         return torch.einsum("lb,...b->...l", matrix, bandpowers)
 
@@ -738,7 +737,7 @@ def _channel_action(
     lmax = int(transfer.shape[0]) - 1
     if int(spectra.shape[-1]) != lmax + 1:
         raise ValueError(f"spectra must end in shape ({lmax + 1},)")
-    values = spectra.to(dtype=transfer.dtype, device=transfer.device)
+    values = _to(spectra, dtype=transfer.dtype, device=transfer.device)
     ell = torch.arange(lmax + 1, dtype=values.dtype, device=values.device)
     scaled = values * transfer * (ell + 0.5)
     result = torch.zeros_like(values)
@@ -765,7 +764,7 @@ def _channel_adjoint(
     lmax = int(transfer.shape[0]) - 1
     if int(spectra.shape[-1]) != lmax + 1:
         raise ValueError(f"spectra must end in shape ({lmax + 1},)")
-    values = spectra.to(dtype=transfer.dtype, device=transfer.device)
+    values = _to(spectra, dtype=transfer.dtype, device=transfer.device)
     result = torch.zeros_like(values)
     for start in range(0, int(nodes.numel()), node_block_size):
         stop = min(start + node_block_size, int(nodes.numel()))
@@ -1041,8 +1040,8 @@ class ModeCouplingWorkspace:
             mask_basis,
         )
         transfer = field_a.transfer * other.transfer
-        binning_matrix = binning.binning_matrix.to(dtype=dtype, device=device)
-        unbinning_matrix = binning.unbinning_matrix.to(dtype=dtype, device=device)
+        binning_matrix = _to(binning.binning_matrix, dtype=dtype, device=device)
+        unbinning_matrix = _to(binning.unbinning_matrix, dtype=dtype, device=device)
         if spectrum_block_size == 1:
             unbinned_columns = unbinning_matrix.transpose(0, 1)
         else:
@@ -1149,7 +1148,7 @@ class ModeCouplingWorkspace:
         ):
             if supplied_bias is None:
                 continue
-            bias = torch.as_tensor(
+            bias = _as_tensor(
                 supplied_bias,
                 dtype=coupled_spectrum.dtype,
                 device=coupled_spectrum.device,
@@ -1158,7 +1157,7 @@ class ModeCouplingWorkspace:
                 raise ValueError(f"{name} must have the same shape as coupled_spectrum")
             residual = residual - bias
         binned = self.binning.bin(residual)
-        matrix = self.coupling_matrix.to(dtype=binned.dtype, device=binned.device)
+        matrix = _to(self.coupling_matrix, dtype=binned.dtype, device=binned.device)
         output_size = self.spectrum_block_size * self.binning.nband
         batch_shape = binned.shape[:-1]
         if self.spectrum_block_size > 1:

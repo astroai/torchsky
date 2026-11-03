@@ -18,6 +18,7 @@ from .operators.config import (
     MapValueSemantics,
 )
 from .quality import DQPolicy, QualityProduct
+from ..device import _as_tensor
 
 
 @dataclass
@@ -32,7 +33,8 @@ class ImageObservation:
         weight: Scalar exposure weight.
         photometric_scale: Multiplicative flux calibration.
         background_offset: Additive background removed before resampling.
-        weight_map: Optional per-pixel weight or inverse-variance tensor.
+        weight_map: Optional per-pixel relative weight tensor (an inverse
+            variance only when ``weight_is_inverse_variance=True``).
         mask: Optional Boolean valid-pixel mask.
 
     Examples:
@@ -106,7 +108,25 @@ Observation = ImageObservation
 
 @dataclass(frozen=True)
 class IFUObservation:
-    """In-memory detector product for runtime-independent IFU cube building."""
+    """In-memory detector product for runtime-independent IFU cube building.
+
+    Each detector sample (one pixel of ``sci``) is mapped to ``(ra, dec,
+    wavelength)`` by ``detector_to_world``. The ``drizzle`` kernel needs the sky
+    footprint of every sample, given in one of three ways:
+
+    - by default, the detector pixel square mapped through ``detector_to_world``,
+      which is only meaningful when neighbouring detector pixels are neighbours on
+      the sky. When slice ids are known (``slice_id`` or the transform's
+      ``slice_id_map``), a sample without a same-slice neighbour along a detector
+      axis has no grid footprint and planning raises;
+    - ``detector_pixel_footprint``: explicit per-sample polygons, shape
+      ``(H, W, V, 2)`` in detector pixels or ``(H, W, V, 3)`` in
+      ``(ra, dec, wavelength)``;
+    - ``aperture_diameter_arcsec``: a circular aperture (an optical fibre)
+      centred on each sample's sky position, scalar or one value per sample.
+      Its exact area overlap with every output spaxel is used, so fibre-fed
+      (row-stacked) spectra need no pixel-grid adjacency.
+    """
 
     sci: Tensor
     detector_to_world: Any
@@ -120,11 +140,29 @@ class IFUObservation:
     weight: Tensor | float | None = None
     dq_policy: DQPolicy | None = None
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    aperture_diameter_arcsec: Tensor | float | None = None
 
     def __post_init__(self) -> None:
         science = torch.as_tensor(self.sci)
         if science.ndim != 2 or not science.is_floating_point():
             raise ValueError("IFU science must be a floating detector image")
+        if self.aperture_diameter_arcsec is not None:
+            if self.detector_pixel_footprint is not None:
+                raise ValueError(
+                    "give either detector_pixel_footprint or aperture_diameter_arcsec"
+                )
+            aperture = _as_tensor(
+                self.aperture_diameter_arcsec,
+                device=science.device,
+                dtype=science.dtype,
+            )
+            if aperture.numel() != 1 and aperture.shape != science.shape:
+                raise ValueError(
+                    "aperture_diameter_arcsec must be scalar or match the science image"
+                )
+            if not bool(torch.isfinite(aperture).all()) or bool((aperture <= 0).any()):
+                raise ValueError("aperture_diameter_arcsec must be finite and positive")
+            object.__setattr__(self, "aperture_diameter_arcsec", aperture)
         if not callable(getattr(self.detector_to_world, "pixel_to_world", None)):
             raise TypeError("detector_to_world must expose pixel_to_world(x, y)")
         if self.dq is not None:
@@ -136,21 +174,19 @@ class IFUObservation:
         for name, value in self.variance_components.items():
             if not isinstance(name, str) or not name:
                 raise ValueError("variance component names must be non-empty")
-            component = torch.as_tensor(
-                value, device=science.device, dtype=science.dtype
-            )
+            component = _as_tensor(value, device=science.device, dtype=science.dtype)
             if component.shape != science.shape:
                 raise ValueError("IFU variance components must match the science image")
             components[name] = component
         if self.slice_id is not None:
-            slice_id = torch.as_tensor(
+            slice_id = _as_tensor(
                 self.slice_id, device=science.device, dtype=torch.int64
             )
             if slice_id.shape != science.shape:
                 raise ValueError("IFU slice_id must match the science image")
             object.__setattr__(self, "slice_id", slice_id)
         if self.detector_pixel_footprint is not None:
-            footprint = torch.as_tensor(
+            footprint = _as_tensor(
                 self.detector_pixel_footprint,
                 device=science.device,
                 dtype=science.dtype,
@@ -170,9 +206,7 @@ class IFUObservation:
         if self.value_semantics not in {"surface_brightness", "flux"}:
             raise ValueError("IFU value_semantics must be surface_brightness or flux")
         if self.weight is not None:
-            weight = torch.as_tensor(
-                self.weight, device=science.device, dtype=science.dtype
-            )
+            weight = _as_tensor(self.weight, device=science.device, dtype=science.dtype)
             if weight.numel() != 1 and weight.shape != science.shape:
                 raise ValueError("IFU weight must be scalar or match the science image")
             object.__setattr__(self, "weight", weight)
@@ -602,7 +636,7 @@ class CubeResult:
         return QualityProduct(dq=self.dq, usability_mask=self.usability_mask)
 
     def query_uncertainty(self, query: Tensor) -> ApertureUncertainty:
-        value = torch.as_tensor(query, device=self.data.device, dtype=self.data.dtype)
+        value = _as_tensor(query, device=self.data.device, dtype=self.data.dtype)
         if value.shape != self.data.shape:
             raise ValueError("cube uncertainty query must match the cube shape")
         if self.covariance is None:
@@ -619,7 +653,7 @@ class CubeResult:
         spatial_aperture: Tensor,
         spectral_weights: Tensor | None = None,
     ) -> ApertureUncertainty:
-        spatial = torch.as_tensor(
+        spatial = _as_tensor(
             spatial_aperture,
             device=self.data.device,
             dtype=self.data.dtype,
@@ -631,7 +665,7 @@ class CubeResult:
                 self.data.shape[0], device=self.data.device, dtype=self.data.dtype
             )
             if spectral_weights is None
-            else torch.as_tensor(
+            else _as_tensor(
                 spectral_weights,
                 device=self.data.device,
                 dtype=self.data.dtype,

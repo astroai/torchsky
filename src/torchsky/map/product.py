@@ -11,7 +11,7 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
-from ..device import resolve_device
+from ..device import _as_tensor, resolve_device, _to
 from ..sphere.moc import MOC
 from ..spectral import SpectralAxis
 from ..spectrophotometry import Passband
@@ -928,9 +928,7 @@ def _streaming_sample_variance(
     mean = torch.zeros_like(reference)
     m2 = torch.zeros_like(reference)
     for count, raw_sample in enumerate(samples, start=1):
-        sample = torch.as_tensor(
-            raw_sample, device=reference.device, dtype=reference.dtype
-        )
+        sample = _as_tensor(raw_sample, device=reference.device, dtype=reference.dtype)
         if sample.shape != reference.shape:
             raise ValueError(f"{label} draw shape must match the rendered product")
         if not bool(torch.isfinite(sample).all()):
@@ -1005,7 +1003,8 @@ def render_field_ensemble_product(
         m2 = m2 + delta * (sample - mean)
         if member_has_detector:
             assert result.uncertainty is not None and detector_sum is not None
-            detector_sum = detector_sum + result.uncertainty.variance.to(
+            detector_sum = detector_sum + _to(
+                result.uncertainty.variance,
                 device=sample.device,
                 dtype=sample.dtype,
             )
@@ -1118,7 +1117,8 @@ def estimate_map_inverse_variance(
         return torch.clamp(weight, min=float(min_inverse_variance))
     if mode != "support_density_proxy":
         raise ValueError(f"unsupported uncertainty mode {mode!r}")
-    reference = _as_cube(support_weight if support_weight is not None else weight).to(
+    reference = _to(
+        _as_cube(support_weight if support_weight is not None else weight),
         dtype=torch.float32,
         device=weight.device,
     )

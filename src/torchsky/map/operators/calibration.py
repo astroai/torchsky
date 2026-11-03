@@ -19,6 +19,7 @@ from .learned_kernel import (
     ExtendedResidualKernelPSF,
     LowRankChromaticPSF,
 )
+from ...device import _as_tensor, _to
 
 FieldTrainingStage = Literal["scene", "background", "psf", "joint"]
 
@@ -73,7 +74,7 @@ def registered_image_stamps(
     """Bilinearly sample source-centred, phase-registered image stamps."""
     if image.ndim != 2 or not image.is_floating_point():
         raise ValueError("image must be a floating-point 2D tensor")
-    positions = torch.as_tensor(source_xy, device=image.device, dtype=image.dtype)
+    positions = _as_tensor(source_xy, device=image.device, dtype=image.dtype)
     if (
         positions.ndim != 2
         or positions.shape[1] != 2
@@ -172,8 +173,8 @@ class PSFCalibrationTerm:
     def predicted_kernels(self) -> Tensor:
         parameter = next(self.model.parameters())
         coordinates = [
-            self.detector_x.to(device=parameter.device, dtype=parameter.dtype),
-            self.detector_y.to(device=parameter.device, dtype=parameter.dtype),
+            _to(self.detector_x, device=parameter.device, dtype=parameter.dtype),
+            _to(self.detector_y, device=parameter.device, dtype=parameter.dtype),
             self.wavelength.to(device=parameter.device),
             self.time_mjd.to(device=parameter.device),
         ]
@@ -189,10 +190,12 @@ class PSFCalibrationTerm:
 
     def raw_loss(self) -> Tensor:
         predicted = self.predicted_kernels()
-        target = self.target_kernels.to(device=predicted.device, dtype=predicted.dtype)
+        target = _to(
+            self.target_kernels, device=predicted.device, dtype=predicted.dtype
+        )
         assert self.pixel_weight is not None
-        pixel_weight = self.pixel_weight.to(
-            device=predicted.device, dtype=predicted.dtype
+        pixel_weight = _to(
+            self.pixel_weight, device=predicted.device, dtype=predicted.dtype
         )
         valid = pixel_weight > 0.0
         predicted = torch.where(valid, predicted, torch.zeros_like(predicted))
@@ -203,7 +206,9 @@ class PSFCalibrationTerm:
             dim=(-2, -1)
         ) / pixel_weight.sum(dim=(-2, -1))
         assert self.sample_weight is not None
-        weights = self.sample_weight.to(device=predicted.device, dtype=predicted.dtype)
+        weights = _to(
+            self.sample_weight, device=predicted.device, dtype=predicted.dtype
+        )
         return (per_sample * weights).sum() / weights.sum()
 
     def penalty(self) -> Tensor:
@@ -217,7 +222,9 @@ class PSFCalibrationTerm:
 
     def diagnostics(self) -> dict[str, float | int | str]:
         predicted = self.predicted_kernels().detach()
-        target = self.target_kernels.to(device=predicted.device, dtype=predicted.dtype)
+        target = _to(
+            self.target_kernels, device=predicted.device, dtype=predicted.dtype
+        )
         assert self.pixel_weight is not None
         valid = self.pixel_weight.to(device=predicted.device) > 0.0
         predicted = torch.where(valid, predicted, torch.zeros_like(predicted))
@@ -320,14 +327,16 @@ class BackgroundCalibrationTerm:
     def raw_loss(self) -> Tensor:
         parameter = next(self.model.parameters())
         predicted = self.model(
-            self.detector_x.to(device=parameter.device, dtype=parameter.dtype),
-            self.detector_y.to(device=parameter.device, dtype=parameter.dtype),
+            _to(self.detector_x, device=parameter.device, dtype=parameter.dtype),
+            _to(self.detector_y, device=parameter.device, dtype=parameter.dtype),
             self.wavelength.to(device=parameter.device),
             self.time_mjd.to(device=parameter.device),
         )
-        target = self.target_values.to(device=predicted.device, dtype=predicted.dtype)
+        target = _to(self.target_values, device=predicted.device, dtype=predicted.dtype)
         assert self.sample_weight is not None
-        weights = self.sample_weight.to(device=predicted.device, dtype=predicted.dtype)
+        weights = _to(
+            self.sample_weight, device=predicted.device, dtype=predicted.dtype
+        )
         return (torch.square(predicted - target) * weights).sum() / weights.sum()
 
     def penalty(self) -> Tensor:
@@ -336,16 +345,18 @@ class BackgroundCalibrationTerm:
     def diagnostics(self) -> dict[str, float | int | str]:
         parameter = next(self.model.parameters())
         predicted = self.model(
-            self.detector_x.to(device=parameter.device, dtype=parameter.dtype),
-            self.detector_y.to(device=parameter.device, dtype=parameter.dtype),
+            _to(self.detector_x, device=parameter.device, dtype=parameter.dtype),
+            _to(self.detector_y, device=parameter.device, dtype=parameter.dtype),
             self.wavelength.to(device=parameter.device),
             self.time_mjd.to(device=parameter.device),
         ).detach()
-        residual = predicted - self.target_values.to(
-            device=predicted.device, dtype=predicted.dtype
+        residual = predicted - _to(
+            self.target_values, device=predicted.device, dtype=predicted.dtype
         )
         assert self.sample_weight is not None
-        weights = self.sample_weight.to(device=predicted.device, dtype=predicted.dtype)
+        weights = _to(
+            self.sample_weight, device=predicted.device, dtype=predicted.dtype
+        )
         return {
             "name": self.name,
             "kind": "background_value_mse",
@@ -464,10 +475,10 @@ def operator_calibration_identifiability_report(
                     axis.gate_logits.copy_(saved_logits)
 
         coordinates = [
-            term.detector_x.to(device=parameter.device, dtype=parameter.dtype)
+            _to(term.detector_x, device=parameter.device, dtype=parameter.dtype)
             .detach()
             .requires_grad_(),
-            term.detector_y.to(device=parameter.device, dtype=parameter.dtype)
+            _to(term.detector_y, device=parameter.device, dtype=parameter.dtype)
             .detach()
             .requires_grad_(),
             # Preserve small offsets from large wavelength/MJD origins until
@@ -488,14 +499,17 @@ def operator_calibration_identifiability_report(
         for probe_index in range(effective_probes):
             if isinstance(term, PSFCalibrationTerm):
                 projection = (
-                    torch.randint(
-                        0,
-                        2,
-                        output.shape,
-                        generator=generator,
-                        device="cpu",
+                    _to(
+                        torch.randint(
+                            0,
+                            2,
+                            output.shape,
+                            generator=generator,
+                            device="cpu",
+                        ),
+                        device=output.device,
+                        dtype=output.dtype,
                     )
-                    .to(device=output.device, dtype=output.dtype)
                     .mul_(2.0)
                     .sub_(1.0)
                 )

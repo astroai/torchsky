@@ -70,7 +70,9 @@ from .operators.pixel_area import (
     representative_pixel_area_sr,
 )
 from .operators.resampling import (
+    in_bounds_kernel_sum,
     sample_image_plane_batched_channels,
+    supports_in_bounds_kernel_sum,
 )
 from .quality import DQPolicy
 from .sky import CrossExposureSkyCorrector, MeshSkyEstimator
@@ -140,6 +142,7 @@ from ._image_plane_uncertainty import (  # noqa: F401
     _propagate_observation_dq,
     _propagate_observation_variance_components,
 )
+from ..device import _to
 
 _FINITE_APERTURE_COVARIANCE_KERNELS = frozenset(
     {
@@ -1777,10 +1780,8 @@ def coadd_image_plane_cube(
             drizzle_pixfrac=drizzle_pixfrac,
             background_estimator=background_estimator,
         )
-        coeffs = (
-            projection[obs_idx]
-            .to(device=device, dtype=torch.float32)
-            .view(n_band, 1, 1)
+        coeffs = _to(projection[obs_idx], device=device, dtype=torch.float32).view(
+            n_band, 1, 1
         )
         pixel_area_sr = None
         if value_semantics == "flux":
@@ -2038,7 +2039,7 @@ def blot(
         blot_target = target
 
     map_device = _resolve_map_device(device, coadd_tensor, source_or_target)
-    coadd_img = coadd_tensor.to(device=map_device, dtype=torch.float32)
+    coadd_img = _to(coadd_tensor, device=map_device, dtype=torch.float32)
     coadd_wcs = WCS(coadd_header)
     coadd_shape = (int(coadd_img.shape[0]), int(coadd_img.shape[1]))
     h_c, w_c = coadd_shape
@@ -2101,6 +2102,15 @@ def blot(
             grid=grid,
             kernel=kernel,
         )[0]
+        # Renormalise the kernel where its taps fall off the coadd edge.
+        if supports_in_bounds_kernel_sum(kernel):
+            kernel_sum = in_bounds_kernel_sum(
+                src_x, src_y, height=h_c, width=w_c, kernel=kernel
+            ).to(dtype=sampled.dtype)
+            in_bounds = in_bounds & (kernel_sum > torch.finfo(sampled.dtype).eps)
+            sampled = sampled / torch.where(
+                in_bounds, kernel_sum, torch.ones_like(kernel_sum)
+            )
         sampled = torch.where(in_bounds, sampled, torch.zeros_like(sampled))
         if semantics == "flux":
             assert dest_prep.pixel_area_sr is not None

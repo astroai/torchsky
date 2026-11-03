@@ -9,7 +9,7 @@
 
 Source-quadrature transport into native, already integrated detector pixels.
 
-**Guides:** [native-likelihood](../native-likelihood.md), [psf-response-conventions](../psf-response-conventions.md)
+**Guides:** [likelihoods](../models/likelihoods.md), [psf-conventions](../models/psf-conventions.md)
 
 ---
 

@@ -19,6 +19,7 @@ import torch
 from torch import Tensor
 
 from .wcs.iau2006 import C_M_S, earth_barycentric_velocity_icrs
+from .device import _as_tensor, _to
 
 C_KM_S = 299792.458
 
@@ -168,7 +169,7 @@ def one_plus_z_from_codes(
 ) -> Tensor:
     """Convert per-sample velocity kinds without device-synchronizing branches."""
     default_code = _normalize_v_kind(default_kind)
-    codes = kind_codes.to(device=value.device, dtype=torch.long)
+    codes = _to(kind_codes, device=value.device, dtype=torch.long)
     while codes.ndim < value.ndim:
         codes = codes.unsqueeze(-1)
     recognized = (
@@ -222,13 +223,15 @@ def compose_rapidities(*zetas: Tensor | float) -> Tensor:
         raise TypeError("compose_rapidities requires at least one rapidity")
     total = torch.as_tensor(zetas[0])
     for zeta in zetas[1:]:
-        total = total + torch.as_tensor(zeta).to(device=total.device, dtype=total.dtype)
+        total = total + _to(
+            torch.as_tensor(zeta), device=total.device, dtype=total.dtype
+        )
     return total
 
 
 def shift_ln_wavelength(ln_lambda: Tensor, zeta: Tensor | float) -> Tensor:
     """``ln λ' = ln λ + ζ``. Formulation Step 3 is ``ln λ_topo = ln λ_rest + ζ_sys + ζ_BERV``."""
-    shift = torch.as_tensor(zeta).to(device=ln_lambda.device, dtype=ln_lambda.dtype)
+    shift = _to(torch.as_tensor(zeta), device=ln_lambda.device, dtype=ln_lambda.dtype)
     while shift.ndim < ln_lambda.ndim:
         shift = shift.unsqueeze(-1)
     return ln_lambda + shift
@@ -247,7 +250,7 @@ def los_barycentric_beta(unit_xyz: Tensor, tt_mjd: Tensor) -> Tensor:
     norm = torch.linalg.vector_norm(n, dim=-1, keepdim=True).clamp_min(1.0e-15)
     n = n / norm
     velocity = earth_barycentric_velocity_icrs(torch.as_tensor(tt_mjd))
-    velocity = velocity.to(device=n.device, dtype=n.dtype)
+    velocity = _to(velocity, device=n.device, dtype=n.dtype)
     while velocity.ndim < n.ndim:
         velocity = velocity.unsqueeze(0)
     while n.ndim < velocity.ndim:
@@ -291,11 +294,11 @@ def apply_redshift_f_lambda(
 ) -> tuple[Tensor, Tensor]:
     """Shift a sampled ``F_λ`` spectrum: ``λ' = λ(1+z)``, ``F' = F / (1+z)``."""
     factor = _require_one_plus_z(
-        torch.as_tensor(one_plus_z).to(device=flux_rest.device, dtype=flux_rest.dtype)
+        _to(torch.as_tensor(one_plus_z), device=flux_rest.device, dtype=flux_rest.dtype)
     )
     if isinstance(factor, Tensor) and factor.ndim == flux_rest.ndim - 1:
         factor = factor.unsqueeze(-1)
-    lam = torch.as_tensor(lambda_rest, device=flux_rest.device, dtype=flux_rest.dtype)
+    lam = _as_tensor(lambda_rest, device=flux_rest.device, dtype=flux_rest.dtype)
     return flux_rest / factor, lam * factor
 
 
@@ -325,7 +328,7 @@ def apply_redshift(
     """
     if velocity_or_z.ndim == flux_rest.ndim - 1:
         velocity_or_z = velocity_or_z.unsqueeze(-1)
-    velocity_or_z = velocity_or_z.to(device=flux_rest.device, dtype=flux_rest.dtype)
+    velocity_or_z = _to(velocity_or_z, device=flux_rest.device, dtype=flux_rest.dtype)
     if is_velocity:
         one_plus_z = one_plus_z_from_velocity_kms(velocity_or_z, relativistic=True)
     else:

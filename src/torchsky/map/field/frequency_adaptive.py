@@ -20,6 +20,7 @@ from torch import Tensor
 from .core import _BaseFieldModel
 from .hashgrid import HashGridEncoder
 from .types import FieldDomain
+from ...device import _to
 
 
 def _validate_bandwidths(values: Sequence[float]) -> tuple[float, ...]:
@@ -135,7 +136,8 @@ class BaconField(_BaseFieldModel):
             raise ValueError(f"level must be in [0, {self.num_levels - 1}]")
         # Every entry of ``readouts`` is an ``nn.Linear`` appended in ``__init__``.
         parameter = cast(nn.Linear, self.readouts[0]).weight
-        coords = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom).to(
+        coords = _to(
+            self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom),
             device=parameter.device,
             dtype=parameter.dtype,
         )
@@ -324,11 +326,15 @@ class SASNetField(_BaseFieldModel):
         """Return learned per-frequency masks for diagnostics."""
         # ``readout`` is built as Linear -> SiLU -> Linear in ``__init__``.
         parameter = cast(nn.Linear, self.readout[0]).weight
-        coords_unit = self._unit_box_coords(
-            ra_deg,
-            dec_deg,
-            wavelength_angstrom,
-        ).to(device=parameter.device, dtype=parameter.dtype)
+        coords_unit = _to(
+            self._unit_box_coords(
+                ra_deg,
+                dec_deg,
+                wavelength_angstrom,
+            ),
+            device=parameter.device,
+            dtype=parameter.dtype,
+        )
         mask_features = self.mask_encoder(coords_unit[..., :-1])
         return torch.sigmoid(self.mask_network(mask_features))
 
@@ -340,7 +346,8 @@ class SASNetField(_BaseFieldModel):
     ) -> Tensor:
         # ``readout`` is built as Linear -> SiLU -> Linear in ``__init__``.
         parameter = cast(nn.Linear, self.readout[0]).weight
-        coords = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom).to(
+        coords = _to(
+            self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom),
             device=parameter.device,
             dtype=parameter.dtype,
         )
@@ -422,8 +429,10 @@ class FlairField(_BaseFieldModel):
     def forward(
         self, ra_deg: Tensor, dec_deg: Tensor, wavelength_angstrom: Tensor | float
     ) -> Tensor:
-        features = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom).to(
-            device=self.output.weight.device, dtype=self.output.weight.dtype
+        features = _to(
+            self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom),
+            device=self.output.weight.device,
+            dtype=self.output.weight.dtype,
         )
         for index, layer in enumerate(self.hidden):
             features = _bla_features(

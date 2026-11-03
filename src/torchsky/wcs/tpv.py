@@ -3,6 +3,7 @@ from typing import Any, Dict, Tuple
 
 import torch
 from torch import Tensor
+from ..device import _to
 
 PV1_KEYS = tuple(f"PV1_{i}" for i in range(40))
 PV2_KEYS = tuple(f"PV2_{i}" for i in range(40))
@@ -196,8 +197,8 @@ class TPV:
     def to(self, device: torch.device) -> "TPV":
         self.idx1, self.idx2 = self.idx1.to(device), self.idx2.to(device)
         coeff_dtype = torch.float32 if device.type == "mps" else self.c1.dtype
-        self.c1 = self.c1.to(device=device, dtype=coeff_dtype)
-        self.c2 = self.c2.to(device=device, dtype=coeff_dtype)
+        self.c1 = _to(self.c1, device=device, dtype=coeff_dtype)
+        self.c2 = _to(self.c2, device=device, dtype=coeff_dtype)
         return self
 
     def distort(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:

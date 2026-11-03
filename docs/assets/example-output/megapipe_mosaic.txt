@@ -1,0 +1,20 @@
+tile 712.165: CRVAL (359.072, -7.500), exposure 240 s, noise 1.76 counts/px
+tile 711.165: CRVAL (358.568, -7.500), exposure 240 s, noise 1.62 counts/px
+tile 712.166a: CRVAL (358.673, -7.000), exposure 1224 s, noise 1.43 counts/px
+tile 712.166b: CRVAL (358.673, -7.000), exposure 1224 s, noise 1.46 counts/px
+common TAN grid: (712, 868) px
+lanczos3: pairwise overlaps (interior, 8 px eroded)
+  712.165 - 711.165: 152896 px, median offset -0.000, rms 0.25 (noise-only 2.39, ratio 0.10)
+  712.165 - 712.166a: 127221 px, median offset -0.002, rms 0.56 (noise-only 2.26, ratio 0.25)
+  712.165 - 712.166b:  47861 px, median offset -0.002, rms 0.69 (noise-only 2.29, ratio 0.30)
+  711.165 - 712.166a: 125550 px, median offset -0.002, rms 0.52 (noise-only 2.16, ratio 0.24)
+  711.165 - 712.166b: 112216 px, median offset -0.002, rms 0.47 (noise-only 2.19, ratio 0.22)
+  coadd: 554955 covered px; pixels seen by 1/2/3/4 cutouts: 250638/178767/77689/47861
+drizzle_square: pairwise overlaps (interior, 8 px eroded)
+  712.165 - 711.165: 154207 px, median offset -0.000, rms 0.25 (noise-only 2.39, ratio 0.10)
+  712.165 - 712.166a: 128666 px, median offset -0.001, rms 0.49 (noise-only 2.26, ratio 0.22)
+  712.165 - 712.166b:  48794 px, median offset +0.000, rms 0.59 (noise-only 2.29, ratio 0.26)
+  711.165 - 712.166a: 126984 px, median offset -0.002, rms 0.41 (noise-only 2.16, ratio 0.19)
+  711.165 - 712.166b: 113563 px, median offset -0.002, rms 0.36 (noise-only 2.19, ratio 0.17)
+  coadd: 556094 covered px; pixels seen by 1/2/3/4 cutouts: 249678/179432/78190/48794
+Lanczos3 vs drizzle coadd: pixel correlation 0.9982 over 554955 px

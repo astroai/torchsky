@@ -9,7 +9,7 @@
 
 Field-observation bandpass metadata from SVO, transmission files, built-in tables, or Gaussian profiles.
 
-**Guides:** [field](../field.md), [map](../map.md)
+**Guides:** [fields](../models/fields.md), [coadds](../maps/coadds.md)
 
 ---
 

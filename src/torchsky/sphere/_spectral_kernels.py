@@ -41,6 +41,7 @@ from ._spectral_ring_fourier import (
     _ring_fourier_modes,
     _ring_fourier_synthesis,
 )
+from ..device import _to
 
 
 _M_PER_ALM_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
@@ -104,8 +105,8 @@ def _scalar_legendre_scan(
     thr = 2.0 ** (scale_bits // 2)
     inv = 2.0 ** (-scale_bits)
 
-    th = theta_ring.to(device="cpu", dtype=torch.float64)
-    ct = torch.cos(th).to(device=device, dtype=dtype)
+    th = _to(theta_ring, device="cpu", dtype=torch.float64)
+    ct = _to(torch.cos(th), device=device, dtype=dtype)
     log_sin = torch.log(torch.clamp(torch.sin(th), min=1e-300))
     mv = torch.arange(m0, m1, dtype=torch.float64)
     log_c = 0.5 * (
@@ -118,8 +119,8 @@ def _scalar_legendre_scan(
     ex64 = torch.clamp(torch.floor(seed_log / ln_scale), max=0.0)
     mant = torch.exp(seed_log - ex64 * ln_scale)
     sign = torch.where(mv % 2 == 0, 1.0, -1.0)
-    mant = (mant * sign[:, None]).to(device=device, dtype=dtype)
-    ex = ex64.to(device=device, dtype=dtype)
+    mant = _to(mant * sign[:, None], device=device, dtype=dtype)
+    ex = _to(ex64, device=device, dtype=dtype)
 
     lam1 = torch.zeros((nm, ct.numel()), dtype=dtype, device=device)
     lam2 = torch.zeros_like(lam1)
@@ -137,8 +138,8 @@ def _scalar_legendre_scan(
                 * (((ell - 1.0) ** 2) - ms * ms)
                 / den
             )
-            a_t = a.to(device=device, dtype=dtype)[:, None]
-            b_t = b.to(device=device, dtype=dtype)[:, None]
+            a_t = _to(a, device=device, dtype=dtype)[:, None]
+            b_t = _to(b, device=device, dtype=dtype)[:, None]
             new[:kp] = a_t * ct[None, :] * lam1[:kp] - b_t * lam2[:kp]
         if ell < m1:
             new[ell - m0] = mant[ell - m0]
@@ -169,7 +170,7 @@ def _scalar_ring_legendre_integrate(
         for ell, k, lam in _scalar_legendre_scan(
             theta_ring, m0=m0, m1=m1, lmax=lmax, device=_scan_device(device)
         ):
-            lam = lam.to(device=device, dtype=real_dtype)
+            lam = _to(lam, device=device, dtype=real_dtype)
             coef = torch.einsum("bmrc,mr->bmc", s_c[:, :k], lam)
             out[:, base[m0 : m0 + k] + ell] = coef * pix_w
     return torch.view_as_complex(out.contiguous())
@@ -191,7 +192,7 @@ def _scalar_ring_legendre_synthesize(
         for ell, k, lam in _scalar_legendre_scan(
             theta_ring, m0=m0, m1=m1, lmax=lmax, device=_scan_device(device)
         ):
-            lam = lam.to(device=device, dtype=real_dtype)
+            lam = _to(lam, device=device, dtype=real_dtype)
             coef = a_ri[:, base[m0 : m0 + k] + ell]
             f[:, m0 : m0 + k] += coef[:, :, None, :] * lam[None, :, :, None]
     return torch.view_as_complex(f.contiguous())
@@ -229,8 +230,10 @@ def _scalar_alm2map_ring_torch(
             out_s_m.append(s_modes)
         s_modes_batch = torch.stack(out_s_m, dim=0)
 
-        phase0_pos = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1).to(
-            dtype=torch.complex128, device=s_modes_batch.device
+        phase0_pos = _to(
+            _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1),
+            dtype=torch.complex128,
+            device=s_modes_batch.device,
         )
         c_all = s_modes_batch * phase0_pos.unsqueeze(0)
 
@@ -247,8 +250,10 @@ def _scalar_alm2map_ring_torch(
             mmax=int(mmax),
         )
 
-        phi0_phase = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1).to(
-            device=device, dtype=dtype_cplx
+        phi0_phase = _to(
+            _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1),
+            device=device,
+            dtype=dtype_cplx,
         )
         # Apply phi0 phase per m
         f_m_ring = f_m_ring * phi0_phase.unsqueeze(0)
@@ -292,8 +297,10 @@ def _scalar_map2alm_ring_torch(
         nside=int(nside),
     )
 
-    phase0_neg = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=-1).to(
-        device=device, dtype=dtype_cplx
+    phase0_neg = _to(
+        _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=-1),
+        device=device,
+        dtype=dtype_cplx,
     )
     s_all = s_all * phase0_neg.unsqueeze(0)
 
@@ -374,8 +381,8 @@ def _ring_spin_interpolate_blocks(
         if y_plus.numel() == 0:
             empty = torch.zeros((int(mmax) + 1, 0), dtype=dtype, device=device)
             return empty, empty
-        y_plus = y_plus.to(device=device, dtype=dtype)
-        y_minus = y_minus.to(device=device, dtype=dtype)
+        y_plus = _to(y_plus, device=device, dtype=dtype)
+        y_minus = _to(y_minus, device=device, dtype=dtype)
         use_cpp = (
             os.environ.get("TORCHSKY_SPIN_RING_INTERP_CONCAT_CPP", "1") != "0"
             and _native_ops.has_spectral_dispatcher()
@@ -420,8 +427,8 @@ def _ring_spin_interpolate_blocks(
     idx = 0
     for m in range(int(mmax) + 1):
         l_count = int(lmax) - m + 1
-        y_plus = y_plus_blocks[m].to(device=device, dtype=dtype)
-        y_minus = y_minus_blocks[m].to(device=device, dtype=dtype)
+        y_plus = _to(y_plus_blocks[m], device=device, dtype=dtype)
+        y_minus = _to(y_minus_blocks[m], device=device, dtype=dtype)
         c_plus_m = coeff_plus[idx : idx + l_count]
         c_minus_m = coeff_minus[idx : idx + l_count]
         s_plus[m] = c_plus_m @ y_plus
@@ -456,8 +463,8 @@ def _ring_spin_integrate_blocks(
         if y_plus.numel() == 0:
             empty = torch.zeros((nalm,), dtype=dtype, device=device)
             return empty, empty
-        y_plus = y_plus.to(device=device, dtype=dtype)
-        y_minus = y_minus.to(device=device, dtype=dtype)
+        y_plus = _to(y_plus, device=device, dtype=dtype)
+        y_minus = _to(y_minus, device=device, dtype=dtype)
         use_cpp = (
             os.environ.get("TORCHSKY_SPIN_RING_INTEGRATE_CONCAT_CPP", "1") != "0"
             and _native_ops.has_spectral_dispatcher()
@@ -499,8 +506,8 @@ def _ring_spin_integrate_blocks(
     idx = 0
     for m in range(int(mmax) + 1):
         l_count = int(lmax) - m + 1
-        y_plus = y_plus_blocks[m].to(device=device, dtype=dtype)
-        y_minus = y_minus_blocks[m].to(device=device, dtype=dtype)
+        y_plus = _to(y_plus_blocks[m], device=device, dtype=dtype)
+        y_minus = _to(y_minus_blocks[m], device=device, dtype=dtype)
         c_plus[idx : idx + l_count] = (y_plus @ s_plus[m]) * pix_w
         c_minus[idx : idx + l_count] = (y_minus @ s_minus[m]) * pix_w
         idx += l_count
@@ -566,8 +573,8 @@ def _spin_alm2map_ring_torch(
             # Fast path: call C++ directly and avoid stack/detach overhead
             _, _, theta_ring_cpu, _ = _ring_layout_for_nside(nside)
             # We still need complex128 CPU tensors for the current C++ impl
-            cp_cpu = coeff_plus.to(dtype=torch.complex128, device="cpu").contiguous()
-            cm_cpu = coeff_minus.to(dtype=torch.complex128, device="cpu").contiguous()
+            cp_cpu = _to(coeff_plus, dtype=torch.complex128, device="cpu").contiguous()
+            cm_cpu = _to(coeff_minus, dtype=torch.complex128, device="cpu").contiguous()
             alm_stack = torch.stack([cp_cpu, cm_cpu], dim=0)
 
             s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
@@ -590,8 +597,10 @@ def _spin_alm2map_ring_torch(
         )
 
     # 2. Apply phase factors and inverse FFT to get ring values
-    phase0_pos = _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1).to(
-        device=s_plus.device, dtype=s_plus.dtype
+    phase0_pos = _to(
+        _ring_phi0_phase_for_nside(int(nside), int(mmax), sign=1),
+        device=s_plus.device,
+        dtype=s_plus.dtype,
     )
     s_plus = s_plus * phase0_pos
     s_minus = s_minus * phase0_pos

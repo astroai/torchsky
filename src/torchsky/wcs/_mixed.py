@@ -14,6 +14,7 @@ from ._math import _wrap_lon180
 from .tabular import (
     _solve_coupled_tabular_partial,
 )
+from ..device import _as_tensor, _to
 
 if TYPE_CHECKING:
     pass
@@ -215,12 +216,8 @@ class _MixedMixin:
                     "mixed coupled tabular transforms require a complete pixel sample "
                     "or a complete world sample for the coupled axes"
                 )
-            pix_t = torch.as_tensor(
-                pix_axes, dtype=torch.long, device=pixel_flat.device
-            )
-            world_t = torch.as_tensor(
-                world_axes, dtype=torch.long, device=pixel_flat.device
-            )
+            pix_t = _as_tensor(pix_axes, dtype=torch.long, device=pixel_flat.device)
+            world_t = _as_tensor(world_axes, dtype=torch.long, device=pixel_flat.device)
             for row_index in (
                 torch.nonzero(leftover, as_tuple=False).reshape(-1).tolist()
             ):
@@ -355,13 +352,13 @@ class _MixedMixin:
             rows_w = world_flat[row_mask]
             rel = rows_p + (1.0 - float(origin)) - self.crpix
             if unknown_pixel_axes and world_axes_known:
-                known_pix = torch.as_tensor(
+                known_pix = _as_tensor(
                     pixel_axes_known, dtype=torch.long, device=self.device
                 )
-                unknown_pix = torch.as_tensor(
+                unknown_pix = _as_tensor(
                     unknown_pixel_axes, dtype=torch.long, device=self.device
                 )
-                known_world = torch.as_tensor(
+                known_world = _as_tensor(
                     world_axes_known, dtype=torch.long, device=self.device
                 )
                 rhs = rows_w[:, known_world] - self.crval[known_world]
@@ -422,13 +419,13 @@ class _MixedMixin:
             if len(world_axes_known) == 0:
                 continue
             rel = rows_p + (1.0 - float(origin)) - self.crpix
-            known_pix = torch.as_tensor(
+            known_pix = _as_tensor(
                 pixel_axes_known, dtype=torch.long, device=self.device
             )
-            unknown_pix = torch.as_tensor(
+            unknown_pix = _as_tensor(
                 unknown_pixel_axes, dtype=torch.long, device=self.device
             )
-            known_world = torch.as_tensor(
+            known_world = _as_tensor(
                 world_axes_known, dtype=torch.long, device=self.device
             )
             rhs = rows_w[:, known_world] - self.crval[known_world]
@@ -459,7 +456,7 @@ class _MixedMixin:
                 dtype=self._wcs_coord_dtype(self.device),
                 device=self.device,
             )
-        tensor = torch.as_tensor(
+        tensor = _as_tensor(
             value, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         if tensor.shape == ():
@@ -555,7 +552,7 @@ class _MixedMixin:
         xs = x.index_select(0, idx_s)
         with torch.no_grad():
             val = fn(xs.detach())
-        j = jac.to(dtype=xs.dtype, device=xs.device)
+        j = _to(jac, dtype=xs.dtype, device=xs.device)
         cols = list(x_ref_axes)
         dx = (xs - xs.detach())[:, cols]
         out_s = val + dx @ j.T

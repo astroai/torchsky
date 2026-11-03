@@ -9,7 +9,7 @@
 
 Explicit diagonal calibration of an already integrated detector product.
 
-**Guides:** [native-likelihood](../native-likelihood.md)
+**Guides:** [likelihoods](../models/likelihoods.md)
 
 ---
 

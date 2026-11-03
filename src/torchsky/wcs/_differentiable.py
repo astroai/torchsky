@@ -9,6 +9,7 @@ from typing import (
     Any,
 )
 import numpy as np
+from ..device import _as_tensor, _to
 
 
 if TYPE_CHECKING:
@@ -84,7 +85,7 @@ class _DifferentiableMixin:
                 .cpu()
             )
             return wmat @ cd
-        pix = self._reference_pixel(origin).to(dtype=dt, device=dev)
+        pix = _to(self._reference_pixel(origin), dtype=dt, device=dev)
         if code in self._KINKED_CODES:
             pix = pix + self._KINK_STEP * torch.tensor(
                 [1.0, 0.371], dtype=dt, device=dev
@@ -119,7 +120,7 @@ class _DifferentiableMixin:
         rel = (
             pixels_flat.detach()[:, :2]
             + (1.0 - origin)
-            - self.crpix[:2].to(device=pixels_flat.device, dtype=pixels_flat.dtype)
+            - _to(self.crpix[:2], device=pixels_flat.device, dtype=pixels_flat.dtype)
         )
         at_ref = rel.abs().amax(dim=1) < self._REF_TOL
         if not bool(at_ref.any()):
@@ -148,8 +149,10 @@ class _DifferentiableMixin:
             return fn(world_flat)
         lon, lat = self._celestial_lon_axis, self._celestial_lat_axis
         with torch.no_grad():
-            pix_ref = self._reference_pixel(origin).to(
-                dtype=world_flat.dtype, device=world_flat.device
+            pix_ref = _to(
+                self._reference_pixel(origin),
+                dtype=world_flat.dtype,
+                device=world_flat.device,
             )
             world_ref = self._stacked_pixels_to_world_flat(
                 pix_ref[None], origin, allow_cpp_sphere=False
@@ -277,8 +280,8 @@ class _DifferentiableMixin:
         """
         if y is not None:
             dt = self._wcs_coord_dtype(self.device)
-            x_t = torch.as_tensor(coords, dtype=dt, device=self.device)
-            y_t = torch.as_tensor(y, dtype=dt, device=self.device)
+            x_t = _as_tensor(coords, dtype=dt, device=self.device)
+            y_t = _as_tensor(y, dtype=dt, device=self.device)
             x_t, y_t = torch.broadcast_tensors(x_t, y_t)
             stacked = torch.stack([x_t, y_t], dim=-1)
         else:
@@ -361,7 +364,7 @@ class _DifferentiableMixin:
         if len(index_arrays) != self.pixel_n_dim:
             raise ValueError(f"expected {self.pixel_n_dim} array index arrays")
         pixels = [
-            torch.as_tensor(
+            _as_tensor(
                 index_arrays[self.pixel_n_dim - 1 - i],
                 device=self.device,
                 dtype=self._wcs_coord_dtype(self.device),

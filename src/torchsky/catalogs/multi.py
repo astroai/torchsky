@@ -23,6 +23,7 @@ from .core import (
     _normalize_radius_arcsec,
     sky_pairs,
 )
+from ..device import _as_tensor, _to
 
 
 @dataclass
@@ -145,7 +146,7 @@ def crossmatch_self(
     device = ra.device
     dtype = _work_dtype(device)
     ra = ra.to(dtype)
-    dec = torch.as_tensor(lat_deg, dtype=dtype, device=device).reshape(-1)
+    dec = _as_tensor(lat_deg, dtype=dtype, device=device).reshape(-1)
     n = int(ra.numel())
     res = _self_pairs(
         ra, dec, radius_arcsec, err_arcsec, left_chunk_size, right_chunk_size
@@ -210,7 +211,7 @@ def _as_lonlat(cat: Any, device: torch.device | None) -> tuple[Tensor, Tensor]:
     lon = torch.as_tensor(lon).reshape(-1)
     dev = device if device is not None else lon.device
     dtype = _work_dtype(dev)
-    return lon.to(device=dev, dtype=dtype), torch.as_tensor(
+    return _to(lon, device=dev, dtype=dtype), _as_tensor(
         lat, dtype=dtype, device=dev
     ).reshape(-1)
 

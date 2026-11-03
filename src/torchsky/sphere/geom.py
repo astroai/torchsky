@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol, TYPE_CHECKING
 
 import torch
 from torch import Tensor
+from ..device import _to
 
 if TYPE_CHECKING:
     import numpy as np
@@ -20,6 +21,7 @@ except ImportError:
 
 from .. import _ops
 
+from . import _region_area
 from . import healpix as _healpix
 from .core import (
     great_circle_distance,
@@ -84,7 +86,7 @@ def _as_geom_tensor(
 ) -> Tensor:
     tensor = torch.as_tensor(value)
     if like is not None:
-        return tensor.to(device=like.device, dtype=like.dtype)
+        return _to(tensor, device=like.device, dtype=like.dtype)
     if tensor.device.type == "mps":
         return tensor.to(dtype=torch.float32)
     return tensor.to(dtype=torch.float64)
@@ -619,8 +621,8 @@ def spherical_polygon_contains(
     lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
     shape = lon_t.shape
     lon_poly, lat_poly = _normalize_polygon_vertices(poly_lon_deg, poly_lat_deg)
-    lon_poly = lon_poly.to(device=lon_t.device, dtype=lon_t.dtype)
-    lat_poly = lat_poly.to(device=lon_t.device, dtype=lon_t.dtype)
+    lon_poly = _to(lon_poly, device=lon_t.device, dtype=lon_t.dtype)
+    lat_poly = _to(lat_poly, device=lon_t.device, dtype=lon_t.dtype)
     vertices = lonlat_to_unit_xyz(lon_poly, lat_poly).to(dtype=lon_t.dtype)
     points = lonlat_to_unit_xyz(lon_t, lat_t).reshape(-1, 3).to(dtype=lon_t.dtype)
 
@@ -774,7 +776,7 @@ def spherical_polygons_intersect(
     lon1, lat1 = _normalize_polygon_vertices(lon1_deg, lat1_deg)
     lon2, lat2 = _normalize_polygon_vertices(lon2_deg, lat2_deg)
     v1 = lonlat_to_unit_xyz(lon1, lat1)
-    v2 = lonlat_to_unit_xyz(lon2, lat2).to(device=v1.device, dtype=v1.dtype)
+    v2 = _to(lonlat_to_unit_xyz(lon2, lat2), device=v1.device, dtype=v1.dtype)
     tol_rad = math.radians(atol_deg)
 
     v1_next = torch.roll(v1, shifts=-1, dims=0)
@@ -1037,11 +1039,11 @@ class SphericalPolygon:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.union(other)
-        return exact.union(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact union; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "union", self, other, cap_steps=cap_steps, backend=backend
+        )
 
     def exact_intersection(
         self,
@@ -1049,11 +1051,11 @@ class SphericalPolygon:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.intersection(other)
-        return exact.intersection(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact intersection; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "intersection", self, other, cap_steps=cap_steps, backend=backend
+        )
 
     def exact_difference(
         self,
@@ -1061,11 +1063,11 @@ class SphericalPolygon:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.difference(other)
-        return exact.difference(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact difference; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "difference", self, other, cap_steps=cap_steps, backend=backend
+        )
 
 
 @dataclass(frozen=True)
@@ -1081,11 +1083,20 @@ class SphericalMultiPolygon:
         object.__setattr__(self, "polygons", polys)
 
     def area(self, *, degrees: bool = False, oriented: bool = False) -> Tensor:
+        """Area of the union of the members (overlaps count once).
+
+        ``oriented=True`` returns the sum of the members' signed areas instead.
+        """
         vals = [p.area(degrees=degrees, oriented=oriented) for p in self.polygons]
-        out = vals[0]
-        for v in vals[1:]:
-            out = out + v
-        return out
+        if oriented or len(vals) == 1:
+            out = vals[0]
+            for v in vals[1:]:
+                out = out + v
+            return out
+        area_sr = _boolean_area_sr(self)
+        if degrees:
+            area_sr *= (180.0 / math.pi) * (180.0 / math.pi)
+        return torch.tensor(area_sr, dtype=vals[0].dtype, device=vals[0].device)
 
     def contains(
         self,
@@ -1161,11 +1172,11 @@ class SphericalMultiPolygon:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.union(other)
-        return exact.union(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact union; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "union", self, other, cap_steps=cap_steps, backend=backend
+        )
 
     def exact_intersection(
         self,
@@ -1173,11 +1184,11 @@ class SphericalMultiPolygon:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.intersection(other)
-        return exact.intersection(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact intersection; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "intersection", self, other, cap_steps=cap_steps, backend=backend
+        )
 
     def exact_difference(
         self,
@@ -1185,11 +1196,11 @@ class SphericalMultiPolygon:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.difference(other)
-        return exact.difference(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact difference; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "difference", self, other, cap_steps=cap_steps, backend=backend
+        )
 
 
 @dataclass(frozen=True)
@@ -1223,6 +1234,13 @@ class SphericalCap:
         if inclusive:
             return dist <= self.radius_deg + atol_deg
         return dist < self.radius_deg - atol_deg
+
+    def area(self, *, degrees: bool = False) -> float:
+        """Exact cap area ``2 pi (1 - cos r)``."""
+        area_sr = 4.0 * math.pi * math.sin(0.5 * math.radians(self.radius_deg)) ** 2
+        if degrees:
+            return area_sr * ((180.0 / math.pi) * (180.0 / math.pi))
+        return area_sr
 
     def query_pixels(self, nside: int, *, nest: bool = False) -> Tensor:
         return _healpix.query_circle(
@@ -1270,11 +1288,11 @@ class SphericalCap:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.union(other)
-        return exact.union(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact union; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "union", self, other, cap_steps=cap_steps, backend=backend
+        )
 
     def exact_intersection(
         self,
@@ -1282,11 +1300,11 @@ class SphericalCap:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.intersection(other)
-        return exact.intersection(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact intersection; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "intersection", self, other, cap_steps=cap_steps, backend=backend
+        )
 
     def exact_difference(
         self,
@@ -1294,11 +1312,11 @@ class SphericalCap:
         *,
         cap_steps: int = 256,
         backend: Literal["spherical-geometry", "native"] = "native",
-    ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
-        exact = self.to_exact(cap_steps=cap_steps, backend=backend)
-        if isinstance(exact, NativeApproximateSphericalRegion):
-            return exact.difference(other)
-        return exact.difference(other, cap_steps=cap_steps)
+    ) -> "ExactSphericalRegion | SphericalBooleanRegion":
+        """Exact difference; ``native`` returns a region whose ``area()`` is exact."""
+        return _exact_boolean(
+            "difference", self, other, cap_steps=cap_steps, backend=backend
+        )
 
 
 @dataclass(frozen=True)
@@ -1684,8 +1702,31 @@ class SphericalBooleanRegion:
     ) -> "ExactSphericalRegion | NativeApproximateSphericalRegion":
         return to_exact_region(self, cap_steps=cap_steps, backend=backend)
 
-    def exact_area(self, *, degrees: bool = False, cap_steps: int = 256) -> float:
-        return self.to_exact(cap_steps=cap_steps).area(degrees=degrees)
+    def area(self, *, degrees: bool = False) -> float:
+        """Exact area of the combination (steradians unless ``degrees=True``).
+
+        Defined when every operand is a ``SphericalPolygon`` or
+        ``SphericalMultiPolygon`` (great-circle edges): the result's boundary is
+        clipped from the operands' edges and integrated exactly. Operands with
+        small-circle boundaries (caps, boxes, ellipses) raise ``ValueError``;
+        use ``area_estimate()`` for those.
+        """
+        area_sr = _boolean_area_sr(self)
+        if degrees:
+            return area_sr * ((180.0 / math.pi) * (180.0 / math.pi))
+        return area_sr
+
+    def exact_area(
+        self,
+        *,
+        degrees: bool = False,
+        cap_steps: int = 256,
+        backend: Literal["spherical-geometry", "native"] = "native",
+    ) -> float:
+        """Exact area; ``native`` is :meth:`area`, ``spherical-geometry`` is opt-in."""
+        if backend == "native":
+            return self.area(degrees=degrees)
+        return self.to_exact(cap_steps=cap_steps, backend=backend).area(degrees=degrees)
 
 
 @dataclass(frozen=True)
@@ -1724,6 +1765,13 @@ class NativeApproximateSphericalRegion:
                 math.sin(math.radians(region.lat_max))
                 - math.sin(math.radians(region.lat_min))
             )
+        if isinstance(region, (SphericalBooleanRegion, SphericalMultiPolygon)):
+            try:
+                return _boolean_area_sr(region)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"{exc}; use area_estimate() or backend='spherical-geometry'"
+                ) from exc
         raise RuntimeError(
             "analytic native area is unavailable; use area_estimate() or "
             "backend='spherical-geometry'"
@@ -1731,7 +1779,10 @@ class NativeApproximateSphericalRegion:
 
     def area(self, *, degrees: bool = False) -> float:
         area_sr = self._analytic_area_sr()
-        if area_sr <= 0.0:
+        exact_boolean = isinstance(
+            self._region, (SphericalBooleanRegion, SphericalMultiPolygon)
+        )
+        if area_sr <= 0.0 and not exact_boolean:
             raise RuntimeError("native area is indeterminate for zero-area regions")
         if degrees:
             return area_sr * ((180.0 / math.pi) * (180.0 / math.pi))
@@ -1927,6 +1978,86 @@ class ExactSphericalRegion:
                 "exact region is empty; cannot convert to SphericalMultiPolygon"
             )
         return SphericalMultiPolygon(tuple(polys))
+
+
+def _polygon_loop(polygon: SphericalPolygon) -> _region_area.OrientedLoop:
+    lon = _to(polygon.lon_deg.detach(), device="cpu", dtype=torch.float64)
+    lat = _to(polygon.lat_deg.detach(), device="cpu", dtype=torch.float64)
+    vertices = lonlat_to_unit_xyz(lon, lat)
+    left_is_small = _region_area.loop_left_area(vertices) <= 2.0 * math.pi
+    region_is_small = True
+    if polygon.inside_lon_deg is not None and polygon.inside_lat_deg is not None:
+        region_is_small = bool(
+            spherical_polygon_contains(
+                polygon.inside_lon_deg, polygon.inside_lat_deg, lon, lat
+            )
+        )
+    if left_is_small != region_is_small:
+        vertices = torch.flip(vertices, dims=(0,))
+
+    def contains(points: Tensor) -> Tensor:
+        p_lon, p_lat = unit_xyz_to_lonlat(points)
+        return polygon.contains(p_lon, p_lat).to(device="cpu").reshape(-1)
+
+    return _region_area.OrientedLoop(vertices=vertices, contains=contains)
+
+
+def _boolean_operands(region: Any, loops: list[_region_area.OrientedLoop]) -> Any:
+    """Flatten a polygon boolean tree into loops and a membership evaluator."""
+    if isinstance(region, NativeApproximateSphericalRegion):
+        return _boolean_operands(region._region, loops)
+    if isinstance(region, SphericalPolygon):
+        index = len(loops)
+        loops.append(_polygon_loop(region))
+        return lambda values: values[index]
+    if isinstance(region, SphericalMultiPolygon):
+        parts = [_boolean_operands(p, loops) for p in region.polygons]
+
+        def union_all(values: Any) -> Tensor:
+            out = parts[0](values)
+            for part in parts[1:]:
+                out = out | part(values)
+            return out
+
+        return union_all
+    if isinstance(region, SphericalBooleanRegion):
+        left = _boolean_operands(region.left, loops)
+        right = _boolean_operands(region.right, loops)
+        if region.op == "union":
+            return lambda values: left(values) | right(values)
+        if region.op == "intersection":
+            return lambda values: left(values) & right(values)
+        return lambda values: left(values) & ~right(values)
+    raise ValueError(
+        f"exact area needs polygon operands; {type(region).__name__} boundaries "
+        "are not great-circle arcs"
+    )
+
+
+def _boolean_area_sr(region: "SphericalBooleanRegion | SphericalMultiPolygon") -> float:
+    loops: list[_region_area.OrientedLoop] = []
+    evaluate = _boolean_operands(region, loops)
+
+    def region_contains(points: Tensor) -> Tensor:
+        p_lon, p_lat = unit_xyz_to_lonlat(points)
+        return _region_contains(region, p_lon, p_lat).to(device="cpu").reshape(-1)
+
+    return _region_area.boolean_region_area(loops, evaluate, region_contains)
+
+
+def _exact_boolean(
+    op: Literal["union", "intersection", "difference"],
+    left: RegionOperand,
+    right: RegionOperand,
+    *,
+    cap_steps: int,
+    backend: Literal["spherical-geometry", "native"],
+) -> "ExactSphericalRegion | SphericalBooleanRegion":
+    if backend == "native":
+        return SphericalBooleanRegion(op=op, left=left, right=right)
+    exact = to_exact_region(left, cap_steps=cap_steps, backend=backend)
+    assert isinstance(exact, ExactSphericalRegion)
+    return getattr(exact, op)(right, cap_steps=cap_steps)
 
 
 def to_exact_region(

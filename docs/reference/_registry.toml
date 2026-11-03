@@ -16,6 +16,7 @@ version = 1
 "torchsky.field.SpectralCapacityProfile" = "Observation-derived spectral-capacity regime."
 "torchsky.spectrophotometry.PhotometryOutput" = "Output representation for synthetic photometry."
 "torchsky.spectrophotometry.WavelengthUnit" = "Wavelength unit accepted by spectrophotometry functions."
+"torchsky.spectrophotometry.Weighting" = "Photon- or energy-counting detector response for synthetic photometry."
 "torchsky.wcs.TabularBoundsMode" = "Out-of-bounds behavior for tabular WCS interpolation."
 
 [group_titles]
@@ -59,238 +60,246 @@ target = "Render targets"
 
 [quickpaths]
 rows = [
-  { goal = "Transform pixels and sky coordinates", entry = "torchsky.wcs.WCS", page = "wcs", guide = "wcs.md" },
-  { goal = "Use catalog frames and space motion", entry = "torchsky.coords.transform", page = "coords", guide = "coordinates.md" },
-  { goal = "Crossmatch catalogs at scale", entry = "torchsky.catalogs.crossmatch_sky", page = "catalogs", guide = "catalogs.md" },
-  { goal = "HEALPix indexing, queries, regions, MOC", entry = "torchsky.sphere.ang2pix", page = "sphere", guide = "sphere.md" },
-  { goal = "Spherical harmonic transforms", entry = "torchsky.sphere.anafast", page = "sphere", guide = "sht.md" },
-  { goal = "Plan and coadd images", entry = "torchsky.map.coadd", page = "map", guide = "map.md" },
-  { goal = "Build spectral cubes", entry = "torchsky.map.coadd_cube", page = "map", guide = "cubes.md" },
-  { goal = "Compose scenes and operator bundles", entry = "torchsky.scene.render", page = "scene", guide = "scene.md" },
-  { goal = "Fit continuous field models", entry = "torchsky.field.fit", page = "field", guide = "field.md" },
-  { goal = "Spectral axes, cubes, Doppler shifts", entry = "torchsky.spectral.SpectralAxis", page = "spectral", guide = "spectral.md" },
-  { goal = "Synthetic photometry and dust laws", entry = "torchsky.spectrophotometry.synthetic_photometry", page = "spectrophotometry", guide = "spectrophotometry.md" },
-  { goal = "FLRW distances and AP scaling", entry = "torchsky.cosmology.comoving_distance", page = "cosmology", guide = "cosmology.md" },
-  { goal = "Display and training transforms", entry = "torchsky.transforms.Compose", page = "transforms", guide = "encoders.md" },
-  { goal = "Quality and inverse-variance contracts", entry = "torchsky.quality.build_weight_product", page = "quality", guide = "map.md" },
-  { goal = "Native likelihood and forced photometry", entry = "torchsky.map.likelihood.GaussianLikelihoodFactor", page = "map-likelihood", guide = "native-likelihood.md" },
-  { goal = "Browser viewer", entry = "torchsky.viz.serve", page = "viz", guide = "viz.md" },
+  { goal = "Transform pixels and sky coordinates", entry = "torchsky.wcs.WCS", page = "wcs", guide = "coordinates/index.md" },
+  { goal = "Use catalog frames and space motion", entry = "torchsky.coords.transform", page = "coords", guide = "coordinates/frames.md" },
+  { goal = "Crossmatch catalogs at scale", entry = "torchsky.catalogs.crossmatch_sky", page = "catalogs", guide = "catalogs/crossmatch.md" },
+  { goal = "HEALPix indexing, queries, regions, MOC", entry = "torchsky.sphere.ang2pix", page = "sphere", guide = "sphere/healpix.md" },
+  { goal = "Spherical harmonic transforms", entry = "torchsky.sphere.anafast", page = "sphere", guide = "sphere/sht.md" },
+  { goal = "Plan and coadd images", entry = "torchsky.map.coadd", page = "map", guide = "maps/coadds.md" },
+  { goal = "Build spectral cubes", entry = "torchsky.map.coadd_cube", page = "map", guide = "maps/cubes.md" },
+  { goal = "Compose scenes and operator bundles", entry = "torchsky.scene.render", page = "scene", guide = "models/scenes.md" },
+  { goal = "Fit continuous field models", entry = "torchsky.field.fit", page = "field", guide = "models/fields.md" },
+  { goal = "Spectral axes, cubes, Doppler shifts", entry = "torchsky.spectral.SpectralAxis", page = "spectral", guide = "spectra/spectral-axes.md" },
+  { goal = "Synthetic photometry and dust laws", entry = "torchsky.spectrophotometry.synthetic_photometry", page = "spectrophotometry", guide = "spectra/photometry.md" },
+  { goal = "FLRW distances and AP scaling", entry = "torchsky.cosmology.comoving_distance", page = "cosmology", guide = "spectra/cosmology.md" },
+  { goal = "Display and training transforms", entry = "torchsky.transforms.Compose", page = "transforms", guide = "models/encoders.md" },
+  { goal = "Quality and inverse-variance contracts", entry = "torchsky.quality.build_weight_product", page = "quality", guide = "maps/coadds.md" },
+  { goal = "Native likelihood and forced photometry", entry = "torchsky.map.likelihood.GaussianLikelihoodFactor", page = "map-likelihood", guide = "models/likelihoods.md" },
+  { goal = "Browser viewer", entry = "torchsky.viz.serve", page = "viz", guide = "introduction/viz.md" },
 ]
 
 [[namespace]]
 name = "torchsky"
 slug = "torchsky"
 tier = "core"
-related = ["reference/index.md", "concepts.md"]
+related = ["reference/index.md", "introduction/concepts.md"]
 intro = "The lean package root. `torchsky.WCS` is the one promoted class; everything else is a domain namespace that loads on first access, so importing the package never pulls in compiled kernels, map models, or optional astronomy packages."
 
 [[module]]
 name = "torchsky.sphere.compat"
 slug = "sphere-compat"
 tier = "compatibility"
-related = ["sphere.md"]
+related = ["sphere/healpix.md"]
 intro = "healpy-shaped HEALPix compatibility layer built on torchsky kernels. Use it when migrating healpy code; prefer the `torchsky.sphere` names for new work."
 
 [[module]]
 name = "torchsky.sphere.healpix"
 slug = "sphere-healpix"
 tier = "core"
-related = ["sphere.md"]
+related = ["sphere/healpix.md"]
 intro = "The torch-native HEALPix kernels: indexing, neighbors, interpolation, queries, reordering, and map sampling. These functions accept and return PyTorch tensors."
 
 [[namespace]]
 name = "torchsky.wcs"
 slug = "wcs"
 tier = "core"
-related = ["wcs.md", "coordinates.md", "psf-response-conventions.md"]
+related = ["coordinates/index.md", "coordinates/frames.md", "models/psf-conventions.md"]
 intro = "Tensor-native FITS WCS: analytic and distorted projections, SIP/TPV and lookup-table distortions, spectral and time axes, tabular and coupled axes, celestial frames, sampled GWCS detector tables, and astrometric calibration. Every transform accepts and returns `torch.Tensor` and dispatches on the axes present in the header."
 
 [[namespace]]
 name = "torchsky.coords"
 slug = "coords"
 tier = "core"
-related = ["coordinates.md", "wcs.md"]
+related = ["coordinates/frames.md", "coordinates/index.md"]
 
 [[namespace]]
 name = "torchsky.sphere"
 slug = "sphere"
 tier = "core"
-related = ["sphere.md", "sht.md", "moc-and-sparse.md"]
+related = ["sphere/healpix.md", "sphere/sht.md", "sphere/moc.md"]
 
 [[namespace]]
 name = "torchsky.catalogs"
 slug = "catalogs"
 tier = "core"
-related = ["catalogs.md"]
+related = ["catalogs/crossmatch.md"]
 
 [[namespace]]
 name = "torchsky.map"
 slug = "map"
 tier = "core"
-related = ["map.md", "cubes.md", "healpix-maps.md"]
+related = ["maps/coadds.md", "maps/cubes.md", "maps/healpix-mapmaking.md"]
 
 [[namespace]]
 name = "torchsky.map.likelihood"
 slug = "map-likelihood"
 tier = "experimental"
-related = ["native-likelihood.md", "map.md"]
+related = ["models/likelihoods.md", "maps/coadds.md"]
 
 [[namespace]]
 name = "torchsky.map.query"
 slug = "map-query"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
 
 [[namespace]]
 name = "torchsky.map.solvers"
 slug = "map-solvers"
 tier = "experimental"
-related = ["map.md", "sht.md"]
+related = ["maps/coadds.md", "sphere/sht.md"]
 intro = "Matrix-free linear solvers and bound observation operators for discrete inverse mapmaking: harmonic and T/E/B prior operators, operator composition, diagonal preconditioners, and spherical-harmonic solver hooks. Experimental: signatures may change between minor releases."
 
 [[namespace]]
 name = "torchsky.map.evidence"
 slug = "map-evidence"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
 
 [[namespace]]
 name = "torchsky.map.operators.continuous_response"
 slug = "map-operators-continuous-response"
 tier = "experimental"
-related = ["native-likelihood.md", "psf-response-conventions.md"]
+related = ["models/likelihoods.md", "models/psf-conventions.md"]
 
 [[namespace]]
 name = "torchsky.map.operators.detector_response"
 slug = "map-operators-detector-response"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
 
 [[namespace]]
 name = "torchsky.map.operators.epsf"
 slug = "map-operators-epsf"
 tier = "experimental"
-related = ["psf-response-conventions.md"]
+related = ["models/psf-conventions.md"]
 
 [[namespace]]
 name = "torchsky.map.operators.nuisance"
 slug = "map-operators-nuisance"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
 
 [[namespace]]
 name = "torchsky.map.operators.pixel_calibration"
 slug = "map-operators-pixel-calibration"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
+
+[[module]]
+name = "torchsky.map.operators.noise"
+slug = "map-operators-noise"
+tier = "experimental"
+related = ["models/likelihoods.md"]
+members = ["gaussian_nll", "poisson_gaussian_nll"]
+intro = "Per-pixel detector likelihoods: the normalized Gaussian negative log-likelihood, and the Poisson-Gaussian mixture for a few electrons per pixel read out with Gaussian noise. Both are also importable from `torchsky.map.operators`."
 
 [[namespace]]
 name = "torchsky.map.field.gaussian"
 slug = "map-field-gaussian"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
 
 [[namespace]]
 name = "torchsky.map.field.chromatic"
 slug = "map-field-chromatic"
 tier = "experimental"
-related = ["field.md", "map.md"]
+related = ["models/fields.md", "maps/coadds.md"]
 intro = "Chromatic PSF fields and continuous-wavelength sky fields integrated over band transmission curves."
 
 [[namespace]]
 name = "torchsky.map.field.joint_native_likelihood"
 slug = "map-field-joint-native-likelihood"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
 
 [[namespace]]
 name = "torchsky.map.field.native_integrated_read"
 slug = "map-field-native-integrated-read"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
 
 [[namespace]]
 name = "torchsky.map.field.native_response"
 slug = "map-field-native-response"
 tier = "experimental"
-related = ["native-likelihood.md"]
+related = ["models/likelihoods.md"]
 
 [[namespace]]
 name = "torchsky.scene"
 slug = "scene"
 tier = "experimental"
-related = ["scene.md", "psf-response-conventions.md"]
+related = ["models/scenes.md", "models/psf-conventions.md"]
 
 [[namespace]]
 name = "torchsky.field"
 slug = "field"
 tier = "experimental"
-related = ["field.md", "field-formulation.md", "encoders.md"]
-intro = "Continuous sky models: domains, field model kinds and presets, observation encoding, fitting, rendering, residual diagnostics, and portable artifacts. The formulation behind these APIs is in the [field formulation guide](../field-formulation.md)."
+related = ["models/fields.md", "models/formulation.md", "models/encoders.md"]
+intro = "Continuous sky models: domains, field model kinds and presets, observation encoding, fitting, rendering, residual diagnostics, and portable artifacts. The formulation behind these APIs is in the [field formulation guide](../models/formulation.md)."
 
 [[namespace]]
 name = "torchsky.spectral"
 slug = "spectral"
 tier = "core"
-related = ["spectral.md"]
+related = ["spectra/spectral-axes.md"]
 
 [[namespace]]
 name = "torchsky.spectrophotometry"
 slug = "spectrophotometry"
 tier = "core"
-related = ["spectrophotometry.md", "spectral.md"]
+related = ["spectra/photometry.md", "spectra/spectral-axes.md"]
 
 [[namespace]]
 name = "torchsky.extinction"
 slug = "extinction"
 tier = "core"
-related = ["extinction.md", "spectral.md"]
+related = ["spectra/extinction.md", "spectra/spectral-axes.md"]
 
 [[namespace]]
 name = "torchsky.cosmology"
 slug = "cosmology"
 tier = "core"
-related = ["cosmology.md", "spectral.md"]
+related = ["spectra/cosmology.md", "spectra/spectral-axes.md"]
 
 [[namespace]]
 name = "torchsky.redshift"
 slug = "redshift"
 tier = "core"
-related = ["spectral.md"]
+related = ["spectra/spectral-axes.md"]
 
 [[namespace]]
 name = "torchsky.log_lambda"
 slug = "log-lambda"
 tier = "core"
-related = ["spectral.md"]
+related = ["spectra/spectral-axes.md"]
 
 [[namespace]]
 name = "torchsky.encoders"
 slug = "encoders"
-tier = "core"
-related = ["encoders.md"]
+tier = "experimental"
+related = ["models/encoders.md"]
 
 [[namespace]]
 name = "torchsky.filter_profiles"
 slug = "filter-profiles"
 tier = "experimental"
-related = ["field.md", "map.md"]
+related = ["models/fields.md", "maps/coadds.md"]
 intro = "Field-observation bandpass metadata from SVO, transmission files, built-in tables, or Gaussian profiles."
 
 [[namespace]]
 name = "torchsky.transforms"
 slug = "transforms"
 tier = "core"
-related = ["encoders.md"]
+related = ["models/encoders.md"]
 
 [[namespace]]
 name = "torchsky.quality"
 slug = "quality"
 tier = "core"
-related = ["map.md"]
+related = ["maps/coadds.md"]
 
 [[namespace]]
 name = "torchsky.viz"
 slug = "viz"
 tier = "experimental"
-related = ["viz.md", "cli.md"]
+related = ["introduction/viz.md", "introduction/cli.md"]

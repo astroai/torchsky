@@ -12,6 +12,7 @@ from .._dtype import work_dtype as _work_dtype
 from ..sphere import great_circle_distance
 from ..sphere import healpix as _healpix
 from ..sphere.moc import MOC, nest2uniq
+from ..device import _as_tensor, _to
 
 _MAX_NSIDE = 65536
 _TARGET_POINTS_PER_PIXEL = 64
@@ -73,7 +74,7 @@ def cap_covering_pixels(
     device = lon_t.device
     dtype = _work_dtype(device)
     lon_t = lon_t.to(dtype=dtype).reshape(-1)
-    lat_t = torch.as_tensor(lat_deg, device=device, dtype=dtype).reshape(-1)
+    lat_t = _as_tensor(lat_deg, device=device, dtype=dtype).reshape(-1)
     if lon_t.numel() != 1 or lat_t.numel() != 1:
         raise ValueError("cap_covering_pixels takes a single center")
     if radius_rad >= math.pi:
@@ -110,7 +111,7 @@ def cap_covering_pixels(
             nest=True,
             lonlat=False,
         )
-        neigh = torch.as_tensor(neigh, dtype=torch.int64, device=device).reshape(-1)
+        neigh = _as_tensor(neigh, dtype=torch.int64, device=device).reshape(-1)
         neigh = neigh[neigh >= 0]
         if neigh.numel() == 0:
             break
@@ -185,7 +186,7 @@ def nested_neighbor_rings(nside: int, pix: Tensor, hops: int) -> Tensor:
         invalid = flat < 0
         safe = flat.clamp(min=0)
         neigh = _healpix.get_all_neighbours(nside, safe, nest=True, lonlat=False)
-        neigh = torch.as_tensor(neigh, dtype=torch.int64, device=pix_t.device)
+        neigh = _as_tensor(neigh, dtype=torch.int64, device=pix_t.device)
         if neigh.ndim == 1:
             neigh = neigh.reshape(8, -1)
         neigh = neigh.masked_fill(invalid.unsqueeze(0), -1)
@@ -249,7 +250,7 @@ class HealpixIndex:
         device = lon_t.device
         dtype = _work_dtype(device)
         lon_t = lon_t.to(dtype=dtype).reshape(-1)
-        lat_t = torch.as_tensor(lat, device=device, dtype=dtype).reshape(-1)
+        lat_t = _as_tensor(lat, device=device, dtype=dtype).reshape(-1)
         if lon_t.numel() != lat_t.numel():
             raise ValueError("lon and lat must have the same number of rows")
         nside_i = default_nside(int(lon_t.numel())) if nside is None else int(nside)
@@ -302,8 +303,8 @@ class HealpixIndex:
         return HealpixIndex(
             nside=self.nside,
             nest=self.nest,
-            lon=self.lon.to(device=device_t, dtype=dtype),
-            lat=self.lat.to(device=device_t, dtype=dtype),
+            lon=_to(self.lon, device=device_t, dtype=dtype),
+            lat=_to(self.lat, device=device_t, dtype=dtype),
             order=self.order.to(device=device_t),
             unique_pixels=self.unique_pixels.to(device=device_t),
             bucket_starts=self.bucket_starts.to(device=device_t),
@@ -312,7 +313,7 @@ class HealpixIndex:
 
     def lookup(self, pixels: Tensor) -> Tensor:
         """Row indices whose HEALPix pixel is in ``pixels`` (vectorized gather)."""
-        pix = torch.as_tensor(
+        pix = _as_tensor(
             pixels,
             dtype=torch.int64,
             device=self.unique_pixels.device,
@@ -337,7 +338,7 @@ class HealpixIndex:
 
     def expand(self, pixels: Tensor) -> tuple[Tensor, Tensor]:
         """Map per-query pixels ``[N]`` to ``(query_index, row_index)`` pairs."""
-        pix = torch.as_tensor(
+        pix = _as_tensor(
             pixels,
             dtype=torch.int64,
             device=self.unique_pixels.device,
@@ -392,8 +393,8 @@ class HealpixIndex:
         if self.lon.numel() == 0:
             return self.order[:0]
         device = self.lon.device
-        lon_t = torch.as_tensor(lon, device=device, dtype=self.lon.dtype).reshape(-1)
-        lat_t = torch.as_tensor(lat, device=device, dtype=self.lat.dtype).reshape(-1)
+        lon_t = _as_tensor(lon, device=device, dtype=self.lon.dtype).reshape(-1)
+        lat_t = _as_tensor(lat, device=device, dtype=self.lat.dtype).reshape(-1)
         if lon_t.numel() != 1 or lat_t.numel() != 1:
             raise ValueError("query_disc takes a single center")
         radius = float(radius_deg)

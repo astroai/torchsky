@@ -9,6 +9,7 @@ import torch
 from torch import Tensor, nn
 
 from .semantics import AxisSpec, DomainSpec, UnitSpec, axes_domain
+from ..device import _to
 
 
 class UnsupportedInverseError(RuntimeError):
@@ -180,16 +181,16 @@ class AffineMapping(Mapping):
             matrix_tensor = matrix_tensor.to(dtype=torch.float64)
         if not offset_tensor.is_floating_point():
             offset_tensor = offset_tensor.to(dtype=matrix_tensor.dtype)
-        offset_tensor = offset_tensor.to(
-            device=matrix_tensor.device, dtype=matrix_tensor.dtype
+        offset_tensor = _to(
+            offset_tensor, device=matrix_tensor.device, dtype=matrix_tensor.dtype
         )
         super().__init__(input_axes_tuple, output_axes_tuple, domain=domain)
         self.register_buffer("matrix", matrix_tensor)
         self.register_buffer("offset", offset_tensor)
 
     def _evaluate(self, inputs: Tensor) -> Tensor:
-        matrix = self.matrix.to(device=inputs.device, dtype=inputs.dtype)
-        offset = self.offset.to(device=inputs.device, dtype=inputs.dtype)
+        matrix = _to(self.matrix, device=inputs.device, dtype=inputs.dtype)
+        offset = _to(self.offset, device=inputs.device, dtype=inputs.dtype)
         return torch.matmul(inputs, matrix.mT) + offset
 
     def _make_exact_inverse(self) -> Mapping | None:
@@ -231,7 +232,7 @@ class UnitConversionMapping(Mapping):
         self.register_buffer("factors", torch.tensor(factors, dtype=torch.float64))
 
     def _evaluate(self, inputs: Tensor) -> Tensor:
-        return inputs * self.factors.to(device=inputs.device, dtype=inputs.dtype)
+        return inputs * _to(self.factors, device=inputs.device, dtype=inputs.dtype)
 
     def _make_exact_inverse(self) -> Mapping:
         return UnitConversionMapping(self.output_axes, self.input_axes)
@@ -504,7 +505,7 @@ class NumericalInverseMapping(Mapping):
             raise ValueError(f"inverse expects trailing dimension {self.n_inputs}")
         batch_shape = targets.shape[:-1]
         flat_targets = targets.reshape(-1, self.n_inputs)
-        guess = self.initial.to(device=targets.device, dtype=targets.dtype).expand_as(
+        guess = _to(self.initial, device=targets.device, dtype=targets.dtype).expand_as(
             flat_targets
         )
         identity = torch.eye(

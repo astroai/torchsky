@@ -1,0 +1,7 @@
+8485-1901: 171 fibre spectra (9 exposures), 389 channels in 6400-7000 A; refraction moves the fibres by 0.037 arcsec across the window
+cube (389, 17, 17) (wave, y, x) at 1 arcsec; 147 spaxels covered in every channel
+total flux in the window over 147 spaxels: ours / DRP = 1.0116
+image centroid ours - DRP: (+0.001, -0.008) spaxels
+continuum image: 28 spaxels above 10 % of peak, correlation 0.998, ours / DRP median 1.005 (16-84 %: 0.963-1.037)
+H-alpha   image: 40 spaxels above 10 % of peak, correlation 0.997, ours / DRP median 1.047 (16-84 %: 0.919-1.137)
+integrated spectrum: ours / DRP median 1.0135, rms of the relative difference 0.0251

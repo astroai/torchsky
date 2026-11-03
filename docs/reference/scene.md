@@ -9,7 +9,7 @@
 
 Experimental scene representation and operator facade.
 
-**Guides:** [scene](../scene.md), [psf-response-conventions](../psf-response-conventions.md)
+**Guides:** [scenes](../models/scenes.md), [psf-conventions](../models/psf-conventions.md)
 
 ---
 

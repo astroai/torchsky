@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor
+from .device import _as_tensor
 
 # Rest (vacuum) wavelengths of the first diffuse interstellar bands modeled.
 DIB_REST_ANGSTROM: tuple[float, ...] = (5780.0, 5797.0, 6614.0)
@@ -69,14 +70,14 @@ def a_v_at_distance(
     """
     distances = profile["distance_pc"]
     column = profile["a_v_cumulative"]
-    d = torch.as_tensor(distance_pc, device=column.device, dtype=column.dtype)
+    d = _as_tensor(distance_pc, device=column.device, dtype=column.dtype)
     if d.ndim == 0:
         d = d.reshape(1)
     d = d.clamp(min=0.0)
     if distance_bin_index is None:
         upper = torch.searchsorted(distances, d.detach(), right=False)
     else:
-        upper = torch.as_tensor(
+        upper = _as_tensor(
             distance_bin_index, device=column.device, dtype=torch.long
         ).reshape(d.shape)
     upper = upper.clamp(min=1, max=distances.numel() - 1)

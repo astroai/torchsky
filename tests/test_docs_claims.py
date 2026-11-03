@@ -39,7 +39,7 @@ def test_documented_version_floors_match_pyproject() -> None:
         for dep in PYPROJECT["project"]["dependencies"]
         if dep.lower().startswith("torchfits")
     )
-    install = (DOCS / "install.md").read_text(encoding="utf-8")
+    install = (DOCS / "introduction" / "install.md").read_text(encoding="utf-8")
     assert requires_python.replace(">=", ">=") in "".join(install.split())
     assert f">={torch_floor}" in install
     torchfits_short = ".".join(torchfits_floor.split(".")[:2])
@@ -50,12 +50,12 @@ def test_documented_version_floors_match_pyproject() -> None:
 
 def test_release_status_is_consistent() -> None:
     index = (DOCS / "index.md").read_text(encoding="utf-8")
-    install = (DOCS / "install.md").read_text(encoding="utf-8")
+    install = (DOCS / "introduction" / "install.md").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for text, label in ((index, "index"), (install, "install"), (readme, "README")):
         flat = " ".join(text.split())
         assert re.search(r"GitHub pre-release", flat, re.IGNORECASE), (
-            f"{label} must state that 0.5.0rc1 is a GitHub pre-release"
+            f"{label} must state that release candidates are GitHub pre-releases"
         )
         assert re.search(
             r"not (uploaded )?(to |on )PyPI|never uploaded to PyPI", flat
@@ -92,7 +92,8 @@ def test_documented_wheel_python_versions_are_built() -> None:
     built = set(re.findall(r"cp(\d)(\d+)", match.group(1)))
     documented = set(
         re.findall(
-            r"Python 3\.(\d+)", (DOCS / "install.md").read_text(encoding="utf-8")
+            r"Python 3\.(\d+)",
+            (DOCS / "introduction" / "install.md").read_text(encoding="utf-8"),
         )
     )
     if documented:

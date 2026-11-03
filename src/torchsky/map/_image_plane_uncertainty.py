@@ -72,6 +72,7 @@ from ._image_plane_tiling import (
     _obs_target_footprint,
     _validated_target_cache_capacity,
 )
+from ..device import _to
 
 
 def _observations_have_quality(observations: Sequence[ImageObservation]) -> bool:
@@ -380,9 +381,9 @@ def _propagate_aperture_uncertainty(
         raise ValueError("MapResult inverse variance must match its data shape")
 
     map_device = _resolve_map_device(device, observations, result, aperture_weights)
-    aperture = aperture.to(device=map_device, dtype=torch.float32)
-    map_weight = result.weight.to(device=map_device, dtype=torch.float32)
-    inverse_variance = inverse_variance.to(device=map_device, dtype=torch.float32)
+    aperture = _to(aperture, device=map_device, dtype=torch.float32)
+    map_weight = _to(result.weight, device=map_device, dtype=torch.float32)
+    inverse_variance = _to(inverse_variance, device=map_device, dtype=torch.float32)
     accumulator_dtype = torch.float32 if map_device.type == "mps" else torch.float64
     requested = aperture != 0.0
     if bool((requested & ((map_weight <= 0.0) | (inverse_variance <= 0.0))).any()):
@@ -630,19 +631,21 @@ def _propagate_observation_variance_components(
             image, header_dict_obs = _core_mod.load_observation_image_and_header(
                 obs, device=read_dev
             )
-            image_dev = image.to(device=device, dtype=torch.float32)
+            image_dev = _to(image, device=device, dtype=torch.float32)
             if comp is None:
                 comp_t = torch.zeros_like(image_dev)
             elif isinstance(comp, Tensor):
-                comp_t = validate_image_plane_2d(comp).to(
-                    device=device, dtype=torch.float32
+                comp_t = _to(
+                    validate_image_plane_2d(comp), device=device, dtype=torch.float32
                 )
             else:
                 comp_raw, _ = read(
                     str(comp), hdu=obs.hdu, return_header=True, device=read_dev
                 )
-                comp_t = validate_image_plane_2d(comp_raw).to(
-                    device=device, dtype=torch.float32
+                comp_t = _to(
+                    validate_image_plane_2d(comp_raw),
+                    device=device,
+                    dtype=torch.float32,
                 )
             source_wcs = WCS(header_dict_obs)
             s_eff = _effective_observation_photometric_scale(obs, header_dict_obs)

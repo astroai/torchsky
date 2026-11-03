@@ -1,0 +1,8 @@
+legacy_cartwheel_griz: bands griz, 128 x 128 px at 0.524 arcsec
+legacy_cartwheel_gz_fine: bands gz, 160 x 160 px at 0.350 arcsec
+NSIDE = 2^19: 0.403 arcsec cells, 3.30e+12 on the full sphere
+band g: 2 grid(s), 27454 cells; 25 arcsec disc  365.83 nmgy (AB 16.09) vs image plane  365.96 nmgy (ratio 0.9997); cell-by-cell difference -0.024 sigma median, 0.313 sigma robust rms
+band r: 1 grid(s), 27454 cells; 25 arcsec disc  459.40 nmgy (AB 15.84) vs image plane  459.23 nmgy (ratio 1.0004); cell-by-cell difference -0.020 sigma median, 0.243 sigma robust rms
+band i: 1 grid(s), 27454 cells; 25 arcsec disc  554.93 nmgy (AB 15.64) vs image plane  554.74 nmgy (ratio 1.0003); cell-by-cell difference -0.008 sigma median, 0.229 sigma robust rms
+band z: 2 grid(s), 27454 cells; 25 arcsec disc  773.53 nmgy (AB 15.28) vs image plane  773.72 nmgy (ratio 0.9998); cell-by-cell difference -0.008 sigma median, 0.275 sigma robust rms
+sparse storage: 109816 cells in 4 maps; a dense float32 map at this NSIDE would be 13.2 TB

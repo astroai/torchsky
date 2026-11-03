@@ -16,6 +16,7 @@ from .astrometry import (
     AstrometrySolution,
 )
 from ._graph import _UnionFind
+from ..device import _as_tensor
 
 MissingColorPolicy = Literal["error", "zero", "drop"]
 
@@ -32,7 +33,7 @@ def _finite(value: Tensor, name: str) -> None:
 
 
 def _measurement_covariance(value: Any, flux: Tensor) -> Tensor:
-    covariance = torch.as_tensor(value, dtype=flux.dtype, device=flux.device)
+    covariance = _as_tensor(value, dtype=flux.dtype, device=flux.device)
     n = int(flux.numel())
     if covariance.ndim == 0:
         covariance = torch.eye(n, dtype=flux.dtype, device=flux.device) * covariance
@@ -70,9 +71,7 @@ class PhotometricMeasurementBlock:
         _finite(flux, "flux")
         if not bool((flux > 0).all().detach().cpu().item()):
             raise ValueError("calibration flux measurements must be positive")
-        source_ids = torch.as_tensor(
-            self.source_ids, dtype=torch.int64, device=flux.device
-        )
+        source_ids = _as_tensor(self.source_ids, dtype=torch.int64, device=flux.device)
         if source_ids.shape != flux.shape:
             raise ValueError("source_ids and flux must have matching shape")
         covariance = _measurement_covariance(self.flux_covariance, flux)
@@ -82,14 +81,14 @@ class PhotometricMeasurementBlock:
             if value is None:
                 tensor = torch.zeros(n, dtype=flux.dtype, device=flux.device)
             else:
-                tensor = torch.as_tensor(value, dtype=flux.dtype, device=flux.device)
+                tensor = _as_tensor(value, dtype=flux.dtype, device=flux.device)
                 tensor = torch.broadcast_to(tensor, (n,)).clone()
                 _finite(tensor, name)
             object.__setattr__(self, name, tensor)
         if self.star_flat_basis is None:
             star_flat = torch.empty((n, 0), dtype=flux.dtype, device=flux.device)
         else:
-            star_flat = torch.as_tensor(
+            star_flat = _as_tensor(
                 self.star_flat_basis, dtype=flux.dtype, device=flux.device
             )
             if star_flat.ndim != 2 or star_flat.shape[0] != n:
@@ -98,9 +97,7 @@ class PhotometricMeasurementBlock:
         if self.weights is None:
             weights = torch.ones(n, dtype=flux.dtype, device=flux.device)
         else:
-            weights = torch.as_tensor(
-                self.weights, dtype=flux.dtype, device=flux.device
-            )
+            weights = _as_tensor(self.weights, dtype=flux.dtype, device=flux.device)
             if weights.shape != (n,):
                 raise ValueError("weights must have shape (N,)")
             _finite(weights, "weights")
@@ -109,13 +106,11 @@ class PhotometricMeasurementBlock:
         if self.fit_mask is None:
             fit_mask = torch.ones(n, dtype=torch.bool, device=flux.device)
         else:
-            fit_mask = torch.as_tensor(
-                self.fit_mask, dtype=torch.bool, device=flux.device
-            )
+            fit_mask = _as_tensor(self.fit_mask, dtype=torch.bool, device=flux.device)
             if fit_mask.shape != (n,):
                 raise ValueError("fit_mask must have shape (N,)")
         if self.epoch is not None:
-            epoch = torch.as_tensor(self.epoch, dtype=flux.dtype, device=flux.device)
+            epoch = _as_tensor(self.epoch, dtype=flux.dtype, device=flux.device)
             epoch = torch.broadcast_to(epoch, (n,)).clone()
             _finite(epoch, "epoch")
             object.__setattr__(self, "epoch", epoch)
@@ -144,12 +139,8 @@ class PhotometricReference:
             raise ValueError("reference flux must have shape (N, B)")
         if flux.shape[1] != len(self.bands):
             raise ValueError("reference bands and flux columns must align")
-        source_ids = torch.as_tensor(
-            self.source_ids, dtype=torch.int64, device=flux.device
-        )
-        variance = torch.as_tensor(
-            self.flux_variance, dtype=flux.dtype, device=flux.device
-        )
+        source_ids = _as_tensor(self.source_ids, dtype=torch.int64, device=flux.device)
+        variance = _as_tensor(self.flux_variance, dtype=flux.dtype, device=flux.device)
         if source_ids.shape != (flux.shape[0],) or variance.shape != flux.shape:
             raise ValueError("reference arrays have inconsistent shapes")
         present = torch.isfinite(flux)
@@ -305,9 +296,7 @@ def photometric_log_residuals(
 ) -> Tensor:
     """Compute optionally whitened log-flux residuals for calibration."""
     measured = torch.as_tensor(measured_flux)
-    predicted = torch.as_tensor(
-        predicted_flux, dtype=measured.dtype, device=measured.device
-    )
+    predicted = _as_tensor(predicted_flux, dtype=measured.dtype, device=measured.device)
     if measured.shape != predicted.shape or measured.ndim != 1:
         raise ValueError("measured_flux and predicted_flux need matching (N,) shape")
     if not bool(((measured > 0) & (predicted > 0)).all().detach().cpu().item()):
@@ -323,7 +312,7 @@ def photometric_log_residuals(
             upper=False,
         ).squeeze(-1)
     if weights is not None:
-        weight = torch.as_tensor(weights, dtype=measured.dtype, device=measured.device)
+        weight = _as_tensor(weights, dtype=measured.dtype, device=measured.device)
         if weight.shape != measured.shape:
             raise ValueError("weights must have shape (N,)")
         residual = residual * torch.sqrt(weight)
@@ -426,7 +415,7 @@ class CoupledCalibrationGraph:
         if sed_basis is None:
             basis = torch.eye(len(bands), dtype=dtype, device=device)
         else:
-            basis = torch.as_tensor(sed_basis, dtype=dtype, device=device)
+            basis = _as_tensor(sed_basis, dtype=dtype, device=device)
             if basis.ndim != 2 or basis.shape[0] != len(bands):
                 raise ValueError("sed_basis must have shape (n_band, n_coefficient)")
             _finite(basis, "sed_basis")
@@ -1101,7 +1090,7 @@ class _PhotometrySolver:
             [torch.diagonal(value) for value in self.graph.log_covariance]
         )
         norm = residual.abs() / torch.sqrt(diagonal)
-        delta = torch.as_tensor(
+        delta = _as_tensor(
             self.config.huber_delta, dtype=self.dtype, device=self.device
         )
         weights = torch.where(

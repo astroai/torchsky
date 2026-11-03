@@ -205,3 +205,18 @@ def test_spatial_sky_background_op_can_be_disabled() -> None:
     op = SpatialSkyBackgroundOp(est, name="test_bg")
     op.enabled = False
     assert not op.enabled
+
+
+def test_per_exposure_sky_small_images_use_clamped_mesh() -> None:
+
+    from torchsky.map import Observation, SkyConfig
+    from torchsky.map.sky_matching import match_sky
+
+    for n in (32, 64, 65):
+        data = torch.full((n, n), 5.0)
+        _, info = match_sky(
+            [Observation(data=data)], config=SkyConfig(mode="per_exposure")
+        )
+        bg = info["backgrounds"][0]
+        assert bg.shape == (n, n)
+        assert torch.allclose(bg, data, atol=1e-5)

@@ -20,6 +20,7 @@ from ..operators.background import (
     AdditiveProcessingState,
     validate_additive_components,
 )
+from ...device import _to
 
 if TYPE_CHECKING:
     from ..exposure_pose import ExposurePose
@@ -105,7 +106,7 @@ class DetectorToSkyTransform(Protocol):
 
 @dataclass(frozen=True)
 class ForwardContext:
-    """Exposure / instrument context ``c`` (see ``docs/field.md``).
+    """Exposure / instrument context ``c`` (see ``docs/models/fields.md``).
 
     Rendering passes this to ``nn.Module.forward`` or ``render_bandpass`` **only when**
     the model declares a ``forward_context`` keyword parameter. Otherwise it is ignored
@@ -277,19 +278,14 @@ class PSFSpec:
         """Return an independently moved PSF without mutating the source model."""
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("PSFSpec dtype must be floating point")
-        move_kwargs: dict[str, Any] = {}
-        if device is not None:
-            move_kwargs["device"] = device
-        if dtype is not None:
-            move_kwargs["dtype"] = dtype
         kernel = self.kernel2d
         cells = self.cell_u_pix
         model = copy.deepcopy(self.model)
-        if move_kwargs:
-            kernel = None if kernel is None else kernel.to(**move_kwargs)
-            cells = None if cells is None else cells.to(**move_kwargs)
+        if device is not None or dtype is not None:
+            kernel = None if kernel is None else _to(kernel, device, dtype)
+            cells = None if cells is None else _to(cells, device, dtype)
             if model is not None:
-                model.to(**move_kwargs)
+                _to(model, device, dtype)
         return PSFSpec(
             mode=self.mode,
             sigma_pix=float(self.sigma_pix),
@@ -618,7 +614,7 @@ class FieldObservation:
             raise TypeError("FieldObservation dtype must be floating point")
         kwargs: dict[str, Any] = {"header": dict(self.header)}
         kwargs["additive_components"] = tuple(
-            component.to(device=device, dtype=dtype)
+            _to(component, device=device, dtype=dtype)
             for component in self.additive_components
         )
         floating_fields = (
@@ -641,25 +637,20 @@ class FieldObservation:
             if not isinstance(value, Tensor):
                 continue
             target_dtype = dtype if dtype is not None else value.dtype
-            kwargs[name] = value.to(device=device, dtype=target_dtype)
+            kwargs[name] = _to(value, device=device, dtype=target_dtype)
         for name in ("mask", "amplifier_index"):
             value = getattr(self, name)
             if isinstance(value, Tensor):
                 kwargs[name] = value.to(device=device)
         if self.psf_spec is not None:
-            kwargs["psf_spec"] = self.psf_spec.to(device=device, dtype=dtype)
+            kwargs["psf_spec"] = _to(self.psf_spec, device=device, dtype=dtype)
         if self.passband is not None and device is not None:
             kwargs["passband"] = self.passband.to(device)
         transform = self.detector_to_sky
         if isinstance(transform, nn.Module):
             transform = copy.deepcopy(transform)
-            move_kwargs: dict[str, Any] = {}
-            if device is not None:
-                move_kwargs["device"] = device
-            if dtype is not None:
-                move_kwargs["dtype"] = dtype
-            if move_kwargs:
-                transform.to(**move_kwargs)
+            if device is not None or dtype is not None:
+                _to(transform, device, dtype)
                 kwargs["detector_to_sky"] = transform
         return replace(self, **kwargs)
 

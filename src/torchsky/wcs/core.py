@@ -24,13 +24,15 @@ from ._geometry import _GeometryMixin, _HeaderIOMixin
 from ._math import _wrap_lon180, _wrap_lon360
 from ._rotation import _RotationMixin
 
-from .tpv import TPV, PV1_KEYS_SET, PV2_KEYS_SET
+from .tpv import TPV
+from ._header_parse import WCSHeaderWarning as WCSHeaderWarning
 from .sip import SIP
 from .tabular import (
     CoupledTabularLookupWCS,
     TabularAxis,
 )
 from .functional import _pixel_to_world_fused, _world_to_pixel_fused
+from ..device import _as_tensor, _to
 
 if TYPE_CHECKING:
     pass
@@ -112,12 +114,12 @@ class DistortionLookupTable:
             if dtype is not None
             else (torch.float32 if dev.type == "mps" else self.data.dtype)
         )
-        self.data = self.data.to(device=dev, dtype=target_dtype)
+        self.data = _to(self.data, device=dev, dtype=target_dtype)
         return self
 
     def eval_tensor(self, x1: Tensor, y1: Tensor) -> Tensor:
         """Evaluate bilinear lookup at 1-based FITS pixel coordinates `(x1, y1)`."""
-        table = self.data.to(device=x1.device, dtype=x1.dtype)
+        table = _to(self.data, device=x1.device, dtype=x1.dtype)
         h, w = int(table.shape[0]), int(table.shape[1])
         tx = (x1 - self.crval[0]) / self.cdelt[0] + (self.crpix[0] - 1.0)
         ty = (y1 - self.crval[1]) / self.cdelt[1] + (self.crpix[1] - 1.0)
@@ -293,26 +295,6 @@ class WCS(
             self.naxis = self._infer_wcs_naxis(header)
             self._pixel_shape = self._infer_pixel_shape(header)
             self._parse_header(header)
-            # Check for SIP
-            if self._header_has(header, "A_ORDER") or self._header_has(
-                header, "B_ORDER"
-            ):
-                self.sip = SIP(header)
-
-            # Check for TPV (Tangent with PV distortion)
-            # SCAMP often uses CTYPE = RA---TAN with PV1_j keywords
-            has_pv = bool(PV1_KEYS_SET.intersection(self.wcs_params)) or bool(
-                PV2_KEYS_SET.intersection(self.wcs_params)
-            )
-            is_tpv_ctype = (
-                self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TPV")
-            )
-
-            if is_tpv_ctype or (
-                self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TAN")
-                and has_pv
-            ):
-                self.tpv = TPV(self.wcs_params)
         else:
             self.naxis = int(
                 kwargs.get("NAXIS", kwargs.get("WCSAXES", kwargs.get("naxis", 2)))
@@ -334,19 +316,7 @@ class WCS(
 
         self._identify_celestial_axes()
         self._setup_projection_params()
-        if self._has_celestial:
-            lon_ctype = (
-                str(self.wcs_params.get(f"CTYPE{self._celestial_lon_axis + 1}", ""))
-                .strip()
-                .upper()
-            )
-            has_pv = any(
-                key.startswith(("PV1_", "PV2_")) for key in self._projection_params
-            )
-            if lon_ctype.endswith("TPV") or (lon_ctype.endswith("TAN") and has_pv):
-                self.tpv = TPV(self._projection_params)
-            else:
-                self.tpv = None
+        self._resolve_header_distortions()
 
         if self.tpv is not None and (
             self._celestial_lon_axis != 0 or self._celestial_lat_axis != 1
@@ -986,7 +956,7 @@ class WCS(
                 setattr(
                     self,
                     name,
-                    value.to(device=self.device, dtype=target_dtype or value.dtype),
+                    _to(value, device=self.device, dtype=target_dtype or value.dtype),
                 )
         if self.tpv is not None:
             self.tpv.to(self.device)
@@ -1002,12 +972,12 @@ class WCS(
                 )
         tabular_dtype = torch.float32 if self.device.type == "mps" else torch.float64
         self.tabular_axes = {
-            axis: tabular.to(device=self.device, dtype=tabular_dtype)
+            axis: _to(tabular, device=self.device, dtype=tabular_dtype)
             for axis, tabular in self.tabular_axes.items()
         }
         if self.coupled_tabular is not None:
-            self.coupled_tabular = self.coupled_tabular.to(
-                device=self.device, dtype=tabular_dtype
+            self.coupled_tabular = _to(
+                self.coupled_tabular, device=self.device, dtype=tabular_dtype
             )
         if self._pixel_affine_matrix is not None:
             assert self._pixel_affine_offset is not None
@@ -1163,10 +1133,10 @@ class WCS(
         if identity:
             return self._clone_preserving_wcs_state()
 
-        step_t = torch.as_tensor(
+        step_t = _as_tensor(
             steps, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
-        start_t = torch.as_tensor(
+        start_t = _as_tensor(
             starts, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
 
@@ -1333,10 +1303,10 @@ class WCS(
         """
         if self.naxis < 2:
             raise ValueError("pixel affine correction requires at least two WCS axes")
-        affine = torch.as_tensor(
+        affine = _as_tensor(
             matrix, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
-        shift = torch.as_tensor(
+        shift = _as_tensor(
             offset, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         if affine.shape != (2, 2):
@@ -1634,9 +1604,7 @@ class WCS(
             ref = (self.crpix - 1.0).clone()
             for fixed_axis, fixed_rel in fixed_rel_by_axis.items():
                 ref[fixed_axis] = (
-                    torch.as_tensor(
-                        fixed_rel, dtype=self.crpix.dtype, device=self.device
-                    )
+                    _as_tensor(fixed_rel, dtype=self.crpix.dtype, device=self.device)
                     + self.crpix[fixed_axis]
                     - 1.0
                 )

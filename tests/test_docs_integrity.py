@@ -21,44 +21,57 @@ DOCS = ROOT / "docs"
 # guide between nav groups does not break the contract test.
 REQUIRED_PAGES = (
     "index.md",
-    "install.md",
-    "quickstart.md",
-    "concepts.md",
-    "coming-from.md",
-    "wcs.md",
-    "coordinates.md",
-    "sphere.md",
-    "sht.md",
-    "moc-and-sparse.md",
-    "catalogs.md",
-    "spectral.md",
-    "spectrophotometry.md",
-    "extinction.md",
-    "cosmology.md",
-    "map.md",
-    "cubes.md",
-    "healpix-maps.md",
-    "scene.md",
-    "field.md",
-    "field-formulation.md",
-    "encoders.md",
-    "cli.md",
-    "viz.md",
-    "gallery.md",
-    "native-likelihood.md",
-    "psf-response-conventions.md",
-    "examples.md",
-    "changelog.md",
-    "roadmap.md",
-    "release.md",
-    "contributing.md",
-    "authoring.md",
+    "introduction/index.md",
+    "introduction/install.md",
+    "introduction/quickstart.md",
+    "introduction/concepts.md",
+    "introduction/coming-from.md",
+    "introduction/cli.md",
+    "introduction/viz.md",
+    "coordinates/index.md",
+    "coordinates/projections.md",
+    "coordinates/distortions.md",
+    "coordinates/frames.md",
+    "coordinates/observed-place.md",
+    "sphere/index.md",
+    "sphere/healpix.md",
+    "sphere/moc.md",
+    "sphere/sht.md",
+    "sphere/sparse-maps.md",
+    "catalogs/index.md",
+    "catalogs/crossmatch.md",
+    "catalogs/containers.md",
+    "maps/index.md",
+    "maps/resampling.md",
+    "maps/coadds.md",
+    "maps/cubes.md",
+    "maps/healpix-mapmaking.md",
+    "spectra/index.md",
+    "spectra/spectral-axes.md",
+    "spectra/kinematics.md",
+    "spectra/photometry.md",
+    "spectra/extinction.md",
+    "spectra/cosmology.md",
+    "models/index.md",
+    "models/fields.md",
+    "models/scenes.md",
+    "models/likelihoods.md",
+    "models/psf-conventions.md",
+    "models/encoders.md",
+    "models/formulation.md",
+    "examples/index.md",
+    "examples/gallery.md",
+    "project/changelog.md",
+    "project/roadmap.md",
+    "project/release.md",
+    "project/contributing.md",
+    "project/authoring.md",
     "reference/index.md",
     "reference/runtime-contract.md",
-    "evaluation/highlights.md",
-    "evaluation/benchmarks.md",
-    "evaluation/parity.md",
-    "evaluation/scaling.md",
+    "performance/highlights.md",
+    "performance/benchmarks.md",
+    "performance/parity.md",
+    "performance/scaling.md",
 )
 
 # Non-published trees that must stay outside docs/.
@@ -83,6 +96,16 @@ def _nav_pages(nav: object) -> list[str]:
     return pages
 
 
+def _guide_pages() -> list[Path]:
+    """Hand-authored guide pages (excludes generated reference and site copies)."""
+    return [
+        path
+        for path in sorted(DOCS.rglob("*.md"))
+        if path.relative_to(DOCS).parts[0] not in {"reference", "published-examples"}
+        and not path.name.startswith("_")
+    ]
+
+
 def _markdown_links(text: str) -> list[str]:
     return re.findall(r"\[[^\]]*\]\(([^)\s]+)\)", text)
 
@@ -95,7 +118,7 @@ def test_required_pages_exist() -> None:
 def test_every_published_page_is_in_navigation() -> None:
     config = _zensical_config()
     pages = set(_nav_pages(config["project"].get("nav", [])))
-    published = {path.name for path in DOCS.glob("*.md")}
+    published = {str(path.relative_to(DOCS)) for path in _guide_pages()}
     unlisted = sorted(published - pages)
     assert not unlisted, f"Published pages missing from the nav: {unlisted}"
 
@@ -134,7 +157,7 @@ def test_readme_points_at_the_published_index() -> None:
 
 def test_relative_doc_links_resolve() -> None:
     broken: list[str] = []
-    for page in DOCS.glob("*.md"):
+    for page in _guide_pages():
         text = page.read_text(encoding="utf-8")
         for link in _markdown_links(text):
             if link.startswith(("http://", "https://", "mailto:", "#")):
@@ -142,7 +165,7 @@ def test_relative_doc_links_resolve() -> None:
             target = link.split("#", 1)[0]
             if not target:
                 continue
-            if target.startswith("published-examples/"):
+            if "published-examples/" in target:
                 # Generated at docs-build time from examples/ by
                 # scripts/sync_docs_examples.sh; check the source script.
                 source = ROOT / "examples" / Path(target).name
@@ -155,19 +178,19 @@ def test_relative_doc_links_resolve() -> None:
 
 
 def test_examples_page_lists_existing_scripts() -> None:
-    page = (DOCS / "examples.md").read_text(encoding="utf-8")
+    page = (DOCS / "examples" / "index.md").read_text(encoding="utf-8")
     referenced = [
         link
         for link in _markdown_links(page)
         if link.endswith(".py") and not link.startswith(("http://", "https://"))
     ]
-    assert referenced, "examples.md must link runnable example scripts"
+    assert referenced, "examples/index.md must link runnable example scripts"
     missing: list[str] = []
     for link in referenced:
         name = Path(link.split("#", 1)[0]).name
         if not (ROOT / "examples" / name).is_file():
             missing.append(link)
-    assert not missing, f"examples.md links missing scripts: {missing}"
+    assert not missing, f"examples/index.md links missing scripts: {missing}"
     assert (ROOT / "scripts" / "sync_docs_examples.sh").is_file()
 
 
@@ -186,14 +209,14 @@ def test_docs_do_not_advertise_removed_io_aliases() -> None:
         "torchsky.get_wcs(",
     )
     offenders: list[str] = []
-    for page in DOCS.glob("*.md"):
+    for page in _guide_pages():
         if page.name == "changelog.md":
             # The changelog records removals by name; it must not break this check.
             continue
         text = page.read_text(encoding="utf-8")
         for pattern in removed:
             if pattern in text:
-                offenders.append(f"{page.name}: {pattern}")
+                offenders.append(f"{page.relative_to(DOCS)}: {pattern}")
     assert not offenders, f"Docs reference removed torchsky I/O aliases: {offenders}"
 
 

@@ -1,0 +1,8 @@
+SDSS DR17 spectroscopic galaxies: 7145; z_spec 10/50/90% = 0.067 / 0.307 / 0.600
+median E(B-V) 0.023; A_u = 0.115 mag
+epoch    1: train -log p(z) = -0.384
+epoch  151: train -log p(z) = -1.740
+epoch  300: train -log p(z) = -1.844
+test set: 2144 galaxies (train 5001)
+torchsky encoder : sigma_NMAD 0.0267, outliers 0.9%, bias -0.0019, mean log p(z_spec) 1.70
+SDSS DR17 Photoz: sigma_NMAD 0.0181, outliers 0.6%, bias -0.0003 on 2139 galaxies with an estimate (reference; trained on a much larger spectroscopic set)

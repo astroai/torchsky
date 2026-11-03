@@ -41,6 +41,7 @@ from .image_plane_common import (
 )
 from .image_plane_projection import _angular_separation_deg
 from ..wcs import WCS
+from ..device import _to
 
 
 def _spherical_union_center(footprints: Tensor) -> tuple[float, float]:
@@ -111,7 +112,7 @@ def _adaptive_tangent_boundary(
         world = wcs.pixel_to_world(pixel_tensor)
         if isinstance(world, tuple):
             world = torch.stack(world[:2], dim=-1)
-        world = world.detach().to(device="cpu", dtype=torch.float64)
+        world = _to(world.detach(), device="cpu", dtype=torch.float64)
         xi, eta = _world_to_tangent_plane(
             world,
             center_ra_deg=center_ra_deg,
@@ -157,8 +158,8 @@ def _adaptive_projected_boundary(
                 lon, lat, target_frame, to_equinox=target_equinox
             )
         px, py = target_wcs.world_to_pixel(lon, lat)
-        return (
-            torch.stack((px, py), dim=-1).detach().to(device="cpu", dtype=torch.float64)
+        return _to(
+            torch.stack((px, py), dim=-1).detach(), device="cpu", dtype=torch.float64
         )
 
     corners = (
@@ -295,7 +296,7 @@ def _plan_union_footprint_target(
         footprint = wcs.pixel_to_world(pixel_edges)
         if isinstance(footprint, tuple):
             footprint = torch.stack(footprint[:2], dim=-1)
-        footprint = footprint.detach().to(device="cpu", dtype=torch.float64)
+        footprint = _to(footprint.detach(), device="cpu", dtype=torch.float64)
         if footprint.shape != (4, 2) or not bool(torch.all(torch.isfinite(footprint))):
             raise RuntimeError(
                 f"Could not determine finite footprint for {observation.path}"
@@ -311,7 +312,7 @@ def _plan_union_footprint_target(
             )
             footprint = torch.stack((lon_c, lat_c), dim=-1)
         determinant = torch.linalg.det(
-            wcs.cd.detach().to(device="cpu", dtype=torch.float64)
+            _to(wcs.cd.detach(), device="cpu", dtype=torch.float64)
         )
         obs_scale = math.sqrt(abs(float(determinant)))
         if not math.isfinite(obs_scale) or obs_scale <= 0.0:

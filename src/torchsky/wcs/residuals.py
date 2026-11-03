@@ -10,6 +10,7 @@ from typing import Literal
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+from ..device import _as_tensor, _to
 
 ResidualComponent = Literal["stable", "drift", "local"]
 
@@ -26,7 +27,7 @@ def _finite_real(value: Tensor, name: str, *, ndim: int | None = None) -> Tensor
 
 
 def _vector_covariance(value: Tensor, count: int, like: Tensor, name: str) -> Tensor:
-    covariance = torch.as_tensor(value, dtype=like.dtype, device=like.device)
+    covariance = _as_tensor(value, dtype=like.dtype, device=like.device)
     if covariance.shape == (2, 2):
         covariance = covariance.expand(count, 2, 2).clone()
     if covariance.shape != (count, 2, 2):
@@ -124,7 +125,7 @@ class TangentPlaneGauge:
     def _active(self, active: Tensor | None) -> Tensor:
         if active is None:
             return torch.ones(self.count, dtype=torch.bool, device=self.design.device)
-        mask = torch.as_tensor(active, dtype=torch.bool, device=self.design.device)
+        mask = _as_tensor(active, dtype=torch.bool, device=self.design.device)
         if mask.shape != (self.count,):
             raise ValueError("active must have shape (N,)")
         if int(mask.sum().detach().cpu().item()) * 2 <= self.dimension:
@@ -141,9 +142,7 @@ class TangentPlaneGauge:
         return factor
 
     def project(self, value: Tensor, active: Tensor | None = None) -> Tensor:
-        values = torch.as_tensor(
-            value, dtype=self.design.dtype, device=self.design.device
-        )
+        values = _as_tensor(value, dtype=self.design.dtype, device=self.design.device)
         if values.shape != (self.count, 2):
             raise ValueError("value must have shape (N, 2)")
         mask = self._active(active)
@@ -159,9 +158,7 @@ class TangentPlaneGauge:
         return torch.where(mask[:, None], projected, torch.zeros_like(projected))
 
     def project_design(self, value: Tensor, active: Tensor | None = None) -> Tensor:
-        values = torch.as_tensor(
-            value, dtype=self.design.dtype, device=self.design.device
-        )
+        values = _as_tensor(value, dtype=self.design.dtype, device=self.design.device)
         if values.ndim != 3 or values.shape[:2] != (self.count, 2):
             raise ValueError("value must have shape (N, 2, K)")
         mask = self._active(active)
@@ -193,7 +190,7 @@ class TangentPlaneGauge:
     def project_covariance(
         self, covariance: Tensor, active: Tensor | None = None
     ) -> Tensor:
-        value = torch.as_tensor(
+        value = _as_tensor(
             covariance, dtype=self.design.dtype, device=self.design.device
         )
         if value.shape == (self.count, 2, 2):
@@ -228,7 +225,7 @@ class TangentPlaneGauge:
     ) -> Tensor:
         mask = self._active(active)
         basis = self.null_basis(mask)
-        values = torch.as_tensor(
+        values = _as_tensor(
             coordinates, dtype=self.design.dtype, device=self.design.device
         )
         if values.shape != (basis.shape[1],):
@@ -238,9 +235,7 @@ class TangentPlaneGauge:
         return result
 
     def gauge_residual(self, value: Tensor) -> Tensor:
-        values = torch.as_tensor(
-            value, dtype=self.design.dtype, device=self.design.device
-        )
+        values = _as_tensor(value, dtype=self.design.dtype, device=self.design.device)
         if values.shape != (self.count, 2):
             raise ValueError("value must have shape (N, 2)")
         return torch.einsum("nai,nab,nb->i", self.design, self.precision, values)
@@ -271,8 +266,10 @@ class AstrometricResidualFeatures:
             ("band_encoding", None),
             ("telemetry", None),
         ):
-            value = _finite_real(getattr(self, name), name, ndim=2).to(
-                device=device, dtype=dtype
+            value = _to(
+                _finite_real(getattr(self, name), name, ndim=2),
+                device=device,
+                dtype=dtype,
             )
             if value.shape[0] != count or (
                 width is not None and value.shape[1] != width
@@ -280,8 +277,10 @@ class AstrometricResidualFeatures:
                 raise ValueError(f"{name} has an incompatible shape")
             object.__setattr__(self, name, value)
         for name in ("color", "time", "airmass", "parallactic_angle"):
-            value = _finite_real(getattr(self, name), name, ndim=1).to(
-                device=device, dtype=dtype
+            value = _to(
+                _finite_real(getattr(self, name), name, ndim=1),
+                device=device,
+                dtype=dtype,
             )
             if value.shape != (count,):
                 raise ValueError(f"{name} must have shape (N,)")
@@ -324,8 +323,10 @@ class ResidualModeDesign:
         if stable.shape[1] != 2:
             raise ValueError("mode tensors must have shape (N, 2, K)")
         for name in ("drift", "local"):
-            value = _finite_real(getattr(self, name), name, ndim=3).to(
-                dtype=stable.dtype, device=stable.device
+            value = _to(
+                _finite_real(getattr(self, name), name, ndim=3),
+                dtype=stable.dtype,
+                device=stable.device,
             )
             if value.shape[:2] != stable.shape[:2]:
                 raise ValueError("all mode tensors must share shape (N, 2, K)")
@@ -435,8 +436,10 @@ class BayesianModeState:
 
     def __post_init__(self) -> None:
         mean = _finite_real(self.mean, "mean", ndim=1)
-        covariance = _finite_real(self.covariance, "covariance", ndim=2).to(
-            dtype=mean.dtype, device=mean.device
+        covariance = _to(
+            _finite_real(self.covariance, "covariance", ndim=2),
+            dtype=mean.dtype,
+            device=mean.device,
         )
         if covariance.shape != (mean.numel(), mean.numel()):
             raise ValueError("covariance has an incompatible shape")
@@ -477,8 +480,10 @@ def fit_bayesian_modes(
     gauge: TangentPlaneGauge | None = None,
 ) -> BayesianModeState:
     """Fit residual modes with Gaussian priors and correlated noise."""
-    values = _finite_real(residual, "residual", ndim=2).to(
-        dtype=design.stable.dtype, device=design.stable.device
+    values = _to(
+        _finite_real(residual, "residual", ndim=2),
+        dtype=design.stable.dtype,
+        device=design.stable.device,
     )
     if values.shape != (design.count, 2):
         raise ValueError("residual must have shape (N, 2)")
@@ -553,8 +558,10 @@ def update_bayesian_modes(
     """Update one residual component while preserving the other components."""
     if state.widths != design.widths:
         raise ValueError("state and design mode widths differ")
-    values = _finite_real(residual, "residual", ndim=2).to(
-        dtype=state.mean.dtype, device=state.mean.device
+    values = _to(
+        _finite_real(residual, "residual", ndim=2),
+        dtype=state.mean.dtype,
+        device=state.mean.device,
     )
     if values.shape != (design.count, 2):
         raise ValueError("residual must have shape (N, 2)")
@@ -603,8 +610,10 @@ class ResidualSupport:
 
     def __post_init__(self) -> None:
         lower = _finite_real(self.lower, "lower", ndim=1)
-        upper = _finite_real(self.upper, "upper", ndim=1).to(
-            dtype=lower.dtype, device=lower.device
+        upper = _to(
+            _finite_real(self.upper, "upper", ndim=1),
+            dtype=lower.dtype,
+            device=lower.device,
         )
         if upper.shape != lower.shape or not bool((upper > lower).all()):
             raise ValueError("support bounds must have matching increasing coordinates")
@@ -619,9 +628,7 @@ class ResidualSupport:
     def contains(
         self, features: Tensor, inducing: Tensor, length_scale: Tensor
     ) -> Tensor:
-        values = torch.as_tensor(
-            features, dtype=self.lower.dtype, device=self.lower.device
-        )
+        values = _as_tensor(features, dtype=self.lower.dtype, device=self.lower.device)
         if values.ndim != 2 or values.shape[1] != self.lower.numel():
             raise ValueError("features have an incompatible shape")
         finite = torch.isfinite(values).all(dim=-1)
@@ -629,7 +636,7 @@ class ResidualSupport:
         safe_values = torch.where(finite[:, None], values, self.lower)
         distance = torch.cdist(
             safe_values / length_scale,
-            inducing.to(values) / length_scale,
+            _to(inducing, values.device, values.dtype) / length_scale,
         ).amin(dim=-1)
         return finite & bounded & (distance <= self.max_inducing_distance)
 
@@ -671,10 +678,14 @@ class SparseGPResidual:
 
     def __post_init__(self) -> None:
         inducing = _finite_real(self.inducing_features, "inducing_features", ndim=2)
-        length = _finite_real(self.length_scale, "length_scale", ndim=1).to(inducing)
+        length = _to(
+            _finite_real(self.length_scale, "length_scale", ndim=1),
+            inducing.device,
+            inducing.dtype,
+        )
         if length.shape != (inducing.shape[1],) or not bool((length > 0).all()):
             raise ValueError("length_scale must be positive with shape (F,)")
-        amplitude = torch.as_tensor(
+        amplitude = _as_tensor(
             self.amplitude, dtype=inducing.dtype, device=inducing.device
         )
         if amplitude.numel() != 1 or not bool(
@@ -685,13 +696,21 @@ class SparseGPResidual:
             self.output_covariance, 1, inducing, "output_covariance"
         )[0]
         size = 2 * inducing.shape[0]
-        mean = _finite_real(self.posterior_mean, "posterior_mean", ndim=1).to(inducing)
-        covariance = _finite_real(
-            self.posterior_covariance, "posterior_covariance", ndim=2
-        ).to(inducing)
-        inducing_covariance = _finite_real(
-            self.inducing_covariance, "inducing_covariance", ndim=2
-        ).to(inducing)
+        mean = _to(
+            _finite_real(self.posterior_mean, "posterior_mean", ndim=1),
+            inducing.device,
+            inducing.dtype,
+        )
+        covariance = _to(
+            _finite_real(self.posterior_covariance, "posterior_covariance", ndim=2),
+            inducing.device,
+            inducing.dtype,
+        )
+        inducing_covariance = _to(
+            _finite_real(self.inducing_covariance, "inducing_covariance", ndim=2),
+            inducing.device,
+            inducing.dtype,
+        )
         if mean.shape != (size,) or covariance.shape != (size, size):
             raise ValueError("posterior tensors have incompatible shapes")
         if inducing_covariance.shape != (size, size):
@@ -711,7 +730,7 @@ class SparseGPResidual:
         object.__setattr__(self, "inducing_covariance", inducing_covariance)
 
     def predict(self, features: Tensor) -> SparseGPResidualPrediction:
-        query = torch.as_tensor(
+        query = _as_tensor(
             features,
             dtype=self.inducing_features.dtype,
             device=self.inducing_features.device,
@@ -750,7 +769,7 @@ class SparseGPResidual:
         self, features: Tensor, residual: Tensor, *, min_scale: float = 1.0
     ) -> SparseGPResidual:
         prediction = self.predict(features)
-        values = torch.as_tensor(
+        values = _as_tensor(
             residual, dtype=prediction.mean.dtype, device=prediction.mean.device
         )
         if values.shape != prediction.mean.shape:
@@ -782,8 +801,12 @@ def fit_sparse_gp_residual(
 ) -> SparseGPResidual:
     """Fit a sparse Gaussian-process model to tangent-plane residuals."""
     train = _finite_real(features, "features", ndim=2)
-    values = _finite_real(residual, "residual", ndim=2).to(train)
-    inducing = _finite_real(inducing_features, "inducing_features", ndim=2).to(train)
+    values = _to(_finite_real(residual, "residual", ndim=2), train.device, train.dtype)
+    inducing = _to(
+        _finite_real(inducing_features, "inducing_features", ndim=2),
+        train.device,
+        train.dtype,
+    )
     if values.shape != (train.shape[0], 2) or inducing.shape[1] != train.shape[1]:
         raise ValueError("training tensors have incompatible shapes")
     noise = _vector_covariance(
@@ -792,14 +815,14 @@ def fit_sparse_gp_residual(
     if gauge is not None:
         if gauge.count != train.shape[0]:
             raise ValueError("gauge and training row counts differ")
-    length = torch.as_tensor(length_scale, dtype=train.dtype, device=train.device)
+    length = _as_tensor(length_scale, dtype=train.dtype, device=train.device)
     if length.shape != (train.shape[1],) or not bool((length > 0).all()):
         raise ValueError("length_scale must be positive with shape (F,)")
     amplitude_tensor = train.new_tensor(amplitude)
     output = (
         torch.eye(2, dtype=train.dtype, device=train.device)
         if output_covariance is None
-        else torch.as_tensor(output_covariance, dtype=train.dtype, device=train.device)
+        else _as_tensor(output_covariance, dtype=train.dtype, device=train.device)
     )
     output = _vector_covariance(output, 1, train, "output_covariance")[0]
     scalar_uu = _rbf_kernel(inducing, inducing, length, amplitude_tensor)
@@ -965,12 +988,10 @@ class ExperimentalConditionalResidual(nn.Module):
         query_features: Tensor,
     ) -> ConditionalResidualPrediction:
         context = torch.as_tensor(context_features)
-        residual = torch.as_tensor(
+        residual = _as_tensor(
             context_residual, dtype=context.dtype, device=context.device
         )
-        query = torch.as_tensor(
-            query_features, dtype=context.dtype, device=context.device
-        )
+        query = _as_tensor(query_features, dtype=context.dtype, device=context.device)
         if context.ndim != 2 or context.shape[1] != self.feature_dim:
             raise ValueError("context_features have an incompatible shape")
         if residual.shape != (context.shape[0], 2):
@@ -1081,15 +1102,15 @@ class AstrometricResidualLadder:
         self.envelope = envelope
 
     def _gate(self, component: ResidualComponentInput) -> ResidualComponentResult:
-        mean = torch.as_tensor(
+        mean = _as_tensor(
             component.mean,
             dtype=self.gauge.design.dtype,
             device=self.gauge.design.device,
         )
-        covariance = torch.as_tensor(
+        covariance = _as_tensor(
             component.covariance, dtype=mean.dtype, device=mean.device
         )
-        supported = torch.as_tensor(
+        supported = _as_tensor(
             component.supported, dtype=torch.bool, device=mean.device
         )
         if mean.shape != (self.gauge.count, 2):
@@ -1110,7 +1131,7 @@ class AstrometricResidualLadder:
             & (eigenvalue <= self.envelope.max_covariance_eigenvalue)
         )
         if component.jacobian is not None:
-            jacobian = torch.as_tensor(
+            jacobian = _as_tensor(
                 component.jacobian, dtype=mean.dtype, device=mean.device
             )
             if jacobian.shape != (self.gauge.count, 2, 2):
@@ -1201,18 +1222,24 @@ class VersionedResidualState:
         ):
             raise ValueError("state versions must increase monotonically")
         replay = _finite_real(self.replay_features, "replay_features", ndim=2)
-        replay_residuals = _finite_real(
-            self.replay_residuals, "replay_residuals", ndim=2
-        ).to(replay)
+        replay_residuals = _to(
+            _finite_real(self.replay_residuals, "replay_residuals", ndim=2),
+            replay.device,
+            replay.dtype,
+        )
         replay_covariance = _vector_covariance(
             self.replay_covariance, int(replay.shape[0]), replay, "replay_covariance"
         )
-        anchors = _finite_real(self.anchor_features, "anchor_features", ndim=2).to(
-            replay
+        anchors = _to(
+            _finite_real(self.anchor_features, "anchor_features", ndim=2),
+            replay.device,
+            replay.dtype,
         )
-        anchor_residuals = _finite_real(
-            self.anchor_residuals, "anchor_residuals", ndim=2
-        ).to(replay)
+        anchor_residuals = _to(
+            _finite_real(self.anchor_residuals, "anchor_residuals", ndim=2),
+            replay.device,
+            replay.dtype,
+        )
         anchor_covariance = _vector_covariance(
             self.anchor_covariance, int(anchors.shape[0]), anchors, "anchor_covariance"
         )
@@ -1241,13 +1268,28 @@ class VersionedResidualState:
         if capacity < 1:
             raise ValueError("capacity must be positive")
         new_features = torch.cat(
-            (self.replay_features, features.to(self.replay_features))
+            (
+                self.replay_features,
+                _to(features, self.replay_features.device, self.replay_features.dtype),
+            )
         )[-capacity:]
         new_residuals = torch.cat(
-            (self.replay_residuals, residuals.to(self.replay_residuals))
+            (
+                self.replay_residuals,
+                _to(
+                    residuals, self.replay_residuals.device, self.replay_residuals.dtype
+                ),
+            )
         )[-capacity:]
         new_covariance = torch.cat(
-            (self.replay_covariance, covariance.to(self.replay_covariance))
+            (
+                self.replay_covariance,
+                _to(
+                    covariance,
+                    self.replay_covariance.device,
+                    self.replay_covariance.dtype,
+                ),
+            )
         )[-capacity:]
         return replace(
             self,

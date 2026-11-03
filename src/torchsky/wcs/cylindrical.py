@@ -3,6 +3,7 @@ import math
 import torch
 from torch import Tensor
 from typing import Tuple, Optional
+from ..device import _as_tensor, _to
 
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
@@ -20,8 +21,8 @@ def _pv_param(
     like: Tensor,
 ) -> Tensor:
     if params is None or idx >= int(params.numel()):
-        return torch.as_tensor(default, dtype=like.dtype, device=like.device)
-    return params[idx].to(dtype=like.dtype, device=like.device)
+        return _as_tensor(default, dtype=like.dtype, device=like.device)
+    return _to(params[idx], dtype=like.dtype, device=like.device)
 
 
 def project_cylindrical(
@@ -35,7 +36,7 @@ def project_cylindrical(
     Project intermediate (xi, eta) to spherical (phi, theta) for Cylindrical projections.
     """
     if projection_code == "CEA" and pv2 is not None and int(pv2.numel()) > 1:
-        lam = pv2[1].to(dtype=xi.dtype, device=xi.device)
+        lam = _to(pv2[1], dtype=xi.dtype, device=xi.device)
         if not bool(torch.isfinite(lam)) or bool(lam == 0.0):
             raise ValueError("CEA PV2_1 (lambda) must be finite and non-zero")
     pv2_1 = _pv_param(pv2, 1, 1.0, like=xi)
@@ -111,7 +112,7 @@ def deproject_cylindrical(
     Returns: xi, eta in degrees.
     """
     if projection_code == "CEA" and pv2 is not None and int(pv2.numel()) > 1:
-        lam = pv2[1].to(dtype=phi.dtype, device=phi.device)
+        lam = _to(pv2[1], dtype=phi.dtype, device=phi.device)
         if not bool(torch.isfinite(lam)) or bool(lam == 0.0):
             raise ValueError("CEA PV2_1 (lambda) must be finite and non-zero")
     pv2_1 = _pv_param(pv2, 1, 1.0, like=phi)

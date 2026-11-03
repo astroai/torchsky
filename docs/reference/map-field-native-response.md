@@ -9,7 +9,7 @@
 
 Opt-in native source-quadrature rendering and fixed Gaussian evidence.
 
-**Guides:** [native-likelihood](../native-likelihood.md)
+**Guides:** [likelihoods](../models/likelihoods.md)
 
 ---
 

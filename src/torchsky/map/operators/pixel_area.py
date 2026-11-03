@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor
+from ...device import _as_tensor, _to
 
 
 def wrapped_delta_ra_deg(ra_a_deg: Tensor, ra_b_deg: Tensor) -> Tensor:
@@ -108,8 +109,8 @@ def pixel_area_sr_at(wcs, x: Tensor, y: Tensor) -> Tensor:
         out_dev = reference.device
         target_dev = wcs_dev if isinstance(wcs_dev, torch.device) else reference.device
     coord_dtype = torch.float32 if target_dev.type == "mps" else torch.float64
-    x = torch.as_tensor(x, dtype=coord_dtype, device=target_dev)
-    y = torch.as_tensor(y, dtype=coord_dtype, device=target_dev)
+    x = _as_tensor(x, dtype=coord_dtype, device=target_dev)
+    y = _as_tensor(y, dtype=coord_dtype, device=target_dev)
     x, y = torch.broadcast_tensors(x, y)
     if _is_undistorted_tan(wcs):
         area_sr = _tan_pixel_area_sr(wcs, x, y)
@@ -154,8 +155,8 @@ def pixel_area_sr_map(
             torch.arange(x0, x1, dtype=coord_dtype, device=wcs_dev),
             indexing="ij",
         )
-        area_sr[y_start - y0 : y_end - y0] = pixel_area_sr_at(wcs, x, y).to(
-            device=device, dtype=torch.float32
+        area_sr[y_start - y0 : y_end - y0] = _to(
+            pixel_area_sr_at(wcs, x, y), device=device, dtype=torch.float32
         )
     return area_sr
 

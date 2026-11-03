@@ -173,7 +173,7 @@ def test_observed_altaz_requires_eop_and_zenith() -> None:
     utc = torch.tensor(51544.5, dtype=torch.float64)
     last = _gmst_deg_from_ut1_mjd(utc)
     state = CatalogState(lon=last, lat=torch.tensor(45.0, dtype=torch.float64))
-    _az, alt = observed_altaz(state, obstime_mjd_utc=utc, site=site, eop=eop)
+    _az, alt = observed_altaz(state, obstime_mjd_utc=utc, site=site, eop=eop, pn="none")
     torch.testing.assert_close(
         alt, torch.tensor(90.0, dtype=torch.float64), atol=1e-6, rtol=0.0
     )
@@ -260,14 +260,16 @@ def test_iau2006_pn_shifts_altaz_from_era_only() -> None:
     shift_deg = torch.hypot(daz, alt1 - alt0)
     assert float(shift_deg) > 0.05
     assert float(shift_deg) < 1.0
-    with pytest.raises(ValueError, match="tt_minus_utc"):
-        observed_altaz(
-            state,
-            obstime_mjd_utc=utc,
-            site=site,
-            eop=EarthOrientation(dut1_s=0.0),
-            pn="iau2006",
-        )
+    # Without tt_minus_utc_s, TT-UTC comes from the leap table (69.184 s in 2023).
+    az2, alt2 = observed_altaz(
+        state,
+        obstime_mjd_utc=utc,
+        site=site,
+        eop=EarthOrientation(dut1_s=0.0),
+        pn="iau2006",
+    )
+    torch.testing.assert_close(az2, az1, atol=1e-12, rtol=0.0)
+    torch.testing.assert_close(alt2, alt1, atol=1e-12, rtol=0.0)
 
 
 def test_aberration_and_refraction_are_opt_in() -> None:
@@ -331,6 +333,7 @@ def test_coords_transform_geometric_and_altaz() -> None:
         obstime_mjd_utc=utc,
         site=Site(lon_deg=0.0, lat_deg=45.0),
         eop=EarthOrientation(dut1_s=0.0),
+        pn="none",
     )
     torch.testing.assert_close(
         alt, torch.tensor(90.0, dtype=torch.float64), atol=1e-5, rtol=0.0
@@ -366,6 +369,7 @@ def test_observed_altaz_stays_on_accelerator() -> None:
         obstime_mjd_utc=utc,
         site=site,
         eop=eop,
+        pn="none",
     )
     torch.testing.assert_close(
         alt_cpu, torch.tensor(90.0, dtype=torch.float64), atol=1e-5, rtol=0.0
@@ -379,6 +383,7 @@ def test_observed_altaz_stays_on_accelerator() -> None:
             obstime_mjd_utc=_on_accel(utc, device),
             site=site,
             eop=eop,
+            pn="none",
         )
         assert az.device.type == device
         assert alt.device.type == device

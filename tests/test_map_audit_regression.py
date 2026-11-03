@@ -148,7 +148,7 @@ def test_cube_drizzle_pixfrac_exact_box_overlap(pixfrac):
 
 
 def test_coadd_cube_accepts_cube_target_for_ifu_frames():
-    """The IFU recipe in docs/cubes.md: Observation(ifu_wcs=...) + CubeTarget."""
+    """The IFU recipe in docs/maps/cubes.md: Observation(ifu_wcs=...) + CubeTarget."""
     from torchsky.map import CubeTarget, Observation, ResampleConfig, coadd_cube
     from torchsky.wcs import WCS
     from torchsky.wcs.gwcs_sampling import IFUSliceWCS
@@ -501,9 +501,12 @@ def test_coadd_healpix_converts_galactic_wcs_to_icrs_pixels():
     assert covered.numel() > 0
     ra, dec = hp.pix2ang(64, covered, nest=True, lonlat=True)
     ra0, dec0 = galactic_to_icrs(torch.tensor(120.0), torch.tensor(30.0))
-    d_ra = (ra - ra0.item() + 180.0) % 360.0 - 180.0
-    assert d_ra.abs().max() < 3.0 / max(math.cos(math.radians(dec0.item())), 0.1)
-    assert (dec - dec0.item()).abs().max() < 3.0
+    # Every touched cell lies within the image half-diagonal (2.3 deg) plus the
+    # largest nside-64 cell radius (0.9 deg) of the ICRS image centre.
+    sep = hp.angular_distance_deg(
+        ra.to(torch.float64), dec.to(torch.float64), ra0.double(), dec0.double()
+    )
+    assert float(sep.max()) < 2.3 + 0.9
 
 
 def test_ifu_angular_distance_gradient_finite_for_coincident_points():

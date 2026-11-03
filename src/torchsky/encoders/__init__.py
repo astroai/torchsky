@@ -1,4 +1,8 @@
-"""Coordinate-aware encoders for implicit sky models."""
+"""Coordinate-aware encoders for implicit sky models.
+
+Note:
+This module is experimental; its API may change between releases.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ from .photometry import (
     PhotometryEncoder,
     marginalize_association_logits,
 )
+from ..device import _to
 
 
 def _sky_encoder_fourier_min_frequency(*, patch_extent_deg: float) -> float:
@@ -188,11 +193,15 @@ class SkyCoordinateEncoder(nn.Module):
         feats = [sky, fourier]
         if wavelength is not None or frequency is not None:
             feats.append(
-                log_spectral_encoding(
-                    wavelength=wavelength,
-                    frequency=frequency,
-                    num_frequencies=self.spectral_frequencies,
-                ).to(device=sky.device, dtype=sky.dtype)
+                _to(
+                    log_spectral_encoding(
+                        wavelength=wavelength,
+                        frequency=frequency,
+                        num_frequencies=self.spectral_frequencies,
+                    ),
+                    device=sky.device,
+                    dtype=sky.dtype,
+                )
             )
         return torch.cat(feats, dim=-1)
 

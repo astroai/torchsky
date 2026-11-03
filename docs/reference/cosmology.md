@@ -2,11 +2,11 @@
 
 # `torchsky.cosmology`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Differentiable FLRW distance and protected geometry primitives.
 
-**Guides:** [cosmology](../cosmology.md), [spectral](../spectral.md)
+**Guides:** [cosmology](../spectra/cosmology.md), [spectral-axes](../spectra/spectral-axes.md)
 
 ---
 
@@ -22,10 +22,12 @@ namespace `torchsky.cosmology` unless the group text says otherwise.
         - APScaling
         - FLRW
         - FlatWCDM
+        - HUBBLE_TIME_GYR
         - PLANCK18_H0
         - PLANCK18_OM0
         - PLANCK18_W0
         - SPEED_OF_LIGHT_KM_S
+        - age
         - alcock_paczynski_scaling
         - angular_diameter_distance
         - comoving_distance
@@ -35,6 +37,7 @@ namespace `torchsky.cosmology` unless the group text says otherwise.
         - distance_modulus
         - e_of_z
         - hubble_parameter
+        - lookback_time
         - luminosity_distance
         - transverse_comoving_distance
       heading_level: 3

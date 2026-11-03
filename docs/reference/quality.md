@@ -2,11 +2,11 @@
 
 # `torchsky.quality`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Torch-native quality, inverse-variance, and confidence contracts.
 
-**Guides:** [map](../map.md)
+**Guides:** [coadds](../maps/coadds.md)
 
 ---
 

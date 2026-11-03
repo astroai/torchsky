@@ -9,7 +9,7 @@
 
 Matrix-free precision actions with declared linear Gaussian nuisances.
 
-**Guides:** [native-likelihood](../native-likelihood.md)
+**Guides:** [likelihoods](../models/likelihoods.md)
 
 ---
 

@@ -4,8 +4,8 @@ Implements 1D spectra with inverse variance/mask arrays and 3D data cubes
 for IFU instruments and radio astronomy.
 
 Note:
-This module is an experimental helper layer built on top of torchsky FITS I/O.
-It is not part of the core FITS read/write parity surface.
+This is a core torchsky module. FITS file I/O is owned by ``torchfits``;
+spectra and cubes here operate on in-memory tensors and header mappings.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from .wcs.spectral import (
     spectral_to_frequency as _wcs_spectral_to_frequency,
     spectral_unit_scale,
 )
+from .device import _as_tensor, _to
 
 
 _SPECTRAL_TYPE_KEYS = ("WAVE", "AWAV", "FREQ", "ENER", "WAVN", "VELO")
@@ -158,7 +159,7 @@ def _rebin_piecewise_constant(
 
     safe_flux = torch.where(valid, flux, torch.zeros_like(flux))
     integral = _piecewise_constant_integral(safe_flux, input_edges, query_edges)
-    widths = normalization_widths.to(device=flux.device, dtype=flux.dtype)
+    widths = _to(normalization_widths, device=flux.device, dtype=flux.dtype)
     output_flux = (integral[..., 1:] - integral[..., :-1]) / widths
 
     inside = (query_edges[..., :-1] >= input_edges[0]) & (
@@ -174,7 +175,7 @@ def _rebin_piecewise_constant(
         )
         overlap = invalid_integral[..., 1:] - invalid_integral[..., :-1]
         scale = torch.maximum(
-            normalization_widths.to(device=flux.device, dtype=coord_dtype).abs(),
+            _to(normalization_widths, device=flux.device, dtype=coord_dtype).abs(),
             torch.ones((), device=flux.device, dtype=coord_dtype),
         )
         tolerance = 8 * torch.finfo(coord_dtype).eps * scale
@@ -268,9 +269,7 @@ def relativistic_doppler_shift(
         raise ValueError("flux must be a floating-point tensor with a spectral axis")
     input_edges = torch.as_tensor(input_edges, device=flux.device)
     _validate_spectral_edges(input_edges, flux.shape[-1], "input_edges")
-    velocity = torch.as_tensor(
-        radial_velocity, device=flux.device, dtype=input_edges.dtype
-    )
+    velocity = _as_tensor(radial_velocity, device=flux.device, dtype=input_edges.dtype)
     if not bool(torch.isfinite(velocity).all()) or bool(
         torch.any(velocity.abs() >= _SPEED_OF_LIGHT_M_PER_S)
     ):
@@ -349,6 +348,75 @@ def _spectral_axis_length_from_header(
     raise ValueError(f"Missing NAXIS{fits_axis} for spectral axis reconstruction")
 
 
+_SPECTRAL_AXIS_KEYS = ("CTYPE", "CUNIT", "CRVAL", "CRPIX", "CDELT", "CNAME")
+_SPECTRAL_GLOBAL_KEYS = (
+    "RESTFRQ",
+    "RESTFREQ",
+    "RESTWAV",
+    "SPECSYS",
+    "SSYSOBS",
+    "SSYSSRC",
+    "VELOSYS",
+    "ZSOURCE",
+    "VELREF",
+)
+
+
+def _spectral_world_from_header(
+    header: Dict[str, Any], *, fits_axis: int, naxis: int, length: int
+) -> torch.Tensor:
+    """World values along one FITS spectral axis, evaluated by :class:`~torchsky.wcs.WCS`.
+
+    The axis is cut out as a one-dimensional WCS (its ``CDi_i`` or
+    ``PCi_i * CDELTi`` scale, ``PVi_m``/``PSi_m`` parameters and rest
+    frequency carried over), so the linear scale and the FITS Paper III
+    algorithm codes (``-LOG``, ``-F2W``, ``-V2W``, ``-GRI``, ...) follow the
+    WCS implementation exactly. A spectral axis coupled to other axes by
+    off-diagonal ``CD``/``PC`` terms has no single 1-D coordinate and is
+    refused, as is any algorithm code the WCS cannot evaluate.
+    """
+    upper = {str(key).upper(): value for key, value in header.items()}
+    i = fits_axis
+    for j in range(1, naxis + 1):
+        if j == i:
+            continue
+        for key in (f"CD{i}_{j}", f"CD{j}_{i}", f"PC{i}_{j}", f"PC{j}_{i}"):
+            value = upper.get(key)
+            if value is not None and float(value) != 0.0:
+                raise ValueError(
+                    f"spectral axis {i} is coupled to axis {j} by {key}={value}; "
+                    "it has no single 1-D coordinate"
+                )
+    sub: Dict[str, Any] = {"NAXIS": 1, "NAXIS1": int(length)}
+    for prefix in _SPECTRAL_AXIS_KEYS:
+        if f"{prefix}{i}" in upper:
+            sub[f"{prefix}1"] = upper[f"{prefix}{i}"]
+    if f"CD{i}_{i}" in upper:
+        sub["CD1_1"] = upper[f"CD{i}_{i}"]
+    elif f"PC{i}_{i}" in upper:
+        sub["PC1_1"] = upper[f"PC{i}_{i}"]
+    for key, value in upper.items():
+        for prefix in (f"PV{i}_", f"PS{i}_"):
+            if key.startswith(prefix) and key[len(prefix) :].isdigit():
+                sub[f"{prefix[:2]}1_{key[len(prefix) :]}"] = value
+    for key in _SPECTRAL_GLOBAL_KEYS:
+        if key in upper:
+            sub[key] = upper[key]
+    ctype = str(sub.get("CTYPE1", ""))
+    try:
+        world = WCS(sub).pixel_to_world(torch.arange(length, dtype=torch.float64))
+    except Exception as error:
+        raise ValueError(
+            f"cannot evaluate spectral axis CTYPE{i}={ctype!r}: {error}"
+        ) from error
+    values = torch.as_tensor(world, dtype=torch.float64).reshape(-1)
+    if values.numel() != length or not bool(torch.isfinite(values).all()):
+        raise ValueError(
+            f"spectral axis CTYPE{i}={ctype!r} has non-finite world coordinates"
+        )
+    return values
+
+
 def spectral_axis_from_header(
     header: Dict[str, Any],
     *,
@@ -381,10 +449,6 @@ def spectral_axis_from_header(
         fits_axis=spectral_fits_axis,
         data_shape=data_shape,
     )
-    crval = float(header.get(f"CRVAL{spectral_fits_axis}", 0.0))
-    cdelt = float(header.get(f"CDELT{spectral_fits_axis}", 1.0))
-    crpix = float(header.get(f"CRPIX{spectral_fits_axis}", 1.0))
-
     # Reconstruct coordinate values
     ctype = str(header.get(f"CTYPE{spectral_fits_axis}", ""))
     if ctype.upper().endswith("-TAB"):
@@ -402,17 +466,25 @@ def spectral_axis_from_header(
         header_upper = {str(k).upper(): v for k, v in header.items()}
         custom_key_prefix = spectral_type.upper()
         if f"{custom_key_prefix}0" in header_upper:
-            custom_vals = []
-            for i in range(axis_length):
-                k = f"{custom_key_prefix}{i}"
-                if k in header_upper:
-                    custom_vals.append(float(header_upper[k]))
-                else:
-                    custom_vals.append(crval + cdelt * (i - (crpix - 1.0)))
-            values = torch.tensor(custom_vals, dtype=torch.float64)
+            keys = [f"{custom_key_prefix}{i}" for i in range(axis_length)]
+            if all(key in header_upper for key in keys):
+                values = torch.tensor(
+                    [float(header_upper[key]) for key in keys], dtype=torch.float64
+                )
+            else:
+                values = _spectral_world_from_header(
+                    header,
+                    fits_axis=spectral_fits_axis,
+                    naxis=naxis,
+                    length=axis_length,
+                ).clone()
+                for i, key in enumerate(keys):
+                    if key in header_upper:
+                        values[i] = float(header_upper[key])
         else:
-            pixels = torch.arange(axis_length, dtype=torch.float64)
-            values = crval + cdelt * (pixels - (crpix - 1.0))
+            values = _spectral_world_from_header(
+                header, fits_axis=spectral_fits_axis, naxis=naxis, length=axis_length
+            )
 
     tensor_axis_index = naxis - spectral_fits_axis
     return (
@@ -769,7 +841,7 @@ class SpectralAxis:
     ) -> "SpectralAxis":
         """Transfer coordinate tensors without changing physical metadata."""
         return SpectralAxis(
-            values=self.values.to(device=device, dtype=dtype),
+            values=_to(self.values, device=device, dtype=dtype),
             unit=self.unit,
             type=self.type,
             rest_frequency=self.rest_frequency,
@@ -777,7 +849,7 @@ class SpectralAxis:
             bin_edges=(
                 None
                 if self.bin_edges is None
-                else self.bin_edges.to(device=device, dtype=dtype)
+                else _to(self.bin_edges, device=device, dtype=dtype)
             ),
         )
 
@@ -817,7 +889,7 @@ class SpectralAxis:
             return angstrom.to(dtype=values.dtype)
         freq = self.to_frequency()
         wave = frequency_to_spectral(freq, "WAVE", unit="Angstrom")
-        return wave.to(dtype=values.dtype, device=values.device)
+        return _to(wave, dtype=values.dtype, device=values.device)
 
     def to_frequency(self) -> torch.Tensor:
         """Convert to frequency in Hz via FITS spectral conventions."""
@@ -829,7 +901,7 @@ class SpectralAxis:
             unit=self.unit,
             rest_frequency=self.rest_frequency,
         )
-        return out.to(dtype=values.dtype, device=values.device)
+        return _to(out, dtype=values.dtype, device=values.device)
 
     def to_energy(self, unit: str = "eV") -> torch.Tensor:
         """Convert to photon energy in joules or electron-volt units."""
@@ -928,8 +1000,8 @@ class Spectrum1D:
         masking is dropped because interpolated channels mix masked samples.
         """
         work_dtype = _work_dtype(self.flux.device)
-        current_wave = self.wavelength.to(device=self.flux.device, dtype=work_dtype)
-        target_wave = new_wavelength.to(device=self.flux.device, dtype=work_dtype)
+        current_wave = _to(self.wavelength, device=self.flux.device, dtype=work_dtype)
+        target_wave = _to(new_wavelength, device=self.flux.device, dtype=work_dtype)
         if current_wave.ndim != 1 or target_wave.ndim != 1:
             raise ValueError("wavelength grids must be 1D")
         if current_wave.numel() < 2:

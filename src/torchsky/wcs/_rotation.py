@@ -14,6 +14,7 @@ import torch
 from torch import Tensor
 
 from ._math import _sincos, _wrap_lon180, _wrap_lon360
+from ..device import _as_tensor
 
 
 class _RotationMixin:
@@ -58,12 +59,8 @@ class _RotationMixin:
 
         xi_rad = xi * rad
         eta_rad = eta * rad
-        crval1_rad = torch.as_tensor(
-            self.alpha0 * rad, dtype=xi.dtype, device=xi.device
-        )
-        crval2_rad = torch.as_tensor(
-            self.delta0 * rad, dtype=xi.dtype, device=xi.device
-        )
+        crval1_rad = _as_tensor(self.alpha0 * rad, dtype=xi.dtype, device=xi.device)
+        crval2_rad = _as_tensor(self.delta0 * rad, dtype=xi.dtype, device=xi.device)
 
         # Use the explicit rotation matrix method which is vectorizable.
         # 1. Construct vector in tangent plane (3D).

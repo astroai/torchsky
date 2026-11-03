@@ -192,3 +192,194 @@ def test_f99_optional_dust_extinction_parity() -> None:
         dtype=got.dtype,
     )
     torch.testing.assert_close(got, ref, atol=2e-2, rtol=2e-2)
+
+
+# A(λ)/A(V) from dust_extinction 1.7 (K. Gordon, BSD-3-Clause), the reference
+# implementation of these laws, at R_V = 2.5, 3.1, 5.0.
+_DUST_EXTINCTION_REFERENCE = {
+    "g23": (
+        [
+            1000.0,
+            1500.0,
+            2175.0,
+            3100.0,
+            4400.0,
+            5500.0,
+            10000.0,
+            22000.0,
+            98000.0,
+            200000.0,
+        ],
+        {
+            2.5: [
+                7.07162967271,
+                3.61980669258,
+                3.92073114306,
+                2.07237900604,
+                1.39544917216,
+                0.998204954128,
+                0.320757048028,
+                0.0686489185088,
+                0.077978345895,
+                0.038275030712,
+            ],
+            3.1: [
+                5.14408310829,
+                2.82354704072,
+                3.22035808515,
+                1.81486758871,
+                1.32041499934,
+                0.998505968387,
+                0.395680326042,
+                0.103110029219,
+                0.0850407954221,
+                0.0415882981779,
+            ],
+            5.0: [
+                2.0921343813,
+                1.56280259195,
+                2.11143407681,
+                1.40714117794,
+                1.20161089237,
+                0.998982574297,
+                0.514308849563,
+                0.15767345451,
+                0.0962230071733,
+                0.0468343049989,
+            ],
+        },
+    ),
+    "f19": (
+        [1200.0, 2175.0, 3100.0, 4400.0, 5500.0, 8000.0, 20000.0],
+        {
+            2.5: [
+                4.4597106329,
+                3.92197557679,
+                2.00250148832,
+                1.39979088583,
+                1.00017660567,
+                0.5606448,
+                0.120563341736,
+            ],
+            3.1: [
+                3.49750990775,
+                3.18247982373,
+                1.78945101289,
+                1.32241332519,
+                1.00015166451,
+                0.607741935484,
+                0.135020069516,
+            ],
+            5.0: [
+                1.97402542627,
+                2.01161154807,
+                1.45212109344,
+                1.19989885418,
+                1.00011217434,
+                0.6823124,
+                0.157909888502,
+            ],
+        },
+    ),
+    "gcc09": (
+        [950.0, 1200.0, 1500.0, 2175.0, 2800.0],
+        {
+            2.5: [
+                8.59650371706,
+                5.04129561792,
+                3.62289086449,
+                3.97859787129,
+                2.3287431064,
+            ],
+            3.1: [
+                5.89194126788,
+                3.67644218099,
+                2.79314950486,
+                3.19329305505,
+                1.98487743876,
+            ],
+            5.0: [1.60971739, 1.51542423918, 1.4793923521, 1.94989376266, 1.440423465],
+        },
+    ),
+}
+
+
+@pytest.mark.parametrize("law", ["g23", "f19", "gcc09"])
+@pytest.mark.parametrize("r_v", [2.5, 3.1, 5.0])
+def test_recent_laws_match_dust_extinction_values(law: str, r_v: float) -> None:
+    waves, table = _DUST_EXTINCTION_REFERENCE[law]
+    wave = torch.tensor(waves, dtype=torch.float64)
+    got = k_lambda(wave, law=cast(Any, law), r_v=r_v)
+    want = torch.tensor(table[r_v], dtype=torch.float64)
+    torch.testing.assert_close(got, want, rtol=1e-10, atol=1e-11)
+
+
+@pytest.mark.parametrize(
+    ("law", "cls_name", "lo_um", "hi_um", "r_vs"),
+    [
+        ("g23", "G23", 0.0912, 32.0, (2.3, 3.1, 4.0, 5.6)),
+        ("f19", "F19", 1.0 / 8.7, 1.0 / 0.3, (2.0, 3.1, 4.0, 6.0)),
+        ("gcc09", "GCC09", 1.0 / 11.0, 1.0 / 3.3, (2.0, 3.1, 4.0, 6.0)),
+    ],
+)
+def test_recent_laws_match_live_dust_extinction(
+    law, cls_name, lo_um, hi_um, r_vs
+) -> None:
+    pytest.importorskip("dust_extinction")
+    import numpy as np
+    from astropy import units as u
+    from dust_extinction import parameter_averages
+
+    x = np.linspace(1.0 / hi_um, 1.0 / lo_um, 2001)
+    wave = torch.tensor(1.0e4 / x, dtype=torch.float64)
+    for r_v in r_vs:
+        ref = getattr(parameter_averages, cls_name)(Rv=r_v)(x / u.micron)
+        got = k_lambda(wave, law=law, r_v=r_v)
+        torch.testing.assert_close(
+            got, torch.tensor(ref, dtype=torch.float64), rtol=1e-12, atol=1e-13
+        )
+
+
+@pytest.mark.parametrize("law", ["g23", "f19", "gcc09"])
+def test_recent_laws_fail_closed_outside_their_domain(law: str) -> None:
+    inside = {"g23": 5500.0, "f19": 5500.0, "gcc09": 2000.0}[law]
+    outside = {"g23": 500.0, "f19": 40000.0, "gcc09": 5500.0}[law]
+    with pytest.raises(ValueError, match=law):
+        a_lambda(torch.tensor([outside], dtype=torch.float64), a_v=1.0, law=law)
+    with pytest.raises(ValueError, match="R_V"):
+        a_lambda(torch.tensor([inside], dtype=torch.float64), a_v=1.0, r_v=7.0, law=law)
+
+
+@pytest.mark.parametrize("law", ["g23", "f19", "gcc09"])
+def test_recent_laws_gradients(law: str) -> None:
+    wave = {
+        "g23": torch.tensor([1200.0, 3150.0, 5500.0, 10000.0, 98000.0]),
+        "f19": torch.tensor([1500.0, 4400.0, 9000.0]),
+        "gcc09": torch.tensor([1000.0, 2175.0, 3000.0]),
+    }[law].to(torch.float64)
+    ebv = torch.tensor([0.1, 0.4], dtype=torch.float64, requires_grad=True)
+    r_v = torch.tensor(3.3, dtype=torch.float64, requires_grad=True)
+    assert torch.autograd.gradcheck(
+        lambda e, r: a_lambda(wave, ebv=e, r_v=r, law=cast(Any, law)), (ebv, r_v)
+    )
+    wave_grad = wave.clone().requires_grad_(True)
+    assert torch.autograd.gradcheck(
+        lambda w: a_lambda(w, a_v=1.0, r_v=3.1, law=cast(Any, law)), (wave_grad,)
+    )
+
+
+@pytest.mark.parametrize("law", ["g23", "f19", "gcc09"])
+def test_recent_laws_on_device(law: str, compute_device) -> None:
+    dtype = torch.float32 if compute_device.type == "mps" else torch.float64
+    wave = {
+        "g23": torch.tensor([1200.0, 5500.0, 22000.0]),
+        "f19": torch.tensor([1500.0, 5500.0, 9000.0]),
+        "gcc09": torch.tensor([1000.0, 2175.0, 3000.0]),
+    }[law].to(dtype)
+    ebv = torch.tensor([[0.1], [0.4]], dtype=dtype)
+    expected = transmission(wave, ebv, law=cast(Any, law))
+    got = transmission(
+        wave.to(compute_device), ebv.to(compute_device), law=cast(Any, law)
+    )
+    assert got.device.type == compute_device.type and got.shape == (2, 3)
+    torch.testing.assert_close(got.cpu(), expected, rtol=1e-5, atol=1e-6)

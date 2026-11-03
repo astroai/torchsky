@@ -21,6 +21,7 @@ from ..scenes import (
     SceneRepresentation,
 )
 from ..target import TargetRenderSpec
+from ...device import _as_tensor, _to
 
 
 def harmonic_degree_diagonal(
@@ -128,7 +129,7 @@ def harmonic_dense_covariance(
         raise ValueError("mmax must satisfy 0 <= mmax <= lmax")
     if ell_correlation_length <= 0.0:
         raise ValueError("ell_correlation_length must be positive")
-    ell = _alm_ell_array(ll, mm).to(dtype=torch.float64, device=device)
+    ell = _to(_alm_ell_array(ll, mm), dtype=torch.float64, device=device)
     delta = ell[:, None] - ell[None, :]
     cov = float(amplitude) * torch.exp(
         -0.5 * torch.square(delta / float(ell_correlation_length))
@@ -157,12 +158,12 @@ def harmonic_cl_diagonal(
         raise ValueError("lmax must be non-negative")
     if mm < 0 or mm > ll:
         raise ValueError("mmax must satisfy 0 <= mmax <= lmax")
-    cl_t = torch.as_tensor(cls, dtype=torch.float64, device=device)
+    cl_t = _as_tensor(cls, dtype=torch.float64, device=device)
     if cl_t.ndim != 1 or int(cl_t.numel()) < ll + 1:
         raise ValueError("cls must be a 1D spectrum with length >= lmax+1")
     variance_l = cl_t[: ll + 1]
     if beam_transfer is not None:
-        beam_t = torch.as_tensor(beam_transfer, dtype=torch.float64, device=device)
+        beam_t = _as_tensor(beam_transfer, dtype=torch.float64, device=device)
         if beam_t.ndim != 1 or int(beam_t.numel()) < ll + 1:
             raise ValueError(
                 "beam_transfer must be a 1D spectrum with length >= lmax+1"
@@ -328,9 +329,7 @@ def build_spin_harmonic_kronecker_prior_operator(
     if eb_coupling is None:
         eb_t = torch.eye(2, dtype=harmonic_t.dtype, device=harmonic_t.device)
     else:
-        eb_t = torch.as_tensor(
-            eb_coupling, dtype=harmonic_t.dtype, device=harmonic_t.device
-        )
+        eb_t = _as_tensor(eb_coupling, dtype=harmonic_t.dtype, device=harmonic_t.device)
         if eb_t.ndim != 2 or tuple(eb_t.shape) != (2, 2):
             raise ValueError("eb_coupling must have shape (2, 2)")
     return build_state_kronecker_operator(
@@ -364,26 +363,26 @@ def teb_cls_precision_factors(
         raise ValueError("lmax must be non-negative")
     if mm < 0 or mm > ll:
         raise ValueError("mmax must satisfy 0 <= mmax <= lmax")
-    cl_tt = torch.as_tensor(cls_tt, dtype=torch.float64, device=device)
-    cl_ee = torch.as_tensor(cls_ee, dtype=torch.float64, device=device)
-    cl_bb = torch.as_tensor(cls_bb, dtype=torch.float64, device=device)
+    cl_tt = _as_tensor(cls_tt, dtype=torch.float64, device=device)
+    cl_ee = _as_tensor(cls_ee, dtype=torch.float64, device=device)
+    cl_bb = _as_tensor(cls_bb, dtype=torch.float64, device=device)
     for name, arr in (("cls_tt", cl_tt), ("cls_ee", cl_ee), ("cls_bb", cl_bb)):
         if arr.ndim != 1 or int(arr.numel()) < ll + 1:
             raise ValueError(f"{name} must be a 1D spectrum with length >= lmax+1")
     cl_te = (
         torch.zeros(ll + 1, dtype=torch.float64, device=device)
         if cls_te is None
-        else torch.as_tensor(cls_te, dtype=torch.float64, device=device)
+        else _as_tensor(cls_te, dtype=torch.float64, device=device)
     )
     cl_tb = (
         torch.zeros(ll + 1, dtype=torch.float64, device=device)
         if cls_tb is None
-        else torch.as_tensor(cls_tb, dtype=torch.float64, device=device)
+        else _as_tensor(cls_tb, dtype=torch.float64, device=device)
     )
     cl_eb = (
         torch.zeros(ll + 1, dtype=torch.float64, device=device)
         if cls_eb is None
-        else torch.as_tensor(cls_eb, dtype=torch.float64, device=device)
+        else _as_tensor(cls_eb, dtype=torch.float64, device=device)
     )
     for name, arr in (("cls_te", cl_te), ("cls_tb", cl_tb), ("cls_eb", cl_eb)):
         if arr.ndim != 1 or int(arr.numel()) < ll + 1:
@@ -391,12 +390,12 @@ def teb_cls_precision_factors(
     bt = (
         torch.ones(ll + 1, dtype=torch.float64, device=device)
         if beam_transfer_t is None
-        else torch.as_tensor(beam_transfer_t, dtype=torch.float64, device=device)
+        else _as_tensor(beam_transfer_t, dtype=torch.float64, device=device)
     )
     bp = (
         torch.ones(ll + 1, dtype=torch.float64, device=device)
         if beam_transfer_pol is None
-        else torch.as_tensor(beam_transfer_pol, dtype=torch.float64, device=device)
+        else _as_tensor(beam_transfer_pol, dtype=torch.float64, device=device)
     )
     if bt.ndim != 1 or int(bt.numel()) < ll + 1:
         raise ValueError("beam_transfer_t must be a 1D spectrum with length >= lmax+1")
@@ -495,9 +494,9 @@ def build_teb_cls_prior_operator(
         tensor = _scene_state_tensor(scene)
         if tuple(tensor.shape) != tuple(state.shape):
             raise ValueError("TEB Cl prior received a scene with incompatible shape")
-        tensor_t = tensor.to(dtype=factors.dtype, device=factors.device)
+        tensor_t = _to(tensor, dtype=factors.dtype, device=factors.device)
         mapped = torch.einsum("nij,jn->in", factors, tensor_t)
-        return mapped.to(dtype=tensor.dtype, device=tensor.device)
+        return _to(mapped, dtype=tensor.dtype, device=tensor.device)
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
@@ -505,9 +504,9 @@ def build_teb_cls_prior_operator(
             raise ValueError(
                 "TEB Cl prior adjoint received data with incompatible shape"
             )
-        mapped_t = mapped.to(dtype=factors.dtype, device=factors.device)
+        mapped_t = _to(mapped, dtype=factors.dtype, device=factors.device)
         adj = torch.einsum("nji,in->jn", torch.conj(factors), mapped_t)
-        return adj.to(dtype=state.dtype, device=state.device)
+        return _to(adj, dtype=state.dtype, device=state.device)
 
     return BoundObservationOperator(
         operators=ObservationOperatorBundle(),

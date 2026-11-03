@@ -1,18 +1,22 @@
 #!/usr/bin/env python
 """Smoke runner for every example script in ``examples/``.
 
-Each example is a standalone script that builds its own synthetic inputs, so
-the runner can execute them one by one in a bounded subprocess. It is the gate
+Each example is a standalone script that builds its own synthetic inputs or
+fetches a small public sample, so the runner can execute them one by one in a
+bounded subprocess. It is the gate
 behind ``pixi run examples`` and ``tests/test_examples_runner.py``.
 
 Run a subset with positional names::
 
     python examples/test_examples.py wcs_tour.py healpix_and_moc.py
 
-An example that exits with status 77 (``SKIP``) has an opt-in data
-requirement that is not met (see ``real_data_cutout.py``: sample not cached under
-``TORCHSKY_EXAMPLE_FAST=1`` or no network); it is reported as SKIP and does not fail the gate. Examples under ``examples/applications/`` need
-external data or checkpoints and are not run here.
+An example that exits with status 77 (``SKIP``) has a data requirement that is
+not met (the real-data examples: sample not cached under
+``TORCHSKY_EXAMPLE_FAST=1`` or no network); it is reported as SKIP and does not
+fail the gate. Under GitHub Actions ``TORCHSKY_EXAMPLE_FAST`` is set, so those
+examples skip unless their samples are cached. Examples under
+``examples/applications/`` need external data or checkpoints and are not run
+here.
 """
 
 from __future__ import annotations
@@ -32,7 +36,8 @@ ROOT = SCRIPT_DIR.parent
 # measured reason.
 DEFAULT_TIMEOUT = 120
 SKIP = 77
-TIMEOUTS: dict[str, int] = {}
+# The TAP cones of the catalogue example can take minutes on the first, uncached run.
+TIMEOUTS: dict[str, int] = {"crossmatch_gaia_2mass_allwise.py": 600}
 
 EXCLUDE = {
     "test_examples.py",

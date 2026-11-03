@@ -1,0 +1,8 @@
+COMP-MAP-Synchrotron: nside 256, 786432 pixels, unit uK_RJ, median 1.65e+07
+mask |b| > 20 deg, 10 deg cosine taper: f_sky = 0.6576 (MOC area; analytic 0.6580), w2 = 0.5579
+even/odd multipole ratio at ell 100-200: sharp cut, monopole kept 1.90; apodised, monopole+dipole removed 1.005
+high-latitude spectrum: C_ell ~ ell^-2.91 over ell 10-50
+band          |b|>20 / full sky   |b|>30 / |b|>20   simulation out / in
+ell  10- 30         0.0326              0.761             1.184
+ell  30- 60         0.0202              0.845             1.037
+ell  60-150         0.0176              1.166             1.028

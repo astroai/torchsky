@@ -2,11 +2,11 @@
 
 # `torchsky`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 The lean package root. `torchsky.WCS` is the one promoted class; everything else is a domain namespace that loads on first access, so importing the package never pulls in compiled kernels, map models, or optional astronomy packages.
 
-**Guides:** [index](../reference/index.md), [concepts](../concepts.md)
+**Guides:** [reference](../reference/index.md), [concepts](../introduction/concepts.md)
 
 ---
 
@@ -32,7 +32,7 @@ namespaces keep imports light: they load on first access.
 | `torchsky.catalogs` | core | [reference](catalogs.md) |
 | `torchsky.coords` | core | [reference](coords.md) |
 | `torchsky.cosmology` | core | [reference](cosmology.md) |
-| `torchsky.encoders` | core | [reference](encoders.md) |
+| `torchsky.encoders` | experimental | [reference](encoders.md) |
 | `torchsky.extinction` | core | [reference](extinction.md) |
 | `torchsky.field` | experimental | [reference](field.md) |
 | `torchsky.log_lambda` | core | [reference](log-lambda.md) |

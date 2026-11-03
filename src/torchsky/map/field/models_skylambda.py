@@ -31,6 +31,7 @@ from .types import (
     FieldDomain,
     FieldObservation,
 )
+from ...device import _as_tensor, _to
 
 
 def _triplane_names(spatial_dim: int) -> tuple[str, ...]:
@@ -1165,7 +1166,7 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
         dtype: torch.dtype,
         shape: torch.Size,
     ) -> Tensor:
-        wavelength = torch.as_tensor(
+        wavelength = _as_tensor(
             wavelength_angstrom,
             device=device,
             dtype=dtype,
@@ -1175,8 +1176,8 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
         wavelength = torch.clamp(wavelength, min=1.0)
         return (
             torch.log(wavelength)
-            - self.spectral_log_center.to(device=device, dtype=dtype)
-        ) / (self.spectral_log_scale.to(device=device, dtype=dtype))
+            - _to(self.spectral_log_center, device=device, dtype=dtype)
+        ) / (_to(self.spectral_log_scale, device=device, dtype=dtype))
 
     def _spectral_basis(
         self,
@@ -1192,8 +1193,8 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
             dtype=dtype,
             shape=shape,
         )
-        centers = self.spectral_basis_centers.to(device=device, dtype=dtype)
-        widths = self.spectral_basis_widths.to(device=device, dtype=dtype)
+        centers = _to(self.spectral_basis_centers, device=device, dtype=dtype)
+        widths = _to(self.spectral_basis_widths, device=device, dtype=dtype)
         diff = lam.unsqueeze(-1) - centers
         # ⚡ Bolt: Element-wise multiplication is faster than torch.square or **2
         scaled_diff = diff / torch.clamp(widths, min=1.0e-3)
@@ -1295,7 +1296,7 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
                 [mod_hidden, detail_hidden, spectral_context, bandpass_latent], dim=-1
             )
         ).squeeze(-1)
-        support_scale_tensor = torch.as_tensor(
+        support_scale_tensor = _as_tensor(
             support_scale,
             device=base.device,
             dtype=base.dtype,
@@ -1426,7 +1427,7 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
         )
         cached = self._spectral_observability_cache.get(cache_key)
         if cached is not None:
-            return cached.to(device=device, dtype=dtype)
+            return _to(cached, device=device, dtype=dtype)
         lower = max(
             min(_bandpass_bounds(observation)[0] for observation in observations),
             1.0,

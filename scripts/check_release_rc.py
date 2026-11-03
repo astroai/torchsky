@@ -27,13 +27,13 @@ _RC_TAG_RE = re.compile(r"^v(?P<base>\d+\.\d+\.\d+)rc(?P<number>\d+)$")
 ALLOWED_STABLE_CHANGES = frozenset(
     {
         "CITATION.cff",
-        "docs/changelog.md",
+        "docs/project/changelog.md",
         "pixi.toml",
         "pyproject.toml",
         "src/torchsky/__init__.py",
     }
 )
-VERSION_FILES = ALLOWED_STABLE_CHANGES - {"docs/changelog.md"}
+VERSION_FILES = ALLOWED_STABLE_CHANGES - {"docs/project/changelog.md"}
 
 
 def split_version(version: str) -> tuple[str, str | None]:

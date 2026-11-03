@@ -26,7 +26,12 @@ def _tier1_names() -> list[str]:
 
 
 def _guide_text() -> str:
-    pages = [path for path in DOCS.glob("*.md") if not path.name.startswith("api-")]
+    pages = [
+        path
+        for path in DOCS.rglob("*.md")
+        if path.relative_to(DOCS).parts[0] not in {"reference", "published-examples"}
+        and not path.name.startswith("api-")
+    ]
     return "\n".join(path.read_text(encoding="utf-8") for path in pages)
 
 

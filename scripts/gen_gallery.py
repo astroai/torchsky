@@ -2,7 +2,7 @@
 """Generate the demonstration gallery figures.
 
 Committed figures live under ``docs/assets/gallery`` and are embedded by
-``docs/gallery.md``. Regenerate deliberately; do not run this during the docs
+``docs/examples/gallery.md``. Regenerate deliberately; do not run this during the docs
 build (it imports torch and matplotlib).
 
     pixi run docs-gallery

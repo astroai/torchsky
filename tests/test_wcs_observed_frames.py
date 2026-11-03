@@ -164,13 +164,13 @@ def test_cirs_tete_match_erfa_matrices() -> None:
 def test_observed_frames_require_eop() -> None:
     with pytest.raises(ValueError, match="GCRS requires"):
         transform(10.0, 20.0, from_frame="ICRS", to_frame="GCRS")
-    with pytest.raises(ValueError, match="tt_minus_utc"):
+    with pytest.raises(ValueError, match="leap-second table"):
         transform(
             10.0,
             20.0,
             from_frame="ICRS",
             to_frame="CIRS",
-            obstime_mjd_utc=UTC_MJD,
+            obstime_mjd_utc=40000.0,  # 1968: before the 1972 leap table
             eop=EarthOrientation(dut1_s=DUT1_S),
         )
 

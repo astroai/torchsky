@@ -2,11 +2,11 @@
 
 # `torchsky.catalogs`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Catalog streaming, indexing, and crossmatching helpers.
 
-**Guides:** [catalogs](../catalogs.md)
+**Guides:** [crossmatch](../catalogs/crossmatch.md)
 
 ---
 

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch
 from torch import Tensor
+from ..device import _as_tensor
 
 if TYPE_CHECKING:
     from .sip import SIP
@@ -72,7 +73,7 @@ class _GeometryMixin:
         """Return a boolean mask for pixels inside ``pixel_bounds``."""
         if self._pixel_shape is None:
             raise ValueError("in_image requires NAXISi image bounds")
-        pix = torch.as_tensor(
+        pix = _as_tensor(
             pixels, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         if pix.shape[-1] != self.naxis:

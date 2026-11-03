@@ -1,0 +1,6 @@
+manga_8485_1901.fits.gz: 34 x 34 spaxels x 4563 channels, WAVE-LOG, 1E-17 erg/s/cm^2/Angstrom/spaxel
+WAVE-LOG axis 3621.60-10353.81 Å; max |WCS - WAVE HDU| = 1.5e-04 Å
+systemic redshift from central Hα: z = 0.04077 (cz = 12221 km/s)
+Hα detected at 5 sigma in 254 spaxels; total Hα flux 1187 x 1e-17 erg/s/cm^2; velocity range -102 to +90 km/s
+integrated [N II] 6585 / Hα = 0.41 (log -0.39: star formation, not AGN)
+reprojected cube (16, 93, 93) at 0.25 arcsec, rotated 30 deg: Hα total 1194 vs 1194 (1.0000)

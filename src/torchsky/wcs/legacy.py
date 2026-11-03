@@ -5,6 +5,7 @@ import torch
 from torch import Tensor
 
 from .zenithal import project_zenithal
+from ..device import _to
 
 
 def parse_wat_keywords(header: Dict[str, Any], prefix: str = "WAT") -> str:
@@ -278,7 +279,7 @@ def project_zpx(
             merged.setdefault(k, v)
     pv2 = _dict_to_pv_tensor(merged, axis=2)
     if pv2 is not None:
-        pv2 = pv2.to(device=xi.device, dtype=xi.dtype)
+        pv2 = _to(pv2, device=xi.device, dtype=xi.dtype)
     dxi, deta = _tnx_delta_plane(xi, eta, wat_data)
     return project_zenithal(xi + dxi, eta + deta, "ZPN", pv2=pv2)
 
@@ -298,6 +299,6 @@ def deproject_zpx(
             merged.setdefault(k, v)
     pv2_eff = _dict_to_pv_tensor(merged, axis=2)
     if pv2_eff is not None:
-        pv2_eff = pv2_eff.to(device=phi.device, dtype=phi.dtype)
+        pv2_eff = _to(pv2_eff, device=phi.device, dtype=phi.dtype)
     xi_c, eta_c = deproject_zenithal(phi, theta, "ZPN", pv2=pv2_eff)
     return invert_tnx_plane(xi_c, eta_c, wat_data)

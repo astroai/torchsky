@@ -18,6 +18,7 @@ from ._spectral_config import (
 from ._spectral_kernels import (
     _ring_pix2ring_index,
 )
+from ..device import _to
 
 
 _RING_WEIGHT_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
@@ -195,13 +196,15 @@ def _apply_map2alm_weights(
         keep = _gal_cut_keep_mask(nside, float(gal_cut), nest=False, device=rows.device)
         out = out * keep.to(dtype=out.dtype)
     if use_pixel_weights:
-        corr = _healpix_full_pixel_weight_corrections(nside, datapath).to(
-            device=rows.device, dtype=out.dtype
+        corr = _to(
+            _healpix_full_pixel_weight_corrections(nside, datapath),
+            device=rows.device,
+            dtype=out.dtype,
         )
         out = out * (1.0 + corr).unsqueeze(0)
     elif use_weights:
-        w = _healpix_ring_quadrature_weights(nside).to(
-            device=rows.device, dtype=out.dtype
+        w = _to(
+            _healpix_ring_quadrature_weights(nside), device=rows.device, dtype=out.dtype
         )
         out = out * w.unsqueeze(0)
     return out

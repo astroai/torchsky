@@ -68,3 +68,7 @@ Unspecified run-time error.
 **[`UnsupportedPathError`](wcs.md#torchsky.wcs.UnsupportedPathError)**
 
 Unspecified run-time error.
+
+**[`WCSHeaderWarning`](wcs.md#torchsky.wcs.WCSHeaderWarning)**
+
+A header was read under a documented compatibility rule its CTYPE does not state.

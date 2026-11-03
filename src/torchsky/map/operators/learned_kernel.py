@@ -39,6 +39,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .adaptive_axes import AdaptiveSpatioSpectralTemporalEncoder
+from ...device import _as_tensor, _to
 
 __all__ = [
     "AffineRadiometry",
@@ -142,15 +143,15 @@ class SpatioSpectralTemporalEncoder(nn.Module):
             time_offset = time_mjd - self.time_center_mjd
         else:
             time_offset = float(time_mjd) - self.time_center_mjd
-        wavelength_offset_tensor = torch.as_tensor(
+        wavelength_offset_tensor = _as_tensor(
             wavelength_offset, device=spatial_x.device, dtype=spatial_x.dtype
         )
-        time_offset_tensor = torch.as_tensor(
+        time_offset_tensor = _as_tensor(
             time_offset, device=spatial_x.device, dtype=spatial_x.dtype
         )
         x, y, spectral_offset, temporal_offset = torch.broadcast_tensors(
             spatial_x,
-            spatial_y.to(device=spatial_x.device, dtype=spatial_x.dtype),
+            _to(spatial_y, device=spatial_x.device, dtype=spatial_x.dtype),
             wavelength_offset_tensor,
             time_offset_tensor,
         )
@@ -244,8 +245,8 @@ class ConditionedKernelPSF(nn.Module):
         mixture = self.mixture_weights(spatial_x, spatial_y, wavelength, time_mjd).to(
             dtype=image.dtype
         )
-        basis = self.kernel_basis.basis_kernels().to(
-            device=image.device, dtype=image.dtype
+        basis = _to(
+            self.kernel_basis.basis_kernels(), device=image.device, dtype=image.dtype
         )
         weighted_sources = mixture * image.unsqueeze(0)
         convolved = F.conv2d(
@@ -398,9 +399,11 @@ class ExtendedResidualKernelPSF(nn.Module):
         residual = torch.einsum(
             "...b,bhw->...hw", mixture, self._anchored_residual_basis()
         )
-        baseline = self.baseline_kernel.to(device=residual.device, dtype=residual.dtype)
-        fraction = self.residual_fraction.to(
-            device=residual.device, dtype=residual.dtype
+        baseline = _to(
+            self.baseline_kernel, device=residual.device, dtype=residual.dtype
+        )
+        fraction = _to(
+            self.residual_fraction, device=residual.device, dtype=residual.dtype
         )
         return (1.0 - fraction) * baseline + fraction * residual
 
@@ -437,8 +440,8 @@ class ExtendedResidualKernelPSF(nn.Module):
         mixture = self.mixture_weights(spatial_x, spatial_y, wavelength, time_mjd).to(
             dtype=image.dtype
         )
-        basis = self._anchored_residual_basis().to(
-            device=image.device, dtype=image.dtype
+        basis = _to(
+            self._anchored_residual_basis(), device=image.device, dtype=image.dtype
         )
         residual = (
             F.conv2d(
@@ -450,15 +453,15 @@ class ExtendedResidualKernelPSF(nn.Module):
             .squeeze(0)
             .sum(dim=0)
         )
-        baseline_kernel = self.baseline_kernel.to(
-            device=image.device, dtype=image.dtype
+        baseline_kernel = _to(
+            self.baseline_kernel, device=image.device, dtype=image.dtype
         )
         baseline = F.conv2d(
             image[None, None],
             baseline_kernel.flip(-2, -1)[None, None],
             padding=self.kernel_size // 2,
         )[0, 0]
-        fraction = self.residual_fraction.to(device=image.device, dtype=image.dtype)
+        fraction = _to(self.residual_fraction, device=image.device, dtype=image.dtype)
         return (1.0 - fraction) * baseline + fraction * residual
 
 
@@ -794,8 +797,8 @@ class LearnedInstrumentOperator(nn.Module):
         b = image.shape[0]
         out = image
         if cond is not None and self.shift_head is not None:
-            shift = self.predicted_shift(cond, b).to(
-                device=image.device, dtype=image.dtype
+            shift = _to(
+                self.predicted_shift(cond, b), device=image.device, dtype=image.dtype
             )
             out = self.shifter(out, shift)
         out = self.psf(out, cond)
@@ -1027,15 +1030,17 @@ class LowRankChromaticPSF(nn.Module):
         """Return stacked ``(sigma_x, sigma_y, rho)`` of shape ``[N, 3]``."""
         if u_pix.ndim != 2 or u_pix.shape[-1] != 2:
             raise ValueError("u_pix must have shape [N, 2]")
-        lam = torch.as_tensor(lam_norm, device=u_pix.device, dtype=u_pix.dtype).expand(
+        lam = _as_tensor(lam_norm, device=u_pix.device, dtype=u_pix.dtype).expand(
             u_pix.shape[0]
         )
         # Legendre polynomials are orthogonal on [-1, 1]; lam_norm lives on
         # [0, 1], so rescale before evaluating the spectral basis.
-        spec = _legendre_basis(2.0 * lam - 1.0, self.spectral_degree).to(
-            device=self.raw_log_sigma.device, dtype=self.raw_log_sigma.dtype
+        spec = _to(
+            _legendre_basis(2.0 * lam - 1.0, self.spectral_degree),
+            device=self.raw_log_sigma.device,
+            dtype=self.raw_log_sigma.dtype,
         )
-        u_norm = u_pix.to(self.extent_pix.device, self.extent_pix.dtype) / (
+        u_norm = _to(u_pix, self.extent_pix.device, self.extent_pix.dtype) / (
             self.extent_pix.clamp_min(1.0)
         )
         grid = u_norm.view(1, 1, -1, 2)[..., [0, 1]].clamp(-1.0, 1.0)
@@ -1108,11 +1113,11 @@ class LowRankChromaticPSF(nn.Module):
             for ix in range(gs):
                 x0, x1 = ix * cell_w, min(width, (ix + 1) * cell_w)
                 x_slice = slice(x0, x1) if x0 < x1 else slice(width - 1, width)
-                cx = spatial_x[y_slice, x_slice].to(device=device, dtype=dtype).mean()
-                cy = spatial_y[y_slice, x_slice].to(device=device, dtype=dtype).mean()
+                cx = _to(spatial_x[y_slice, x_slice], device=device, dtype=dtype).mean()
+                cy = _to(spatial_y[y_slice, x_slice], device=device, dtype=dtype).mean()
                 u_rows.append(torch.stack([cx, cy]))
         u_pix = torch.stack(u_rows, dim=0)
-        params = self(u_pix, lam_norm).to(device=device, dtype=dtype)
+        params = _to(self(u_pix, lam_norm), device=device, dtype=dtype)
         kernels = gaussian_kernels_from_params(params, size=ks)
         flat = image.reshape(-1, height, width)
         cells = _build_blended_cells(kernels, height, width, dtype, device)

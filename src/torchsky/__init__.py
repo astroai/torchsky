@@ -14,7 +14,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-__version__ = "0.5.0rc1"
+__version__ = "0.5.0rc2"
 
 _NAMESPACES: dict[str, str] = {
     "wcs": "torchsky.wcs",

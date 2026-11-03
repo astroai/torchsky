@@ -6,7 +6,7 @@
 
 healpy-shaped HEALPix compatibility layer built on torchsky kernels. Use it when migrating healpy code; prefer the `torchsky.sphere` names for new work.
 
-**Guides:** [sphere](../sphere.md)
+**Guides:** [healpix](../sphere/healpix.md)
 
 ---
 

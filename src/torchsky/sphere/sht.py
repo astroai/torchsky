@@ -12,6 +12,7 @@ import torch
 from torch import Tensor
 
 from . import spectral as _spectral
+from ..device import _to
 
 
 class SpinConvention(StrEnum):
@@ -938,8 +939,8 @@ def _packed_inner(left: Tensor, right: Tensor, request: SHTRequest) -> Tensor:
     m = _spectral._alm_m_array(int(request.lmax), _resolved_mmax(request)).to(
         left.device
     )
-    gain = torch.where(m == 0, 1.0, 2.0).to(
-        dtype=_real_dtype(left.dtype), device=left.device
+    gain = _to(
+        torch.where(m == 0, 1.0, 2.0), dtype=_real_dtype(left.dtype), device=left.device
     )
     value = gain * torch.real(torch.conj(left) * right)
     return value.sum(dim=(-2, -1)) if request.spin else value.sum(dim=-1)
@@ -1273,14 +1274,18 @@ class TorchHarmonicsBackend:
             )
             phase = _phase(request, values.dtype, values.device)
             rectangular = rectangular * phase.view(*((1,) * (rectangular.ndim - 1)), -1)
-            transform = self._transform(module, "InverseRealSHT", geometry, ll, mm).to(
-                device=values.device, dtype=real_dtype
+            transform = _to(
+                self._transform(module, "InverseRealSHT", geometry, ll, mm),
+                device=values.device,
+                dtype=real_dtype,
             )
             output = transform(rectangular)
             return SHTResult(_storage_scalar_map(output, geometry), request, self.name)
         canonical = _canonical_scalar_map(values, geometry).to(real_dtype)
-        transform = self._transform(module, "RealSHT", geometry, ll, mm).to(
-            device=values.device, dtype=real_dtype
+        transform = _to(
+            self._transform(module, "RealSHT", geometry, ll, mm),
+            device=values.device,
+            dtype=real_dtype,
         )
         rectangular = transform(canonical)
         packed = _packed_alm(rectangular, ll, mm)

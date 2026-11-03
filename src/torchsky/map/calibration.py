@@ -25,6 +25,7 @@ from .operators.config import (
     MapStackingMethod,
     MapValueSemantics,
 )
+from ..device import _to
 
 
 def _accumulate_variance_weight(
@@ -48,7 +49,7 @@ def _set_context_bit(
 ) -> None:
     word = int(observation_index) // 32
     bit = int(observation_index) % 32
-    encoded = support.to(device=context.device, dtype=torch.int64) * (1 << bit)
+    encoded = _to(support, device=context.device, dtype=torch.int64) * (1 << bit)
     plane = context[word]
     if target_window is None:
         plane.bitwise_or_(encoded)

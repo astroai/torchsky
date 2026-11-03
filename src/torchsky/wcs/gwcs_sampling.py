@@ -19,6 +19,7 @@ from .detector_astrometry import (
     SampledTransformValidation,
     validate_sampled_transform,
 )
+from ..device import _as_tensor, _to
 
 
 def _reference_values(reference: Callable[..., Any], points: Tensor) -> Tensor:
@@ -34,7 +35,7 @@ def _reference_values(reference: Callable[..., Any], points: Tensor) -> Tensor:
         values = np.stack((np.asarray(result[0]), np.asarray(result[1])), axis=-1)
     else:
         values = np.asarray(result)
-    output = torch.as_tensor(values, device=points.device, dtype=points.dtype)
+    output = _as_tensor(values, device=points.device, dtype=points.dtype)
     if output.shape != points.shape or not bool(torch.isfinite(output).all()):
         raise ValueError("reference must return finite coordinates matching (..., 2)")
     return output
@@ -208,7 +209,7 @@ class FrozenDetectorEpochTables:
         dtype = torch.float32 if device_t.type == "mps" else None
         samples = tuple(
             GWCSGridSamplingResult(
-                transform=sample.transform.to(device=device_t, dtype=dtype),
+                transform=_to(sample.transform, device=device_t, dtype=dtype),
                 validation=sample.validation,
                 grid_shape=sample.grid_shape,
                 detector_bounds=sample.detector_bounds,
@@ -223,7 +224,7 @@ class FrozenDetectorEpochTables:
         """Device-native table eval. Runtime does not import gwcs."""
         pts = torch.as_tensor(detector_xy)
         table = self.transform_at(epoch)
-        return table(pts.to(device=table.table.device, dtype=table.table.dtype))
+        return table(_to(pts, device=table.table.device, dtype=table.table.dtype))
 
     def inverse(self, sky_xy: Any, epoch: float, **kwargs: Any) -> Tensor:
         """Newton inverse of the frozen table at the nearest epoch."""
@@ -318,10 +319,10 @@ class IFUSliceWCS:
         dev = torch.device(device)
         dt = torch.float32 if dev.type == "mps" else torch.float64
         return IFUSliceWCS(
-            ra_map=self.ra_map.to(device=dev, dtype=dt),
-            dec_map=self.dec_map.to(device=dev, dtype=dt),
-            wavelength_map=self.wavelength_map.to(device=dev, dtype=dt),
-            slice_id_map=self.slice_id_map.to(device=dev, dtype=torch.int64),
+            ra_map=_to(self.ra_map, dev, dt),
+            dec_map=_to(self.dec_map, dev, dt),
+            wavelength_map=_to(self.wavelength_map, dev, dt),
+            slice_id_map=_to(self.slice_id_map, dev, torch.int64),
         )
 
     @classmethod
@@ -378,7 +379,7 @@ class IFUSliceWCS:
                         if callable(_lam):
                             l_s = _lam(x_pts, y_pts)
                         else:
-                            l_t = torch.as_tensor(_lam, dtype=dt, device=dev)
+                            l_t = _as_tensor(_lam, dtype=dt, device=dev)
                             l_s = l_t[m] if l_t.shape == (h, w) else l_t
                         return r_s, d_s, l_s
 
@@ -387,7 +388,7 @@ class IFUSliceWCS:
                     spec = (item["ra"], item["dec"], item["wavelength"])
             else:
                 mask, spec = item
-            m = torch.as_tensor(mask, dtype=torch.bool, device=dev)
+            m = _as_tensor(mask, dtype=torch.bool, device=dev)
             if m.shape != (h, w):
                 raise ValueError(
                     f"slice {slice_idx} mask shape {tuple(m.shape)} != {(h, w)}"
@@ -397,14 +398,14 @@ class IFUSliceWCS:
             if callable(spec):
                 sampled: Any = spec(xx[m], yy[m])
                 r_s, d_s, lam_s = sampled
-                ra_full[m] = torch.as_tensor(r_s, dtype=dt, device=dev)
-                dec_full[m] = torch.as_tensor(d_s, dtype=dt, device=dev)
-                wave_full[m] = torch.as_tensor(lam_s, dtype=dt, device=dev)
+                ra_full[m] = _as_tensor(r_s, dtype=dt, device=dev)
+                dec_full[m] = _as_tensor(d_s, dtype=dt, device=dev)
+                wave_full[m] = _as_tensor(lam_s, dtype=dt, device=dev)
             else:
                 r_s, d_s, lam_s = spec
-                r_t = torch.as_tensor(r_s, dtype=dt, device=dev)
-                d_t = torch.as_tensor(d_s, dtype=dt, device=dev)
-                l_t = torch.as_tensor(lam_s, dtype=dt, device=dev)
+                r_t = _as_tensor(r_s, dtype=dt, device=dev)
+                d_t = _as_tensor(d_s, dtype=dt, device=dev)
+                l_t = _as_tensor(lam_s, dtype=dt, device=dev)
                 if r_t.shape == (h, w):
                     ra_full[m] = r_t[m]
                     dec_full[m] = d_t[m]
@@ -440,9 +441,9 @@ class IFUSliceWCS:
             indexing="ij",
         )
         ra, dec, wave = reference(xx, yy)
-        ra_t = torch.as_tensor(ra, dtype=dt, device=dev).reshape(h, w)
-        dec_t = torch.as_tensor(dec, dtype=dt, device=dev).reshape(h, w)
-        wave_t = torch.as_tensor(wave, dtype=dt, device=dev).reshape(h, w)
+        ra_t = _as_tensor(ra, dtype=dt, device=dev).reshape(h, w)
+        dec_t = _as_tensor(dec, dtype=dt, device=dev).reshape(h, w)
+        wave_t = _as_tensor(wave, dtype=dt, device=dev).reshape(h, w)
         valid = torch.isfinite(ra_t) & torch.isfinite(dec_t) & torch.isfinite(wave_t)
         if slice_id_map is None:
             sid = torch.where(
@@ -451,9 +452,7 @@ class IFUSliceWCS:
                 torch.full((h, w), -1, dtype=torch.int64, device=dev),
             )
         else:
-            sid = torch.as_tensor(slice_id_map, dtype=torch.int64, device=dev).reshape(
-                h, w
-            )
+            sid = _as_tensor(slice_id_map, dtype=torch.int64, device=dev).reshape(h, w)
             sid = torch.where(valid, sid, torch.full_like(sid, -1))
         return cls(
             ra_map=ra_t,
@@ -468,8 +467,8 @@ class IFUSliceWCS:
         """Evaluate ``(ra_deg, dec_deg, wavelength)`` at sub-pixel ``(x, y)`` without cross-slice bleed."""
         dev = self.ra_map.device
         dt = self.ra_map.dtype
-        xt = torch.as_tensor(x, dtype=dt, device=dev)
-        yt = torch.as_tensor(y, dtype=dt, device=dev)
+        xt = _as_tensor(x, dtype=dt, device=dev)
+        yt = _as_tensor(y, dtype=dt, device=dev)
         xt, yt = torch.broadcast_tensors(xt, yt)
         orig_shape = xt.shape
         xf = xt.reshape(-1)

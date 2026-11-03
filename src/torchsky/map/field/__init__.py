@@ -12,7 +12,7 @@ Submodules
 ``observation_builders``
     :class:`FieldObservation` factories for binned spectra, IFU cubes, and energy channels.
 ``implicit_forward``
-    Forward-model shell (context ``c``, kinematics ``ζ``, modular survey losses); see ``docs/field.md``."""
+    Forward-model shell (context ``c``, kinematics ``ζ``, modular survey losses); see ``docs/models/fields.md``."""
 
 from typing import Any
 

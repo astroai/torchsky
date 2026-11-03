@@ -8,9 +8,9 @@ from typing import (
     Dict,
 )
 import math
+import warnings
 
-
-from .tpv import TPV, PV1_KEYS_SET, PV2_KEYS_SET
+from .tpv import TPV
 from .sip import SIP
 from .legacy import (
     extract_zpx_params,
@@ -23,6 +23,17 @@ from ._core_support import (
     _celestial_axis_role,
     _ctype_projection_code,
 )
+
+
+class WCSHeaderWarning(UserWarning):
+    """A header was read under a documented compatibility rule its CTYPE does not state.
+
+    The one rule today is the pre-2012 SCAMP spelling: ``CTYPE = RA---TAN`` /
+    ``DEC--TAN`` with ``PVi_m`` cards where some ``m >= 5``. WCSLIB and Astropy
+    read that as TPV, and so does torchsky, rewriting ``CTYPE`` to ``-TPV`` and
+    emitting this warning. Turn it into an error with
+    ``warnings.simplefilter("error", WCSHeaderWarning)``.
+    """
 
 
 class _HeaderParseMixin:
@@ -121,6 +132,20 @@ class _HeaderParseMixin:
                     self._header_get(header, f"CUNIT{i}", "")
                 )
 
+    def _supported_celestial_codes(self) -> frozenset[str]:
+        # TAB: celestial axes backed by -TAB lookup tables.
+        return frozenset(
+            self.ZENITHAL_CODES
+            + self.CYLINDRICAL_CODES
+            + self.ALLSKY_CODES
+            + self.CONIC_CODES
+            + self.POLYCONIC_CODES
+            + self.QUADCUBE_CODES
+            + self.PSEUDOCYLINDRICAL_CODES
+            + self.SPECIAL_CODES
+            + ("TAB",)
+        )
+
     def _identify_celestial_axes(self) -> None:
         longitude = []
         latitude = []
@@ -152,6 +177,16 @@ class _HeaderParseMixin:
         if lon_code != lat_code:
             raise ValueError(
                 "celestial longitude and latitude axes must use the same projection code"
+            )
+        supported = self._supported_celestial_codes()
+        if lon_code not in supported:
+            raise ValueError(
+                "unsupported celestial projection "
+                f"{lon_code!r} in CTYPE{lon_axis + 1}="
+                f"{self.wcs_params.get(f'CTYPE{lon_axis + 1}', '')!r} and "
+                f"CTYPE{lat_axis + 1}="
+                f"{self.wcs_params.get(f'CTYPE{lat_axis + 1}', '')!r}; "
+                f"supported projection codes: {', '.join(sorted(supported))}"
             )
         self._has_celestial = True
         self._celestial_lon_axis = lon_axis
@@ -248,17 +283,75 @@ class _HeaderParseMixin:
         if self._header_has(header, "A_ORDER") or self._header_has(header, "B_ORDER"):
             self.sip = SIP(header)
 
-    def _parse_tpv(self) -> None:
-        """Determine if TPV distortion is present."""
-        has_pv = any(k in self.wcs_params for k in PV1_KEYS_SET) or any(
-            k in self.wcs_params for k in PV2_KEYS_SET
-        )
-        is_tpv_ctype = self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TPV")
+    def _resolve_header_distortions(self) -> None:
+        """Decide SIP and TPV from the final CTYPE; fail closed on contradictions.
 
-        if is_tpv_ctype or (
-            self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TAN") and has_pv
-        ):
-            self.tpv = TPV(self.wcs_params)
+        CTYPE is authoritative (Paper I; Shupe et al. 2005 for ``-SIP``). One
+        compatibility rule is honoured, the one WCSLIB ``wcsset`` and Astropy
+        apply: ``TAN`` with ``PVi_m`` for some ``m >= 5`` is pre-2012 SCAMP TPV
+        (Shupe et al. 2012, SPIE 8451, sec. 7). With only ``m <= 4`` a SCAMP
+        polynomial cannot be told from the parameters Paper II allows on
+        ``TAN``, so a latitude-axis ``PV`` card on plain ``TAN`` raises, while
+        longitude-axis ``PV1_0..4`` keep their standard meaning.
+        """
+        self.tpv = None
+        if not self._has_celestial:
+            if self.sip is not None:
+                raise ValueError("SIP coefficients require celestial '-SIP' CTYPEs")
+            return
+        lon_axis = self._celestial_lon_axis + 1
+        lat_axis = self._celestial_lat_axis + 1
+        lon_ctype = str(self.wcs_params.get(f"CTYPE{lon_axis}", "")).strip().upper()
+        lat_ctype = str(self.wcs_params.get(f"CTYPE{lat_axis}", "")).strip().upper()
+        sip_declared = lon_ctype.endswith("-SIP") and lat_ctype.endswith("-SIP")
+        pv_keys = [
+            str(key)
+            for key in self._projection_params
+            if str(key).startswith(("PV1_", "PV2_")) and str(key)[4:].isdigit()
+        ]
+        scamp_pv = any(int(key[4:]) >= 5 for key in pv_keys)
+        lat_pv = any(key.startswith("PV2_") for key in pv_keys)
+
+        if self.sip is not None and not sip_declared:
+            raise ValueError(
+                "header has SIP coefficients (A_ORDER/B_ORDER) but "
+                f"CTYPE{lon_axis}={lon_ctype!r}, CTYPE{lat_axis}={lat_ctype!r} "
+                "do not both end in '-SIP'; CTYPE is authoritative. Append '-SIP' "
+                "to both CTYPEs if the polynomial applies, or drop the A_*, B_*, "
+                "AP_*, BP_* cards if it is stale (for example a drizzled image)"
+            )
+        if self.sip is not None and scamp_pv:
+            raise ValueError(
+                "header declares SIP and also carries SCAMP PVi_m (m >= 5) "
+                "distortion cards; keep one convention and drop the other"
+            )
+
+        code = lon_ctype[:-4] if lon_ctype.endswith("-SIP") else lon_ctype
+        if code.endswith("-TPV"):
+            self.tpv = TPV(self._projection_params)
+            return
+        if not code.endswith("-TAN") or self.sip is not None:
+            return
+        if scamp_pv:
+            warnings.warn(
+                f"CTYPE{lon_axis}={lon_ctype!r} with PVi_m cards (m >= 5) is read "
+                "as pre-2012 SCAMP TPV, as WCSLIB does, and CTYPE is rewritten to "
+                "'-TPV'. Write '-TPV' in the header to silence this",
+                WCSHeaderWarning,
+                stacklevel=3,
+            )
+            for axis in (lon_axis, lat_axis):
+                ctype = str(self.wcs_params[f"CTYPE{axis}"]).rstrip()
+                self.wcs_params[f"CTYPE{axis}"] = ctype[:-3] + "TPV"
+            self.tpv = TPV(self._projection_params)
+            return
+        if lat_pv:
+            raise ValueError(
+                f"CTYPE{lat_axis}={lat_ctype!r} carries PV{lat_axis}_m cards, which "
+                "TAN does not define; with only m <= 4 they cannot be told apart "
+                "from a low-order SCAMP polynomial. Set both CTYPEs to '-TPV' if "
+                "they are TPV coefficients, or remove them"
+            )
 
     def _parse_header(self, header: Dict[str, Any]):
         """Parse standard FITS WCS keywords."""
@@ -271,7 +364,6 @@ class _HeaderParseMixin:
         self._parse_pv(header)
         self._parse_wat(header)
         self._parse_sip(header)
-        self._parse_tpv()
         self._parse_spectral_metadata(header)
         self._parse_temporal_metadata(header)
         self._parse_celestial_metadata(header)

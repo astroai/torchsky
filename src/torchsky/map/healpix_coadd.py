@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, cast
 
@@ -10,6 +11,8 @@ from torch import Tensor
 
 from ..sphere.moc import MOC
 from ..wcs import WCS
+from ..wcs.frames import warn_frame_bias_conversion
+from ._healpix_overlap import central_pixel_solid_angle, integrate_exposure
 from .calibration import (
     _apply_observation_calibration,
     _load_observation_weight_map,
@@ -29,9 +32,13 @@ from .observation import (
     Target,
 )
 from .operators.image_grid import normalized_header_for_shape, target_shape_from_header
-from .operators.resampling import sample_image_plane_batched_channels
+from .operators.resampling import (
+    in_bounds_kernel_sum,
+    sample_image_plane_batched_channels,
+)
 from .sky_matching import detect_outliers, match_sky
 from .windowing import _build_target_world_grid
+from ..device import _as_tensor, _to
 
 
 def _sorted_chunk(
@@ -132,11 +139,16 @@ class _IcrsWorldView:
     """Present a non-ICRS celestial WCS through ICRS world coordinates.
 
     HEALPix pixelization and ``pix2ang`` are expressed in ICRS lon/lat, while a
-    WCS with GLON/GLAT (or ELON/ELAT, FK4) axes works in its own native frame.
+    WCS with GLON/GLAT (or ELON/ELAT, FK4, FK5) axes works in its own native
+    frame. FK5 J2000 input gets the FK5 to ICRS frame bias, with the same
+    ``CelestialFrameBiasWarning`` as the image-plane path.
     """
 
     def __init__(self, wcs: WCS) -> None:
         self._wcs = wcs
+        warn_frame_bias_conversion(
+            wcs.celestial_frame, "ICRS", wcs.celestial_equinox, None, stacklevel=4
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._wcs, name)
@@ -160,9 +172,41 @@ class _IcrsWorldView:
 
 
 def _icrs_view(wcs: WCS) -> Any:
-    if wcs.celestial_frame in ("ICRS", "FK5"):
+    if wcs.celestial_frame == "ICRS":
         return wcs
     return _IcrsWorldView(wcs)
+
+
+# Support width (image pixels) of each centre-sampling kernel. When HEALPix
+# cells are wider than this, centre samples leave image pixels unused, so the
+# cell is integrated over its overlap with the image instead.
+_KERNEL_SUPPORT_PX = {
+    "nearest": 1.0,
+    "bilinear": 2.0,
+    "bicubic": 4.0,
+    "lanczos2": 4.0,
+    "lanczos3": 6.0,
+    "lanczos4": 8.0,
+}
+
+
+def _add_contributions(
+    pixels: Tensor,
+    numer: Tensor,
+    denom: Tensor,
+    sparse_accumulator: _SortedContributionAccumulator | None,
+    numer_dense: Tensor | None,
+    denom_dense: Tensor | None,
+    overlap_dense: Tensor | None,
+) -> None:
+    if sparse_accumulator is not None:
+        sparse_accumulator.add(pixels, numer, denom)
+        return
+    assert numer_dense is not None and denom_dense is not None
+    assert overlap_dense is not None
+    numer_dense.index_add_(0, pixels, numer)
+    denom_dense.index_add_(0, pixels, denom)
+    overlap_dense.index_add_(0, pixels, torch.ones_like(pixels, dtype=torch.int32))
 
 
 def coadd_healpix(
@@ -185,6 +229,20 @@ def coadd_healpix(
     ``reduction_chunk_size`` bounds sampled contributions retained before each
     incremental reduction. Sparse accumulation retains merged output support;
     dense accumulation writes each chunk directly into the output tensors.
+
+    Values are surface brightness. Each exposure is combined in one of two
+    regimes, chosen from the cell size ``L`` (``nside2resol``) and the image
+    pixel size ``p`` (square root of the central pixel's solid angle):
+
+    - ``L <= support(kernel) * p``: cells are sampled at their centres with
+      ``kernel`` (support 1 for nearest, 2 bilinear, 4 bicubic/lanczos2,
+      6 lanczos3, 8 lanczos4 pixels).
+    - otherwise, or when the footprint contains no cell centre: each cell gets
+      the exact overlap integral ``sum_i A_ip w_i d_i`` and ``sum_i A_ip w_i``,
+      with ``A_ip`` the area of image pixel ``i`` inside cell ``p`` in units
+      of the cell area (drizzle's convention at ``pixfrac = 1``). Partially
+      covered cells get the mean over the covered part and a weight scaled by
+      the covered fraction; ``kernel`` is not used.
 
     Args:
         observations: Image observations to project and combine.
@@ -247,11 +305,11 @@ def coadd_healpix(
 
     for obs in obs_list:
         if obs.data is not None:
-            raw_img = obs.data.to(device=map_device, dtype=torch.float32)
+            raw_img = _to(obs.data, device=map_device, dtype=torch.float32)
             hdr_obs = dict(obs.header) if obs.header is not None else {}
         else:
             raw_img, hdr_obs = load_observation_image_and_header(obs, device=read_dev)
-            raw_img = raw_img.to(device=map_device, dtype=torch.float32)
+            raw_img = _to(raw_img, device=map_device, dtype=torch.float32)
         src_w = _load_observation_weight_map(obs, raw_img, device=map_device)
         cal_img, cal_w = _apply_observation_calibration(obs, raw_img, src_w)
 
@@ -264,8 +322,10 @@ def coadd_healpix(
         H_s, W_s = int(cal_img.shape[-2]), int(cal_img.shape[-1])
         obs_moc = MOC.from_wcs(obs_wcs, shape=(H_s, W_s), max_order=order)
         union_moc = union_moc.union(obs_moc)
-        obs_pix = obs_moc.to_pixelized_region(nside_i, nest=nest).pixels.to(
-            device=map_device, dtype=torch.int64
+        obs_pix = _to(
+            obs_moc.to_pixelized_region(nside_i, nest=nest).pixels,
+            device=map_device,
+            dtype=torch.int64,
         )
         if obs_pix.numel() == 0:
             continue
@@ -279,7 +339,15 @@ def coadd_healpix(
             ],
             dim=0,
         )
-        for pixel_chunk in obs_pix.split(reduction_chunk_size):
+        support = _KERNEL_SUPPORT_PX.get(kernel)
+        if support is None:
+            raise ValueError(f"unsupported kernel {kernel!r}")
+        cell_side = _hp.nside2resol(nside_i)
+        pixel_side = math.sqrt(central_pixel_solid_angle(obs_wcs, H_s, W_s))
+        integrate = not math.isfinite(pixel_side) or cell_side > support * pixel_side
+        centre_in_image = False
+        contributions: list[tuple[Tensor, Tensor, Tensor]] = []
+        for pixel_chunk in obs_pix.split(reduction_chunk_size) if not integrate else ():
             ra_p, dec_p = _hp.pix2ang(nside_i, pixel_chunk, nest=nest, lonlat=True)
             x_src, y_src = obs_wcs.world_to_pixel(ra_p, dec_p)
             x_2d = x_src.to(dtype=torch.float32).unsqueeze(0)
@@ -294,8 +362,18 @@ def coadd_healpix(
                 grid=grid,
                 kernel=kernel,
             )
-            s_num = sampled[0, 0]
-            s_den = sampled[1, 0]
+            # Renormalise the kernel where taps fall off the image edge, so the
+            # weight is the kernel-weighted mean of the input weights.
+            kernel_sum = in_bounds_kernel_sum(
+                x_2d[0], y_2d[0], height=H_s, width=W_s, kernel=kernel
+            )
+            edge_scale = torch.where(
+                kernel_sum > torch.finfo(kernel_sum.dtype).eps,
+                1.0 / kernel_sum,
+                torch.zeros_like(kernel_sum),
+            )
+            s_num = sampled[0, 0] * edge_scale
+            s_den = sampled[1, 0] * edge_scale
             s_sup = sampled[2, 0]
             in_b = (
                 torch.isfinite(x_2d[0])
@@ -305,24 +383,33 @@ def coadd_healpix(
                 & (y_2d[0] >= 0.0)
                 & (y_2d[0] <= (H_s - 1))
             )
+            centre_in_image = centre_in_image or bool(in_b.any())
             hit = in_b & (s_sup > 0.0) & (s_den > 0.0) & torch.isfinite(s_num)
             if bool(hit.any()):
-                hit_pixels = pixel_chunk[hit]
-                if sparse_accumulator is not None:
-                    sparse_accumulator.add(hit_pixels, s_num[hit], s_den[hit])
-                else:
-                    assert (
-                        numer_dense is not None
-                        and denom_dense is not None
-                        and overlap_dense is not None
-                    )
-                    numer_dense.index_add_(0, hit_pixels, s_num[hit])
-                    denom_dense.index_add_(0, hit_pixels, s_den[hit])
-                    overlap_dense.index_add_(
-                        0,
-                        hit_pixels,
-                        torch.ones_like(hit_pixels, dtype=torch.int32),
-                    )
+                contributions.append((pixel_chunk[hit], s_num[hit], s_den[hit]))
+        if not integrate and not centre_in_image:
+            integrate = True
+        if integrate:
+            cells, i_num, i_den = integrate_exposure(
+                obs_wcs,
+                channels[0],
+                channels[1],
+                nside=nside_i,
+                nest=nest,
+                chunk_size=reduction_chunk_size,
+            )
+            keep = i_den > 0.0
+            contributions = [(cells[keep], i_num[keep], i_den[keep])]
+        for hit_pixels, c_num, c_den in contributions:
+            _add_contributions(
+                hit_pixels,
+                c_num,
+                c_den,
+                sparse_accumulator,
+                numer_dense,
+                denom_dense,
+                overlap_dense,
+            )
 
     if not sparse:
         assert (
@@ -460,28 +547,36 @@ def resample_healpix(
         interp_mode: Literal["bilinear", "nearest"] = (
             "nearest" if method == "nearest" else "bilinear"
         )
-        sampled = healpix_map.interpolate(ra_g, dec_g, method=interp_mode).to(
-            device=map_device, dtype=torch.float32
+        sampled = _to(
+            healpix_map.interpolate(ra_g, dec_g, method=interp_mode),
+            device=map_device,
+            dtype=torch.float32,
         )
         valid = torch.isfinite(sampled) & (sampled != float(healpix_map.fill_value))
         data_2d = torch.where(valid, sampled, torch.zeros_like(sampled))
         if weight_smap is not None:
-            w_2d = weight_smap.interpolate(ra_g, dec_g, method=interp_mode).to(
-                device=map_device, dtype=torch.float32
+            w_2d = _to(
+                weight_smap.interpolate(ra_g, dec_g, method=interp_mode),
+                device=map_device,
+                dtype=torch.float32,
             )
             w_2d = torch.where(valid & (w_2d > 0.0), w_2d, torch.zeros_like(data_2d))
         else:
             w_2d = valid.to(dtype=torch.float32)
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
-    map_t = torch.as_tensor(healpix_map, device=map_device, dtype=torch.float32)
+    map_t = _as_tensor(healpix_map, device=map_device, dtype=torch.float32)
     resolved_nside = (
         int(nside) if nside is not None else _hp.npix2nside(int(map_t.shape[-1]))
     )
     if method == "harmonic":
-        data_2d = sample_healpix_map_on_image_header_harmonic(
-            map_t, nside=resolved_nside, nest=nest, target_header=header_dict
-        ).to(device=map_device, dtype=torch.float32)
+        data_2d = _to(
+            sample_healpix_map_on_image_header_harmonic(
+                map_t, nside=resolved_nside, nest=nest, target_header=header_dict
+            ),
+            device=map_device,
+            dtype=torch.float32,
+        )
         w_2d = torch.isfinite(data_2d).to(dtype=torch.float32)
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
@@ -490,26 +585,34 @@ def resample_healpix(
         "nearest" if method == "nearest" else "bilinear"
     )
     if weight_dense is not None:
-        w_t = weight_dense.to(device=map_device, dtype=torch.float32)
+        w_t = _to(weight_dense, device=map_device, dtype=torch.float32)
         good_hp = torch.isfinite(map_t) & (~_hp.mask_bad(map_t)) & (w_t > 0.0)
         safe_map = torch.where(good_hp, map_t, torch.zeros_like(map_t))
         safe_w = torch.where(good_hp, w_t, torch.zeros_like(w_t))
-        num_2d = sample_healpix_map(
-            safe_map * safe_w,
-            nside=resolved_nside,
-            lon_deg=ra_g,
-            lat_deg=dec_g,
-            nest=nest,
-            interpolation=interp_mode_d,
-        ).to(device=map_device, dtype=torch.float32)
-        w_2d = sample_healpix_map(
-            safe_w,
-            nside=resolved_nside,
-            lon_deg=ra_g,
-            lat_deg=dec_g,
-            nest=nest,
-            interpolation=interp_mode_d,
-        ).to(device=map_device, dtype=torch.float32)
+        num_2d = _to(
+            sample_healpix_map(
+                safe_map * safe_w,
+                nside=resolved_nside,
+                lon_deg=ra_g,
+                lat_deg=dec_g,
+                nest=nest,
+                interpolation=interp_mode_d,
+            ),
+            device=map_device,
+            dtype=torch.float32,
+        )
+        w_2d = _to(
+            sample_healpix_map(
+                safe_w,
+                nside=resolved_nside,
+                lon_deg=ra_g,
+                lat_deg=dec_g,
+                nest=nest,
+                interpolation=interp_mode_d,
+            ),
+            device=map_device,
+            dtype=torch.float32,
+        )
         valid = torch.isfinite(num_2d) & torch.isfinite(w_2d) & (w_2d > 0.0)
         data_2d = torch.where(
             valid, num_2d / w_2d.clamp_min(1e-12), torch.zeros_like(num_2d)
@@ -517,14 +620,18 @@ def resample_healpix(
         w_2d = torch.where(valid, w_2d, torch.zeros_like(w_2d))
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
-    data_2d = sample_healpix_map(
-        map_t,
-        nside=resolved_nside,
-        lon_deg=ra_g,
-        lat_deg=dec_g,
-        nest=nest,
-        interpolation=interp_mode_d,
-    ).to(device=map_device, dtype=torch.float32)
+    data_2d = _to(
+        sample_healpix_map(
+            map_t,
+            nside=resolved_nside,
+            lon_deg=ra_g,
+            lat_deg=dec_g,
+            nest=nest,
+            interpolation=interp_mode_d,
+        ),
+        device=map_device,
+        dtype=torch.float32,
+    )
     valid = torch.isfinite(data_2d) & (~_hp.mask_bad(data_2d))
     data_2d = torch.where(valid, data_2d, torch.zeros_like(data_2d))
     w_2d = valid.to(dtype=torch.float32)

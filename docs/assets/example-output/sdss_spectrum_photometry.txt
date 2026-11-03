@@ -1,0 +1,10 @@
+plate 751 MJD 52251 fibre 160: class QSO, z = 0.04559 (v = 13356 km/s), 3840/3841 good pixels, 3799-9198 A
+[OIII]4960: rest-frame centroid 4960.38 A -> +5 km/s from the pipeline redshift
+[OIII]5008: rest-frame centroid 5008.47 A -> +14 km/s from the pipeline redshift
+band  coverage  torchsky AB  SDSS synthetic  diff    dust-corrected  A_lambda(pivot)
+  u     0.12      invalid         18.237
+  g     1.00       17.470         17.496  -0.027          17.213         0.263
+  r     1.00       16.776         16.764  +0.012          16.597         0.180
+  i     1.00       16.370         16.374  -0.004          16.236         0.134
+  z     0.69      invalid         16.125
+rms difference to the SDSS synthetic magnitudes (griz): 0.017 mag; dust-corrected g-r = 0.616

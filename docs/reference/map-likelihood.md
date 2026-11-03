@@ -9,7 +9,7 @@
 
 Fixed Gaussian likelihood evidence and requested sampling uncertainty.
 
-**Guides:** [native-likelihood](../native-likelihood.md), [map](../map.md)
+**Guides:** [likelihoods](../models/likelihoods.md), [coadds](../maps/coadds.md)
 
 ---
 

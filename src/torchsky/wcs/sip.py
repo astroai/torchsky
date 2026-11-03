@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 from typing import Dict, Any
+from ..device import _to
 
 
 class SIP:
@@ -78,7 +79,7 @@ class SIP:
 
         def _move(tensor: Tensor) -> Tensor:
             if tensor.is_floating_point() and coeff_dtype is not None:
-                return tensor.to(device=device, dtype=coeff_dtype)
+                return _to(tensor, device=device, dtype=coeff_dtype)
             return tensor.to(device)
 
         self._a_c = _move(self._a_c)
@@ -185,7 +186,7 @@ class SIP:
     ) -> Tensor:
         c = pack["c"]
         if c.device != out_like.device or c.dtype != out_like.dtype:
-            c = c.to(device=out_like.device, dtype=out_like.dtype)
+            c = _to(c, device=out_like.device, dtype=out_like.dtype)
         if c.numel() == 0:
             return torch.zeros_like(out_like)
         p = pack["p"]

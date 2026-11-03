@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .base import PSFOp
+from ...device import _to
 
 
 @dataclass
@@ -133,7 +134,7 @@ def _normalized_kernel2d(reference: Tensor, kernel2d: Tensor) -> Tensor:
         raise ValueError("kernel2d PSF must be non-empty")
     if any(int(size) % 2 == 0 for size in kernel2d.shape):
         raise ValueError("kernel2d PSF dimensions must be odd")
-    kernel = kernel2d.to(device=reference.device, dtype=reference.dtype)
+    kernel = _to(kernel2d, device=reference.device, dtype=reference.dtype)
     if not bool(torch.isfinite(kernel).all()):
         raise ValueError("kernel2d PSF must contain only finite values")
     kernel_sum = kernel.sum()
@@ -198,16 +199,16 @@ def _cell_kernels_from_spec(
         node_uvw = getattr(model, "node_uvw", None)
         extent_pix = getattr(model, "extent_pix", None)
         if isinstance(node_uvw, Tensor) and isinstance(extent_pix, Tensor):
-            u_pix = (node_uvw * extent_pix).to(device=device, dtype=dtype)
+            u_pix = _to(node_uvw * extent_pix, device=device, dtype=dtype)
         else:
             u_pix = torch.zeros((n_cells, 2), device=device, dtype=dtype)
     else:
-        u_pix = u_pix.to(device=device, dtype=dtype)
+        u_pix = _to(u_pix, device=device, dtype=dtype)
         if u_pix.shape != (n_cells, 2):
             raise ValueError(
                 f"cell_u_pix must have shape ({n_cells}, 2); got {tuple(u_pix.shape)}"
             )
-    params = model(u_pix, lam_norm).to(device=device, dtype=dtype)
+    params = _to(model(u_pix, lam_norm), device=device, dtype=dtype)
     sigma_max = torch.max(params[:, 0], params[:, 1]).max().item()
     radius = max(1, int(torch.ceil(torch.tensor(3.0 * sigma_max)).item()))
     size = min(2 * radius + 1, 101)

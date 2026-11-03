@@ -23,6 +23,7 @@ from .frames import (
     radec_to_unit,
 )
 from .semantics import Epoch, TimeFormat, TimeScale, TimeSpec
+from ..device import _as_tensor
 
 Representation = Literal["lonlat_deg", "unit_xyz", "barycentric_au"]
 
@@ -100,7 +101,7 @@ class CatalogState:
                 _as_f64(self.radial_velocity_km_s), self.lon.device
             )
         if self.valid is not None:
-            self.valid = torch.as_tensor(
+            self.valid = _as_tensor(
                 self.valid, dtype=torch.bool, device=self.lon.device
             )
 

@@ -24,6 +24,7 @@ from ..sphere import healpix as hp
 from ..sphere.spectral import _legendre_l_sequence, _wigner_d_l_sequence, alm_index
 from ..wcs import WCS
 from .healpix_image_plane import sample_healpix_map_on_image_header
+from ..device import _as_tensor, _to
 
 
 def rebandlimit_healpix_map_via_sht(
@@ -76,7 +77,7 @@ def rebandlimit_healpix_map_via_sht(
         pol=False,
         pixwin=False,
     )
-    return torch.as_tensor(out, dtype=m.dtype, device=m.device)
+    return _as_tensor(out, dtype=m.dtype, device=m.device)
 
 
 def sample_healpix_map_on_image_header_spectral(
@@ -144,7 +145,7 @@ def sample_alm_on_image_header_spectral(
         lmax=lmax,
         mmax=mmax,
     )
-    return torch.as_tensor(out, dtype=torch.float64, device=dev)
+    return _as_tensor(out, dtype=torch.float64, device=dev)
 
 
 def sample_healpix_map_on_image_header_harmonic(
@@ -186,7 +187,7 @@ def sample_healpix_map_on_image_header_harmonic(
         mmax=ll,
         device=device,
     )
-    return out.to(dtype=m.dtype, device=(device if device is not None else m.device))
+    return _to(out, dtype=m.dtype, device=(device if device is not None else m.device))
 
 
 sample_alm_on_tan_header_spectral = sample_alm_on_image_header_spectral
@@ -223,7 +224,7 @@ def sample_spin_alm_on_image_header_spectral(
         lmax=lmax,
         mmax=mmax,
     )
-    return torch.as_tensor(out, dtype=torch.float64, device=dev)
+    return _as_tensor(out, dtype=torch.float64, device=dev)
 
 
 def sample_healpix_spin_map_on_image_header_harmonic(
@@ -258,8 +259,10 @@ def sample_healpix_spin_map_on_image_header_harmonic(
         mmax=ll,
         device=device,
     )
-    return out.to(
-        dtype=maps_t.dtype, device=(device if device is not None else maps_t.device)
+    return _to(
+        out,
+        dtype=maps_t.dtype,
+        device=(device if device is not None else maps_t.device),
     )
 
 
@@ -301,7 +304,7 @@ def accumulate_image_on_alm_adjoint(
         indexing="ij",
     )
     lon, lat = wcs.pixel_to_world(x, y)
-    img_flat = img.reshape(-1).to(dtype=torch.float64, device=dev)
+    img_flat = _to(img.reshape(-1), dtype=torch.float64, device=dev)
     lon_flat = lon.reshape(-1).to(dtype=torch.float64)
     lat_flat = lat.reshape(-1).to(dtype=torch.float64)
     valid = (
@@ -367,8 +370,8 @@ def accumulate_image_on_spin_alm_adjoint(
         indexing="ij",
     )
     lon, lat = wcs.pixel_to_world(x, y)
-    q_flat = maps_t[0].reshape(-1).to(dtype=torch.float64, device=dev)
-    u_flat = maps_t[1].reshape(-1).to(dtype=torch.float64, device=dev)
+    q_flat = _to(maps_t[0].reshape(-1), dtype=torch.float64, device=dev)
+    u_flat = _to(maps_t[1].reshape(-1), dtype=torch.float64, device=dev)
     lon_flat = lon.reshape(-1).to(dtype=torch.float64)
     lat_flat = lat.reshape(-1).to(dtype=torch.float64)
     valid = (

@@ -2,17 +2,28 @@
 
 # `torchsky.wcs`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../contributing.md).
+**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
 Tensor-native FITS WCS: analytic and distorted projections, SIP/TPV and lookup-table distortions, spectral and time axes, tabular and coupled axes, celestial frames, sampled GWCS detector tables, and astrometric calibration. Every transform accepts and returns `torch.Tensor` and dispatches on the axes present in the header.
 
-**Guides:** [wcs](../wcs.md), [coordinates](../coordinates.md), [psf-response-conventions](../psf-response-conventions.md)
+**Guides:** [coordinates](../coordinates/index.md), [frames](../coordinates/frames.md), [psf-conventions](../models/psf-conventions.md)
 
 ---
 
 This reference is generated from the package source. Names are grouped by
 the module that defines them; import every name from the public
 namespace `torchsky.wcs` unless the group text says otherwise.
+
+## Header parse
+
+::: torchsky.wcs
+    options:
+      members:
+        - WCSHeaderWarning
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
 
 ## Alignment
 

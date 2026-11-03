@@ -407,7 +407,14 @@ class MeshSkyEstimator:
             assert fk is not None
             k = fk
             pad = k // 2
-            mp = F.pad(mesh[None, None], (pad, pad, pad, pad), mode="reflect")
+            # Reflect padding needs pad < mesh size; a mesh as small as one cell
+            # (image no larger than a block) replicates its edge instead.
+            pad_mode = (
+                "reflect"
+                if (pad < mesh.shape[-2] and pad < mesh.shape[-1])
+                else "replicate"
+            )
+            mp = F.pad(mesh[None, None], (pad, pad, pad, pad), mode=pad_mode)
             patches = mp.unfold(2, k, 1).unfold(3, k, 1)
             nH, nW = mesh.shape
             flat = patches.reshape(1, 1, nH, nW, -1)

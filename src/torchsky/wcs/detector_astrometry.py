@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import torch
 from torch import Tensor, nn
+from ..device import _as_tensor, _to
 
 InterpolationMode = Literal["bilinear", "bicubic"]
 AngularCoordinates = Literal["sky_degrees", "plane_degrees", "plane_arcsec"]
@@ -31,7 +32,7 @@ def _as_pair(
     dtype: torch.dtype,
     device: torch.device,
 ) -> Tensor:
-    pair = torch.as_tensor(value, dtype=dtype, device=device)
+    pair = _as_tensor(value, dtype=dtype, device=device)
     if pair.shape != (2,):
         raise ValueError(f"{name} must have shape (2,)")
     _finite(pair, name)
@@ -233,9 +234,9 @@ class RegularGridTransform2D(nn.Module):
 
     def evaluate_with_jacobian(self, points: Any) -> tuple[Tensor, Tensor]:
         pts = self._coerce_points(points)
-        table = self.table.to(device=pts.device, dtype=pts.dtype)
-        origin = self.origin.to(device=pts.device, dtype=pts.dtype)
-        spacing = self.spacing.to(device=pts.device, dtype=pts.dtype)
+        table = _to(self.table, device=pts.device, dtype=pts.dtype)
+        origin = _to(self.origin, device=pts.device, dtype=pts.dtype)
+        spacing = _to(self.spacing, device=pts.device, dtype=pts.dtype)
         return _interpolate_regular_grid(pts, table, origin, spacing, self.mode)
 
     def forward(self, points: Any) -> Tensor:
@@ -309,9 +310,9 @@ class RegularGridTransform2D(nn.Module):
     ) -> Tensor:
         """Newton inverse with output-unit ``atol`` and dimensionless ``rtol``."""
         tgt = self._coerce_points(values)
-        origin = self.origin.to(device=tgt.device, dtype=tgt.dtype)
-        spacing = self.spacing.to(device=tgt.device, dtype=tgt.dtype)
-        table = self.table.to(device=tgt.device, dtype=tgt.dtype)
+        origin = _to(self.origin, device=tgt.device, dtype=tgt.dtype)
+        spacing = _to(self.spacing, device=tgt.device, dtype=tgt.dtype)
+        table = _to(self.table, device=tgt.device, dtype=tgt.dtype)
         height, width = self.grid_shape
         p00 = table[0, 0]
         dx = (table[0, -1] - table[0, 0]) / max(width - 1, 1)
@@ -408,20 +409,20 @@ class TangentPlaneAffine(nn.Module):
         pts = torch.as_tensor(points)
         if not pts.is_floating_point() or pts.shape[-1:] != (2,):
             raise ValueError("points must be floating point with last dimension 2")
-        matrix = self.matrix.to(device=pts.device, dtype=pts.dtype)
-        offset = self.offset.to(device=pts.device, dtype=pts.dtype)
+        matrix = _to(self.matrix, device=pts.device, dtype=pts.dtype)
+        offset = _to(self.offset, device=pts.device, dtype=pts.dtype)
         return torch.matmul(pts, matrix.T) + offset
 
     def inverse(self, points: Any) -> Tensor:
         pts = torch.as_tensor(points)
         if not pts.is_floating_point() or pts.shape[-1:] != (2,):
             raise ValueError("points must be floating point with last dimension 2")
-        matrix = self.matrix.to(device=pts.device, dtype=pts.dtype)
-        offset = self.offset.to(device=pts.device, dtype=pts.dtype)
+        matrix = _to(self.matrix, device=pts.device, dtype=pts.dtype)
+        offset = _to(self.offset, device=pts.device, dtype=pts.dtype)
         return torch.matmul(pts - offset, torch.linalg.inv(matrix).T)
 
     def jacobian(self, points: Tensor) -> Tensor:
-        matrix = self.matrix.to(device=points.device, dtype=points.dtype)
+        matrix = _to(self.matrix, device=points.device, dtype=points.dtype)
         return matrix.expand(*points.shape[:-1], 2, 2)
 
     def jacobian_determinant(self) -> Tensor:
@@ -494,7 +495,7 @@ class AffineFreeResidualGrid2D(nn.Module):
     @property
     def projected_control(self) -> Tensor:
         flat = self.control.reshape(-1, 2)
-        basis = self.affine_basis.to(device=flat.device, dtype=flat.dtype)
+        basis = _to(self.affine_basis, device=flat.device, dtype=flat.dtype)
         projected = flat - basis @ (basis.T @ flat)
         return projected.reshape_as(self.control)
 
@@ -503,9 +504,9 @@ class AffineFreeResidualGrid2D(nn.Module):
         if not pts.is_floating_point() or pts.is_complex() or pts.shape[-1:] != (2,):
             raise ValueError("points must be real floating point with last dimension 2")
         _finite(pts, "points")
-        control = self.projected_control.to(device=pts.device, dtype=pts.dtype)
-        origin = self.origin.to(device=pts.device, dtype=pts.dtype)
-        spacing = self.spacing.to(device=pts.device, dtype=pts.dtype)
+        control = _to(self.projected_control, device=pts.device, dtype=pts.dtype)
+        origin = _to(self.origin, device=pts.device, dtype=pts.dtype)
+        spacing = _to(self.spacing, device=pts.device, dtype=pts.dtype)
         return _interpolate_regular_grid(pts, control, origin, spacing, self.mode)
 
     def forward(self, points: Any) -> Tensor:
@@ -550,7 +551,7 @@ class DetectorToTangentTransform(nn.Module):
         pts = torch.as_tensor(points)
         base, base_jacobian = self.table.evaluate_with_jacobian(pts)
         affine = self.affine(base)
-        affine_matrix = self.affine.matrix.to(device=pts.device, dtype=pts.dtype)
+        affine_matrix = _to(self.affine.matrix, device=pts.device, dtype=pts.dtype)
         jacobian = torch.matmul(affine_matrix, base_jacobian)
         if self.residual is not None:
             correction, correction_jacobian = self.residual.evaluate_with_jacobian(pts)
@@ -578,8 +579,8 @@ class DetectorToTangentTransform(nn.Module):
                 rtol=rtol,
             )
         x = self.table.inverse(mid, max_iter=max_iter, fail_closed=False)
-        origin = self.table.origin.to(device=tgt.device, dtype=tgt.dtype)
-        spacing = self.table.spacing.to(device=tgt.device, dtype=tgt.dtype)
+        origin = _to(self.table.origin, device=tgt.device, dtype=tgt.dtype)
+        spacing = _to(self.table.spacing, device=tgt.device, dtype=tgt.dtype)
         height, width = self.table.grid_shape
         x0, y0 = origin[0], origin[1]
         x1 = origin[0] + (width - 1) * spacing[0]
@@ -694,7 +695,7 @@ class DetectorToSkyTransform(nn.Module):
         x_tensor = torch.as_tensor(x)
         if not x_tensor.is_floating_point() or x_tensor.is_complex():
             raise ValueError("x must be a real floating-point tensor")
-        y_tensor = torch.as_tensor(y, dtype=x_tensor.dtype, device=x_tensor.device)
+        y_tensor = _as_tensor(y, dtype=x_tensor.dtype, device=x_tensor.device)
         if not y_tensor.is_floating_point() or y_tensor.is_complex():
             raise ValueError("y must be a real floating-point tensor")
         x_tensor, y_tensor = torch.broadcast_tensors(x_tensor, y_tensor)
@@ -779,7 +780,7 @@ def validate_sampled_transform(
     if not samples.is_floating_point() or samples.shape[-1:] != (2,):
         raise ValueError("points must be floating point with last dimension 2")
     predicted = torch.as_tensor(transform(samples))
-    expected = torch.as_tensor(
+    expected = _as_tensor(
         reference(samples), device=predicted.device, dtype=predicted.dtype
     )
     if predicted.shape != expected.shape or predicted.shape[-1:] != (2,):

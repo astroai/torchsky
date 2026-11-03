@@ -1,0 +1,6 @@
+cone r=0.25 deg at (132.825, 11.8): Gaia 2086, 2MASS 1330, AllWISE 2806 rows
+Gaia x 2MASS within 2.0 arcsec: best1 1330 pairs (3 ms), mutual 1301 pairs (4 ms), median separation 0.083 arcsec
+skyerr (3 x catalogue errors): 1275 pairs (2 ms), 1275 shared with the fixed radius
+Gaia x AllWISE skyerr: 1249 pairs (2 ms), median separation 0.138 arcsec
+brute-force check on 300 Gaia rows: 180 matches, identical = True
+crossmatch_many group (2.5 arcsec, 7 ms): 3383 groups; groups with 1/2/3 catalogues: 1764/436/1183

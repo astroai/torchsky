@@ -10,16 +10,18 @@ tests assert the important ones.
   between devices or to NumPy implicitly; if you pass CUDA or MPS tensors, the
   result stays there, and if you pass CPU tensors it stays on the CPU.
 - Kernels follow PyTorch dtype promotion. Passing `float64` coordinates keeps
-  `float64` precision through the transform; `float32` inputs are computed in
-  `float32` except where a documented step (for example an astrometric fit)
-  promotes internally and returns the promoted dtype.
+  `float64` precision through the transform; other kernels compute in the
+  promoted input dtype. The exception is WCS: sky coordinates are computed and
+  returned in `float64` on CPU and CUDA even for `float32` pixel inputs,
+  because `float32` sky coordinates lose about 10 mas. MPS has no `float64`, so
+  WCS runs in `float32` there and emits a `PrecisionWarning`.
 - Integer pixel indices are converted to the floating dtype of the surrounding
   computation; output pixel coordinates follow the coordinate dtype.
 - The compiled `torchsky._cpp` extension is optional. Without it, the same
   Python/Torch kernels run with identical semantics and lower throughput. Set
   `TORCHSKY_DISABLE_CPP=1` to force the fallback when diagnosing a native crash;
   do not publish native performance numbers from such a run. See
-  [installation](../install.md).
+  [installation](../introduction/install.md).
 
 ## Coordinates and pixels
 
@@ -53,12 +55,14 @@ tests assert the important ones.
 - `ResampleConfig.semantics` defaults to `"surface_brightness"`. Passing
   `"flux"` multiplies by the target pixel area; the choice is recorded in the
   result provenance.
-- Weights are **inverse variance** unless the observation declares otherwise
-  (`Observation.weight_is_inverse_variance`). Variance components
+- Weights are **relative weights** by default
+  (`Observation.weight_is_inverse_variance=False`). Pass
+  `weight_is_inverse_variance=True` when weights are inverse variances; variance
+  propagation then uses them. Variance components
   (`var_poisson`, `var_rnoise`, `var_flat`) stay separate.
 - `ResampleConfig.spectral_kernel` defaults to `"linear"`; cube workflows also
   accept `"drizzle"`, `"emsm"`, `"msm"`, and `"nearest"`.
-- See [`torchsky.map`](map.md) and the [map guide](../map.md).
+- See [`torchsky.map`](map.md) and the [map guide](../maps/index.md).
 
 ## Quality and masks
 

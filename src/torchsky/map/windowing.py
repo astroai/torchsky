@@ -17,6 +17,7 @@ from .operators.pixel_area import (
 )
 from .operators.execution import wcs_has_distortion
 from .operators.config import MapValueSemantics
+from ..device import _as_tensor, _to
 
 # Footprint cropping applies to every target size: the saving (the per-observation
 # gather / splat work is proportional to the window, not the canvas) is unconditional
@@ -83,8 +84,8 @@ def _build_target_world_grid(
     )
     ra, dec = target_wcs.pixel_to_world(x, y)
     output_dtype = torch.float32 if device.type == "mps" else ra.dtype
-    return ra.to(device=device, dtype=output_dtype), dec.to(
-        device=device, dtype=output_dtype
+    return _to(ra, device=device, dtype=output_dtype), _to(
+        dec, device=device, dtype=output_dtype
     )
 
 
@@ -98,8 +99,8 @@ def _spherical_cap_radius_from_world_grid(
     d2r = math.pi / 180.0
     ra = ra_deg * d2r
     dec = dec_deg * d2r
-    ra0 = torch.as_tensor(center_ra_deg * d2r, dtype=ra.dtype, device=ra.device)
-    dec0 = torch.as_tensor(center_dec_deg * d2r, dtype=dec.dtype, device=dec.device)
+    ra0 = _as_tensor(center_ra_deg * d2r, dtype=ra.dtype, device=ra.device)
+    dec0 = _as_tensor(center_dec_deg * d2r, dtype=dec.dtype, device=dec.device)
     delta_ra = ra - ra0
     dot = torch.sin(dec) * torch.sin(dec0) + torch.cos(dec) * torch.cos(
         dec0
@@ -154,8 +155,8 @@ def _quadrature_target_world_grid(
     )
     ra, dec = target_wcs.pixel_to_world(x, y)
     output_dtype = torch.float32 if device.type == "mps" else ra.dtype
-    return ra.to(device=device, dtype=output_dtype), dec.to(
-        device=device, dtype=output_dtype
+    return _to(ra, device=device, dtype=output_dtype), _to(
+        dec, device=device, dtype=output_dtype
     )
 
 
@@ -410,10 +411,10 @@ def _footprint_bbox_on_target(
         and bool(torch.isfinite(dec_deg).all())
     ):
         raise _FootprintUnavailable("non-finite footprint samples")
-    ra_deg = ra_deg.to("cpu", torch.float64)
-    dec_deg = dec_deg.to("cpu", torch.float64)
-    x_tgt = x_tgt.to("cpu", torch.float64)
-    y_tgt = y_tgt.to("cpu", torch.float64)
+    ra_deg = _to(ra_deg, "cpu", torch.float64)
+    dec_deg = _to(dec_deg, "cpu", torch.float64)
+    x_tgt = _to(x_tgt, "cpu", torch.float64)
+    y_tgt = _to(y_tgt, "cpu", torch.float64)
     if bool(getattr(target_wcs, "_is_tan", False)) or bool(
         getattr(target_wcs, "_is_tpv", False)
     ):

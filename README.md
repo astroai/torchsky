@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/astroai/torchsky/actions/workflows/ci.yml/badge.svg)](https://github.com/astroai/torchsky/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/badge/docs-astroai.github.io%2Ftorchsky-brightgreen)](https://astroai.github.io/torchsky/)
-[![Release: 0.5.0rc1 pre-release](https://img.shields.io/badge/release-0.5.0rc1%20pre--release-lightgrey)](https://github.com/astroai/torchsky/releases)
+[![PyPI](https://img.shields.io/pypi/v/torchsky)](https://pypi.org/project/torchsky/)
 [![Python 3.12-3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/astroai/torchsky/blob/main/LICENSE)
 
@@ -16,10 +16,9 @@ torchsky installs as a dependency.
 
 ## Install
 
-0.5.0rc1 is distributed as a
-[GitHub pre-release](https://github.com/astroai/torchsky/releases) and is not
-uploaded to PyPI. Install from source or from the pre-release wheels now; `pip
-install torchsky` works from 0.5.0. Building from source needs a C++ compiler and
+Stable releases, from 0.5.0, are on PyPI: `pip install torchsky`. Release
+candidates are only [GitHub pre-releases](https://github.com/astroai/torchsky/releases)
+and are never uploaded to PyPI. Building from source needs a C++ compiler and
 CMake for the native extension:
 
 ```bash
@@ -29,7 +28,7 @@ pip install .
 ```
 
 torchsky supports Python 3.12 to 3.14 with PyTorch 2.14. The
-[installation guide](https://astroai.github.io/torchsky/install/) covers CUDA,
+[installation guide](https://astroai.github.io/torchsky/introduction/install/) covers CUDA,
 Pixi, and troubleshooting.
 
 ## Quick start
@@ -73,17 +72,17 @@ Lanczos-3 coadd takes 14.3 s on 8 CPU threads and 5.2 s on a GPU slice, against
 30.1 s for SWarp. Its drizzle matches STScI drizzle to better than 2e-6 sigma. A
 280-CCD UNIONS tile coadd fell from 2292 s to 711 s on CPU. Hardware, versions,
 and evidence are on the
-[performance highlights](https://astroai.github.io/torchsky/evaluation/highlights/)
+[performance highlights](https://astroai.github.io/torchsky/performance/highlights/)
 page.
 
 ## Documentation
 
-- [Quick start](https://astroai.github.io/torchsky/quickstart/) and
+- [Quick start](https://astroai.github.io/torchsky/introduction/quickstart/) and
   [examples](https://astroai.github.io/torchsky/examples/)
 - [User guide and API reference](https://github.com/astroai/torchsky/blob/main/docs/index.md)
   (rendered at [astroai.github.io/torchsky](https://astroai.github.io/torchsky/))
-- [Coming from Astropy, healpy, or reproject](https://astroai.github.io/torchsky/coming-from/)
-- [Changelog](https://astroai.github.io/torchsky/changelog/)
+- [Coming from Astropy, healpy, or reproject](https://astroai.github.io/torchsky/introduction/coming-from/)
+- [Changelog](https://astroai.github.io/torchsky/project/changelog/)
 
 ## Contributing
 

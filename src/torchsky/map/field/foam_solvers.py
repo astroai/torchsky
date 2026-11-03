@@ -16,6 +16,7 @@ from typing import Callable, Literal, Sequence
 
 import torch
 from torch import Tensor
+from ...device import _to
 
 
 def spectral_basis_whitening_transform(
@@ -352,7 +353,8 @@ def render_power_spectral_samples(
         raise ValueError("cell_samples and response_weights must be finite")
 
     squeeze_channel = response_weights.ndim == 1
-    responses = response_weights.reshape(-1, response_weights.shape[-1]).to(
+    responses = _to(
+        response_weights.reshape(-1, response_weights.shape[-1]),
         device=cell_samples.device,
         dtype=cell_samples.dtype,
     )
@@ -457,7 +459,8 @@ def render_power_spectral_affine_basis(
         or not bool(torch.isfinite(response_weights).all())
     ):
         raise ValueError("affine spectral inputs must be finite and share dtype/device")
-    responses = response_weights.reshape(-1, response_weights.shape[-1]).to(
+    responses = _to(
+        response_weights.reshape(-1, response_weights.shape[-1]),
         device=cell_coefficients.device,
         dtype=cell_coefficients.dtype,
     )

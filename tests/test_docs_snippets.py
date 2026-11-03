@@ -33,9 +33,11 @@ OPTIONAL_MODULES = {
 
 def _blocks() -> list[tuple[str, str]]:
     blocks: list[tuple[str, str]] = []
-    for page in sorted(DOCS.glob("*.md")):
+    for page in sorted(DOCS.rglob("*.md")):
+        if page.relative_to(DOCS).parts[0] in {"reference", "published-examples"}:
+            continue
         for index, match in enumerate(FENCE.findall(page.read_text(encoding="utf-8"))):
-            blocks.append((f"{page.name}:{index}", textwrap.dedent(match)))
+            blocks.append((f"{page.relative_to(DOCS)}:{index}", textwrap.dedent(match)))
     return blocks
 
 

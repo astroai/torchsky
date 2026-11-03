@@ -10,6 +10,7 @@ import torch
 from torch import Tensor
 
 from . import healpix as _healpix
+from ..device import _as_tensor, _to
 
 if TYPE_CHECKING:
     from .moc import BMOC, MOC
@@ -133,7 +134,7 @@ def _prepare_sparse_random_sampler(
     else:
         w_raw = torch.as_tensor(weights, device=dev)
     f_dtype = _healpix._float_dtype_for_device(dev)
-    w = w_raw.to(device=dev, dtype=f_dtype).reshape(-1)
+    w = _to(w_raw, device=dev, dtype=f_dtype).reshape(-1)
     if w.numel() != pix_nested.numel():
         raise ValueError("weights must have one entry per valid pixel in footprint")
     w = torch.where(torch.isfinite(w) & (w > 0), w, torch.zeros_like(w))
@@ -159,7 +160,7 @@ def _sample_in_nested_cells(
     pix_t = torch.as_tensor(pix_nested, dtype=torch.int64)
     device = pix_t.device
     f_dtype = _healpix._float_dtype_for_device(device)
-    ns_t = torch.as_tensor(nsides, dtype=torch.int64, device=device)
+    ns_t = _as_tensor(nsides, dtype=torch.int64, device=device)
     npface = ns_t * ns_t
     face_num = torch.div(pix_t, npface, rounding_mode="floor")
     ipf = pix_t - face_num * npface
@@ -168,8 +169,8 @@ def _sample_in_nested_cells(
     ns_f = ns_t.to(f_dtype)
     # Clamp u_x, u_y slightly below 1.0 to stay strictly inside the cell
     eps = 1e-7 if f_dtype == torch.float32 else 1e-15
-    ux = u_x.to(device=device, dtype=f_dtype).clamp(min=0.0, max=1.0 - eps)
-    uy = u_y.to(device=device, dtype=f_dtype).clamp(min=0.0, max=1.0 - eps)
+    ux = _to(u_x, device=device, dtype=f_dtype).clamp(min=0.0, max=1.0 - eps)
+    uy = _to(u_y, device=device, dtype=f_dtype).clamp(min=0.0, max=1.0 - eps)
     x = (ix + ux) / ns_f
     y = (iy + uy) / ns_f
 

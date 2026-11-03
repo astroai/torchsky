@@ -31,6 +31,7 @@ from .networks import (
 from .types import (
     FieldDomain,
 )
+from ...device import _as_tensor, _to
 
 
 if TYPE_CHECKING:
@@ -171,7 +172,7 @@ class SpectralPowerFoamField(_BaseFieldModel):
 
     def spectral_basis(self, wavelength: Tensor | float) -> Tensor:
         """Return the Legendre basis shared by smooth and exact rendering."""
-        value = torch.as_tensor(
+        value = _as_tensor(
             wavelength,
             device=self.sites.device,
             dtype=self.sites.dtype,
@@ -206,7 +207,8 @@ class SpectralPowerFoamField(_BaseFieldModel):
             ra_deg,
             float(self.domain.wavelength_center),
         )
-        return self._encoded_coords(ra_deg, dec_deg, wavelength)[..., :2].to(
+        return _to(
+            self._encoded_coords(ra_deg, dec_deg, wavelength)[..., :2],
             device=self.sites.device,
             dtype=self.sites.dtype,
         )
@@ -309,7 +311,7 @@ class FoamInitializedINRField(_BaseFieldModel):
         coords = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom)
         parameter = self.residual_output.weight
         hidden = self.residual_trunk(
-            coords.to(device=parameter.device, dtype=parameter.dtype)
+            _to(coords, device=parameter.device, dtype=parameter.dtype)
         )
         raw = self.residual_output(hidden).squeeze(-1)
         return self.max_log_correction * torch.tanh(raw / self.max_log_correction)
@@ -323,7 +325,7 @@ class FoamInitializedINRField(_BaseFieldModel):
         with torch.no_grad():
             reference = self.reference_foam(ra_deg, dec_deg, wavelength_angstrom)
         correction = self.log_intensity_correction(ra_deg, dec_deg, wavelength_angstrom)
-        reference = reference.to(device=correction.device, dtype=correction.dtype)
+        reference = _to(reference, device=correction.device, dtype=correction.dtype)
         return reference.clamp_min(self.intensity_floor) * torch.exp(correction)
 
 
@@ -400,7 +402,8 @@ class DiffuseFoamHybridField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> tuple[Tensor, Tensor]:
         diffuse = self.diffuse_field(ra_deg, dec_deg, wavelength_angstrom)
-        localized = self.localized_foam(ra_deg, dec_deg, wavelength_angstrom).to(
+        localized = _to(
+            self.localized_foam(ra_deg, dec_deg, wavelength_angstrom),
             device=diffuse.device,
             dtype=diffuse.dtype,
         )

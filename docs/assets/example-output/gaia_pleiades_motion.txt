@@ -1,0 +1,7 @@
+Gaia DR3 cone r=1 deg around the Pleiades: 2745 stars with G < 16
+ICRS -> Galactic: |mu| preserved to 5.7e-14 mas/yr, round-trip position error 8.5e-04 uas
+members: 265 of 2745; mean parallax 7.373 mas (135.6 pc)
+cluster proper motion: ICRS (mu_a*, mu_d) = (19.97, -45.58) mas/yr; Galactic (mu_l*, mu_b) = (45.43, -20.32) mas/yr
+published (Gaia DR2, Babusiaux et al. 2018): (20.00, -45.55) mas/yr, parallax 7.364 mas
+tangential velocity 32.0 km/s; member proper-motion rms per axis 1.31 mas/yr = 0.85 km/s (internal motion, binaries and projection, not deconvolved)
+J2016.0 -> J2000.0: members move 0.795 arcsec (median); angular vs rigorous space motion for 205 members with RV: max 8.68 uas

@@ -10,6 +10,7 @@ from typing import Mapping, Protocol, runtime_checkable
 import torch
 from torch import Tensor
 
+from ...device import _scatter_reduce_int
 from ...domain import DomainSpec
 from ..evidence import EvidenceSnapshot
 from ..provenance import PlanFingerprint, plan_fingerprint
@@ -339,8 +340,13 @@ class IndexedResponsePlan:
             packed = torch.zeros(stop - start, dtype=wide, device=flags.device)
             for bit in occupied:
                 plane = (gathered >> bit) & 1
-                bit_plane = torch.zeros_like(packed).scatter_reduce_(
-                    0, local_target, plane, reduce="amax", include_self=True
+                bit_plane = _scatter_reduce_int(
+                    torch.zeros_like(packed),
+                    0,
+                    local_target,
+                    plane,
+                    "amax",
+                    include_self=True,
                 )
                 packed |= bit_plane << bit
             output[start:stop] = _from_bit_pattern(packed, flags.dtype)

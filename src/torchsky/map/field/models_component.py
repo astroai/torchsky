@@ -37,7 +37,7 @@ from ..solvers import (
     _relative_norm,
     _subspace_leakage,
 )
-from ...device import resolve_device
+from ...device import resolve_device, _to
 
 
 if TYPE_CHECKING:
@@ -172,9 +172,11 @@ class FieldComponentDecomposition(_BaseFieldModel):
                 wavelength_angstrom,
                 forward_context=forward_context,
             )
-            gain = self.component_gains[idx].to(dtype=plane.dtype, device=plane.device)
+            gain = _to(
+                self.component_gains[idx], dtype=plane.dtype, device=plane.device
+            )
             outputs.append(
-                weights[idx].to(dtype=plane.dtype, device=plane.device) * gain * plane
+                _to(weights[idx], dtype=plane.dtype, device=plane.device) * gain * plane
             )
         stacked = torch.stack(outputs, dim=0)
         if aggregate:
@@ -268,7 +270,7 @@ class FieldComponentDecomposition(_BaseFieldModel):
                 forward_context=forward_context,
                 aggregate=aggregate,
             )
-            weight = weights[i].to(dtype=plane.dtype, device=plane.device)
+            weight = _to(weights[i], dtype=plane.dtype, device=plane.device)
             if aggregate:
                 rendered = rendered + plane * weight
             else:
@@ -357,7 +359,7 @@ class FieldComponentDecomposition(_BaseFieldModel):
                 forward_context=forward_context,
                 aggregate=aggregate,
             )
-            weight = weights[i].to(dtype=sample.dtype, device=sample.device)
+            weight = _to(weights[i], dtype=sample.dtype, device=sample.device)
             if aggregate:
                 rendered = rendered + sample * weight
             else:

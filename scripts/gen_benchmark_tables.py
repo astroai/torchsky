@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render the reference benchmark tables from the committed JSON snapshot.
 
-    pixi run docs-bench-tables          # regenerate docs/evaluation/benchmarks.md
+    pixi run docs-bench-tables          # regenerate docs/performance/benchmarks.md
     pixi run docs-bench-tables-check    # fail if the page is stale
 
 The JSON artifact is produced by torchsky-harness (``benchmarks/bench_docs_reference.py``,
@@ -18,8 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "docs" / "data" / "reference_benchmarks.json"
-TEMPLATE = ROOT / "docs" / "evaluation" / "_benchmarks_template.md"
-PAGE = ROOT / "docs" / "evaluation" / "benchmarks.md"
+TEMPLATE = ROOT / "docs" / "performance" / "_benchmarks_template.md"
+PAGE = ROOT / "docs" / "performance" / "benchmarks.md"
 MARKER = "<!-- BENCH_TABLES -->"
 
 

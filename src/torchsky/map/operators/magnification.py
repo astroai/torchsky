@@ -28,6 +28,7 @@ import math
 
 import torch
 from torch import Tensor, nn
+from ...device import _as_tensor
 
 __all__ = [
     "ConvergenceMagnification",
@@ -126,7 +127,7 @@ def magnification_bias(
         kappa_map, mode=mode, max_magnification=max_magnification
     )
     mu = _restore_shape(mu, original)
-    exponent = torch.as_tensor(count_slope, dtype=mu.dtype, device=mu.device) - 1.0
+    exponent = _as_tensor(count_slope, dtype=mu.dtype, device=mu.device) - 1.0
     return density * mu.pow(exponent)
 
 

@@ -640,3 +640,33 @@ def test_moc_area_is_exact_and_device_independent() -> None:
     if torch.backends.mps.is_available():
         on_mps = MOC(moc.uniq.to("mps"))
         assert on_mps.area == pytest.approx(moc.area, rel=1e-15)
+
+
+def test_moc_read_fits_ivoa_first_extension_without_extname(tmp_path):
+    """IVOA MOC files need not set EXTNAME; ORDERING='NUNIQ' in HDU 1 suffices."""
+    path = str(tmp_path / "ivoa.fits")
+    uniq = torch.tensor([4 * 4**3 + 5, 4 * 4**3 + 6], dtype=torch.int64)
+    torchfits.write(
+        path,
+        {"UNIQ": uniq},
+        header={"ORDERING": "NUNIQ", "MOCORDER": 3, "MOCDIM": "SPACE"},
+        overwrite=True,
+    )
+    assert torch.equal(MOC.read_fits(path).uniq, MOC(uniq).uniq)
+
+
+def test_moc_read_fits_rejects_non_moc_and_time_moc(tmp_path):
+    plain = str(tmp_path / "plain.fits")
+    torchfits.write(plain, {"FLUX": torch.tensor([1.0, 2.0])}, overwrite=True)
+    with pytest.raises(ValueError, match="No MOC table"):
+        MOC.read_fits(plain)
+
+    tmoc = str(tmp_path / "tmoc.fits")
+    torchfits.write(
+        tmoc,
+        {"UNIQ": torch.tensor([5], dtype=torch.int64)},
+        header={"ORDERING": "NUNIQ", "MOCDIM": "TIME"},
+        overwrite=True,
+    )
+    with pytest.raises(ValueError, match="TIME MOC"):
+        MOC.read_fits(tmoc)

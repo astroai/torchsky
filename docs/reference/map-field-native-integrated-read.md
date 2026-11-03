@@ -9,7 +9,7 @@
 
 Opt-in single-integrated-read native photon/dark/read likelihoods.
 
-**Guides:** [native-likelihood](../native-likelihood.md)
+**Guides:** [likelihoods](../models/likelihoods.md)
 
 ---
 

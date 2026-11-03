@@ -12,6 +12,7 @@ from torch import Tensor
 from ...wcs import WCS
 from .config import MapResamplingKernel, MapValueSemantics
 from .execution import wcs_has_distortion
+from ...device import _to
 
 
 def sinc(x: Tensor) -> Tensor:
@@ -261,7 +262,7 @@ def sample_image_plane(
     return (
         F.grid_sample(
             image.unsqueeze(0).unsqueeze(0),
-            grid.to(device=image.device, dtype=image.dtype).unsqueeze(0),
+            _to(grid, device=image.device, dtype=image.dtype).unsqueeze(0),
             mode=kernel,
             padding_mode="zeros",
             align_corners=True,
@@ -290,7 +291,7 @@ def sample_image_plane_channels(
         )
     return F.grid_sample(
         image.unsqueeze(0),
-        grid.to(device=image.device, dtype=image.dtype).unsqueeze(0),
+        _to(grid, device=image.device, dtype=image.dtype).unsqueeze(0),
         mode=kernel,
         padding_mode="zeros",
         align_corners=True,
@@ -441,6 +442,84 @@ def _axis_tap_count(kernel: MapResamplingKernel) -> int:
     if kernel == "bicubic":
         return 4
     return 2 * kernel_support(kernel)
+
+
+_IN_BOUNDS_SUM_KERNELS = frozenset(
+    {"nearest", "bilinear", "bicubic"} | _CUSTOM_SEPARABLE_KERNELS
+)
+
+
+def supports_in_bounds_kernel_sum(kernel: MapResamplingKernel) -> bool:
+    """Whether :func:`in_bounds_kernel_sum` has explicit taps for ``kernel``."""
+    return kernel in _IN_BOUNDS_SUM_KERNELS
+
+
+def _axis_in_bounds_sum(
+    coordinate: Tensor, *, size: int, kernel: MapResamplingKernel
+) -> Tensor:
+    # One tap at a time keeps the working set O(N) instead of O(N * taps).
+    if kernel == "nearest":
+        index = torch.round(coordinate)
+        inside = torch.isfinite(index) & (index >= 0.0) & (index <= float(size - 1))
+        return inside.to(dtype=coordinate.dtype)
+    if kernel == "bilinear":
+        first, count = 0, 2
+    elif kernel == "bicubic":
+        first, count = -1, 4
+    else:
+        first, count = 1 - kernel_support(kernel), 2 * kernel_support(kernel)
+    finite = torch.isfinite(coordinate)
+    safe = torch.where(finite, coordinate, torch.zeros_like(coordinate))
+    base = torch.floor(safe)
+    inside = torch.zeros_like(safe)
+    total = torch.zeros_like(safe)
+    for offset in range(first, first + count):
+        index = base + float(offset)
+        delta = safe - index
+        if kernel == "bilinear":
+            coefficient = 1.0 - torch.abs(delta)
+        elif kernel == "bicubic":
+            coefficient = keys_cubic_weight(delta, b=0.0, c=0.75)
+        else:
+            coefficient = kernel_weight(kernel, delta)
+        total = total + coefficient
+        in_range = (index >= 0.0) & (index <= float(size - 1))
+        inside = inside + torch.where(in_range, coefficient, torch.zeros_like(delta))
+    if kernel in _CUSTOM_LANCZOS_KERNELS:
+        # Same full-window normalisation as _axis_interpolation_coefficients.
+        safe_total = torch.where(
+            torch.abs(total) > torch.finfo(total.dtype).eps,
+            total,
+            torch.ones_like(total),
+        )
+        inside = inside / safe_total
+    return torch.where(finite, inside, torch.zeros_like(inside))
+
+
+def in_bounds_kernel_sum(
+    x_src: Tensor,
+    y_src: Tensor,
+    *,
+    height: int,
+    width: int,
+    kernel: MapResamplingKernel,
+) -> Tensor:
+    """Sum of a sample's interpolation coefficients over taps inside the image.
+
+    The samplers zero taps that fall outside ``[0, width) x [0, height)``, so
+    near an edge the coefficients of a sample no longer sum to one (for a
+    negative-lobe kernel such as Lanczos the sum can exceed one). Dividing the
+    sampled planes by this sum renormalises the truncated kernel. For separable
+    kernels the 2-D sum is the product of the per-axis sums. The result has the
+    shape of ``x_src``; it is exactly one for samples whose taps are all inside.
+    """
+    if kernel not in _IN_BOUNDS_SUM_KERNELS:
+        raise ValueError(f"in-bounds kernel sum is undefined for kernel {kernel!r}")
+    if x_src.shape != y_src.shape:
+        raise ValueError("x_src and y_src must have matching shapes")
+    sx = _axis_in_bounds_sum(x_src, size=int(width), kernel=kernel)
+    sy = _axis_in_bounds_sum(y_src, size=int(height), kernel=kernel)
+    return sx * sy
 
 
 def _separable_chunk_size(taps: int, columns: int, itemsize: int) -> int:
@@ -634,10 +713,12 @@ def _quadrature_batch_variance(
     valid: Tensor | None,
     *,
     kernel: MapResamplingKernel,
+    scale: Tensor | None = None,
 ) -> Tensor:
     """Variance of the mean over ``B`` sample points for ``R`` output pixels.
 
-    ``x``, ``y`` and ``valid`` are ``[B, R]``.  The coefficient of source pixel
+    ``x``, ``y``, ``valid`` and ``scale`` (a per-point coefficient factor) are
+    ``[B, R]``.  The coefficient of source pixel
     ``(i, j)`` is ``sum_b wy_b(i) wx_b(j) / B`` (invalid points contribute 0)
     and the result is ``sum_ij coef**2 * var[i, j]``, accumulated in float64
     (float32 on MPS).
@@ -665,6 +746,8 @@ def _quadrature_batch_variance(
     )
     if valid is not None:
         point_scale = point_scale * valid.to(dtype=accumulate_dtype)
+    if scale is not None:
+        point_scale = point_scale * scale.to(dtype=accumulate_dtype)
     y_coefficients = y_coefficients * point_scale.unsqueeze(-1)
     x_base, x_slots, x_span = _axis_tap_window(x_indices, x_coefficients)
     y_base, y_slots, y_span = _axis_tap_window(y_indices, y_coefficients)
@@ -742,12 +825,16 @@ def sample_image_plane_diagonal_variance(
     kernel: MapResamplingKernel,
     average_coordinate_batch: bool = False,
     sample_valid: Tensor | None = None,
+    sample_scale: Tensor | None = None,
 ) -> Tensor:
     """Apply squared interpolation coefficients to independent source variance.
 
     With ``average_coordinate_batch=True``, the leading coordinate dimension is
     averaged as one quadrature operator before coefficients are squared. This
     preserves covariance when multiple samples reuse the same source pixel.
+    ``sample_scale`` (shape of ``x_src``) multiplies every coefficient of a
+    sample, e.g. the reciprocal of :func:`in_bounds_kernel_sum` for a
+    renormalised edge kernel.
     """
     if source_variance.ndim != 2 or not source_variance.is_floating_point():
         raise ValueError("source_variance must be a floating [H,W] tensor")
@@ -765,6 +852,10 @@ def sample_image_plane_diagonal_variance(
         if sample_valid.shape != x_src.shape or sample_valid.device != x_src.device:
             raise ValueError("sample_valid must match coordinate shape and device")
         sample_valid = sample_valid.to(dtype=torch.bool)
+    if sample_scale is not None and (
+        sample_scale.shape != x_src.shape or sample_scale.device != x_src.device
+    ):
+        raise ValueError("sample_scale must match coordinate shape and device")
 
     if average_coordinate_batch:
         batch, out_height, out_width = (
@@ -798,6 +889,9 @@ def sample_image_plane_diagonal_variance(
         flat_valid = (
             None if sample_valid is None else sample_valid.reshape(batch, pixel_count)
         )
+        flat_scale = (
+            None if sample_scale is None else sample_scale.reshape(batch, pixel_count)
+        )
         for start in range(0, pixel_count, chunk_pixels):
             stop = min(start + chunk_pixels, pixel_count)
             output[start:stop] = _quadrature_batch_variance(
@@ -806,6 +900,7 @@ def sample_image_plane_diagonal_variance(
                 flat_y[:, start:stop],
                 None if flat_valid is None else flat_valid[:, start:stop],
                 kernel=kernel,
+                scale=None if flat_scale is None else flat_scale[:, start:stop],
             )
         return output.reshape(out_height, out_width)
 
@@ -820,6 +915,8 @@ def sample_image_plane_diagonal_variance(
     )
     assert variance is not None
     variance = variance.reshape(x_src.shape)
+    if sample_scale is not None:
+        variance = variance * torch.square(sample_scale.to(dtype=variance.dtype))
     if sample_valid is not None:
         variance = torch.where(sample_valid, variance, torch.zeros_like(variance))
     return variance
@@ -828,12 +925,12 @@ def sample_image_plane_diagonal_variance(
 def _tan_homography_factors(wcs: WCS) -> tuple[Tensor, Tensor] | None:
     if not bool(getattr(wcs, "_is_tan", False)) or wcs_has_distortion(wcs):
         return None
-    cd = wcs.cd.detach().to(device="cpu", dtype=torch.float64)
+    cd = _to(wcs.cd.detach(), device="cpu", dtype=torch.float64)
     det_cd = float(torch.linalg.det(cd).item())
     if not math.isfinite(det_cd) or abs(det_cd) < 1e-20:
         return None
     cd_inv = torch.linalg.inv(cd)
-    crpix = wcs.crpix.detach().to(device="cpu", dtype=torch.float64)
+    crpix = _to(wcs.crpix.detach(), device="cpu", dtype=torch.float64)
     p0_x = float(crpix[0].item()) - 1.0
     p0_y = float(crpix[1].item()) - 1.0
     px = torch.tensor(
@@ -855,8 +952,8 @@ def _tan_homography_factors(wcs: WCS) -> tuple[Tensor, Tensor] | None:
         device=wcs.device,
     )
     ra_deg, dec_deg = wcs.pixel_to_world(px, py)
-    ra = torch.deg2rad(ra_deg.detach().to(device="cpu", dtype=torch.float64))
-    dec = torch.deg2rad(dec_deg.detach().to(device="cpu", dtype=torch.float64))
+    ra = torch.deg2rad(_to(ra_deg.detach(), device="cpu", dtype=torch.float64))
+    dec = torch.deg2rad(_to(dec_deg.detach(), device="cpu", dtype=torch.float64))
     if not bool(torch.isfinite(ra).all() and torch.isfinite(dec).all()):
         return None
     cos_d = torch.cos(dec)
@@ -941,8 +1038,8 @@ def infer_tan_projective_homography(
         ra.to(device=source_wcs.device),
         dec.to(device=source_wcs.device),
     )
-    xs_cpu = xs.detach().to(device="cpu", dtype=torch.float64)
-    ys_cpu = ys.detach().to(device="cpu", dtype=torch.float64)
+    xs_cpu = _to(xs.detach(), device="cpu", dtype=torch.float64)
+    ys_cpu = _to(ys.detach(), device="cpu", dtype=torch.float64)
     if not bool(torch.isfinite(xs_cpu).all() and torch.isfinite(ys_cpu).all()):
         return None
     tol = (
@@ -966,7 +1063,7 @@ def evaluate_tan_projective_homography(
 ) -> tuple[Tensor, Tensor]:
     """Evaluate 3x3 projective homography on [0..height-1] x [0..width-1] using 1D outer sums."""
     compute_dtype = torch.float32 if device.type == "mps" else torch.float64
-    h_mat = homography.to(device=device, dtype=compute_dtype)
+    h_mat = _to(homography, device=device, dtype=compute_dtype)
     x_row = torch.arange(width, dtype=compute_dtype, device=device).unsqueeze(0)
     y_col = torch.arange(height, dtype=compute_dtype, device=device).unsqueeze(1)
     denom = (h_mat[2, 0] * x_row) + (h_mat[2, 1] * y_col + h_mat[2, 2])
@@ -1037,8 +1134,8 @@ def infer_diagonal_scale_shift_pixel_map(
     ra, dec = target_wcs.pixel_to_world(jx, iy)
     xs, ys = source_wcs.world_to_pixel(ra, dec)
     # The WCS may live on an accelerator; this small fit runs on the grid's device.
-    xs = xs.to(device=jx.device, dtype=jx.dtype)
-    ys = ys.to(device=jx.device, dtype=jx.dtype)
+    xs = _to(xs, device=jx.device, dtype=jx.dtype)
+    ys = _to(ys, device=jx.device, dtype=jx.dtype)
     ones = torch.ones_like(jx)
     ax = torch.stack([jx, iy, ones], dim=1)
     sol_x = torch.linalg.lstsq(ax, xs.unsqueeze(-1), rcond=None).solution.squeeze(-1)
@@ -1091,8 +1188,8 @@ def infer_linear_affine_pixel_map(
     ra, dec = target_wcs.pixel_to_world(jx, iy)
     xs, ys = source_wcs.world_to_pixel(ra, dec)
     # The WCS may live on an accelerator; this small fit runs on the grid's device.
-    xs = xs.to(device=jx.device, dtype=jx.dtype)
-    ys = ys.to(device=jx.device, dtype=jx.dtype)
+    xs = _to(xs, device=jx.device, dtype=jx.dtype)
+    ys = _to(ys, device=jx.device, dtype=jx.dtype)
     ones = torch.ones_like(jx)
     a_mat = torch.stack([jx, iy, ones], dim=1)
     sol_x = torch.linalg.lstsq(a_mat, xs.unsqueeze(-1), rcond=None).solution.squeeze(-1)

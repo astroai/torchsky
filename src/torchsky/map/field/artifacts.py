@@ -25,6 +25,7 @@ from .core import (
 )
 from .registry import FIELD_MODEL_KINDS
 from .types import FieldDomain, FieldFitResult, FieldModelKind
+from ...device import _as_tensor, _to
 
 
 _MANIFEST_NAME = "manifest.json"
@@ -412,22 +413,19 @@ def capture_field_rng_state(*, sampling_rng_state: Tensor | None = None) -> dict
 def restore_field_rng_state(state: Mapping[str, Any]) -> Tensor | None:
     cpu_state = state.get("cpu")
     if isinstance(cpu_state, Tensor):
-        torch.set_rng_state(cpu_state.to(device="cpu", dtype=torch.uint8))
+        torch.set_rng_state(_to(cpu_state, device="cpu", dtype=torch.uint8))
     cuda_state = state.get("cuda")
     if torch.cuda.is_available() and isinstance(cuda_state, (list, tuple)):
         torch.cuda.set_rng_state_all(
-            [
-                torch.as_tensor(item, dtype=torch.uint8, device="cpu")
-                for item in cuda_state
-            ]
+            [_as_tensor(item, dtype=torch.uint8, device="cpu") for item in cuda_state]
         )
     mps_state = state.get("mps")
     set_mps_state = getattr(torch.mps, "set_rng_state", None)
     if isinstance(mps_state, Tensor) and callable(set_mps_state):
-        set_mps_state(mps_state.to(device="cpu", dtype=torch.uint8))
+        set_mps_state(_to(mps_state, device="cpu", dtype=torch.uint8))
     sampling = state.get("sampling")
     return (
-        sampling.to(device="cpu", dtype=torch.uint8)
+        _to(sampling, device="cpu", dtype=torch.uint8)
         if isinstance(sampling, Tensor)
         else None
     )

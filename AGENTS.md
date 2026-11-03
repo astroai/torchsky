@@ -13,7 +13,7 @@ Human contributors start at [CONTRIBUTING.md](CONTRIBUTING.md).
   authorization.
 - Preserve unrelated working-tree changes. Keep diffs focused; report what
   changed, the checks actually run, and any unresolved failures.
-- Treat historical plans and `docs/roadmap.md` items as context; check current
+- Treat historical plans and `docs/project/roadmap.md` items as context; check current
   code before resuming one.
 
 ## Git
@@ -135,16 +135,16 @@ covers torchsky-owned hot paths.
 
 ## Documentation
 
-- Update user docs when public behavior changes; update `docs/changelog.md` for
+- Update user docs when public behavior changes; update `docs/project/changelog.md` for
   user-visible changes.
-- Follow `docs/authoring.md`: guides are hand-written; `docs/reference/*.md` is
+- Follow `docs/project/authoring.md`: guides are hand-written; `docs/reference/*.md` is
   generated from `docs/reference/_registry.toml` by `scripts/gen_reference.py`
   (never hand-edit); runnable snippets carry `<!-- docs: run -->`.
 - Run `pixi run docs-contract` for docs work (strict build, links, anchors,
   generated pages, snippets, docs tests). Docs-only edits need no other pytest.
 - Examples in `examples/` must use torchsky, be self-contained, and write
   outputs to a temporary directory, not the working directory.
-- Releases follow `docs/release.md`.
+- Releases follow `docs/project/release.md`.
 
 ## Change checklist
 

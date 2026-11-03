@@ -30,5 +30,5 @@ def test_core_package_has_no_benchmark_modules() -> None:
 
 
 def test_benchmarks_doc_stays_a_redirect() -> None:
-    text = (ROOT / "docs" / "evaluation" / "benchmarks.md").read_text(encoding="utf-8")
+    text = (ROOT / "docs" / "performance" / "benchmarks.md").read_text(encoding="utf-8")
     assert "torchsky-harness" in text

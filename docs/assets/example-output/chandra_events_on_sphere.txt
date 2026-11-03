@@ -1,0 +1,5 @@
+ObsID 5950 (Sgr A*, 48.5 ks): 483964 events, 323657 in 0.5-7 keV; field centre 266.401, -28.987 deg
+sparse map nside 16384 (12.9 arcsec cells): 8105 occupied cells of 3.22e+09, 323657 events conserved, peak 26512 counts/cell
+MOC order 12: 132 cells, 420 arcmin^2 (five chips, edges inflated by the 51 arcsec cells); contains 323657/323657 events
+smoothed 6 steps (sigma ~ 26 arcsec): 12236 cells, counts 323657.0 (conserved: True)
+brightest smoothed cell (2266 counts) lies 10.0 arcmin from Sgr A*, a point source; the cell at Sgr A* holds 367 counts

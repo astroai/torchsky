@@ -1,0 +1,14 @@
+g 0.52"   (128, 128) px, passband 3835-5570 A, total   634.1 nmgy
+r 0.52"   (128, 128) px, passband 5405-7290 A, total   829.0 nmgy
+i 0.52"   (128, 128) px, passband 6775-8690 A, total   907.0 nmgy
+z 0.52"   (128, 128) px, passband 8255-10140 A, total  1019.5 nmgy
+g 0.35"   (160, 160) px, passband 3835-5570 A, total  1084.5 nmgy
+z 0.35"   (160, 160) px, passband 8255-10140 A, total  1888.7 nmgy
+fit: 240 steps, loss 0.0352 -> 0.0041
+g 0.52"   model/data flux 0.942, variance explained 0.737
+r 0.52"   model/data flux 0.976, variance explained 0.811
+i 0.52"   model/data flux 1.018, variance explained 0.840
+z 0.52"   model/data flux 1.085, variance explained 0.826
+g 0.35"   model/data flux 0.963, variance explained 0.744
+z 0.35"   model/data flux 1.074, variance explained 0.864
+model g-z colour: nucleus +1.42 mag, ring +0.39 mag (the ring is bluer)

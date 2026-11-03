@@ -154,7 +154,7 @@ jobs:
       matrix:
         include:
         - shard: fundamentals
-          tests: tests/test_map_adjoints.py tests/test_map_background_ops.py tests/test_map_fft_affine_ldu.py tests/test_map_fft_resample.py tests/test_map_image_plane_tiling.py tests/test_map_image_plane_stacking.py tests/test_map_image_plane_uncertainty.py tests/test_map_image_plane_kernels.py tests/test_map_image_plane_products.py tests/test_map_operator_bundle.py tests/test_map_operator_execution.py tests/test_map_periodic_affine.py tests/test_map_product.py tests/test_map_solvers.py
+          tests: tests/test_map_adjoints.py tests/test_map_background_ops.py tests/test_map_fft_affine_ldu.py tests/test_map_fft_resample.py tests/test_map_image_plane_tiling.py tests/test_map_image_plane_stacking.py tests/test_map_image_plane_uncertainty.py tests/test_map_coadd_edge_weights.py tests/test_map_image_plane_kernels.py tests/test_map_image_plane_products.py tests/test_map_operator_bundle.py tests/test_map_operator_execution.py tests/test_map_periodic_affine.py tests/test_map_product.py tests/test_map_solvers.py
           pytest_args: ''
         - shard: field-components
           tests: tests/test_map_field_rendering.py tests/test_map_field_decomposition.py tests/test_map_field_optimization.py tests/test_map_field_wavelength_models.py tests/test_map_field_encoders.py tests/test_map_field_domain_bandpass.py
@@ -196,7 +196,7 @@ jobs:
           tests: tests/test_map_healpix_coadd_bridge_smoke.py tests/test_map_healpix_native_tan.py tests/test_map_radio_fixture.py tests/test_map_radio_smoke.py tests/test_map_spectral_affine.py tests/test_map_spectral_nonuniform.py tests/test_map_spectral_nufft.py tests/test_map_sphere_sh_map_smoke.py
           pytest_args: ''
         - shard: products-geometry
-          tests: tests/test_map_adaptive_reprojection.py tests/test_map_clean_api.py tests/test_map_cube_spectral_axis.py tests/test_map_dq_parity.py tests/test_map_geometry_scalability.py tests/test_map_healpix_coadd.py tests/test_map_ifu_cube.py tests/test_map_ifu_variance.py tests/test_map_plan.py
+          tests: tests/test_map_adaptive_reprojection.py tests/test_map_clean_api.py tests/test_map_cube_spectral_axis.py tests/test_map_dq_parity.py tests/test_map_geometry_scalability.py tests/test_map_healpix_coadd.py tests/test_map_healpix_overlap.py tests/test_map_ifu_cube.py tests/test_map_ifu_variance.py tests/test_map_ifu_vectorised.py tests/test_map_plan.py
           pytest_args: ''
         - shard: operators-extra
           tests: tests/test_map_operator_chunking.py tests/test_map_operator_coverage.py tests/test_map_operator_foundations.py tests/test_map_operator_noise.py

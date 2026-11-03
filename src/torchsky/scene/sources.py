@@ -17,6 +17,7 @@ from ..map.scenes import SceneRepresentation, target_to_field_observation
 from ..map.target import TargetRenderSpec
 from ..sphere.moc import MOC
 from ..wcs import WCS
+from ..device import _as_tensor
 
 
 POINT_MORPHOLOGY = 0
@@ -162,7 +163,7 @@ class SourceCatalogScene(SceneRepresentation):
         if gaussian_parameters is None:
             gaussian = self.lon.new_zeros((count, 3))
         else:
-            gaussian = torch.as_tensor(
+            gaussian = _as_tensor(
                 gaussian_parameters, dtype=self.lon.dtype, device=device
             )
             if gaussian.shape != (count, 3):
@@ -182,9 +183,7 @@ class SourceCatalogScene(SceneRepresentation):
         if sersic_parameters is None:
             sersic = self.lon.new_zeros((count, 4))
         else:
-            sersic = torch.as_tensor(
-                sersic_parameters, dtype=self.lon.dtype, device=device
-            )
+            sersic = _as_tensor(sersic_parameters, dtype=self.lon.dtype, device=device)
             if sersic.shape != (count, 4):
                 raise ValueError("sersic_parameters must have shape (components, 4)")
             if not bool(torch.isfinite(sersic).all()):
@@ -209,9 +208,7 @@ class SourceCatalogScene(SceneRepresentation):
                 raise ValueError(
                     "fixed_templates and packed template inputs are mutually exclusive"
                 )
-            dense = torch.as_tensor(
-                fixed_templates, dtype=self.lon.dtype, device=device
-            )
+            dense = _as_tensor(fixed_templates, dtype=self.lon.dtype, device=device)
             if dense.ndim != 3 or int(dense.shape[0]) != count:
                 raise ValueError(
                     "fixed_templates must have shape (components, height, width)"
@@ -227,19 +224,19 @@ class SourceCatalogScene(SceneRepresentation):
         self.template_data = (
             self.lon.new_empty((0,))
             if template_data is None
-            else torch.as_tensor(
-                template_data, dtype=self.lon.dtype, device=device
-            ).reshape(-1)
+            else _as_tensor(template_data, dtype=self.lon.dtype, device=device).reshape(
+                -1
+            )
         )
         self.template_slices = (
             torch.zeros((count, 2), dtype=torch.int64, device=device)
             if template_slices is None
-            else torch.as_tensor(template_slices, dtype=torch.int64, device=device)
+            else _as_tensor(template_slices, dtype=torch.int64, device=device)
         )
         self.template_shapes = (
             torch.zeros((count, 2), dtype=torch.int64, device=device)
             if template_shapes is None
-            else torch.as_tensor(template_shapes, dtype=torch.int64, device=device)
+            else _as_tensor(template_shapes, dtype=torch.int64, device=device)
         )
         if self.template_slices.shape != (count, 2) or self.template_shapes.shape != (
             count,
@@ -251,7 +248,7 @@ class SourceCatalogScene(SceneRepresentation):
         if template_pixel_scale_arcsec is None:
             scale = self.lon.new_zeros((count, 2))
         else:
-            scale = torch.as_tensor(
+            scale = _as_tensor(
                 template_pixel_scale_arcsec, dtype=self.lon.dtype, device=device
             )
             if scale.ndim == 0:
@@ -293,7 +290,7 @@ class SourceCatalogScene(SceneRepresentation):
         basis = (
             None
             if spectral_basis is None
-            else torch.as_tensor(spectral_basis, dtype=self.lon.dtype, device=device)
+            else _as_tensor(spectral_basis, dtype=self.lon.dtype, device=device)
         )
         if basis is not None:
             if basis.ndim != 2 or int(basis.shape[0]) != len(self.band_labels):
@@ -311,7 +308,7 @@ class SourceCatalogScene(SceneRepresentation):
             )
             coefficient_matrix = self.lon.new_zeros((count, width))
         else:
-            coefficient_matrix = torch.as_tensor(
+            coefficient_matrix = _as_tensor(
                 coefficients, dtype=self.lon.dtype, device=device
             )
             if coefficient_matrix.ndim == 1:
@@ -345,7 +342,7 @@ class SourceCatalogScene(SceneRepresentation):
         self.parameter_slices = (
             default_slices
             if parameter_slices is None
-            else torch.as_tensor(parameter_slices, dtype=torch.int64, device=device)
+            else _as_tensor(parameter_slices, dtype=torch.int64, device=device)
         )
         if self.parameter_slices.shape != (count, 2):
             raise ValueError("parameter_slices must have shape (components, 2)")
@@ -390,7 +387,7 @@ class SourceCatalogScene(SceneRepresentation):
                 sy, sx = self.template_pixel_scale_arcsec[index]
                 radius[index] = 0.5 * torch.sqrt((h * sy).square() + (w * sx).square())
         else:
-            radius = torch.as_tensor(
+            radius = _as_tensor(
                 support_radius_arcsec, dtype=self.lon.dtype, device=device
             )
             if radius.ndim == 0:
@@ -433,14 +430,12 @@ class SourceCatalogScene(SceneRepresentation):
         self.support_uniq = (
             None
             if support_uniq is None
-            else torch.as_tensor(
-                support_uniq, dtype=torch.int64, device=device
-            ).reshape(-1)
+            else _as_tensor(support_uniq, dtype=torch.int64, device=device).reshape(-1)
         )
         self.support_slices = (
             None
             if support_slices is None
-            else torch.as_tensor(support_slices, dtype=torch.int64, device=device)
+            else _as_tensor(support_slices, dtype=torch.int64, device=device)
         )
         if (self.support_uniq is None) != (self.support_slices is None):
             raise ValueError(
@@ -754,7 +749,7 @@ class SourceCatalogScene(SceneRepresentation):
         indices = (
             range(self.component_count)
             if source_indices is None
-            else torch.as_tensor(source_indices, dtype=torch.int64, device=self.device)
+            else _as_tensor(source_indices, dtype=torch.int64, device=self.device)
             .reshape(-1)
             .tolist()
         )

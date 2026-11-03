@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 
 {% block announce %}
+  <aside class="ts-unverified-banner" role="note">
+    <strong>⚠ These docs have not yet been verified by a human.</strong>
+    They were drafted with AI assistance and are checked by automated tests
+    only, so text, numbers and recommendations may be wrong.
+    <a href="https://github.com/astroai/torchsky/issues">Report problems</a>.
+  </aside>
   {% if config.extra.docs_channel == "edge" %}
   <aside class="ts-edge-banner">
     <strong>Edge docs</strong> — tip of <code>main</code>, not a release.

@@ -6,14 +6,15 @@ from typing import Any
 
 import torch
 from torch import Tensor
+from ..device import _to
 
 SECONDS_PER_DAY = 86400.0
 TT_MINUS_TAI_SECONDS = 32.184
 TAI_MINUS_GPS_SECONDS = 19.0
 
 # Effective MJD dates at 00:00:00 UTC and TAI-UTC offsets in seconds.
-# IERS Bulletin C 71 / NIST still give TAI-UTC = 37 s from 2017-01-01
-# through at least the 2026-06-30 no-leap announcement.
+# IERS Bulletin C 72 / Leap_Second.dat give TAI-UTC = 37 s from 2017-01-01;
+# that file expires on 2027-06-28 (no leap second at the end of 2026).
 _LEAP_EFFECTIVE_MJD = torch.tensor(
     [
         41317.0,
@@ -156,8 +157,8 @@ def _as_float_tensor(value: Any) -> Tensor:
 def tai_minus_utc_seconds(mjd_utc: Any) -> Tensor:
     """Return TAI-UTC in seconds for UTC MJD values covered by leap table."""
     mjd = _as_float_tensor(mjd_utc)
-    table = _LEAP_EFFECTIVE_MJD.to(device=mjd.device, dtype=mjd.dtype)
-    offsets = _TAI_MINUS_UTC.to(device=mjd.device, dtype=mjd.dtype)
+    table = _to(_LEAP_EFFECTIVE_MJD, device=mjd.device, dtype=mjd.dtype)
+    offsets = _to(_TAI_MINUS_UTC, device=mjd.device, dtype=mjd.dtype)
     flat = mjd.reshape(-1)
     idx = torch.bucketize(flat, table, right=True) - 1
     idx = torch.clamp(idx, min=0, max=offsets.numel() - 1)
@@ -175,6 +176,36 @@ def tai_minus_utc_seconds(mjd_utc: Any) -> Tensor:
         if torch.any(mask):
             values = torch.where(mask, offsets[i - 1] + (flat - start) * delta, values)
     return values.reshape(mjd.shape)
+
+
+# UTC MJD bounds within which the leap table is authoritative: the first entry
+# (1972-01-01; earlier UTC used drifting "rubber" seconds) and the expiry date
+# of IERS Leap_Second.dat matching the table (2027-06-28).
+_LEAP_TABLE_START_MJD = 41317.0
+_LEAP_TABLE_EXPIRES_MJD = 61584.0
+
+
+def _tt_minus_utc_seconds_checked(mjd_utc: Tensor) -> Tensor:
+    """TT-UTC (s) from the leap table; ``ValueError`` outside its validity.
+
+    Inside the table this is ``32.184 + (TAI-UTC)``, ERFA ``dat`` plus the
+    TT-TAI constant, including the fractional ramp on leap-second days.
+    Before 1972 or after the table expires TAI-UTC is unknown here, so the
+    caller must supply it.
+    """
+    mjd = mjd_utc.detach().cpu().to(torch.float64)
+    if not bool(torch.isfinite(mjd).all()):
+        raise ValueError("UTC MJD must be finite to derive TT-UTC")
+    lo = float(mjd.min()) if mjd.numel() else _LEAP_TABLE_START_MJD
+    hi = float(mjd.max()) if mjd.numel() else _LEAP_TABLE_START_MJD
+    if lo < _LEAP_TABLE_START_MJD or hi >= _LEAP_TABLE_EXPIRES_MJD:
+        raise ValueError(
+            "TT-UTC cannot be derived from torchsky's leap-second table outside "
+            f"UTC MJD [{_LEAP_TABLE_START_MJD:g}, {_LEAP_TABLE_EXPIRES_MJD:g}) "
+            "(1972-01-01 to the 2027-06-28 table expiry); pass "
+            "EarthOrientation(tt_minus_utc_s=...) from IERS data"
+        )
+    return TT_MINUS_TAI_SECONDS + tai_minus_utc_seconds(mjd)
 
 
 def convert_time_scale(mjd: Any, from_scale: str, to_scale: str) -> Tensor:
@@ -398,12 +429,12 @@ def _keplerian_heliocentric_equatorial(mjd: Tensor, body: str) -> Tensor:
     T_flat = ((jd - 2451545.0) / 36525.0).to(dtype=dtype)
     d2r = math.pi / 180.0
     a0, da, e0, de, i0, di, L0, dL, vp0, dvp, om0, dom = elems
-    a = (a0 + da * T_flat).to(device=device, dtype=dtype)
-    e = (e0 + de * T_flat).to(device=device, dtype=dtype)
-    i = ((i0 + di * T_flat) * d2r).to(device=device, dtype=dtype)
-    L = ((L0 + dL * T_flat) * d2r).to(device=device, dtype=dtype)
-    varpi = ((vp0 + dvp * T_flat) * d2r).to(device=device, dtype=dtype)
-    omega_node = ((om0 + dom * T_flat) * d2r).to(device=device, dtype=dtype)
+    a = _to(a0 + da * T_flat, device=device, dtype=dtype)
+    e = _to(e0 + de * T_flat, device=device, dtype=dtype)
+    i = _to((i0 + di * T_flat) * d2r, device=device, dtype=dtype)
+    L = _to((L0 + dL * T_flat) * d2r, device=device, dtype=dtype)
+    varpi = _to((vp0 + dvp * T_flat) * d2r, device=device, dtype=dtype)
+    omega_node = _to((om0 + dom * T_flat) * d2r, device=device, dtype=dtype)
 
     omega_arg = varpi - omega_node
     M = L - varpi
@@ -466,7 +497,7 @@ def _gmst_rotation_matrix(mjd: Tensor) -> tuple[Tensor, Tensor]:
         + 0.000387933 * T_flat**2
         - T_flat**3 / 38710000.0
     )
-    gmst_rad = (gmst * (math.pi / 180.0)).to(device=mjd.device, dtype=mjd.dtype)
+    gmst_rad = _to(gmst * (math.pi / 180.0), device=mjd.device, dtype=mjd.dtype)
 
     return torch.cos(gmst_rad), torch.sin(gmst_rad)
 

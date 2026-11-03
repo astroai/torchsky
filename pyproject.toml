@@ -11,7 +11,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "torchsky"
-version = "0.5.0rc1"
+version = "0.5.0rc2"
 description = "Torch-native sky data, coordinates, geometry, and mapmaking"
 authors = [{ name = "Seb Fabbro", email = "sebfabbro@gmail.com" }]
 readme = "README.md"
@@ -47,7 +47,7 @@ dependencies = [
 Homepage = "https://github.com/astroai/torchsky"
 Repository = "https://github.com/astroai/torchsky"
 Documentation = "https://astroai.github.io/torchsky/"
-Changelog = "https://astroai.github.io/torchsky/changelog/"
+Changelog = "https://astroai.github.io/torchsky/project/changelog/"
 Issues = "https://github.com/astroai/torchsky/issues"
 
 [project.scripts]

@@ -150,6 +150,7 @@ from ._spectral_kernels import (  # noqa: F401
     _scan_device,
     _spin_alm2map_ring_torch,
 )
+from ..device import _as_tensor, _to
 
 
 _SCALAR_RECURRENCE_CPP_ENABLE = (
@@ -612,7 +613,7 @@ def _map2alm_single_pass(
     mat = _scalar_map2alm_mat(nside, False, lmax, mmax)
     if mat is not None:
         if mat.device != map_c.device or mat.dtype != complex_dtype:
-            mat = mat.to(device=map_c.device, dtype=complex_dtype)
+            mat = _to(mat, device=map_c.device, dtype=complex_dtype)
         alm = (map_c @ mat) * pix_w
     else:
         if bytes_needed > 1024 * 1024 * 1024:
@@ -625,7 +626,7 @@ def _map2alm_single_pass(
             (rows.shape[0], nalm), dtype=complex_dtype, device=map_c.device
         )
         for m in range(mmax + 1):
-            y_conj = y_conj_blocks[m].to(device=map_c.device, dtype=complex_dtype)
+            y_conj = _to(y_conj_blocks[m], device=map_c.device, dtype=complex_dtype)
             l_count = lmax - m + 1
             coeffs = (map_c @ y_conj.transpose(0, 1)) * pix_w
             start = alm_index(m, m, lmax, mmax)
@@ -773,7 +774,7 @@ def almxfl(
     scale = torch.zeros((ll + 1,), dtype=torch.float64, device=rows.device)
     keep = min(int(fl_t.numel()), ll + 1)
     if keep > 0:
-        scale[:keep] = fl_t[:keep].to(device=rows.device, dtype=torch.float64)
+        scale[:keep] = _to(fl_t[:keep], device=rows.device, dtype=torch.float64)
     gain = scale.index_select(0, ell).to(torch.complex128)
 
     out = rows if can_inplace else rows.clone()
@@ -804,7 +805,7 @@ def rotate_alm(
     dtype = rows.dtype
     real_dtype = _preferred_real_dtype(device)
     # healpy rotate_alm zyz: Wigner-d argument is -theta relative to our d^l_{m m'}(beta).
-    beta = torch.as_tensor(-float(theta), dtype=real_dtype, device=device)
+    beta = _as_tensor(-float(theta), dtype=real_dtype, device=device)
     psi_t = torch.as_tensor(float(psi), dtype=real_dtype, device=device)
     phi_t = torch.as_tensor(float(phi), dtype=real_dtype, device=device)
     zero = torch.zeros((), dtype=real_dtype, device=device)
@@ -919,8 +920,8 @@ def alm2map(
             pw_t, pw_p = pixwin_loader(int(nside), lmax=ll, pol=True)
             ell = _alm_ell_array(ll, mm)
             cdt = _preferred_complex_dtype(alms_pol.device)
-            st = pw_t.index_select(0, ell).to(device=alms_pol.device, dtype=cdt)
-            sp = pw_p.index_select(0, ell).to(device=alms_pol.device, dtype=cdt)
+            st = _to(pw_t.index_select(0, ell), device=alms_pol.device, dtype=cdt)
+            sp = _to(pw_p.index_select(0, ell), device=alms_pol.device, dtype=cdt)
             a_t = a_t * st
             a_e = a_e * sp
             a_b = a_b * sp
@@ -992,13 +993,17 @@ def alm2map(
     complex_dtype = _preferred_complex_dtype(rows_eff.device)
     if mat is not None:
         if mat.device != rows_eff.device or mat.dtype != complex_dtype:
-            mat = mat.to(device=rows_eff.device, dtype=complex_dtype)
+            mat = _to(mat, device=rows_eff.device, dtype=complex_dtype)
         m_idx = _alm_m_array(ll, mm)
-        gain = torch.where(
-            m_idx == 0,
-            torch.ones_like(m_idx, dtype=real_dtype),
-            torch.full_like(m_idx, 2.0, dtype=real_dtype),
-        ).to(dtype=complex_dtype, device=rows_eff.device)
+        gain = _to(
+            torch.where(
+                m_idx == 0,
+                torch.ones_like(m_idx, dtype=real_dtype),
+                torch.full_like(m_idx, 2.0, dtype=real_dtype),
+            ),
+            dtype=complex_dtype,
+            device=rows_eff.device,
+        )
         out = torch.real((rows_eff * gain.unsqueeze(0)) @ mat).to(real_dtype)
     else:
         y_blocks, _ = _ylm_basis(nside, nest, ll, mm)
@@ -1006,7 +1011,7 @@ def alm2map(
             (rows.shape[0], npix), dtype=real_dtype, device=rows_eff.device
         )
         for m in range(mm + 1):
-            y = y_blocks[m].to(device=rows_eff.device, dtype=complex_dtype)
+            y = _to(y_blocks[m], device=rows_eff.device, dtype=complex_dtype)
             l_count = ll - m + 1
             start = alm_index(m, m, ll, mm)
             coeffs = rows_eff[:, start : start + l_count]
@@ -1033,8 +1038,8 @@ def alm2lonlat(
     real_dtype = _preferred_real_dtype(device)
     complex_dtype = _preferred_complex_dtype(device)
 
-    lon_t = torch.as_tensor(lon_deg, dtype=real_dtype, device=device)
-    lat_t = torch.as_tensor(lat_deg, dtype=real_dtype, device=device)
+    lon_t = _as_tensor(lon_deg, dtype=real_dtype, device=device)
+    lat_t = _as_tensor(lat_deg, dtype=real_dtype, device=device)
     lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
     coord_shape = lon_t.shape
     phi = torch.deg2rad(torch.remainder(lon_t.reshape(-1), 360.0))
@@ -1087,8 +1092,8 @@ def alm2lonlat_spin(
     complex_dtype = _preferred_complex_dtype(device)
     alm1 = alm1.to(dtype=complex_dtype)
     alm2 = alm2.to(dtype=complex_dtype)
-    lon_t = torch.as_tensor(lon_deg, dtype=real_dtype, device=device)
-    lat_t = torch.as_tensor(lat_deg, dtype=real_dtype, device=device)
+    lon_t = _as_tensor(lon_deg, dtype=real_dtype, device=device)
+    lat_t = _as_tensor(lat_deg, dtype=real_dtype, device=device)
     lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
     coord_shape = lon_t.shape
     phi = torch.deg2rad(torch.remainder(lon_t.reshape(-1), 360.0))
@@ -1658,10 +1663,10 @@ def alm2map_spin(
                 y_plus_m0,
                 y_minus_m0,
             )
-        y_plus = y_plus.to(device=alm1.device, dtype=cdt)
-        y_minus = y_minus.to(device=alm1.device, dtype=cdt)
-        y_plus_m0 = y_plus_m0.to(device=alm1.device, dtype=cdt)
-        y_minus_m0 = y_minus_m0.to(device=alm1.device, dtype=cdt)
+        y_plus = _to(y_plus, device=alm1.device, dtype=cdt)
+        y_minus = _to(y_minus, device=alm1.device, dtype=cdt)
+        y_plus_m0 = _to(y_plus_m0, device=alm1.device, dtype=cdt)
+        y_minus_m0 = _to(y_minus_m0, device=alm1.device, dtype=cdt)
         p_plus_pos = coeff_plus @ y_plus
         p_minus_pos = coeff_minus @ y_minus
         if mm == 0:
@@ -1675,8 +1680,8 @@ def alm2map_spin(
     else:
         Y_plus, _ = _spin_ylm_basis_concat(int(nside), nest, ll, mm, spin_i)
         Y_minus, _ = _spin_ylm_basis_concat(int(nside), nest, ll, mm, -spin_i)
-        Y_plus = Y_plus.to(device=alm1.device, dtype=cdt)
-        Y_minus = Y_minus.to(device=alm1.device, dtype=cdt)
+        Y_plus = _to(Y_plus, device=alm1.device, dtype=cdt)
+        Y_minus = _to(Y_minus, device=alm1.device, dtype=cdt)
 
         # P = C @ Y
         # C: (Nalm,), Y: (Nalm, Npix)

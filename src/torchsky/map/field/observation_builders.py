@@ -21,6 +21,7 @@ from torch import Tensor
 
 from .observation_ops import header_shape as _header_shape
 from .types import FieldObservation, FieldSpectralQuantity
+from ...device import _as_tensor
 
 
 def make_tangent_plane_header(
@@ -108,7 +109,7 @@ def _per_bin_background(
 ) -> Tensor | None:
     if value is None:
         return None
-    tensor = torch.as_tensor(value, dtype=dtype, device=device)
+    tensor = _as_tensor(value, dtype=dtype, device=device)
     if tensor.ndim == 2:
         if tuple(tensor.shape) != (height, width):
             raise ValueError(
@@ -190,7 +191,7 @@ def _field_observations_from_per_bin_bounds(
     w_tensor: Tensor | None = None
     m_tensor: Tensor | None = None
     if weight is not None:
-        w_tensor = torch.as_tensor(weight, dtype=dtype, device=device)
+        w_tensor = _as_tensor(weight, dtype=dtype, device=device)
         if w_tensor.ndim == 2:
             if w_tensor.shape != (h, w):
                 raise ValueError(
@@ -204,7 +205,7 @@ def _field_observations_from_per_bin_bounds(
         else:
             raise ValueError("weight must be (H, W) or (n_bin, H, W)")
     if mask is not None:
-        m_tensor = torch.as_tensor(mask, dtype=torch.bool, device=device)
+        m_tensor = _as_tensor(mask, dtype=torch.bool, device=device)
         if m_tensor.ndim == 2:
             if m_tensor.shape != (h, w):
                 raise ValueError(
