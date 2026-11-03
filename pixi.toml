@@ -10,7 +10,7 @@ platforms = [
 
 [package]
 name = "torchsky"
-version = "0.5.0rc2"
+version = "0.5.0"
 description = "Torch-native sky data, coordinates, geometry, and mapmaking"
 authors = ["Seb Fabbro <sebfabbro@gmail.com>"]
 
