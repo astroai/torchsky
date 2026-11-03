@@ -5,6 +5,13 @@ title: Sky computing for PyTorch
 
 <div class="ts-below" markdown>
 
+!!! danger "These docs have not yet been verified by a human"
+    The guides, examples and reference text for this first release were
+    drafted with AI assistance. Automated tests run every code snippet and
+    example, but no person has yet reviewed the prose, the numbers or the
+    recommendations. Treat them as a draft, check results that matter, and
+    [report anything wrong](https://github.com/astroai/torchsky/issues).
+
 **torchsky** does astronomy's sky-domain computations as PyTorch tensor code:
 coordinates and WCS, HEALPix and spherical geometry, catalog crossmatches,
 image coadds and HEALPix maps, spectra and synthetic photometry, and
