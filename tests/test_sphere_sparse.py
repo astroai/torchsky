@@ -318,6 +318,63 @@ def test_sparse_get_values_coverage_blocks_multiband_match_searchsorted() -> Non
     torch.testing.assert_close(blocked.get_values(query), plain.get_values(query))
 
 
+@pytest.mark.parametrize("nest", [True, False])
+def test_sparse_high_ratio_coverage_skips_dense_blocks(nest: bool) -> None:
+    # nside 2**19 over nside_coverage 32: one dense block would hold 2**28
+    # slots (2 GiB float64) for a few thousand stored pixels (CANFAR CUDA OOM
+    # in legacy_healpix_multiband). Lookup must stay exact without blocks.
+    nside = 2**19
+    nest_pix = torch.arange(5 * 2**28 - 1500, 5 * 2**28 + 1500, dtype=torch.int64)
+    pixels = nest_pix if nest else hp.nest2ring(nside, nest_pix)
+    values = torch.stack(
+        (torch.linspace(1.0, 2.0, pixels.numel()), torch.full((3000,), 7.0))
+    ).to(torch.float64)
+    smap = SparseHealpixMap.from_pixels(
+        pixels, values, nside_sparse=nside, nest=nest, nside_coverage=32
+    )
+    assert smap._block_values is None
+    plain = SparseHealpixMap.from_pixels(pixels, values, nside_sparse=nside, nest=nest)
+    query = torch.cat(
+        (pixels[::7], torch.tensor([0, -1, 12 * nside**2, 12 * nside**2 - 1]))
+    )
+    torch.testing.assert_close(smap.get_values(query), plain.get_values(query))
+    assert smap.coverage_map is not None
+    assert int((smap.coverage_map >= 0).sum()) == 2
+    torch.testing.assert_close(
+        smap.get_column(1).get_values(query), plain.get_column(1).get_values(query)
+    )
+
+
+def test_sparse_degrade_without_blocks_matches_block_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import torchsky.sphere.sparse as sparse_mod
+
+    nside = 64
+    pixels = torch.arange(0, 4 * 40, dtype=torch.int64)
+    values = torch.rand(pixels.numel(), dtype=torch.float64) + 1.0
+    values[3] = 0.0  # exactly the fill: ignored by both paths
+    values[9] = 1e-12  # isclose(fill) would drop it; the exact rule keeps it
+    values[40:44] = 0.0  # a parent whose children are all fill
+    blocked = SparseHealpixMap.from_pixels(
+        pixels, values, nside_sparse=nside, nside_coverage=8, sentinel=0.0
+    )
+    assert blocked._block_values is not None
+    monkeypatch.setattr(sparse_mod, "_LOOKUP_BLOCK_MAX_SLOTS_PER_PIXEL", 0)
+    listed = SparseHealpixMap.from_pixels(
+        pixels, values, nside_sparse=nside, nside_coverage=8, sentinel=0.0
+    )
+    assert listed._block_values is None
+    for pess in (False, True):
+        a = blocked.ud_grade(32, pess=pess)
+        b = listed.ud_grade(32, pess=pess)
+        torch.testing.assert_close(a.pixels, b.pixels)
+        torch.testing.assert_close(a.values, b.values)
+    assert float(listed.ud_grade(32).get_values(torch.tensor([2]))[0]) == pytest.approx(
+        float(values[8:12][values[8:12].isfinite()].mean())
+    )
+
+
 @pytest.mark.parametrize(
     "dtype,fill,values",
     [

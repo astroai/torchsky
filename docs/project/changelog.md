@@ -49,6 +49,15 @@ Changes after 0.5.0rc1 are listed here.
 
 ### Fixed
 
+- `SparseHealpixMap` with `nside_coverage` no longer allocates a dense
+  lookup block of `(nside / nside_coverage)**2` values per covered coverage
+  cell when that exceeds eight slots per stored pixel; such maps look values
+  up by binary search on the sorted pixels. A sparse NSIDE 2^19 coadd needed
+  6 GiB per map and ran out of memory on a 10.75 GiB GPU.
+- IFU drizzle with `aperture_diameter_arcsec`: spaxels that a fibre misses or
+  only touches got rounding-noise weights (~1e-16) that differed between CPU
+  and CUDA and switched whole spaxels on or off. Overlap fractions within the
+  computation's rounding bound (64 eps) are now zero.
 - MPS: moving an MPS tensor to CPU float64/complex128 in one `.to(device,
   dtype)`, `torch.as_tensor` or `.to(other)` call returns zeros in PyTorch
   2.14. Every such conversion in torchsky now moves first and casts on the

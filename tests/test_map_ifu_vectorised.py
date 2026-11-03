@@ -466,3 +466,39 @@ def test_legacy_drizzle_footprint_stays_inside_slices() -> None:
     # Each 0.5 arcsec sample covers one 0.5 arcsec spaxel: no spaxel is hit by a
     # footprint stretched across the 3 arcsec gap between the slices.
     assert int((result.weight[1] > 0).sum()) <= 2 * shape[1]
+
+
+def test_fibre_aperture_coverage_is_stable_under_ulp_perturbation() -> None:
+    # Fibre edges in this bundle land on spaxel edges, so many spaxels in a
+    # fibre's bounding box have zero true overlap. Their disk areas evaluate to
+    # +/- a few eps; kept as positive weights they decided whole-spaxel
+    # coverage differently on CPU and CUDA (CANFAR H100 round). One-ulp moves
+    # of the fibre positions reproduce that sensitivity without a GPU.
+    xy, transform, wave, _ = _fibre_bundle()
+    edges = torch.cat((wave - 1.0, wave[-1:] + 1.0))
+    target = CubeTarget(_wcs((21, 21), scale_arcsec=0.5), edges, shape=(21, 21))
+    science = torch.rand(
+        transform.detector_shape,
+        generator=torch.Generator().manual_seed(5),
+        dtype=torch.float64,
+    )
+
+    def cube(ra: torch.Tensor, dec: torch.Tensor):
+        moved = IFUSliceWCS(ra, dec, transform.wavelength_map, transform.slice_id_map)
+        observation = IFUObservation(science, moved, aperture_diameter_arcsec=2.0)
+        return coadd_cube([observation], target, spectral_kernel="drizzle")
+
+    base = cube(transform.ra_map, transform.dec_map)
+    coefficients = base.response_plan.coefficients
+    assert bool((coefficients > 64 * torch.finfo(torch.float64).eps).all())
+    up, down = torch.tensor(math.inf), torch.tensor(-math.inf)
+    for ra_step, dec_step in ((up, None), (down, None), (up, up), (down, up)):
+        ra = torch.nextafter(transform.ra_map, ra_step.to(torch.float64))
+        dec = (
+            transform.dec_map
+            if dec_step is None
+            else torch.nextafter(transform.dec_map, dec_step.to(torch.float64))
+        )
+        moved = cube(ra, dec)
+        assert torch.equal(moved.weight > 0, base.weight > 0)
+        torch.testing.assert_close(moved.data, base.data, rtol=1e-8, atol=1e-8)

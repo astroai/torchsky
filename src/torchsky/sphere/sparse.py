@@ -45,6 +45,15 @@ _CPP_BLOCK_DTYPES = frozenset(
     }
 )
 
+# Dense per-coverage-cell lookup blocks store one slot per fine pixel of every
+# covered coverage cell, so their size is ``(n_covered + 1) * ratio**2`` and is
+# set by ``nside / nside_coverage``, not by the number of stored pixels. They
+# are built only while that slot count is at most this multiple of the stored
+# pixel count, which keeps the lookup memory O(n_pixels). Sparser maps answer
+# ``get_values`` by binary search on the sorted pixel list; both paths return
+# identical values (see tests/test_sphere_sparse.py).
+_LOOKUP_BLOCK_MAX_SLOTS_PER_PIXEL = 8
+
 
 def _coerce_torch_dtype(dtype: Any) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
@@ -828,33 +837,28 @@ class SparseHealpixMap:
 
         Block 0 is the fill/sentinel row so uncovered cells gather without a
         missing-index branch (healsparse stores the same layout as a flat
-        offset table).
+        offset table). Blocks are skipped (``_block_values is None``) when they
+        would hold more than ``_LOOKUP_BLOCK_MAX_SLOTS_PER_PIXEL`` slots per
+        stored pixel; ``get_values`` then binary-searches the sorted pixels.
         """
+        self._block_index = None
+        self._block_values = None
         if self.nside_coverage is None:
-            self._block_index = None
-            self._block_values = None
             self._fill_tensor = None
+            return
+        self._fill_tensor = _as_tensor(
+            self.fill_value, dtype=self.values.dtype, device=self.values.device
+        )
+        n_pixels = int(self.pixels.numel())
+        if n_pixels == 0:
             return
         npix_cov = _healpix.nside2npix(self.nside_coverage)
         ratio2 = int(self.pixels_per_cov)
         device = self.pixels.device
         lead = tuple(self.values.shape[:-1])
-        index = torch.zeros((npix_cov,), dtype=torch.int64, device=device)
         lead_n = 1
         for size in lead:
             lead_n *= int(size)
-        self._fill_tensor = _as_tensor(
-            self.fill_value, dtype=self.values.dtype, device=self.values.device
-        )
-        if self.pixels.numel() == 0:
-            self._block_index = index
-            self._block_values = torch.full(
-                lead + (1, ratio2),
-                self.fill_value,
-                dtype=self.values.dtype,
-                device=self.values.device,
-            )
-            return
         nest_pix = (
             self.pixels if self.nest else _healpix.ring2nest(self.nside, self.pixels)
         )
@@ -862,6 +866,9 @@ class SparseHealpixMap:
         off = nest_pix - cov * ratio2
         unique_cov, inverse = torch.unique(cov, return_inverse=True)
         n_covered = int(unique_cov.numel())
+        if (n_covered + 1) * ratio2 > _LOOKUP_BLOCK_MAX_SLOTS_PER_PIXEL * n_pixels:
+            return
+        index = torch.zeros((npix_cov,), dtype=torch.int64, device=device)
         index[unique_cov] = torch.arange(
             1, n_covered + 1, device=device, dtype=torch.int64
         )
@@ -1583,7 +1590,19 @@ class SparseHealpixMap:
                     else val_sorted.dtype,
                     device=val_sorted.device,
                 )
-                if val_sorted.is_floating_point() or val_sorted.is_complex():
+                if (
+                    val_sorted.is_floating_point()
+                    and self.nside_coverage is not None
+                    and out_nside_coverage == self.nside_coverage
+                ):
+                    # Same rule as _ud_grade_from_coverage_blocks, used when the
+                    # map is too sparse to carry lookup blocks: a stored child
+                    # counts unless it is non-finite or exactly the stored fill.
+                    stored_fill = _as_tensor(
+                        self.fill_value, dtype=val_sorted.dtype, device=val.device
+                    )
+                    goods = torch.isfinite(val_sorted) & (val_sorted != stored_fill)
+                elif val_sorted.is_floating_point() or val_sorted.is_complex():
                     base = val_sorted.real if val_sorted.is_complex() else val_sorted
                     goods = torch.isfinite(val_sorted) & (
                         ~torch.isclose(

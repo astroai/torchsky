@@ -58,6 +58,13 @@ def _model_value(model: ScaleModel | None, wavelength: Tensor) -> Tensor | None:
 _BLOCK_ELEMENTS = 1 << 21
 # Samples whose footprints are mapped and bounded together.
 _SAMPLE_BLOCK = 1 << 15
+# Rounding resolution, in units of eps, of an aperture/pixel overlap fraction
+# from ``_disk_polygon_area``: four edge terms of magnitude <= pi r^2 / 2, each
+# a few ulp off. A pixel inside the aperture's bounding box that misses or only
+# touches the disk has true overlap 0 but evaluates to a few eps of either sign,
+# which differs between CPU and CUDA and, through a weighted mean, would decide
+# whether the pixel is covered at all. Fractions at or below the bound are 0.
+_DISK_FRACTION_ULPS = 64
 
 
 def _geometry_dtype(device: torch.device) -> torch.dtype:
@@ -932,6 +939,15 @@ def plan_ifu_cube_response(
                         spatial_fraction = _disk_polygon_area(
                             local_x, local_y, pair_radius
                         ).abs() / (math.pi * pair_radius * pair_radius)
+                        resolution = (
+                            _DISK_FRACTION_ULPS
+                            * torch.finfo(spatial_fraction.dtype).eps
+                        )
+                        spatial_fraction = torch.where(
+                            spatial_fraction > resolution,
+                            spatial_fraction,
+                            torch.zeros_like(spatial_fraction),
+                        )
                     # Spectral pairs.
                     band_owner, band_local = _enumerate_ranges(z_count)
                     band_sample = sub[band_owner]
