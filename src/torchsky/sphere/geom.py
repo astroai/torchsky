@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol, TYPE_CHECKING
 
 import torch
 from torch import Tensor
+from ..device import _to
 
 if TYPE_CHECKING:
     import numpy as np
@@ -85,7 +86,7 @@ def _as_geom_tensor(
 ) -> Tensor:
     tensor = torch.as_tensor(value)
     if like is not None:
-        return tensor.to(device=like.device, dtype=like.dtype)
+        return _to(tensor, device=like.device, dtype=like.dtype)
     if tensor.device.type == "mps":
         return tensor.to(dtype=torch.float32)
     return tensor.to(dtype=torch.float64)
@@ -620,8 +621,8 @@ def spherical_polygon_contains(
     lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
     shape = lon_t.shape
     lon_poly, lat_poly = _normalize_polygon_vertices(poly_lon_deg, poly_lat_deg)
-    lon_poly = lon_poly.to(device=lon_t.device, dtype=lon_t.dtype)
-    lat_poly = lat_poly.to(device=lon_t.device, dtype=lon_t.dtype)
+    lon_poly = _to(lon_poly, device=lon_t.device, dtype=lon_t.dtype)
+    lat_poly = _to(lat_poly, device=lon_t.device, dtype=lon_t.dtype)
     vertices = lonlat_to_unit_xyz(lon_poly, lat_poly).to(dtype=lon_t.dtype)
     points = lonlat_to_unit_xyz(lon_t, lat_t).reshape(-1, 3).to(dtype=lon_t.dtype)
 
@@ -775,7 +776,7 @@ def spherical_polygons_intersect(
     lon1, lat1 = _normalize_polygon_vertices(lon1_deg, lat1_deg)
     lon2, lat2 = _normalize_polygon_vertices(lon2_deg, lat2_deg)
     v1 = lonlat_to_unit_xyz(lon1, lat1)
-    v2 = lonlat_to_unit_xyz(lon2, lat2).to(device=v1.device, dtype=v1.dtype)
+    v2 = _to(lonlat_to_unit_xyz(lon2, lat2), device=v1.device, dtype=v1.dtype)
     tol_rad = math.radians(atol_deg)
 
     v1_next = torch.roll(v1, shifts=-1, dims=0)
@@ -1980,8 +1981,8 @@ class ExactSphericalRegion:
 
 
 def _polygon_loop(polygon: SphericalPolygon) -> _region_area.OrientedLoop:
-    lon = polygon.lon_deg.detach().to(device="cpu", dtype=torch.float64)
-    lat = polygon.lat_deg.detach().to(device="cpu", dtype=torch.float64)
+    lon = _to(polygon.lon_deg.detach(), device="cpu", dtype=torch.float64)
+    lat = _to(polygon.lat_deg.detach(), device="cpu", dtype=torch.float64)
     vertices = lonlat_to_unit_xyz(lon, lat)
     left_is_small = _region_area.loop_left_area(vertices) <= 2.0 * math.pi
     region_is_small = True

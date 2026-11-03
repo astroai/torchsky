@@ -12,7 +12,7 @@ import os
 import torch
 from torch import Tensor
 
-from ..device import require_float64, resolve_device
+from ..device import require_float64, resolve_device, _to
 from . import healpix as _healpix
 from ._pixwin import LMAX_PER_NSIDE as _PIXWIN_LMAX_PER_NSIDE
 from ._pixwin import MAX_NSIDE as _PIXWIN_MAX_NSIDE
@@ -320,10 +320,10 @@ def _normalize_cls_input(
 ) -> tuple[list[Tensor | None], list[tuple[int, int]], int]:
     if isinstance(cls, Tensor):
         if cls.ndim == 1:
-            return [cls.to(device="cpu", dtype=torch.float64)], [(0, 0)], 1
+            return [_to(cls, device="cpu", dtype=torch.float64)], [(0, 0)], 1
         if cls.ndim == 2:
             seq: list[Tensor | None] = [
-                cls[i].to(device="cpu", dtype=torch.float64)
+                _to(cls[i], device="cpu", dtype=torch.float64)
                 for i in range(int(cls.shape[0]))
             ]
         else:
@@ -332,7 +332,7 @@ def _normalize_cls_input(
         seq = [
             None
             if c is None
-            else torch.as_tensor(c).to(device="cpu", dtype=torch.float64)
+            else _to(torch.as_tensor(c), device="cpu", dtype=torch.float64)
             for c in cls
         ]
     else:

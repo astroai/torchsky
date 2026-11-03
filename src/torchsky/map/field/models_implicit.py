@@ -25,7 +25,7 @@ from .networks import linear_at, linear_layers
 from .types import (
     FieldDomain,
 )
-from ...device import require_float64
+from ...device import require_float64, _to
 from ...wcs import WCS
 
 
@@ -162,7 +162,7 @@ class ExplicitSpectralGridField(_BaseFieldModel):
         centers = torch.tensor(
             band_centers, device=self.grid.device, dtype=self.grid.dtype
         )
-        data = product.data.to(device=self.grid.device, dtype=self.grid.dtype)
+        data = _to(product.data, device=self.grid.device, dtype=self.grid.dtype)
         sampled_planes = []
         for plane in data:
             sampled = (
@@ -455,7 +455,7 @@ class GaussianBasisField(_BaseFieldModel):
             raise ValueError("product initialization requires splat=True")
         device, dtype = self.centers.device, self.centers.dtype
         require_float64(device, what="GaussianBasisField.initialize_from_product")
-        data = product.data.to(device=device, dtype=dtype)
+        data = _to(product.data, device=device, dtype=dtype)
         if data.ndim != 3 or not torch.isfinite(data).all():
             raise ValueError("splat initialization requires a finite band/image cube")
         bands = []
@@ -819,7 +819,7 @@ class SpectralBasisField(_BaseFieldModel):
             lam.view(-1, 1).to(dtype=self.coeff_head.weight.dtype)
         ).view(-1, *([1] * bias.ndim))
         per_wavelength = torch.exp(log_amp) * F.softplus(out) + 1.0e-4
-        norm_weights = weights.to(device=coeff.device, dtype=per_wavelength.dtype)
+        norm_weights = _to(weights, device=coeff.device, dtype=per_wavelength.dtype)
         norm_weights = norm_weights / torch.clamp(norm_weights.sum(), min=1.0e-8)
         return torch.sum(
             per_wavelength * norm_weights.view(-1, *([1] * bias.ndim)),
@@ -882,7 +882,7 @@ class BandpassConditionedField(_BaseFieldModel):
             wavelengths.to(dtype=self.output.weight.dtype)
             - float(self.domain.wavelength_center)
         ) / float(self.domain.wavelength_scale)
-        weights = weights.to(device=lam.device, dtype=self.output.weight.dtype)
+        weights = _to(weights, device=lam.device, dtype=self.output.weight.dtype)
         weights = weights / torch.clamp(weights.sum(), min=1.0e-8)
         mean = torch.sum(weights * lam)
         centered = lam - mean

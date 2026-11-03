@@ -52,6 +52,7 @@ from .spectral_projection import (
     _validated_spectral_axis,
     _validated_spectral_bin_edges,
 )
+from ..device import _to
 
 
 def _has_3d_ifu_observations(
@@ -156,7 +157,7 @@ def _coadd_ifu_3d_cube(
     s_axis = _validated_spectral_axis(
         spectral_axis, default_unit=spectral_unit, default_type=spectral_type
     )
-    wave_centers = s_axis.values.to(device=map_device, dtype=torch.float32)
+    wave_centers = _to(s_axis.values, device=map_device, dtype=torch.float32)
     N_wave = int(wave_centers.numel())
 
     target_wcs = WCS(header_dict).to(map_device)
@@ -177,11 +178,11 @@ def _coadd_ifu_3d_cube(
 
     for obs in observations:
         if obs.data is not None:
-            raw_img = obs.data.to(device=map_device, dtype=torch.float32)
+            raw_img = _to(obs.data, device=map_device, dtype=torch.float32)
             hdr_obs = dict(obs.header) if obs.header is not None else {}
         else:
             raw_img, hdr_obs = load_observation_image_and_header(obs, device=read_dev)
-            raw_img = raw_img.to(device=map_device, dtype=torch.float32)
+            raw_img = _to(raw_img, device=map_device, dtype=torch.float32)
         src_w = _load_observation_weight_map(obs, raw_img, device=map_device)
         cal_img, cal_w = _apply_observation_calibration(obs, raw_img, src_w)
 
@@ -192,7 +193,7 @@ def _coadd_ifu_3d_cube(
             else (obs.wcs if isinstance(obs.wcs, IFUSliceWCS) else None)
         )
         if ifu_obj is not None and getattr(ifu_obj, "valid_mask", None) is not None:
-            valid = valid & ifu_obj.valid_mask.to(device=map_device, dtype=torch.bool)
+            valid = valid & _to(ifu_obj.valid_mask, device=map_device, dtype=torch.bool)
         if not bool(valid.any()):
             continue
 
@@ -230,7 +231,7 @@ def _coadd_ifu_3d_cube(
                 else:
                     ra_d, dec_d = obs_wcs.pixel_to_world(xd, yd)
                     if obs.wavelength_map is not None:
-                        lam_d = obs.wavelength_map.to(device=dev, dtype=dtype)[iy, ix]
+                        lam_d = _to(obs.wavelength_map, device=dev, dtype=dtype)[iy, ix]
                     else:
                         assert obs.wavelength is not None
                         lam_d = torch.full_like(ra_d, float(obs.wavelength))
@@ -293,14 +294,16 @@ def _coadd_ifu_3d_cube(
             xp, yp, zp = mapper(xj + step_x.to(jdtype), yj, xxj + step_x, yyj)
             xq, yq, zq = mapper(xj, yj + step_y.to(jdtype), xxj, yyj + step_y)
             sx, sy = step_x.to(jdtype), step_y.to(jdtype)
-            jac = torch.stack(
-                [
-                    torch.stack([(xp - x0) / sx, (xq - x0) / sy]),
-                    torch.stack([(yp - y0) / sx, (yq - y0) / sy]),
-                    torch.stack([(zp - z0_) / sx, (zq - z0_) / sy]),
-                ]
-            ).to(
-                device=map_device, dtype=torch.float32
+            jac = _to(
+                torch.stack(
+                    [
+                        torch.stack([(xp - x0) / sx, (xq - x0) / sy]),
+                        torch.stack([(yp - y0) / sx, (yq - y0) / sy]),
+                        torch.stack([(zp - z0_) / sx, (zq - z0_) / sy]),
+                    ]
+                ),
+                device=map_device,
+                dtype=torch.float32,
             )  # (cube axis, detector axis, n)
         xt, yt, zt = (v.to(torch.float32) for v in (xt, yt, zt))
         ok = torch.isfinite(xt) & torch.isfinite(yt) & torch.isfinite(zt)

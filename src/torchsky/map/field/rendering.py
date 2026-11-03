@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...device import resolve_device
+from ...device import _as_tensor, resolve_device, _to
 from ...spectral import SpectralAxis
 from ...sphere import healpix as _healpix_wcs
 
@@ -287,8 +287,8 @@ def _tile_world_coordinate_grid(
     ra_deg, dec_deg = _observation_pixel_to_world(observation, x, y)
     output_dtype = torch.float32 if device.type == "mps" else ra_deg.dtype
     return (
-        ra_deg.to(device=device, dtype=output_dtype),
-        dec_deg.to(device=device, dtype=output_dtype),
+        _to(ra_deg, device=device, dtype=output_dtype),
+        _to(dec_deg, device=device, dtype=output_dtype),
     )
 
 
@@ -1255,17 +1255,21 @@ def render_spectral_power_foam_observation_exact(
             )
             monochromatic = (pixel_integrals / pixel_areas).reshape(height, width)
             if additive_model is not None:
-                monochromatic = monochromatic + render_field_observation(
-                    additive_model,
-                    observation,
-                    num_spectral_samples=1,
-                    override_wavelengths=wavelength.reshape(1),
-                    override_weights=torch.ones_like(wavelength).reshape(1),
-                    spatial_sampling=additive_spatial_sampling,
-                    spatial_tile_hw=spatial_tile_hw,
-                    forward_context=forward_context,
-                    operator_bundle=empty_operator_bundle,
-                ).to(device=device, dtype=monochromatic.dtype)
+                monochromatic = monochromatic + _to(
+                    render_field_observation(
+                        additive_model,
+                        observation,
+                        num_spectral_samples=1,
+                        override_wavelengths=wavelength.reshape(1),
+                        override_weights=torch.ones_like(wavelength).reshape(1),
+                        spatial_sampling=additive_spatial_sampling,
+                        spatial_tile_hw=spatial_tile_hw,
+                        forward_context=forward_context,
+                        operator_bundle=empty_operator_bundle,
+                    ),
+                    device=device,
+                    dtype=monochromatic.dtype,
+                )
             rendered += _apply_learned_psf(
                 monochromatic,
                 observation,
@@ -1284,17 +1288,21 @@ def render_spectral_power_foam_observation_exact(
         )
         rendered = (pixel_integrals / pixel_areas).reshape(height, width)
         if additive_model is not None:
-            rendered = rendered + render_field_observation(
-                additive_model,
-                observation,
-                num_spectral_samples=num_spectral_samples,
-                override_wavelengths=wavelengths,
-                override_weights=weights,
-                spatial_sampling=additive_spatial_sampling,
-                spatial_tile_hw=spatial_tile_hw,
-                forward_context=forward_context,
-                operator_bundle=empty_operator_bundle,
-            ).to(device=device, dtype=rendered.dtype)
+            rendered = rendered + _to(
+                render_field_observation(
+                    additive_model,
+                    observation,
+                    num_spectral_samples=num_spectral_samples,
+                    override_wavelengths=wavelengths,
+                    override_weights=weights,
+                    spatial_sampling=additive_spatial_sampling,
+                    spatial_tile_hw=spatial_tile_hw,
+                    forward_context=forward_context,
+                    operator_bundle=empty_operator_bundle,
+                ),
+                device=device,
+                dtype=rendered.dtype,
+            )
     if operator_bundle.psf is not None and not isinstance(
         operator_bundle.psf, LearnedPSFOp
     ):
@@ -1503,7 +1511,7 @@ def _evaluate_field_plane_func_vmap(
     dec_f = dec_grid.reshape(-1)
     n = int(ra_f.shape[0])
     dev = ra_f.device
-    wl0 = torch.as_tensor(wavelength, dtype=torch.float32, device=dev)
+    wl0 = _as_tensor(wavelength, dtype=torch.float32, device=dev)
     cc = max(int(chunk), 1)
     if n == 0:
         return evaluate_field_coordinates_vmapped(model, ra_f, dec_f, wl0).reshape(
@@ -1622,7 +1630,7 @@ def render_field_cube(
     )
     device = resolve_device(None, model)
     ra_deg, dec_deg = _coordinate_grid(target_header, shape=fallback, device=device)
-    wavelengths = spectral_axis.to_wavelength().to(device=device, dtype=torch.float32)
+    wavelengths = _to(spectral_axis.to_wavelength(), device=device, dtype=torch.float32)
     if wavelengths.ndim != 1:
         raise ValueError("spectral_axis must yield a 1D wavelength tensor")
     nw = int(wavelengths.shape[0])
@@ -1676,7 +1684,7 @@ def render_field_healpix(
     nside_i = int(nside)
     npix = _healpix_wcs.nside2npix(nside_i)
     dev = device if device is not None else resolve_device(None, model)
-    wavelengths = spectral_axis.to_wavelength().to(device=dev, dtype=torch.float32)
+    wavelengths = _to(spectral_axis.to_wavelength(), device=dev, dtype=torch.float32)
     nw = int(wavelengths.shape[0])
     if nw == 0:
         return torch.empty((0, npix), device=dev, dtype=torch.float32)
@@ -1689,8 +1697,8 @@ def render_field_healpix(
         ipix = ipix_full[i0:i1]
         ra, dec = _healpix_wcs.pix2ang(nside_i, ipix, nest=nest, lonlat=True)
         coordinate_dtype = torch.float32 if dev.type == "mps" else ra.dtype
-        ra = ra.to(device=dev, dtype=coordinate_dtype)
-        dec = dec.to(device=dev, dtype=coordinate_dtype)
+        ra = _to(ra, device=dev, dtype=coordinate_dtype)
+        dec = _to(dec, device=dev, dtype=coordinate_dtype)
         sub = _field_hypercube_spectral_stack(
             model,
             ra,

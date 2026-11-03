@@ -6,6 +6,7 @@ import math
 
 import torch
 from torch import Tensor
+from ..device import _as_tensor
 
 
 _POINT_WIDTH = 1.0e-6
@@ -21,7 +22,7 @@ def box_overlap_taps(center: Tensor, width: Tensor | float) -> tuple[Tensor, Ten
     Footprints narrower than 1e-6 pixel are point masses.
     ``n_taps = ceil(max(width)) + 1`` is the most pixels a box can touch.
     """
-    width_t = torch.as_tensor(width, dtype=center.dtype, device=center.device)
+    width_t = _as_tensor(width, dtype=center.dtype, device=center.device)
     width_t = width_t.expand_as(center)
     # A footprint narrower than 1e-6 pixel is a point mass: all weight on the pixel that
     # contains the centre (the limit of the box overlap fractions, free of the float32

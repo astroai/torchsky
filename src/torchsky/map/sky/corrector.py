@@ -8,6 +8,7 @@ from torch import Tensor
 
 from .estimator import MeshSkyEstimator
 from .polynomial import CompactPolynomialSkyModel, PolynomialSkyModel
+from ...device import _to
 
 
 class _CompactDifferenceModel(Protocol):
@@ -40,7 +41,7 @@ def _valid_pixels(
         if mask is not None:
             if mask.shape != shape:
                 raise ValueError("mask shape must match image shape")
-            support = support & ~mask.to(device=device, dtype=torch.bool)
+            support = support & ~_to(mask, device=device, dtype=torch.bool)
         valid.append(support)
     return valid
 
@@ -307,7 +308,7 @@ class CrossExposureSkyCorrector:
             raise ValueError("overlap difference must be a 2D image")
         if overlap.shape != difference.shape:
             raise ValueError("overlap support must match difference shape")
-        support = overlap.to(device=difference.device, dtype=torch.bool)
+        support = _to(overlap, device=difference.device, dtype=torch.bool)
         if not bool(support.any()):
             raise ValueError("overlap support must contain at least one pixel")
         model = self._get_estimator()(difference, ~support)

@@ -142,6 +142,7 @@ from ._image_plane_uncertainty import (  # noqa: F401
     _propagate_observation_dq,
     _propagate_observation_variance_components,
 )
+from ..device import _to
 
 _FINITE_APERTURE_COVARIANCE_KERNELS = frozenset(
     {
@@ -1779,10 +1780,8 @@ def coadd_image_plane_cube(
             drizzle_pixfrac=drizzle_pixfrac,
             background_estimator=background_estimator,
         )
-        coeffs = (
-            projection[obs_idx]
-            .to(device=device, dtype=torch.float32)
-            .view(n_band, 1, 1)
+        coeffs = _to(projection[obs_idx], device=device, dtype=torch.float32).view(
+            n_band, 1, 1
         )
         pixel_area_sr = None
         if value_semantics == "flux":
@@ -2040,7 +2039,7 @@ def blot(
         blot_target = target
 
     map_device = _resolve_map_device(device, coadd_tensor, source_or_target)
-    coadd_img = coadd_tensor.to(device=map_device, dtype=torch.float32)
+    coadd_img = _to(coadd_tensor, device=map_device, dtype=torch.float32)
     coadd_wcs = WCS(coadd_header)
     coadd_shape = (int(coadd_img.shape[0]), int(coadd_img.shape[1]))
     h_c, w_c = coadd_shape

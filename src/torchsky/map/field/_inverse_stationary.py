@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import torch
 import torch.nn as nn
 from torch import Tensor
+from ...device import _to
 
 
 if TYPE_CHECKING:
@@ -60,8 +61,10 @@ def _extract_stationary_effective_psf(
             raise ValueError(
                 "ExplicitPSFOp observation.psf_spec must be frozen with pixel_response_included=True"
             )
-        kernel = spec.kernel2d.detach().to(
-            device=observation.image.device, dtype=observation.image.dtype
+        kernel = _to(
+            spec.kernel2d.detach(),
+            device=observation.image.device,
+            dtype=observation.image.dtype,
         )
     elif isinstance(psf_op, LearnedPSFOp):
         model = psf_op.model
@@ -110,8 +113,10 @@ def _extract_stationary_effective_psf(
             raise ValueError(
                 "calibrated PSF varies across detector coordinates; stationary adapter requires a coordinate-invariant PSF"
             )
-        kernel = ref_kernel.detach().to(
-            device=observation.image.device, dtype=observation.image.dtype
+        kernel = _to(
+            ref_kernel.detach(),
+            device=observation.image.device,
+            dtype=observation.image.dtype,
         )
     else:
         raise TypeError(f"unsupported PSF operator type {type(psf_op)!r}")

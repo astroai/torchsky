@@ -35,6 +35,7 @@ from .image_plane_common import (
 from .planning import plan
 from .windowing import _build_target_world_grid
 from ..wcs import WCS
+from ..device import _to
 
 
 def _load_existing_observation_valid_mask(
@@ -56,11 +57,11 @@ def _load_existing_observation_valid_mask(
     if mask is None:
         return None
     if obs.good_bits is not None:
-        dq = mask.to(device=device, dtype=torch.int64)
+        dq = _to(mask, device=device, dtype=torch.int64)
         return (dq & (~int(obs.good_bits))) == 0
     if mask.dtype == torch.bool:
-        return mask.to(device=device, dtype=torch.bool)
-    return mask.to(device=device, dtype=torch.float32) > 0.0
+        return _to(mask, device=device, dtype=torch.bool)
+    return _to(mask, device=device, dtype=torch.float32) > 0.0
 
 
 @overload
@@ -195,7 +196,7 @@ def detect_outliers(
         zip(observations, blotted_list, strict=True)
     ):
         raw_img, hdr = load_observation_image_and_header(obs, device=read_dev)
-        raw_img_dev = raw_img.to(device=map_device, dtype=torch.float32)
+        raw_img_dev = _to(raw_img, device=map_device, dtype=torch.float32)
         src_w = _load_observation_weight_map(obs, raw_img_dev, device=map_device)
         cal_img, cal_w = _apply_observation_calibration(obs, raw_img_dev, src_w)
         s_eff = _effective_observation_photometric_scale(obs, hdr)
@@ -211,16 +212,16 @@ def detect_outliers(
         ):
             var_tot = torch.zeros_like(cal_img)
             if isinstance(obs.var_poisson, Tensor):
-                var_tot = var_tot + obs.var_poisson.to(
-                    device=map_device, dtype=torch.float32
+                var_tot = var_tot + _to(
+                    obs.var_poisson, device=map_device, dtype=torch.float32
                 )
             if isinstance(obs.var_rnoise, Tensor):
-                var_tot = var_tot + obs.var_rnoise.to(
-                    device=map_device, dtype=torch.float32
+                var_tot = var_tot + _to(
+                    obs.var_rnoise, device=map_device, dtype=torch.float32
                 )
             if isinstance(obs.var_flat, Tensor):
-                var_tot = var_tot + obs.var_flat.to(
-                    device=map_device, dtype=torch.float32
+                var_tot = var_tot + _to(
+                    obs.var_flat, device=map_device, dtype=torch.float32
                 )
             valid_variance = torch.isfinite(var_tot) & (var_tot > 0.0)
             noise_sigma = torch.where(
@@ -361,7 +362,7 @@ def _robust_scalar_sky(
 ) -> float:
     valid = torch.isfinite(image)
     if bad_mask is not None:
-        valid = valid & (~bad_mask.to(device=image.device, dtype=torch.bool))
+        valid = valid & (~_to(bad_mask, device=image.device, dtype=torch.bool))
     vals = image[valid].to(dtype=torch.float32)
     if vals.numel() == 0:
         return 0.0
@@ -438,7 +439,7 @@ def match_sky(
         backgrounds: list[Tensor] = []
         for obs in observations:
             img, hdr = load_observation_image_and_header(obs, device=read_dev)
-            img_dev = img.to(device=map_device, dtype=torch.float32)
+            img_dev = _to(img, device=map_device, dtype=torch.float32)
             obs_shape = (int(img_dev.shape[0]), int(img_dev.shape[1]))
             bad_mask = ~torch.isfinite(img_dev)
             prev_valid = _load_existing_observation_valid_mask(
@@ -459,7 +460,7 @@ def match_sky(
         scales: list[float] = []
         for obs in observations:
             img, hdr = load_observation_image_and_header(obs, device=read_dev)
-            img_dev = img.to(device=map_device, dtype=torch.float32)
+            img_dev = _to(img, device=map_device, dtype=torch.float32)
             src_w = _load_observation_weight_map(obs, img_dev, device=map_device)
             cal_img, cal_w = _apply_observation_calibration(obs, img_dev, src_w)
             s_eff = _effective_observation_photometric_scale(obs, hdr)
@@ -569,7 +570,7 @@ def match_sky(
         for idx, obs in enumerate(observations):
             if should_apply:
                 img, hdr = load_observation_image_and_header(obs, device=read_dev)
-                img_dev = img.to(device=map_device, dtype=torch.float32)
+                img_dev = _to(img, device=map_device, dtype=torch.float32)
                 s_eff = _effective_observation_photometric_scale(obs, hdr)
                 obs_wcs = WCS(hdr)
                 obs_shape = (int(img_dev.shape[0]), int(img_dev.shape[1]))
@@ -602,7 +603,7 @@ def match_sky(
     for obs, corr in zip(observations, corrections):
         if should_apply:
             img, hdr = load_observation_image_and_header(obs, device=read_dev)
-            img_dev = img.to(device=map_device, dtype=torch.float32)
+            img_dev = _to(img, device=map_device, dtype=torch.float32)
             s_eff = _effective_observation_photometric_scale(obs, hdr)
             corr_obs = blot(
                 corr,

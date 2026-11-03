@@ -8,7 +8,7 @@ from collections.abc import Callable
 import torch
 from torch import Tensor
 
-from ..device import require_float64
+from ..device import require_float64, _to
 from ..sphere.moc import MOC
 from ..wcs import WCS
 from .box_overlap import box_overlap_taps
@@ -461,8 +461,8 @@ def _interpolated_source_pixels(
     if _requires_roundtrip_validity_check(source_wcs):
         valid = oks[0] if len(oks) == 1 else torch.stack(oks, dim=0)
     if device.type == "mps":
-        x_all = x_all.to(device=device, dtype=torch.float32)
-        y_all = y_all.to(device=device, dtype=torch.float32)
+        x_all = _to(x_all, device=device, dtype=torch.float32)
+        y_all = _to(y_all, device=device, dtype=torch.float32)
         valid = None if valid is None else valid.to(device)
     return x_all, y_all, valid
 

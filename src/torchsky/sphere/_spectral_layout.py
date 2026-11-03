@@ -17,6 +17,7 @@ from ._spectral_config import (
     _NEST2RING_PERM_CACHE,
     _RING2NEST_PERM_CACHE,
 )
+from ..device import _to
 
 
 def _infer_lmax_mmax_from_nalm(
@@ -133,8 +134,8 @@ def _angles_for_nside(nside: int, nest: bool) -> tuple[Tensor, Tensor, Tensor, f
         npix = _healpix.nside2npix(nside)
         pix = torch.arange(npix, dtype=torch.int64)
         theta, phi = _healpix.pix2ang(nside, pix, nest=nest, lonlat=False)
-        theta = theta.to(dtype=torch.float64, device="cpu")
-        phi = phi.to(dtype=torch.float64, device="cpu")
+        theta = _to(theta, dtype=torch.float64, device="cpu")
+        phi = _to(phi, dtype=torch.float64, device="cpu")
         return theta, phi, torch.cos(theta), 4.0 * math.pi / float(npix)
 
     return _ANGLE_CACHE.get_or_build(key, build)
@@ -146,9 +147,9 @@ def _ring2nest_perm_for_nside(nside: int) -> Tensor:
     def build() -> Tensor:
         npix = _healpix.nside2npix(ns)
         idx = torch.arange(npix, dtype=torch.int64)
-        return (
-            _healpix.ring2nest(ns, idx).to(dtype=torch.int64, device="cpu").contiguous()
-        )
+        return _to(
+            _healpix.ring2nest(ns, idx), dtype=torch.int64, device="cpu"
+        ).contiguous()
 
     return _RING2NEST_PERM_CACHE.get_or_build(ns, build)
 
@@ -159,9 +160,9 @@ def _nest2ring_perm_for_nside(nside: int) -> Tensor:
     def build() -> Tensor:
         npix = _healpix.nside2npix(ns)
         idx = torch.arange(npix, dtype=torch.int64)
-        return (
-            _healpix.nest2ring(ns, idx).to(dtype=torch.int64, device="cpu").contiguous()
-        )
+        return _to(
+            _healpix.nest2ring(ns, idx), dtype=torch.int64, device="cpu"
+        ).contiguous()
 
     return _NEST2RING_PERM_CACHE.get_or_build(ns, build)
 

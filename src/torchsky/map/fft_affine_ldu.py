@@ -23,6 +23,7 @@ from torch import Tensor
 
 from .fft_resample import resample_translation_fft2d
 from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
+from ..device import _to
 
 
 def _per_col_vertical_shift_fft(image: Tensor, shift_y_per_col: Tensor) -> Tensor:
@@ -37,7 +38,7 @@ def _per_col_vertical_shift_fft(image: Tensor, shift_y_per_col: Tensor) -> Tenso
     comp = torch.complex64 if dtype == torch.float32 else torch.complex128
     x = torch.fft.fft(image.to(comp), n=h, dim=0)
     k = torch.fft.fftfreq(h, d=1.0, device=device, dtype=torch.float64).view(-1, 1)
-    sh = shift_y_per_col.to(device=device, dtype=torch.float64).view(1, -1)
+    sh = _to(shift_y_per_col, device=device, dtype=torch.float64).view(1, -1)
     ph = torch.exp(-2j * math.pi * k * sh).to(comp)
     return torch.fft.ifft(x * ph, n=h, dim=0).real.to(dtype)
 

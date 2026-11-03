@@ -22,6 +22,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from ..wcs import TangentPlaneFrame, WCS
+from ..device import _to
 
 if TYPE_CHECKING:
     from .field.types import FieldObservation
@@ -65,16 +66,16 @@ class ExposurePose(nn.Module):
         frame = TangentPlaneFrame(ra0=ra0, dec0=dec0)
         xi, eta = frame.world_to_plane(ra_deg, dec_deg)
 
-        theta = self.delta_theta_rad.to(device=device, dtype=dtype)
-        scale = torch.exp(self.delta_log_scale.to(device=device, dtype=dtype))
+        theta = _to(self.delta_theta_rad, device=device, dtype=dtype)
+        scale = torch.exp(_to(self.delta_log_scale, device=device, dtype=dtype))
         c = torch.cos(theta)
         st = torch.sin(theta)
 
         xi_r = scale * (c * xi - st * eta)
         eta_r = scale * (st * xi + c * eta)
 
-        d_ra = self.delta_ra_deg.to(device=device, dtype=dtype)
-        d_dec = self.delta_dec_deg.to(device=device, dtype=dtype)
+        d_ra = _to(self.delta_ra_deg, device=device, dtype=dtype)
+        d_dec = _to(self.delta_dec_deg, device=device, dtype=dtype)
         xi_out = xi_r + d_ra * cos_dec0
         eta_out = eta_r + d_dec
 
@@ -233,7 +234,7 @@ def fit_pose_correction(
     tx = xi_d.mean() - (c * xi_s.mean() - s * eta_s.mean())
     ty = eta_d.mean() - (s * xi_s.mean() + c * eta_s.mean())
 
-    pose = ExposurePose().to(device=src_ra.device, dtype=src_ra.dtype)
+    pose = _to(ExposurePose(), device=src_ra.device, dtype=src_ra.dtype)
     with torch.no_grad():
         pose.delta_theta_rad.copy_(theta)
         pose.delta_log_scale.zero_()

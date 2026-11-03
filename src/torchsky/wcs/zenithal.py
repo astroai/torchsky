@@ -5,6 +5,7 @@ from torch import Tensor
 from typing import Tuple, Optional
 
 from ._math import _sincos
+from ..device import _as_tensor, _to
 
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
@@ -19,8 +20,8 @@ def _pv_param(
 ) -> Tensor:
     """Return PV parameter *idx* with a default, matching cylindrical.py."""
     if params is None or idx >= int(params.numel()):
-        return torch.as_tensor(default, dtype=like.dtype, device=like.device)
-    return params[idx].to(dtype=like.dtype, device=like.device)
+        return _as_tensor(default, dtype=like.dtype, device=like.device)
+    return _to(params[idx], dtype=like.dtype, device=like.device)
 
 
 def project_zenithal(

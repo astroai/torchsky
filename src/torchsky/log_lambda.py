@@ -12,6 +12,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from .redshift import C_KM_S
+from .device import _as_tensor
 
 # Gaussian FWHM / σ. Formulation uses 2.355.
 _FWHM_OVER_SIGMA = 2.355
@@ -69,7 +70,7 @@ def convolve_log_lambda(
 
     def _align(value: Tensor | float) -> Tensor:
         """Broadcast a width/mean parameter to ``(batch, 1)`` or ``(batch, n)``."""
-        tensor = torch.as_tensor(value, device=flux_t.device, dtype=flux_t.dtype)
+        tensor = _as_tensor(value, device=flux_t.device, dtype=flux_t.dtype)
         if tensor.ndim == 0:
             return tensor.reshape(1, 1).expand(batch, 1)
         # A parameter shaped like the batch axes is one value per spectrum.
@@ -104,7 +105,7 @@ def convolve_log_lambda(
 
     dln: Tensor | None = None
     if dln_lambda is not None:
-        dln = torch.as_tensor(dln_lambda, device=flux_t.device, dtype=flux_t.dtype)
+        dln = _as_tensor(dln_lambda, device=flux_t.device, dtype=flux_t.dtype)
         if not bool((dln > 0).all()):
             raise ValueError("dln_lambda must be positive")
     need_dln = sigma_kms is not None or bool((mean.abs() > 0).any())

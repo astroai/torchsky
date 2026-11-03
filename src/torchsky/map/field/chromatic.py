@@ -28,6 +28,7 @@ import math
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
+from ...device import _as_tensor, _to
 
 __all__ = [
     "ChromaticPSFField",
@@ -133,7 +134,7 @@ class ChromaticPSFField(nn.Module):
 
     def basis(self, lam_um: Tensor, channel: Tensor) -> Tensor:
         """Kernels at wavelengths ``lam_um`` (M,) and channels (M,): ``(M, num_kernels, size, size)``."""
-        lam_um = torch.as_tensor(
+        lam_um = _as_tensor(
             lam_um, dtype=torch.float32, device=self._offsets.device
         ).flatten()
         channel = torch.as_tensor(channel, device=self._offsets.device).flatten()
@@ -176,7 +177,7 @@ class ChromaticPSFField(nn.Module):
         ``lam_um``, ``channel`` and ``detector`` broadcast against ``u``.
         """
         n = u.shape[0]
-        lam_um = torch.as_tensor(lam_um, dtype=u.dtype, device=u.device).expand(n)
+        lam_um = _as_tensor(lam_um, dtype=u.dtype, device=u.device).expand(n)
         channel = torch.as_tensor(channel, device=u.device).expand(n)
         detector = torch.as_tensor(detector, device=u.device).long().expand(n)
         inp = torch.cat(
@@ -241,7 +242,7 @@ class LogLambdaRBFBasis(nn.Module):
 
     def forward(self, lam_um: Tensor) -> Tensor:
         u = self.unit(
-            torch.as_tensor(
+            _as_tensor(
                 lam_um, dtype=self.centres.dtype, device=self.centres.device
             ).flatten()
         )
@@ -330,7 +331,9 @@ def spectral_coefficients_from_bands(
     with torch.no_grad():
         nb, q = nodes_um.shape
         phi = basis(nodes_um.flatten()).view(nb, q, -1)
-        design = (phi * node_weights[:, :, None].to(phi)).sum(1)  # B K
+        design = (phi * _to(node_weights[:, :, None], phi.device, phi.dtype)).sum(
+            1
+        )  # B K
         k = design.shape[1]
         d = torch.zeros(max(k - 2, 0), k, dtype=torch.float64)
         for i in range(k - 2):
@@ -339,7 +342,9 @@ def spectral_coefficients_from_bands(
         normal = (
             dm.T @ dm + smoothness * d.T @ d + 1e-6 * torch.eye(k, dtype=torch.float64)
         )
-        proj = torch.linalg.solve(normal, dm.T).to(
-            device=band_images.device, dtype=band_images.dtype
+        proj = _to(
+            torch.linalg.solve(normal, dm.T),
+            device=band_images.device,
+            dtype=band_images.dtype,
         )
         return torch.einsum("kb,bhw->khw", proj, band_images)

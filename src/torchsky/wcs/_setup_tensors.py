@@ -21,6 +21,7 @@ from .cylindrical import project_cylindrical
 from .allsky import project_allsky
 from .conic import project_conic
 from .quadcube import project_quadcube
+from ..device import _as_tensor
 
 if TYPE_CHECKING:
     pass
@@ -352,7 +353,7 @@ class _SetupTensorsMixin:
         self._ra_p_rad = self.alpha_p * d2r
         self._dec_p_rad = self.delta_p * d2r
         self._phi_p_rad = self._phi_p_native * d2r
-        dec_p_tensor = torch.as_tensor(
+        dec_p_tensor = _as_tensor(
             self._dec_p_rad,
             dtype=self._wcs_coord_dtype(self.device),
             device=self.device,

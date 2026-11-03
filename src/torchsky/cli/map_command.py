@@ -11,7 +11,7 @@ from typing import Any, Literal, Mapping, Sequence, cast
 
 import torch
 
-from ..device import default_compute_device
+from ..device import default_compute_device, _to
 from torchfits import read
 from torchfits import read_header  # noqa: F401
 from ..map.field.artifacts import load_field_artifact, save_field_artifact
@@ -211,7 +211,7 @@ def _paths_to_field_observations(
                     f"{weight_path}: weight map shape {tuple(wmap.shape)} "
                     f"does not match image shape {tuple(img.shape)}"
                 )
-            weight = weight * wmap.to(device=img.device, dtype=torch.float32)
+            weight = weight * _to(wmap, device=img.device, dtype=torch.float32)
         mask = None
         if mask_path is not None:
             mmap = read(str(mask_path), hdu=mask_hdu, device=read_device)
@@ -220,7 +220,7 @@ def _paths_to_field_observations(
                     f"{mask_path}: mask map shape {tuple(mmap.shape)} "
                     f"does not match image shape {tuple(img.shape)}"
                 )
-            mask = mmap.to(device=img.device, dtype=torch.float32)
+            mask = _to(mmap, device=img.device, dtype=torch.float32)
         out.append(
             FieldObservation(
                 image=img,

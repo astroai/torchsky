@@ -21,6 +21,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from .image import apply_stretch, to_png, zscale_limits
+from ...device import _to
 
 # Delay-import torchsky sub-modules to avoid circular imports
 _healpix = None
@@ -213,8 +214,8 @@ def render_hips_tile(
         return None  # tile entirely outside image
 
     # Build grid for F.grid_sample: (1, 1, tile_size^2, 2)
-    grid = torch.stack([grid_x, grid_y], dim=-1).to(
-        device=image.device, dtype=torch.float32
+    grid = _to(
+        torch.stack([grid_x, grid_y], dim=-1), device=image.device, dtype=torch.float32
     )
     grid = grid.reshape(1, tile_size * tile_size, 1, 2)
 

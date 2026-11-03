@@ -6,6 +6,7 @@ from typing import Any, Literal, overload
 
 import torch
 from torch import Tensor
+from ..device import _as_tensor, _to
 
 TabularBoundsMode = Literal["nan", "clamp"]
 _MAX_PAIRWISE_ENTRIES = 1_000_000
@@ -54,8 +55,8 @@ def _interp1d(
     dtype = torch.promote_types(torch.promote_types(query.dtype, xp.dtype), fp.dtype)
     device = query.device
     x = query.to(dtype=dtype)
-    grid_raw = xp.to(device=device, dtype=dtype)
-    values_raw = fp.to(device=device, dtype=dtype)
+    grid_raw = _to(xp, device=device, dtype=dtype)
+    values_raw = _to(fp, device=device, dtype=dtype)
     if bool((grid_raw[0] <= grid_raw[-1]).detach().cpu().item()):
         grid = grid_raw
         values = values_raw
@@ -128,8 +129,8 @@ class TabularAxis:
         dtype: torch.dtype | None = None,
     ) -> "TabularAxis":
         """Return a copy with tables moved to ``device`` and/or ``dtype``."""
-        pixel = self.pixel.to(device=device, dtype=dtype)
-        world = self.world.to(device=device, dtype=dtype)
+        pixel = _to(self.pixel, device=device, dtype=dtype)
+        world = _to(self.world, device=device, dtype=dtype)
         return TabularAxis(
             pixel, world, name=self.name, unit=self.unit, bounds=self.bounds
         )
@@ -193,7 +194,7 @@ class TabularLookupWCS:
         dtype: torch.dtype | None = None,
     ) -> "TabularLookupWCS":
         return TabularLookupWCS(
-            axis.to(device=device, dtype=dtype) for axis in self.axes
+            _to(axis, device=device, dtype=dtype) for axis in self.axes
         )
 
     def pixel_to_world(
@@ -270,8 +271,8 @@ class CoupledTabularLookupWCS:
             dtype = torch.promote_types(dtype, axis.dtype)
         if device.type == "mps" and dtype == torch.float64:
             dtype = torch.float32
-        axes = [axis.to(device=device, dtype=dtype) for axis in axis_tuple]
-        world_t = world_raw.to(device=device, dtype=dtype)
+        axes = [_to(axis, device=device, dtype=dtype) for axis in axis_tuple]
+        world_t = _to(world_raw, device=device, dtype=dtype)
         if world_t.ndim == len(axes):
             world_t = world_t.unsqueeze(-1)
         if world_t.ndim != len(axes) + 1:
@@ -327,8 +328,8 @@ class CoupledTabularLookupWCS:
         dtype: torch.dtype | None = None,
     ) -> "CoupledTabularLookupWCS":
         return CoupledTabularLookupWCS(
-            tuple(axis.to(device=device, dtype=dtype) for axis in self.pixel_axes),
-            self.world.to(device=device, dtype=dtype),
+            tuple(_to(axis, device=device, dtype=dtype) for axis in self.pixel_axes),
+            _to(self.world, device=device, dtype=dtype),
             names=self.names,
             units=self.units,
             bounds=self.bounds,
@@ -349,8 +350,8 @@ class CoupledTabularLookupWCS:
             dtype = torch.promote_types(pts.dtype, self.world.dtype)
         device = pts.device
         query = pts.to(dtype=dtype)
-        axes = tuple(axis.to(device=device, dtype=dtype) for axis in self.pixel_axes)
-        values = self.world.to(device=device, dtype=dtype)
+        axes = tuple(_to(axis, device=device, dtype=dtype) for axis in self.pixel_axes)
+        values = _to(self.world, device=device, dtype=dtype)
         return _interp_multilinear(query, axes, values, bounds=bounds_mode)
 
     def world_to_pixel(
@@ -374,7 +375,7 @@ class CoupledTabularLookupWCS:
             dtype = torch.promote_types(pts.dtype, self.world.dtype)
         device = pts.device
         target = pts.to(dtype=dtype).reshape(-1, self.world_n_dim)
-        axes = tuple(axis.to(device=device, dtype=dtype) for axis in self.pixel_axes)
+        axes = tuple(_to(axis, device=device, dtype=dtype) for axis in self.pixel_axes)
         if target.shape[0] == 0:
             return torch.empty(
                 (*query_shape, self.pixel_n_dim), dtype=dtype, device=device
@@ -390,7 +391,7 @@ class CoupledTabularLookupWCS:
                 tol=tol,
             )
         else:
-            world_grid = self.world.to(device=device, dtype=dtype)
+            world_grid = _to(self.world, device=device, dtype=dtype)
             flat_world = world_grid.reshape(-1, self.world_n_dim)
             flat_axes = _flat_grid_pixel_coordinates(axes)
             nearest = _nearest_grid_indices(target, flat_world)
@@ -470,20 +471,31 @@ def _solve_coupled_tabular_point(
 ) -> Tensor:
     current = initial.clone()
     if lower_bounds is None:
-        lower = torch.stack([axis[0] for axis in axes]).to(
-            device=target.device, dtype=target.dtype
+        lower = _to(
+            torch.stack([axis[0] for axis in axes]),
+            device=target.device,
+            dtype=target.dtype,
         )
     else:
-        lower = lower_bounds.to(device=target.device, dtype=target.dtype)
+        lower = _to(lower_bounds, device=target.device, dtype=target.dtype)
     if upper_bounds is None:
-        upper = torch.stack([axis[-1] for axis in axes]).to(
-            device=target.device, dtype=target.dtype
+        upper = _to(
+            torch.stack([axis[-1] for axis in axes]),
+            device=target.device,
+            dtype=target.dtype,
         )
     else:
-        upper = upper_bounds.to(device=target.device, dtype=target.dtype)
-    eps = torch.stack(
-        [torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8) for axis in axes]
-    ).to(device=target.device, dtype=target.dtype)
+        upper = _to(upper_bounds, device=target.device, dtype=target.dtype)
+    eps = _to(
+        torch.stack(
+            [
+                torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8)
+                for axis in axes
+            ]
+        ),
+        device=target.device,
+        dtype=target.dtype,
+    )
     for _ in range(max_iter):
         value = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0].to(
             dtype=target.dtype
@@ -535,21 +547,25 @@ def _solve_coupled_tabular_point_2d_global(
     tol: float,
 ) -> Tensor:
     x_axis, y_axis = axes
-    world = lookup.world.to(device=target.device, dtype=target.dtype)
+    world = _to(lookup.world, device=target.device, dtype=target.dtype)
     dtype_tol = torch.finfo(target.dtype).eps * 8
-    axis_tol = torch.stack(
-        [
-            torch.clamp(
-                (x_axis[-1] - x_axis[0]).abs() * max(1.0e-9, dtype_tol),
-                min=max(1.0e-10, dtype_tol),
-            ),
-            torch.clamp(
-                (y_axis[-1] - y_axis[0]).abs() * max(1.0e-9, dtype_tol),
-                min=max(1.0e-10, dtype_tol),
-            ),
-        ]
-    ).to(device=target.device, dtype=target.dtype)
-    world_tol = torch.as_tensor(tol, device=target.device, dtype=target.dtype)
+    axis_tol = _to(
+        torch.stack(
+            [
+                torch.clamp(
+                    (x_axis[-1] - x_axis[0]).abs() * max(1.0e-9, dtype_tol),
+                    min=max(1.0e-10, dtype_tol),
+                ),
+                torch.clamp(
+                    (y_axis[-1] - y_axis[0]).abs() * max(1.0e-9, dtype_tol),
+                    min=max(1.0e-10, dtype_tol),
+                ),
+            ]
+        ),
+        device=target.device,
+        dtype=target.dtype,
+    )
+    world_tol = _as_tensor(tol, device=target.device, dtype=target.dtype)
     solutions: list[Tensor] = []
 
     for x_index in range(x_axis.shape[0] - 1):
@@ -574,11 +590,15 @@ def _solve_coupled_tabular_point_2d_global(
             ):
                 continue
 
-            lower = torch.stack((x_axis[x_index], y_axis[y_index])).to(
-                device=target.device, dtype=target.dtype
+            lower = _to(
+                torch.stack((x_axis[x_index], y_axis[y_index])),
+                device=target.device,
+                dtype=target.dtype,
             )
-            upper = torch.stack((x_axis[x_index + 1], y_axis[y_index + 1])).to(
-                device=target.device, dtype=target.dtype
+            upper = _to(
+                torch.stack((x_axis[x_index + 1], y_axis[y_index + 1])),
+                device=target.device,
+                dtype=target.dtype,
             )
             initial = (lower + upper) * 0.5
             candidate = _solve_coupled_tabular_point(
@@ -651,9 +671,16 @@ def _newton_coupled_tabular_batch(
     n_points = int(current.shape[0])
     if n_points == 0:
         return current
-    eps = torch.stack(
-        [torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8) for axis in axes]
-    ).to(device=target.device, dtype=target.dtype)
+    eps = _to(
+        torch.stack(
+            [
+                torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8)
+                for axis in axes
+            ]
+        ),
+        device=target.device,
+        dtype=target.dtype,
+    )
     converged = torch.zeros(n_points, dtype=torch.bool, device=target.device)
     for _ in range(max_iter):
         value = lookup.pixel_to_world(current, bounds="clamp").to(dtype=target.dtype)
@@ -704,26 +731,41 @@ def _solve_coupled_tabular_partial(
 ) -> tuple[Tensor, Tensor]:
     """Solve leftover mixed coupled rows; freeze known pixels, match known world."""
     axes = lookup.pixel_axes
-    current = pixel.to(dtype=world.dtype, device=world.device).clone()
-    freeze = pixel_known.to(dtype=torch.bool, device=world.device)
-    known_w = world_known.to(dtype=torch.bool, device=world.device)
+    current = _to(pixel, dtype=world.dtype, device=world.device).clone()
+    freeze = _to(pixel_known, dtype=torch.bool, device=world.device)
+    known_w = _to(world_known, dtype=torch.bool, device=world.device)
     for axis_index, axis in enumerate(axes):
         if not bool(freeze[axis_index]):
             current[axis_index] = 0.5 * (axis[0] + axis[-1])
-    lower = torch.stack(
-        [pixel[i] if bool(freeze[i]) else axis[0] for i, axis in enumerate(axes)]
-    ).to(device=world.device, dtype=world.dtype)
-    upper = torch.stack(
-        [pixel[i] if bool(freeze[i]) else axis[-1] for i, axis in enumerate(axes)]
-    ).to(device=world.device, dtype=world.dtype)
+    lower = _to(
+        torch.stack(
+            [pixel[i] if bool(freeze[i]) else axis[0] for i, axis in enumerate(axes)]
+        ),
+        device=world.device,
+        dtype=world.dtype,
+    )
+    upper = _to(
+        torch.stack(
+            [pixel[i] if bool(freeze[i]) else axis[-1] for i, axis in enumerate(axes)]
+        ),
+        device=world.device,
+        dtype=world.dtype,
+    )
     if not bool(known_w.any()) or not bool((~freeze).any()):
         got = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0]
         return current, got
     free_idx = (~freeze).nonzero(as_tuple=False).reshape(-1)
     known_idx = known_w.nonzero(as_tuple=False).reshape(-1)
-    eps = torch.stack(
-        [torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8) for axis in axes]
-    ).to(device=world.device, dtype=world.dtype)
+    eps = _to(
+        torch.stack(
+            [
+                torch.clamp((axis[-1] - axis[0]).abs() * 1.0e-6, min=1.0e-8)
+                for axis in axes
+            ]
+        ),
+        device=world.device,
+        dtype=world.dtype,
+    )
     for _ in range(max_iter):
         value = lookup.pixel_to_world(current.unsqueeze(0), bounds="clamp")[0]
         residual = torch.where(known_w, value - world, torch.zeros_like(value))
@@ -799,8 +841,8 @@ def _solve_coupled_tabular_2d_global_batch(
     if n_points == 0:
         return out
 
-    world = lookup.world.to(device=target.device, dtype=target.dtype)
-    world_tol = torch.as_tensor(tol, device=target.device, dtype=target.dtype)
+    world = _to(lookup.world, device=target.device, dtype=target.dtype)
+    world_tol = _as_tensor(tol, device=target.device, dtype=target.dtype)
     nx = int(x_axis.shape[0] - 1)
     ny = int(y_axis.shape[0] - 1)
     n_cells = nx * ny
@@ -901,18 +943,22 @@ def _solve_coupled_tabular_2d_global_batch(
             tol=tol,
         )
         dtype_tol = torch.finfo(target.dtype).eps * 8
-        axis_tol = torch.stack(
-            [
-                torch.clamp(
-                    (x_axis[-1] - x_axis[0]).abs() * max(1.0e-9, dtype_tol),
-                    min=max(1.0e-10, dtype_tol),
-                ),
-                torch.clamp(
-                    (y_axis[-1] - y_axis[0]).abs() * max(1.0e-9, dtype_tol),
-                    min=max(1.0e-10, dtype_tol),
-                ),
-            ]
-        ).to(device=target.device, dtype=target.dtype)
+        axis_tol = _to(
+            torch.stack(
+                [
+                    torch.clamp(
+                        (x_axis[-1] - x_axis[0]).abs() * max(1.0e-9, dtype_tol),
+                        min=max(1.0e-10, dtype_tol),
+                    ),
+                    torch.clamp(
+                        (y_axis[-1] - y_axis[0]).abs() * max(1.0e-9, dtype_tol),
+                        min=max(1.0e-10, dtype_tol),
+                    ),
+                ]
+            ),
+            device=target.device,
+            dtype=target.dtype,
+        )
         in_bounds = torch.all(solved + axis_tol >= lower, dim=-1) & torch.all(
             solved - axis_tol <= upper, dim=-1
         )
@@ -988,7 +1034,7 @@ def _interp_multilinear(
                 weights_hi[axis_index] if use_hi else (1.0 - weights_hi[axis_index])
             )
             flat_index = flat_index + idx * stride_value
-            weight = weight * weight_axis.to(dtype=values.dtype, device=values.device)
+            weight = weight * _to(weight_axis, dtype=values.dtype, device=values.device)
         corner_values = flat_values.index_select(0, flat_index.reshape(-1)).reshape(
             *query_shape, values.shape[-1]
         )

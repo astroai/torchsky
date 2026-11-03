@@ -14,6 +14,7 @@ otherwise a public API computes and returns on the device of its tensor inputs;
 import os
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
+from typing import Any, TypeVar
 
 import torch
 from torch import nn
@@ -136,3 +137,70 @@ def resolve_fit_device(
     model without tensors.
     """
     return resolve_device(device, model)
+
+
+_T = TypeVar("_T")
+
+
+def _to(
+    obj: _T,
+    device: torch.device | str | None = None,
+    dtype: torch.dtype | None = None,
+) -> _T:
+    """``obj.to(device=device, dtype=dtype)`` that is correct for MPS sources.
+
+    PyTorch 2.14 on MPS returns zeros, without warning, when one ``.to`` call
+    both leaves MPS and casts to a dtype that MPS lacks (``float64``,
+    ``complex128``): ``mps_f32.to("cpu", torch.float64)`` is all zeros, while
+    ``mps_f32.cpu().double()`` is right. The same cast path is behind
+    ``.to(cpu_f64_tensor)``, ``.type(torch.DoubleTensor)``,
+    ``torch.as_tensor``/``torch.tensor`` with ``device`` and ``dtype``, and
+    ``cpu_f64.copy_(mps_tensor)``. Seen with PyTorch 2.14.1 on Apple silicon;
+    integer, float32 and float16 targets are unaffected. MPS dtype limits:
+    https://docs.pytorch.org/docs/stable/notes/mps.html
+
+    This helper moves an MPS source to the target device first and casts
+    there; every other combination is one ``.to`` call. ``obj`` may be a
+    tensor, an ``nn.Module`` (its first parameter or buffer gives the source
+    device) or any object with a ``to(device=..., dtype=...)`` method, which is
+    called unchanged. Autograd is preserved. Every in-package ``.to`` call that
+    passes both a device and a dtype goes through here
+    (``tests/test_device_to.py`` enforces it).
+    """
+    mover: Any = obj
+    source = _source_device(obj)
+    if (
+        device is not None
+        and dtype is not None
+        and source is not None
+        and source.type == "mps"
+        and torch.device(device).type != "mps"
+    ):
+        return mover.to(device=device).to(dtype=dtype)
+    return mover.to(device=device, dtype=dtype)
+
+
+def _source_device(obj: object) -> torch.device | None:
+    if isinstance(obj, torch.Tensor):
+        return obj.device
+    if isinstance(obj, nn.Module):
+        for tensor in obj.parameters():
+            return tensor.device
+        for tensor in obj.buffers():
+            return tensor.device
+    return None
+
+
+def _as_tensor(
+    data: Any,
+    dtype: torch.dtype | None = None,
+    device: torch.device | str | None = None,
+) -> torch.Tensor:
+    """``torch.as_tensor(data, dtype=dtype, device=device)`` via :func:`_to`.
+
+    ``torch.as_tensor`` of an MPS tensor with a CPU ``device`` and a float64
+    ``dtype`` hits the same zero-filling copy as ``Tensor.to``.
+    """
+    if isinstance(data, torch.Tensor):
+        return _to(data, device=device, dtype=dtype)
+    return torch.as_tensor(data, dtype=dtype, device=device)

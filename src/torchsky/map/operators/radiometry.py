@@ -10,6 +10,7 @@ from torch import Tensor
 
 from ...spectrophotometry import Passband
 from .base import RadiometryOp
+from ...device import _as_tensor
 
 
 @dataclass
@@ -72,7 +73,7 @@ def expected_electrons_from_photon_spectral_density(
     if dim < 0 or dim >= density.ndim:
         raise ValueError("spectral_dim is out of range")
     density = density.movedim(dim, -1)
-    wavelength = torch.as_tensor(
+    wavelength = _as_tensor(
         wavelength_angstrom,
         device=density.device,
         dtype=density.dtype,
@@ -91,7 +92,7 @@ def expected_electrons_from_photon_spectral_density(
     response = (
         throughput.evaluate(wavelength)
         if isinstance(throughput, Passband)
-        else torch.as_tensor(throughput, device=density.device, dtype=density.dtype)
+        else _as_tensor(throughput, device=density.device, dtype=density.dtype)
     )
     if not bool(torch.isfinite(response).all()) or bool((response < 0.0).any()):
         raise ValueError("throughput must be finite and non-negative")
@@ -107,15 +108,9 @@ def expected_electrons_from_photon_spectral_density(
         wavelength,
         dim=-1,
     )
-    area = torch.as_tensor(
-        collecting_area_m2, device=density.device, dtype=density.dtype
-    )
-    duration = torch.as_tensor(
-        exposure_time_s, device=density.device, dtype=density.dtype
-    )
-    measure = torch.as_tensor(
-        spatial_measure, device=density.device, dtype=density.dtype
-    )
+    area = _as_tensor(collecting_area_m2, device=density.device, dtype=density.dtype)
+    duration = _as_tensor(exposure_time_s, device=density.device, dtype=density.dtype)
+    measure = _as_tensor(spatial_measure, device=density.device, dtype=density.dtype)
     for value, name, strictly_positive in (
         (area, "collecting_area_m2", True),
         (duration, "exposure_time_s", True),

@@ -10,7 +10,7 @@ from typing import Any, Literal, cast
 import torch
 from torch import Tensor
 
-from ..device import resolve_device
+from ..device import _as_tensor, resolve_device, _to
 from ..domain import DomainSpec
 from ..wcs.spectral import canonical_spectral_type, spectral_unit_scale
 from .observation import (
@@ -42,7 +42,7 @@ def _model_value(model: ScaleModel | None, wavelength: Tensor) -> Tensor | None:
     if model is None:
         return None
     value = model(wavelength) if callable(model) else model
-    result = torch.as_tensor(value, device=wavelength.device, dtype=wavelength.dtype)
+    result = _as_tensor(value, device=wavelength.device, dtype=wavelength.dtype)
     if result.numel() != 1:
         result = torch.broadcast_to(result, wavelength.shape)
     if not bool(torch.isfinite(result).all()) or bool((result <= 0).any()):
@@ -69,7 +69,7 @@ def _sample_blocks(cost: Tensor, budget: int) -> list[tuple[int, int]]:
     count = int(cost.numel())
     if count == 0:
         return []
-    cumulative = torch.cumsum(cost.to(device="cpu", dtype=torch.int64), dim=0)
+    cumulative = torch.cumsum(_to(cost, device="cpu", dtype=torch.int64), dim=0)
     blocks: list[tuple[int, int]] = []
     start = 0
     while start < count:
@@ -422,17 +422,15 @@ def _observation_arrays(
     statistical_weight_parts: list[Tensor] = []
     offsets = [0]
     for observation in observations:
-        science = observation.sci.to(device=device, dtype=dtype).reshape(-1)
+        science = _to(observation.sci, device=device, dtype=dtype).reshape(-1)
         science_parts.append(science)
         total_variance = torch.zeros_like(science)
         variance_valid = torch.ones_like(science, dtype=torch.bool)
         for name in component_names:
             if name in observation.variance_components:
-                component = (
-                    observation.variance_components[name]
-                    .to(device=device, dtype=dtype)
-                    .reshape(-1)
-                )
+                component = _to(
+                    observation.variance_components[name], device=device, dtype=dtype
+                ).reshape(-1)
                 variance_valid &= torch.isfinite(component) & (component >= 0)
                 safe = torch.where(
                     variance_valid, component, torch.zeros_like(component)
@@ -487,7 +485,7 @@ def _sample_slice_ids(
         slice_ids = getattr(transform, "slice_id_map", None)
     if slice_ids is None:
         return None
-    return torch.as_tensor(slice_ids).to(device=device, dtype=torch.int64)
+    return _to(torch.as_tensor(slice_ids), device=device, dtype=torch.int64)
 
 
 def _require_grid_neighbours(slice_ids: Tensor, rows: Tensor, columns: Tensor) -> None:
@@ -1090,11 +1088,11 @@ def plan_ifu_cube_response(
         target_index_tensor = target_index_tensor.to(resolved_device)
         contributors = contributors.to(resolved_device)
         dq = dq.to(resolved_device)
-        coefficients = coefficients.to(resolved_device, output_dtype)
-        output_weight = output_weight.to(resolved_device, output_dtype)
-        science = science.to(resolved_device, output_dtype)
+        coefficients = _to(coefficients, resolved_device, output_dtype)
+        output_weight = _to(output_weight, resolved_device, output_dtype)
+        science = _to(science, resolved_device, output_dtype)
         components = {
-            name: value.to(resolved_device, output_dtype)
+            name: _to(value, resolved_device, output_dtype)
             for name, value in components.items()
         }
     plan = IndexedResponsePlan(

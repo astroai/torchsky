@@ -26,6 +26,7 @@ from typing import Any, Sequence
 
 import torch
 from torch import Tensor
+from ...device import _to
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,7 @@ def persistent_foam_site_initialization(
         zip(coordinates, residuals, contributions, strict=True)
     ):
         flat_coords = coords.reshape(-1, 2)
-        flat_values = values.reshape(-1).to(device=device, dtype=dtype)
+        flat_values = _to(values.reshape(-1), device=device, dtype=dtype)
         if (
             coords.device != device
             or coords.dtype != dtype
@@ -132,7 +133,7 @@ def persistent_foam_site_initialization(
         if weights is None:
             flat_weights = torch.ones_like(flat_values)
         else:
-            flat_weights = weights.reshape(-1).to(device=device, dtype=dtype)
+            flat_weights = _to(weights.reshape(-1), device=device, dtype=dtype)
             if (
                 flat_weights.numel() != flat_values.numel()
                 or not bool(torch.isfinite(flat_weights).all())
@@ -327,19 +328,23 @@ class SpectralPowerFoam(torch.nn.Module):
         rate = float(decay)
         if not math.isfinite(rate) or rate < 0.0 or rate >= 1.0:
             raise ValueError("decay must be finite in [0, 1)")
-        indices = cell_indices.reshape(-1).to(
+        indices = _to(
+            cell_indices.reshape(-1),
             device=self.sites.device,
             dtype=torch.int64,
         )
-        residual = whitened_residuals.reshape(-1).to(
+        residual = _to(
+            whitened_residuals.reshape(-1),
             device=self.sites.device,
             dtype=self.sites.dtype,
         )
-        contribution = contributions.reshape(-1).to(
+        contribution = _to(
+            contributions.reshape(-1),
             device=self.sites.device,
             dtype=self.sites.dtype,
         )
-        coords = positions.reshape(-1, 2).to(
+        coords = _to(
+            positions.reshape(-1, 2),
             device=self.sites.device,
             dtype=self.sites.dtype,
         )

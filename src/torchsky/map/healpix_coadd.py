@@ -38,6 +38,7 @@ from .operators.resampling import (
 )
 from .sky_matching import detect_outliers, match_sky
 from .windowing import _build_target_world_grid
+from ..device import _as_tensor, _to
 
 
 def _sorted_chunk(
@@ -304,11 +305,11 @@ def coadd_healpix(
 
     for obs in obs_list:
         if obs.data is not None:
-            raw_img = obs.data.to(device=map_device, dtype=torch.float32)
+            raw_img = _to(obs.data, device=map_device, dtype=torch.float32)
             hdr_obs = dict(obs.header) if obs.header is not None else {}
         else:
             raw_img, hdr_obs = load_observation_image_and_header(obs, device=read_dev)
-            raw_img = raw_img.to(device=map_device, dtype=torch.float32)
+            raw_img = _to(raw_img, device=map_device, dtype=torch.float32)
         src_w = _load_observation_weight_map(obs, raw_img, device=map_device)
         cal_img, cal_w = _apply_observation_calibration(obs, raw_img, src_w)
 
@@ -321,8 +322,10 @@ def coadd_healpix(
         H_s, W_s = int(cal_img.shape[-2]), int(cal_img.shape[-1])
         obs_moc = MOC.from_wcs(obs_wcs, shape=(H_s, W_s), max_order=order)
         union_moc = union_moc.union(obs_moc)
-        obs_pix = obs_moc.to_pixelized_region(nside_i, nest=nest).pixels.to(
-            device=map_device, dtype=torch.int64
+        obs_pix = _to(
+            obs_moc.to_pixelized_region(nside_i, nest=nest).pixels,
+            device=map_device,
+            dtype=torch.int64,
         )
         if obs_pix.numel() == 0:
             continue
@@ -544,28 +547,36 @@ def resample_healpix(
         interp_mode: Literal["bilinear", "nearest"] = (
             "nearest" if method == "nearest" else "bilinear"
         )
-        sampled = healpix_map.interpolate(ra_g, dec_g, method=interp_mode).to(
-            device=map_device, dtype=torch.float32
+        sampled = _to(
+            healpix_map.interpolate(ra_g, dec_g, method=interp_mode),
+            device=map_device,
+            dtype=torch.float32,
         )
         valid = torch.isfinite(sampled) & (sampled != float(healpix_map.fill_value))
         data_2d = torch.where(valid, sampled, torch.zeros_like(sampled))
         if weight_smap is not None:
-            w_2d = weight_smap.interpolate(ra_g, dec_g, method=interp_mode).to(
-                device=map_device, dtype=torch.float32
+            w_2d = _to(
+                weight_smap.interpolate(ra_g, dec_g, method=interp_mode),
+                device=map_device,
+                dtype=torch.float32,
             )
             w_2d = torch.where(valid & (w_2d > 0.0), w_2d, torch.zeros_like(data_2d))
         else:
             w_2d = valid.to(dtype=torch.float32)
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
-    map_t = torch.as_tensor(healpix_map, device=map_device, dtype=torch.float32)
+    map_t = _as_tensor(healpix_map, device=map_device, dtype=torch.float32)
     resolved_nside = (
         int(nside) if nside is not None else _hp.npix2nside(int(map_t.shape[-1]))
     )
     if method == "harmonic":
-        data_2d = sample_healpix_map_on_image_header_harmonic(
-            map_t, nside=resolved_nside, nest=nest, target_header=header_dict
-        ).to(device=map_device, dtype=torch.float32)
+        data_2d = _to(
+            sample_healpix_map_on_image_header_harmonic(
+                map_t, nside=resolved_nside, nest=nest, target_header=header_dict
+            ),
+            device=map_device,
+            dtype=torch.float32,
+        )
         w_2d = torch.isfinite(data_2d).to(dtype=torch.float32)
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
@@ -574,26 +585,34 @@ def resample_healpix(
         "nearest" if method == "nearest" else "bilinear"
     )
     if weight_dense is not None:
-        w_t = weight_dense.to(device=map_device, dtype=torch.float32)
+        w_t = _to(weight_dense, device=map_device, dtype=torch.float32)
         good_hp = torch.isfinite(map_t) & (~_hp.mask_bad(map_t)) & (w_t > 0.0)
         safe_map = torch.where(good_hp, map_t, torch.zeros_like(map_t))
         safe_w = torch.where(good_hp, w_t, torch.zeros_like(w_t))
-        num_2d = sample_healpix_map(
-            safe_map * safe_w,
-            nside=resolved_nside,
-            lon_deg=ra_g,
-            lat_deg=dec_g,
-            nest=nest,
-            interpolation=interp_mode_d,
-        ).to(device=map_device, dtype=torch.float32)
-        w_2d = sample_healpix_map(
-            safe_w,
-            nside=resolved_nside,
-            lon_deg=ra_g,
-            lat_deg=dec_g,
-            nest=nest,
-            interpolation=interp_mode_d,
-        ).to(device=map_device, dtype=torch.float32)
+        num_2d = _to(
+            sample_healpix_map(
+                safe_map * safe_w,
+                nside=resolved_nside,
+                lon_deg=ra_g,
+                lat_deg=dec_g,
+                nest=nest,
+                interpolation=interp_mode_d,
+            ),
+            device=map_device,
+            dtype=torch.float32,
+        )
+        w_2d = _to(
+            sample_healpix_map(
+                safe_w,
+                nside=resolved_nside,
+                lon_deg=ra_g,
+                lat_deg=dec_g,
+                nest=nest,
+                interpolation=interp_mode_d,
+            ),
+            device=map_device,
+            dtype=torch.float32,
+        )
         valid = torch.isfinite(num_2d) & torch.isfinite(w_2d) & (w_2d > 0.0)
         data_2d = torch.where(
             valid, num_2d / w_2d.clamp_min(1e-12), torch.zeros_like(num_2d)
@@ -601,14 +620,18 @@ def resample_healpix(
         w_2d = torch.where(valid, w_2d, torch.zeros_like(w_2d))
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
-    data_2d = sample_healpix_map(
-        map_t,
-        nside=resolved_nside,
-        lon_deg=ra_g,
-        lat_deg=dec_g,
-        nest=nest,
-        interpolation=interp_mode_d,
-    ).to(device=map_device, dtype=torch.float32)
+    data_2d = _to(
+        sample_healpix_map(
+            map_t,
+            nside=resolved_nside,
+            lon_deg=ra_g,
+            lat_deg=dec_g,
+            nest=nest,
+            interpolation=interp_mode_d,
+        ),
+        device=map_device,
+        dtype=torch.float32,
+    )
     valid = torch.isfinite(data_2d) & (~_hp.mask_bad(data_2d))
     data_2d = torch.where(valid, data_2d, torch.zeros_like(data_2d))
     w_2d = valid.to(dtype=torch.float32)

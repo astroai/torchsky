@@ -46,6 +46,7 @@ from ._healpix_query_support import (  # noqa: F401
     _ring_pixels_colatitude_band,
     _strip_nest_pixels,
 )
+from ..device import _as_tensor
 
 try:
     from torch.func import vmap
@@ -1330,7 +1331,7 @@ def query_polygon(
         lon_t = torch.as_tensor(vertices)
         dtype = torch.float32 if lon_t.device.type == "mps" else torch.float64
         lon_t = lon_t.to(dtype=dtype).reshape(-1)
-        lat_t = torch.as_tensor(lat_deg, dtype=dtype, device=lon_t.device).reshape(-1)
+        lat_t = _as_tensor(lat_deg, dtype=dtype, device=lon_t.device).reshape(-1)
         v = torch.stack([lon_t, lat_t], dim=-1)
         lonlat = True
     else:

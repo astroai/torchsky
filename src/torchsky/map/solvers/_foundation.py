@@ -10,6 +10,7 @@ from typing import Generic, Protocol, TypeVar, cast, runtime_checkable
 
 import torch
 from torch import Tensor
+from ...device import _to
 
 
 type StateTree = Tensor | tuple[StateTree, ...] | list[StateTree] | dict[str, StateTree]
@@ -142,8 +143,8 @@ class TensorNullspaceProjection:
             raise ValueError(
                 "projected tensor shape must match the declared state shape"
             )
-        basis = self._basis.to(dtype=state_t.dtype, device=state_t.device)
-        gram = self._gram.to(dtype=state_t.dtype, device=state_t.device)
+        basis = _to(self._basis, dtype=state_t.dtype, device=state_t.device)
+        gram = _to(self._gram, dtype=state_t.dtype, device=state_t.device)
         flat = state_t.reshape(-1)
         coefficients = torch.linalg.solve(gram, basis.conj() @ flat)
         return (flat - basis.mT @ coefficients).reshape_as(state_t)
@@ -172,7 +173,7 @@ class DiagonalPreconditioner:
         if tuple(residual_t.shape) != tuple(self.diagonal.shape):
             raise ValueError("preconditioner diagonal shape must match the residual")
         return (
-            self.reciprocal.to(dtype=residual_t.dtype, device=residual_t.device)
+            _to(self.reciprocal, dtype=residual_t.dtype, device=residual_t.device)
             * residual_t
         )
 
@@ -288,7 +289,7 @@ def tree_inner(lhs: StateTree, rhs: StateTree) -> Tensor:
     )
     total = products[0]
     for product in products[1:]:
-        total = total + product.to(dtype=total.dtype, device=total.device)
+        total = total + _to(product, dtype=total.dtype, device=total.device)
     return total
 
 

@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from .._dtype import as_work_tensor as _as_tensor
+from ..device import _to
 
 SPEED_OF_LIGHT = 299792458.0  # m / s
 PLANCK = 6.62607015e-34  # J s
@@ -214,8 +215,8 @@ def spectral_to_frequency(
     if kind == "ENER":
         return x / PLANCK
 
-    f0 = _rest_frequency(rest_frequency, rest_wavelength).to(
-        device=x.device, dtype=x.dtype
+    f0 = _to(
+        _rest_frequency(rest_frequency, rest_wavelength), device=x.device, dtype=x.dtype
     )
     if kind == "ZOPT":
         return f0 / (1.0 + x)
@@ -253,8 +254,10 @@ def frequency_to_spectral(
     elif kind == "ENER":
         y = PLANCK * f
     else:
-        f0 = _rest_frequency(rest_frequency, rest_wavelength).to(
-            device=f.device, dtype=f.dtype
+        f0 = _to(
+            _rest_frequency(rest_frequency, rest_wavelength),
+            device=f.device,
+            dtype=f.dtype,
         )
         if kind == "ZOPT":
             y = f0 / f - 1.0

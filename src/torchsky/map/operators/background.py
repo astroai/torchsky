@@ -13,6 +13,7 @@ from torch import Tensor, nn
 from .adaptive_axes import AdaptiveSpatioSpectralTemporalEncoder
 from .base import BackgroundOp
 from .learned_kernel import SpatioSpectralTemporalEncoder
+from ...device import _to
 
 
 class AdditiveStage(str, Enum):
@@ -89,7 +90,7 @@ class AdditiveComponent:
         dtype: torch.dtype | None = None,
     ) -> AdditiveComponent:
         """Move the plane without detaching its gradient graph."""
-        return replace(self, values=self.values.to(device=device, dtype=dtype))
+        return replace(self, values=_to(self.values, device=device, dtype=dtype))
 
 
 def validate_additive_components(
@@ -150,7 +151,9 @@ def apply_additive_stage(
     """Add validated native-grid means; preserve dtype, device and gradients."""
     for component in components:
         if component.stage == stage:
-            image = image + component.values.to(device=image.device, dtype=image.dtype)
+            image = image + _to(
+                component.values, device=image.device, dtype=image.dtype
+            )
     return image
 
 
@@ -355,7 +358,7 @@ def polynomial_background(
     if normalized_coordinates:
         xx = (xx / max(float(width - 1), 1.0)) * 2.0 - 1.0
         yy = (yy / max(float(height - 1), 1.0)) * 2.0 - 1.0
-    coeffs = coeffs.to(device=device, dtype=dtype).reshape(-1)
+    coeffs = _to(coeffs, device=device, dtype=dtype).reshape(-1)
     terms: list[Tensor] = []
     degree = 0
     while len(terms) < int(coeffs.numel()):
@@ -381,7 +384,7 @@ def apply_background_components(
     out = image
     for component in (sky, instrument, detector):
         if component is not None:
-            out = out + component.to(device=image.device, dtype=image.dtype)
+            out = out + _to(component, device=image.device, dtype=image.dtype)
     return out
 
 
@@ -395,7 +398,7 @@ def _coerce_background_component(
 ) -> Tensor | None:
     if component is None:
         return None
-    tensor = component.to(device=device, dtype=dtype)
+    tensor = _to(component, device=device, dtype=dtype)
     if tuple(tensor.shape) != shape:
         raise ValueError(f"{name} background shape must match rendered image shape")
     return tensor
@@ -454,7 +457,7 @@ def fit_background_plane(
 ) -> BackgroundFitSummary:
     """Fit an optionally weighted, sigma-clipped plane to supported residuals."""
     residual = residual.to(dtype=torch.float32)
-    mask = mask.to(device=residual.device, dtype=torch.bool)
+    mask = _to(mask, device=residual.device, dtype=torch.bool)
     if residual.ndim != 2 or mask.shape != residual.shape:
         raise ValueError("fit_background_plane expects 2D residual and matching mask")
     if sigma_clip is not None and sigma_clip <= 0:
@@ -464,7 +467,7 @@ def fit_background_plane(
     if weight is None:
         weight = torch.ones_like(residual)
     else:
-        weight = weight.to(device=residual.device, dtype=torch.float32)
+        weight = _to(weight, device=residual.device, dtype=torch.float32)
         if weight.shape != residual.shape:
             raise ValueError("background weight must match residual shape")
     mask = mask & torch.isfinite(residual) & torch.isfinite(weight) & (weight > 0)

@@ -7,6 +7,7 @@ import math
 
 import torch
 from torch import Tensor
+from ...device import _to
 
 __all__ = ["SpatialFillDistanceBounds", "spatial_fill_distance_bounds"]
 
@@ -88,7 +89,7 @@ def spatial_fill_distance_bounds(
     if width <= 0.0 or height <= 0.0:
         raise ValueError("domain bounds must have positive x and y extent")
 
-    points = torch.as_tensor(points_xy).detach().to(device="cpu", dtype=torch.float64)
+    points = _to(torch.as_tensor(points_xy).detach(), device="cpu", dtype=torch.float64)
     if points.ndim != 2 or points.shape[1] != 2 or points.shape[0] < 1:
         raise ValueError("points_xy must have shape (n, 2) with n >= 1")
     if not bool(torch.isfinite(points).all()):

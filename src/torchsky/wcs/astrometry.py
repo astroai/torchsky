@@ -15,6 +15,7 @@ from ..sphere import great_circle_distance
 from ._graph import _UnionFind
 from .alignment import TangentPlaneFrame
 from .semantics import Epoch, TimeSpec
+from ..device import _as_tensor, _to
 
 PoseModel = Literal["shift", "rshift", "rscale", "affine", "general"]
 MissingPolicy = Literal["error", "zero", "drop"]
@@ -32,7 +33,7 @@ def _as_real_tensor(value: Any, name: str) -> Tensor:
 
 
 def _covariance(value: Any, n: int, name: str, like: Tensor) -> Tensor:
-    covariance = torch.as_tensor(value, dtype=like.dtype, device=like.device)
+    covariance = _as_tensor(value, dtype=like.dtype, device=like.device)
     if covariance.shape == (2, 2):
         covariance = covariance.expand(n, 2, 2).clone()
     if covariance.shape != (n, 2, 2):
@@ -61,17 +62,13 @@ def _call_wcs(wcs: Any, detector_xy: Tensor) -> Tensor:
             raise ValueError("approximate_wcs must return two sky coordinates")
         world = torch.stack(
             tuple(
-                torch.as_tensor(
-                    item, dtype=detector_xy.dtype, device=detector_xy.device
-                )
+                _as_tensor(item, dtype=detector_xy.dtype, device=detector_xy.device)
                 for item in result
             ),
             dim=-1,
         )
     else:
-        world = torch.as_tensor(
-            result, dtype=detector_xy.dtype, device=detector_xy.device
-        )
+        world = _as_tensor(result, dtype=detector_xy.dtype, device=detector_xy.device)
     if world.shape != detector_xy.shape:
         raise ValueError("approximate_wcs output must have shape (N, 2)")
     if not bool(torch.isfinite(world).all().detach().cpu().item()):
@@ -115,7 +112,7 @@ class AstrometricObservation:
             self.centroid_covariance, n, "centroid_covariance", points
         )
         if self.source_ids is not None:
-            identifiers = torch.as_tensor(
+            identifiers = _as_tensor(
                 self.source_ids, dtype=torch.int64, device=points.device
             )
             if identifiers.shape != (n,):
@@ -125,8 +122,10 @@ class AstrometricObservation:
             raise ValueError("sky_position or approximate_wcs is required")
         sky = None
         if self.sky_position is not None:
-            sky = _as_real_tensor(self.sky_position, "sky_position").to(
-                device=points.device, dtype=points.dtype
+            sky = _to(
+                _as_real_tensor(self.sky_position, "sky_position"),
+                device=points.device,
+                dtype=points.dtype,
             )
             if sky.shape != points.shape:
                 raise ValueError("sky_position must have shape (N, 2)")
@@ -134,17 +133,17 @@ class AstrometricObservation:
             raise ValueError("covariance_space must be 'detector' or 'tangent'")
         jacobian = None
         if self.world_jacobian is not None:
-            jacobian = _as_real_tensor(self.world_jacobian, "world_jacobian").to(
-                device=points.device, dtype=points.dtype
+            jacobian = _to(
+                _as_real_tensor(self.world_jacobian, "world_jacobian"),
+                device=points.device,
+                dtype=points.dtype,
             )
             if jacobian.shape != (n, 2, 2):
                 raise ValueError("world_jacobian must have shape (N, 2, 2)")
         for name in ("dcr_basis", "lateral_color_basis", "parallax_factor"):
             value = getattr(self, name)
             if value is not None:
-                tensor = torch.as_tensor(
-                    value, dtype=points.dtype, device=points.device
-                )
+                tensor = _as_tensor(value, dtype=points.dtype, device=points.device)
                 if tensor.shape == (2,):
                     tensor = tensor.expand(n, 2).clone()
                 if tensor.shape != (n, 2) or not bool(torch.isfinite(tensor).all()):
@@ -157,10 +156,10 @@ class AstrometricObservation:
                 raise ValueError(
                     "zenith_angle_deg and parallactic_angle_deg are required together"
                 )
-            zenith = torch.as_tensor(
+            zenith = _as_tensor(
                 self.zenith_angle_deg, dtype=points.dtype, device=points.device
             )
-            angle = torch.as_tensor(
+            angle = _as_tensor(
                 self.parallactic_angle_deg, dtype=points.dtype, device=points.device
             )
             zenith = torch.broadcast_to(zenith, (n,))
@@ -178,9 +177,7 @@ class AstrometricObservation:
                 * torch.stack((torch.sin(radians), torch.cos(radians)), dim=-1),
             )
         if self.color is not None:
-            color = torch.as_tensor(
-                self.color, dtype=points.dtype, device=points.device
-            )
+            color = _as_tensor(self.color, dtype=points.dtype, device=points.device)
             if color.shape != (n,):
                 raise ValueError("color must have shape (N,)")
             object.__setattr__(self, "color", color)
@@ -330,18 +327,14 @@ def tangent_plane_block_residuals(
 ) -> Tensor:
     """Return differentiable two-coordinate residual blocks with full covariance."""
     obs = _as_real_tensor(observed, "observed")
-    pred = torch.as_tensor(predicted, dtype=obs.dtype, device=obs.device)
+    pred = _as_tensor(predicted, dtype=obs.dtype, device=obs.device)
     if obs.shape != pred.shape or obs.shape[-1:] != (2,):
         raise ValueError("observed and predicted must have matching (..., 2) shape")
-    covariance = torch.as_tensor(
-        centroid_covariance, dtype=obs.dtype, device=obs.device
-    )
+    covariance = _as_tensor(centroid_covariance, dtype=obs.dtype, device=obs.device)
     if covariance.shape != obs.shape[:-1] + (2, 2):
         covariance = torch.broadcast_to(covariance, obs.shape[:-1] + (2, 2))
     if reference_covariance is not None:
-        reference = torch.as_tensor(
-            reference_covariance, dtype=obs.dtype, device=obs.device
-        )
+        reference = _as_tensor(reference_covariance, dtype=obs.dtype, device=obs.device)
         covariance = covariance + torch.broadcast_to(reference, covariance.shape)
     residual = obs - pred
     if whiten:
@@ -352,7 +345,7 @@ def tangent_plane_block_residuals(
             factor, residual.unsqueeze(-1), upper=False
         ).squeeze(-1)
     if robust_weights is not None:
-        weights = torch.as_tensor(robust_weights, dtype=obs.dtype, device=obs.device)
+        weights = _as_tensor(robust_weights, dtype=obs.dtype, device=obs.device)
         residual = residual * torch.sqrt(weights).unsqueeze(-1)
     return residual
 
@@ -365,8 +358,10 @@ def match_approximate_wcs(
     index: HealpixIndex | None = None,
 ) -> ApproximateMatchResult:
     """Nearest supplied-reference matching, using only ``HealpixIndex`` candidates."""
-    reference = _as_real_tensor(reference_sky, "reference_sky").to(
-        device=observation.detector_xy.device, dtype=observation.detector_xy.dtype
+    reference = _to(
+        _as_real_tensor(reference_sky, "reference_sky"),
+        device=observation.detector_xy.device,
+        dtype=observation.detector_xy.dtype,
     )
     if reference.ndim != 2 or reference.shape[1] != 2:
         raise ValueError("reference_sky must have shape (N, 2)")
@@ -452,9 +447,11 @@ class AstrometricMatchGraph:
         if tangent_frame is None:
             frame_points = sky
             if reference_positions is not None:
-                reference_for_frame = _as_real_tensor(
-                    reference_positions, "reference_positions"
-                ).to(device=device, dtype=dtype)
+                reference_for_frame = _to(
+                    _as_real_tensor(reference_positions, "reference_positions"),
+                    device=device,
+                    dtype=dtype,
+                )
                 frame_points = torch.cat((frame_points, reference_for_frame))
             tangent_frame = TangentPlaneFrame.from_points(
                 frame_points[:, 0], frame_points[:, 1]
@@ -506,11 +503,11 @@ class AstrometricMatchGraph:
                     "reference_source_ids, reference_positions, and "
                     "reference_covariance are required together"
                 )
-            ref_ids = torch.as_tensor(
-                reference_source_ids, dtype=torch.int64, device=device
-            )
-            positions = _as_real_tensor(reference_positions, "reference_positions").to(
-                device=device, dtype=dtype
+            ref_ids = _as_tensor(reference_source_ids, dtype=torch.int64, device=device)
+            positions = _to(
+                _as_real_tensor(reference_positions, "reference_positions"),
+                device=device,
+                dtype=dtype,
             )
             if ref_ids.ndim != 1 or positions.shape != (ref_ids.numel(), 2):
                 raise ValueError("reference catalog arrays have inconsistent shapes")
@@ -538,10 +535,14 @@ class AstrometricMatchGraph:
                             "reference_proper_motion_covariance is required with "
                             "reference_proper_motion_mas_per_year"
                         )
-                    motion = _as_real_tensor(
-                        reference_proper_motion_mas_per_year,
-                        "reference_proper_motion_mas_per_year",
-                    ).to(device=device, dtype=dtype)
+                    motion = _to(
+                        _as_real_tensor(
+                            reference_proper_motion_mas_per_year,
+                            "reference_proper_motion_mas_per_year",
+                        ),
+                        device=device,
+                        dtype=dtype,
+                    )
                     if motion.shape != positions.shape:
                         raise ValueError(
                             "reference_proper_motion_mas_per_year must have shape (N, 2)"
@@ -563,10 +564,10 @@ class AstrometricMatchGraph:
                             "reference_parallax_variance is required with "
                             "reference_parallax_mas"
                         )
-                    parallax = torch.as_tensor(
+                    parallax = _as_tensor(
                         reference_parallax_mas, dtype=dtype, device=device
                     )
-                    variance = torch.as_tensor(
+                    variance = _as_tensor(
                         reference_parallax_variance, dtype=dtype, device=device
                     )
                     parallax = torch.broadcast_to(parallax, (ref_ids.numel(),))
@@ -796,11 +797,11 @@ def _epoch_jyear(
         )
     spec = TimeSpec(format="jyear", scale=config.epoch_scale)
     if isinstance(value, Epoch):
-        epoch = value.to(spec).value.to(dtype=like.dtype, device=like.device)
+        epoch = _to(value.to(spec).value, dtype=like.dtype, device=like.device)
     else:
         epoch = (
             Epoch(
-                torch.as_tensor(value, dtype=like.dtype, device=like.device),
+                _as_tensor(value, dtype=like.dtype, device=like.device),
                 TimeSpec(format=config.epoch_format, scale=config.epoch_scale),
             )
             .to(spec)
@@ -828,14 +829,12 @@ class _AstrometrySolver:
         if fit_mask is None:
             self.fit_mask = torch.ones(self.n_row, dtype=torch.bool, device=self.device)
         else:
-            self.fit_mask = torch.as_tensor(
-                fit_mask, dtype=torch.bool, device=self.device
-            )
+            self.fit_mask = _as_tensor(fit_mask, dtype=torch.bool, device=self.device)
             if self.fit_mask.shape != (self.n_row,):
                 raise ValueError("fit_mask must have shape (N,) for graph rows")
         self.source_colors = None
         if source_colors is not None:
-            self.source_colors = torch.as_tensor(
+            self.source_colors = _as_tensor(
                 source_colors, dtype=self.dtype, device=self.device
             )
             if self.source_colors.shape != (self.n_source,):
@@ -1464,7 +1463,7 @@ class _AstrometrySolver:
         precision = torch.linalg.inv(self.graph.centroid_covariance)
         squared = torch.einsum("mc,mcd,md->m", residual, precision, residual)
         norm = torch.sqrt(torch.clamp_min(squared, 0.0))
-        delta = torch.as_tensor(
+        delta = _as_tensor(
             self.config.huber_delta, dtype=self.dtype, device=self.device
         )
         return torch.where(

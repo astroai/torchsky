@@ -41,6 +41,7 @@ from .iau2006 import (
     refco,
     tt_mjd_from_utc,
 )
+from ..device import _to
 
 SECONDS_PER_DAY = 86400.0
 MJD_J2000 = 51544.5
@@ -264,7 +265,7 @@ def _observer_pv_gcrs(
 
 
 def _apply_matrix(m: Tensor, v: Tensor) -> Tensor:
-    m = m.to(device=v.device, dtype=v.dtype)
+    m = _to(m, device=v.device, dtype=v.dtype)
     return (m @ v.unsqueeze(-1)).squeeze(-1)
 
 
@@ -319,10 +320,10 @@ def observed_altaz(
     v_itrs = _icrs_unit_to_itrs(
         icrs, obstime_mjd_utc, eop, pn=pn, aberration=aberration, site=site
     )
-    lon_rad = site.lon_deg.to(device=device, dtype=dtype) * D2R
-    lat_rad = site.lat_deg.to(device=device, dtype=dtype) * D2R
+    lon_rad = _to(site.lon_deg, device=device, dtype=dtype) * D2R
+    lat_rad = _to(site.lat_deg, device=device, dtype=dtype) * D2R
     assert isinstance(site.height_m, Tensor)  # normalised by the site's __post_init__
-    height = site.height_m.to(device=device, dtype=dtype)
+    height = _to(site.height_m, device=device, dtype=dtype)
     if not bool(torch.isfinite(height).all()):
         raise ValueError("site.height_m must be finite WGS84 ellipsoidal height")
     east, north, up = _geodetic_normal_east_north(lon_rad, lat_rad)

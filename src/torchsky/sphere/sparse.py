@@ -8,6 +8,7 @@ from torch import Tensor
 from torchsky import _ops
 
 from . import healpix as _healpix
+from ..device import _as_tensor, _to
 
 if TYPE_CHECKING:
     from .geom import PixelizedRegion
@@ -261,7 +262,7 @@ class SparseHealpixMap:
                     cov[self._block_index > 0] = 0
                 self.coverage_map = cov
             if self._fill_tensor is None:
-                self._fill_tensor = torch.as_tensor(
+                self._fill_tensor = _as_tensor(
                     self.fill_value, dtype=self.values.dtype, device=self.values.device
                 )
 
@@ -360,7 +361,7 @@ class SparseHealpixMap:
                 _fill_tensor=self._fill_tensor,
             )
         return self.get_values(
-            torch.as_tensor(key, dtype=torch.int64, device=self.pixels.device)
+            _as_tensor(key, dtype=torch.int64, device=self.pixels.device)
         )
 
     @classmethod
@@ -423,7 +424,7 @@ class SparseHealpixMap:
             npix = _healpix.nside2npix(ns)
 
         if valid_mask is not None:
-            valid = torch.as_tensor(valid_mask, dtype=torch.bool, device=vals.device)
+            valid = _as_tensor(valid_mask, dtype=torch.bool, device=vals.device)
             if valid.shape != (npix,):
                 raise ValueError("valid_mask must have shape (npix,)")
         else:
@@ -680,7 +681,7 @@ class SparseHealpixMap:
                 & (y_p < H - 0.5)
             )
             if getattr(obs, "mask", None) is not None and bool(in_b.any()):
-                m_t = torch.as_tensor(obs.mask, dtype=torch.bool, device=pix.device)
+                m_t = _as_tensor(obs.mask, dtype=torch.bool, device=pix.device)
                 in_b_idx = torch.nonzero(in_b, as_tuple=False).flatten()
                 bad = m_t[iy[in_b_idx].clamp(0, H - 1), ix[in_b_idx].clamp(0, W - 1)]
                 in_b[in_b_idx] = ~bad
@@ -693,7 +694,7 @@ class SparseHealpixMap:
                 w_scalar = float(raw_w)
             if w_plane is not None and bool(in_b.any()):
                 w_t = (
-                    torch.as_tensor(w_plane, dtype=torch.float32, device=pix.device)
+                    _as_tensor(w_plane, dtype=torch.float32, device=pix.device)
                     * w_scalar
                 )
                 in_b_idx = torch.nonzero(in_b, as_tuple=False).flatten()
@@ -842,7 +843,7 @@ class SparseHealpixMap:
         lead_n = 1
         for size in lead:
             lead_n *= int(size)
-        self._fill_tensor = torch.as_tensor(
+        self._fill_tensor = _as_tensor(
             self.fill_value, dtype=self.values.dtype, device=self.values.device
         )
         if self.pixels.numel() == 0:
@@ -977,7 +978,7 @@ class SparseHealpixMap:
         ):
             pix_flat = pixels.reshape(-1)
         else:
-            pix_flat = torch.as_tensor(
+            pix_flat = _as_tensor(
                 pixels, dtype=torch.int64, device=self.pixels.device
             ).reshape(-1)
         flat_shape = tuple(self.values.shape[:-1]) + (pix_flat.numel(),)
@@ -1093,7 +1094,7 @@ class SparseHealpixMap:
 
     def update_values_pix(self, pixels: Tensor, values: Tensor) -> None:
         """Update existing or add new pixels to the sparse map."""
-        pix_new = torch.as_tensor(pixels, dtype=torch.int64, device=self.pixels.device)
+        pix_new = _as_tensor(pixels, dtype=torch.int64, device=self.pixels.device)
         val_new = torch.as_tensor(values, device=self.values.device)
 
         if self.pixels.numel() == 0:
@@ -1132,7 +1133,7 @@ class SparseHealpixMap:
             dtype_t = value_t.dtype
         else:
             dtype_t = _coerce_torch_dtype(dtype)
-            value_t = torch.as_tensor(value, dtype=dtype_t, device=pix.device)
+            value_t = _as_tensor(value, dtype=dtype_t, device=pix.device)
         if value_t.ndim != 0:
             raise ValueError("value must be a scalar")
         values = torch.full(
@@ -1192,7 +1193,7 @@ class SparseHealpixMap:
                 dtype_t = value_t.dtype
             else:
                 dtype_t = _coerce_torch_dtype(dtype)
-                value_t = torch.as_tensor(value, dtype=dtype_t, device=pix.device)
+                value_t = _as_tensor(value, dtype=dtype_t, device=pix.device)
             if value_t.ndim != 0:
                 raise ValueError("value must be a scalar")
             values = torch.full(
@@ -1260,7 +1261,7 @@ class SparseHealpixMap:
         return mask
 
     def _global_to_local(self, pix: Tensor) -> tuple[Tensor, Tensor]:
-        pix_t = torch.as_tensor(pix, dtype=torch.int64, device=self.pixels.device)
+        pix_t = _as_tensor(pix, dtype=torch.int64, device=self.pixels.device)
         if self.pixels.numel() == 0:
             return torch.zeros_like(pix_t), torch.zeros_like(pix_t, dtype=torch.bool)
 
@@ -1281,8 +1282,8 @@ class SparseHealpixMap:
         work_dtype = (
             torch.float32 if self.values.device.type == "mps" else torch.float64
         )
-        lon_t = torch.as_tensor(lon_deg, dtype=work_dtype, device=self.values.device)
-        lat_t = torch.as_tensor(lat_deg, dtype=work_dtype, device=self.values.device)
+        lon_t = _as_tensor(lon_deg, dtype=work_dtype, device=self.values.device)
+        lat_t = _as_tensor(lat_deg, dtype=work_dtype, device=self.values.device)
         lon_t, lat_t = torch.broadcast_tensors(lon_t, lat_t)
         shape = lon_t.shape
         lon_f = lon_t.reshape(-1)
@@ -1301,7 +1302,8 @@ class SparseHealpixMap:
             self.nside, lon_f, lat_f, nest=self.nest, lonlat=True
         )
         pix4 = pix4.to(self.pixels.device).reshape(4, -1)
-        w4 = w4.to(
+        w4 = _to(
+            w4,
             self.values.device,
             dtype=self.values.real.dtype
             if self.values.is_complex()
@@ -1316,7 +1318,7 @@ class SparseHealpixMap:
 
         if self.pixels.numel() > 0:
             stored_fill = (
-                torch.as_tensor(
+                _as_tensor(
                     self.fill_value,
                     dtype=self.values.dtype,
                     device=self.values.device,
@@ -1390,7 +1392,7 @@ class SparseHealpixMap:
             if power is not None
             else 1.0
         )
-        stored_fill = torch.as_tensor(
+        stored_fill = _as_tensor(
             self.fill_value, dtype=grouped.dtype, device=grouped.device
         )
         goods = torch.isfinite(grouped) & (grouped != stored_fill)
@@ -1464,7 +1466,7 @@ class SparseHealpixMap:
             coverage_map=cov_map,
             _block_index=new_index,
             _block_values=new_blocks,
-            _fill_tensor=torch.as_tensor(fv, dtype=data.dtype, device=data.device),
+            _fill_tensor=_as_tensor(fv, dtype=data.dtype, device=data.device),
         )
 
     def ud_grade(
@@ -1586,7 +1588,7 @@ class SparseHealpixMap:
                     goods = torch.isfinite(val_sorted) & (
                         ~torch.isclose(
                             base,
-                            torch.as_tensor(fv, dtype=base.dtype, device=base.device),
+                            _as_tensor(fv, dtype=base.dtype, device=base.device),
                         )
                     )
                 else:
@@ -1973,8 +1975,8 @@ def sum_union(
     out_dtype = _promote_sparse_value_dtypes(maps)
     values = torch.zeros((all_pixels.numel(),), dtype=out_dtype, device=device)
     for smap in maps:
-        vals = smap.get_values(all_pixels).to(dtype=out_dtype, device=device)
-        valid = vals != torch.as_tensor(
+        vals = _to(smap.get_values(all_pixels), dtype=out_dtype, device=device)
+        valid = vals != _as_tensor(
             smap.fill_value, dtype=vals.dtype, device=vals.device
         )
         values = values + torch.where(valid, vals, torch.zeros_like(vals))
@@ -2001,7 +2003,7 @@ def sum_intersection(
     out_dtype = _promote_sparse_value_dtypes(maps)
     values = torch.zeros((common.numel(),), dtype=out_dtype, device=device)
     for smap in maps:
-        values = values + smap.get_values(common).to(dtype=out_dtype, device=device)
+        values = values + _to(smap.get_values(common), dtype=out_dtype, device=device)
     return SparseHealpixMap.from_pixels(
         common,
         values,

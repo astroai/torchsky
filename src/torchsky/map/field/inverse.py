@@ -19,6 +19,7 @@ from torch import Tensor
 from ..._hash import file_sha256 as _file_sha256
 from ...calibration_evidence import load_operator_calibration_split
 from ...wcs import WCS
+from ...device import _as_tensor, _to
 
 if TYPE_CHECKING:
     from ..product import ProductResult
@@ -85,7 +86,8 @@ def prepare_linear_band_grid_observation_data(
         observation.detector_background,
     ):
         if component is not None:
-            component_t = component.to(
+            component_t = _to(
+                component,
                 device=image.device,
                 dtype=image.dtype,
             )
@@ -93,7 +95,7 @@ def prepare_linear_band_grid_observation_data(
                 raise ValueError("background components must be finite")
             background = background + component_t
     if calibrated_background is not None:
-        calibrated = torch.as_tensor(
+        calibrated = _as_tensor(
             calibrated_background,
             device=image.device,
             dtype=image.dtype,
@@ -233,7 +235,7 @@ def bind_linear_band_grid_observation_operator(
         cached = kernel_cache.get(key)
         if cached is not None:
             return cached
-        raw = psf_spec.kernel2d.to(device=device, dtype=dtype)
+        raw = _to(psf_spec.kernel2d, device=device, dtype=dtype)
         normed = raw / torch.clamp(raw.sum(), min=1.0e-8)
         ky, kx = int(normed.shape[0]), int(normed.shape[1])
         # PSF payloads are source stamps; conv2d weights are correlations.
@@ -310,7 +312,7 @@ def bind_linear_band_grid_observation_operator(
                 return sampled
             return apply_psf_spec(
                 sampled,
-                psf_spec.to(device=sampled.device, dtype=sampled.dtype),
+                _to(psf_spec, device=sampled.device, dtype=sampled.dtype),
             )
         tile_h, tile_w = validated_tile_hw
         height, width = obs_shape
@@ -400,7 +402,7 @@ def bind_linear_band_grid_observation_operator(
         if weight is None:
             support = observation_support_mask(observation).to(device=device)
             weight = (
-                observation.weight.to(device=device, dtype=dtype)
+                _to(observation.weight, device=device, dtype=dtype)
                 if observation.weight is not None
                 else torch.ones(obs_shape, device=device, dtype=dtype)
             )
@@ -569,7 +571,7 @@ class LinearBandGridField(_BaseFieldModel):
             raise ValueError(
                 "LinearBandGridField initialization requires local_tangent"
             )
-        data = product.data.to(device=self.grid.device, dtype=self.grid.dtype)
+        data = _to(product.data, device=self.grid.device, dtype=self.grid.dtype)
         if data.ndim == 2:
             plane = data
         elif data.ndim == 3:
@@ -605,10 +607,10 @@ class LinearBandGridField(_BaseFieldModel):
         target_height = max(int(product.header["NAXIS2"]) - 1, 1)
         x_norm = 2.0 * (px / target_width) - 1.0
         y_norm = 2.0 * (py / target_height) - 1.0
-        sample_grid = (
-            torch.stack([x_norm, y_norm], dim=-1)
-            .unsqueeze(0)
-            .to(device=self.grid.device, dtype=self.grid.dtype)
+        sample_grid = _to(
+            torch.stack([x_norm, y_norm], dim=-1).unsqueeze(0),
+            device=self.grid.device,
+            dtype=self.grid.dtype,
         )
         sampled = (
             F.grid_sample(
@@ -653,10 +655,10 @@ class LinearBandGridField(_BaseFieldModel):
         x_min, x_max, y_min, y_max = self.spatial_bounds_local_deg
         x_norm = 2.0 * (x_local - x_min) / (x_max - x_min) - 1.0
         y_norm = 2.0 * (y_local - y_min) / (y_max - y_min) - 1.0
-        sample_grid = (
-            torch.stack((x_norm, y_norm), dim=-1)
-            .reshape(1, -1, 1, 2)
-            .to(device=self.grid.device, dtype=self.grid.dtype)
+        sample_grid = _to(
+            torch.stack((x_norm, y_norm), dim=-1).reshape(1, -1, 1, 2),
+            device=self.grid.device,
+            dtype=self.grid.dtype,
         )
         sampled = F.grid_sample(
             self.grid.unsqueeze(0).unsqueeze(0),
@@ -839,7 +841,7 @@ def solve_linear_band_grid_cg(
         has_nonzero_init = False
         init_ref = solution
     else:
-        solution = torch.as_tensor(
+        solution = _as_tensor(
             initial_solution, dtype=rhs_base.dtype, device=rhs_base.device
         ).clone()
         if solution.shape != rhs_base.shape:
@@ -1044,7 +1046,7 @@ def solve_linear_band_grid_cg(
             )
             if edge_preserving or shared_source_sq is not None:
                 src_sq = (
-                    shared_source_sq.to(device=u.device, dtype=u.dtype)
+                    _to(shared_source_sq, device=u.device, dtype=u.dtype)
                     if shared_source_sq is not None
                     else torch.square(u_dead)
                 )
@@ -1056,8 +1058,8 @@ def solve_linear_band_grid_cg(
                 )
             if edge_preserving or shared_edge_sq is not None:
                 if shared_edge_sq is not None:
-                    gx_sq = shared_edge_sq[0].to(device=u.device, dtype=u.dtype)
-                    gy_sq = shared_edge_sq[1].to(device=u.device, dtype=u.dtype)
+                    gx_sq = _to(shared_edge_sq[0], device=u.device, dtype=u.dtype)
+                    gy_sq = _to(shared_edge_sq[1], device=u.device, dtype=u.dtype)
                 else:
                     gx_sq = (
                         torch.square(u_dead[:, 1:] - u_dead[:, :-1])
@@ -1152,7 +1154,7 @@ def solve_linear_band_grid_cg(
 
         elif isinstance(preconditioner, Tensor):
             preconditioner_name = "tensor_diagonal"
-            diag_t = preconditioner.to(device=rhs.device, dtype=rhs.dtype)
+            diag_t = _to(preconditioner, device=rhs.device, dtype=rhs.dtype)
             if diag_t.shape != rhs.shape:
                 raise ValueError(
                     "diagonal preconditioner shape must match target shape"
@@ -1657,7 +1659,7 @@ def solve_linear_band_grid_lsqr(
     x0 = (
         torch.zeros(state_shape, dtype=dtype, device=device)
         if initial_solution is None
-        else torch.as_tensor(initial_solution, dtype=dtype, device=device).clone()
+        else _as_tensor(initial_solution, dtype=dtype, device=device).clone()
     )
     if x0.shape != state_shape:
         raise ValueError("initial_solution shape must match operator target shape")
@@ -2092,7 +2094,7 @@ def load_stationary_calibrated_band_observations(
                     verify_hashes=True,
                 )
                 coords = [
-                    arrays[name].to(device=param.device, dtype=param.dtype)
+                    _to(arrays[name], device=param.device, dtype=param.dtype)
                     for name in ("detector_x", "detector_y", "wavelength", "time_mjd")
                 ]
                 vals = bg_model(*coords).detach().cpu().double()

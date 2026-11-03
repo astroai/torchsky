@@ -25,6 +25,7 @@ from .index import (
 from .index import nested_neighbor_rings as _nested_neighbor_rings
 from .index import nside_for_cap as _nside_for_cap
 from .index import _BATCHED_RING_HOPS_MAX
+from ..device import _as_tensor, _to
 
 
 def _identity_partition(partition: Any) -> Any:
@@ -181,7 +182,7 @@ def _normalize_radius_arcsec(
 ) -> tuple[Tensor, float]:
     """Return per-left radii and the prune radius (max)."""
     dtype = _work_dtype(device)
-    radius = torch.as_tensor(radius_arcsec, dtype=dtype, device=device)
+    radius = _as_tensor(radius_arcsec, dtype=dtype, device=device)
     if radius.ndim == 0:
         value = float(radius.item())
         if value <= 0.0:
@@ -1018,7 +1019,7 @@ def _error_radii(
     """Per-row error radii (arcsec): finite and ``>= 0``; ``None`` stays ``None``."""
     if value is None:
         return None
-    err = torch.as_tensor(value, dtype=_work_dtype(device), device=device)
+    err = _as_tensor(value, dtype=_work_dtype(device), device=device)
     err = err.reshape(1).expand(n).clone() if err.ndim == 0 else err.reshape(-1)
     if int(err.numel()) != n:
         raise ValueError(f"{name} must be a scalar or have one entry per row")
@@ -1044,8 +1045,8 @@ def _distance_filter(
     if not distance_tol >= 0.0:
         raise ValueError("distance_tol must be non-negative")
     dtype = _work_dtype(device)
-    dl = torch.as_tensor(left_distance, dtype=dtype, device=device).reshape(-1)
-    dr = torch.as_tensor(right_distance, dtype=dtype, device=device).reshape(-1)
+    dl = _as_tensor(left_distance, dtype=dtype, device=device).reshape(-1)
+    dr = _as_tensor(right_distance, dtype=dtype, device=device).reshape(-1)
     if int(dl.numel()) != n_left or int(dr.numel()) != n_right:
         raise ValueError("distance arrays must have one entry per catalogue row")
     tol = float(distance_tol)
@@ -1228,16 +1229,16 @@ def crossmatch_sky(
     raw_left_ra = torch.as_tensor(left_ra_deg).reshape(-1)
     work_device = torch.device(device) if device is not None else raw_left_ra.device
     work_dtype = _work_dtype(work_device)
-    left_ra = raw_left_ra.to(device=work_device, dtype=work_dtype)
-    left_dec = torch.as_tensor(
-        left_dec_deg, dtype=work_dtype, device=work_device
-    ).reshape(-1)
-    right_ra = torch.as_tensor(
-        right_ra_deg, dtype=work_dtype, device=work_device
-    ).reshape(-1)
-    right_dec = torch.as_tensor(
-        right_dec_deg, dtype=work_dtype, device=work_device
-    ).reshape(-1)
+    left_ra = _to(raw_left_ra, device=work_device, dtype=work_dtype)
+    left_dec = _as_tensor(left_dec_deg, dtype=work_dtype, device=work_device).reshape(
+        -1
+    )
+    right_ra = _as_tensor(right_ra_deg, dtype=work_dtype, device=work_device).reshape(
+        -1
+    )
+    right_dec = _as_tensor(right_dec_deg, dtype=work_dtype, device=work_device).reshape(
+        -1
+    )
     n_left, n_right = int(left_ra.numel()), int(right_ra.numel())
     find = normalize_find(find)
     if left_chunk_size <= 0 or right_chunk_size <= 0:
@@ -1332,9 +1333,7 @@ def crossmatch_sky_streamed(
     device = raw_right_ra.device
     work_dtype = _work_dtype(device)
     right_ra = raw_right_ra.to(dtype=work_dtype)
-    right_dec = torch.as_tensor(right_dec_deg, dtype=work_dtype, device=device).reshape(
-        -1
-    )
+    right_dec = _as_tensor(right_dec_deg, dtype=work_dtype, device=device).reshape(-1)
 
     if radius_arcsec <= 0.0:
         raise ValueError("radius_arcsec must be positive")
@@ -1359,10 +1358,8 @@ def crossmatch_sky_streamed(
     candidate_cache: dict[int, Tensor] = {}
 
     for left_ra, left_dec in left_batches:
-        left_ra = torch.as_tensor(left_ra, dtype=work_dtype, device=device).reshape(-1)
-        left_dec = torch.as_tensor(left_dec, dtype=work_dtype, device=device).reshape(
-            -1
-        )
+        left_ra = _as_tensor(left_ra, dtype=work_dtype, device=device).reshape(-1)
+        left_dec = _as_tensor(left_dec, dtype=work_dtype, device=device).reshape(-1)
         chunk_len = int(left_ra.numel())
         if chunk_len == 0:
             continue

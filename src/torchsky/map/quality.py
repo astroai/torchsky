@@ -9,6 +9,7 @@ import torch
 from torch import Tensor
 
 from ..quality import QualityBit
+from ..device import _as_tensor
 
 
 def _validate_bit_mask(value: int | None, name: str) -> int | None:
@@ -62,7 +63,7 @@ class DQPolicy:
 
     def with_cosmic_rays(self, dq: Tensor, cosmic_rays: Tensor) -> Tensor:
         value = self._coerce(dq).clone()
-        mask = torch.as_tensor(cosmic_rays, device=value.device, dtype=torch.bool)
+        mask = _as_tensor(cosmic_rays, device=value.device, dtype=torch.bool)
         if mask.shape != value.shape:
             raise ValueError("cosmic-ray mask must match the DQ plane shape")
         return torch.where(mask, value | self.cosmic_ray_bit, value)
@@ -116,7 +117,7 @@ class QualityProduct:
 
     def __post_init__(self) -> None:
         dq = DQPolicy._coerce(self.dq)
-        usable = torch.as_tensor(
+        usable = _as_tensor(
             self.usability_mask,
             device=dq.device,
             dtype=torch.bool,

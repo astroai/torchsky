@@ -30,6 +30,7 @@ from .photometry import (
     _rank_analysis,
     fit_forced_photometry,
 )
+from ..device import _as_tensor, _to
 
 
 FailurePolicy = Literal["raise", "return"]
@@ -255,7 +256,7 @@ def _component_mask(
         return torch.full(
             (scene.component_count,), value, dtype=torch.bool, device=scene.device
         )
-    mask = torch.as_tensor(value, dtype=torch.bool, device=scene.device).reshape(-1)
+    mask = _as_tensor(value, dtype=torch.bool, device=scene.device).reshape(-1)
     if mask.numel() != scene.component_count:
         raise ValueError(f"{name} must be bool or match scene.component_count")
     return mask
@@ -271,7 +272,7 @@ def _validate_holdout_masks(
         raise ValueError("heldout_masks must match observations")
     result = []
     for observation, mask in zip(observations, heldout_masks, strict=True):
-        value = torch.as_tensor(mask, dtype=torch.bool, device=observation.image.device)
+        value = _as_tensor(mask, dtype=torch.bool, device=observation.image.device)
         if value.shape != observation.image.shape:
             raise ValueError("each heldout mask must match its observation image")
         result.append(value)
@@ -358,7 +359,9 @@ def _weighted_residual(
         weight = (
             torch.ones_like(residual)
             if observation.weight is None
-            else observation.weight[y0:y1, x0:x1].to(residual).clamp_min(0)
+            else _to(
+                observation.weight[y0:y1, x0:x1], residual.device, residual.dtype
+            ).clamp_min(0)
         )
         values.append((residual[valid] * torch.sqrt(weight[valid])).reshape(-1))
     if values:
@@ -383,11 +386,13 @@ def _adequacy(
         valid = observation_support_mask(observation)
         if heldout_masks is not None:
             valid = valid & heldout_masks[index]
-        residual = observation.image - prediction.to(observation.image)
+        residual = observation.image - _to(
+            prediction, observation.image.device, observation.image.dtype
+        )
         weight = (
             torch.ones_like(residual)
             if observation.weight is None
-            else observation.weight.to(residual).clamp_min(0)
+            else _to(observation.weight, residual.device, residual.dtype).clamp_min(0)
         )
         selected_weight = weight[valid]
         selected_residual = residual[valid]
@@ -833,13 +838,17 @@ def fit_parametric_deblending(
                     gradient.to("cpu") if gradient.device.type == "mps" else gradient
                 )
                 try:
-                    delta = torch.linalg.solve(analysis_system, -analysis_gradient).to(
-                        values
+                    delta = _to(
+                        torch.linalg.solve(analysis_system, -analysis_gradient),
+                        values.device,
+                        values.dtype,
                     )
                 except RuntimeError:
-                    delta = (
-                        torch.linalg.pinv(analysis_system) @ -analysis_gradient
-                    ).to(values)
+                    delta = _to(
+                        torch.linalg.pinv(analysis_system) @ -analysis_gradient,
+                        values.device,
+                        values.dtype,
+                    )
                 trial_values = values.clone()
                 trial_values[selected] += delta
                 trial_values = _project_parameters(
@@ -901,7 +910,9 @@ def fit_parametric_deblending(
                 else information
             )
             null_values, null_vectors = torch.linalg.eigh(0.5 * (analysis + analysis.T))
-            null_vectors = null_vectors[:, null_values <= cutoff.to(analysis)]
+            null_vectors = null_vectors[
+                :, null_values <= _to(cutoff, analysis.device, analysis.dtype)
+            ]
             if null_vectors.numel():
                 involved = null_vectors.abs().amax(dim=1) > math.sqrt(
                     torch.finfo(information.dtype).eps
@@ -915,7 +926,9 @@ def fit_parametric_deblending(
                 if information.device.type == "mps"
                 else information
             )
-            covariance = torch.linalg.inv(analysis).to(information)
+            covariance = _to(
+                torch.linalg.inv(analysis), information.device, information.dtype
+            )
             covariance = 0.5 * (covariance + covariance.T)
         positive = eigenvalues[eigenvalues > cutoff]
         condition = (
@@ -1011,7 +1024,8 @@ def fit_parametric_deblending(
         nonlinear_covariance=tuple(item.covariance for item in diagnostics),
         predictions=final_fit.predictions,
         residuals=tuple(
-            observation.image - prediction.to(observation.image)
+            observation.image
+            - _to(prediction, observation.image.device, observation.image.dtype)
             for observation, prediction in zip(
                 observations, final_fit.predictions, strict=True
             )
@@ -1410,7 +1424,8 @@ def fit_morphology_spectrum_deblending(
         covariance=final_fit.covariance,
         predictions=final_fit.predictions,
         residuals=tuple(
-            observation.image - prediction.to(observation.image)
+            observation.image
+            - _to(prediction, observation.image.device, observation.image.dtype)
             for observation, prediction in zip(
                 observations, final_fit.predictions, strict=True
             )

@@ -14,6 +14,7 @@ from .core import great_circle_distance, lonlat_to_unit_xyz
 from .geom import PixelizedRegion, spherical_polygon_contains
 from .randoms import PreparedRandomSampler, _prepare_moc_random_sampler, sample_randoms
 from .sparse import SparseHealpixMap
+from ..device import _to
 
 
 def _order_from_nside(nside: int, *, name: str = "nside") -> int:
@@ -396,7 +397,7 @@ def _normalize_bmoc(uniq: Tensor, flag: Tensor) -> tuple[Tensor, Tensor]:
         0, group, flag.to(s.device)[idx].to(torch.int64), reduce="amin"
     )
     normalized_uniq = uniq[idx[top]]
-    normalized_flag = group_flag.to(device=flag.device, dtype=torch.uint8)
+    normalized_flag = _to(group_flag, device=flag.device, dtype=torch.uint8)
     order = torch.argsort(normalized_uniq)
     return normalized_uniq[order], normalized_flag[order]
 

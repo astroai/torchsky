@@ -17,6 +17,7 @@ from .quality import (
     select_field_residual_tiles,
 )
 from .types import FieldObservation
+from ...device import _as_tensor, _to
 
 
 @dataclass(frozen=True)
@@ -46,9 +47,9 @@ def _tile_weighted_mean_residual(
     if product is None:
         return 0.0
     residual = torch.as_tensor(product.residual)[tile.y0 : tile.y1, tile.x0 : tile.x1]
-    weight = torch.as_tensor(
-        product.weight, device=residual.device, dtype=residual.dtype
-    )[tile.y0 : tile.y1, tile.x0 : tile.x1]
+    weight = _as_tensor(product.weight, device=residual.device, dtype=residual.dtype)[
+        tile.y0 : tile.y1, tile.x0 : tile.x1
+    ]
     support = torch.as_tensor(product.support, device=residual.device).to(
         dtype=torch.bool
     )[tile.y0 : tile.y1, tile.x0 : tile.x1]
@@ -173,8 +174,8 @@ class ResidualTileBasisField(_BaseFieldModel):
 
     def _resolved_scales(self, *, dtype: torch.dtype, device: torch.device) -> Tensor:
         if self.log_tile_scales is not None:
-            return torch.exp(self.log_tile_scales).to(device=device, dtype=dtype)
-        return self.tile_scales.to(device=device, dtype=dtype)
+            return _to(torch.exp(self.log_tile_scales), device=device, dtype=dtype)
+        return _to(self.tile_scales, device=device, dtype=dtype)
 
     def residual_correction(
         self,
@@ -183,11 +184,11 @@ class ResidualTileBasisField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
         coords = self._encoded_coords(ra_deg, dec_deg, wavelength_angstrom)
-        centers = self.tile_centers.to(device=coords.device, dtype=coords.dtype)
+        centers = _to(self.tile_centers, device=coords.device, dtype=coords.dtype)
         scales = self._resolved_scales(dtype=coords.dtype, device=coords.device)
         diff = (coords.unsqueeze(-2) - centers) / torch.clamp(scales, min=1.0e-6)
         basis = torch.exp(-0.5 * torch.sum(diff * diff, dim=-1))
-        amplitudes = self.tile_amplitudes.to(device=coords.device, dtype=coords.dtype)
+        amplitudes = _to(self.tile_amplitudes, device=coords.device, dtype=coords.dtype)
         return torch.sum(basis * amplitudes, dim=-1)
 
     def forward(
@@ -197,7 +198,8 @@ class ResidualTileBasisField(_BaseFieldModel):
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
         base = self.base_model(ra_deg, dec_deg, wavelength_angstrom)
-        return base + self.residual_correction(ra_deg, dec_deg, wavelength_angstrom).to(
+        return base + _to(
+            self.residual_correction(ra_deg, dec_deg, wavelength_angstrom),
             dtype=base.dtype,
             device=base.device,
         )

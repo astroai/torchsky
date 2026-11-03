@@ -26,6 +26,7 @@ from ..scenes import (
     as_scene_representation,
 )
 from ..target import TargetRenderSpec
+from ...device import _as_tensor, _to
 
 
 def _scene_state_tensor(scene: SceneRepresentation) -> Tensor:
@@ -155,7 +156,7 @@ def build_state_subspace_operator(
             adj = torch.as_tensor(adjoint_tensor)
             if adj.ndim != state.ndim - 1 or tuple(adj.shape) != tuple(state.shape[1:]):
                 raise ValueError("subspace adjoint returned an incompatible tensor")
-            out[indices[0]] = adj.to(dtype=state.dtype, device=state.device)
+            out[indices[0]] = _to(adj, dtype=state.dtype, device=state.device)
             return out
         adj = torch.as_tensor(adjoint_tensor)
         expected = (int(indices.numel()), *tuple(state.shape[1:]))
@@ -164,7 +165,7 @@ def build_state_subspace_operator(
         out.index_copy_(
             0,
             indices.to(device=out.device),
-            adj.to(dtype=state.dtype, device=out.device),
+            _to(adj, dtype=state.dtype, device=out.device),
         )
         return out
 
@@ -222,7 +223,7 @@ def build_state_component_mixture_operator(
             device=state.device,
         )
         if weights is None
-        else torch.as_tensor(
+        else _as_tensor(
             weights,
             dtype=state.dtype if state.is_complex() else torch.float32,
             device=state.device,
@@ -238,7 +239,7 @@ def build_state_component_mixture_operator(
                 "component mixture operator received a scene with incompatible shape"
             )
         subset = tensor.index_select(0, component_idx.to(device=tensor.device))
-        coeffs = weights_t.to(dtype=subset.dtype, device=subset.device).view(
+        coeffs = _to(weights_t, dtype=subset.dtype, device=subset.device).view(
             int(component_idx.numel()),
             *([1] * (subset.ndim - 1)),
         )
@@ -252,9 +253,9 @@ def build_state_component_mixture_operator(
                 "component mixture adjoint returned an incompatible tensor"
             )
         out = torch.zeros_like(state)
-        coeffs = torch.conj(weights_t.to(dtype=adj.dtype, device=adj.device))
+        coeffs = torch.conj(_to(weights_t, dtype=adj.dtype, device=adj.device))
         for idx, weight in zip(component_idx.tolist(), coeffs, strict=True):
-            out[idx] = out[idx] + (weight * adj).to(dtype=out.dtype, device=out.device)
+            out[idx] = out[idx] + _to(weight * adj, dtype=out.dtype, device=out.device)
         return out
 
     def _wrap_bound(operator: BoundObservationOperator) -> BoundObservationOperator:
@@ -390,7 +391,7 @@ class SurveyInstrumentComponentMixer(nn.Module):
         scales: Tensor | Sequence[float],
     ) -> None:
         """Rescale role-matched mixer columns in-place for exact gauge preservation."""
-        scales_t = torch.as_tensor(
+        scales_t = _as_tensor(
             scales,
             dtype=self.shared_weights.dtype,
             device=self.shared_weights.device,
@@ -489,7 +490,8 @@ class HarmonicComponentDecomposition(nn.Module):
     def component_mask(self, role: str) -> Tensor:
         if role not in SurveyInstrumentComponentMixer._VALID_ROLES:
             raise ValueError(f"unsupported component role {role!r}")
-        return getattr(self.mixer, f"{role}_mask").to(
+        return _to(
+            getattr(self.mixer, f"{role}_mask"),
             device=self.coeff_real.device,
             dtype=self.coeff_real.dtype,
         )
@@ -656,7 +658,7 @@ class HarmonicComponentDecomposition(nn.Module):
             + self.component_mask("interaction")
         ).clamp(max=1.0)
         if private_harmonic_diagonal is not None:
-            diag = torch.as_tensor(
+            diag = _as_tensor(
                 private_harmonic_diagonal,
                 dtype=self.coeff_real.dtype,
                 device=self.coeff_real.device,
@@ -694,7 +696,7 @@ def build_conditioned_component_mixture_operator(
 
     def _weights_for(dtype: torch.dtype, device: torch.device) -> Tensor:
         weights = mixer(survey=survey, instrument=instrument)
-        return weights.to(dtype=dtype, device=device)
+        return _to(weights, dtype=dtype, device=device)
 
     def _mix(scene: SceneRepresentation | nn.Module | Tensor) -> Tensor:
         tensor = _scene_state_tensor(as_scene_representation(scene))
@@ -719,7 +721,7 @@ def build_conditioned_component_mixture_operator(
             ncomp,
             *([1] * adj.ndim),
         )
-        return (coeffs * adj.unsqueeze(0)).to(dtype=state.dtype, device=state.device)
+        return _to(coeffs * adj.unsqueeze(0), dtype=state.dtype, device=state.device)
 
     def _wrap_bound(operator: BoundObservationOperator) -> BoundObservationOperator:
         def _apply_operator(
@@ -779,7 +781,7 @@ def build_state_diagonal_operator(
             raise ValueError(
                 "state-space diagonal operator received a scene with incompatible shape"
             )
-        return diag.to(dtype=tensor.dtype, device=tensor.device) * tensor
+        return _to(diag, dtype=tensor.dtype, device=tensor.device) * tensor
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
@@ -787,7 +789,7 @@ def build_state_diagonal_operator(
             raise ValueError(
                 "state-space diagonal adjoint received data with incompatible shape"
             )
-        return torch.conj(diag).to(dtype=mapped.dtype, device=mapped.device) * mapped
+        return _to(torch.conj(diag), dtype=mapped.dtype, device=mapped.device) * mapped
 
     return BoundObservationOperator(
         operators=ObservationOperatorBundle(),
@@ -831,10 +833,10 @@ def build_state_matrix_operator(
             raise ValueError(
                 "state-space matrix operator received a scene with incompatible shape"
             )
-        flat = _flatten_state(tensor).to(dtype=matrix_t.dtype, device=matrix_t.device)
+        flat = _to(_flatten_state(tensor), dtype=matrix_t.dtype, device=matrix_t.device)
         mapped = matrix_t @ flat
         return _reshape_state(
-            mapped.to(dtype=tensor.dtype, device=tensor.device), state
+            _to(mapped, dtype=tensor.dtype, device=tensor.device), state
         )
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
@@ -843,9 +845,9 @@ def build_state_matrix_operator(
             raise ValueError(
                 "state-space matrix adjoint received data with incompatible shape"
             )
-        flat = _flatten_state(mapped).to(dtype=matrix_t.dtype, device=matrix_t.device)
+        flat = _to(_flatten_state(mapped), dtype=matrix_t.dtype, device=matrix_t.device)
         adj = torch.conj(matrix_t.transpose(-2, -1)) @ flat
-        return _reshape_state(adj.to(dtype=mapped.dtype, device=mapped.device), state)
+        return _reshape_state(_to(adj, dtype=mapped.dtype, device=mapped.device), state)
 
     return BoundObservationOperator(
         operators=ObservationOperatorBundle(),
@@ -872,7 +874,7 @@ def build_state_low_rank_operator(
     if weights is None:
         weights_t = torch.ones(rank, dtype=basis_t.dtype, device=basis_t.device)
     else:
-        weights_t = torch.as_tensor(weights, dtype=basis_t.dtype, device=basis_t.device)
+        weights_t = _as_tensor(weights, dtype=basis_t.dtype, device=basis_t.device)
         if weights_t.ndim != 1 or int(weights_t.shape[0]) != rank:
             raise ValueError("weights must have shape (rank,)")
     target = TargetRenderSpec(
@@ -893,9 +895,9 @@ def build_state_low_rank_operator(
             raise ValueError(
                 "state-space low-rank operator received a scene with incompatible shape"
             )
-        flat = _flatten_state(tensor).to(dtype=basis_t.dtype, device=basis_t.device)
+        flat = _to(_flatten_state(tensor), dtype=basis_t.dtype, device=basis_t.device)
         coeffs = torch.conj(basis_t).transpose(-2, -1) @ flat
-        return (weights_t * coeffs).to(dtype=tensor.dtype, device=tensor.device)
+        return _to(weights_t * coeffs, dtype=tensor.dtype, device=tensor.device)
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
@@ -903,9 +905,9 @@ def build_state_low_rank_operator(
             raise ValueError(
                 "state-space low-rank adjoint received data with incompatible shape"
             )
-        coeffs = mapped.to(dtype=basis_t.dtype, device=basis_t.device)
+        coeffs = _to(mapped, dtype=basis_t.dtype, device=basis_t.device)
         flat = basis_t @ (torch.conj(weights_t) * coeffs)
-        return _reshape_state(flat.to(dtype=state.dtype, device=state.device), state)
+        return _reshape_state(_to(flat, dtype=state.dtype, device=state.device), state)
 
     return BoundObservationOperator(
         operators=ObservationOperatorBundle(),
@@ -952,9 +954,9 @@ def build_state_kronecker_operator(
             raise ValueError(
                 "Kronecker state operator received a scene with incompatible shape"
             )
-        tensor_t = tensor.to(dtype=left_t.dtype, device=left_t.device)
+        tensor_t = _to(tensor, dtype=left_t.dtype, device=left_t.device)
         mapped = left_t @ tensor_t @ torch.conj(right_t).transpose(-2, -1)
-        return mapped.to(dtype=tensor.dtype, device=tensor.device)
+        return _to(mapped, dtype=tensor.dtype, device=tensor.device)
 
     def _apply_adjoint(tensor: Tensor) -> Tensor:
         mapped = torch.as_tensor(tensor)
@@ -963,9 +965,9 @@ def build_state_kronecker_operator(
             out_cols,
         ):
             raise ValueError("Kronecker adjoint received data with incompatible shape")
-        mapped_t = mapped.to(dtype=left_t.dtype, device=left_t.device)
+        mapped_t = _to(mapped, dtype=left_t.dtype, device=left_t.device)
         adj = torch.conj(left_t).transpose(-2, -1) @ mapped_t @ right_t
-        return adj.to(dtype=state.dtype, device=state.device)
+        return _to(adj, dtype=state.dtype, device=state.device)
 
     return BoundObservationOperator(
         operators=ObservationOperatorBundle(),

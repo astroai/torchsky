@@ -31,6 +31,7 @@ from .image_grid import (
 )
 from .mask_weight import load_image_observation_weight_map
 from .pixel_area import pixel_area_sr_map
+from ...device import _to
 
 
 def bind_image_plane_target_operator(
@@ -146,7 +147,7 @@ def bind_image_plane_target_operator(
                 device=device,
             )
             noise_cache[cache_key] = weight_map
-        return tensor_t * weight_map.to(dtype=tensor_t.dtype, device=device)
+        return tensor_t * _to(weight_map, dtype=tensor_t.dtype, device=device)
 
     return BoundObservationOperator(
         operators=bundle,

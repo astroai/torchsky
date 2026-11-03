@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from ...device import _to
 
 
 def hash_grid_smoothstep(t: Tensor) -> Tensor:
@@ -170,8 +171,10 @@ class HashGridEncoder(nn.Module):
                     sample = table[self._hash(corner, table_size)]
                 level_feat = level_feat + weight.unsqueeze(-1) * sample
             if self.level_gain is not None:
-                g = self.level_gain[level_idx].to(
-                    device=level_feat.device, dtype=level_feat.dtype
+                g = _to(
+                    self.level_gain[level_idx],
+                    device=level_feat.device,
+                    dtype=level_feat.dtype,
                 )
                 level_feat = level_feat * g
             outputs.append(level_feat)
@@ -184,7 +187,7 @@ def sample_feature_plane(plane: Tensor, coord_u: Tensor, coord_v: Tensor) -> Ten
         flat_u = coord_u.reshape(-1)
         flat_v = coord_v.reshape(-1)
         grid = torch.stack([2.0 * flat_u - 1.0, 2.0 * flat_v - 1.0], dim=-1)
-        grid = grid.view(1, -1, 1, 2).to(dtype=plane.dtype, device=plane.device)
+        grid = _to(grid.view(1, -1, 1, 2), dtype=plane.dtype, device=plane.device)
         sampled = F.grid_sample(
             plane.unsqueeze(0),
             grid,
@@ -196,8 +199,8 @@ def sample_feature_plane(plane: Tensor, coord_u: Tensor, coord_v: Tensor) -> Ten
         return sampled.reshape(*coord_u.shape, plane.shape[0])
 
     height, width = int(plane.shape[-2]), int(plane.shape[-1])
-    flat_u = coord_u.reshape(-1).to(device=plane.device, dtype=plane.dtype)
-    flat_v = coord_v.reshape(-1).to(device=plane.device, dtype=plane.dtype)
+    flat_u = _to(coord_u.reshape(-1), device=plane.device, dtype=plane.dtype)
+    flat_v = _to(coord_v.reshape(-1), device=plane.device, dtype=plane.dtype)
     x = flat_u.clamp(0.0, 1.0) * float(max(width - 1, 0))
     y = flat_v.clamp(0.0, 1.0) * float(max(height - 1, 0))
     x0 = torch.floor(x).to(dtype=torch.long)

@@ -33,6 +33,7 @@ from .types import (
     FieldSpatialSampling,
     ForwardContext,
 )
+from ...device import _to
 
 
 def _mixture_render_kwargs(
@@ -78,21 +79,21 @@ def _structured_noise_loss(
     ):
         if value is None:
             continue
-        plane = value.to(device=residual.device, dtype=residual.dtype)
+        plane = _to(value, device=residual.device, dtype=residual.dtype)
         plane_valid = torch.isfinite(plane) & (plane >= 0.0)
         valid = valid & plane_valid
         components[key] = torch.where(plane_valid, plane, torch.zeros_like(plane))
     err = (
         None
         if observation.err is None
-        else observation.err.to(device=residual.device, dtype=residual.dtype)
+        else _to(observation.err, device=residual.device, dtype=residual.dtype)
     )
     if not components and err is None:
         if observation.weight is None:
             raise ValueError(
                 "structured_nll requires variance planes, ERR, or inverse-variance weight"
             )
-        weight = observation.weight.to(device=residual.device, dtype=residual.dtype)
+        weight = _to(observation.weight, device=residual.device, dtype=residual.dtype)
         err = torch.where(
             weight > 0.0,
             weight.clamp_min(torch.finfo(weight.dtype).tiny).rsqrt(),
@@ -115,8 +116,10 @@ def _structured_noise_loss(
         contamination_prior=(
             None
             if observation.contamination_prior is None
-            else observation.contamination_prior.to(
-                device=residual.device, dtype=residual.dtype
+            else _to(
+                observation.contamination_prior,
+                device=residual.device,
+                dtype=residual.dtype,
             )
         ),
     )
@@ -179,12 +182,12 @@ def _compute_full_observation_losses(
                 spatial_tile_hw=spatial_tile_hw,
             )
             pred_logvar = None
-        image = observation.image.to(device=pred.device, dtype=pred.dtype)
+        image = _to(observation.image, device=pred.device, dtype=pred.dtype)
         valid = _observation_support_mask(observation).to(device=pred.device)
         image = torch.where(valid, image, torch.zeros_like(image))
         residual = torch.where(valid, pred - image, torch.zeros_like(pred))
         weight = (
-            observation.weight.to(device=pred.device, dtype=pred.dtype)
+            _to(observation.weight, device=pred.device, dtype=pred.dtype)
             if observation.weight is not None
             else torch.ones_like(pred)
         )

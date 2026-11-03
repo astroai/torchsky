@@ -13,6 +13,7 @@ from ...domain import DomainSpec
 from ...wcs import WCS
 from ...wcs.frames import warn_frame_bias_conversion
 from .response import IndexedResponsePlan
+from ...device import _to
 
 
 AdaptiveValueSemantics = Literal["surface_brightness", "integrated_flux"]
@@ -100,8 +101,10 @@ def _mapped_points(
     lon, lat = target_wcs.pixel_to_world(points[:, 0], points[:, 1])
     lon, lat = _convert_world_between_wcs(lon, lat, target_wcs, source_wcs)
     x_source, y_source = source_wcs.world_to_pixel(lon, lat)
-    mapped = torch.stack((x_source, y_source), dim=-1).to(
-        device=points.device, dtype=points.dtype
+    mapped = _to(
+        torch.stack((x_source, y_source), dim=-1),
+        device=points.device,
+        dtype=points.dtype,
     )
     if mapped.shape != points.shape or not bool(torch.isfinite(mapped).all()):
         raise RuntimeError(

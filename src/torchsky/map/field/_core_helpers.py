@@ -16,7 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from ...device import resolve_device
+from ...device import _as_tensor, resolve_device, _to
 from ...wcs import WCS
 
 if TYPE_CHECKING:
@@ -196,7 +196,7 @@ def _atlas_expert_weights(
     topk_experts: int | None,
 ) -> Tensor:
     """Gaussian softmax weights over atlas experts, optionally top-k sparsified."""
-    diff = xy.unsqueeze(-2) - centers.to(device=xy.device, dtype=xy.dtype)
+    diff = xy.unsqueeze(-2) - _to(centers, device=xy.device, dtype=xy.dtype)
     logits = -0.5 * torch.sum(torch.square(diff / max(sigma, 1.0e-3)), dim=-1)
     weights = torch.softmax(logits, dim=-1)
     if topk_experts is not None and topk_experts < weights.shape[-1]:
@@ -225,7 +225,7 @@ def _atlas_local_coords(xy: Tensor, centers: Tensor, atlas_side: int) -> Tensor:
     tile_size = 1.0 / float(atlas_side)
     for center in centers:
         lower = center - 0.5 * tile_size
-        shifted = (xy - lower.to(device=xy.device, dtype=xy.dtype)) / tile_size
+        shifted = (xy - _to(lower, device=xy.device, dtype=xy.dtype)) / tile_size
         local.append(torch.clamp(shifted, 0.0, 1.0))
     return torch.stack(local, dim=-2)
 
@@ -257,7 +257,7 @@ class _BaseFieldModel(nn.Module):
         dec_deg: Tensor,
         wavelength_angstrom: Tensor | float,
     ) -> Tensor:
-        wavelength = torch.as_tensor(
+        wavelength = _as_tensor(
             wavelength_angstrom,
             device=ra_deg.device,
             dtype=ra_deg.dtype,
@@ -327,7 +327,7 @@ class _BaseFieldModel(nn.Module):
         dtype: torch.dtype,
         shape: torch.Size,
     ) -> Tensor:
-        wavelength = torch.as_tensor(
+        wavelength = _as_tensor(
             wavelength_angstrom,
             device=device,
             dtype=dtype,
@@ -359,13 +359,13 @@ def _resolve_anchor_sample_world_coordinates(
 ) -> tuple[Tensor, Tensor]:
     if term.sample_ra_deg is not None and term.sample_dec_deg is not None:
         return (
-            term.sample_ra_deg.to(device=device, dtype=torch.float32),
-            term.sample_dec_deg.to(device=device, dtype=torch.float32),
+            _to(term.sample_ra_deg, device=device, dtype=torch.float32),
+            _to(term.sample_dec_deg, device=device, dtype=torch.float32),
         )
     if term.sample_x_pix is None or term.sample_y_pix is None:
         raise ValueError("anchor term does not define sample coordinates")
-    x_pix = term.sample_x_pix.to(device=device, dtype=torch.float64)
-    y_pix = term.sample_y_pix.to(device=device, dtype=torch.float64)
+    x_pix = _to(term.sample_x_pix, device=device, dtype=torch.float64)
+    y_pix = _to(term.sample_y_pix, device=device, dtype=torch.float64)
     ra_deg, dec_deg = _observation_pixel_to_world(term.observation, x_pix, y_pix)
     return ra_deg.to(dtype=torch.float32), dec_deg.to(dtype=torch.float32)
 
@@ -392,8 +392,8 @@ def _resolve_centroid_target_pixel_coordinates(
         torch.tensor(float(term.target_dec_deg), dtype=torch.float64),
     )
     return (
-        x_pix.to(device=device, dtype=dtype),
-        y_pix.to(device=device, dtype=dtype),
+        _to(x_pix, device=device, dtype=dtype),
+        _to(y_pix, device=device, dtype=dtype),
     )
 
 
@@ -427,7 +427,7 @@ def _infer_context_axis_labels(
 
 
 def _sample_feature_volume(volume: Tensor, coords_unit: Tensor) -> Tensor:
-    flat = coords_unit.reshape(-1, 3).to(dtype=volume.dtype, device=volume.device)
+    flat = _to(coords_unit.reshape(-1, 3), dtype=volume.dtype, device=volume.device)
     grid = torch.stack(
         [
             2.0 * flat[:, 0] - 1.0,
@@ -576,13 +576,17 @@ def pretrain_strainer_trunk_synthetic(
             torch.as_tensor(float(domain.wavelength_center), device=device) + lam_offset
         )
         coords_unit = model._unit_box_coords(ra_deg, dec_deg, wavelength)
-        target = _synthetic_noise_target(
-            coords_unit,
-            noise_kind=step_noise,
-            num_terms=num_terms,
-            max_frequency=max_frequency,
-            generator=noise_gen,
-        ).to(device=device, dtype=torch.float32)
+        target = _to(
+            _synthetic_noise_target(
+                coords_unit,
+                noise_kind=step_noise,
+                num_terms=num_terms,
+                max_frequency=max_frequency,
+                generator=noise_gen,
+            ),
+            device=device,
+            dtype=torch.float32,
+        )
         pred = model(
             ra_deg.to(dtype=torch.float32),
             dec_deg.to(dtype=torch.float32),

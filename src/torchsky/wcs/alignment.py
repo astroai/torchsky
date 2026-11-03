@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 import torch
 from torch import Tensor
+from ..device import _as_tensor
 
 AffineGeometry = Literal["shift", "rshift", "rscale", "general"]
 
@@ -22,9 +23,7 @@ class AffineFitResult:
     iterations: int
 
     def apply(self, points: Any) -> Tensor:
-        pts = torch.as_tensor(
-            points, dtype=self.matrix.dtype, device=self.matrix.device
-        )
+        pts = _as_tensor(points, dtype=self.matrix.dtype, device=self.matrix.device)
         return torch.matmul(pts, self.matrix.T) + self.offset
 
 
@@ -62,16 +61,16 @@ class TangentPlaneFrame:
             else torch.float64
         )
         ra_t = ra_t.to(dtype=dtype)
-        dec_t = torch.as_tensor(dec, dtype=dtype, device=ra_t.device)
+        dec_t = _as_tensor(dec, dtype=dtype, device=ra_t.device)
         if ra_t.shape != dec_t.shape:
             raise ValueError("ra and dec must have the same shape")
 
-        d2r = torch.as_tensor(torch.pi / 180.0, dtype=dtype, device=ra_t.device)
-        r2d = torch.as_tensor(180.0 / torch.pi, dtype=dtype, device=ra_t.device)
+        d2r = _as_tensor(torch.pi / 180.0, dtype=dtype, device=ra_t.device)
+        r2d = _as_tensor(180.0 / torch.pi, dtype=dtype, device=ra_t.device)
         ra_rad = ra_t * d2r
         dec_rad = dec_t * d2r
-        ra0_rad = torch.as_tensor(self.ra0, dtype=dtype, device=ra_t.device) * d2r
-        dec0_rad = torch.as_tensor(self.dec0, dtype=dtype, device=ra_t.device) * d2r
+        ra0_rad = _as_tensor(self.ra0, dtype=dtype, device=ra_t.device) * d2r
+        dec0_rad = _as_tensor(self.dec0, dtype=dtype, device=ra_t.device) * d2r
 
         dra = torch.remainder(ra_rad - ra0_rad + torch.pi, 2.0 * torch.pi) - torch.pi
         sin_dec = torch.sin(dec_rad)
@@ -95,16 +94,16 @@ class TangentPlaneFrame:
             else torch.float64
         )
         xi_t = xi_t.to(dtype=dtype)
-        eta_t = torch.as_tensor(eta, dtype=dtype, device=xi_t.device)
+        eta_t = _as_tensor(eta, dtype=dtype, device=xi_t.device)
         if xi_t.shape != eta_t.shape:
             raise ValueError("xi and eta must have the same shape")
 
-        d2r = torch.as_tensor(torch.pi / 180.0, dtype=dtype, device=xi_t.device)
-        r2d = torch.as_tensor(180.0 / torch.pi, dtype=dtype, device=xi_t.device)
+        d2r = _as_tensor(torch.pi / 180.0, dtype=dtype, device=xi_t.device)
+        r2d = _as_tensor(180.0 / torch.pi, dtype=dtype, device=xi_t.device)
         x = xi_t * d2r
         y = eta_t * d2r
-        ra0_rad = torch.as_tensor(self.ra0, dtype=dtype, device=xi_t.device) * d2r
-        dec0_rad = torch.as_tensor(self.dec0, dtype=dtype, device=xi_t.device) * d2r
+        ra0_rad = _as_tensor(self.ra0, dtype=dtype, device=xi_t.device) * d2r
+        dec0_rad = _as_tensor(self.dec0, dtype=dtype, device=xi_t.device) * d2r
 
         rho = torch.sqrt(x * x + y * y)
         c = torch.atan(rho)
@@ -153,7 +152,7 @@ class SkyAffineFitResult:
 
 
 def _radec_to_unit(ra: Tensor, dec: Tensor) -> Tensor:
-    d2r = torch.as_tensor(torch.pi / 180.0, dtype=torch.float64, device=ra.device)
+    d2r = _as_tensor(torch.pi / 180.0, dtype=torch.float64, device=ra.device)
     ra_rad = ra * d2r
     dec_rad = dec * d2r
     cos_dec = torch.cos(dec_rad)
@@ -164,7 +163,7 @@ def _radec_to_unit(ra: Tensor, dec: Tensor) -> Tensor:
 
 
 def _unit_to_radec(unit: Tensor) -> tuple[Tensor, Tensor]:
-    r2d = torch.as_tensor(180.0 / torch.pi, dtype=torch.float64, device=unit.device)
+    r2d = _as_tensor(180.0 / torch.pi, dtype=torch.float64, device=unit.device)
     x, y, z = unit.unbind(dim=-1)
     ra = torch.remainder(torch.atan2(y, x) * r2d, 360.0)
     dec = torch.asin(torch.clamp(z, -1.0, 1.0)) * r2d
@@ -287,7 +286,7 @@ def fit_affine_2d(
     if weights is None:
         w = torch.ones(src.shape[0], dtype=torch.float64, device=src.device)
     else:
-        w = torch.as_tensor(weights, dtype=torch.float64, device=src.device)
+        w = _as_tensor(weights, dtype=torch.float64, device=src.device)
         if w.shape != (src.shape[0],):
             raise ValueError("weights must have shape (N,)")
     valid = (

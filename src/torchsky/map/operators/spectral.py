@@ -10,6 +10,7 @@ import torch
 from torch import Tensor
 
 from .base import SpectralResponseOp
+from ...device import _to
 
 if TYPE_CHECKING:
     from ..field.types import FieldObservation
@@ -45,8 +46,8 @@ def validate_override_quadrature(
         raise ValueError(
             "override wavelengths and weights must be matching non-empty vectors"
         )
-    nodes = wavelengths.to(device=device, dtype=dtype)
-    quadrature = weights.to(device=device, dtype=dtype)
+    nodes = _to(wavelengths, device=device, dtype=dtype)
+    quadrature = _to(weights, device=device, dtype=dtype)
     if not bool(torch.isfinite(nodes).all()):
         raise ValueError("override wavelengths must be finite")
     if not bool(torch.isfinite(quadrature).all()) or bool((quadrature < 0.0).any()):
@@ -95,8 +96,8 @@ def sorted_tabulated_transmission(
         wl = observation.transmission_wavelength
         tt = observation.transmission_throughput
         assert wl is not None and tt is not None
-    wl_d = wl.to(device=device, dtype=dtype).reshape(-1)
-    tt_d = tt.to(device=device, dtype=dtype).reshape(-1)
+    wl_d = _to(wl, device=device, dtype=dtype).reshape(-1)
+    tt_d = _to(tt, device=device, dtype=dtype).reshape(-1)
     wl_s, perm = torch.sort(wl_d)
     tt_s = torch.clamp(tt_d[perm], min=0.0)
     return wl_s, tt_s
@@ -108,8 +109,8 @@ def linear_interp_transmission(
     xq = wl_query
     if not xq.is_floating_point():
         xq = xq.to(dtype=torch.get_default_dtype())
-    x = wl_tab.to(device=xq.device, dtype=xq.dtype)
-    y = tt_tab.to(device=xq.device, dtype=xq.dtype)
+    x = _to(wl_tab, device=xq.device, dtype=xq.dtype)
+    y = _to(tt_tab, device=xq.device, dtype=xq.dtype)
     lo = x[0]
     hi = x[-1]
     clamped = torch.clamp(xq, lo, hi)

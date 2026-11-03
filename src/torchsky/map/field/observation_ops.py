@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from ...device import require_float64
+from ...device import require_float64, _to
 from ...wcs import WCS
 from ..exposure_pose import ExposurePose
 from ..operators.psf import psf_support_radius
@@ -483,8 +483,8 @@ def sample_observation_pixels(
         )
     require_float64(device, what="sample_observation_pixels")
     sampled = support_indices[sample_ids]
-    y = sampled[:, 0].to(dtype=torch.float64, device=device)
-    x = sampled[:, 1].to(dtype=torch.float64, device=device)
+    y = _to(sampled[:, 0], dtype=torch.float64, device=device)
+    x = _to(sampled[:, 1], dtype=torch.float64, device=device)
     ra_deg, dec_deg = observation_pixel_to_world(observation, x, y)
     image = observation.image.to(device=device)[sampled[:, 0], sampled[:, 1]]
     if observation.weight is not None:
@@ -536,8 +536,8 @@ def coordinate_grid(
                     torch.float32 if device.type == "mps" else cached_ra.dtype
                 )
                 return (
-                    cached_ra.to(device=device, dtype=output_dtype),
-                    cached_dec.to(device=device, dtype=output_dtype),
+                    _to(cached_ra, device=device, dtype=output_dtype),
+                    _to(cached_dec, device=device, dtype=output_dtype),
                 )
             observation_or_header.clear_coordinate_cache()
     else:
@@ -570,8 +570,8 @@ def coordinate_grid(
 
     output_dtype = torch.float32 if device.type == "mps" else ra_deg.dtype
     return (
-        ra_deg.to(device=device, dtype=output_dtype),
-        dec_deg.to(device=device, dtype=output_dtype),
+        _to(ra_deg, device=device, dtype=output_dtype),
+        _to(dec_deg, device=device, dtype=output_dtype),
     )
 
 

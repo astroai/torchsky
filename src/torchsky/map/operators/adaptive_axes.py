@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import torch
 from torch import Tensor, nn
+from ...device import _as_tensor, _to
 
 __all__ = [
     "AdaptiveAxisFeatures",
@@ -116,12 +117,9 @@ class AdaptiveAxisFeatures(nn.Module):
         outside the sampled coordinates.
         """
         # Setup runs once; float64 on CPU preserves sub-minute differences in MJD.
-        values = (
-            torch.as_tensor(coordinates)
-            .detach()
-            .to(device="cpu", dtype=torch.float64)
-            .reshape(-1)
-        )
+        values = _to(
+            torch.as_tensor(coordinates).detach(), device="cpu", dtype=torch.float64
+        ).reshape(-1)
         values = values[torch.isfinite(values)]
         unique = torch.unique(values).sort().values
         if constant:
@@ -221,11 +219,11 @@ class AdaptiveAxisFeatures(nn.Module):
         device = coordinate_tensor.device
         work_dtype = torch.float64 if device.type == "cpu" else torch.float32
         coordinate_tensor = coordinate_tensor.to(dtype=work_dtype)
-        evidence_tensor = evidence_tensor.to(device=device, dtype=work_dtype)
+        evidence_tensor = _to(evidence_tensor, device=device, dtype=work_dtype)
         if weights is None:
             weight_tensor = torch.ones_like(coordinate_tensor)
         else:
-            weight_tensor = torch.as_tensor(weights, device=device, dtype=work_dtype)
+            weight_tensor = _as_tensor(weights, device=device, dtype=work_dtype)
             if weight_tensor.shape != coordinate_tensor.shape:
                 raise ValueError("weights must have the same shape as coordinates")
         valid = (
@@ -245,7 +243,7 @@ class AdaptiveAxisFeatures(nn.Module):
         weight_tensor = weight_tensor / weight_tensor.mean()
 
         def fit(log_shift: Tensor, keep: Tensor | None = None) -> tuple[Tensor, Tensor]:
-            log_lengths = self.base_log_lengths.to(device=device, dtype=work_dtype)
+            log_lengths = _to(self.base_log_lengths, device=device, dtype=work_dtype)
             lengths = torch.exp(log_lengths + log_shift)
             phase = coordinate_tensor[:, None] * ((2.0 * math.pi) / lengths)
             design = torch.cat(
@@ -323,13 +321,15 @@ class AdaptiveAxisFeatures(nn.Module):
         shift_fraction = shift_fraction.clamp(-0.999999, 0.999999)
         with torch.no_grad():
             self.scale_shift_raw.copy_(
-                torch.atanh(shift_fraction).to(
+                _to(
+                    torch.atanh(shift_fraction),
                     device=self.scale_shift_raw.device,
                     dtype=self.scale_shift_raw.dtype,
                 )
             )
             self.gate_logits.copy_(
-                torch.logit(initial_gates).to(
+                _to(
+                    torch.logit(initial_gates),
                     device=self.gate_logits.device,
                     dtype=self.gate_logits.dtype,
                 )
@@ -427,12 +427,12 @@ class AdaptiveAxisFeatures(nn.Module):
         normalized = centered / self.reference_scale
         features = [normalized[..., None]]
         if self.num_bands:
-            lengths = self.length_scales.to(
-                device=centered.device, dtype=centered.dtype
+            lengths = _to(
+                self.length_scales, device=centered.device, dtype=centered.dtype
             )
             angular_frequencies = (2.0 * math.pi) / lengths
             phase = centered[..., None] * angular_frequencies
-            gates = self.gates.to(device=centered.device, dtype=centered.dtype)
+            gates = _to(self.gates, device=centered.device, dtype=centered.dtype)
             features.extend((torch.sin(phase) * gates, torch.cos(phase) * gates))
         return torch.cat(features, dim=-1)
 
@@ -672,7 +672,7 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
             if isinstance(wavelength, Tensor)
             else float(wavelength) - self.spectral_axis.center
         )
-        wavelength_offset_tensor = torch.as_tensor(
+        wavelength_offset_tensor = _as_tensor(
             wavelength_offset, device=spatial_x.device, dtype=spatial_x.dtype
         )
         if time_mjd is None:
@@ -681,12 +681,12 @@ class AdaptiveSpatioSpectralTemporalEncoder(nn.Module):
             time_offset = time_mjd - self.temporal_axis.center
         else:
             time_offset = float(time_mjd) - self.temporal_axis.center
-        time_offset_tensor = torch.as_tensor(
+        time_offset_tensor = _as_tensor(
             time_offset, device=spatial_x.device, dtype=spatial_x.dtype
         )
         x, y, spectral_offset, temporal_offset = torch.broadcast_tensors(
             spatial_x,
-            spatial_y.to(device=spatial_x.device, dtype=spatial_x.dtype),
+            _to(spatial_y, device=spatial_x.device, dtype=spatial_x.dtype),
             wavelength_offset_tensor,
             time_offset_tensor,
         )

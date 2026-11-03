@@ -32,6 +32,7 @@ from .tabular import (
     TabularAxis,
 )
 from .functional import _pixel_to_world_fused, _world_to_pixel_fused
+from ..device import _as_tensor, _to
 
 if TYPE_CHECKING:
     pass
@@ -113,12 +114,12 @@ class DistortionLookupTable:
             if dtype is not None
             else (torch.float32 if dev.type == "mps" else self.data.dtype)
         )
-        self.data = self.data.to(device=dev, dtype=target_dtype)
+        self.data = _to(self.data, device=dev, dtype=target_dtype)
         return self
 
     def eval_tensor(self, x1: Tensor, y1: Tensor) -> Tensor:
         """Evaluate bilinear lookup at 1-based FITS pixel coordinates `(x1, y1)`."""
-        table = self.data.to(device=x1.device, dtype=x1.dtype)
+        table = _to(self.data, device=x1.device, dtype=x1.dtype)
         h, w = int(table.shape[0]), int(table.shape[1])
         tx = (x1 - self.crval[0]) / self.cdelt[0] + (self.crpix[0] - 1.0)
         ty = (y1 - self.crval[1]) / self.cdelt[1] + (self.crpix[1] - 1.0)
@@ -955,7 +956,7 @@ class WCS(
                 setattr(
                     self,
                     name,
-                    value.to(device=self.device, dtype=target_dtype or value.dtype),
+                    _to(value, device=self.device, dtype=target_dtype or value.dtype),
                 )
         if self.tpv is not None:
             self.tpv.to(self.device)
@@ -971,12 +972,12 @@ class WCS(
                 )
         tabular_dtype = torch.float32 if self.device.type == "mps" else torch.float64
         self.tabular_axes = {
-            axis: tabular.to(device=self.device, dtype=tabular_dtype)
+            axis: _to(tabular, device=self.device, dtype=tabular_dtype)
             for axis, tabular in self.tabular_axes.items()
         }
         if self.coupled_tabular is not None:
-            self.coupled_tabular = self.coupled_tabular.to(
-                device=self.device, dtype=tabular_dtype
+            self.coupled_tabular = _to(
+                self.coupled_tabular, device=self.device, dtype=tabular_dtype
             )
         if self._pixel_affine_matrix is not None:
             assert self._pixel_affine_offset is not None
@@ -1132,10 +1133,10 @@ class WCS(
         if identity:
             return self._clone_preserving_wcs_state()
 
-        step_t = torch.as_tensor(
+        step_t = _as_tensor(
             steps, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
-        start_t = torch.as_tensor(
+        start_t = _as_tensor(
             starts, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
 
@@ -1302,10 +1303,10 @@ class WCS(
         """
         if self.naxis < 2:
             raise ValueError("pixel affine correction requires at least two WCS axes")
-        affine = torch.as_tensor(
+        affine = _as_tensor(
             matrix, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
-        shift = torch.as_tensor(
+        shift = _as_tensor(
             offset, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         if affine.shape != (2, 2):
@@ -1603,9 +1604,7 @@ class WCS(
             ref = (self.crpix - 1.0).clone()
             for fixed_axis, fixed_rel in fixed_rel_by_axis.items():
                 ref[fixed_axis] = (
-                    torch.as_tensor(
-                        fixed_rel, dtype=self.crpix.dtype, device=self.device
-                    )
+                    _as_tensor(fixed_rel, dtype=self.crpix.dtype, device=self.device)
                     + self.crpix[fixed_axis]
                     - 1.0
                 )

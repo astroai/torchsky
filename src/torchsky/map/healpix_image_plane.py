@@ -14,6 +14,7 @@ from torch import Tensor
 
 from ..sphere import healpix as hp
 from ..wcs import WCS
+from ..device import _to
 
 
 def sample_healpix_map_on_image_header(
@@ -64,7 +65,7 @@ def sample_healpix_map_on_image_header(
     wcs = WCS(dict(target_header)).to(dev)
     result = torch.empty(h, w, dtype=m.dtype, device=dev)
     chunk_size = 128
-    m_work = m.to(dtype=work_dtype, device=dev)
+    m_work = _to(m, dtype=work_dtype, device=dev)
     for y_start in range(0, h, chunk_size):
         y_end = min(y_start + chunk_size, h)
         n_rows = y_end - y_start
@@ -118,7 +119,7 @@ def accumulate_image_on_healpix_map_adjoint(
     work_dtype = torch.float32 if dev.type == "mps" else torch.float64
     wcs = WCS(dict(source_header)).to(dev)
     out = torch.zeros(npix, dtype=work_dtype, device=dev)
-    img_work = img.to(dtype=work_dtype, device=dev)
+    img_work = _to(img, dtype=work_dtype, device=dev)
     chunk_size = 128
     any_valid = False
     for y_start in range(0, h, chunk_size):
@@ -143,8 +144,8 @@ def accumulate_image_on_healpix_map_adjoint(
         )
         valid_flat = valid.reshape(-1)
         pix_flat = pix.reshape(4, -1)[:, valid_flat]
-        weight_flat = weight.reshape(4, -1)[:, valid_flat].to(
-            dtype=work_dtype, device=dev
+        weight_flat = _to(
+            weight.reshape(4, -1)[:, valid_flat], dtype=work_dtype, device=dev
         )
         values_flat = chunk_img.reshape(-1)[valid_flat]
         out.scatter_add_(

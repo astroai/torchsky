@@ -8,6 +8,7 @@ import torch
 from torch import Tensor
 
 from .types import FieldNoisePretrainKind
+from ...device import _to
 
 
 def _synthetic_noise_target(
@@ -42,9 +43,9 @@ def _synthetic_noise_target(
             1.5,
         )
         amplitudes = amplitudes / spectral_slope
-    freqs = freqs.to(device=device, dtype=flat.dtype)
-    phases = phases.to(device=device, dtype=flat.dtype)
-    amplitudes = amplitudes.to(device=device, dtype=flat.dtype)
+    freqs = _to(freqs, device=device, dtype=flat.dtype)
+    phases = _to(phases, device=device, dtype=flat.dtype)
+    amplitudes = _to(amplitudes, device=device, dtype=flat.dtype)
     signal = torch.sin(flat @ freqs.transpose(0, 1) + phases) @ amplitudes
     signal = signal.reshape(coords.shape[:-1])
     centered = signal - signal.mean()

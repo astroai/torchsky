@@ -12,6 +12,7 @@ from torch import Tensor
 from ...wcs import WCS
 from .config import MapResamplingKernel, MapValueSemantics
 from .execution import wcs_has_distortion
+from ...device import _to
 
 
 def sinc(x: Tensor) -> Tensor:
@@ -261,7 +262,7 @@ def sample_image_plane(
     return (
         F.grid_sample(
             image.unsqueeze(0).unsqueeze(0),
-            grid.to(device=image.device, dtype=image.dtype).unsqueeze(0),
+            _to(grid, device=image.device, dtype=image.dtype).unsqueeze(0),
             mode=kernel,
             padding_mode="zeros",
             align_corners=True,
@@ -290,7 +291,7 @@ def sample_image_plane_channels(
         )
     return F.grid_sample(
         image.unsqueeze(0),
-        grid.to(device=image.device, dtype=image.dtype).unsqueeze(0),
+        _to(grid, device=image.device, dtype=image.dtype).unsqueeze(0),
         mode=kernel,
         padding_mode="zeros",
         align_corners=True,
@@ -924,12 +925,12 @@ def sample_image_plane_diagonal_variance(
 def _tan_homography_factors(wcs: WCS) -> tuple[Tensor, Tensor] | None:
     if not bool(getattr(wcs, "_is_tan", False)) or wcs_has_distortion(wcs):
         return None
-    cd = wcs.cd.detach().to(device="cpu", dtype=torch.float64)
+    cd = _to(wcs.cd.detach(), device="cpu", dtype=torch.float64)
     det_cd = float(torch.linalg.det(cd).item())
     if not math.isfinite(det_cd) or abs(det_cd) < 1e-20:
         return None
     cd_inv = torch.linalg.inv(cd)
-    crpix = wcs.crpix.detach().to(device="cpu", dtype=torch.float64)
+    crpix = _to(wcs.crpix.detach(), device="cpu", dtype=torch.float64)
     p0_x = float(crpix[0].item()) - 1.0
     p0_y = float(crpix[1].item()) - 1.0
     px = torch.tensor(
@@ -951,8 +952,8 @@ def _tan_homography_factors(wcs: WCS) -> tuple[Tensor, Tensor] | None:
         device=wcs.device,
     )
     ra_deg, dec_deg = wcs.pixel_to_world(px, py)
-    ra = torch.deg2rad(ra_deg.detach().to(device="cpu", dtype=torch.float64))
-    dec = torch.deg2rad(dec_deg.detach().to(device="cpu", dtype=torch.float64))
+    ra = torch.deg2rad(_to(ra_deg.detach(), device="cpu", dtype=torch.float64))
+    dec = torch.deg2rad(_to(dec_deg.detach(), device="cpu", dtype=torch.float64))
     if not bool(torch.isfinite(ra).all() and torch.isfinite(dec).all()):
         return None
     cos_d = torch.cos(dec)
@@ -1037,8 +1038,8 @@ def infer_tan_projective_homography(
         ra.to(device=source_wcs.device),
         dec.to(device=source_wcs.device),
     )
-    xs_cpu = xs.detach().to(device="cpu", dtype=torch.float64)
-    ys_cpu = ys.detach().to(device="cpu", dtype=torch.float64)
+    xs_cpu = _to(xs.detach(), device="cpu", dtype=torch.float64)
+    ys_cpu = _to(ys.detach(), device="cpu", dtype=torch.float64)
     if not bool(torch.isfinite(xs_cpu).all() and torch.isfinite(ys_cpu).all()):
         return None
     tol = (
@@ -1062,7 +1063,7 @@ def evaluate_tan_projective_homography(
 ) -> tuple[Tensor, Tensor]:
     """Evaluate 3x3 projective homography on [0..height-1] x [0..width-1] using 1D outer sums."""
     compute_dtype = torch.float32 if device.type == "mps" else torch.float64
-    h_mat = homography.to(device=device, dtype=compute_dtype)
+    h_mat = _to(homography, device=device, dtype=compute_dtype)
     x_row = torch.arange(width, dtype=compute_dtype, device=device).unsqueeze(0)
     y_col = torch.arange(height, dtype=compute_dtype, device=device).unsqueeze(1)
     denom = (h_mat[2, 0] * x_row) + (h_mat[2, 1] * y_col + h_mat[2, 2])
@@ -1133,8 +1134,8 @@ def infer_diagonal_scale_shift_pixel_map(
     ra, dec = target_wcs.pixel_to_world(jx, iy)
     xs, ys = source_wcs.world_to_pixel(ra, dec)
     # The WCS may live on an accelerator; this small fit runs on the grid's device.
-    xs = xs.to(device=jx.device, dtype=jx.dtype)
-    ys = ys.to(device=jx.device, dtype=jx.dtype)
+    xs = _to(xs, device=jx.device, dtype=jx.dtype)
+    ys = _to(ys, device=jx.device, dtype=jx.dtype)
     ones = torch.ones_like(jx)
     ax = torch.stack([jx, iy, ones], dim=1)
     sol_x = torch.linalg.lstsq(ax, xs.unsqueeze(-1), rcond=None).solution.squeeze(-1)
@@ -1187,8 +1188,8 @@ def infer_linear_affine_pixel_map(
     ra, dec = target_wcs.pixel_to_world(jx, iy)
     xs, ys = source_wcs.world_to_pixel(ra, dec)
     # The WCS may live on an accelerator; this small fit runs on the grid's device.
-    xs = xs.to(device=jx.device, dtype=jx.dtype)
-    ys = ys.to(device=jx.device, dtype=jx.dtype)
+    xs = _to(xs, device=jx.device, dtype=jx.dtype)
+    ys = _to(ys, device=jx.device, dtype=jx.dtype)
     ones = torch.ones_like(jx)
     a_mat = torch.stack([jx, iy, ones], dim=1)
     sol_x = torch.linalg.lstsq(a_mat, xs.unsqueeze(-1), rcond=None).solution.squeeze(-1)

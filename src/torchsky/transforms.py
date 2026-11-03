@@ -15,6 +15,7 @@ import torch
 from torch import Tensor
 
 from ._dtype import work_dtype
+from .device import _as_tensor
 
 _Size = Union[int, tuple[int, int]]
 _EPS = 1e-30
@@ -176,13 +177,13 @@ class Normalize:
 
     def __call__(self, tensor: Tensor) -> Tensor:
         mean = (
-            torch.as_tensor(self.mean, dtype=tensor.dtype, device=tensor.device)
+            _as_tensor(self.mean, dtype=tensor.dtype, device=tensor.device)
             if self.mean is not None
             else tensor.mean()
         )
         centred = tensor - mean
         std = (
-            torch.as_tensor(self.std, dtype=tensor.dtype, device=tensor.device)
+            _as_tensor(self.std, dtype=tensor.dtype, device=tensor.device)
             if self.std is not None
             else tensor.std()
         )

@@ -29,6 +29,7 @@ from ..operators.bundle import ObservationOperatorBundle
 from .core import render_field_observation
 from .observation_ops import observation_support_mask
 from .types import FieldObservation, ForwardContext
+from ...device import _to
 
 
 @dataclass(frozen=True)
@@ -192,7 +193,7 @@ def observation_charbonnier_loss(
         raise ValueError("prediction shape must match observation.image")
     if not math.isfinite(float(eps)) or float(eps) <= 0.0:
         raise ValueError("eps must be finite and positive")
-    image = observation.image.to(device=prediction.device, dtype=prediction.dtype)
+    image = _to(observation.image, device=prediction.device, dtype=prediction.dtype)
     valid = observation_support_mask(observation).to(device=prediction.device)
     if not bool(valid.any()):
         raise ValueError("Charbonnier loss requires at least one usable pixel")
@@ -203,7 +204,7 @@ def observation_charbonnier_loss(
     w = (
         torch.ones_like(diff, dtype=rho.dtype)
         if observation.weight is None
-        else observation.weight.to(device=prediction.device, dtype=rho.dtype)
+        else _to(observation.weight, device=prediction.device, dtype=rho.dtype)
     )
     effective_weight = torch.where(valid, w.clamp_min(0.0), torch.zeros_like(w))
     return (rho * effective_weight).sum() / effective_weight.sum().clamp_min(1.0e-8)

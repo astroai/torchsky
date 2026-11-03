@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from ...device import _to
 
 
 if TYPE_CHECKING:
@@ -358,7 +359,7 @@ class _LinearBandGridOperatorSet(BoundObservationOperatorSet):
                         else "adjoint input shape must match the bound field observation"
                     )
                     raise ValueError(msg)
-                t_f = t.to(device=device, dtype=dtype)
+                t_f = _to(t, device=device, dtype=dtype)
                 if obs_shape != max_shape:
                     h, w = obs_shape
                     t_f = F.pad(

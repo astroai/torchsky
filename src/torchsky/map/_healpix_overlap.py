@@ -33,6 +33,7 @@ from typing import Any
 
 import torch
 from torch import Tensor
+from ..device import _to
 
 _MAX_DEPTH = 20
 # Largest longitude span of one (sub-)pixel, in quadrants (1/64 = 1.4 deg).
@@ -187,7 +188,7 @@ def _world(wcs: Any, x: Tensor, y: Tensor) -> tuple[Tensor, Tensor]:
     dev = wcs.device if hasattr(wcs, "device") else x.device
     dtype = torch.float32 if torch.device(dev).type == "mps" else torch.float64
     lon, lat = wcs.pixel_to_world(
-        x.to(device=dev, dtype=dtype), y.to(device=dev, dtype=dtype)
+        _to(x, device=dev, dtype=dtype), _to(y, device=dev, dtype=dtype)
     )
     return lon.cpu().to(torch.float64), lat.cpu().to(torch.float64)
 
@@ -353,7 +354,7 @@ def integrate_exposure(
     # Near a pole a cell collects many tiny sub-pixel pieces; accumulate in
     # float64 (float32 sums drift by ~1e-4 there) except on MPS.
     acc = torch.float32 if out_device.type == "mps" else torch.float64
-    area_v = all_area.to(device=out_device, dtype=acc)
+    area_v = _to(all_area, device=out_device, dtype=acc)
     num_out = torch.zeros(uniq.numel(), dtype=acc, device=out_device).index_add(
         0, inverse, area_v * flat_num[all_owner].to(acc)
     )

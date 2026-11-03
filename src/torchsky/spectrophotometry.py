@@ -18,6 +18,7 @@ from typing import Any, Literal, Mapping
 
 import numpy as np
 import torch
+from .device import _as_tensor, _to
 
 _C_ANGSTROM_PER_SECOND = 2.99792458e18
 _AB_ZERO_UJY = 3.631e9
@@ -161,8 +162,8 @@ class Passband:
     def evaluate(self, wavelength: torch.Tensor) -> torch.Tensor:
         """Linear throughput at Angstrom-native ``wavelength``; zero outside support."""
         query = torch.as_tensor(wavelength)
-        grid = self.wavelength.to(device=query.device, dtype=query.dtype)
-        trans = self.throughput.to(device=query.device, dtype=query.dtype)
+        grid = _to(self.wavelength, device=query.device, dtype=query.dtype)
+        trans = _to(self.throughput, device=query.device, dtype=query.dtype)
         idx = torch.searchsorted(grid, query)
         last = grid.numel() - 1
         idx0 = (idx - 1).clamp(0, last)
@@ -191,8 +192,8 @@ class Passband:
             self.wavelength.dtype if target.type in _FLOAT64_DEVICES else torch.float32
         )
         return Passband(
-            self.wavelength.to(device=target, dtype=dtype),
-            self.throughput.to(device=target, dtype=dtype),
+            _to(self.wavelength, device=target, dtype=dtype),
+            _to(self.throughput, device=target, dtype=dtype),
             name=self.name,
             wavelength_unit="angstrom",
         )
@@ -230,13 +231,11 @@ def evaluate_throughput(
     if sigma is None or float(sigma) <= 0:
         raise ValueError("gaussian throughput requires positive sigma")
     if lambda_center_map is not None:
-        center_t = torch.as_tensor(
-            lambda_center_map, device=wave.device, dtype=wave.dtype
-        )
+        center_t = _as_tensor(lambda_center_map, device=wave.device, dtype=wave.dtype)
         if center_t.ndim == wave.ndim - 1:
             center_t = center_t.unsqueeze(-1)
     elif center is not None:
-        center_t = torch.as_tensor(center, device=wave.device, dtype=wave.dtype)
+        center_t = _as_tensor(center, device=wave.device, dtype=wave.dtype)
     else:
         raise ValueError("gaussian throughput needs center or lambda_center_map")
     return torch.exp(-0.5 * torch.square((wave - center_t) / float(sigma)))
@@ -416,7 +415,7 @@ def synthetic_photometry(
     batch = flux.reshape(-1, n_wave)
     mask_t: torch.Tensor | None = None
     if mask is not None:
-        mask_t = torch.as_tensor(mask, dtype=torch.bool, device=wave.device)
+        mask_t = _as_tensor(mask, dtype=torch.bool, device=wave.device)
         if mask_t.shape != flux.shape:
             raise ValueError("mask must have the same shape as flux_lambda")
         mask_t = mask_t.reshape(-1, n_wave)
@@ -527,7 +526,7 @@ def flux_to_magnitude(
 ) -> torch.Tensor:
     """Convert positive fluxes to magnitudes for an explicit flux zero point."""
     values = torch.as_tensor(flux)
-    zero = torch.as_tensor(zero_point, dtype=values.dtype, device=values.device)
+    zero = _as_tensor(zero_point, dtype=values.dtype, device=values.device)
     if torch.any(zero <= 0) or not torch.all(torch.isfinite(zero)):
         raise ValueError("zero_point must be finite and positive")
     safe = torch.where(values > 0, values, torch.ones_like(values))
@@ -539,7 +538,7 @@ def magnitude_to_flux(
 ) -> torch.Tensor:
     """Convert magnitudes to flux using an explicit zero point."""
     values = torch.as_tensor(magnitude)
-    zero = torch.as_tensor(zero_point, dtype=values.dtype, device=values.device)
+    zero = _as_tensor(zero_point, dtype=values.dtype, device=values.device)
     if torch.any(zero <= 0) or not torch.all(torch.isfinite(zero)):
         raise ValueError("zero_point must be finite and positive")
     return zero * torch.pow(10.0, -0.4 * values)
@@ -740,8 +739,8 @@ def _passband_weight(
     passband: Passband, wave: torch.Tensor, weighting: Weighting = "photon"
 ) -> torch.Tensor:
     """Full reference weight, ``int R lambda dlambda`` (photon) or ``int R dlambda``."""
-    pb_wave = passband.wavelength.to(device=wave.device, dtype=wave.dtype)
-    pb_response = passband.throughput.to(device=wave.device, dtype=wave.dtype)
+    pb_wave = _to(passband.wavelength, device=wave.device, dtype=wave.dtype)
+    pb_response = _to(passband.throughput, device=wave.device, dtype=wave.dtype)
     return torch.trapezoid(_band_weights(pb_response, pb_wave, weighting)[0], pb_wave)
 
 
@@ -753,8 +752,8 @@ def _covered_grid(
     weighting: Weighting = "photon",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Union grid of the spectrum and passband support with linear responses."""
-    pb_wave = passband.wavelength.to(device=wave.device, dtype=wave.dtype)
-    pb_response = passband.throughput.to(device=wave.device, dtype=wave.dtype)
+    pb_wave = _to(passband.wavelength, device=wave.device, dtype=wave.dtype)
+    pb_response = _to(passband.throughput, device=wave.device, dtype=wave.dtype)
     if full_weight is None:
         full_weight = torch.trapezoid(
             _band_weights(pb_response, pb_wave, weighting)[0], pb_wave

@@ -25,6 +25,7 @@ from .wcs.spectral import (
     spectral_to_frequency as _wcs_spectral_to_frequency,
     spectral_unit_scale,
 )
+from .device import _as_tensor, _to
 
 
 _SPECTRAL_TYPE_KEYS = ("WAVE", "AWAV", "FREQ", "ENER", "WAVN", "VELO")
@@ -158,7 +159,7 @@ def _rebin_piecewise_constant(
 
     safe_flux = torch.where(valid, flux, torch.zeros_like(flux))
     integral = _piecewise_constant_integral(safe_flux, input_edges, query_edges)
-    widths = normalization_widths.to(device=flux.device, dtype=flux.dtype)
+    widths = _to(normalization_widths, device=flux.device, dtype=flux.dtype)
     output_flux = (integral[..., 1:] - integral[..., :-1]) / widths
 
     inside = (query_edges[..., :-1] >= input_edges[0]) & (
@@ -174,7 +175,7 @@ def _rebin_piecewise_constant(
         )
         overlap = invalid_integral[..., 1:] - invalid_integral[..., :-1]
         scale = torch.maximum(
-            normalization_widths.to(device=flux.device, dtype=coord_dtype).abs(),
+            _to(normalization_widths, device=flux.device, dtype=coord_dtype).abs(),
             torch.ones((), device=flux.device, dtype=coord_dtype),
         )
         tolerance = 8 * torch.finfo(coord_dtype).eps * scale
@@ -268,9 +269,7 @@ def relativistic_doppler_shift(
         raise ValueError("flux must be a floating-point tensor with a spectral axis")
     input_edges = torch.as_tensor(input_edges, device=flux.device)
     _validate_spectral_edges(input_edges, flux.shape[-1], "input_edges")
-    velocity = torch.as_tensor(
-        radial_velocity, device=flux.device, dtype=input_edges.dtype
-    )
+    velocity = _as_tensor(radial_velocity, device=flux.device, dtype=input_edges.dtype)
     if not bool(torch.isfinite(velocity).all()) or bool(
         torch.any(velocity.abs() >= _SPEED_OF_LIGHT_M_PER_S)
     ):
@@ -842,7 +841,7 @@ class SpectralAxis:
     ) -> "SpectralAxis":
         """Transfer coordinate tensors without changing physical metadata."""
         return SpectralAxis(
-            values=self.values.to(device=device, dtype=dtype),
+            values=_to(self.values, device=device, dtype=dtype),
             unit=self.unit,
             type=self.type,
             rest_frequency=self.rest_frequency,
@@ -850,7 +849,7 @@ class SpectralAxis:
             bin_edges=(
                 None
                 if self.bin_edges is None
-                else self.bin_edges.to(device=device, dtype=dtype)
+                else _to(self.bin_edges, device=device, dtype=dtype)
             ),
         )
 
@@ -890,7 +889,7 @@ class SpectralAxis:
             return angstrom.to(dtype=values.dtype)
         freq = self.to_frequency()
         wave = frequency_to_spectral(freq, "WAVE", unit="Angstrom")
-        return wave.to(dtype=values.dtype, device=values.device)
+        return _to(wave, dtype=values.dtype, device=values.device)
 
     def to_frequency(self) -> torch.Tensor:
         """Convert to frequency in Hz via FITS spectral conventions."""
@@ -902,7 +901,7 @@ class SpectralAxis:
             unit=self.unit,
             rest_frequency=self.rest_frequency,
         )
-        return out.to(dtype=values.dtype, device=values.device)
+        return _to(out, dtype=values.dtype, device=values.device)
 
     def to_energy(self, unit: str = "eV") -> torch.Tensor:
         """Convert to photon energy in joules or electron-volt units."""
@@ -1001,8 +1000,8 @@ class Spectrum1D:
         masking is dropped because interpolated channels mix masked samples.
         """
         work_dtype = _work_dtype(self.flux.device)
-        current_wave = self.wavelength.to(device=self.flux.device, dtype=work_dtype)
-        target_wave = new_wavelength.to(device=self.flux.device, dtype=work_dtype)
+        current_wave = _to(self.wavelength, device=self.flux.device, dtype=work_dtype)
+        target_wave = _to(new_wavelength, device=self.flux.device, dtype=work_dtype)
         if current_wave.ndim != 1 or target_wave.ndim != 1:
             raise ValueError("wavelength grids must be 1D")
         if current_wave.numel() < 2:

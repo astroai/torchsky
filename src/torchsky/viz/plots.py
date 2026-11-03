@@ -18,6 +18,7 @@ from torch import Tensor
 
 from ..spectral import SpectralAxis
 from . import theme as _theme
+from ..device import _to
 
 StretchName = Literal["linear", "asinh", "log", "sqrt"]
 
@@ -132,7 +133,7 @@ def plot_pseudo_rgb(
 
     plt = _theme.pyplot()
 
-    wave = spectral_axis.values.detach().to("cpu", torch.float64).flatten()
+    wave = _to(spectral_axis.values.detach(), "cpu", torch.float64).flatten()
     try:
         wave_display = spectral_axis.to_wavelength().detach().to("cpu").flatten()
         unit = spectral_axis.unit

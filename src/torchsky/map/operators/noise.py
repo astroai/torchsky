@@ -26,6 +26,7 @@ from torch.nn import functional as F
 
 from .base import NoiseOp
 from .image_grid import image_shape_hw
+from ...device import _as_tensor, _to
 
 
 VAR_POISSON: Final[str] = "VAR_POISSON"
@@ -81,7 +82,7 @@ def _reference_tensor(*values: object) -> Tensor | None:
 
 
 def _coerce(value: Tensor | float, reference: Tensor) -> Tensor:
-    return torch.as_tensor(value, device=reference.device, dtype=reference.dtype)
+    return _as_tensor(value, device=reference.device, dtype=reference.dtype)
 
 
 def _validate_finite(value: Tensor, *, name: str) -> None:
@@ -487,13 +488,17 @@ def fft_whiten_rows(
         return rows.clone()
     if psd is None:
         reference_white = 1.0 if white_psd is None else white_psd
-        psd_tensor = one_over_f_row_psd(
-            num_rows,
-            white_psd=reference_white,
-            knee_frequency=knee_frequency,
-            exponent=exponent,
-            sample_spacing=sample_spacing,
-        ).to(device=rows.device, dtype=rows.dtype)
+        psd_tensor = _to(
+            one_over_f_row_psd(
+                num_rows,
+                white_psd=reference_white,
+                knee_frequency=knee_frequency,
+                exponent=exponent,
+                sample_spacing=sample_spacing,
+            ),
+            device=rows.device,
+            dtype=rows.dtype,
+        )
         reference = _coerce(reference_white, rows)
         white = _broadcast_parameter(
             reference,
@@ -501,7 +506,7 @@ def fft_whiten_rows(
             name="white_psd",
         )[..., None]
     else:
-        psd_tensor = torch.as_tensor(psd, device=rows.device, dtype=rows.dtype)
+        psd_tensor = _as_tensor(psd, device=rows.device, dtype=rows.dtype)
         if psd_tensor.ndim < 1 or int(psd_tensor.shape[-1]) != num_rows // 2 + 1:
             raise ValueError("psd final axis must have length num_rows // 2 + 1")
         _validate_positive(psd_tensor, name="psd")
@@ -814,7 +819,7 @@ def reduce_detector_nll(
 
     if sample_weight is None:
         return selected.sum() if reduction == "sum" else selected.mean()
-    weights = torch.as_tensor(
+    weights = _as_tensor(
         sample_weight,
         device=values.device,
         dtype=values.dtype,
@@ -865,8 +870,8 @@ def gaussian_nll(
         True
     """
     observed = torch.as_tensor(observed)
-    expected = torch.as_tensor(expected, device=observed.device, dtype=observed.dtype)
-    variance = torch.as_tensor(variance, device=observed.device, dtype=observed.dtype)
+    expected = _as_tensor(expected, device=observed.device, dtype=observed.dtype)
+    variance = _as_tensor(variance, device=observed.device, dtype=observed.dtype)
     observed, expected, variance = torch.broadcast_tensors(observed, expected, variance)
     _validate_finite(observed, name="observed")
     _validate_finite(expected, name="expected")
@@ -889,13 +894,11 @@ def student_t_nll(
 ) -> Tensor:
     """Normalized location-scale Student-t detector negative log likelihood."""
     observed = torch.as_tensor(observed)
-    expected = torch.as_tensor(expected, device=observed.device, dtype=observed.dtype)
-    scale = torch.as_tensor(scale, device=observed.device, dtype=observed.dtype)
+    expected = _as_tensor(expected, device=observed.device, dtype=observed.dtype)
+    scale = _as_tensor(scale, device=observed.device, dtype=observed.dtype)
     observed, expected, scale = torch.broadcast_tensors(observed, expected, scale)
     dof = torch.broadcast_to(
-        torch.as_tensor(
-            degrees_of_freedom, device=observed.device, dtype=observed.dtype
-        ),
+        _as_tensor(degrees_of_freedom, device=observed.device, dtype=observed.dtype),
         observed.shape,
     )
     _validate_finite(observed, name="observed")
@@ -985,12 +988,10 @@ def _prepare_poisson_gaussian(
         raise TypeError("value must have real float32 or float64 dtype")
     if float(tail_sigma) > math.sqrt(torch.finfo(value.dtype).max):
         raise ValueError("Poisson--Gaussian support radius exceeds the dtype range")
-    rate = torch.as_tensor(expected_electrons, device=value.device, dtype=value.dtype)
-    read_var = torch.as_tensor(
-        read_noise_variance, device=value.device, dtype=value.dtype
-    )
-    gain_t = torch.as_tensor(gain, device=value.device, dtype=value.dtype)
-    background_t = torch.as_tensor(background, device=value.device, dtype=value.dtype)
+    rate = _as_tensor(expected_electrons, device=value.device, dtype=value.dtype)
+    read_var = _as_tensor(read_noise_variance, device=value.device, dtype=value.dtype)
+    gain_t = _as_tensor(gain, device=value.device, dtype=value.dtype)
+    background_t = _as_tensor(background, device=value.device, dtype=value.dtype)
     value, rate, read_var, gain_t, background_t = torch.broadcast_tensors(
         value, rate, read_var, gain_t, background_t
     )
@@ -2173,8 +2174,10 @@ class StructuredDetectorNoise(nn.Module):
 
     def _row_nll(self, row_offsets: Tensor) -> Tensor:
         spectrum = torch.fft.rfft(row_offsets, dim=-1, norm="ortho")
-        psd = self.row_noise.psd(int(row_offsets.shape[-1])).to(
-            device=row_offsets.device, dtype=row_offsets.dtype
+        psd = _to(
+            self.row_noise.psd(int(row_offsets.shape[-1])),
+            device=row_offsets.device,
+            dtype=row_offsets.dtype,
         )
         multiplicity = torch.full_like(psd, 2.0)
         multiplicity[..., 0] = 1.0
@@ -2212,7 +2215,7 @@ class StructuredDetectorNoise(nn.Module):
             safe_components = {}
             for name, value in components.items():
                 component = torch.broadcast_to(
-                    value.to(device=residual.device, dtype=residual.dtype),
+                    _to(value, device=residual.device, dtype=residual.dtype),
                     residual.shape,
                 )
                 finite_nonnegative = torch.isfinite(component) & (component >= 0.0)
@@ -2224,7 +2227,7 @@ class StructuredDetectorNoise(nn.Module):
                 )
         elif err is not None:
             err_t = torch.broadcast_to(
-                err.to(device=residual.device, dtype=residual.dtype),
+                _to(err, device=residual.device, dtype=residual.dtype),
                 residual.shape,
             )
             finite_nonnegative = torch.isfinite(err_t) & (err_t >= 0.0)
@@ -2235,10 +2238,14 @@ class StructuredDetectorNoise(nn.Module):
                 torch.ones_like(err_t),
             )
 
-        variance = self.variance_calibration(
-            safe_components,
-            err=safe_err,
-        ).to(device=residual.device, dtype=residual.dtype)
+        variance = _to(
+            self.variance_calibration(
+                safe_components,
+                err=safe_err,
+            ),
+            device=residual.device,
+            dtype=residual.dtype,
+        )
         if variance.shape != residual.shape:
             variance = torch.broadcast_to(variance, residual.shape)
         support &= torch.isfinite(residual) & torch.isfinite(variance) & (variance > 0)
@@ -2281,7 +2288,8 @@ class StructuredDetectorNoise(nn.Module):
         prior = None
         if contamination_prior is not None:
             prior = torch.broadcast_to(
-                contamination_prior.to(
+                _to(
+                    contamination_prior,
                     device=residual.device,
                     dtype=residual.dtype,
                 ),
@@ -2346,7 +2354,8 @@ class StructuredDetectorNoise(nn.Module):
         prior = None
         if contamination_prior is not None:
             prior = torch.broadcast_to(
-                contamination_prior.to(
+                _to(
+                    contamination_prior,
                     device=residual.device,
                     dtype=residual.dtype,
                 ),

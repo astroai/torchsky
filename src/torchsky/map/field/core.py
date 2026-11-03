@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...device import resolve_device
+from ...device import resolve_device, _to
 
 from ..solvers import SurveyInstrumentComponentMixer
 
@@ -103,9 +103,9 @@ def _render_field_component_anchor_target(
     dtype: torch.dtype,
 ) -> Tensor:
     if term.target_image is not None:
-        return term.target_image.to(device=device, dtype=dtype)
+        return _to(term.target_image, device=device, dtype=dtype)
     if term.target_values is not None:
-        return term.target_values.to(device=device, dtype=dtype)
+        return _to(term.target_values, device=device, dtype=dtype)
     assert term.reference_model is not None
     base_observation = _observation_without_background(term.observation)
     if isinstance(term.reference_model, FieldComponentDecomposition):
@@ -113,10 +113,28 @@ def _render_field_component_anchor_target(
             assert (
                 term.sample_dec_deg is not None
             )  # validated pairwise in __post_init__
-            return term.reference_model.render_component_samples(
+            return _to(
+                term.reference_model.render_component_samples(
+                    base_observation,
+                    ra_deg=_to(term.sample_ra_deg, device=device, dtype=torch.float32),
+                    dec_deg=_to(
+                        term.sample_dec_deg, device=device, dtype=torch.float32
+                    ),
+                    roles=term.roles,
+                    num_spectral_samples=num_spectral_samples,
+                    spectral_sampling=spectral_sampling,
+                    spectral_sampling_grid_size=spectral_sampling_grid_size,
+                    generator=generator,
+                    override_wavelengths=term.override_wavelengths,
+                    override_weights=term.override_bandpass_weights,
+                    forward_context=term.forward_context,
+                ),
+                device=device,
+                dtype=dtype,
+            )
+        return _to(
+            term.reference_model.render_component_observation(
                 base_observation,
-                ra_deg=term.sample_ra_deg.to(device=device, dtype=torch.float32),
-                dec_deg=term.sample_dec_deg.to(device=device, dtype=torch.float32),
                 roles=term.roles,
                 num_spectral_samples=num_spectral_samples,
                 spectral_sampling=spectral_sampling,
@@ -125,25 +143,33 @@ def _render_field_component_anchor_target(
                 override_wavelengths=term.override_wavelengths,
                 override_weights=term.override_bandpass_weights,
                 forward_context=term.forward_context,
-            ).to(device=device, dtype=dtype)
-        return term.reference_model.render_component_observation(
-            base_observation,
-            roles=term.roles,
-            num_spectral_samples=num_spectral_samples,
-            spectral_sampling=spectral_sampling,
-            spectral_sampling_grid_size=spectral_sampling_grid_size,
-            generator=generator,
-            override_wavelengths=term.override_wavelengths,
-            override_weights=term.override_bandpass_weights,
-            forward_context=term.forward_context,
-        ).to(device=device, dtype=dtype)
+            ),
+            device=device,
+            dtype=dtype,
+        )
     if term.sample_ra_deg is not None:
         assert term.sample_dec_deg is not None  # validated pairwise in __post_init__
-        return render_field_samples(
+        return _to(
+            render_field_samples(
+                term.reference_model,
+                base_observation,
+                ra_deg=_to(term.sample_ra_deg, device=device, dtype=torch.float32),
+                dec_deg=_to(term.sample_dec_deg, device=device, dtype=torch.float32),
+                num_spectral_samples=num_spectral_samples,
+                spectral_sampling=spectral_sampling,
+                spectral_sampling_grid_size=spectral_sampling_grid_size,
+                generator=generator,
+                override_wavelengths=term.override_wavelengths,
+                override_weights=term.override_bandpass_weights,
+                forward_context=term.forward_context,
+            ),
+            device=device,
+            dtype=dtype,
+        )
+    return _to(
+        render_field_observation(
             term.reference_model,
             base_observation,
-            ra_deg=term.sample_ra_deg.to(device=device, dtype=torch.float32),
-            dec_deg=term.sample_dec_deg.to(device=device, dtype=torch.float32),
             num_spectral_samples=num_spectral_samples,
             spectral_sampling=spectral_sampling,
             spectral_sampling_grid_size=spectral_sampling_grid_size,
@@ -151,18 +177,10 @@ def _render_field_component_anchor_target(
             override_wavelengths=term.override_wavelengths,
             override_weights=term.override_bandpass_weights,
             forward_context=term.forward_context,
-        ).to(device=device, dtype=dtype)
-    return render_field_observation(
-        term.reference_model,
-        base_observation,
-        num_spectral_samples=num_spectral_samples,
-        spectral_sampling=spectral_sampling,
-        spectral_sampling_grid_size=spectral_sampling_grid_size,
-        generator=generator,
-        override_wavelengths=term.override_wavelengths,
-        override_weights=term.override_bandpass_weights,
-        forward_context=term.forward_context,
-    ).to(device=device, dtype=dtype)
+        ),
+        device=device,
+        dtype=dtype,
+    )
 
 
 def field_component_anchor_loss(
@@ -272,7 +290,9 @@ def field_component_anchor_loss(
         ):
             residual = prediction - target
             weight = (
-                term.sample_weight.to(device=prediction.device, dtype=prediction.dtype)
+                _to(
+                    term.sample_weight, device=prediction.device, dtype=prediction.dtype
+                )
                 if term.sample_weight is not None
                 else torch.ones_like(prediction)
             )
@@ -285,8 +305,10 @@ def field_component_anchor_loss(
                 valid, prediction - target, torch.zeros_like(prediction)
             )
             weight = (
-                term.observation.weight.to(
-                    device=prediction.device, dtype=prediction.dtype
+                _to(
+                    term.observation.weight,
+                    device=prediction.device,
+                    dtype=prediction.dtype,
                 )
                 if term.observation.weight is not None
                 else torch.ones_like(prediction)

@@ -29,6 +29,7 @@ from torch import Tensor
 
 from . import theme as _theme
 from .palettes import matplotlib_cmap
+from ..device import _to
 
 SkyProjection = Literal["mollweide", "aitoff", "hammer", "polar"]
 Stretch = Literal["linear", "log", "asinh"]
@@ -119,7 +120,7 @@ def _accumulate(
     """Bin one chunk of samples into the flat accumulators."""
     lon = lon_deg.reshape(-1)
     lat = lat_deg.reshape(-1)
-    val = values.reshape(-1).to(device=buf_sum.device, dtype=torch.float64)
+    val = _to(values.reshape(-1), device=buf_sum.device, dtype=torch.float64)
     valid = torch.isfinite(lon) & torch.isfinite(lat) & torch.isfinite(val)
     if not bool(valid.any()):
         return

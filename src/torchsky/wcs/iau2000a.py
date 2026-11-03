@@ -15,6 +15,7 @@ import torch
 from torch import Tensor
 
 from .frames import ARCSEC_TO_RAD
+from ..device import _as_tensor, _to
 
 TURNAS = 1_296_000.0
 DAS2R = ARCSEC_TO_RAD
@@ -274,7 +275,7 @@ def _arcsec_poly_rad(t: Tensor, coeffs: tuple[float, ...]) -> Tensor:
 
 def _rad_lin(t: Tensor, a0: float, a1: float) -> Tensor:
     return torch.remainder(
-        torch.as_tensor(a0, dtype=t.dtype, device=t.device) + a1 * t, TWO_PI
+        _as_tensor(a0, dtype=t.dtype, device=t.device) + a1 * t, TWO_PI
     )
 
 
@@ -341,7 +342,7 @@ def fapa03(t: Tensor) -> Tensor:
 
 
 def _tables(device: torch.device, dtype: torch.dtype) -> tuple[Tensor, Tensor]:
-    return _XLS.to(device=device, dtype=dtype), _XPL.to(device=device, dtype=dtype)
+    return _to(_XLS, device=device, dtype=dtype), _to(_XPL, device=device, dtype=dtype)
 
 
 def iau2000a_nutation(tt_mjd: Tensor) -> tuple[Tensor, Tensor]:

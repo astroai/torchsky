@@ -22,6 +22,7 @@ from typing import Literal
 
 import torch
 from torch import Tensor
+from .device import _as_tensor, _to
 
 WavelengthUnit = Literal["angstrom", "nm"]
 ExtinctionLaw = Literal[
@@ -185,7 +186,7 @@ def _f99_kknots(r_v: Tensor) -> Tensor:
         - 4.45636e-05 * rv2 * rv2
         - rv
     )
-    x_uv = torch.as_tensor(_F99_XKNOTS[7:9], device=r_v.device, dtype=r_v.dtype).expand(
+    x_uv = _as_tensor(_F99_XKNOTS[7:9], device=r_v.device, dtype=r_v.dtype).expand(
         *rv.shape[:-1], 2
     )
     return torch.cat([k0, k1, k2, k3, k4, k5, k6, _f99_uv_k(x_uv, rv)], dim=-1)
@@ -831,7 +832,7 @@ def _compute_ab(wave_angstrom: Tensor, law: str) -> tuple[Tensor, Tensor]:
 def _as_tensor_like(value: Tensor | float, like: Tensor) -> Tensor:
     if isinstance(value, Tensor):
         return value
-    return torch.as_tensor(value, device=like.device, dtype=like.dtype)
+    return _as_tensor(value, device=like.device, dtype=like.dtype)
 
 
 def _align_scale(scale: Tensor, wave: Tensor) -> Tensor:
@@ -840,7 +841,7 @@ def _align_scale(scale: Tensor, wave: Tensor) -> Tensor:
     Batch axes are leading. A 1-D ``[B]`` scale against a 1-D ``[L]`` grid
     becomes ``[B, 1]``, not a last-axis alignment of ``B`` with ``L``.
     """
-    aligned = scale.to(device=wave.device, dtype=wave.dtype)
+    aligned = _to(scale, device=wave.device, dtype=wave.dtype)
     if aligned.ndim == 0:
         return aligned
     if aligned.ndim == wave.ndim and aligned.shape[-1] != 1:
@@ -1025,8 +1026,8 @@ def apply_extinction(
     if wavelength is None or ext_params is None:
         raise TypeError("apply_extinction requires flux, wavelength, and ext_params")
     flux_t = torch.as_tensor(flux)
-    wave = torch.as_tensor(wavelength).to(device=flux_t.device, dtype=flux_t.dtype)
-    ebv = torch.as_tensor(ext_params).to(device=flux_t.device, dtype=flux_t.dtype)
+    wave = _to(torch.as_tensor(wavelength), device=flux_t.device, dtype=flux_t.dtype)
+    ebv = _to(torch.as_tensor(ext_params), device=flux_t.device, dtype=flux_t.dtype)
     if ebv.ndim == flux_t.ndim - 1:
         ebv = ebv.unsqueeze(-1)
     factor = transmission(

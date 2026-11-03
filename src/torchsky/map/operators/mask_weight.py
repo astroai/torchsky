@@ -14,6 +14,7 @@ from ..quality import DQPolicy
 from .base import MaskWeightOp
 from .image_grid import validate_image_plane_2d
 from .noise import sanitize_inverse_variance
+from ...device import _to
 
 
 @dataclass
@@ -42,7 +43,7 @@ def _load_or_validate_aux_plane(
         raise ValueError(f"{label} shape must match the observation image shape")
     if preserve_integer and not plane.is_floating_point():
         return plane.to(device=device)
-    return plane.to(device=device, dtype=torch.float32)
+    return _to(plane, device=device, dtype=torch.float32)
 
 
 def load_image_observation_dq(
@@ -71,7 +72,8 @@ def load_image_observation_dq(
     for name in ("var_poisson", "var_rnoise", "var_flat"):
         component = getattr(obs, name, None)
         if isinstance(component, Tensor):
-            component_t = validate_image_plane_2d(component).to(
+            component_t = _to(
+                validate_image_plane_2d(component),
                 device=device,
                 dtype=torch.float32,
             )
@@ -104,7 +106,7 @@ def load_image_observation_weight_map(
     device: torch.device,
 ) -> Tensor:
     image_shape = (int(image.shape[0]), int(image.shape[1]))
-    weight_map = torch.isfinite(image).to(dtype=torch.float32, device=device)
+    weight_map = _to(torch.isfinite(image), dtype=torch.float32, device=device)
 
     weight_type = str(getattr(obs, "weight_type", "weight") or "weight").strip().lower()
     if weight_type not in {
@@ -144,8 +146,10 @@ def load_image_observation_weight_map(
             total_var = torch.zeros(image_shape, dtype=torch.float32, device=device)
             valid_var = torch.ones(image_shape, dtype=torch.bool, device=device)
             for vp in var_planes:
-                vp_t = validate_image_plane_2d(torch.as_tensor(vp)).to(
-                    device=device, dtype=torch.float32
+                vp_t = _to(
+                    validate_image_plane_2d(torch.as_tensor(vp)),
+                    device=device,
+                    dtype=torch.float32,
                 )
                 if tuple(vp_t.shape) != image_shape:
                     raise ValueError(
@@ -225,13 +229,13 @@ def load_image_observation_weight_map(
     if mask is not None:
         good_bits = getattr(obs, "good_bits", None)
         if good_bits is not None:
-            dq = mask.to(device=device, dtype=torch.int64)
+            dq = _to(mask, device=device, dtype=torch.int64)
             keep = (dq & (~int(good_bits))) == 0
             weight_map = weight_map * keep.to(dtype=torch.float32)
         elif mask.dtype == torch.bool:
-            weight_map = weight_map * mask.to(device=device, dtype=torch.float32)
+            weight_map = weight_map * _to(mask, device=device, dtype=torch.float32)
         else:
-            mask_f = mask.to(device=device, dtype=torch.float32)
+            mask_f = _to(mask, device=device, dtype=torch.float32)
             mask_f = torch.where(
                 torch.isfinite(mask_f) & (mask_f > 0.0),
                 torch.ones_like(mask_f),

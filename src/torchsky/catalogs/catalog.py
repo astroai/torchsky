@@ -15,6 +15,7 @@ from ..wcs.frames import _to_device, _work_dtype, canonical_celestial_frame
 from ..wcs.observed import EarthOrientation, PNModel, Site
 from .core import CrossmatchResult, crossmatch_sky
 from .index import HealpixIndex
+from ..device import _as_tensor, _to
 
 _OBSERVED_FRAMES = {"ALTAZ", "ITRS", "GCRS", "CIRS", "TETE"}
 
@@ -31,12 +32,12 @@ def _normalize_frame(frame: str) -> str:
 def _as_rows(value: Tensor | float, device: torch.device) -> Tensor:
     if isinstance(value, Tensor):
         return _to_device(value, device).reshape(-1)
-    return torch.as_tensor(value, dtype=_work_dtype(device), device=device).reshape(-1)
+    return _as_tensor(value, dtype=_work_dtype(device), device=device).reshape(-1)
 
 
 def _move_column(col: Tensor, device: torch.device) -> Tensor:
     if device.type == "mps" and col.dtype == torch.float64:
-        return col.to(device=device, dtype=torch.float32)
+        return _to(col, device=device, dtype=torch.float32)
     return col.to(device=device)
 
 
@@ -92,7 +93,7 @@ class Catalog:
         epoch_t = (
             _to_device(self.epoch, device)
             if isinstance(self.epoch, Tensor)
-            else torch.as_tensor(self.epoch, dtype=_work_dtype(device), device=device)
+            else _as_tensor(self.epoch, dtype=_work_dtype(device), device=device)
         )
         if epoch_t.ndim == 0 or epoch_t.numel() == 1:
             self.epoch = epoch_t.reshape(())
@@ -110,9 +111,7 @@ class Catalog:
             self.radial_velocity_km_s, n, device
         )
         if self.valid is not None:
-            valid = torch.as_tensor(
-                self.valid, dtype=torch.bool, device=device
-            ).reshape(-1)
+            valid = _as_tensor(self.valid, dtype=torch.bool, device=device).reshape(-1)
             if int(valid.numel()) != n:
                 raise ValueError("valid must match the number of rows")
             self.valid = valid
@@ -293,7 +292,7 @@ class Catalog:
             t_mjd = (
                 _to_device(time_mjd, self.device)
                 if isinstance(time_mjd, Tensor)
-                else torch.as_tensor(
+                else _as_tensor(
                     time_mjd, dtype=_work_dtype(self.device), device=self.device
                 )
             )

@@ -9,6 +9,7 @@ from torch import Tensor
 
 from .._dtype import as_work_tensor as _as_tensor
 from .._dtype import work_dtype as _work_dtype
+from ..device import _as_tensor as _as_tensor_to, _to
 
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
@@ -70,7 +71,7 @@ _FK4_CORR = (
 
 
 def _to_device(value: Tensor, device: torch.device) -> Tensor:
-    return value.to(device=device, dtype=_work_dtype(device))
+    return _to(value, device=device, dtype=_work_dtype(device))
 
 
 def _wrap360(angle: Tensor) -> Tensor:
@@ -87,7 +88,7 @@ def _besselian_epoch_to_julian_epoch(epoch: float) -> float:
 
 def _rotation_matrix_z(angle_deg: float, *, device: torch.device) -> Tensor:
     dtype = _work_dtype(device)
-    a = torch.as_tensor(angle_deg * D2R, dtype=dtype, device=device)
+    a = _as_tensor_to(angle_deg * D2R, dtype=dtype, device=device)
     s = torch.sin(a)
     c = torch.cos(a)
     z = torch.zeros((), dtype=dtype, device=device)
@@ -103,7 +104,7 @@ def _rotation_matrix_z(angle_deg: float, *, device: torch.device) -> Tensor:
 
 def _rotation_matrix_y(angle_deg: float, *, device: torch.device) -> Tensor:
     dtype = _work_dtype(device)
-    a = torch.as_tensor(angle_deg * D2R, dtype=dtype, device=device)
+    a = _as_tensor_to(angle_deg * D2R, dtype=dtype, device=device)
     s = torch.sin(a)
     c = torch.cos(a)
     z = torch.zeros((), dtype=dtype, device=device)
@@ -193,8 +194,8 @@ def _fk4_no_e_to_fk5_vec(
     jyear = _besselian_epoch_to_julian_epoch(obstime)
     t = (jyear - 1950.0) / 100.0
     b = (
-        _B1950_TO_J2000_M.to(device=device, dtype=vec.dtype)
-        + _FK4_CORR.to(device=device, dtype=vec.dtype) * t
+        _to(_B1950_TO_J2000_M, device=device, dtype=vec.dtype)
+        + _to(_FK4_CORR, device=device, dtype=vec.dtype) * t
     )
     out = torch.matmul(vec, p1.T.to(dtype=vec.dtype))
     out = torch.matmul(out, b.T)
@@ -221,8 +222,8 @@ def _fk5_to_fk4_no_e_vec(
     jyear = _besselian_epoch_to_julian_epoch(obstime)
     t = (jyear - 1950.0) / 100.0
     b = (
-        _B1950_TO_J2000_M.to(device=device, dtype=vec.dtype)
-        + _FK4_CORR.to(device=device, dtype=vec.dtype) * t
+        _to(_B1950_TO_J2000_M, device=device, dtype=vec.dtype)
+        + _to(_FK4_CORR, device=device, dtype=vec.dtype) * t
     )
     p2 = _fk4_precession_matrix(1950.0, to_equinox, device=device)
     out = torch.matmul(vec, b.to(dtype=vec.dtype))
@@ -233,7 +234,7 @@ def _fk5_to_fk4_no_e_vec(
 def radec_to_unit(lon_deg: Any, lat_deg: Any) -> Tensor:
     """Convert longitude/latitude in degrees to unit Cartesian vectors."""
     lon = _as_tensor(lon_deg)
-    lat = _as_tensor(lat_deg).to(device=lon.device, dtype=_work_dtype(lon.device))
+    lat = _to(_as_tensor(lat_deg), device=lon.device, dtype=_work_dtype(lon.device))
     lon_r = lon * D2R
     lat_r = lat * D2R
     cos_lat = torch.cos(lat_r)
@@ -268,7 +269,7 @@ def precess_fk5(
     roadmap items.
     """
     ra = _as_tensor(ra_deg)
-    dec = _as_tensor(dec_deg).to(device=ra.device, dtype=_work_dtype(ra.device))
+    dec = _to(_as_tensor(dec_deg), device=ra.device, dtype=_work_dtype(ra.device))
     if float(from_equinox) == float(to_equinox):
         return ra.clone(), dec.clone()
 
@@ -297,7 +298,7 @@ def precess_fk5(
     cos_dec = torch.cos(dec1)
     sin_dec = torch.sin(dec1)
 
-    theta_t = torch.as_tensor(theta, dtype=_work_dtype(ra.device), device=ra.device)
+    theta_t = _as_tensor_to(theta, dtype=_work_dtype(ra.device), device=ra.device)
     cos_theta = torch.cos(theta_t)
     sin_theta = torch.sin(theta_t)
 
@@ -315,8 +316,8 @@ def icrs_to_galactic(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
     vec = radec_to_unit(ra_deg, dec_deg)
     # Astropy/ERFA define the Galactic frame through FK5 J2000; apply the ICRS
     # frame bias before the FK5 -> Galactic rotation.
-    bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
-    mat = _ICRS_TO_GAL.to(device=vec.device, dtype=vec.dtype)
+    bias = _to(_ICRS_TO_FK5_J2000, device=vec.device, dtype=vec.dtype)
+    mat = _to(_ICRS_TO_GAL, device=vec.device, dtype=vec.dtype)
     gal_vec = torch.matmul(torch.matmul(vec, bias.T), mat.T)
     return unit_to_radec(gal_vec)
 
@@ -324,8 +325,8 @@ def icrs_to_galactic(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
 def galactic_to_icrs(l_deg: Any, b_deg: Any) -> tuple[Tensor, Tensor]:
     """Convert Galactic lon/lat to ICRS equatorial coordinates."""
     vec = radec_to_unit(l_deg, b_deg)
-    bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
-    mat = _ICRS_TO_GAL.to(device=vec.device, dtype=vec.dtype)
+    bias = _to(_ICRS_TO_FK5_J2000, device=vec.device, dtype=vec.dtype)
+    mat = _to(_ICRS_TO_GAL, device=vec.device, dtype=vec.dtype)
     icrs_vec = torch.matmul(torch.matmul(vec, mat), bias)
     return unit_to_radec(icrs_vec)
 
@@ -345,7 +346,7 @@ _ICRS_TO_ECLIPTIC_J2000 = torch.tensor(
 
 
 def _ecliptic_from_icrs_matrix(device: torch.device, dtype: torch.dtype) -> Tensor:
-    return _ICRS_TO_ECLIPTIC_J2000.to(device=device, dtype=dtype)
+    return _to(_ICRS_TO_ECLIPTIC_J2000, device=device, dtype=dtype)
 
 
 def icrs_to_ecliptic(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
@@ -371,14 +372,14 @@ def icrs_to_ecliptic_of_date(
     no aberration, refraction, or site.
     """
     vec = radec_to_unit(ra_deg, dec_deg)
-    tt = _as_tensor(tt_mjd).to(device=vec.device, dtype=vec.dtype)
+    tt = _to(_as_tensor(tt_mjd), device=vec.device, dtype=vec.dtype)
     if tt.numel() != 1:
         raise ValueError("ecliptic of date requires a scalar tt_mjd")
     # Circular: iau2006 imports D2R / ARCSEC_TO_RAD from this module.
     from .iau2006 import iau2006_fw_angles, npb_matrix
 
-    n_matrix = npb_matrix(tt.reshape(()), nutation=False).to(
-        device=vec.device, dtype=vec.dtype
+    n_matrix = _to(
+        npb_matrix(tt.reshape(()), nutation=False), device=vec.device, dtype=vec.dtype
     )
     _, _, _, epsa = iau2006_fw_angles(tt.reshape(()))
     v_date = torch.matmul(vec, n_matrix.T)
@@ -390,14 +391,14 @@ def ecliptic_of_date_to_icrs(
 ) -> tuple[Tensor, Tensor]:
     """Rotate mean ecliptic of date to ICRS via IAU 2006 NPB."""
     vec = radec_to_unit(lon_deg, lat_deg)
-    tt = _as_tensor(tt_mjd).to(device=vec.device, dtype=vec.dtype)
+    tt = _to(_as_tensor(tt_mjd), device=vec.device, dtype=vec.dtype)
     if tt.numel() != 1:
         raise ValueError("ecliptic of date requires a scalar tt_mjd")
     # Circular: iau2006 imports D2R / ARCSEC_TO_RAD from this module.
     from .iau2006 import iau2006_fw_angles, npb_matrix
 
-    n_matrix = npb_matrix(tt.reshape(()), nutation=False).to(
-        device=vec.device, dtype=vec.dtype
+    n_matrix = _to(
+        npb_matrix(tt.reshape(()), nutation=False), device=vec.device, dtype=vec.dtype
     )
     _, _, _, epsa = iau2006_fw_angles(tt.reshape(()))
     v_date = torch.matmul(vec, _ecliptic_matrix_from_obliquity(epsa).T)
@@ -447,7 +448,7 @@ def icrs_to_galactocentric(
     Solar peculiar velocity is not applied.
     """
     vec = radec_to_unit(ra_deg, dec_deg)
-    dist = _as_tensor(distance_kpc).to(device=vec.device, dtype=vec.dtype)
+    dist = _to(_as_tensor(distance_kpc), device=vec.device, dtype=vec.dtype)
     r_helio = dist.unsqueeze(-1) * vec
     gc_hat = radec_to_unit(
         vec.new_tensor(float(galcen_ra_deg)),
@@ -456,7 +457,7 @@ def icrs_to_galactocentric(
     r0 = dist.new_tensor(float(galcen_distance_kpc))
     gal = torch.matmul(
         r_helio - r0 * gc_hat,
-        _ICRS_TO_GAL.to(device=vec.device, dtype=vec.dtype).T,
+        _to(_ICRS_TO_GAL, device=vec.device, dtype=vec.dtype).T,
     )
     z_sun = dist.new_tensor(float(z_sun_pc) * 1.0e-3)
     theta = torch.atan2(z_sun, r0)
@@ -490,7 +491,7 @@ def galactocentric_to_icrs(
         xyz.new_tensor(float(galcen_dec_deg)),
     )
     r_helio = (
-        torch.matmul(gal, _ICRS_TO_GAL.to(device=xyz.device, dtype=xyz.dtype))
+        torch.matmul(gal, _to(_ICRS_TO_GAL, device=xyz.device, dtype=xyz.dtype))
         + r0 * gc_hat
     )
     dist = torch.linalg.vector_norm(r_helio, dim=-1).clamp_min(1.0e-30)
@@ -584,16 +585,16 @@ def propagate_proper_motion(
     """
     lon = _as_tensor(lon_deg)
     device = lon.device
-    lat = _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device))
-    pm_lon = _as_tensor(pm_lon_coslat_mas_yr).to(
-        device=device, dtype=_work_dtype(device)
+    lat = _to(_as_tensor(lat_deg), device=device, dtype=_work_dtype(device))
+    pm_lon = _to(
+        _as_tensor(pm_lon_coslat_mas_yr), device=device, dtype=_work_dtype(device)
     )
-    pm_lat = _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device))
-    source_epoch = _as_tensor(source_epoch_jyear).to(
-        device=device, dtype=_work_dtype(device)
+    pm_lat = _to(_as_tensor(pm_lat_mas_yr), device=device, dtype=_work_dtype(device))
+    source_epoch = _to(
+        _as_tensor(source_epoch_jyear), device=device, dtype=_work_dtype(device)
     )
-    target_epoch = _as_tensor(target_epoch_jyear).to(
-        device=device, dtype=_work_dtype(device)
+    target_epoch = _to(
+        _as_tensor(target_epoch_jyear), device=device, dtype=_work_dtype(device)
     )
     lon, lat, pm_lon, pm_lat, source_epoch, target_epoch = torch.broadcast_tensors(
         lon, lat, pm_lon, pm_lat, source_epoch, target_epoch
@@ -719,11 +720,11 @@ def propagate_proper_motion_with_jacobian(
     device = lon.device
     values = torch.broadcast_tensors(
         lon,
-        _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(pm_lon_coslat_mas_yr).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(source_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(target_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(lat_deg), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(pm_lon_coslat_mas_yr), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(pm_lat_mas_yr), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(source_epoch_jyear), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(target_epoch_jyear), device=device, dtype=_work_dtype(device)),
     )
     state = torch.stack(values[:4], dim=-1)
     propagated_position = torch.stack(propagated, dim=-1)
@@ -776,13 +777,13 @@ def _propagate_space_motion(
     device = lon.device
     values = [
         lon,
-        _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(pm_lon_coslat_mas_yr).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(parallax_mas).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(radial_velocity_km_s).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(source_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(target_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(lat_deg), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(pm_lon_coslat_mas_yr), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(pm_lat_mas_yr), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(parallax_mas), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(radial_velocity_km_s), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(source_epoch_jyear), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(target_epoch_jyear), device=device, dtype=_work_dtype(device)),
     ]
     (
         lon,
@@ -1147,13 +1148,13 @@ def propagate_space_motion_with_jacobian(
     device = lon.device
     state_values = torch.broadcast_tensors(
         lon,
-        _as_tensor(lat_deg).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(pm_lon_coslat_mas_yr).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(pm_lat_mas_yr).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(parallax_mas).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(radial_velocity_km_s).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(source_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
-        _as_tensor(target_epoch_jyear).to(device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(lat_deg), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(pm_lon_coslat_mas_yr), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(pm_lat_mas_yr), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(parallax_mas), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(radial_velocity_km_s), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(source_epoch_jyear), device=device, dtype=_work_dtype(device)),
+        _to(_as_tensor(target_epoch_jyear), device=device, dtype=_work_dtype(device)),
     )
     state = torch.stack(state_values[:6], dim=-1)
     propagated_state = torch.stack(propagated, dim=-1)
@@ -1179,14 +1180,14 @@ def propagate_space_motion_with_jacobian(
 def _icrs_to_fk5_radec(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
     """Apply the ICRS -> FK5 J2000 frame bias to equatorial coordinates."""
     vec = radec_to_unit(ra_deg, dec_deg)
-    bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
+    bias = _to(_ICRS_TO_FK5_J2000, device=vec.device, dtype=vec.dtype)
     return unit_to_radec(torch.matmul(vec, bias.T))
 
 
 def _fk5_to_icrs_radec(ra_deg: Any, dec_deg: Any) -> tuple[Tensor, Tensor]:
     """Apply the FK5 J2000 -> ICRS frame bias (inverse of the above)."""
     vec = radec_to_unit(ra_deg, dec_deg)
-    bias = _ICRS_TO_FK5_J2000.to(device=vec.device, dtype=vec.dtype)
+    bias = _to(_ICRS_TO_FK5_J2000, device=vec.device, dtype=vec.dtype)
     return unit_to_radec(torch.matmul(vec, bias))
 
 
@@ -1266,7 +1267,7 @@ def convert_celestial(
     src = canonical_celestial_frame(from_frame)
     dst = canonical_celestial_frame(to_frame)
     lon = _as_tensor(lon_deg)
-    lat = _as_tensor(lat_deg).to(device=lon.device, dtype=_work_dtype(lon.device))
+    lat = _to(_as_tensor(lat_deg), device=lon.device, dtype=_work_dtype(lon.device))
     if src == "LSR":
         src = "ICRS"
     if src == "TEME" and dst != "TEME":

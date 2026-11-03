@@ -25,6 +25,7 @@ from .astrometry import (
     solve_astrometry,
 )
 from .core import WCS
+from ..device import _as_tensor
 
 
 class AstrometryNetError(RuntimeError):
@@ -431,7 +432,7 @@ def _coerce_inputs(
     x_tensor = torch.as_tensor(x)
     if not x_tensor.is_floating_point() or x_tensor.is_complex() or x_tensor.ndim != 1:
         raise ValueError("x must be a real floating-point tensor with shape (N,)")
-    y_tensor = torch.as_tensor(y, dtype=x_tensor.dtype, device=x_tensor.device)
+    y_tensor = _as_tensor(y, dtype=x_tensor.dtype, device=x_tensor.device)
     if y_tensor.shape != x_tensor.shape or y_tensor.is_complex():
         raise ValueError("y must have the same shape and real dtype as x")
     if x_tensor.numel() < 5 or not bool(
@@ -445,9 +446,7 @@ def _coerce_inputs(
     points = torch.stack((x_tensor, y_tensor), dim=-1).detach().cpu().to(torch.float64)
     flux_tensor = None
     if flux is not None:
-        flux_tensor = torch.as_tensor(
-            flux, dtype=x_tensor.dtype, device=x_tensor.device
-        )
+        flux_tensor = _as_tensor(flux, dtype=x_tensor.dtype, device=x_tensor.device)
         if flux_tensor.shape != x_tensor.shape or not bool(
             torch.isfinite(flux_tensor).all()
         ):

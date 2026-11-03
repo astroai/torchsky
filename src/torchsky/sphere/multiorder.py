@@ -11,6 +11,7 @@ from .._dtype import work_dtype as _work_dtype
 from . import healpix as _healpix
 from .moc import MOC, _order_from_uniq, nest2uniq, uniq2nest
 from .sparse import SparseHealpixMap
+from ..device import _as_tensor, _to
 
 
 @runtime_checkable
@@ -65,7 +66,7 @@ class MultiOrderHealpixMap:
             or uniq_t.dtype.is_complex
         ):
             raise ValueError("uniq must contain integers")
-        uniq_t = uniq_t.to(device=values_t.device, dtype=torch.int64).reshape(-1)
+        uniq_t = _to(uniq_t, device=values_t.device, dtype=torch.int64).reshape(-1)
         if values_t.shape[-1] != uniq_t.numel():
             raise ValueError("the last values dimension must match uniq")
         _order_from_uniq(uniq_t)
@@ -102,7 +103,7 @@ class MultiOrderHealpixMap:
     ) -> MultiOrderHealpixMap:
         return type(self)(
             self.uniq.to(device=device),
-            self.values.to(device=device, dtype=dtype),
+            _to(self.values, device=device, dtype=dtype),
             values_are_densities=self.values_are_densities,
             metadata=self.metadata,
         )
@@ -154,7 +155,7 @@ class MultiOrderHealpixMap:
         lon = torch.as_tensor(lon_deg, device=self.uniq.device)
         dtype = _work_dtype(self.uniq.device)
         lon = lon.to(dtype=dtype)
-        lat = torch.as_tensor(lat_deg, device=self.uniq.device, dtype=dtype)
+        lat = _as_tensor(lat_deg, device=self.uniq.device, dtype=dtype)
         lon, lat = torch.broadcast_tensors(lon, lat)
         shape = lon.shape
         count = lon.numel()

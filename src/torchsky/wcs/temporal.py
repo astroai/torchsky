@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 from torch import Tensor
+from ..device import _to
 
 SECONDS_PER_DAY = 86400.0
 TT_MINUS_TAI_SECONDS = 32.184
@@ -156,8 +157,8 @@ def _as_float_tensor(value: Any) -> Tensor:
 def tai_minus_utc_seconds(mjd_utc: Any) -> Tensor:
     """Return TAI-UTC in seconds for UTC MJD values covered by leap table."""
     mjd = _as_float_tensor(mjd_utc)
-    table = _LEAP_EFFECTIVE_MJD.to(device=mjd.device, dtype=mjd.dtype)
-    offsets = _TAI_MINUS_UTC.to(device=mjd.device, dtype=mjd.dtype)
+    table = _to(_LEAP_EFFECTIVE_MJD, device=mjd.device, dtype=mjd.dtype)
+    offsets = _to(_TAI_MINUS_UTC, device=mjd.device, dtype=mjd.dtype)
     flat = mjd.reshape(-1)
     idx = torch.bucketize(flat, table, right=True) - 1
     idx = torch.clamp(idx, min=0, max=offsets.numel() - 1)
@@ -428,12 +429,12 @@ def _keplerian_heliocentric_equatorial(mjd: Tensor, body: str) -> Tensor:
     T_flat = ((jd - 2451545.0) / 36525.0).to(dtype=dtype)
     d2r = math.pi / 180.0
     a0, da, e0, de, i0, di, L0, dL, vp0, dvp, om0, dom = elems
-    a = (a0 + da * T_flat).to(device=device, dtype=dtype)
-    e = (e0 + de * T_flat).to(device=device, dtype=dtype)
-    i = ((i0 + di * T_flat) * d2r).to(device=device, dtype=dtype)
-    L = ((L0 + dL * T_flat) * d2r).to(device=device, dtype=dtype)
-    varpi = ((vp0 + dvp * T_flat) * d2r).to(device=device, dtype=dtype)
-    omega_node = ((om0 + dom * T_flat) * d2r).to(device=device, dtype=dtype)
+    a = _to(a0 + da * T_flat, device=device, dtype=dtype)
+    e = _to(e0 + de * T_flat, device=device, dtype=dtype)
+    i = _to((i0 + di * T_flat) * d2r, device=device, dtype=dtype)
+    L = _to((L0 + dL * T_flat) * d2r, device=device, dtype=dtype)
+    varpi = _to((vp0 + dvp * T_flat) * d2r, device=device, dtype=dtype)
+    omega_node = _to((om0 + dom * T_flat) * d2r, device=device, dtype=dtype)
 
     omega_arg = varpi - omega_node
     M = L - varpi
@@ -496,7 +497,7 @@ def _gmst_rotation_matrix(mjd: Tensor) -> tuple[Tensor, Tensor]:
         + 0.000387933 * T_flat**2
         - T_flat**3 / 38710000.0
     )
-    gmst_rad = (gmst * (math.pi / 180.0)).to(device=mjd.device, dtype=mjd.dtype)
+    gmst_rad = _to(gmst * (math.pi / 180.0), device=mjd.device, dtype=mjd.dtype)
 
     return torch.cos(gmst_rad), torch.sin(gmst_rad)
 

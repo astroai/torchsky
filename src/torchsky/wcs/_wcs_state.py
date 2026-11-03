@@ -19,6 +19,7 @@ from .tabular import (
     CoupledTabularLookupWCS,
     TabularAxis,
 )
+from ..device import _as_tensor, _to
 
 if TYPE_CHECKING:
     pass
@@ -50,8 +51,8 @@ class _WCSStateMixin:
                 raise ValueError(
                     f"tabular axis {axis_number} requires CTYPE{axis_number} ending in '-TAB'"
                 )
-            axes[idx] = axis.to(
-                device=self.device, dtype=self._wcs_coord_dtype(self.device)
+            axes[idx] = _to(
+                axis, device=self.device, dtype=self._wcs_coord_dtype(self.device)
             )
         self.tabular_axes = axes
 
@@ -105,8 +106,10 @@ class _WCSStateMixin:
                 "coupled_tabular pixel_n_dim must match coupled_tabular_pixel_axes "
                 f"({coupled_tabular.pixel_n_dim} != {len(pixel_axes)})"
             )
-        self.coupled_tabular = coupled_tabular.to(
-            device=self.device, dtype=self._wcs_coord_dtype(self.device)
+        self.coupled_tabular = _to(
+            coupled_tabular,
+            device=self.device,
+            dtype=self._wcs_coord_dtype(self.device),
         )
         self.coupled_tabular_axes = tuple(axis - 1 for axis in world_axes)
         self.coupled_tabular_pixel_axes = tuple(axis - 1 for axis in pixel_axes)
@@ -183,14 +186,16 @@ class _WCSStateMixin:
         """
         if not isinstance(value, Tensor):
             dtype = self._wcs_coord_dtype(self.device)
-            return torch.as_tensor(value, device=self.device, dtype=dtype)
+            return _as_tensor(value, device=self.device, dtype=dtype)
         if value.device.type == "mps":
             self._warn_mps_precision()
             return value.to(dtype=torch.float32)
         dtype = self._wcs_coord_dtype(value.device)
         out = value if value.dtype == dtype else value.to(dtype=dtype)
         if out.device.type == "cpu" and self.device.type != "cpu":
-            return out.to(device=self.device, dtype=self._wcs_coord_dtype(self.device))
+            return _to(
+                out, device=self.device, dtype=self._wcs_coord_dtype(self.device)
+            )
         return out
 
     def _load_pixel_affine_from_params(self, *, prefix: str = "TSKYAF") -> None:
@@ -236,8 +241,12 @@ class _WCSStateMixin:
         self._set_pixel_affine(matrix, offset)
 
     def _set_pixel_affine(self, matrix: Tensor, offset: Tensor) -> None:
-        affine = matrix.to(device=self.device, dtype=self._wcs_coord_dtype(self.device))
-        shift = offset.to(device=self.device, dtype=self._wcs_coord_dtype(self.device))
+        affine = _to(
+            matrix, device=self.device, dtype=self._wcs_coord_dtype(self.device)
+        )
+        shift = _to(
+            offset, device=self.device, dtype=self._wcs_coord_dtype(self.device)
+        )
         affine_inv = torch.linalg.inv(affine)
         self._pixel_affine_matrix = affine
         self._pixel_affine_offset = shift
@@ -396,10 +405,8 @@ class _WCSStateMixin:
         if axis in coupled_pixel:
             return coupled_pixel[axis]
         if axis in self.coupled_tabular_axes:
-            return (
-                self.crval[axis]
-                .to(device=world.device, dtype=world.dtype)
-                .expand(world.shape[0])
+            return _to(self.crval[axis], device=world.device, dtype=world.dtype).expand(
+                world.shape[0]
             )
         return self._apply_tabular_world_to_pixel(world[:, axis], axis)
 
@@ -425,8 +432,8 @@ class _WCSStateMixin:
         self, linear_world: Tensor, axis: int
     ) -> Tensor:
         if hasattr(self, "spectral_transforms") and axis in self.spectral_transforms:
-            crval = self.crval[axis].to(
-                device=linear_world.device, dtype=linear_world.dtype
+            crval = _to(
+                self.crval[axis], device=linear_world.device, dtype=linear_world.dtype
             )
             x = linear_world - crval
             return self.spectral_transforms[axis].pixel_to_world(x)
@@ -434,8 +441,8 @@ class _WCSStateMixin:
         algorithm = self._axis_algorithm_code(axis)
         if algorithm not in {"LOG", "F2W", "W2F"}:
             return linear_world
-        crval = self.crval[axis].to(
-            device=linear_world.device, dtype=linear_world.dtype
+        crval = _to(
+            self.crval[axis], device=linear_world.device, dtype=linear_world.dtype
         )
         if torch.abs(crval) <= 0.0:
             return torch.full_like(linear_world, torch.nan)
@@ -453,14 +460,14 @@ class _WCSStateMixin:
         self, world: Tensor, axis: int
     ) -> Tensor:
         if hasattr(self, "spectral_transforms") and axis in self.spectral_transforms:
-            crval = self.crval[axis].to(device=world.device, dtype=world.dtype)
+            crval = _to(self.crval[axis], device=world.device, dtype=world.dtype)
             x = self.spectral_transforms[axis].world_to_pixel(world)
             return crval + x
 
         algorithm = self._axis_algorithm_code(axis)
         if algorithm not in {"LOG", "F2W", "W2F"}:
             return world
-        crval = self.crval[axis].to(device=world.device, dtype=world.dtype)
+        crval = _to(self.crval[axis], device=world.device, dtype=world.dtype)
         if torch.abs(crval) <= 0.0:
             return torch.full_like(world, torch.nan)
         ratio = world / crval

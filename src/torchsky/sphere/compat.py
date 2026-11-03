@@ -64,6 +64,7 @@ from .spectral import smoothalm as _smoothalm
 from .spectral import smoothmap as _smoothmap
 from .spectral import synalm as _synalm
 from .spectral import synfast as _synfast
+from ..device import _as_tensor
 
 
 class Rotator:
@@ -443,7 +444,7 @@ def fit_dipole(
         _, lat = _healpix.pix2ang(nside, pix, nest=nest, lonlat=True)
         valid = valid & (torch.abs(lat) >= float(gal_cut))
     if valid_mask is not None:
-        mask_t = torch.as_tensor(valid_mask, dtype=torch.bool, device=vals.device)
+        mask_t = _as_tensor(valid_mask, dtype=torch.bool, device=vals.device)
         if mask_t.shape != vals.shape:
             raise ValueError("valid_mask must have shape (npix,)")
         valid = valid & mask_t

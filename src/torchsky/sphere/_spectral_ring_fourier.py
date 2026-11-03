@@ -21,6 +21,7 @@ from ._spectral_config import (
     _RING_FOURIER_SYNTH_CPP_MAX_M,
     _RING_SMALL_DFT_MAX_NPH,
 )
+from ..device import _to
 
 
 def _ring_fourier_modes(
@@ -68,14 +69,18 @@ def _ring_fourier_modes(
         belt_stack = belt_pixels.view(rows.shape[0], n_common, common_len)
         if int(common_len) <= _RING_SMALL_DFT_MAX_NPH:
             if int(common_len) > int(mmax):
-                phase = _ring_azimuth_phase(int(common_len), int(mmax)).to(
-                    device=device, dtype=dtype
+                phase = _to(
+                    _ring_azimuth_phase(int(common_len), int(mmax)),
+                    device=device,
+                    dtype=dtype,
                 )
                 dft_sel = torch.matmul(belt_stack, torch.conj(phase).transpose(0, 1))
             else:
-                phase_base = _ring_azimuth_phase(
-                    int(common_len), int(common_len) - 1
-                ).to(device=device, dtype=dtype)
+                phase_base = _to(
+                    _ring_azimuth_phase(int(common_len), int(common_len) - 1),
+                    device=device,
+                    dtype=dtype,
+                )
                 dft_base = torch.matmul(
                     belt_stack, torch.conj(phase_base).transpose(0, 1)
                 )
@@ -100,13 +105,15 @@ def _ring_fourier_modes(
         ring_stack = rows[:, pix_idx]
         if int(nph) <= _RING_SMALL_DFT_MAX_NPH:
             if int(nph) > int(mmax):
-                phase = _ring_azimuth_phase(int(nph), int(mmax)).to(
-                    device=device, dtype=dtype
+                phase = _to(
+                    _ring_azimuth_phase(int(nph), int(mmax)), device=device, dtype=dtype
                 )
                 dft_sel = torch.matmul(ring_stack, torch.conj(phase).transpose(0, 1))
             else:
-                phase_base = _ring_azimuth_phase(int(nph), int(nph) - 1).to(
-                    device=device, dtype=dtype
+                phase_base = _to(
+                    _ring_azimuth_phase(int(nph), int(nph) - 1),
+                    device=device,
+                    dtype=dtype,
                 )
                 dft_base = torch.matmul(
                     ring_stack, torch.conj(phase_base).transpose(0, 1)
@@ -324,8 +331,10 @@ def _ring_fourier_synthesis(
         s_group = s_m_batched[:, :, start_ring : end_ring + 1]
         s_group_perm = s_group.permute(0, 2, 1)
         if int(common_len) <= _RING_SMALL_DFT_MAX_NPH:
-            phase = _ring_azimuth_phase(int(common_len), int(mmax)).to(
-                device=device, dtype=dtype
+            phase = _to(
+                _ring_azimuth_phase(int(common_len), int(mmax)),
+                device=device,
+                dtype=dtype,
             )
             map_vals = torch.matmul(s_group_perm, phase)
         else:
@@ -357,8 +366,8 @@ def _ring_fourier_synthesis(
         s_group = torch.index_select(s_m_batched, 2, ring_idx)
         s_group_perm = s_group.permute(0, 2, 1)
         if int(nph) <= _RING_SMALL_DFT_MAX_NPH:
-            phase = _ring_azimuth_phase(int(nph), int(mmax)).to(
-                device=device, dtype=dtype
+            phase = _to(
+                _ring_azimuth_phase(int(nph), int(mmax)), device=device, dtype=dtype
             )
             map_vals = torch.matmul(s_group_perm, phase)
         else:

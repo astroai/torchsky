@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor
+from .device import _as_tensor, _to
 
 SPEED_OF_LIGHT_KM_S = 299792.458
 PLANCK18_H0 = 67.66
@@ -39,8 +40,8 @@ def _gauss_legendre_unit(
 
     x, w = np.polynomial.legendre.leggauss(n)
     return (
-        torch.as_tensor(0.5 * (x + 1.0), device=device, dtype=dtype),
-        torch.as_tensor(0.5 * w, device=device, dtype=dtype),
+        _as_tensor(0.5 * (x + 1.0), device=device, dtype=dtype),
+        _as_tensor(0.5 * w, device=device, dtype=dtype),
     )
 
 
@@ -61,8 +62,8 @@ def _as_parameter(
     the target dtype instead.
     """
     if isinstance(value, Tensor):
-        return value.to(device=device, dtype=dtype)
-    return torch.as_tensor(value, device=device, dtype=dtype)
+        return _to(value, device=device, dtype=dtype)
+    return _as_tensor(value, device=device, dtype=dtype)
 
 
 @dataclass(frozen=True)
@@ -560,7 +561,7 @@ def comoving_position(
     ok = torch.as_tensor(cosmology.Ok0)
     if not bool(torch.isfinite(ok).all()) or bool((torch.abs(ok) > 1.0e-12).any()):
         raise ValueError("comoving_position is defined only for Ok0 = 0")
-    z_t = torch.as_tensor(z, device=unit.device, dtype=unit.dtype)
+    z_t = _as_tensor(z, device=unit.device, dtype=unit.dtype)
     shape = torch.broadcast_shapes(unit.shape[:-1], z_t.shape)
     unit_b = torch.broadcast_to(unit, shape + (3,))
     z_b = torch.broadcast_to(z_t, shape)
@@ -577,11 +578,13 @@ def comoving_separation(
 ) -> Tensor:
     """Constant-curvature FLRW spatial geodesic separation in Mpc."""
     unit_a = _validated_unit_xyz(unit_xyz_a, "unit_xyz_a")
-    unit_b = _validated_unit_xyz(unit_xyz_b, "unit_xyz_b").to(
-        device=unit_a.device, dtype=unit_a.dtype
+    unit_b = _to(
+        _validated_unit_xyz(unit_xyz_b, "unit_xyz_b"),
+        device=unit_a.device,
+        dtype=unit_a.dtype,
     )
-    z_a_t = torch.as_tensor(z_a, device=unit_a.device, dtype=unit_a.dtype)
-    z_b_t = torch.as_tensor(z_b, device=unit_a.device, dtype=unit_a.dtype)
+    z_a_t = _as_tensor(z_a, device=unit_a.device, dtype=unit_a.dtype)
+    z_b_t = _as_tensor(z_b, device=unit_a.device, dtype=unit_a.dtype)
     shape = torch.broadcast_shapes(
         unit_a.shape[:-1], unit_b.shape[:-1], z_a_t.shape, z_b_t.shape
     )

@@ -32,6 +32,7 @@ from ..scenes import (
     as_scene_representation,
 )
 from ..target import TargetRenderSpec
+from ...device import _to
 
 
 def _relative_norm(error: Tensor, reference: Tensor) -> float:
@@ -64,8 +65,8 @@ def _subspace_leakage(error: Tensor, basis: Tensor, reference: Tensor) -> float:
         return 0.0
     vector = torch.as_tensor(error).reshape(-1)
     dtype = torch.promote_types(vector.dtype, basis_rows.dtype)
-    matrix = basis_rows.to(dtype=dtype, device=vector.device).transpose(0, 1)
-    rhs = vector.to(dtype=dtype, device=vector.device)
+    matrix = _to(basis_rows, dtype=dtype, device=vector.device).transpose(0, 1)
+    rhs = _to(vector, dtype=dtype, device=vector.device)
     coeffs = torch.linalg.lstsq(matrix, rhs).solution
     projected = matrix @ coeffs
     proj_norm = torch.linalg.vector_norm(projected)
@@ -160,7 +161,7 @@ def _apply_preconditioner(
     if callable(preconditioner):
         return torch.as_tensor(preconditioner(vector))
     return (
-        torch.as_tensor(preconditioner).to(dtype=vector.dtype, device=vector.device)
+        _to(torch.as_tensor(preconditioner), dtype=vector.dtype, device=vector.device)
         * vector
     )
 
@@ -190,8 +191,10 @@ def _solve_normal_system_cg(
         raise TypeError("rhs must have a floating-point or complex dtype")
 
     def _action(state: Tensor) -> Tensor:
-        image = torch.as_tensor(normal_action(state)).to(
-            dtype=state.dtype, device=state.device
+        image = _to(
+            torch.as_tensor(normal_action(state)),
+            dtype=state.dtype,
+            device=state.device,
         )
         if tuple(image.shape) != tuple(rhs_t.shape):
             raise ValueError("normal operator output shape must match rhs")
@@ -206,8 +209,10 @@ def _solve_normal_system_cg(
         initial_solution=(
             None
             if initial_solution is None
-            else torch.as_tensor(initial_solution).to(
-                dtype=rhs_t.dtype, device=rhs_t.device
+            else _to(
+                torch.as_tensor(initial_solution),
+                dtype=rhs_t.dtype,
+                device=rhs_t.device,
             )
         ),
         max_iterations=iterations,
@@ -272,14 +277,18 @@ def _estimate_inverse_diagonal_hutchinson(
         return output
 
     for probe_index in range(num_probes):
-        probe = torch.randint(
-            0,
-            2,
-            state.shape,
-            dtype=torch.int8,
-            device=generator_device,
-            generator=generator,
-        ).to(dtype=real_dtype, device=state.device)
+        probe = _to(
+            torch.randint(
+                0,
+                2,
+                state.shape,
+                dtype=torch.int8,
+                device=generator_device,
+                generator=generator,
+            ),
+            dtype=real_dtype,
+            device=state.device,
+        )
         probe = (probe * 2.0 - 1.0).to(dtype=state.dtype)
         solution = _checked_output(solve(probe), "normal-system solve")
         image = _checked_output(normal_action(solution), "normal action")

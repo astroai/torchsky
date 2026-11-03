@@ -9,6 +9,7 @@ from .. import _ops as _native_ops
 from ._spectral_basis import (
     _ring_layout_for_nside,
 )
+from ..device import _to
 
 
 def _accumulate_add(
@@ -46,7 +47,7 @@ class ScalarSHTIntegrate(torch.autograd.Function):
         nrings = int(theta_ring_cpu.numel())
         weight = torch.full((nrings,), pix_w, dtype=torch.float64, device="cpu")
 
-        s_modes_cpu = s_modes.detach().to(dtype=torch.complex128, device="cpu")
+        s_modes_cpu = _to(s_modes.detach(), dtype=torch.complex128, device="cpu")
 
         if _native_ops.has_spectral_dispatcher():
             out = _native_ops.spectral_scalar_integrate_recurrence(
@@ -73,7 +74,7 @@ class ScalarSHTIntegrate(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_alm: Tensor):
-        grad_alm_cpu = grad_alm.detach().to(device="cpu", dtype=torch.complex128)
+        grad_alm_cpu = _to(grad_alm.detach(), device="cpu", dtype=torch.complex128)
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(ctx.nside)
 
         if _native_ops.has_spectral_dispatcher():
@@ -106,7 +107,7 @@ class ScalarSHTInterpolate(torch.autograd.Function):
         ctx.mmax = mmax
 
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(nside)
-        alm_cpu = alm.detach().to(dtype=torch.complex128, device="cpu")
+        alm_cpu = _to(alm.detach(), dtype=torch.complex128, device="cpu")
 
         if _native_ops.has_spectral_dispatcher():
             out = _native_ops.spectral_scalar_interpolate_recurrence(
@@ -130,7 +131,7 @@ class ScalarSHTInterpolate(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_s_modes: Tensor):
-        grad_s_cpu = grad_s_modes.detach().to(device="cpu", dtype=torch.complex128)
+        grad_s_cpu = _to(grad_s_modes.detach(), device="cpu", dtype=torch.complex128)
 
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(ctx.nside)
         nrings = int(theta_ring_cpu.numel())
@@ -182,8 +183,8 @@ class SpinSHTIntegrate(torch.autograd.Function):
         nrings = int(theta_ring_cpu.numel())
         w_vec = torch.full((nrings,), pix_w, dtype=torch.float64, device="cpu")
 
-        sp = s_plus.detach().to(dtype=torch.complex128, device="cpu")
-        sm = s_minus.detach().to(dtype=torch.complex128, device="cpu")
+        sp = _to(s_plus.detach(), dtype=torch.complex128, device="cpu")
+        sm = _to(s_minus.detach(), dtype=torch.complex128, device="cpu")
 
         alms_stacked = _native_ops.spectral_spin_integrate_recurrence(
             sp.contiguous(),
@@ -200,8 +201,8 @@ class SpinSHTIntegrate(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_a_plus: Tensor, grad_a_minus: Tensor):
-        gap = grad_a_plus.detach().to(dtype=torch.complex128, device="cpu")
-        gam = grad_a_minus.detach().to(dtype=torch.complex128, device="cpu")
+        gap = _to(grad_a_plus.detach(), dtype=torch.complex128, device="cpu")
+        gam = _to(grad_a_minus.detach(), dtype=torch.complex128, device="cpu")
 
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(int(ctx.nside))
         alm_stack = torch.stack([gap, gam], dim=0)
@@ -246,8 +247,8 @@ class SpinSHTInterpolate(torch.autograd.Function):
 
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(nside)
 
-        ap = a_plus.detach().to(dtype=torch.complex128, device="cpu")
-        am = a_minus.detach().to(dtype=torch.complex128, device="cpu")
+        ap = _to(a_plus.detach(), dtype=torch.complex128, device="cpu")
+        am = _to(a_minus.detach(), dtype=torch.complex128, device="cpu")
         alm_stack = torch.stack([ap, am], dim=0)
 
         s_modes_stacked = _native_ops.spectral_spin_interpolate_recurrence(
@@ -263,8 +264,8 @@ class SpinSHTInterpolate(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_s_plus: Tensor, grad_s_minus: Tensor):
-        gsp = grad_s_plus.detach().to(dtype=torch.complex128, device="cpu")
-        gsm = grad_s_minus.detach().to(dtype=torch.complex128, device="cpu")
+        gsp = _to(grad_s_plus.detach(), dtype=torch.complex128, device="cpu")
+        gsm = _to(grad_s_minus.detach(), dtype=torch.complex128, device="cpu")
 
         _, _, theta_ring_cpu, _ = _ring_layout_for_nside(ctx.nside)
         nrings = int(theta_ring_cpu.numel())

@@ -7,7 +7,7 @@ import os
 import torch
 from torch import Tensor
 
-from ...device import require_float64
+from ...device import _as_tensor, require_float64
 
 _DRIZZLE_BOUNDARY_EPS = 1.0e-4
 # Candidate (quad, box) pairs evaluated per tensor batch.  The CPU limit keeps the working
@@ -474,11 +474,11 @@ def _accumulate_quadrilateral_overlaps(
             )
             selected_starts = torch.maximum(
                 starts[owner_ids],
-                torch.as_tensor(pair_start, dtype=torch.int64, device=quad_x.device),
+                _as_tensor(pair_start, dtype=torch.int64, device=quad_x.device),
             )
             selected_ends = torch.minimum(
                 ends[owner_ids],
-                torch.as_tensor(pair_stop, dtype=torch.int64, device=quad_x.device),
+                _as_tensor(pair_stop, dtype=torch.int64, device=quad_x.device),
             )
             owners = torch.repeat_interleave(owner_ids, selected_ends - selected_starts)
         pair_ids = torch.arange(

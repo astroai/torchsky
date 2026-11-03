@@ -49,6 +49,10 @@ Changes after 0.5.0rc1 are listed here.
 
 ### Fixed
 
+- MPS: moving an MPS tensor to CPU float64/complex128 in one `.to(device,
+  dtype)`, `torch.as_tensor` or `.to(other)` call returns zeros in PyTorch
+  2.14. Every such conversion in torchsky now moves first and casts on the
+  target device; a test keeps fused conversions out of `src/`.
 - WCS: TPV `PV1_3`/`PV1_4` are no longer read as `LONPOLE`/`LATPOLE`; DECam
   fields were mirrored about `CRVAL`.
 - `spectral_axis_from_header` and `SpectralReader.read_data_cube` read
