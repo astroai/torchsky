@@ -17,9 +17,7 @@ def _hdr(c1, c2):
     }
 
 
-@pytest.mark.parametrize(
-    "c1,c2", [("RA---XYZ", "DEC--XYZ"), ("GLON-QQQ", "GLAT-QQQ")]
-)
+@pytest.mark.parametrize("c1,c2", [("RA---XYZ", "DEC--XYZ"), ("GLON-QQQ", "GLAT-QQQ")])
 def test_unsupported_celestial_projection_raises(c1, c2):
     with pytest.raises(ValueError) as exc:
         WCS(_hdr(c1, c2))

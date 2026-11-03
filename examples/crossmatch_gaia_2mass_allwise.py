@@ -69,8 +69,16 @@ def main() -> None:
 
     cols = {
         "gaia_dr3": (
-            "source_id", "ra", "dec", "ra_error", "dec_error", "parallax",
-            "pmra", "pmdec", "phot_g_mean_mag", "bp_rp",
+            "source_id",
+            "ra",
+            "dec",
+            "ra_error",
+            "dec_error",
+            "parallax",
+            "pmra",
+            "pmdec",
+            "phot_g_mean_mag",
+            "bp_rp",
         ),
         "twomass": ("designation", "ra", "dec", "err_maj", "j_m", "h_m", "k_m"),
         "allwise": ("designation", "ra", "dec", "sigra", "sigdec", "w1mpro", "w2mpro"),
@@ -85,8 +93,10 @@ def main() -> None:
     )
 
     g_ra, g_dec = propagate(
-        column(gaia, "ra"), column(gaia, "dec"),
-        column(gaia, "pmra"), column(gaia, "pmdec"),
+        column(gaia, "ra"),
+        column(gaia, "dec"),
+        column(gaia, "pmra"),
+        column(gaia, "pmdec"),
         EPOCH_2MASS - 2016.0,
     )
     t_ra, t_dec = column(tmass, "ra"), column(tmass, "dec")
@@ -102,10 +112,26 @@ def main() -> None:
 
     # Fixed-radius matches Gaia -> 2MASS.
     best, ms_best = timed(
-        lambda: crossmatch_sky(g_ra, g_dec, t_ra, t_dec, radius_arcsec=MATCH_ARCSEC, find="best1", device=dev)
+        lambda: crossmatch_sky(
+            g_ra,
+            g_dec,
+            t_ra,
+            t_dec,
+            radius_arcsec=MATCH_ARCSEC,
+            find="best1",
+            device=dev,
+        )
     )
     mutual, ms_mut = timed(
-        lambda: crossmatch_sky(g_ra, g_dec, t_ra, t_dec, radius_arcsec=MATCH_ARCSEC, find="mutual", device=dev)
+        lambda: crossmatch_sky(
+            g_ra,
+            g_dec,
+            t_ra,
+            t_dec,
+            radius_arcsec=MATCH_ARCSEC,
+            find="mutual",
+            device=dev,
+        )
     )
     print(
         f"Gaia x 2MASS within {MATCH_ARCSEC} arcsec: best1 {best.left_index.numel()} pairs "
@@ -114,15 +140,24 @@ def main() -> None:
     )
 
     # Per-source catalogue errors: pair kept when sep <= k (err_gaia + err_2mass).
-    g_err = (torch.hypot(column(gaia, "ra_error"), column(gaia, "dec_error")) / 1e3).to(dev)
+    g_err = (torch.hypot(column(gaia, "ra_error"), column(gaia, "dec_error")) / 1e3).to(
+        dev
+    )
     t_err = torch.nan_to_num(column(tmass, "err_maj")).to(dev)
     w_err = torch.hypot(
-        torch.nan_to_num(column(wise, "sigra")), torch.nan_to_num(column(wise, "sigdec"))
+        torch.nan_to_num(column(wise, "sigra")),
+        torch.nan_to_num(column(wise, "sigdec")),
     ).to(dev)
     skyerr, ms_err = timed(
         lambda: crossmatch_sky(
-            g_ra, g_dec, t_ra, t_dec, find="best1", device=dev,
-            left_err_arcsec=SIGMA_FACTOR * g_err, right_err_arcsec=SIGMA_FACTOR * t_err,
+            g_ra,
+            g_dec,
+            t_ra,
+            t_dec,
+            find="best1",
+            device=dev,
+            left_err_arcsec=SIGMA_FACTOR * g_err,
+            right_err_arcsec=SIGMA_FACTOR * t_err,
         )
     )
     print(
@@ -132,8 +167,14 @@ def main() -> None:
 
     skyerr_w, ms_w = timed(
         lambda: crossmatch_sky(
-            g_ra, g_dec, w_ra, w_dec, find="best1", device=dev,
-            left_err_arcsec=SIGMA_FACTOR * g_err, right_err_arcsec=SIGMA_FACTOR * w_err,
+            g_ra,
+            g_dec,
+            w_ra,
+            w_dec,
+            find="best1",
+            device=dev,
+            left_err_arcsec=SIGMA_FACTOR * g_err,
+            right_err_arcsec=SIGMA_FACTOR * w_err,
         )
     )
     print(
@@ -143,18 +184,25 @@ def main() -> None:
 
     # Brute-force O(N*M) check of best1 on a subset of Gaia rows.
     n_sub = min(N_BRUTE, g_ra.numel())
-    sep = great_circle_distance(
-        g_ra[:n_sub, None], g_dec[:n_sub, None], t_ra[None, :], t_dec[None, :]
-    ) * 3600.0
+    sep = (
+        great_circle_distance(
+            g_ra[:n_sub, None], g_dec[:n_sub, None], t_ra[None, :], t_dec[None, :]
+        )
+        * 3600.0
+    )
     near_sep, near_idx = sep.min(dim=1)
     keep = near_sep <= MATCH_ARCSEC
-    brute = {int(i): int(j) for i, j in zip(torch.nonzero(keep).flatten(), near_idx[keep])}
+    brute = {
+        int(i): int(j) for i, j in zip(torch.nonzero(keep).flatten(), near_idx[keep])
+    }
     fast = {
         int(i): int(j)
         for i, j in zip(best.left_index.cpu(), best.right_index.cpu())
         if int(i) < n_sub
     }
-    print(f"brute-force check on {n_sub} Gaia rows: {len(brute)} matches, identical = {brute == fast}")
+    print(
+        f"brute-force check on {n_sub} Gaia rows: {len(brute)} matches, identical = {brute == fast}"
+    )
     assert brute == fast
 
     # Three-way friends-of-friends group.
@@ -184,14 +232,25 @@ def main() -> None:
     ax = axes[0]
     ax.scatter(g_mag[gi] - k_mag[ti], g_mag[gi], s=3, c="0.65", label="Gaia x 2MASS")
     m = member[gi]
-    ax.scatter((g_mag[gi] - k_mag[ti])[m], g_mag[gi][m], s=4, c="C3", label="parallax 0.9-1.3 mas")
+    ax.scatter(
+        (g_mag[gi] - k_mag[ti])[m],
+        g_mag[gi][m],
+        s=4,
+        c="C3",
+        label="parallax 0.9-1.3 mas",
+    )
     ax.invert_yaxis()
     ax.set(xlabel="G - Ks [mag]", ylabel="G [mag]", title="Colour-magnitude diagram")
     ax.legend(markerscale=3, fontsize=8)
     ax = axes[1]
     ax.scatter(j_mag[ti3] - k_mag[ti3], k_mag[ti3] - w1[wi3], s=4, c="C0")
-    ax.set(xlabel="J - Ks [mag]", ylabel="Ks - W1 [mag]", xlim=(-0.2, 1.4), ylim=(-0.4, 0.8),
-           title=f"Gaia x 2MASS x AllWISE ({int(triple.sum())} stars)")
+    ax.set(
+        xlabel="J - Ks [mag]",
+        ylabel="Ks - W1 [mag]",
+        xlim=(-0.2, 1.4),
+        ylim=(-0.4, 0.8),
+        title=f"Gaia x 2MASS x AllWISE ({int(triple.sum())} stars)",
+    )
     out = args.out or Path(tempfile.mkdtemp(prefix="torchsky-gaia-2mass-allwise-"))
     out.mkdir(parents=True, exist_ok=True)
     fig.savefig(out / "crossmatch_gaia_2mass_allwise.png", dpi=110)

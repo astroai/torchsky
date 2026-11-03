@@ -70,7 +70,9 @@ def smooth_sparse(pixels: torch.Tensor, counts: torch.Tensor, nside: int, steps:
         nb = neighbors(nside, pixels, nest=True)
         pixels_new = torch.unique(torch.cat([pixels, nb[nb >= 0]]))
         pos = torch.searchsorted(pixels_new, pixels)
-        values = torch.zeros(pixels_new.numel(), dtype=counts.dtype, device=counts.device)
+        values = torch.zeros(
+            pixels_new.numel(), dtype=counts.dtype, device=counts.device
+        )
         # each cell spreads value/9 to itself and to its (up to 8) neighbours
         nb_count = (nb >= 0).sum(dim=1).to(counts.dtype)
         share = counts / (1.0 + nb_count)
@@ -127,19 +129,35 @@ def main() -> None:
 
     # Smoothing on the sparse pixel set.
     sm_cells, sm_counts = smooth_sparse(cells, counts, NSIDE, SMOOTH_STEPS)
-    sigma_arcsec = math.sqrt(2 * SMOOTH_STEPS / 3) * 3600 * math.degrees(math.sqrt(math.pi / 3)) / NSIDE
+    sigma_arcsec = (
+        math.sqrt(2 * SMOOTH_STEPS / 3)
+        * 3600
+        * math.degrees(math.sqrt(math.pi / 3))
+        / NSIDE
+    )
     print(
         f"smoothed {SMOOTH_STEPS} steps (sigma ~ {sigma_arcsec:.0f} arcsec): {sm_cells.numel()} cells, "
         f"counts {float(sm_counts.sum()):.1f} (conserved: {abs(float(sm_counts.sum()) - float(counts.sum())) < 1e-6 * float(counts.sum())})"
     )
-    assert abs(float(sm_counts.sum()) - float(counts.sum())) < 1e-6 * float(counts.sum())
+    assert abs(float(sm_counts.sum()) - float(counts.sum())) < 1e-6 * float(
+        counts.sum()
+    )
     top = sm_cells[int(sm_counts.argmax())]
     t_lon, t_lat = pix2ang(NSIDE, top.cpu(), nest=True, lonlat=True)
-    sep = math.hypot(
-        (float(t_lon) - SGR_A_STAR[0]) * math.cos(math.radians(SGR_A_STAR[1])),
-        float(t_lat) - SGR_A_STAR[1],
-    ) * 60
-    sgr = ang2pix(NSIDE, torch.tensor(SGR_A_STAR[0]), torch.tensor(SGR_A_STAR[1]), nest=True, lonlat=True)
+    sep = (
+        math.hypot(
+            (float(t_lon) - SGR_A_STAR[0]) * math.cos(math.radians(SGR_A_STAR[1])),
+            float(t_lat) - SGR_A_STAR[1],
+        )
+        * 60
+    )
+    sgr = ang2pix(
+        NSIDE,
+        torch.tensor(SGR_A_STAR[0]),
+        torch.tensor(SGR_A_STAR[1]),
+        nest=True,
+        lonlat=True,
+    )
     at_sgr = float(sm_counts[sm_cells.cpu() == sgr.cpu()].sum())
     print(
         f"brightest smoothed cell ({float(sm_counts.max()):.0f} counts) lies {sep:.1f} arcmin from Sgr A*, "
@@ -150,14 +168,32 @@ def main() -> None:
     out = args.out or Path(tempfile.mkdtemp(prefix="torchsky-chandra-"))
     out.mkdir(parents=True, exist_ok=True)
     ra0, dec0 = float(ra.mean()), float(dec.mean())
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.5), constrained_layout=True, sharex=True, sharey=True)
-    for ax, (c, v), title in zip(axes, ((cells, counts), (sm_cells, sm_counts)), ("counts per 12.9\" cell", "smoothed")):
+    fig, axes = plt.subplots(
+        1, 2, figsize=(9.5, 4.5), constrained_layout=True, sharex=True, sharey=True
+    )
+    for ax, (c, v), title in zip(
+        axes,
+        ((cells, counts), (sm_cells, sm_counts)),
+        ('counts per 12.9" cell', "smoothed"),
+    ):
         lon, lat = pix2ang(NSIDE, c.cpu(), nest=True, lonlat=True)
         x = (lon - ra0) * math.cos(math.radians(dec0)) * 60
         y = (lat - dec0) * 60
         order = torch.argsort(v.cpu())
-        sc = ax.scatter(x[order], y[order], c=torch.log10(v.cpu()[order].clamp(min=1e-2)), s=1.2, marker="s", cmap="inferno", rasterized=True)
-        ax.set(title=f"0.5-7 keV, {title}", xlabel="east offset [arcmin]", facecolor="black")
+        sc = ax.scatter(
+            x[order],
+            y[order],
+            c=torch.log10(v.cpu()[order].clamp(min=1e-2)),
+            s=1.2,
+            marker="s",
+            cmap="inferno",
+            rasterized=True,
+        )
+        ax.set(
+            title=f"0.5-7 keV, {title}",
+            xlabel="east offset [arcmin]",
+            facecolor="black",
+        )
         ax.set_aspect("equal")
         fig.colorbar(sc, ax=ax, shrink=0.8, label="log10 counts")
     axes[0].invert_xaxis()

@@ -71,13 +71,18 @@ def main() -> None:
         headers.append(dict(torchfits.read_header(str(path), 0)))
     sigma = [pixel_noise(im) for im in images]
     for tile, h, s in zip(TILES, headers, sigma):
-        print(f"tile {tile}: CRVAL ({h['CRVAL1']:.3f}, {h['CRVAL2']:.3f}), exposure {h['EXPTIME']:.0f} s, noise {s:.2f} counts/px")
+        print(
+            f"tile {tile}: CRVAL ({h['CRVAL1']:.3f}, {h['CRVAL2']:.3f}), exposure {h['EXPTIME']:.0f} s, noise {s:.2f} counts/px"
+        )
 
     def make(i: int, **kw) -> Observation:
         ones = torch.ones_like(images[i])
         return Observation(
-            data=images[i].to(dev), wcs=headers[i],
-            weight_map=(ones / sigma[i] ** 2).to(dev), weight_is_inverse_variance=True, **kw,
+            data=images[i].to(dev),
+            wcs=headers[i],
+            weight_map=(ones / sigma[i] ** 2).to(dev),
+            weight_is_inverse_variance=True,
+            **kw,
         )
 
     obs = [make(i) for i in range(4)]
@@ -87,7 +92,14 @@ def main() -> None:
     products = {}
     for kernel, extra in KERNELS.items():
         single = [
-            coadd([o], target, kernel=kernel, semantics="surface_brightness", device=dev, **extra)
+            coadd(
+                [o],
+                target,
+                kernel=kernel,
+                semantics="surface_brightness",
+                device=dev,
+                **extra,
+            )
             for o in obs
         ]
         data = [r.data.cpu() for r in single]
@@ -107,18 +119,35 @@ def main() -> None:
             expected = (sigma[i] ** 2 + sigma[j] ** 2) ** 0.5
             ratio = robust_rms(diff) / expected
             pair_ratio.append(ratio)
-            print(f"  {TILES[i]} - {TILES[j]}: {n:6d} px, median offset {float(diff.median()):+.3f}, rms {robust_rms(diff):.2f} (noise-only {expected:.2f}, ratio {ratio:.2f})")
-        full = coadd(obs, target, kernel=kernel, semantics="surface_brightness", method="weighted_mean", device=dev, **extra)
+            print(
+                f"  {TILES[i]} - {TILES[j]}: {n:6d} px, median offset {float(diff.median()):+.3f}, rms {robust_rms(diff):.2f} (noise-only {expected:.2f}, ratio {ratio:.2f})"
+            )
+        full = coadd(
+            obs,
+            target,
+            kernel=kernel,
+            semantics="surface_brightness",
+            method="weighted_mean",
+            device=dev,
+            **extra,
+        )
         products[kernel] = full
         w = full.weight.cpu()
         n_obs = sum((r.weight.cpu() > 0).to(torch.int32) for r in single)
-        print(f"  coadd: {int((w > 0).sum())} covered px; pixels seen by 1/2/3/4 cutouts: " + "/".join(str(int((n_obs == k).sum())) for k in (1, 2, 3, 4)))
+        print(
+            f"  coadd: {int((w > 0).sum())} covered px; pixels seen by 1/2/3/4 cutouts: "
+            + "/".join(str(int((n_obs == k).sum())) for k in (1, 2, 3, 4))
+        )
         assert pair_ratio and max(pair_ratio) < 3.0
 
     lan, dri = (products[k].data.cpu() for k in KERNELS)
-    both = (products["lanczos3"].weight.cpu() > 0) & (products["drizzle_square"].weight.cpu() > 0)
+    both = (products["lanczos3"].weight.cpu() > 0) & (
+        products["drizzle_square"].weight.cpu() > 0
+    )
     corr = float(torch.corrcoef(torch.stack([lan[both], dri[both]]))[0, 1])
-    print(f"Lanczos3 vs drizzle coadd: pixel correlation {corr:.4f} over {int(both.sum())} px")
+    print(
+        f"Lanczos3 vs drizzle coadd: pixel correlation {corr:.4f} over {int(both.sum())} px"
+    )
 
     out = args.out or Path(tempfile.mkdtemp(prefix="torchsky-megapipe-"))
     out.mkdir(parents=True, exist_ok=True)
@@ -127,13 +156,24 @@ def main() -> None:
     lo, hi = -2.0 * noise, 12.0 * noise
     for ax, (title, im, cover) in zip(
         axes[:2],
-        (("Lanczos3 coadd", lan, products["lanczos3"].weight), ("drizzle coadd", dri, products["drizzle_square"].weight)),
+        (
+            ("Lanczos3 coadd", lan, products["lanczos3"].weight),
+            ("drizzle coadd", dri, products["drizzle_square"].weight),
+        ),
     ):
-        ax.imshow(torch.where(cover.cpu() > 0, im, torch.nan), origin="lower", cmap="gray_r", vmin=lo, vmax=hi)
+        ax.imshow(
+            torch.where(cover.cpu() > 0, im, torch.nan),
+            origin="lower",
+            cmap="gray_r",
+            vmin=lo,
+            vmax=hi,
+        )
         ax.set_title(title, fontsize=9)
         ax.axis("off")
     w = products["lanczos3"].weight.cpu()
-    im = axes[2].imshow(torch.where(w > 0, w, torch.nan), origin="lower", cmap="viridis")
+    im = axes[2].imshow(
+        torch.where(w > 0, w, torch.nan), origin="lower", cmap="viridis"
+    )
     axes[2].set_title("inverse-variance weight", fontsize=9)
     axes[2].axis("off")
     fig.colorbar(im, ax=axes[2], shrink=0.8)
