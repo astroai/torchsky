@@ -103,12 +103,12 @@ inputs = [star_position(image, header) for image, header in zip((tile_712_165, t
 stacked = star_position(result.data.nan_to_num(), result.header)
 for position in inputs:      # the star lands in the same place: within 0.02 arcsec
     assert ((stacked - position) * 3600).abs().max() < 0.02
-interior = result.weight[3:-3, 3:-3]
-torch.testing.assert_close(interior, torch.full_like(interior, 1 / 1.76**2 + 1 / 1.43**2), rtol=1e-4, atol=0.0)
+covered = result.weight[result.weight > 0]   # every covered pixel, edges included
+torch.testing.assert_close(covered, torch.full_like(covered, 1 / 1.76**2 + 1 / 1.43**2), rtol=1e-4, atol=0.0)
 ```
 
-Where both tiles cover the target, the weight is the sum of the two inverse
-variances; `result.inverse_variance` holds the propagated per-pixel inverse
+Both tiles reach every covered target pixel, so the weight is the sum of the two
+inverse variances right up to the edge; `result.inverse_variance` holds the propagated per-pixel inverse
 variance, which [Coadds](coadds.md) explains. The full example mosaics four 512 × 512 cutouts with Lanczos3 and drizzle and checks
 every pairwise overlap.
 

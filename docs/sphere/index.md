@@ -80,7 +80,11 @@ Queries take a unit 3-vector and a radius in radians, as in healpy.
 
 `SphericalPolygon`, `SphericalCap`, and `SphericalMultiPolygon` are exact region
 objects with containment, area, and pixel queries. Boolean algebra works on the
-polygons themselves and, at a fixed `nside`, on `PixelizedRegion` sets. The two
+polygons themselves and, at a fixed `nside`, on `PixelizedRegion` sets. The
+union, intersection, or difference of polygons has an exact `area()`: the
+result's boundary is clipped from the operands' great-circle edges and
+integrated exactly. With a cap, box, or ellipse operand `area()` raises; use
+`area_estimate()`, which converges over a ladder of `nside`. The two
 polygons below are the footprints of two CFHT MegaPipe cutouts from the
 [mosaic example](../examples/index.md#four-megapipe-cutouts-coadded-with-lanczos3-and-drizzle),
 from tiles with different tangent points. The corners are the centres of the
@@ -109,9 +113,11 @@ assert tile_712_165.intersects(tile_712_166)
 both = tile_712_165.intersection(tile_712_166)
 assert bool(both.contains(lon_deg=358.81359, lat_deg=-7.252031))   # a star seen by both
 
-overlap = tile_712_165.pixelize(nside=2**16).intersection(tile_712_166.pixelize(nside=2**16))
-overlap_arcmin2 = overlap.area() * (180 * 60 / math.pi) ** 2  # steradians to arcmin^2
+overlap_arcmin2 = 3600 * both.area(degrees=True)            # exact
 assert 1.1 < overlap_arcmin2 < 1.3
+pixels = tile_712_165.pixelize(nside=2**16).intersection(tile_712_166.pixelize(nside=2**16))
+pixel_arcmin2 = pixels.area() * (180 * 60 / math.pi) ** 2    # pixel-centre count, steradians to arcmin^2
+assert abs(pixel_arcmin2 - overlap_arcmin2) < 0.05
 ```
 
 `area` and `PixelizedRegion.area` are in steradians unless `degrees=True`.

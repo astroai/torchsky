@@ -38,6 +38,28 @@ I_j = \frac{\sum_k w_{kj}\, d_{kj}}{\sum_k w_{kj}}, \qquad
 Masked and flagged pixels get zero weight before resampling, so they never
 enter the sum. A target pixel no exposure reaches has `weight == 0`.
 
+**What the resampled weight means.** An interpolation kernel (bilinear, bicubic,
+Lanczos, Catmull-Rom, Mitchell-Netravali) resamples exposure \(k\) with
+coefficients \(c_{ij}\) over source pixels \(i\) with weights \(w_i\):
+
+\[
+d_{kj} = \frac{\sum_i c_{ij} w_i x_i}{\sum_i c_{ij} w_i}, \qquad
+w_{kj} = \frac{\sum_i c_{ij} w_i}{\sum_{i \in \text{image}} c_{ij}}.
+\]
+
+The weight is the kernel-weighted mean of the input weights. Near an image edge
+the kernel taps that fall off the image are dropped and the remaining
+coefficients are renormalised, so a constant inverse-variance map stays
+constant up to the last covered pixel, whatever the sign of the dropped
+taps. The coadd value is linear in the input pixels,
+\(I_j = \sum_i a_{ij} x_i\), and `inverse_variance` is its exact diagonal
+inverse variance \(1 / \sum_i a_{ij}^2 / w_i\) over all exposures. It exceeds
+`weight` in the interior because interpolation averages neighbouring pixels
+(see [Uncertainty](#uncertainty)). SWarp and `reproject` also resample the
+weight map with the data kernel, so interior weights equal the input inverse
+variance in all three. Drizzle and conservative kernels instead give the covered
+fraction of the input weight at footprint edges.
+
 **Weights are relative by default.** A weight only sets each exposure's share of
 the mean. Declare `weight_is_inverse_variance=True` when the weight map is
 \(1/\sigma^2\) in data units; only then does the result carry

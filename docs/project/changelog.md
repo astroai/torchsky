@@ -54,6 +54,21 @@ Changes after 0.5.0rc1 are listed here.
 - Scalar `R_V` and `E(B-V)` in `extinction.a_lambda` are built in the
   wavelength dtype, with no float32 round-trip.
 - The Horsehead example draws the MOC boundary its caption describes.
+- Coadd weights with interpolation kernels (bicubic, Lanczos, Catmull-Rom,
+  Mitchell-Netravali) renormalise the kernel taps that fall off an input image,
+  so a constant inverse-variance map keeps its value up to the edge. Lanczos3
+  gave up to 1.2× the input inverse variance next to an edge (0.98 instead of
+  0.81 in the maps overview), which also over-weighted that exposure in the
+  mean. The fix covers `coadd`, `coadd_cube`, `coadd_healpix` and `blot`;
+  `inverse_variance` stays the exact variance of the linear estimate.
+- `exact_intersection`, `exact_union` and `exact_difference` on polygons, caps
+  and multipolygons return a `SphericalBooleanRegion` instead of a
+  `NativeApproximateSphericalRegion` whose `area()` raised.
+  `SphericalBooleanRegion.area()` is the exact area of polygon combinations,
+  clipped from the great-circle edges; caps, boxes and ellipses raise
+  `ValueError`. `exact_area()` and native `to_exact` regions use it.
+- `SphericalMultiPolygon.area()` counts overlapping members once; it summed
+  them. `SphericalCap.area()` returns the analytic cap area.
 
 ## [0.5.0rc1] - 2026-11-03
 

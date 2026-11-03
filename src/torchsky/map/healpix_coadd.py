@@ -32,7 +32,10 @@ from .observation import (
     Target,
 )
 from .operators.image_grid import normalized_header_for_shape, target_shape_from_header
-from .operators.resampling import sample_image_plane_batched_channels
+from .operators.resampling import (
+    in_bounds_kernel_sum,
+    sample_image_plane_batched_channels,
+)
 from .sky_matching import detect_outliers, match_sky
 from .windowing import _build_target_world_grid
 
@@ -356,8 +359,18 @@ def coadd_healpix(
                 grid=grid,
                 kernel=kernel,
             )
-            s_num = sampled[0, 0]
-            s_den = sampled[1, 0]
+            # Renormalise the kernel where taps fall off the image edge, so the
+            # weight is the kernel-weighted mean of the input weights.
+            kernel_sum = in_bounds_kernel_sum(
+                x_2d[0], y_2d[0], height=H_s, width=W_s, kernel=kernel
+            )
+            edge_scale = torch.where(
+                kernel_sum > torch.finfo(kernel_sum.dtype).eps,
+                1.0 / kernel_sum,
+                torch.zeros_like(kernel_sum),
+            )
+            s_num = sampled[0, 0] * edge_scale
+            s_den = sampled[1, 0] * edge_scale
             s_sup = sampled[2, 0]
             in_b = (
                 torch.isfinite(x_2d[0])

@@ -53,8 +53,10 @@ from .operators.resampling import (
     infer_linear_affine_pixel_map,
     infer_tan_projective_homography,
     sample_image_plane_batched_channels,
+    in_bounds_kernel_sum,
     sample_image_plane_diagonal_variance,
     sample_separable_with_variance,
+    supports_in_bounds_kernel_sum,
     supports_fused_variance,
 )
 from .periodic_affine import resample_linear_affine_periodic_bilinear_2d
@@ -793,6 +795,22 @@ def _resample_weighted_to_target(
         )
         return _result(sampled_numer, sampled_weight)
 
+    def _sample_unit_plane(x_src: Tensor, y_src: Tensor) -> Tensor:
+        # Kernels without explicit taps (spectral): the in-bounds coefficient
+        # sum is the resampled unit image under the same zero boundary.
+        ones = torch.ones((h_src, w_src), dtype=torch.float32, device=image.device)
+        if resampling_kernel == "spectral_nonuniform":
+            return resample_nonuniform_spectral_2d(
+                ones, x_src, y_src, boundary_mode="zero"
+            )
+        if resampling_kernel == "spectral_nonuniform_fast":
+            return resample_nonuniform_spectral_fast_2d(
+                ones, x_src, y_src, boundary_mode="zero"
+            )
+        raise ValueError(
+            f"edge renormalisation is undefined for kernel {resampling_kernel!r}"
+        )
+
     def _sample_on_source_grid(
         x_src: Tensor,
         y_src: Tensor,
@@ -935,6 +953,28 @@ def _resample_weighted_to_target(
                 sampled_support = (
                     sampled_planes[:, 2] if support_image is not None else None
                 )
+        # Taps outside the source image are zeroed by every sampler, so near an
+        # edge the coefficients no longer sum to one (more than one for the
+        # negative lobes of Lanczos or bicubic). Renormalise the truncated kernel
+        # so the resampled weight is the kernel-weighted mean of the input
+        # weights, exactly as in the interior; the variance coefficients scale
+        # with it, which keeps the propagated inverse variance exact.
+        if supports_in_bounds_kernel_sum(resampling_kernel):
+            kernel_sum = in_bounds_kernel_sum(
+                x_src, y_src, height=h_src, width=w_src, kernel=resampling_kernel
+            )
+        else:
+            kernel_sum = _sample_unit_plane(x_src, y_src)
+        kernel_sum = kernel_sum.to(dtype=sampled_weight.dtype)
+        edge_scale = torch.where(
+            kernel_sum > torch.finfo(kernel_sum.dtype).eps,
+            1.0 / kernel_sum,
+            torch.zeros_like(kernel_sum),
+        )
+        sampled_numer = sampled_numer * edge_scale
+        sampled_weight = sampled_weight * edge_scale
+        if fused_variance is not None:
+            fused_variance = fused_variance * torch.square(edge_scale)
         in_bounds = (
             (x_src >= 0.0)
             & (x_src <= (w_src - 1))
@@ -991,6 +1031,7 @@ def _resample_weighted_to_target(
                     kernel=resampling_kernel,
                     average_coordinate_batch=x_src.ndim == 3,
                     sample_valid=sample_valid,
+                    sample_scale=edge_scale,
                 )
         if (
             value_semantics == "surface_brightness"

@@ -70,7 +70,9 @@ from .operators.pixel_area import (
     representative_pixel_area_sr,
 )
 from .operators.resampling import (
+    in_bounds_kernel_sum,
     sample_image_plane_batched_channels,
+    supports_in_bounds_kernel_sum,
 )
 from .quality import DQPolicy
 from .sky import CrossExposureSkyCorrector, MeshSkyEstimator
@@ -2101,6 +2103,15 @@ def blot(
             grid=grid,
             kernel=kernel,
         )[0]
+        # Renormalise the kernel where its taps fall off the coadd edge.
+        if supports_in_bounds_kernel_sum(kernel):
+            kernel_sum = in_bounds_kernel_sum(
+                src_x, src_y, height=h_c, width=w_c, kernel=kernel
+            ).to(dtype=sampled.dtype)
+            in_bounds = in_bounds & (kernel_sum > torch.finfo(sampled.dtype).eps)
+            sampled = sampled / torch.where(
+                in_bounds, kernel_sum, torch.ones_like(kernel_sum)
+            )
         sampled = torch.where(in_bounds, sampled, torch.zeros_like(sampled))
         if semantics == "flux":
             assert dest_prep.pixel_area_sr is not None
