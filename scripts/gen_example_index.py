@@ -51,6 +51,30 @@ REAL_SCENARIOS: list[tuple[str, str, list[tuple[str, str]]]] = [
         ],
     ),
     (
+        "Gaia DR3 astrometry and Galactic dust",
+        "Catalogue motion in other frames and epochs, and a dust map sampled at star positions.",
+        [
+            (
+                "gaia_pleiades_motion",
+                "Pleiades proper motions in the Galactic frame and back to J2000",
+            ),
+            (
+                "dust_extinction_taurus",
+                "SFD dust at Gaia positions in Taurus, dereddened with G23",
+            ),
+        ],
+    ),
+    (
+        "Survey footprints (HiPS MOCs)",
+        "Published survey coverage combined exactly as MOCs and as a sparse depth map.",
+        [
+            (
+                "survey_footprints_moc",
+                "SDSS, GALEX and eROSITA eFEDS footprints: areas and overlaps",
+            )
+        ],
+    ),
+    (
         "Planck",
         "All-sky HEALPix maps, masks and power spectra.",
         [
@@ -72,6 +96,14 @@ REAL_SCENARIOS: list[tuple[str, str, list[tuple[str, str]]]] = [
                 "manga_ifu_cube",
                 "A MaNGA IFU cube: Hα map, rotation and reprojection",
             ),
+            (
+                "manga_rss_to_cube",
+                "A MaNGA cube rebuilt from its 171 dithered fibre spectra",
+            ),
+            (
+                "sdss_photoz_encoder",
+                "Photometric redshifts of 7145 galaxies with the experimental encoders",
+            ),
         ],
     ),
     (
@@ -86,6 +118,20 @@ REAL_SCENARIOS: list[tuple[str, str, list[tuple[str, str]]]] = [
                 "legacy_forced_photometry",
                 "Forced photometry of 143 Gaia stars near NGC 288",
             ),
+            (
+                "legacy_healpix_multiband",
+                "g/r/i/z cutouts of the Cartwheel coadded onto sparse HEALPix maps",
+            ),
+        ],
+    ),
+    (
+        "JWST NIRCam (MAST)",
+        "Calibrated exposures cut from MAST products by HTTP range reads.",
+        [
+            (
+                "jwst_smacs0723_coadd",
+                "Four SMACS 0723 dithers coadded with Lanczos3 and drizzle, checked against MAST",
+            )
         ],
     ),
     (
@@ -244,6 +290,16 @@ def _sample_table() -> list[str]:
         flag = " (opt-in)" if spec["large"] else ""
         desc = " ".join(str(spec["description"]).split())
         lines.append(f"| `{name}`{flag} | {size_text} | {desc} | {spec['license']} |")
+    sys.path.insert(0, str(EXAMPLES))
+    try:
+        import _mast_cutout as mc
+    finally:
+        sys.path.remove(str(EXAMPLES))
+    for name, spec in mc.CUTOUTS.items():
+        desc = " ".join(str(spec["description"]).split())
+        lines.append(
+            f"| `{name}` | cutout | {desc}; cut from `{spec['product']}` by range reads | {spec['license']} |"
+        )
     lines.extend(
         [
             "",

@@ -104,6 +104,33 @@ cutout = resample_healpix(sky, exposures[0].wcs)     # back onto the first cutou
 The map takes about 6 s on a laptop CPU. Projected back onto the first cutout,
 it differs from the original by a median of 0.003 counts.
 
+## Four Bands of the Cartwheel, One Map Each
+
+The [Legacy Surveys example](../published-examples/legacy_healpix_multiband.py)
+starts from two DR10 cutouts on different grids: g/r/i/z at 0.524 arcsec, and
+g/z at 0.35 arcsec. Their values are nanomaggies per pixel, so each image is
+first divided by its exact pixel area
+([`pixel_area_map`](../reference/wcs.md#torchsky.wcs.WCS)). Each band is then
+coadded with its inverse variance onto a sparse nested map at
+`nside = 2**19` (0.40 arcsec cells). Only 27 454 cells per band are stored; a
+dense map at this resolution would need 13 TB.
+
+```python
+# fragment: per_band maps a band to its surface-brightness Observations
+from torchsky.map import coadd_healpix
+
+maps = {band: coadd_healpix(obs, 2**19, nest=True, sparse=True, kernel="lanczos3")
+        for band, obs in per_band.items()}
+```
+
+![g, r, i and z sparse HEALPix maps of the Cartwheel galaxy](../assets/gallery/examples/legacy_healpix_multiband.png)
+
+Each map is checked against `coadd` onto a planned TAN grid at the same scale:
+
+- **Flux.** The flux in a 25 arcsec disc agrees within 0.04 % in every band.
+- **Pixels.** The image-plane coadd, sampled at the HEALPix cell centres,
+  differs from the map by a median of 0.02 σ.
+
 ## Dense or Sparse?
 
 | Situation | Choice | Why |
@@ -238,4 +265,5 @@ not computed.
   spectra of the result.
 - Reference: [`coadd_healpix`](../reference/map.md#torchsky.map.coadd_healpix),
   [`HealpixResult`](../reference/map.md#torchsky.map.HealpixResult).
-- Example: [multiband tiles onto HEALPix](../published-examples/coadd_to_healpix.py).
+- Examples: [multiband tiles onto HEALPix](../published-examples/coadd_to_healpix.py),
+  [Legacy Surveys g/r/i/z of the Cartwheel](../published-examples/legacy_healpix_multiband.py).

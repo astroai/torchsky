@@ -182,6 +182,27 @@ pixi run -e test -- python examples/applications/catalogue_photoz.py train \
 The bundled synthetic check shows the pipeline learns and reloads correctly;
 it does not establish photo-z accuracy on a real survey.
 
+### Photometric Redshifts of Real SDSS Galaxies
+
+The [SDSS photo-z example](../published-examples/sdss_photoz_encoder.py) trains
+`PhotometryEncoder` and `BinnedRedshiftHead` from scratch on the ugriz fluxes
+of 5001 SDSS DR17 spectroscopic galaxies and tests on 2144 others. In 300
+epochs (about 35 s on a CPU) it reaches σ_NMAD = 0.027 in Δz/(1+z) with 0.9%
+outliers (|Δz|/(1+z) > 0.15); the SDSS DR17 Photoz table, trained on far more
+spectra, scores 0.018 and 0.6% on the same galaxies. The metrics hold for the
+spectroscopic selection only, not for a photometric sample. For a fixed
+five-band catalogue, every token still needs explicit `passband_id` and
+`survey_id` tensors of the flux shape:
+
+```python
+# fragment: flux, error are (N, 5) tensors in nanomaggies; NaN error = unknown
+passband = torch.arange(5).expand(len(flux), -1)
+latent, supported = encoder(flux, error, passband, torch.zeros_like(passband))
+loss = -head.log_prob(head(latent, supported=supported), z_spec).mean()
+```
+
+![Photometric against spectroscopic redshift for the torchsky encoder and for the SDSS DR17 Photoz table](../assets/gallery/examples/sdss_photoz_encoder.png)
+
 ### Image Transforms for Training
 
 `torchsky.transforms` holds tensor transforms for image training pipelines

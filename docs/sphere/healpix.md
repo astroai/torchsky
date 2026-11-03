@@ -196,6 +196,8 @@ torch.testing.assert_close(weights.sum(0), torch.ones(2, dtype=torch.float64))
 
 `sample_multiband_healpix` and `sample_multiwavelength_healpix` do the same
 for `[n_band, npix]` cubes, the latter interpolating along wavelength too.
+The [Taurus dust example](../published-examples/dust_extinction_taurus.py)
+samples the SFD E(B−V) map at Gaia star positions this way.
 
 ### Change Resolution
 

@@ -1,0 +1,10 @@
+SDSS DR9        747497 cells, max order 12,   14693.1 deg^2 (35.6% of the sky)
+GALEX AIS NUV    71384 cells, max order  8,   32839.7 deg^2 (79.6% of the sky)
+eROSITA eFEDS      122 cells, max order  7,     159.7 deg^2 (0.4% of the sky)
+SDSS n GALEX 12994.4 deg^2, SDSS u GALEX 34538.5 deg^2, SDSS - GALEX 1698.7 deg^2; inclusion-exclusion residual 0.0e+00 deg^2
+eFEDS 159.7 deg^2: 99.8% in SDSS, 86.0% in GALEX AIS, 137.0 deg^2 in all three
+1 deg cap at order 13: MOC 3.1886 deg^2 vs exact 3.1415 deg^2 (+1.50%, boundary cells)
+order 8 depth >= 1:  662472 pixels =   34750.5 deg^2
+order 8 depth >= 2:  261599 pixels =   13722.4 deg^2
+order 8 depth >= 3:    2618 pixels =     137.3 deg^2
+SDSS n GALEX at order 8: 13700.1 deg^2 vs exact 12994.4 deg^2 (+5.4% from boundary cells)

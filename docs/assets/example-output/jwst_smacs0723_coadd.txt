@@ -1,0 +1,17 @@
+exposure 1 (dither 1): pixel origin (976, 988) on NRCBLONG, background sigma 0.0084 MJy/sr, 235 flagged px
+exposure 2 (dither 2): pixel origin (973, 1083) on NRCBLONG, background sigma 0.0085 MJy/sr, 242 flagged px
+exposure 3 (dither 3): pixel origin (1069, 1086) on NRCBLONG, background sigma 0.0084 MJy/sr, 239 flagged px
+exposure 4 (dither 4): pixel origin (1071, 991) on NRCBLONG, background sigma 0.0084 MJy/sr, 233 flagged px
+pipeline 3.0.0 (jwst_1584.pmap); filter F444W
+planned TAN grid: (258, 257) px at 0.0630 arcsec/px, rotated -145.0 deg
+flux conservation, 5 sources above 1 uJy, 1 arcsec soft aperture, coadd / median of the inputs (17 source-exposure pairs):
+  lanczos3        median 1.0027, range 0.9845-1.0082
+  drizzle_square  median 0.9987, range 0.9828-1.0070
+  input-to-input scatter of the same apertures (robust): median 0.03 %
+noise in source-free pixels (robust rms / predicted 1/sqrt(inverse_variance)):
+  each exposure   ratio 0.98-0.99
+  lanczos3        rms 0.00371, predicted 0.00366 MJy/sr (ratio 1.01); large-aperture variance factor 1.33
+  drizzle_square  rms 0.00293, predicted 0.00279 MJy/sr (ratio 1.05); large-aperture variance factor 2.30
+vs MAST i2d ((280, 280) px, 9 dithers x 2 modules): background offset +0.0004 MJy/sr (+0.17 % of the sky), pixel correlation 0.9995, robust rms of the difference 0.0025 MJy/sr
+  aperture flux ours / MAST over 5 sources: median 1.0010, range 0.9896-1.0043
+  centroid offset ours - MAST (x, y) on the MAST grid: (-0.3, +2.1) mas over 5 sources

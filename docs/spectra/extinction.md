@@ -107,6 +107,32 @@ print(mags.value)   # [[17.470, 16.776], [17.213, 16.597]]: g-r is 0.077 mag blu
 The g band brightens by 0.26 mag and r by 0.18 mag. The complete analysis is
 [`examples/sdss_spectrum_photometry.py`](https://github.com/astroai/torchsky/blob/main/examples/sdss_spectrum_photometry.py).
 
+## A Dust Map at Catalogue Positions
+
+For a catalogue, E(B−V) comes from a dust map sampled at each star. The
+[Taurus example](../published-examples/dust_extinction_taurus.py) samples the
+SFD map (HEALPix, nside 512, Galactic) at 4831 Gaia DR3 positions and applies
+G23 at the Gaia pivot wavelengths:
+
+```python
+# fragment: sfd is the SFD map column read with torchfits; ra, dec, bp, rp are Gaia columns
+from torchsky.coords import transform
+from torchsky.extinction import a_lambda
+from torchsky.sphere import sample_healpix_map
+
+l, b = transform(ra, dec, from_frame="ICRS", to_frame="GALACTIC")
+ebv = 0.86 * sample_healpix_map(sfd, 512, l, b, nest=True)      # Schlafly & Finkbeiner 2011
+per_ebv = a_lambda(torch.tensor([6217.59, 5109.71, 7769.02]), ebv=1.0, law="g23")
+bp_rp_0 = (bp - rp) - ebv * (per_ebv[1] - per_ebv[2])           # E(BP-RP) = 1.49 E(B-V)
+```
+
+Behind the clouds the main sequence narrows from 0.19 to 0.10 mag (NMAD). A
+dust-map scale fitted by gradient descent through the same operations narrows
+it to 0.08 mag at 0.60 times the rescaled map: SFD over-predicts reddening in
+Taurus, and pivot wavelengths overstate the band extinction of red stars.
+
+![SFD E(B-V) around the Taurus field with the Gaia stars, and the colour-magnitude diagram before and after G23 dereddening](../assets/gallery/examples/dust_extinction_taurus.png)
+
 ## Recipes
 
 ### Extinction at Given Wavelengths

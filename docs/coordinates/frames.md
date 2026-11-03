@@ -108,6 +108,31 @@ field star the two models differ by far less than a milliarcsecond. The
 [frames and motion example](../published-examples/frames_and_motion.py) runs
 the same comparison and the frame conversions below on several sources.
 
+## Real Data: The Pleiades in Gaia DR3
+
+The [Pleiades example](../published-examples/gaia_pleiades_motion.py) loads
+2745 Gaia DR3 stars into one `CatalogState`, rotates positions and proper
+motions to the Galactic frame, and selects 265 cluster members with a Gaussian
+mixture in proper motion and parallax:
+
+```python
+# fragment: ra, dec, pmra, pmdec, plx are Gaia DR3 columns as float64 tensors
+from torchsky.coords import CatalogState
+
+icrs = CatalogState(lon=ra, lat=dec, frame="ICRS", epoch=2016.0,
+                    pm_lon_coslat_mas_yr=pmra, pm_lat_mas_yr=pmdec, parallax_mas=plx)
+gal = icrs.to_frame("GALACTIC")          # mean (mu_l*, mu_b) = (45.43, -20.32) mas/yr
+back = icrs.propagate_angular(2000.0)    # members move 0.80 arcsec in 16 years
+```
+
+The members' mean motion, (19.97, −45.58) mas/yr in ICRS at 7.373 mas, matches
+the Gaia DR2 cluster value. For the 205 members with a radial velocity, the
+proper-motion-only model and `propagate_physical` differ by at most 9 µas over
+16 years. `tests/test_gaia_pleiades_motion_parity.py` checks the same steps
+against astropy's `SkyCoord.apply_space_motion`.
+
+![Vector-point diagram of the Pleiades field in Galactic proper motion, and the members on the sky with their motion relative to the cluster mean](../assets/gallery/examples/gaia_pleiades_motion.png)
+
 ## Recipes
 
 ### Convert Frames
@@ -217,6 +242,8 @@ Geometric frames and space motion are checked against Astropy and ERFA in
 
 - [Observed place](observed-place.md): alt/az, aberration, and refraction.
 - [Catalogs](../catalogs/index.md): epoch-aware crossmatch uses `CatalogState`.
+- Examples: [frames and motion](../published-examples/frames_and_motion.py),
+  [Pleiades proper motions](../published-examples/gaia_pleiades_motion.py).
 - [Kinematics](../spectra/kinematics.md): radial velocity frames and Doppler shifts.
 - Reference: [`torchsky.coords`](../reference/coords.md),
   [`CatalogState`](../reference/coords.md#torchsky.coords.CatalogState).

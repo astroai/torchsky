@@ -111,6 +111,44 @@ rest = flux_conserving_rebin(flux.permute(1, 2, 0) * (1 + z), edges / (1 + z),
                              torch.arange(6500.0, 6631.0, 1.0, dtype=torch.float64))
 ```
 
+## Real Data: A MaNGA Cube From Its Fibres
+
+The [fibre-to-cube example](../published-examples/manga_rss_to_cube.py) builds
+the same galaxy's cube from scratch, from its row-stacked spectra (the DR17
+`LOGRSS` file): 19 fibres × 9 dithered exposures. These become one IFU frame
+(wavelength × fibre):
+
+- **Geometry.** An `IFUSliceWCS` holds each fibre's RA and Dec at every
+  wavelength, including differential refraction, and each fibre is its own
+  slice.
+- **Units.** Fibre fluxes are divided by the fibre area to give surface
+  brightness.
+- **Resampling.** The 6400–7000 Å window goes onto 1 arcsec spaxels with the
+  `emsm` (exponential modified Shepard) kernel.
+
+```python
+# fragment: ra, dec, wave are (n_wave, n_fibre) maps from IFURA/IFUDEC, XPOS/YPOS and WAVE
+from torchsky.map import CubeTarget, Observation, coadd_cube
+from torchsky.wcs import IFUSliceWCS
+
+ifu = IFUSliceWCS(ra_map=ra, dec_map=dec, wavelength_map=wave, slice_id_map=fibre_id)
+frame = Observation(data=flux / fibre_area, ifu_wcs=ifu, mask=good, weight=good.float())
+cube = coadd_cube([frame], CubeTarget(spatial_wcs=wcs_1arcsec, spectral_bin_edges=edges),
+                  spectral_kernel="emsm", emsm_scale=1.0)
+```
+
+![171 fibre centres, Hα from coadd_cube and from the DRP cube, and the integrated spectra](../assets/gallery/examples/manga_rss_to_cube.png)
+
+Against the released cube, summed 2 × 2 onto the same grid:
+
+- **Flux.** The total flux in the window agrees to 1.2 %.
+- **Position.** The image centroids agree to 0.01 spaxel.
+- **Images.** The continuum and Hα images correlate at 0.998 and 0.997.
+
+The weights must be equal per sample, as in the pipeline. Inverse-variance
+weights favour the fainter fibre of each overlapping pair, because its Poisson
+noise is lower, and bias this cube 17 % low.
+
 ## Which Path Am I On?
 
 | Input | Path | Notes |
@@ -273,4 +311,5 @@ many slices overlap one voxel.
 - Reference: [`coadd_cube`](../reference/map.md#torchsky.map.coadd_cube),
   [`CubeResult`](../reference/map.md#torchsky.map.CubeResult).
 - Examples: [MaNGA cube: Hα map, rotation and reprojection](../published-examples/manga_ifu_cube.py),
+  [MaNGA cube rebuilt from its fibre spectra](../published-examples/manga_rss_to_cube.py),
   [IFU frames to a spectral cube](../published-examples/spectral_cube.py).

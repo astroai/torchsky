@@ -43,6 +43,69 @@ brute-force check on 300 Gaia rows: 180 matches, identical = True
 crossmatch_many group (2.5 arcsec, 7 ms): 3383 groups; groups with 1/2/3 catalogues: 1764/436/1183
 ```
 
+## Gaia DR3 astrometry and Galactic dust
+
+Catalogue motion in other frames and epochs, and a dust map sampled at star positions.
+
+### Pleiades proper motions in the Galactic frame and back to J2000
+
+![Pleiades proper motions in the Galactic frame and back to J2000](../assets/gallery/examples/gaia_pleiades_motion.png)
+
+Gaia DR3 proper motions of the Pleiades in the Galactic frame. *Runtime: about 2 s on CPU once the sample is cached.*
+
+Script: [`examples/gaia_pleiades_motion.py`](https://github.com/astroai/torchsky/blob/main/examples/gaia_pleiades_motion.py) · [site copy](../published-examples/gaia_pleiades_motion.py)
+
+```text
+Gaia DR3 cone r=1 deg around the Pleiades: 2745 stars with G < 16
+ICRS -> Galactic: |mu| preserved to 5.7e-14 mas/yr, round-trip position error 8.5e-04 uas
+members: 265 of 2745; mean parallax 7.373 mas (135.6 pc)
+cluster proper motion: ICRS (mu_a*, mu_d) = (19.97, -45.58) mas/yr; Galactic (mu_l*, mu_b) = (45.43, -20.32) mas/yr
+published (Gaia DR2, Babusiaux et al. 2018): (20.00, -45.55) mas/yr, parallax 7.364 mas
+tangential velocity 32.0 km/s; member proper-motion rms per axis 1.31 mas/yr = 0.85 km/s (internal motion, binaries and projection, not deconvolved)
+J2016.0 -> J2000.0: members move 0.795 arcsec (median); angular vs rigorous space motion for 205 members with RV: max 8.68 uas
+```
+
+### SFD dust at Gaia positions in Taurus, dereddened with G23
+
+![SFD dust at Gaia positions in Taurus, dereddened with G23](../assets/gallery/examples/dust_extinction_taurus.png)
+
+SFD dust sampled at Gaia star positions in Taurus, then dereddened with G23. *Runtime: about 5 s on CPU once the samples are cached.*
+
+Script: [`examples/dust_extinction_taurus.py`](https://github.com/astroai/torchsky/blob/main/examples/dust_extinction_taurus.py) · [site copy](../published-examples/dust_extinction_taurus.py)
+
+```text
+SFD E(B-V): nside 512, 3145728 pixels, NESTED, Galactic; all-sky median 0.070 mag
+4831 Gaia stars at l = 169.8, b = -16.7: E(B-V) 5/50/95% = 0.26 / 0.46 / 1.09 mag
+G23, R_V = 3.1: A_G, A_BP, A_RP per E(B-V) = 2.681, 3.409, 1.916; E(BP-RP)/E(B-V) = 1.493
+main-sequence colour width (NMAD) behind the clouds (4721 stars): 0.190 mag uncorrected, 0.104 with 0.86 x SFD, 0.080 with the fitted scale s = 0.60
+fitted reddening is 0.60 x the Schlafly-Finkbeiner-scaled SFD (0.51 x raw SFD) for these stars
+```
+
+## Survey footprints (HiPS MOCs)
+
+Published survey coverage combined exactly as MOCs and as a sparse depth map.
+
+### SDSS, GALEX and eROSITA eFEDS footprints: areas and overlaps
+
+![SDSS, GALEX and eROSITA eFEDS footprints: areas and overlaps](../assets/gallery/examples/survey_footprints_moc.png)
+
+Footprint algebra on real survey coverage: SDSS, GALEX and eROSITA eFEDS MOCs. *Runtime: about 3 s on CPU once the samples are cached.*
+
+Script: [`examples/survey_footprints_moc.py`](https://github.com/astroai/torchsky/blob/main/examples/survey_footprints_moc.py) · [site copy](../published-examples/survey_footprints_moc.py)
+
+```text
+SDSS DR9        747497 cells, max order 12,   14693.1 deg^2 (35.6% of the sky)
+GALEX AIS NUV    71384 cells, max order  8,   32839.7 deg^2 (79.6% of the sky)
+eROSITA eFEDS      122 cells, max order  7,     159.7 deg^2 (0.4% of the sky)
+SDSS n GALEX 12994.4 deg^2, SDSS u GALEX 34538.5 deg^2, SDSS - GALEX 1698.7 deg^2; inclusion-exclusion residual 0.0e+00 deg^2
+eFEDS 159.7 deg^2: 99.8% in SDSS, 86.0% in GALEX AIS, 137.0 deg^2 in all three
+1 deg cap at order 13: MOC 3.1886 deg^2 vs exact 3.1415 deg^2 (+1.50%, boundary cells)
+order 8 depth >= 1:  662472 pixels =   34750.5 deg^2
+order 8 depth >= 2:  261599 pixels =   13722.4 deg^2
+order 8 depth >= 3:    2618 pixels =     137.3 deg^2
+SDSS n GALEX at order 8: 13700.1 deg^2 vs exact 12994.4 deg^2 (+5.4% from boundary cells)
+```
+
 ## Planck
 
 All-sky HEALPix maps, masks and power spectra.
@@ -108,6 +171,43 @@ integrated [N II] 6585 / Hα = 0.41 (log -0.39: star formation, not AGN)
 reprojected cube (16, 93, 93) at 0.25 arcsec, rotated 30 deg: Hα total 1194 vs 1194 (1.0000)
 ```
 
+### A MaNGA cube rebuilt from its 171 dithered fibre spectra
+
+![A MaNGA cube rebuilt from its 171 dithered fibre spectra](../assets/gallery/examples/manga_rss_to_cube.png)
+
+Build a MaNGA data cube from its 171 dithered fibre spectra with ``coadd_cube``. *Runtime: about 10 s on CPU once the 16 MB fibre file and the 39 MB cube are cached.*
+
+Script: [`examples/manga_rss_to_cube.py`](https://github.com/astroai/torchsky/blob/main/examples/manga_rss_to_cube.py) · [site copy](../published-examples/manga_rss_to_cube.py)
+
+```text
+8485-1901: 171 fibre spectra (9 exposures), 389 channels in 6400-7000 A; refraction moves the fibres by 0.037 arcsec across the window
+cube (389, 17, 17) (wave, y, x) at 1 arcsec; 147 spaxels covered in every channel
+total flux in the window over 147 spaxels: ours / DRP = 1.0116
+image centroid ours - DRP: (+0.001, -0.008) spaxels
+continuum image: 28 spaxels above 10 % of peak, correlation 0.998, ours / DRP median 1.005 (16-84 %: 0.963-1.037)
+H-alpha   image: 40 spaxels above 10 % of peak, correlation 0.997, ours / DRP median 1.047 (16-84 %: 0.919-1.137)
+integrated spectrum: ours / DRP median 1.0135, rms of the relative difference 0.0251
+```
+
+### Photometric redshifts of 7145 galaxies with the experimental encoders
+
+![Photometric redshifts of 7145 galaxies with the experimental encoders](../assets/gallery/examples/sdss_photoz_encoder.png)
+
+Photometric redshifts of SDSS galaxies with the experimental torchsky encoders. *Runtime: about 35 s on CPU once the sample is cached.*
+
+Script: [`examples/sdss_photoz_encoder.py`](https://github.com/astroai/torchsky/blob/main/examples/sdss_photoz_encoder.py) · [site copy](../published-examples/sdss_photoz_encoder.py)
+
+```text
+SDSS DR17 spectroscopic galaxies: 7145; z_spec 10/50/90% = 0.067 / 0.307 / 0.600
+median E(B-V) 0.023; A_u = 0.115 mag
+epoch    1: train -log p(z) = -0.384
+epoch  151: train -log p(z) = -1.740
+epoch  300: train -log p(z) = -1.844
+test set: 2144 galaxies (train 5001)
+torchsky encoder : sigma_NMAD 0.0267, outliers 0.9%, bias -0.0019, mean log p(z_spec) 1.70
+SDSS DR17 Photoz: sigma_NMAD 0.0181, outliers 0.6%, bias -0.0003 on 2139 galaxies with an estimate (reference; trained on a much larger spectroscopic set)
+```
+
 ## Legacy Surveys (DECam)
 
 Multi-band DECam images: a continuous field fit and catalogue forced photometry.
@@ -152,6 +252,52 @@ blend groups: 71 for 143 stars
 g: forced / Tractor flux, 143 stars at S/N > 50: median 0.817, robust scatter 0.034
 r: forced / Tractor flux, 143 stars at S/N > 50: median 0.856, robust scatter 0.028
 z: forced / Tractor flux, 143 stars at S/N > 50: median 0.858, robust scatter 0.034
+```
+
+### g/r/i/z cutouts of the Cartwheel coadded onto sparse HEALPix maps
+
+![g/r/i/z cutouts of the Cartwheel coadded onto sparse HEALPix maps](../assets/gallery/examples/legacy_healpix_multiband.png)
+
+Coadd Legacy Surveys g/r/i/z cutouts of the Cartwheel onto sparse HEALPix maps. *Runtime: about 10 s on CPU once the two 0.5 MB cutouts are cached.*
+
+Script: [`examples/legacy_healpix_multiband.py`](https://github.com/astroai/torchsky/blob/main/examples/legacy_healpix_multiband.py) · [site copy](../published-examples/legacy_healpix_multiband.py)
+
+```text
+legacy_cartwheel_griz: bands griz, 128 x 128 px at 0.524 arcsec
+legacy_cartwheel_gz_fine: bands gz, 160 x 160 px at 0.350 arcsec
+NSIDE = 2^19: 0.403 arcsec cells, 3.30e+12 on the full sphere
+band g: 2 grid(s), 27454 cells; 25 arcsec disc  365.83 nmgy (AB 16.09) vs image plane  365.96 nmgy (ratio 0.9997); cell-by-cell difference -0.024 sigma median, 0.313 sigma robust rms
+band r: 1 grid(s), 27454 cells; 25 arcsec disc  459.40 nmgy (AB 15.84) vs image plane  459.23 nmgy (ratio 1.0004); cell-by-cell difference -0.020 sigma median, 0.243 sigma robust rms
+band i: 1 grid(s), 27454 cells; 25 arcsec disc  554.93 nmgy (AB 15.64) vs image plane  554.74 nmgy (ratio 1.0003); cell-by-cell difference -0.008 sigma median, 0.229 sigma robust rms
+band z: 2 grid(s), 27454 cells; 25 arcsec disc  773.53 nmgy (AB 15.28) vs image plane  773.72 nmgy (ratio 0.9998); cell-by-cell difference -0.008 sigma median, 0.275 sigma robust rms
+sparse storage: 109816 cells in 4 maps; a dense float32 map at this NSIDE would be 13.2 TB
+```
+
+## JWST NIRCam (MAST)
+
+Calibrated exposures cut from MAST products by HTTP range reads.
+
+### Four SMACS 0723 dithers coadded with Lanczos3 and drizzle, checked against MAST
+
+![Four SMACS 0723 dithers coadded with Lanczos3 and drizzle, checked against MAST](../assets/gallery/examples/jwst_smacs0723_coadd.png)
+
+Coadd four dithered JWST NIRCam exposures of SMACS 0723 with Lanczos3 and drizzle. *Runtime: about 5 s on CPU once they are cached.*
+
+Script: [`examples/jwst_smacs0723_coadd.py`](https://github.com/astroai/torchsky/blob/main/examples/jwst_smacs0723_coadd.py) · [site copy](../published-examples/jwst_smacs0723_coadd.py)
+
+```text
+exposure 1 (dither 1): pixel origin (976, 988) on NRCBLONG, background sigma 0.0084 MJy/sr, 235 flagged px
+exposure 2 (dither 2): pixel origin (973, 1083) on NRCBLONG, background sigma 0.0085 MJy/sr, 242 flagged px
+exposure 3 (dither 3): pixel origin (1069, 1086) on NRCBLONG, background sigma 0.0084 MJy/sr, 239 flagged px
+exposure 4 (dither 4): pixel origin (1071, 991) on NRCBLONG, background sigma 0.0084 MJy/sr, 233 flagged px
+pipeline 3.0.0 (jwst_1584.pmap); filter F444W
+planned TAN grid: (258, 257) px at 0.0630 arcsec/px, rotated -145.0 deg
+flux conservation, 5 sources above 1 uJy, 1 arcsec soft aperture, coadd / median of the inputs (17 source-exposure pairs):
+  lanczos3        median 1.0027, range 0.9845-1.0082
+  drizzle_square  median 0.9987, range 0.9828-1.0070
+  input-to-input scatter of the same apertures (robust): median 0.03 %
+noise in source-free pixels (robust rms / predicted 1/sqrt(inverse_variance)):
+  each exposure   ratio 0.98-0.99
 ```
 
 ## DSS photographic plates
@@ -449,14 +595,27 @@ archive and IRSA, with a `COUNT(*)` check against truncation.
 | `planck_smica_1024` (opt-in) | 176.2 MB | Planck PR2 SMICA CMB I/Q/U, nside=1024 (smallest official CMB map; the PR3 SMICA map is 2 GB at nside=2048). | Planck Legacy Archive (ESA); cite Planck Collaboration 2015 IX |
 | `manga_logcube` (opt-in) | 212.0 MB | SDSS-IV MaNGA DR17 LOGCUBE, plate-IFU 7443-12703. | SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015) |
 | `manga_8485_1901` | 38.9 MB | SDSS-IV MaNGA DR17 LOGCUBE, plate-IFU 8485-1901 (19-fibre bundle, 34 x 34 spaxels of 0.5 arcsec, 4563 log-lambda channels, 3622-10354 A); the smallest MaNGA cube format, a star-forming disc galaxy at z = 0.037. | SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015) |
+| `manga_8485_1901_rss` | 15.8 MB | SDSS-IV MaNGA DR17 LOGRSS (row-stacked spectra) of plate-IFU 8485-1901: 171 fibre spectra (19 fibres x 9 dithered exposures) on the cube's log-lambda grid, with inverse variance, mask and per-wavelength fibre positions (XPOS/YPOS). | SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015) |
 | `legacy_cartwheel_griz` | 0.5 MB | Legacy Surveys DR10 g/r/i/z cutout of the Cartwheel galaxy, 128 x 128 px at 0.524 arcsec/px (TAN), image cube in HDU 0 and inverse variance in HDU 1, nanomaggies. | Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment |
 | `legacy_cartwheel_gz_fine` | 0.4 MB | Legacy Surveys DR10 g/z cutout of the Cartwheel on a second grid: 160 x 160 px at 0.35 arcsec/px, centre offset by 3 and 2.5 arcsec. | Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment |
 | `legacy_ngc288_grz` | 3.5 MB | Legacy Surveys DR10 g/r/z cutout 4 arcmin west of the globular cluster NGC 288, 384 x 384 px at the native 0.262 arcsec/px, image cube in HDU 0 and inverse variance in HDU 1, nanomaggies. | Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment |
 | `legacy_ngc288_catalog` | 0.4 MB | Legacy Surveys DR10 Tractor catalogue of the same field (143 Gaia stars with Tractor g/r/z fluxes and inverse variances). | Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment; Gaia DR3 (ESA/DPAC) astrometry |
+| `gaia_pleiades_cone` | 0.3 MB | Gaia DR3 snapshot from the IRSA TAP service (CSV): sources with G < 16 and a proper motion within 1 degree of the Pleiades (RA 56.75, Dec +24.12), ordered by source_id. | Gaia DR3 (ESA/Gaia/DPAC, CC BY-SA 3.0 IGO) via the IRSA TAP mirror; cite Gaia Collaboration 2023 |
+| `gaia_taurus_cone` | 0.4 MB | Gaia DR3 snapshot from the IRSA TAP service (CSV): G < 17 sources with BP/RP photometry and parallax_over_error > 5 within 1 degree of (RA 64.5, Dec +27.0) in the Taurus dark clouds, ordered by source_id. | Gaia DR3 (ESA/Gaia/DPAC, CC BY-SA 3.0 IGO) via the IRSA TAP mirror; cite Gaia Collaboration 2023 |
+| `sfd_ebv_healpix_512` | 25.2 MB | Schlegel, Finkbeiner & Davis (1998) E(B-V) dust map resampled by LAMBDA to HEALPix nside=512, NESTED, Galactic coordinates (the smallest official HEALPix form of SFD). | NASA LAMBDA (public domain, US Government work); cite Schlegel et al. 1998 |
+| `sdss_dr17_photoz_sample` | 1.3 MB | SDSS DR17 SkyServer snapshot (CSV): every spectroscopic galaxy with zWarning = 0 in RA 150-156, Dec 0-6, with ugriz model fluxes and inverse variances (nanomaggies) and the DR17 Photoz (Beck et al. 2016) estimate. | SDSS public data; cite SDSS DR17 (Abdurro'uf et al. 2022) and Beck et al. 2016 |
+| `moc_sdss_dr9` | 3.0 MB | Coverage MOC (order 12) of the SDSS DR9 imaging HiPS. | HiPS coverage MOC built by CDS (Strasbourg), mirrored by IRSA; cite SDSS DR9 (Ahn et al. 2012) |
+| `moc_galex_ais_nuv` | 0.3 MB | Coverage MOC of the GALEX GR6 All-sky Imaging Survey NUV HiPS. | HiPS coverage MOC built by CDS (Strasbourg), mirrored by IRSA; GALEX (NASA), cite Bianchi et al. 2017 |
+| `moc_erosita_efeds` | 0.0 MB | Coverage MOC (order 7) of the eROSITA eFEDS field HiPS from ESASky. | ESASky HiPS (ESA); eROSITA EDR data (MPE, CC BY 4.0), cite Brunner et al. 2022 |
 | `svo_decam_g` | 0.0 MB | DECam g-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES |
 | `svo_decam_r` | 0.0 MB | DECam r-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES |
 | `svo_decam_i` | 0.0 MB | DECam i-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES |
 | `svo_decam_z` | 0.0 MB | DECam z-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES |
+| `smacs0723_f444w_cal_1` | cutout | JWST NIRCam F444W calibrated exposure 1 of the 9-point INTRAMODULEBOX dither (NRCBLONG, 837 s), 256 x 256 px cutout of SCI, ERR and VAR_RNOISE (MJy/sr) with the pipeline SIP WCS; pixels flagged DO_NOT_USE are NaN in SCI; cut from `jw02736001001_02105_00001_nrcblong_cal.fits` by range reads | JWST ERO programme 2736 (SMACS J0723.3-7327), public via MAST (STScI); cite Pontoppidan et al. 2022 ApJL 936 L14 and acknowledge MAST/STScI |
+| `smacs0723_f444w_cal_2` | cutout | JWST NIRCam F444W calibrated exposure 2 of the 9-point INTRAMODULEBOX dither (NRCBLONG, 837 s), 256 x 256 px cutout of SCI, ERR and VAR_RNOISE (MJy/sr) with the pipeline SIP WCS; pixels flagged DO_NOT_USE are NaN in SCI; cut from `jw02736001001_02105_00002_nrcblong_cal.fits` by range reads | JWST ERO programme 2736 (SMACS J0723.3-7327), public via MAST (STScI); cite Pontoppidan et al. 2022 ApJL 936 L14 and acknowledge MAST/STScI |
+| `smacs0723_f444w_cal_3` | cutout | JWST NIRCam F444W calibrated exposure 3 of the 9-point INTRAMODULEBOX dither (NRCBLONG, 837 s), 256 x 256 px cutout of SCI, ERR and VAR_RNOISE (MJy/sr) with the pipeline SIP WCS; pixels flagged DO_NOT_USE are NaN in SCI; cut from `jw02736001001_02105_00003_nrcblong_cal.fits` by range reads | JWST ERO programme 2736 (SMACS J0723.3-7327), public via MAST (STScI); cite Pontoppidan et al. 2022 ApJL 936 L14 and acknowledge MAST/STScI |
+| `smacs0723_f444w_cal_4` | cutout | JWST NIRCam F444W calibrated exposure 4 of the 9-point INTRAMODULEBOX dither (NRCBLONG, 837 s), 256 x 256 px cutout of SCI, ERR and VAR_RNOISE (MJy/sr) with the pipeline SIP WCS; pixels flagged DO_NOT_USE are NaN in SCI; cut from `jw02736001001_02105_00004_nrcblong_cal.fits` by range reads | JWST ERO programme 2736 (SMACS J0723.3-7327), public via MAST (STScI); cite Pontoppidan et al. 2022 ApJL 936 L14 and acknowledge MAST/STScI |
+| `smacs0723_f444w_i2d` | cutout | JWST NIRCam F444W level-3 pipeline mosaic of all 9 dithers and both modules (drizzle, 0.063 arcsec/px), 280 x 280 px cutout of SCI; cut from `jw02736-o001_t001_nircam_clear-f444w_i2d.fits` by range reads | JWST ERO programme 2736 (SMACS J0723.3-7327), public via MAST (STScI); cite Pontoppidan et al. 2022 ApJL 936 L14 and acknowledge MAST/STScI |
 
 ```bash
 pixi run fetch-example-samples                  # all small samples

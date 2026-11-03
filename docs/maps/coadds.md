@@ -108,6 +108,43 @@ mosaic = coadd(exposures, target, kernel="lanczos3", method="weighted_mean")
 Where tiles overlap, they agree to a median offset below 0.002 counts, and the
 Lanczos-3 and drizzle mosaics correlate at 0.998 pixel by pixel.
 
+## JWST NIRCam Dithers Against the Pipeline Mosaic
+
+The [SMACS 0723 example](../published-examples/jwst_smacs0723_coadd.py) cuts
+256 × 256 px around one sky position out of four dithered F444W calibrated
+exposures on MAST (HTTP range reads, no full download). It keeps the
+pipeline's SIP distortion, plans a grid aligned with the detector rows, and
+coadds with cosmic-ray outlier rejection, once with Lanczos3 and once with
+drizzle at `pixfrac=0.8`.
+
+```python
+# fragment: observations are the four calibrated cutouts with background-limited weights
+from torchsky.map import OutlierConfig, coadd, plan
+from torchsky.wcs import WCS
+
+angle = WCS(observations[0].wcs).position_angle()
+target = plan(observations, projection="TAN", rotation_deg=angle)   # 258 x 257 px
+drizzled = coadd(observations, target, kernel="drizzle_square", pixfrac=0.8,
+                 semantics="surface_brightness", outliers=OutlierConfig())
+```
+
+![SMACS 0723 F444W: Lanczos3 and drizzle coadds, the MAST i2d, their difference, the predicted noise and flux conservation](../assets/gallery/examples/jwst_smacs0723_coadd.png)
+
+Results:
+
+- **Flux.** In 1 arcsec apertures, both coadds keep the median input flux to
+  within 0.3 %.
+- **Noise.** The noise in source-free pixels matches `1/sqrt(inverse_variance)`
+  to 1 % for Lanczos3 and 5 % for drizzle.
+- **Pipeline.** Drizzled onto the grid of the STScI level-3 mosaic, which uses
+  all nine dithers, the coadd correlates with it at 0.9995 pixel by pixel. The
+  aperture fluxes agree to 0.1 % and the centroids to 2 mas.
+
+The weights there are a flux-independent inverse variance (read noise plus
+sky). Weighting by `1/ERR²`, which includes source Poisson noise, gives the
+bright pixels of every source less weight. That biases drizzle low and
+Lanczos high by up to 20 % on bright stars.
+
 ## A Weighted Coadd
 
 <!-- docs: run -->
@@ -319,4 +356,5 @@ different inputs give comparable products.
   [`SkyConfig`](../reference/map.md#torchsky.map.SkyConfig),
   [`OutlierConfig`](../reference/map.md#torchsky.map.OutlierConfig).
 - Examples: [MegaPipe mosaic](../published-examples/megapipe_mosaic.py),
+  [JWST SMACS 0723 dithers](../published-examples/jwst_smacs0723_coadd.py),
   [dithered SIP coadd](../published-examples/coadd_dithered_sip.py).

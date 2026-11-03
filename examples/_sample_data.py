@@ -21,6 +21,7 @@ from pathlib import Path
 import shutil
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from typing import Any
@@ -39,6 +40,19 @@ _LEGACY_CREDIT = (
     "Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment"
 )
 _PLA = "https://irsa.ipac.caltech.edu/data/Planck/release_2/all-sky-maps/maps/component-maps"
+# Pinned query snapshots: a synchronous TAP / SkyServer GET whose ORDER BY makes
+# the CSV byte-stable for an immutable release, so its sha256 can be pinned.
+_GAIA_TAP = "https://irsa.ipac.caltech.edu/TAP/sync?FORMAT=csv&QUERY="
+_SKYSERVER = (
+    "https://skyserver.sdss.org/dr17/SkyServerWS/SearchTools/SqlSearch?format=csv&cmd="
+)
+_IRSA_HIPS = "https://irsa.ipac.caltech.edu/data/hips/CDS"
+_GAIA_CREDIT = "Gaia DR3 (ESA/Gaia/DPAC, CC BY-SA 3.0 IGO) via the IRSA TAP mirror; cite Gaia Collaboration 2023"
+_HIPS_MOC_CREDIT = "HiPS coverage MOC built by CDS (Strasbourg), mirrored by IRSA"
+
+
+def _query_url(base: str, query: str) -> str:
+    return base + urllib.parse.quote(" ".join(query.split()), safe="")
 
 
 class SampleUnavailable(RuntimeError):
@@ -295,6 +309,24 @@ SAMPLES: dict[str, dict[str, Any]] = {
         ),
         "license": "SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015)",
     },
+    "manga_8485_1901_rss": {
+        "url": (
+            "https://data.sdss.org/sas/dr17/manga/spectro/redux/v3_1_1/8485/"
+            "stack/manga-8485-1901-LOGRSS.fits.gz"
+        ),
+        "bytes": 15762876,
+        "sha256": "ff0b6e1700ba3ec578779632690d266884e2bb6352320ff6c1bcfcb21a3cb4a8",
+        "magic": _GZIP,
+        "suffix": ".fits.gz",
+        "large": False,
+        "description": (
+            "SDSS-IV MaNGA DR17 LOGRSS (row-stacked spectra) of plate-IFU 8485-1901: "
+            "171 fibre spectra (19 fibres x 9 dithered exposures) on the cube's "
+            "log-lambda grid, with inverse variance, mask and per-wavelength fibre "
+            "positions (XPOS/YPOS)."
+        ),
+        "license": "SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015)",
+    },
     "legacy_cartwheel_griz": {
         "url": (
             f"{_LEGACY}?ra=9.4213&dec=-33.7163&layer=ls-dr10&pixscale=0.524"
@@ -361,6 +393,118 @@ SAMPLES: dict[str, dict[str, Any]] = {
         ),
         "license": _LEGACY_CREDIT + "; Gaia DR3 (ESA/DPAC) astrometry",
     },
+    "gaia_pleiades_cone": {
+        "url": _query_url(
+            _GAIA_TAP,
+            """SELECT source_id, ra, dec, parallax, parallax_error, pmra, pmdec,
+            radial_velocity, phot_g_mean_mag, bp_rp FROM gaia_dr3_source
+            WHERE 1=CONTAINS(POINT('ICRS',ra,dec),CIRCLE('ICRS',56.75,24.1167,1.0))
+            AND phot_g_mean_mag < 16 AND pmra IS NOT NULL ORDER BY source_id""",
+        ),
+        "bytes": 270095,
+        "sha256": "21ab4d8c92f99dc8c7a6af4c53aa3f96fddd36cfe46f57d7c7c68e6ba88b28a3",
+        "magic": (b"source_id",),
+        "suffix": ".csv",
+        "large": False,
+        "description": (
+            "Gaia DR3 snapshot from the IRSA TAP service (CSV): sources with G < 16 and a proper motion "
+            "within 1 degree of the Pleiades (RA 56.75, Dec +24.12), ordered by "
+            "source_id."
+        ),
+        "license": _GAIA_CREDIT,
+    },
+    "gaia_taurus_cone": {
+        "url": _query_url(
+            _GAIA_TAP,
+            """SELECT source_id, ra, dec, parallax, phot_g_mean_mag,
+            phot_bp_mean_mag, phot_rp_mean_mag FROM gaia_dr3_source
+            WHERE 1=CONTAINS(POINT('ICRS',ra,dec),CIRCLE('ICRS',64.5,27.0,1.0))
+            AND phot_g_mean_mag < 17 AND phot_bp_mean_mag IS NOT NULL
+            AND phot_rp_mean_mag IS NOT NULL AND parallax_over_error > 5
+            ORDER BY source_id""",
+        ),
+        "bytes": 415482,
+        "sha256": "5ff9b0b160052c4f49d453628701d0bdd34990a6be91dc5eb27f37c5a0341ea4",
+        "magic": (b"source_id",),
+        "suffix": ".csv",
+        "large": False,
+        "description": (
+            "Gaia DR3 snapshot from the IRSA TAP service (CSV): G < 17 sources with BP/RP photometry and "
+            "parallax_over_error > 5 within 1 degree of (RA 64.5, Dec +27.0) in "
+            "the Taurus dark clouds, ordered by source_id."
+        ),
+        "license": _GAIA_CREDIT,
+    },
+    "sfd_ebv_healpix_512": {
+        "url": "https://lambda.gsfc.nasa.gov/data/foregrounds/SFD/lambda_sfd_ebv.fits",
+        "bytes": 25174080,
+        "sha256": "a4a8b81dbc6da0c8a6e3562f04e07cf358cdae1862d2c68ae6eb44aa6bd71076",
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "Schlegel, Finkbeiner & Davis (1998) E(B-V) dust map resampled by LAMBDA "
+            "to HEALPix nside=512, NESTED, Galactic coordinates (the smallest "
+            "official HEALPix form of SFD)."
+        ),
+        "license": "NASA LAMBDA (public domain, US Government work); cite Schlegel et al. 1998",
+    },
+    "sdss_dr17_photoz_sample": {
+        "url": _query_url(
+            _SKYSERVER,
+            """SELECT p.objid, p.ra, p.dec, s.z AS specz, p.modelFlux_u,
+            p.modelFlux_g, p.modelFlux_r, p.modelFlux_i, p.modelFlux_z,
+            p.modelFluxIvar_u, p.modelFluxIvar_g, p.modelFluxIvar_r,
+            p.modelFluxIvar_i, p.modelFluxIvar_z, p.extinction_r, pz.z AS photoz
+            FROM SpecObj AS s JOIN PhotoObj AS p ON p.objid = s.bestobjid
+            JOIN Photoz AS pz ON pz.objid = p.objid
+            WHERE s.class = 'GALAXY' AND s.zWarning = 0
+            AND p.ra BETWEEN 150 AND 156 AND p.dec BETWEEN 0 AND 6
+            ORDER BY p.objid""",
+        ),
+        "bytes": 1253554,
+        "sha256": "fc7c2bcdadf2f79d5c60e4251423d72ec67b8575550e9c338219f8825c6e6db5",
+        "magic": (b"#Table1",),
+        "suffix": ".csv",
+        "large": False,
+        "description": (
+            "SDSS DR17 SkyServer snapshot (CSV): every spectroscopic galaxy with "
+            "zWarning = 0 in RA 150-156, Dec 0-6, with ugriz model fluxes and "
+            "inverse variances (nanomaggies) and the DR17 Photoz (Beck et al. 2016) "
+            "estimate."
+        ),
+        "license": "SDSS public data; cite SDSS DR17 (Abdurro'uf et al. 2022) and Beck et al. 2016",
+    },
+    "moc_sdss_dr9": {
+        "url": f"{_IRSA_HIPS}/SDSS/DR9/color/Moc.fits",
+        "bytes": 2998080,
+        "sha256": "1b7327f91612db66086f75217e27638481d193b849d87d4249ae570baf260993",
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": "Coverage MOC (order 12) of the SDSS DR9 imaging HiPS.",
+        "license": _HIPS_MOC_CREDIT + "; cite SDSS DR9 (Ahn et al. 2012)",
+    },
+    "moc_galex_ais_nuv": {
+        "url": f"{_IRSA_HIPS}/GALEX/GR6-03-2014/AIS-ND/Moc.fits",
+        "bytes": 293760,
+        "sha256": "59f2dfdcaa8a98355dd7a33c8aa84992a7d44c259ff923ba03adac7e31dc90c7",
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": "Coverage MOC of the GALEX GR6 All-sky Imaging Survey NUV HiPS.",
+        "license": _HIPS_MOC_CREDIT + "; GALEX (NASA), cite Bianchi et al. 2017",
+    },
+    "moc_erosita_efeds": {
+        "url": "https://skies.esac.esa.int/eROSITA/Hips_rate_eFEDS_single_band/Moc.fits",
+        "bytes": 8640,
+        "sha256": "3b45b7689513149a1e9fa1491e65156eb3aaf93fae5584a625326635eb380709",
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": "Coverage MOC (order 7) of the eROSITA eFEDS field HiPS from ESASky.",
+        "license": "ESASky HiPS (ESA); eROSITA EDR data (MPE, CC BY 4.0), cite Brunner et al. 2022",
+    },
     **{
         f"svo_decam_{band}": {
             "url": f"{_SVO}CTIO/DECam.{band}",
@@ -395,9 +539,9 @@ SAMPLES: dict[str, dict[str, Any]] = {
             ),
         )
     },
-    # Follow-up: the JWST SMACS0723 NIRCam i2d products on MAST are ~1.7 GB each
-    # and MAST offers no stable server-side FITS cutout URL; the mini-cutouts are
-    # built by torchsky-harness scripts/build_smacs0723_minicutout.py.
+    # JWST products on MAST are 100 MB to GBs and MAST has no server-side FITS
+    # cutout for them; examples/_mast_cutout.py builds small cutouts by HTTP
+    # range reads (registry: _mast_cutout.CUTOUTS).
 }
 
 

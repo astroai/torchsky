@@ -108,6 +108,13 @@ counts_map = SparseHealpixMap.from_pixels(cells, counts.double(), 2**14, nest=Tr
 
 ![Chandra ACIS events of Sgr A* binned on a sparse HEALPix map, raw and smoothed](../assets/gallery/examples/chandra_events_on_sphere.png)
 
+The [footprint example](../published-examples/survey_footprints_moc.py)
+degrades the SDSS, GALEX, and eFEDS coverage MOCs to nside 256 and adds them
+with [`sum_union`](../reference/sphere.md#torchsky.sphere.sum_union) into one
+sparse map of survey depth. Its SDSS ∩ GALEX area, 13700 deg², is 5.4% above
+the exact MOC intersection because a degraded cell counts as soon as any part
+of it is covered.
+
 ## Recipes
 
 ### Build, Query, and Convert
@@ -237,4 +244,5 @@ see the [parity page](../performance/parity.md).
   [`MultiOrderHealpixMap`](../reference/sphere.md#torchsky.sphere.MultiOrderHealpixMap),
   [`sum_union`](../reference/sphere.md#torchsky.sphere.sum_union).
 - Examples: [Chandra events](../published-examples/chandra_events_on_sphere.py),
-  [HEALPix and MOC](../published-examples/healpix_and_moc.py).
+  [HEALPix and MOC](../published-examples/healpix_and_moc.py),
+  [survey footprints](../published-examples/survey_footprints_moc.py).

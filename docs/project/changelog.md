@@ -26,6 +26,12 @@ Changes after 0.5.0rc1 are listed here.
 - Real-data examples: MaNGA IFU cube, Legacy Surveys multi-band field fit,
   Gaia forced photometry against Tractor; the distortions guide uses real
   HST SIP and DECam TPV headers.
+- More real-data examples: JWST SMACS 0723 NIRCam coadd checked against the
+  MAST mosaic; Legacy Surveys g/r/i/z on sparse HEALPix maps; a MaNGA cube
+  rebuilt from fibre spectra; Gaia DR3 Pleiades proper motions in the
+  Galactic frame; SFD dust at Gaia positions with G23; SDSS photometric
+  redshifts with the experimental encoders; SDSS/GALEX/eFEDS footprint
+  algebra with MOCs. TAP and SQL query snapshots are pinned by sha256.
 
 ### Changed
 
