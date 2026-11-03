@@ -55,7 +55,7 @@ def test_release_status_is_consistent() -> None:
     for text, label in ((index, "index"), (install, "install"), (readme, "README")):
         flat = " ".join(text.split())
         assert re.search(r"GitHub pre-release", flat, re.IGNORECASE), (
-            f"{label} must state that 0.5.0rc1 is a GitHub pre-release"
+            f"{label} must state that release candidates are GitHub pre-releases"
         )
         assert re.search(
             r"not (uploaded )?(to |on )PyPI|never uploaded to PyPI", flat

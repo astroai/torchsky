@@ -3,15 +3,15 @@
 
 ## Release status
 
-!!! warning "0.5.0rc1 is a GitHub pre-release"
-    The current line is **0.5.0rc1**. Release candidates are distributed as
+!!! note "Stable releases on PyPI, release candidates on GitHub"
+    0.5.0 is the first stable release, and stable releases are on PyPI.
+    Release candidates such as 0.5.0rc2 are distributed only as
     [GitHub pre-releases](https://github.com/astroai/torchsky/releases) and are
-    never uploaded to PyPI. Install from source (below) or from the pre-release
-    wheels now; `pip install torchsky` works from 0.5.0. This note changes in the
-    same commit that publishes the release.
+    never uploaded to PyPI; install one from its pre-release wheels or from
+    source.
 
 ```bash
-pip install torchsky        # from 0.5.0 (not the rc)
+pip install torchsky
 ```
 
 `torchsky` does not own or bundle CFITSIO.
@@ -19,7 +19,7 @@ pip install torchsky        # from 0.5.0 (not the rc)
 dependency for FITS file and table I/O and installs together with torchsky.
 
 ```bash
-pip install "torchsky @ file:///path/to/torchsky-0.5.0rc1-*.whl"   # a wheel you built
+pip install "torchsky @ file:///path/to/torchsky-0.5.0-*.whl"   # a wheel you built
 ```
 
 ### Supported lanes (0.5)

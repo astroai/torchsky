@@ -179,7 +179,8 @@ prints quantitative checks of its result. Select a figure to open the example.
 
 ---
 
-torchsky 0.5.0rc1 is a GitHub pre-release and is not on PyPI until 0.5.0;
+Stable releases are on PyPI (`pip install torchsky`); release candidates are
+GitHub pre-releases and are never uploaded to PyPI.
 [Install](introduction/install.md) covers wheels and source builds.
 
 </div>
