@@ -404,3 +404,142 @@ def test_python_float_parameters_keep_float64_precision() -> None:
     got = comoving_distance(z, H0=h0, om0=om0)
     assert got.dtype == torch.float64
     torch.testing.assert_close(got, torch.as_tensor(ref.value), rtol=1e-9, atol=0.0)
+
+
+_TIME_CASES = [
+    {"H0": 67.66, "om0": 0.3111},
+    {"H0": 70.0, "om0": 0.3, "ok0": 0.08},
+    {"H0": 70.0, "om0": 0.3, "ok0": -0.08},
+    {"H0": 70.0, "om0": 0.29, "ok0": 0.03, "w0": -0.85, "wa": 0.2},
+    {"H0": 70.0, "om0": 0.3, "w0": -0.9, "wa": -0.3},
+]
+
+
+def _astropy_reference(astropy, case):
+    ode0 = 1.0 - case["om0"] - case.get("ok0", 0.0)
+    # Radiation off (Tcmb0=0): torchsky.cosmology has no radiation or
+    # massive-neutrino terms.
+    return astropy.w0waCDM(
+        H0=case["H0"],
+        Om0=case["om0"],
+        Ode0=ode0,
+        w0=case.get("w0", -1.0),
+        wa=case.get("wa", 0.0),
+        Tcmb0=0.0,
+    )
+
+
+@pytest.mark.parametrize("case", _TIME_CASES)
+def test_lookback_time_and_age_match_astropy(case) -> None:
+    astropy = pytest.importorskip("astropy.cosmology")
+    from torchsky.cosmology import age, lookback_time
+
+    z = torch.tensor([0.0, 0.01, 0.5, 1.0, 3.0, 10.0, 100.0], dtype=torch.float64)
+    ref = _astropy_reference(astropy, case)
+    torch.testing.assert_close(
+        lookback_time(z, **case),
+        torch.tensor(ref.lookback_time(z.numpy()).value, dtype=torch.float64),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    # astropy integrates the age with quad at its default 1.5e-8 tolerance.
+    torch.testing.assert_close(
+        age(z, **case),
+        torch.tensor(ref.age(z.numpy()).value, dtype=torch.float64),
+        rtol=1e-7,
+        atol=0.0,
+    )
+
+
+def test_age_matches_closed_forms() -> None:
+    from torchsky.cosmology import HUBBLE_TIME_GYR, age, lookback_time
+
+    z = torch.tensor([0.0, 1.0, 1000.0], dtype=torch.float64)
+    # Einstein-de Sitter: t(z) = (2/3) t_H (1+z)^(-3/2).
+    torch.testing.assert_close(
+        age(z, H0=70.0, om0=1.0),
+        2.0 / 3.0 * HUBBLE_TIME_GYR / 70.0 * (1.0 + z) ** -1.5,
+        rtol=1e-14,
+        atol=0.0,
+    )
+    # Flat LCDM: t0 = 2 t_H / (3 sqrt(OL)) asinh(sqrt(OL/Om)).
+    om = 0.3111
+    exact = (
+        HUBBLE_TIME_GYR
+        / PLANCK18_H0
+        * 2.0
+        / (3.0 * math.sqrt(1.0 - om))
+        * math.asinh(math.sqrt((1.0 - om) / om))
+    )
+    assert float(age(torch.tensor(0.0, dtype=torch.float64))) == pytest.approx(
+        exact, rel=1e-14
+    )
+    # lookback(z) + age(z) = age(0) for any model.
+    z = torch.tensor([0.3, 2.0, 7.0], dtype=torch.float64)
+    total = lookback_time(z, om0=0.3, ok0=0.05, w0=-0.9, wa=0.1) + age(
+        z, om0=0.3, ok0=0.05, w0=-0.9, wa=0.1
+    )
+    torch.testing.assert_close(
+        total,
+        age(torch.zeros(3, dtype=torch.float64), om0=0.3, ok0=0.05, w0=-0.9, wa=0.1),
+        rtol=1e-13,
+        atol=0.0,
+    )
+
+
+def test_lookback_time_and_age_edges() -> None:
+    from torchsky.cosmology import age, lookback_time
+
+    assert float(lookback_time(torch.tensor(-0.01))) == 0.0
+    assert lookback_time(torch.tensor([])).numel() == 0
+    with pytest.raises(ValueError, match="Om0 > 0"):
+        age(torch.tensor(0.0), om0=0.0, ok0=1.0)
+    with pytest.raises(ValueError, match="H0"):
+        lookback_time(torch.tensor(1.0), H0=-1.0)
+    flrw = FLRW(H0=70.0, Om0=0.3)
+    z = torch.tensor([0.5, 2.0], dtype=torch.float64)
+    torch.testing.assert_close(flrw.age(z), age(z, H0=70.0, om0=0.3))
+    torch.testing.assert_close(
+        flrw.lookback_time(z), lookback_time(z, H0=70.0, om0=0.3)
+    )
+
+
+def test_lookback_time_and_age_gradients() -> None:
+    from torchsky.cosmology import age, lookback_time
+
+    z = torch.tensor([0.5, 2.0], dtype=torch.float64, requires_grad=True)
+    params = (
+        torch.tensor(68.0, dtype=torch.float64, requires_grad=True),
+        torch.tensor(0.31, dtype=torch.float64, requires_grad=True),
+        torch.tensor(0.02, dtype=torch.float64, requires_grad=True),
+        torch.tensor(-0.95, dtype=torch.float64, requires_grad=True),
+        torch.tensor(0.1, dtype=torch.float64, requires_grad=True),
+    )
+    for function in (lookback_time, age):
+        assert torch.autograd.gradcheck(
+            lambda zz, h0, om, ok, w0, wa, f=function: f(
+                zz, H0=h0, om0=om, ok0=ok, w0=w0, wa=wa
+            ),
+            (z, *params),
+        )
+    # dt_L/dz = t_H / ((1+z) E(z)) analytically.
+    zz = torch.tensor([0.7], dtype=torch.float64, requires_grad=True)
+    (grad,) = torch.autograd.grad(lookback_time(zz, H0=70.0, om0=0.3).sum(), zz)
+    from torchsky.cosmology import HUBBLE_TIME_GYR
+
+    expected = HUBBLE_TIME_GYR / 70.0 / (1.7 * e_of_z(zz.detach(), om0=0.3))
+    torch.testing.assert_close(grad, expected, rtol=1e-12, atol=0.0)
+
+
+def test_lookback_time_and_age_on_device(compute_device) -> None:
+    from torchsky.cosmology import age, lookback_time
+
+    dtype = torch.float32 if compute_device.type == "mps" else torch.float64
+    z_cpu = torch.tensor([0.1, 1.0, 5.0], dtype=dtype)
+    z = z_cpu.to(compute_device)
+    for function in (lookback_time, age):
+        out = function(z, H0=70.0, om0=0.3)
+        assert out.device.type == compute_device.type and out.dtype == dtype
+        torch.testing.assert_close(
+            out.cpu(), function(z_cpu, H0=70.0, om0=0.3), rtol=1e-5, atol=1e-5
+        )

@@ -4,7 +4,8 @@ No learnable parameters or cosmological priors live here. Science projects pass
 plain tensors (including ``nn.Parameter`` instances) through :class:`FLRW`.
 
 Defaults are Planck 2018: ``H0=67.66`` km/s/Mpc, ``Om0=0.3111``, ``w0=-1``.
-Distances are Mpc; distance modulus is magnitudes. ``c = 299792.458`` km/s.
+Distances are Mpc; distance modulus is magnitudes; times are Gyr (Julian
+years). ``c = 299792.458`` km/s.
 Radiation is neglected. Curvature follows the standard convention ``Ok0 > 0``
 for an open universe. ``wa`` uses the CPL law ``w(a) = w0 + wa (1-a)``.
 """
@@ -20,6 +21,11 @@ SPEED_OF_LIGHT_KM_S = 299792.458
 PLANCK18_H0 = 67.66
 PLANCK18_OM0 = 0.3111
 PLANCK18_W0 = -1.0
+#: Megaparsec in km (IAU 2015 parsec) and gigayear (Julian) in seconds.
+_MPC_KM = 3.0856775814913673e19
+_GYR_S = 3.15576e16
+#: Hubble time ``1/H0`` in Gyr for ``H0 = 1`` km/s/Mpc.
+HUBBLE_TIME_GYR = _MPC_KM / _GYR_S
 
 
 _GL_NODES = 64
@@ -155,6 +161,14 @@ class FLRW:
 
     def differential_comoving_volume(self, z: Tensor) -> Tensor:
         return differential_comoving_volume(z, self)
+
+    def lookback_time(self, z: Tensor) -> Tensor:
+        return lookback_time(
+            z, H0=self.H0, om0=self.Om0, ok0=self.Ok0, w0=self.w0, wa=self.wa
+        )
+
+    def age(self, z: Tensor) -> Tensor:
+        return age(z, H0=self.H0, om0=self.Om0, ok0=self.Ok0, w0=self.w0, wa=self.wa)
 
     def distance_modulus(self, z: Tensor) -> Tensor:
         return distance_modulus(
@@ -390,6 +404,125 @@ def differential_comoving_volume(
     return SPEED_OF_LIGHT_KM_S * d_m.square() / hubble
 
 
+def _hubble_time_gyr(
+    H0: Tensor | float, *, device: torch.device, dtype: torch.dtype
+) -> Tensor:
+    h0 = _as_parameter(H0, device=device, dtype=dtype)
+    if not bool(torch.isfinite(h0).all()) or bool((h0 <= 0.0).any()):
+        raise ValueError("H0 must be finite and positive")
+    return HUBBLE_TIME_GYR / h0
+
+
+def lookback_time(
+    z: Tensor,
+    *,
+    H0: Tensor | float = PLANCK18_H0,
+    om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
+    w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
+) -> Tensor:
+    """Lookback time ``t_L(z) = t_H int_0^z dz' / ((1+z') E(z'))`` in Gyr.
+
+    ``t_H = 1/H0``. The integrand is ``1/E`` in ``u = ln(1+z)`` and uses the
+    same per-point 64-node Gauss-Legendre rule as :func:`comoving_distance`.
+    Negative ``z`` is treated as zero. Radiation is neglected.
+
+    Args:
+        z: Redshift tensor.
+        H0: Present-day Hubble parameter in km/s/Mpc.
+        om0: Present-day matter density parameter.
+        ok0: Present-day curvature density parameter.
+        w0: Dark-energy equation-of-state value at scale factor one.
+        wa: CPL dark-energy evolution coefficient.
+
+    Returns:
+        Lookback times in Gyr with the shape of ``z``.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.cosmology import lookback_time
+        >>> lookback_time(torch.tensor([0.0])).tolist()
+        [0.0]
+    """
+    z_t = _floating_tensor(z)
+    if z_t.numel() == 0:
+        return z_t
+    z_nonneg = _nonnegative_redshift(z_t)
+    nodes, weights = _gauss_legendre_unit(_GL_NODES, z_t.device, z_t.dtype)
+    u_max = torch.log1p(z_nonneg).unsqueeze(-1)
+    u = u_max * nodes
+    integrand = 1.0 / e_of_z(torch.expm1(u), om0=om0, ok0=ok0, w0=w0, wa=wa)
+    integral = u_max.squeeze(-1) * torch.sum(integrand * weights, dim=-1)
+    return _hubble_time_gyr(H0, device=z_t.device, dtype=z_t.dtype) * integral
+
+
+def age(
+    z: Tensor,
+    *,
+    H0: Tensor | float = PLANCK18_H0,
+    om0: Tensor | float = PLANCK18_OM0,
+    ok0: Tensor | float = 0.0,
+    w0: Tensor | float = PLANCK18_W0,
+    wa: Tensor | float = 0.0,
+) -> Tensor:
+    """Age of the universe at redshift ``z``, ``t_H int_z^inf dz'/((1+z')E)``, in Gyr.
+
+    In scale factor the integral is ``int_0^{a(z)} da / (a E)``. Substituting
+    ``a = a(z) s^2`` makes the integrand ``2 a s / sqrt(a^2 E^2)`` smooth at
+    the big bang whenever matter dominates there, so the 64-node
+    Gauss-Legendre rule converges to machine precision. ``a^2 E^2`` is
+    evaluated directly so no power of ``1+z`` overflows. Requires
+    ``Om0 > 0``; negative ``z`` is treated as zero. Radiation is neglected:
+    with Planck parameters it shortens the present age by about 0.02 per
+    cent, and much more at high redshift.
+
+    Args:
+        z: Redshift tensor (``age(0)`` is the present age).
+        H0: Present-day Hubble parameter in km/s/Mpc.
+        om0: Present-day matter density parameter.
+        ok0: Present-day curvature density parameter.
+        w0: Dark-energy equation-of-state value at scale factor one.
+        wa: CPL dark-energy evolution coefficient.
+
+    Returns:
+        Ages in Gyr with the shape of ``z``.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.cosmology import age
+        >>> round(float(age(torch.tensor(0.0, dtype=torch.float64), H0=70.0, om0=1.0)), 6)
+        9.312307
+    """
+    z_t = _floating_tensor(z)
+    if z_t.numel() == 0:
+        return z_t
+    z_nonneg = _nonnegative_redshift(z_t)
+    om = _as_parameter(om0, device=z_t.device, dtype=z_t.dtype)
+    if not bool(torch.isfinite(om).all()) or bool((om <= 0.0).any()):
+        raise ValueError("age requires Om0 > 0 (matter-dominated big bang)")
+    ok = _as_parameter(ok0, device=z_t.device, dtype=z_t.dtype)
+    w = _as_parameter(w0, device=z_t.device, dtype=z_t.dtype)
+    w_a = _as_parameter(wa, device=z_t.device, dtype=z_t.dtype)
+    nodes, weights = _gauss_legendre_unit(_GL_NODES, z_t.device, z_t.dtype)
+    a_end = (1.0 / (1.0 + z_nonneg)).unsqueeze(-1)
+    a = a_end * nodes.square()
+    # a^2 E^2 = Om/a + Ok + Ode a^(-1-3(w0+wa)) exp(-3 wa (1-a)).
+    dark_energy = (
+        (1.0 - om - ok)
+        * torch.pow(a, -1.0 - 3.0 * (w + w_a))
+        * torch.exp(-3.0 * w_a * (1.0 - a))
+    )
+    scaled_squared = om / a + ok + dark_energy
+    if not bool(torch.isfinite(scaled_squared).all()) or bool(
+        (scaled_squared <= 0.0).any()
+    ):
+        raise ValueError("FLRW parameters produce non-positive E(z)^2")
+    integrand = 2.0 * a_end * nodes / torch.sqrt(scaled_squared)
+    integral = torch.sum(integrand * weights, dim=-1)
+    return _hubble_time_gyr(H0, device=z_t.device, dtype=z_t.dtype) * integral
+
+
 def _validated_unit_xyz(value: Tensor, name: str) -> Tensor:
     unit = torch.as_tensor(value)
     if not unit.is_floating_point():
@@ -557,10 +690,12 @@ __all__ = [
     "APScaling",
     "FLRW",
     "FlatWCDM",
+    "HUBBLE_TIME_GYR",
     "PLANCK18_H0",
     "PLANCK18_OM0",
     "PLANCK18_W0",
     "SPEED_OF_LIGHT_KM_S",
+    "age",
     "alcock_paczynski_scaling",
     "angular_diameter_distance",
     "comoving_distance",
@@ -570,6 +705,7 @@ __all__ = [
     "distance_modulus",
     "e_of_z",
     "hubble_parameter",
+    "lookback_time",
     "luminosity_distance",
     "transverse_comoving_distance",
 ]

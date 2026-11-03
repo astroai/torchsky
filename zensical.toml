@@ -115,6 +115,7 @@ nav = [
       "reference/map-operators-detector-response.md",
       "reference/map-operators-epsf.md",
       "reference/map-operators-nuisance.md",
+      "reference/map-operators-noise.md",
       "reference/map-operators-pixel-calibration.md",
       "reference/map-field-gaussian.md",
       "reference/map-field-chromatic.md",

@@ -377,9 +377,15 @@ def _render_module(entry: dict, registry: dict) -> str:
         return "\n".join(lines).rstrip() + "\n"
 
     module = importlib.import_module(namespace)
+    selected = list(entry.get("members", ()))
     names = list(getattr(module, "__all__", ()))
     if not names:
         names = sorted(name for name in dir(module) if not name.startswith("_"))
+    if selected:
+        unknown = sorted(set(selected) - set(names))
+        if unknown:
+            raise SystemExit(f"{namespace}: registry members not exported: {unknown}")
+        names = selected
     resolved = _resolve(namespace, names)
     objects = dict(resolved)
     griffe_module = griffe.load(namespace, search_paths=[str(SRC)])
@@ -396,6 +402,18 @@ def _render_module(entry: dict, registry: dict) -> str:
             f"`{namespace}`."
         ),
     )
+    if selected:
+        # A curated subset: only the listed names are documented here.
+        lines.extend(
+            [
+                f'<a id="{namespace}"></a>',
+                "",
+                f"## {entry.get('group', 'Functions')}",
+                "",
+            ]
+        )
+        lines.extend(_render_members(namespace, names, objects, griffe_module))
+        return "\n".join(lines).rstrip() + "\n"
     lines.extend(
         [
             "## Module",

@@ -34,17 +34,17 @@ reference pages carry the contracts.
 | `torchsky` | core | 18 | [reference](torchsky.md) |
 | `torchsky.catalogs` | core | 34 | [reference](catalogs.md) |
 | `torchsky.coords` | core | 16 | [reference](coords.md) |
-| `torchsky.cosmology` | core | 18 | [reference](cosmology.md) |
-| `torchsky.extinction` | core | 15 | [reference](extinction.md) |
+| `torchsky.cosmology` | core | 21 | [reference](cosmology.md) |
+| `torchsky.extinction` | core | 18 | [reference](extinction.md) |
 | `torchsky.log_lambda` | core | 3 | [reference](log-lambda.md) |
 | `torchsky.map` | core | 41 | [reference](map.md) |
 | `torchsky.quality` | core | 10 | [reference](quality.md) |
 | `torchsky.redshift` | core | 28 | [reference](redshift.md) |
 | `torchsky.spectral` | core | 14 | [reference](spectral.md) |
-| `torchsky.spectrophotometry` | core | 10 | [reference](spectrophotometry.md) |
+| `torchsky.spectrophotometry` | core | 13 | [reference](spectrophotometry.md) |
 | `torchsky.sphere` | core | 134 | [reference](sphere.md) |
 | `torchsky.transforms` | core | 20 | [reference](transforms.md) |
-| `torchsky.wcs` | core | 140 | [reference](wcs.md) |
+| `torchsky.wcs` | core | 141 | [reference](wcs.md) |
 | `torchsky.encoders` | experimental | 8 | [reference](encoders.md) |
 | `torchsky.field` | experimental | 52 | [reference](field.md) |
 | `torchsky.filter_profiles` | experimental | 6 | [reference](filter-profiles.md) |
@@ -71,6 +71,7 @@ reference pages carry the contracts.
 |---|---|---|
 | `torchsky.sphere.compat` | compatibility | [reference](sphere-compat.md) |
 | `torchsky.sphere.healpix` | core | [reference](sphere-healpix.md) |
+| `torchsky.map.operators.noise` | experimental | [reference](map-operators-noise.md) |
 
 Every public name in these namespaces is listed exactly once. The
 `api-manifest.json` artifact is the frozen name-level contract checked in CI.

@@ -14,7 +14,9 @@ from torch import Tensor
 
 from ..device import require_float64, resolve_device
 from . import healpix as _healpix
-from ._pixwin_embedded import REFERENCE_PIXWIN_TABLES as _REFERENCE_PIXWIN_TABLES
+from ._pixwin import LMAX_PER_NSIDE as _PIXWIN_LMAX_PER_NSIDE
+from ._pixwin import MAX_NSIDE as _PIXWIN_MAX_NSIDE
+from ._pixwin import computed_pixwin as _computed_pixwin
 
 
 def _spectral():
@@ -166,53 +168,60 @@ def gaussian_beam(fwhm_rad: float, lmax: int, *, pol: bool = False) -> Tensor:
     return torch.stack([base, base * fac_p, base * fac_p, base * fac_tp], dim=1)
 
 
-def _load_pixwin_table(nside: int) -> tuple[Tensor, Tensor]:
-    """Return the temperature and polarization pixel window tables for ``nside``.
-
-    Only the reference rows embedded in ``_pixwin_embedded`` are distributed
-    with torchsky; no external FITS tables are read. Clone the arrays so callers
-    cannot mutate the shared reference.
-    """
-    ref = _REFERENCE_PIXWIN_TABLES.get(int(nside))
-    if ref is None:
-        supported = ", ".join(str(key) for key in sorted(_REFERENCE_PIXWIN_TABLES))
-        raise ValueError(
-            f"pixel window tables are embedded for nside {{{supported}}}; "
-            f"nside={nside} is not bundled"
-        )
-    return ref[0].clone(), ref[1].clone()
-
-
 def pixwin(
     nside: int,
     *,
     pol: bool = False,
     lmax: int | None = None,
 ) -> Tensor | tuple[Tensor, Tensor]:
-    """
-    Return HEALPix pixel window function(s).
+    """HEALPix pixel window function(s) ``w_l``, computed from the pixel shapes.
 
-    Uses the embedded reference rows (the same numeric values as the standard
-    HEALPix/healpy tables) for the bundled ``nside`` values; other ``nside``
-    values are rejected rather than silently approximated.
+    ``w_l^2`` is the average over pixels of each pixel's harmonic power,
+    ``(1/N) sum_p (1/Omega^2) iint_p P_l(n . n')``, the definition behind the
+    HEALPix tables. It is evaluated exactly up to quadrature (better than
+    ``1e-12``): a terminating hypergeometric series in the pair separation
+    separates ``l`` from pixel moments that are integrated with Gauss-Legendre
+    rules on each pixel shape. The polarization window uses the spin-2 kernel
+    ``d^l_22`` with the frame parallel-transported across the pixel.
+
+    The moments cost ``O(nside^2)`` once per ``nside`` (about a minute at
+    ``nside=2048`` on a laptop CPU) and are cached in memory and, from
+    ``nside=256``, under ``$TORCHSKY_CACHE_DIR/pixwin`` (default
+    ``~/.cache/torchsky/pixwin``).
+
+    Args:
+        nside: HEALPix resolution, a power of two up to 8192.
+        pol: Also return the polarization window (zero for ``l < 2``).
+        lmax: Largest multipole; default ``3 nside - 1``, at most ``4 nside``.
+
+    Returns:
+        Float64 CPU tensor ``w_l`` of length ``lmax + 1``, or ``(w_T, w_P)``.
+
+    Examples:
+        >>> from torchsky.sphere import pixwin
+        >>> w = pixwin(16)
+        >>> w.shape, round(float(w[0]), 12)
+        (torch.Size([48]), 1.0)
     """
     ns = int(nside)
     if not bool(_healpix.isnsideok(ns)):
         raise ValueError("Wrong nside value (must be a power of two).")
+    if ns > _PIXWIN_MAX_NSIDE:
+        raise ValueError(
+            f"pixel windows are computed for nside <= {_PIXWIN_MAX_NSIDE}; "
+            f"nside={ns} would cost O(nside^2) pixel-shape integrals"
+        )
     ll = int((3 * ns - 1) if lmax is None else lmax)
     if ll < 0:
         raise ValueError("lmax must be non-negative")
-    pw_t_all, pw_p_all = _load_pixwin_table(ns)
-    max_l = int(pw_t_all.numel()) - 1
-    if ll > max_l:
-        if lmax is not None:
-            raise ValueError(
-                f"lmax={lmax} exceeds tabulated multipoles (0..{max_l}) for nside={ns}"
-            )
-        ll = max_l
+    if ll > _PIXWIN_LMAX_PER_NSIDE * ns:
+        raise ValueError(
+            f"lmax={ll} exceeds {_PIXWIN_LMAX_PER_NSIDE}*nside for nside={ns}"
+        )
+    temperature, polarization = _computed_pixwin(ns, ll)
     if bool(pol):
-        return pw_t_all[: ll + 1].clone(), pw_p_all[: ll + 1].clone()
-    return pw_t_all[: ll + 1].clone()
+        return temperature, polarization
+    return temperature
 
 
 def bl2beam(bl: Tensor | list[float], theta: Tensor | list[float]) -> Tensor:

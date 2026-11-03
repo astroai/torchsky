@@ -1,0 +1,8 @@
+384 x 384 px at 0.262 arcsec; 143 catalogue stars on the image
+g: PSF sigma 2.09 px, FWHM 1.29 arcsec
+r: PSF sigma 1.59 px, FWHM 0.98 arcsec
+z: PSF sigma 1.39 px, FWHM 0.86 arcsec
+blend groups: 71 for 143 stars
+g: forced / Tractor flux, 143 stars at S/N > 50: median 0.817, robust scatter 0.034
+r: forced / Tractor flux, 143 stars at S/N > 50: median 0.856, robust scatter 0.028
+z: forced / Tractor flux, 143 stars at S/N > 50: median 0.858, robust scatter 0.034

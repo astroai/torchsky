@@ -97,9 +97,57 @@ solved = operator.solve_normal_equation_cg(operator.apply(sky), iterations=8)
 assert solved.solution.shape == sky.shape
 ```
 
-There is no real-data run of this layer in the documentation yet; the
-[MegaPipe mosaic example](https://github.com/astroai/torchsky/blob/main/examples/megapipe_mosaic.py)
-uses the same resampling kernels in forward (coadd) form.
+The [MegaPipe mosaic example](../published-examples/megapipe_mosaic.py) uses the
+same resampling kernels in forward (coadd) form.
+
+## Real Data: Forced Photometry of Gaia Stars
+
+A scene does not have to be a pixel grid. A
+[`SourceCatalogScene`](../reference/scene.md#torchsky.scene.SourceCatalogScene)
+is a list of sources at fixed sky positions with one flux per band, rendered
+through each observation's WCS and PSF. Its parameters enter the prediction
+linearly, so fitting them is an exact linear least-squares problem.
+[`fit_forced_photometry`](../reference/catalogs.md#torchsky.catalogs.fit_forced_photometry)
+groups stars whose footprints overlap and solves each group for its fluxes and a
+local background on the native pixels.
+
+The [forced photometry example](../published-examples/legacy_forced_photometry.py)
+does this on a 100 arcsec Legacy Surveys DR10 g/r/z cutout 4 arcmin from the
+globular cluster NGC 288. It uses the 143 Gaia stars in the DR10 Tractor
+catalogue of the field. The PSF is a Gaussian whose width is fitted per band
+by minimising chi-square over a grid of widths, giving FWHM 1.29, 0.98 and
+0.86 arcsec in g, r and z.
+
+![DR10 r image with Gaia positions, rendered scene, residual, and forced against Tractor fluxes](../assets/gallery/examples/legacy_forced_photometry.png)
+
+```python
+# fragment: images, invvar, header, ra, dec and sigma come from the cached cutout and catalogue
+import torch
+
+from torchsky.catalogs import fit_forced_photometry
+from torchsky.field import FieldObservation, PSFSpec
+from torchsky.scene import SourceCatalogScene
+
+observations = [
+    FieldObservation(image=images[k], header=header, weight=invvar[k],
+                     band_name=band, psf_spec=PSFSpec.gaussian(sigma[k]))
+    for k, band in enumerate("grz")
+]
+scene = SourceCatalogScene(ra, dec, coefficients=torch.zeros((ra.numel(), 3), dtype=torch.float64),
+                           band_labels=("g", "r", "z"))
+result = fit_forced_photometry(observations, scene, background="constant")
+# result.flux: (143, 3) nanomaggies; result.predictions: the rendered scene per band
+```
+
+The forced fluxes follow the Tractor fluxes star by star with a robust scatter
+of 3 % in every band. Their median ratio, 0.82–0.86, is an aperture
+correction, not an error: Tractor fits pixelized PSF models with extended
+wings to the individual exposures, and a Gaussian core misses that light. Use
+a measured PSF (a kernel `PSFSpec` or a template morphology) when absolute
+fluxes matter. The residual image also shows what a forced fit cannot
+do: stars missing from the input catalogue stay in the data, and each blend
+group absorbs them into its local background. A full fit of all 143 stars and
+three bands takes about a second on a CPU.
 
 ## Recipes
 
@@ -206,3 +254,4 @@ and a failed solve raises instead of returning a number.
 - [Resampling](../maps/resampling.md): the kernels inside the operators.
 - Reference: [`torchsky.scene`](../reference/scene.md),
   [`torchsky.map.solvers`](../reference/map-solvers.md).
+- Example: [forced photometry of Gaia stars on Legacy Surveys images](../published-examples/legacy_forced_photometry.py).

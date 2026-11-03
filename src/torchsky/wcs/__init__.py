@@ -69,6 +69,7 @@ from .core import (
     DistortionLookupTable as DistortionLookupTable,
     PrecisionWarning as PrecisionWarning,
     WCS as WCS,
+    WCSHeaderWarning as WCSHeaderWarning,
 )
 from .detector_astrometry import (
     AffineFreeResidualGrid2D,
@@ -254,6 +255,7 @@ __all__ = [
     "air_wavelength_to_vacuum",
     "CelestialFrameBiasWarning",
     "PrecisionWarning",
+    "WCSHeaderWarning",
     "convert_celestial",
     "convert_spectral",
     "ecliptic_to_icrs",

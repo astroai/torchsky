@@ -44,8 +44,21 @@ which mixes dust and stars rather than placing a screen in front of them.
 | `"odonnell94"` | O'Donnell (1994) | Milky Way, improved optical | Optical polynomial replaced; UV and IR as CCM89 |
 | `"f99"` | Fitzpatrick (1999) | Milky Way, the law behind SFD/SF11 recalibrations | Calibrated over its spline knots; outside is extrapolation |
 | `"calzetti"` | Calzetti et al. (2000) | Star-forming host galaxies, \(R_V = 4.05\) default | 0.12–2.2 µm; clamped outside |
+| `"g23"` | Gordon, Clayton, Decleir & Fitzpatrick (2023, ApJ 950, 86) | Milky Way, current average from the far-UV to the mid-IR, with silicate features | 912 Å–32 µm, \(2.3 \le R_V \le 5.6\); raises outside |
+| `"f19"` | Fitzpatrick, Massa, Gordon et al. (2019, ApJ 886, 108) | Milky Way, HST/STIS spectrophotometric optical and UV | 1150 Å–3.3 µm, \(2 \le R(55) \le 6\); raises outside |
+| `"gcc09"` | Gordon, Cartledge & Clayton (2009, ApJ 705, 1320; erratum 2014) | Milky Way ultraviolet down to the Lyman limit | 909–3030 Å only, \(2 \le R_V \le 6\); raises outside |
 
-Later laws such as Gordon et al. (2023, G23) are not included.
+G23 combines a broken power law with silicate features (infrared), a
+polynomial with three intermediate-scale features (optical), and the
+Fitzpatrick–Massa form (ultraviolet), joined smoothly at 1 µm and 0.3 µm; like
+`dust_extinction`, it includes the 0.9854 renormalization to the HST/STIS
+scale. F19 is a cubic spline through its tabulated \(k(\lambda-55)\) and is
+normalized at 5500 Å, so `a_v` and `r_v` are \(A(55)\) and \(R(55)\) there.
+GCC09 was derived for the ultraviolet only. The coefficients of all three are
+those of the papers as implemented in
+[`dust_extinction`](https://dust-extinction.readthedocs.io) (BSD-3-Clause).
+These newer laws fail closed: a wavelength or \(R_V\) outside the calibrated
+range raises `ValueError` instead of extrapolating.
 
 ## Assumptions and Accuracy
 
@@ -55,9 +68,9 @@ Later laws such as Gordon et al. (2023, G23) are not included.
   screen they are **rest-frame** wavelengths.
 - \(A(\lambda)\) is clamped at zero in `transmission`, so a screen never
   brightens a source.
-- F99 agrees with the [`dust_extinction`](https://dust-extinction.readthedocs.io)
-  package to 2 per cent from 1500 to 8000 Å, and CCM89 matches its V-band
-  anchor, in the test suite.
+- G23, F19, and GCC09 match `dust_extinction` to \(10^{-12}\) relative across
+  their ranges and \(R_V\) limits. F99 agrees with it to 2 per cent from 1500
+  to 8000 Å, and CCM89 matches its V-band anchor, in the test suite.
 
 ## A Real Spectrum: Galactic Dust Correction
 
@@ -197,7 +210,8 @@ import torch
 from torchsky.extinction import a_lambda
 
 uv = torch.tensor([2000.0], dtype=torch.float64)
-values = {law: float(a_lambda(uv, a_v=1.0, law=law)) for law in ("ccm89", "odonnell94", "f99", "calzetti")}
+laws = ("ccm89", "odonnell94", "f99", "calzetti", "g23", "f19", "gcc09")
+values = {law: float(a_lambda(uv, a_v=1.0, law=law)) for law in laws}
 assert max(values.values()) - min(values.values()) > 0.1
 print(values)
 ```

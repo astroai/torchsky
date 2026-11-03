@@ -149,8 +149,8 @@ def test_tan_with_sip_gradcheck() -> None:
     """Forward gradcheck passes through SIP distortion + TAN projection."""
     header = {
         "NAXIS": 2,
-        "CTYPE1": "RA---TAN",
-        "CTYPE2": "DEC--TAN",
+        "CTYPE1": "RA---TAN-SIP",
+        "CTYPE2": "DEC--TAN-SIP",
         "CRPIX1": 128.0,
         "CRPIX2": 128.0,
         "CRVAL1": 180.0,
@@ -180,11 +180,11 @@ def test_tan_with_sip_gradcheck() -> None:
 
 
 def test_tpv_gradcheck() -> None:
-    """Forward gradcheck passes through TPV distortion + TAN projection."""
+    """Forward gradcheck passes through TPV distortion."""
     header = {
         "NAXIS": 2,
-        "CTYPE1": "RA---TAN",
-        "CTYPE2": "DEC--TAN",
+        "CTYPE1": "RA---TPV",
+        "CTYPE2": "DEC--TPV",
         "CRPIX1": 128.0,
         "CRPIX2": 128.0,
         "CRVAL1": 180.0,

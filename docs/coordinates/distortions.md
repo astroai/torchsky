@@ -54,10 +54,15 @@ Check `world_to_pixel(pixel_to_world(p)) ≈ p` over the full image for any
 new header: a strongly non-monotonic polynomial outside the fitted area has
 no unique inverse, and the round trip is the cheapest test.
 
-## Minimal Example: SIP Round Trip
+## Minimal Example: An HST ACS Header (SIP)
 
-Synthetic coefficients of the size found in a 2k × 4k CCD at 0.18 arcsec per
-pixel; the distortion moves the corners by about 0.9 arcsec.
+The header below is the SIP part of chip 1 (`SCI,1`) of the ACS/WFC exposure
+`ja7za3uwq_flc.fits` (programme 11371, NGC 6217, F814W, 2009). It was read from
+MAST and its WCS cards are copied verbatim, so the snippet runs offline. The
+fifth-order polynomial moves the chip corners by up to 3.1 arcsec relative to
+the linear `CD` solution. The full HST solution also has the `CPDIS` and `D2IM`
+lookup tables that sit in other extensions of the file (see the recipe below).
+torchsky matches Astropy/WCSLIB on this header to better than 1e-6 mas.
 
 <!-- docs: run -->
 ```python
@@ -65,28 +70,37 @@ import torch
 
 from torchsky.wcs import WCS
 
-linear = {
-    "NAXIS": 2, "NAXIS1": 2048, "NAXIS2": 4096,
-    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-    "CRPIX1": 1024.5, "CRPIX2": 2048.5, "CRVAL1": 150.1, "CRVAL2": 2.2,
-    "CD1_1": -5.1e-05, "CD1_2": 0.0, "CD2_1": 0.0, "CD2_2": 5.1e-05,
+acs_wfc1 = {   # MAST mast:HST/product/ja7za3uwq_flc.fits, HDU SCI,1 (WCSNAME IDC_0461802dj)
+    "NAXIS": 2, "NAXIS1": 4096, "NAXIS2": 2048, "CTYPE1": "RA---TAN-SIP", "CTYPE2": "DEC--TAN-SIP",
+    "CRPIX1": 2048.0, "CRPIX2": 1024.0, "CRVAL1": 248.092265756327, "CRVAL2": 78.18901993692644,
+    "CD1_1": 1.18249897003846e-05, "CD1_2": 8.07657398228177e-06, "CD2_1": 7.20569251008454e-06,
+    "CD2_2": -1.1404356942835e-05, "A_ORDER": 5, "A_0_2": 2.16281011638133e-06,
+    "A_0_3": -1.46765064057e-13, "A_0_4": 2.30223358084363e-14, "A_0_5": 6.02562521036014e-18,
+    "A_1_1": -5.2158590853721e-06, "A_1_2": -5.3107969261848e-10, "A_1_3": -7.8659474888604e-15,
+    "A_1_4": -1.4384073054676e-18, "A_2_0": 8.55616623616636e-06, "A_2_1": -3.3917464109293e-11,
+    "A_2_2": 3.78668896735343e-14, "A_2_3": 2.16488764283563e-18, "A_3_0": -4.9291246606641e-10,
+    "A_3_1": 6.55012597688049e-15, "A_3_2": 1.79047178737381e-18, "A_4_0": 2.49607276946249e-14,
+    "A_4_1": -2.2971527069895e-18, "A_5_0": 3.34341779527238e-18, "B_ORDER": 5,
+    "B_0_2": -7.2361867909899e-06, "B_0_3": -3.8365985750577e-10, "B_0_4": 4.81417281373599e-15,
+    "B_0_5": -3.0671653630262e-17, "B_1_1": 6.18551929615015e-06, "B_1_2": -7.2701405701748e-11,
+    "B_1_3": 1.17031008147548e-14, "B_1_4": 1.2378998215801e-17, "B_2_0": -1.7465651995444e-06,
+    "B_2_1": -5.1770808967636e-10, "B_2_2": -2.9745588348931e-14, "B_2_3": -4.0252836502166e-19,
+    "B_3_0": 9.84290294757522e-11, "B_3_1": -9.2509958233811e-16, "B_3_2": -6.5707633212806e-19,
+    "B_4_0": -1.7429369365811e-14, "B_4_1": 1.26904088898591e-18, "B_5_0": -2.9208753120287e-18,
 }
-sip = {
-    **linear, "CTYPE1": "RA---TAN-SIP", "CTYPE2": "DEC--TAN-SIP",
-    "A_ORDER": 2, "A_2_0": 2.0e-6, "A_1_1": -1.0e-6, "A_0_2": 3.0e-7,
-    "B_ORDER": 2, "B_2_0": 4.0e-7, "B_1_1": 1.5e-6, "B_0_2": -2.0e-6,
-}
-wcs, flat = WCS(sip), WCS(linear)
+wcs = WCS(acs_wfc1)
+linear = WCS({k: v for k, v in acs_wfc1.items() if k[:2] not in ("A_", "B_")}
+             | {"CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN"})
 
-x = torch.tensor([0.0, 1023.5, 2047.0], dtype=torch.float64)   # corner, centre, corner
-y = torch.tensor([0.0, 2047.5, 4095.0], dtype=torch.float64)
+x = torch.tensor([0.0, 2047.0, 4095.0, 0.0, 4095.0], dtype=torch.float64)   # corners and CRPIX
+y = torch.tensor([0.0, 1023.0, 0.0, 2047.0, 2047.0], dtype=torch.float64)
 ra, dec = wcs.pixel_to_world(x, y)
 x_back, y_back = wcs.world_to_pixel(ra, dec)
 assert (x_back - x).abs().max() < 1e-6 and (y_back - y).abs().max() < 1e-6
 
-shift_arcsec = (dec - flat.pixel_to_world(x, y)[1]).abs() * 3600
-assert shift_arcsec[1] < 1e-6 and shift_arcsec[0] > 0.8      # zero at CRPIX, ~0.9" at a corner
-assert wcs.to_header()["CTYPE1"] == "RA---TAN-SIP"
+ra0, dec0 = linear.pixel_to_world(x, y)
+shift = torch.hypot((ra - ra0) * torch.cos(torch.deg2rad(dec)), dec - dec0) * 3600
+assert shift[1] < 1e-6 and 2.0 < shift.max() < 3.5        # 0 at CRPIX, ~3 arcsec at the corners
 ```
 
 The [dithered SIP coadd](../published-examples/coadd_dithered_sip.py) renders
@@ -94,7 +108,17 @@ eight exposures through SIP solutions and checks the astrometry of the coadd.
 
 ## Recipes
 
-### Read a SCAMP TPV Header
+### Read a DECam TPV Header
+
+DECam community-pipeline images (`InstCal`) carry one SCAMP TPV solution per
+CCD. The header below is CCD S29 of `c4d_140525_072118_ooi_g_rrr.fits.fz`
+(programme 2014A-0321, NGC 6744 field, g band, 2014), read from the NOIRLab
+Astro Data Archive with its WCS cards copied verbatim. `CRPIX` points at the
+optical axis of the 62-CCD mosaic, some 11 000 pixels off this chip. `PV1_3`
+and `PV2_3` are the coefficients of \(r\), here zero. Under `-TPV` they are
+polynomial terms, not the `LONPOLE`/`LATPOLE` of Paper II. The polynomial moves
+this chip by 3.0–3.5 arcsec relative to the linear `CD` solution; torchsky
+matches Astropy/WCSLIB on it to better than 1e-6 mas.
 
 <!-- docs: run -->
 ```python
@@ -102,23 +126,32 @@ import torch
 
 from torchsky.wcs import WCS
 
-header = {
-    "NAXIS": 2, "NAXIS1": 2048, "NAXIS2": 4612,
-    "CTYPE1": "RA---TPV", "CTYPE2": "DEC--TPV",
-    "CRPIX1": 1024.5, "CRPIX2": 2306.5, "CRVAL1": 150.1, "CRVAL2": 2.2,
-    "CD1_1": -5.16e-05, "CD1_2": 0.0, "CD2_1": 0.0, "CD2_2": 5.16e-05,
-    "PV1_0": 0.0, "PV1_1": 1.0, "PV1_2": 0.0, "PV1_4": 2e-3, "PV1_7": 5e-3,
-    "PV2_0": 0.0, "PV2_1": 1.0, "PV2_2": 0.0, "PV2_4": -1e-3, "PV2_7": 4e-3,
+decam_s29 = {   # NOIRLab archive c4d_140525_072118_ooi_g_rrr.fits.fz, extension S29
+    "NAXIS": 2, "NAXIS1": 2046, "NAXIS2": 4094, "CTYPE1": "RA---TPV", "CTYPE2": "DEC--TPV",
+    "CRPIX1": 13422.2, "CRPIX2": 6306.33300000001, "CRVAL1": 287.4314124816,
+    "CRVAL2": -63.84949275399, "CD1_1": -4.060086963025e-07, "CD1_2": 7.285880050401e-05,
+    "CD2_1": -7.286252566409e-05, "CD2_2": -4.059689173171e-07, "PV1_0": 0.001709600882009,
+    "PV1_1": 1.01479314616, "PV1_2": -0.002479541426295, "PV1_3": 0.0, "PV1_4": 0.007835790723642,
+    "PV1_5": -0.01976350862627, "PV1_6": 0.001901723338406, "PV1_7": 0.0002087520149181,
+    "PV1_8": -0.007273769983855, "PV1_9": 0.007872055622797, "PV1_10": -0.0005311615314207,
+    "PV2_0": -0.003103387145331, "PV2_1": 1.013895242054, "PV2_2": -0.0102502558997,
+    "PV2_3": 0.0, "PV2_4": -0.01626927460387, "PV2_5": 0.02022513728663, "PV2_6": -0.01122435264465,
+    "PV2_7": 0.006422711612, "PV2_8": -0.01015554463106, "PV2_9": 0.008962633753844,
+    "PV2_10": -0.0026543549284,
 }
-tpv = WCS(header)
-same = WCS({**header, "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN"})  # SCAMP's older spelling
+tpv = WCS(decam_s29)
+linear = WCS({k: v for k, v in decam_s29.items() if not k.startswith("PV")}
+             | {"CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN"})
 
-x = torch.tensor([0.0, 2047.0], dtype=torch.float64)
-y = torch.tensor([0.0, 4611.0], dtype=torch.float64)
+x = torch.tensor([0.0, 2045.0, 0.0, 2045.0, 1022.5], dtype=torch.float64)
+y = torch.tensor([0.0, 0.0, 4093.0, 4093.0, 2046.5], dtype=torch.float64)
 ra, dec = tpv.pixel_to_world(x, y)
-assert torch.equal(ra, same.pixel_to_world(x, y)[0])
 x_back, y_back = tpv.world_to_pixel(ra, dec)
 assert (x_back - x).abs().max() < 1e-6 and (y_back - y).abs().max() < 1e-6
+
+ra0, dec0 = linear.pixel_to_world(x, y)
+shift = torch.hypot((ra - ra0) * torch.cos(torch.deg2rad(dec)), dec - dec0) * 3600
+assert 2.5 < shift.min() and shift.max() < 4.0           # arcsec, across the whole chip
 ```
 
 ### Attach Paper IV Lookup Tables
@@ -210,12 +243,22 @@ is [`solve_astrometry`](../reference/wcs.md#torchsky.wcs.solve_astrometry).
 
 ## When Headers Lie
 
-- **SIP without `-SIP`.** A header with `A_ORDER`/`B_ORDER` gets SIP applied
-  even when `CTYPE` ends in plain `TAN`, as Astropy does. Remove the `A_*`
-  and `B_*` cards first if they are stale.
-- **`TAN` with `PV` cards is TPV.** SCAMP writes `RA---TAN` plus `PVi_m`.
-  torchsky reads that as TPV; if the `PV` cards were meant as projection
-  parameters, the header is ambiguous and must be fixed upstream.
+`CTYPE` is authoritative, as the FITS standard and the SIP convention
+require. A header whose distortion cards contradict it raises `ValueError`
+naming the fix; the one compatibility reading torchsky keeps emits
+[`WCSHeaderWarning`](../reference/wcs.md#torchsky.wcs.WCSHeaderWarning).
+
+| Header | Astropy / WCSLIB | torchsky |
+|---|---|---|
+| `A_ORDER`/`B_ORDER` with plain `TAN` (or `TPV`) | applies SIP, logs a message | `ValueError`: append `-SIP`, or drop the stale `A_*`/`B_*` cards (drizzled images keep them) |
+| `TAN` with `PVi_m`, some `m >= 5` | TPV (pre-2012 SCAMP) | TPV, `CTYPE` rewritten to `-TPV`, `WCSHeaderWarning` |
+| `TAN` with `PV2_m`, all `m <= 4` | standard `TAN`; `PV2_m` ignored, `PV1_1`/`PV1_2` become the fiducial point | `ValueError`: a degree-1 SCAMP fit looks exactly like this, so set `-TPV` or remove the cards |
+| `TAN` with only `PV1_0`…`PV1_4` | standard fiducial point and pole | same as WCSLIB |
+| `TAN-SIP` with SCAMP `PVi_m` (`m >= 5`) | drops the `PV` cards | `ValueError`: keep one convention |
+
+Make the legacy reading an error with
+`warnings.simplefilter("error", WCSHeaderWarning)`.
+
 - **Rank-deficient TPV.** A header with `PV2_2 = 1` and no `PV2_1` is
   rank-deficient; its inverse is a particular solution.
 - **Polynomials outside their fit.** SIP and TPV are fitted to stars inside the

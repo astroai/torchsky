@@ -27,6 +27,8 @@ namespace `torchsky.spectrophotometry` unless the group text says otherwise.
         - synthetic_photometry
         - synthetic_photometry_bands
         - throughput_from_mapping
+        - vega_spectrum
+        - vega_zero_point
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false
@@ -48,4 +50,12 @@ typing.Literal['mean_f_lambda', 'f_nu_microjy', 'ab_mag']
 
 ```python
 typing.Literal['angstrom', 'nm']
+```
+
+<a id="torchsky.spectrophotometry.Weighting"></a>
+
+**`Weighting`**
+
+```python
+typing.Literal['photon', 'energy']
 ```

@@ -120,7 +120,7 @@ def test_ifu_photometric_scale_is_applied_once() -> None:
 
 
 def test_healpix_photometric_scale_is_applied_once() -> None:
-    shape = (32, 32)
+    shape = (64, 64)  # 3.2 deg: several fully covered nside-64 cells
     header = _header(shape)
     observation = Observation(
         data=torch.full(shape, 3.0),
@@ -137,9 +137,10 @@ def test_healpix_photometric_scale_is_applied_once() -> None:
     torch.testing.assert_close(
         result.data[covered], torch.full_like(result.data[covered], 6.0)
     )
-    torch.testing.assert_close(
-        result.weight[covered], torch.full_like(result.weight[covered], 1.0)
-    )
+    # Cells are integrated over their overlap: weight 4 / 2**2 = 1 on fully
+    # covered cells, the covered fraction of it on edge cells.
+    assert float(result.weight.max()) == pytest.approx(1.0, abs=1e-6)
+    assert float(result.weight.max()) <= 1.0 + 1e-6
 
 
 @pytest.mark.parametrize(

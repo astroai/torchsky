@@ -158,9 +158,9 @@ assert abs(float(flux) - 17.0) < 4 * float(sigma)
 
 ### Poisson–Gaussian Pixels With Gradients
 
-`torchsky.map.operators.poisson_gaussian_nll` takes observed values, expected electrons, read
+[`poisson_gaussian_nll`](../reference/map-operators-noise.md#torchsky.map.operators.noise.poisson_gaussian_nll) takes observed values, expected electrons, read
 variance, gain, and offset. At a few electrons per pixel it describes the data
-better than a Gaussian with variance \(\lambda + \sigma_r^2\).
+better than a Gaussian ([`gaussian_nll`](../reference/map-operators-noise.md#torchsky.map.operators.noise.gaussian_nll)) with variance \(\lambda + \sigma_r^2\).
 
 <!-- docs: run -->
 ```python

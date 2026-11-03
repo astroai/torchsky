@@ -24,7 +24,8 @@ from ._geometry import _GeometryMixin, _HeaderIOMixin
 from ._math import _wrap_lon180, _wrap_lon360
 from ._rotation import _RotationMixin
 
-from .tpv import TPV, PV1_KEYS_SET, PV2_KEYS_SET
+from .tpv import TPV
+from ._header_parse import WCSHeaderWarning as WCSHeaderWarning
 from .sip import SIP
 from .tabular import (
     CoupledTabularLookupWCS,
@@ -293,26 +294,6 @@ class WCS(
             self.naxis = self._infer_wcs_naxis(header)
             self._pixel_shape = self._infer_pixel_shape(header)
             self._parse_header(header)
-            # Check for SIP
-            if self._header_has(header, "A_ORDER") or self._header_has(
-                header, "B_ORDER"
-            ):
-                self.sip = SIP(header)
-
-            # Check for TPV (Tangent with PV distortion)
-            # SCAMP often uses CTYPE = RA---TAN with PV1_j keywords
-            has_pv = bool(PV1_KEYS_SET.intersection(self.wcs_params)) or bool(
-                PV2_KEYS_SET.intersection(self.wcs_params)
-            )
-            is_tpv_ctype = (
-                self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TPV")
-            )
-
-            if is_tpv_ctype or (
-                self.wcs_params.get("CTYPE1", "").strip().upper().endswith("TAN")
-                and has_pv
-            ):
-                self.tpv = TPV(self.wcs_params)
         else:
             self.naxis = int(
                 kwargs.get("NAXIS", kwargs.get("WCSAXES", kwargs.get("naxis", 2)))
@@ -334,19 +315,7 @@ class WCS(
 
         self._identify_celestial_axes()
         self._setup_projection_params()
-        if self._has_celestial:
-            lon_ctype = (
-                str(self.wcs_params.get(f"CTYPE{self._celestial_lon_axis + 1}", ""))
-                .strip()
-                .upper()
-            )
-            has_pv = any(
-                key.startswith(("PV1_", "PV2_")) for key in self._projection_params
-            )
-            if lon_ctype.endswith("TPV") or (lon_ctype.endswith("TAN") and has_pv):
-                self.tpv = TPV(self._projection_params)
-            else:
-                self.tpv = None
+        self._resolve_header_distortions()
 
         if self.tpv is not None and (
             self._celestial_lon_axis != 0 or self._celestial_lat_axis != 1

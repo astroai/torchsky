@@ -124,6 +124,54 @@ prediction = field.render(model, observations[0])
 assert prediction.shape == (32, 32) and torch.isfinite(prediction).all()
 ```
 
+## Real Data: The Cartwheel in Four Bands
+
+The [Legacy Surveys field example](../published-examples/legacy_field_fit.py)
+fits one field to six real DECam images of the Cartwheel ring galaxy from
+Legacy Surveys DR10. Four bands (g, r, i, z) are sampled on a 0.524 arcsec grid,
+and g and z also on a 0.35 arcsec grid with a shifted centre. Each image
+carries its inverse-variance map, its DECam filter curve from the SVO Filter
+Profile Service, and a 1.1 arcsec Gaussian PSF. The two grids come from the
+same coadds, so the second grid tests the multi-WCS forward model, not
+independent data. The cutout service keeps surface brightness on every grid,
+which is what the field model assumes.
+
+![Data, field model, and residual for six Legacy Surveys images of the Cartwheel](../assets/gallery/examples/legacy_field_fit.png)
+
+```python
+# fragment: the example fetches the cutouts and filter curves; see legacy_field_fit.py
+import torch
+import torchfits
+
+from torchsky import field
+from torchsky.filter_profiles import bandpass_from_transmission_file, field_observation_spectral_kwargs
+
+images = torchfits.read("legacy_cartwheel_griz.fits", hdu=0).float()   # (band, y, x), nanomaggies
+invvar = torchfits.read("legacy_cartwheel_griz.fits", hdu=1).float()
+observations = [
+    field.FieldObservation(
+        image=images[k], header=header, weight=invvar[k],
+        psf_spec=field.PSFSpec.gaussian(1.1 / 2.3548 / 0.524),
+        **field_observation_spectral_kwargs(bandpass_from_transmission_file(f"DECam.{band}.dat", band_name=band)),
+    )
+    for k, band in enumerate("griz")
+]                                                   # plus g and z on the 0.35 arcsec grid
+model = field.preset("fast", field.estimate_domain(observations))
+result = field.fit(observations, model, steps=240, lr=5e-3, num_spectral_samples=3,
+                   training_patch_size=32, training_patches_per_observation=2)
+```
+
+After about a minute on a CPU, the model explains 74–86 % of the pixel
+variance in each image, and the model-to-data flux ratio is 0.94–1.09. The
+model reproduces the outer ring, the inner ring, the nucleus and the colour
+gradient between them: g − z is 1.4 mag at the nucleus and 0.4 mag on the
+ring. The residuals keep the star-forming knots of the ring and overshoot the
+nucleus: this compact network is smoother than the data. That is the gap a
+larger model, more steps or a learned PSF must close, and it is visible only
+because the example renders the model back through each observation and shows
+the residual. Training on 32 px patches keeps each step cheap, since a fit on
+full images costs the whole forward model for every pixel at every step.
+
 ## Recipes
 
 ### Build Observations From FITS Files
@@ -309,6 +357,7 @@ assert torch.isfinite(loss)
 - [Scenes](scenes.md): observation operators with exact adjoints.
 - [Likelihoods](likelihoods.md): noise models and pixel likelihoods.
 - [Formulation](formulation.md): the inverse problem behind fields.
-- Examples: [neural multiband field](https://github.com/astroai/torchsky/blob/main/examples/neural_field_multiband.py),
+- Examples: [Cartwheel field fit on Legacy Surveys images](../published-examples/legacy_field_fit.py),
+  [neural multiband field](https://github.com/astroai/torchsky/blob/main/examples/neural_field_multiband.py),
   [survey split](https://github.com/astroai/torchsky/blob/main/examples/survey_split.py).
 - Reference: [`torchsky.field`](../reference/field.md).

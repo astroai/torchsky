@@ -62,6 +62,55 @@ the moment-0 centroid are recovered within one bin and 0.01 pixel.
 
 ![IFU frames resampled into a spectral cube](../assets/gallery/examples/spectral_cube.png)
 
+## Real Data: A MaNGA Cube
+
+Pipeline cubes do not need `coadd_cube` to exist, only to be reprojected. The
+[MaNGA example](../published-examples/manga_ifu_cube.py) reads the SDSS DR17
+cube of the star-forming disc galaxy 8485-1901 (34 × 34 spaxels of
+0.5 arcsec, 4563 channels from 3622 to 10354 Å) with torchfits. The steps:
+
+- **Spectral axis.** The cube's `WAVE-LOG` axis is evaluated through the 3D
+  [`WCS`](../reference/wcs.md#torchsky.wcs.WCS) and agrees with the file's own
+  `WAVE` table to 2e-4 Å. Channel edges come from the same WCS at half-pixel
+  positions.
+- **Rest frame.** The redshift is measured on the central Hα line
+  (z = 0.0408). Every spaxel is rebinned onto a 1 Å rest-frame grid with
+  [`flux_conserving_rebin`](../reference/spectral.md#torchsky.spectral.flux_conserving_rebin),
+  which propagates the inverse variance and the `DONOTUSE` mask.
+- **Line maps.** A continuum from two sidebands is subtracted, which gives
+  the Hα flux map, its 5σ detections (254 spaxels), the Hα centroid velocity
+  field (±100 km/s of ordered rotation) and an integrated [N II]/Hα of 0.41,
+  typical of star formation.
+- **Reprojection.** The continuum-subtracted Hα planes are reprojected with
+  `coadd_cube` onto a 0.25 arcsec grid rotated by 30°, with Lanczos3 and
+  `semantics="flux"`. The integrated Hα flux is unchanged to 1e-4.
+
+![MaNGA 8485-1901: white light, Hα flux, Hα velocity, reprojected Hα, and the central spectrum](../assets/gallery/examples/manga_ifu_cube.png)
+
+```python
+# fragment: path points at the cached manga-8485-1901-LOGCUBE.fits.gz
+import torch
+import torchfits
+
+from torchsky.spectral import DataCube, SpectralAxis, flux_conserving_rebin
+from torchsky.wcs import WCS
+
+header = dict(torchfits.read_header(path, "FLUX"))
+flux = torchfits.read(path, hdu="FLUX").double()                  # (4563, 34, 34)
+nz = flux.shape[0]
+wcs = WCS(header)                                                 # RA---TAN, DEC--TAN, WAVE-LOG
+def wavelength(channel):                                          # spectral world coordinate
+    return wcs.pixel_to_world(torch.stack([channel * 0 + 16.5, channel * 0 + 16.5, channel], -1))[:, 2]
+
+centres = wavelength(torch.arange(nz, dtype=torch.float64))
+edges = wavelength(torch.arange(nz + 1, dtype=torch.float64) - 0.5)
+cube = DataCube(data=flux, spectral_axis=SpectralAxis(centres, "Angstrom", "WAVE"))
+
+z = 0.0408
+rest = flux_conserving_rebin(flux.permute(1, 2, 0) * (1 + z), edges / (1 + z),
+                             torch.arange(6500.0, 6631.0, 1.0, dtype=torch.float64))
+```
+
 ## Which Path Am I On?
 
 | Input | Path | Notes |
@@ -223,4 +272,5 @@ many slices overlap one voxel.
 - [HEALPix mapmaking](healpix-mapmaking.md) for spherical products.
 - Reference: [`coadd_cube`](../reference/map.md#torchsky.map.coadd_cube),
   [`CubeResult`](../reference/map.md#torchsky.map.CubeResult).
-- Example: [IFU frames to a spectral cube](../published-examples/spectral_cube.py).
+- Examples: [MaNGA cube: Hα map, rotation and reprojection](../published-examples/manga_ifu_cube.py),
+  [IFU frames to a spectral cube](../published-examples/spectral_cube.py).

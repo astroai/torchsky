@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, cast
 
@@ -11,6 +12,7 @@ from torch import Tensor
 from ..sphere.moc import MOC
 from ..wcs import WCS
 from ..wcs.frames import warn_frame_bias_conversion
+from ._healpix_overlap import central_pixel_solid_angle, integrate_exposure
 from .calibration import (
     _apply_observation_calibration,
     _load_observation_weight_map,
@@ -171,6 +173,38 @@ def _icrs_view(wcs: WCS) -> Any:
     return _IcrsWorldView(wcs)
 
 
+# Support width (image pixels) of each centre-sampling kernel. When HEALPix
+# cells are wider than this, centre samples leave image pixels unused, so the
+# cell is integrated over its overlap with the image instead.
+_KERNEL_SUPPORT_PX = {
+    "nearest": 1.0,
+    "bilinear": 2.0,
+    "bicubic": 4.0,
+    "lanczos2": 4.0,
+    "lanczos3": 6.0,
+    "lanczos4": 8.0,
+}
+
+
+def _add_contributions(
+    pixels: Tensor,
+    numer: Tensor,
+    denom: Tensor,
+    sparse_accumulator: _SortedContributionAccumulator | None,
+    numer_dense: Tensor | None,
+    denom_dense: Tensor | None,
+    overlap_dense: Tensor | None,
+) -> None:
+    if sparse_accumulator is not None:
+        sparse_accumulator.add(pixels, numer, denom)
+        return
+    assert numer_dense is not None and denom_dense is not None
+    assert overlap_dense is not None
+    numer_dense.index_add_(0, pixels, numer)
+    denom_dense.index_add_(0, pixels, denom)
+    overlap_dense.index_add_(0, pixels, torch.ones_like(pixels, dtype=torch.int32))
+
+
 def coadd_healpix(
     observations: Sequence[Observation],
     nside: int,
@@ -192,9 +226,19 @@ def coadd_healpix(
     incremental reduction. Sparse accumulation retains merged output support;
     dense accumulation writes each chunk directly into the output tensors.
 
-    Cells are sampled at their centres. An observation whose footprint overlaps
-    cells but contains none of their centres (cells larger than the image)
-    raises ``ValueError``; use a higher ``nside``.
+    Values are surface brightness. Each exposure is combined in one of two
+    regimes, chosen from the cell size ``L`` (``nside2resol``) and the image
+    pixel size ``p`` (square root of the central pixel's solid angle):
+
+    - ``L <= support(kernel) * p``: cells are sampled at their centres with
+      ``kernel`` (support 1 for nearest, 2 bilinear, 4 bicubic/lanczos2,
+      6 lanczos3, 8 lanczos4 pixels).
+    - otherwise, or when the footprint contains no cell centre: each cell gets
+      the exact overlap integral ``sum_i A_ip w_i d_i`` and ``sum_i A_ip w_i``,
+      with ``A_ip`` the area of image pixel ``i`` inside cell ``p`` in units
+      of the cell area (drizzle's convention at ``pixfrac = 1``). Partially
+      covered cells get the mean over the covered part and a weight scaled by
+      the covered fraction; ``kernel`` is not used.
 
     Args:
         observations: Image observations to project and combine.
@@ -255,7 +299,7 @@ def coadd_healpix(
         None if sparse else torch.zeros(npix, dtype=torch.int32, device=map_device)
     )
 
-    for obs_index, obs in enumerate(obs_list):
+    for obs in obs_list:
         if obs.data is not None:
             raw_img = obs.data.to(device=map_device, dtype=torch.float32)
             hdr_obs = dict(obs.header) if obs.header is not None else {}
@@ -289,8 +333,15 @@ def coadd_healpix(
             ],
             dim=0,
         )
+        support = _KERNEL_SUPPORT_PX.get(kernel)
+        if support is None:
+            raise ValueError(f"unsupported kernel {kernel!r}")
+        cell_side = _hp.nside2resol(nside_i)
+        pixel_side = math.sqrt(central_pixel_solid_angle(obs_wcs, H_s, W_s))
+        integrate = not math.isfinite(pixel_side) or cell_side > support * pixel_side
         centre_in_image = False
-        for pixel_chunk in obs_pix.split(reduction_chunk_size):
+        contributions: list[tuple[Tensor, Tensor, Tensor]] = []
+        for pixel_chunk in obs_pix.split(reduction_chunk_size) if not integrate else ():
             ra_p, dec_p = _hp.pix2ang(nside_i, pixel_chunk, nest=nest, lonlat=True)
             x_src, y_src = obs_wcs.world_to_pixel(ra_p, dec_p)
             x_2d = x_src.to(dtype=torch.float32).unsqueeze(0)
@@ -319,29 +370,29 @@ def coadd_healpix(
             centre_in_image = centre_in_image or bool(in_b.any())
             hit = in_b & (s_sup > 0.0) & (s_den > 0.0) & torch.isfinite(s_num)
             if bool(hit.any()):
-                hit_pixels = pixel_chunk[hit]
-                if sparse_accumulator is not None:
-                    sparse_accumulator.add(hit_pixels, s_num[hit], s_den[hit])
-                else:
-                    assert (
-                        numer_dense is not None
-                        and denom_dense is not None
-                        and overlap_dense is not None
-                    )
-                    numer_dense.index_add_(0, hit_pixels, s_num[hit])
-                    denom_dense.index_add_(0, hit_pixels, s_den[hit])
-                    overlap_dense.index_add_(
-                        0,
-                        hit_pixels,
-                        torch.ones_like(hit_pixels, dtype=torch.int32),
-                    )
-        if not centre_in_image:
-            raise ValueError(
-                f"the footprint of observation {obs_index} overlaps HEALPix "
-                f"cells but contains no cell centre at nside={nside_i} "
-                f"(cells are about {58.6 / nside_i:.4g} deg across, larger than "
-                "the image); cells are sampled at their centres, so use a "
-                "higher nside"
+                contributions.append((pixel_chunk[hit], s_num[hit], s_den[hit]))
+        if not integrate and not centre_in_image:
+            integrate = True
+        if integrate:
+            cells, i_num, i_den = integrate_exposure(
+                obs_wcs,
+                channels[0],
+                channels[1],
+                nside=nside_i,
+                nest=nest,
+                chunk_size=reduction_chunk_size,
+            )
+            keep = i_den > 0.0
+            contributions = [(cells[keep], i_num[keep], i_den[keep])]
+        for hit_pixels, c_num, c_den in contributions:
+            _add_contributions(
+                hit_pixels,
+                c_num,
+                c_den,
+                sparse_accumulator,
+                numer_dense,
+                denom_dense,
+                overlap_dense,
             )
 
     if not sparse:

@@ -47,27 +47,28 @@ crossmatch_many group (2.5 arcsec, 7 ms): 3383 groups; groups with 1/2/3 catalog
 
 All-sky HEALPix maps, masks and power spectra.
 
-### Masked power spectrum of the Commander synchrotron map
+### Apodised-mask power spectrum of the Commander synchrotron map
 
-![Masked power spectrum of the Commander synchrotron map](../assets/gallery/examples/planck_power_spectrum.png)
+![Apodised-mask power spectrum of the Commander synchrotron map](../assets/gallery/examples/planck_power_spectrum.png)
 
-Power spectrum of the Planck Commander synchrotron map on a masked sky. *Runtime: about 5 s on CPU once the map (9 MB) is cached.*
+Power spectrum of the Planck Commander synchrotron map with an apodised Galactic mask. *Runtime: about 5 s on CPU once the map (9 MB) is cached.*
 
 Script: [`examples/planck_power_spectrum.py`](https://github.com/astroai/torchsky/blob/main/examples/planck_power_spectrum.py) · [site copy](../published-examples/planck_power_spectrum.py)
 
 ```text
 COMP-MAP-Synchrotron: nside 256, 786432 pixels, unit uK_RJ, median 1.65e+07
-mask |b| > 20 deg: f_sky = 0.6576 (pixels), 0.6576 (MOC area), analytic 0.6580
-full-sky spectrum: C_ell ~ ell^-1.77 over ell 10-150
-band          masked/fsky vs full (data)   masked/fsky vs full (simulation)
-ell  10- 30      0.109                        1.086
-ell  30-100      0.083                        0.973
-ell 100-250      0.027                        1.019
+mask |b| > 20 deg, 10 deg cosine taper: f_sky = 0.6576 (MOC area; analytic 0.6580), w2 = 0.5579
+even/odd multipole ratio at ell 100-200: sharp cut, monopole kept 1.90; apodised, monopole+dipole removed 1.005
+high-latitude spectrum: C_ell ~ ell^-2.91 over ell 10-50
+band          |b|>20 / full sky   |b|>30 / |b|>20   simulation out / in
+ell  10- 30         0.0326              0.761             1.184
+ell  30- 60         0.0202              0.845             1.037
+ell  60-150         0.0176              1.166             1.028
 ```
 
 ## SDSS
 
-Calibrated spectra, rest frames, dust and synthetic photometry.
+Calibrated spectra and IFU cubes: rest frames, dust, emission-line maps and synthetic photometry.
 
 ### A quasar spectrum: rest frame, dust and ugriz magnitudes
 
@@ -90,6 +91,69 @@ band  coverage  torchsky AB  SDSS synthetic  diff    dust-corrected  A_lambda(pi
 rms difference to the SDSS synthetic magnitudes (griz): 0.017 mag; dust-corrected g-r = 0.616
 ```
 
+### A MaNGA IFU cube: Hα map, rotation and reprojection
+
+![A MaNGA IFU cube: Hα map, rotation and reprojection](../assets/gallery/examples/manga_ifu_cube.png)
+
+Hα map, velocity field and spectrum of a MaNGA IFU cube. *Runtime: about 5 s on CPU once the 39 MB cube is cached.*
+
+Script: [`examples/manga_ifu_cube.py`](https://github.com/astroai/torchsky/blob/main/examples/manga_ifu_cube.py) · [site copy](../published-examples/manga_ifu_cube.py)
+
+```text
+manga_8485_1901.fits.gz: 34 x 34 spaxels x 4563 channels, WAVE-LOG, 1E-17 erg/s/cm^2/Angstrom/spaxel
+WAVE-LOG axis 3621.60-10353.81 Å; max |WCS - WAVE HDU| = 1.5e-04 Å
+systemic redshift from central Hα: z = 0.04077 (cz = 12221 km/s)
+Hα detected at 5 sigma in 254 spaxels; total Hα flux 1187 x 1e-17 erg/s/cm^2; velocity range -102 to +90 km/s
+integrated [N II] 6585 / Hα = 0.41 (log -0.39: star formation, not AGN)
+reprojected cube (16, 93, 93) at 0.25 arcsec, rotated 30 deg: Hα total 1194 vs 1194 (1.0000)
+```
+
+## Legacy Surveys (DECam)
+
+Multi-band DECam images: a continuous field fit and catalogue forced photometry.
+
+### One continuous field fitted to g/r/i/z images of the Cartwheel
+
+![One continuous field fitted to g/r/i/z images of the Cartwheel](../assets/gallery/examples/legacy_field_fit.png)
+
+Fit one continuous field to Legacy Surveys g/r/i/z images of the Cartwheel galaxy. *Runtime: about 60 s on CPU once the 1 MB of cutouts and filter curves are cached.*
+
+Script: [`examples/legacy_field_fit.py`](https://github.com/astroai/torchsky/blob/main/examples/legacy_field_fit.py) · [site copy](../published-examples/legacy_field_fit.py)
+
+```text
+g 0.52"   (128, 128) px, passband 3835-5570 A, total   634.1 nmgy
+r 0.52"   (128, 128) px, passband 5405-7290 A, total   829.0 nmgy
+i 0.52"   (128, 128) px, passband 6775-8690 A, total   907.0 nmgy
+z 0.52"   (128, 128) px, passband 8255-10140 A, total  1019.5 nmgy
+g 0.35"   (160, 160) px, passband 3835-5570 A, total  1084.5 nmgy
+z 0.35"   (160, 160) px, passband 8255-10140 A, total  1888.7 nmgy
+fit: 240 steps, loss 0.0352 -> 0.0041
+g 0.52"   model/data flux 0.942, variance explained 0.737
+r 0.52"   model/data flux 0.976, variance explained 0.811
+i 0.52"   model/data flux 1.018, variance explained 0.840
+z 0.52"   model/data flux 1.085, variance explained 0.826
+g 0.35"   model/data flux 0.963, variance explained 0.744
+```
+
+### Forced photometry of 143 Gaia stars near NGC 288
+
+![Forced photometry of 143 Gaia stars near NGC 288](../assets/gallery/examples/legacy_forced_photometry.png)
+
+Forced photometry of Gaia stars on Legacy Surveys g/r/z images near NGC 288. *Runtime: about 20 s on CPU once the 4 MB of samples are cached.*
+
+Script: [`examples/legacy_forced_photometry.py`](https://github.com/astroai/torchsky/blob/main/examples/legacy_forced_photometry.py) · [site copy](../published-examples/legacy_forced_photometry.py)
+
+```text
+384 x 384 px at 0.262 arcsec; 143 catalogue stars on the image
+g: PSF sigma 2.09 px, FWHM 1.29 arcsec
+r: PSF sigma 1.59 px, FWHM 0.98 arcsec
+z: PSF sigma 1.39 px, FWHM 0.86 arcsec
+blend groups: 71 for 143 stars
+g: forced / Tractor flux, 143 stars at S/N > 50: median 0.817, robust scatter 0.034
+r: forced / Tractor flux, 143 stars at S/N > 50: median 0.856, robust scatter 0.028
+z: forced / Tractor flux, 143 stars at S/N > 50: median 0.858, robust scatter 0.034
+```
+
 ## DSS photographic plates
 
 A WCS from a real header, frames, footprints and reprojection.
@@ -109,6 +173,7 @@ pixel scale 1.009 x 1.007 arcsec, field 15.0 x 15.0 arcmin, rotation +0.065 deg
 footprint centre l, b = 206.97, -16.75 deg; exact polygon area 225 arcmin^2
 Horsehead at pixel (549.0, 445.8), Galactic l, b = 206.96, -16.78 deg
 MOC order 15: 674 cells, area 229 arcmin^2 (1.020 x polygon)
+MOC degraded to order 12: 104 cells, 1 boundary loop(s), area 258 arcmin^2
 rotated TAN grid (1219, 1219), CAR grid (895, 893); original -> CAR -> original residual rms = 0.015 of the image std
 mean surface brightness: original 9831.5, CAR 9832.0 (ratio 1.0001)
 ```
@@ -383,6 +448,15 @@ archive and IRSA, with a `COUNT(*)` check against truncation.
 | `planck_commander_dust_256` | 28.3 MB | Planck PR2 Commander thermal dust component, HEALPix nside=256. | Planck Legacy Archive (ESA); cite Planck Collaboration 2015 X |
 | `planck_smica_1024` (opt-in) | 176.2 MB | Planck PR2 SMICA CMB I/Q/U, nside=1024 (smallest official CMB map; the PR3 SMICA map is 2 GB at nside=2048). | Planck Legacy Archive (ESA); cite Planck Collaboration 2015 IX |
 | `manga_logcube` (opt-in) | 212.0 MB | SDSS-IV MaNGA DR17 LOGCUBE, plate-IFU 7443-12703. | SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015) |
+| `manga_8485_1901` | 38.9 MB | SDSS-IV MaNGA DR17 LOGCUBE, plate-IFU 8485-1901 (19-fibre bundle, 34 x 34 spaxels of 0.5 arcsec, 4563 log-lambda channels, 3622-10354 A); the smallest MaNGA cube format, a star-forming disc galaxy at z = 0.037. | SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015) |
+| `legacy_cartwheel_griz` | 0.5 MB | Legacy Surveys DR10 g/r/i/z cutout of the Cartwheel galaxy, 128 x 128 px at 0.524 arcsec/px (TAN), image cube in HDU 0 and inverse variance in HDU 1, nanomaggies. | Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment |
+| `legacy_cartwheel_gz_fine` | 0.4 MB | Legacy Surveys DR10 g/z cutout of the Cartwheel on a second grid: 160 x 160 px at 0.35 arcsec/px, centre offset by 3 and 2.5 arcsec. | Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment |
+| `legacy_ngc288_grz` | 3.5 MB | Legacy Surveys DR10 g/r/z cutout 4 arcmin west of the globular cluster NGC 288, 384 x 384 px at the native 0.262 arcsec/px, image cube in HDU 0 and inverse variance in HDU 1, nanomaggies. | Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment |
+| `legacy_ngc288_catalog` | 0.4 MB | Legacy Surveys DR10 Tractor catalogue of the same field (143 Gaia stars with Tractor g/r/z fluxes and inverse variances). | Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment; Gaia DR3 (ESA/DPAC) astrometry |
+| `svo_decam_g` | 0.0 MB | DECam g-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES |
+| `svo_decam_r` | 0.0 MB | DECam r-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES |
+| `svo_decam_i` | 0.0 MB | DECam i-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES |
+| `svo_decam_z` | 0.0 MB | DECam z-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service. | SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES |
 
 ```bash
 pixi run fetch-example-samples                  # all small samples

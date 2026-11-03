@@ -12,8 +12,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal, Mapping
 
+import numpy as np
 import torch
 
 _C_ANGSTROM_PER_SECOND = 2.99792458e18
@@ -40,6 +43,27 @@ def _working_dtype(tensor: torch.Tensor) -> torch.dtype:
 
 WavelengthUnit = Literal["angstrom", "nm"]
 PhotometryOutput = Literal["mean_f_lambda", "f_nu_microjy", "ab_mag"]
+Weighting = Literal["photon", "energy"]
+
+
+def _check_weighting(weighting: str) -> None:
+    if weighting not in ("photon", "energy"):
+        raise ValueError("weighting must be 'photon' or 'energy'")
+
+
+def _band_weights(
+    response: torch.Tensor, grid: torch.Tensor, weighting: Weighting
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """``F_lambda`` and ``F_nu`` weights (without ``c``) of a response on a grid.
+
+    Photon counting weights ``F_lambda`` by ``R lambda`` and ``F_nu`` by
+    ``R / lambda``; energy counting by ``R`` and ``R / lambda^2`` (Bessell &
+    Murphy 2012, appendix A).
+    """
+
+    if weighting == "photon":
+        return response * grid, response / grid
+    return response, response / grid.square()
 
 
 @dataclass(frozen=True)
@@ -154,15 +178,21 @@ class Passband:
         return torch.where(outside, torch.zeros_like(value), value)
 
     def to(self, device: torch.device | str) -> Passband:
-        """Return the canonical float64 passband on ``device``.
+        """Return the canonical passband on ``device``.
 
-        Passband samples remain float64 calibration metadata.  Evaluation casts
-        them to the query dtype, so moving a scene or observation never silently
-        lowers the precision of the stored response curve.
+        Passband samples remain float64 calibration metadata on devices that
+        support it. Evaluation casts them to the query dtype, so moving a scene
+        or observation never silently lowers the precision of the stored
+        response curve. A device without ``float64`` (MPS) holds the curve in
+        ``float32``, the same rule ``Passband`` applies to tensors created there.
         """
+        target = torch.device(device)
+        dtype = (
+            self.wavelength.dtype if target.type in _FLOAT64_DEVICES else torch.float32
+        )
         return Passband(
-            self.wavelength.to(device=device),
-            self.throughput.to(device=device),
+            self.wavelength.to(device=target, dtype=dtype),
+            self.throughput.to(device=target, dtype=dtype),
             name=self.name,
             wavelength_unit="angstrom",
         )
@@ -283,8 +313,9 @@ def _integrate_one_grid(
     *,
     output: PhotometryOutput,
     min_coverage: float,
+    weighting: Weighting = "photon",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, str]:
-    grid, response, coverage = _covered_grid(wave, passband)
+    grid, response, coverage = _covered_grid(wave, passband, weighting=weighting)
     values = torch.full(
         (batch.shape[0],), torch.nan, dtype=batch.dtype, device=batch.device
     )
@@ -292,17 +323,15 @@ def _integrate_one_grid(
     unit = _photometry_unit(output)
     if bool(torch.any(valid)):
         sampled_flux = _linear_interpolate(wave, batch, grid)
-        photon_weight = response * grid
-        numerator = torch.trapezoid(sampled_flux * photon_weight, grid, dim=-1)
+        lambda_weight, nu_weight = _band_weights(response, grid, weighting)
+        numerator = torch.trapezoid(sampled_flux * lambda_weight, grid, dim=-1)
         if output == "mean_f_lambda":
-            denominator = torch.trapezoid(photon_weight, grid)
+            denominator = torch.trapezoid(lambda_weight, grid)
             values = torch.where(valid, numerator / denominator, values)
         else:
             # Same quadrature as the numerator so a constant F_ν is recovered
             # after the spectrum samples are unioned into the passband grid.
-            denominator = _C_ANGSTROM_PER_SECOND * torch.trapezoid(
-                response / grid, grid
-            )
+            denominator = _C_ANGSTROM_PER_SECOND * torch.trapezoid(nu_weight, grid)
             values = torch.where(valid, numerator / denominator * 1.0e29, values)
             if output == "ab_mag":
                 values = torch.where(
@@ -319,8 +348,9 @@ def synthetic_photometry(
     output: PhotometryOutput = "mean_f_lambda",
     min_coverage: float = 0.99,
     mask: torch.Tensor | None = None,
+    weighting: Weighting = "photon",
 ) -> PhotometryResult:
-    """Integrate one spectrum or a batch through a photon-counting passband.
+    """Integrate one spectrum or a batch through a passband.
 
     ``wavelength`` may be 1D (shared grid) or match ``flux_lambda`` including a
     trailing spectral axis. ``flux_lambda`` is per Angstrom in arbitrary units
@@ -331,6 +361,12 @@ def synthetic_photometry(
     ``mask``, when given, is True for samples that exist. Masked wavelengths
     are dropped from the integral and do not count toward filter coverage.
 
+    ``weighting="photon"`` (default) is a photon-counting detector, mean
+    ``F_lambda = int F R lambda dlambda / int R lambda dlambda``;
+    ``"energy"`` is an energy-counting one (bolometers, some published
+    curves), ``int F R dlambda / int R dlambda``. Coverage is measured with the
+    same weight.
+
     Args:
         wavelength: Shared or per-spectrum wavelength samples.
         flux_lambda: Flux density per Angstrom on the trailing spectral axis.
@@ -338,6 +374,7 @@ def synthetic_photometry(
         output: Requested mean-flux, microjansky, or AB-magnitude representation.
         min_coverage: Minimum passband response fraction required for validity.
         mask: Optional valid-sample mask.
+        weighting: ``"photon"`` or ``"energy"`` counting response.
 
     Returns:
         Photometry values, unit, passband coverage, and validity mask.
@@ -353,6 +390,7 @@ def synthetic_photometry(
         raise ValueError("output must be 'mean_f_lambda', 'f_nu_microjy', or 'ab_mag'")
     if not 0.0 <= min_coverage <= 1.0:
         raise ValueError("min_coverage must be between zero and one")
+    _check_weighting(weighting)
     wave = torch.as_tensor(wavelength)
     flux = torch.as_tensor(flux_lambda, device=wave.device)
     dtype = _working_dtype(wave)
@@ -405,6 +443,7 @@ def synthetic_photometry(
             output=output,
             min_coverage=min_coverage,
             mask=None if mask_t is None else mask_t[0],
+            weighting=weighting,
         )
         cov_out = coverage.expand(result_shape)
         valid_out = valid.expand(result_shape)
@@ -429,6 +468,7 @@ def synthetic_photometry(
                 output=output,
                 min_coverage=min_coverage,
                 mask=keep,
+                weighting=weighting,
             )
             values[i] = row[0]
             covs[i] = cov
@@ -451,6 +491,7 @@ def synthetic_photometry_bands(
     output: PhotometryOutput = "mean_f_lambda",
     min_coverage: float = 0.99,
     mask: torch.Tensor | None = None,
+    weighting: Weighting = "photon",
 ) -> PhotometryResult:
     """Integrate through many passbands; values have a trailing band axis."""
     if not passbands:
@@ -469,6 +510,7 @@ def synthetic_photometry_bands(
             output=output,
             min_coverage=min_coverage,
             mask=mask,
+            weighting=weighting,
         )
         for band in passbands
     ]
@@ -503,6 +545,105 @@ def magnitude_to_flux(
     return zero * torch.pow(10.0, -0.4 * values)
 
 
+#: Packaged Vega spectrum: CALSPEC ``alpha_lyr_stis_012.fits`` (Bohlin, Hubeny
+#: & Rauch 2020, AJ 160, 21; STScI CALSPEC, public domain), WAVELENGTH (vacuum
+#: Angstrom, float64) and FLUX (erg s^-1 cm^-2 A^-1, float32) columns verbatim,
+#: 900 A to 300 um. Source file sha256
+#: 7201cd8566d53d384430c3d5fd2ae8d8122e9a7f765711748b49336f63237672.
+_VEGA_SPECTRUM_SOURCE = "CALSPEC alpha_lyr_stis_012"
+_VEGA_FILE = Path(__file__).parent / "_data" / "calspec_alpha_lyr_stis_012.npz"
+
+
+@lru_cache(maxsize=1)
+def _vega_arrays() -> tuple[np.ndarray, np.ndarray]:
+    with np.load(_VEGA_FILE, allow_pickle=False) as data:
+        wavelength = np.asarray(data["wavelength"], dtype=np.float64)
+        flux = np.asarray(data["flux"], dtype=np.float64)
+    wavelength.setflags(write=False)
+    flux.setflags(write=False)
+    return wavelength, flux
+
+
+def vega_spectrum(
+    device: torch.device | str | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The CALSPEC spectrum of Vega, packaged with torchsky.
+
+    ``alpha_lyr_stis_012`` (Bohlin, Hubeny & Rauch 2020): HST/STIS data from
+    1152 to 10200 A joined to a 9550 K model, normalised to
+    ``3.47e-9 erg s^-1 cm^-2 A^-1`` at 5556 A. Public-domain STScI data,
+    92 kB in the wheel.
+
+    Args:
+        device: Target device; float64 where the device supports it.
+
+    Returns:
+        Vacuum wavelength in Angstrom and ``F_lambda`` in cgs units.
+
+    Examples:
+        >>> from torchsky.spectrophotometry import vega_spectrum
+        >>> wave, flux = vega_spectrum()
+        >>> wave.shape == flux.shape, float(wave[0]) < 1000.0
+        (True, True)
+    """
+    wavelength, flux = _vega_arrays()
+    target = torch.device("cpu" if device is None else device)
+    dtype = (
+        torch.float64 if target.type in _FLOAT64_DEVICES else torch.get_default_dtype()
+    )
+    return (
+        torch.tensor(wavelength, dtype=dtype, device=target),
+        torch.tensor(flux, dtype=dtype, device=target),
+    )
+
+
+def vega_zero_point(
+    passband: Passband,
+    *,
+    output: Literal["mean_f_lambda", "f_nu_microjy"] = "mean_f_lambda",
+    weighting: Weighting = "photon",
+) -> torch.Tensor:
+    """Band-averaged flux of Vega, the zero point of a Vega magnitude system.
+
+    ``m_Vega = -2.5 log10(<F> / vega_zero_point(band))`` with ``<F>`` from
+    :func:`synthetic_photometry` in the same ``output`` and ``weighting``;
+    pass it to :func:`flux_to_magnitude`. Vega has magnitude zero in every
+    band by this definition (systems that assign Vega 0.03 mag add that
+    offset). Uses :func:`vega_spectrum`.
+
+    Args:
+        passband: Band to integrate through.
+        output: ``"mean_f_lambda"`` (cgs per Angstrom) or ``"f_nu_microjy"``.
+        weighting: ``"photon"`` or ``"energy"`` counting response.
+
+    Returns:
+        Scalar zero-point flux.
+
+    Raises:
+        ValueError: If the passband is not covered by the Vega spectrum.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.spectrophotometry import Passband, vega_zero_point
+        >>> band = Passband(torch.tensor([5546.0, 5556.0, 5566.0]), torch.tensor([0.0, 1.0, 0.0]))
+        >>> round(float(vega_zero_point(band)) * 1e9, 2)
+        3.47
+    """
+    if output not in ("mean_f_lambda", "f_nu_microjy"):
+        raise ValueError("output must be 'mean_f_lambda' or 'f_nu_microjy'")
+    wave, flux = vega_spectrum(device=passband.wavelength.device)
+    # The response is non-zero up to the samples bracketing its positive part.
+    positive = torch.nonzero(passband.throughput > 0).flatten()
+    last = passband.wavelength.numel() - 1
+    low = passband.wavelength[max(int(positive[0]) - 1, 0)]
+    high = passband.wavelength[min(int(positive[-1]) + 1, last)]
+    if bool(low < wave[0]) or bool(high > wave[-1]):
+        raise ValueError("passband extends beyond the Vega spectrum (900 A to 300 um)")
+    return synthetic_photometry(
+        wave, flux, passband, output=output, weighting=weighting, min_coverage=0.0
+    ).value
+
+
 def _boolean_run_slices(mask: torch.Tensor) -> list[tuple[int, int]]:
     """Inclusive-exclusive ``[start, stop)`` runs of True in a 1-D mask."""
     if mask.ndim != 1:
@@ -528,11 +669,17 @@ def _integrate_masked(
     output: PhotometryOutput,
     min_coverage: float,
     mask: torch.Tensor | None,
+    weighting: Weighting = "photon",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, str]:
     """Integrate, splitting at mask holes so invalid samples are not interpolated."""
     if mask is None or bool(mask.all()):
         return _integrate_one_grid(
-            wave, batch, passband, output=output, min_coverage=min_coverage
+            wave,
+            batch,
+            passband,
+            output=output,
+            min_coverage=min_coverage,
+            weighting=weighting,
         )
     unit = _photometry_unit(output)
     values = torch.full(
@@ -554,22 +701,20 @@ def _integrate_masked(
     den_lambda = zero.clone()
     den_nu = zero.clone()
     covered = zero.clone()
-    full_weight = _passband_weight(passband, wave)
+    full_weight = _passband_weight(passband, wave, weighting)
     for start, stop in runs:
         grid, response, piece_coverage = _covered_grid(
-            wave[start:stop], passband, full_weight
+            wave[start:stop], passband, full_weight, weighting=weighting
         )
         if grid.numel() < 2:
             continue
         sampled_flux = _linear_interpolate(wave[start:stop], batch[:, start:stop], grid)
-        photon_weight = response * grid
+        lambda_weight, nu_weight = _band_weights(response, grid, weighting)
         numerator = numerator + torch.trapezoid(
-            sampled_flux * photon_weight, grid, dim=-1
+            sampled_flux * lambda_weight, grid, dim=-1
         )
-        den_lambda = den_lambda + torch.trapezoid(photon_weight, grid)
-        den_nu = den_nu + _C_ANGSTROM_PER_SECOND * torch.trapezoid(
-            response / grid, grid
-        )
+        den_lambda = den_lambda + torch.trapezoid(lambda_weight, grid)
+        den_nu = den_nu + _C_ANGSTROM_PER_SECOND * torch.trapezoid(nu_weight, grid)
         covered = covered + piece_coverage * full_weight
     coverage = covered / full_weight
     valid = (coverage >= min_coverage) & (den_lambda > 0)
@@ -591,21 +736,29 @@ def _to_angstrom(wavelength: torch.Tensor) -> torch.Tensor:
     return wavelength
 
 
-def _passband_weight(passband: Passband, wave: torch.Tensor) -> torch.Tensor:
-    """Full :math:`\\int \\lambda R_\\lambda d\\lambda` reference weight."""
+def _passband_weight(
+    passband: Passband, wave: torch.Tensor, weighting: Weighting = "photon"
+) -> torch.Tensor:
+    """Full reference weight, ``int R lambda dlambda`` (photon) or ``int R dlambda``."""
     pb_wave = passband.wavelength.to(device=wave.device, dtype=wave.dtype)
     pb_response = passband.throughput.to(device=wave.device, dtype=wave.dtype)
-    return torch.trapezoid(pb_response * pb_wave, pb_wave)
+    return torch.trapezoid(_band_weights(pb_response, pb_wave, weighting)[0], pb_wave)
 
 
 def _covered_grid(
-    wave: torch.Tensor, passband: Passband, full_weight: torch.Tensor | None = None
+    wave: torch.Tensor,
+    passband: Passband,
+    full_weight: torch.Tensor | None = None,
+    *,
+    weighting: Weighting = "photon",
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Union grid of the spectrum and passband support with linear responses."""
     pb_wave = passband.wavelength.to(device=wave.device, dtype=wave.dtype)
     pb_response = passband.throughput.to(device=wave.device, dtype=wave.dtype)
     if full_weight is None:
-        full_weight = torch.trapezoid(pb_response * pb_wave, pb_wave)
+        full_weight = torch.trapezoid(
+            _band_weights(pb_response, pb_wave, weighting)[0], pb_wave
+        )
     left = torch.maximum(wave[0], pb_wave[0])
     right = torch.minimum(wave[-1], pb_wave[-1])
     if not bool(right > left):
@@ -622,7 +775,9 @@ def _covered_grid(
         torch.cat((left[None], pb_inside, spectrum_inside, right[None]))
     ).values
     response = _linear_interpolate(pb_wave, pb_response.unsqueeze(0), grid).squeeze(0)
-    coverage = torch.trapezoid(response * grid, grid) / full_weight
+    coverage = (
+        torch.trapezoid(_band_weights(response, grid, weighting)[0], grid) / full_weight
+    )
     return grid, response, coverage
 
 
@@ -655,10 +810,13 @@ __all__ = [
     "PhotometryOutput",
     "PhotometryResult",
     "WavelengthUnit",
+    "Weighting",
     "evaluate_throughput",
     "flux_to_magnitude",
     "magnitude_to_flux",
     "synthetic_photometry",
     "synthetic_photometry_bands",
     "throughput_from_mapping",
+    "vega_spectrum",
+    "vega_zero_point",
 ]

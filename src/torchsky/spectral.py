@@ -349,6 +349,75 @@ def _spectral_axis_length_from_header(
     raise ValueError(f"Missing NAXIS{fits_axis} for spectral axis reconstruction")
 
 
+_SPECTRAL_AXIS_KEYS = ("CTYPE", "CUNIT", "CRVAL", "CRPIX", "CDELT", "CNAME")
+_SPECTRAL_GLOBAL_KEYS = (
+    "RESTFRQ",
+    "RESTFREQ",
+    "RESTWAV",
+    "SPECSYS",
+    "SSYSOBS",
+    "SSYSSRC",
+    "VELOSYS",
+    "ZSOURCE",
+    "VELREF",
+)
+
+
+def _spectral_world_from_header(
+    header: Dict[str, Any], *, fits_axis: int, naxis: int, length: int
+) -> torch.Tensor:
+    """World values along one FITS spectral axis, evaluated by :class:`~torchsky.wcs.WCS`.
+
+    The axis is cut out as a one-dimensional WCS (its ``CDi_i`` or
+    ``PCi_i * CDELTi`` scale, ``PVi_m``/``PSi_m`` parameters and rest
+    frequency carried over), so the linear scale and the FITS Paper III
+    algorithm codes (``-LOG``, ``-F2W``, ``-V2W``, ``-GRI``, ...) follow the
+    WCS implementation exactly. A spectral axis coupled to other axes by
+    off-diagonal ``CD``/``PC`` terms has no single 1-D coordinate and is
+    refused, as is any algorithm code the WCS cannot evaluate.
+    """
+    upper = {str(key).upper(): value for key, value in header.items()}
+    i = fits_axis
+    for j in range(1, naxis + 1):
+        if j == i:
+            continue
+        for key in (f"CD{i}_{j}", f"CD{j}_{i}", f"PC{i}_{j}", f"PC{j}_{i}"):
+            value = upper.get(key)
+            if value is not None and float(value) != 0.0:
+                raise ValueError(
+                    f"spectral axis {i} is coupled to axis {j} by {key}={value}; "
+                    "it has no single 1-D coordinate"
+                )
+    sub: Dict[str, Any] = {"NAXIS": 1, "NAXIS1": int(length)}
+    for prefix in _SPECTRAL_AXIS_KEYS:
+        if f"{prefix}{i}" in upper:
+            sub[f"{prefix}1"] = upper[f"{prefix}{i}"]
+    if f"CD{i}_{i}" in upper:
+        sub["CD1_1"] = upper[f"CD{i}_{i}"]
+    elif f"PC{i}_{i}" in upper:
+        sub["PC1_1"] = upper[f"PC{i}_{i}"]
+    for key, value in upper.items():
+        for prefix in (f"PV{i}_", f"PS{i}_"):
+            if key.startswith(prefix) and key[len(prefix) :].isdigit():
+                sub[f"{prefix[:2]}1_{key[len(prefix) :]}"] = value
+    for key in _SPECTRAL_GLOBAL_KEYS:
+        if key in upper:
+            sub[key] = upper[key]
+    ctype = str(sub.get("CTYPE1", ""))
+    try:
+        world = WCS(sub).pixel_to_world(torch.arange(length, dtype=torch.float64))
+    except Exception as error:
+        raise ValueError(
+            f"cannot evaluate spectral axis CTYPE{i}={ctype!r}: {error}"
+        ) from error
+    values = torch.as_tensor(world, dtype=torch.float64).reshape(-1)
+    if values.numel() != length or not bool(torch.isfinite(values).all()):
+        raise ValueError(
+            f"spectral axis CTYPE{i}={ctype!r} has non-finite world coordinates"
+        )
+    return values
+
+
 def spectral_axis_from_header(
     header: Dict[str, Any],
     *,
@@ -381,10 +450,6 @@ def spectral_axis_from_header(
         fits_axis=spectral_fits_axis,
         data_shape=data_shape,
     )
-    crval = float(header.get(f"CRVAL{spectral_fits_axis}", 0.0))
-    cdelt = float(header.get(f"CDELT{spectral_fits_axis}", 1.0))
-    crpix = float(header.get(f"CRPIX{spectral_fits_axis}", 1.0))
-
     # Reconstruct coordinate values
     ctype = str(header.get(f"CTYPE{spectral_fits_axis}", ""))
     if ctype.upper().endswith("-TAB"):
@@ -402,17 +467,25 @@ def spectral_axis_from_header(
         header_upper = {str(k).upper(): v for k, v in header.items()}
         custom_key_prefix = spectral_type.upper()
         if f"{custom_key_prefix}0" in header_upper:
-            custom_vals = []
-            for i in range(axis_length):
-                k = f"{custom_key_prefix}{i}"
-                if k in header_upper:
-                    custom_vals.append(float(header_upper[k]))
-                else:
-                    custom_vals.append(crval + cdelt * (i - (crpix - 1.0)))
-            values = torch.tensor(custom_vals, dtype=torch.float64)
+            keys = [f"{custom_key_prefix}{i}" for i in range(axis_length)]
+            if all(key in header_upper for key in keys):
+                values = torch.tensor(
+                    [float(header_upper[key]) for key in keys], dtype=torch.float64
+                )
+            else:
+                values = _spectral_world_from_header(
+                    header,
+                    fits_axis=spectral_fits_axis,
+                    naxis=naxis,
+                    length=axis_length,
+                ).clone()
+                for i, key in enumerate(keys):
+                    if key in header_upper:
+                        values[i] = float(header_upper[key])
         else:
-            pixels = torch.arange(axis_length, dtype=torch.float64)
-            values = crval + cdelt * (pixels - (crpix - 1.0))
+            values = _spectral_world_from_header(
+                header, fits_axis=spectral_fits_axis, naxis=naxis, length=axis_length
+            )
 
     tensor_axis_index = naxis - spectral_fits_axis
     return (

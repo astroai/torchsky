@@ -4,5 +4,6 @@ pixel scale 1.009 x 1.007 arcsec, field 15.0 x 15.0 arcmin, rotation +0.065 deg
 footprint centre l, b = 206.97, -16.75 deg; exact polygon area 225 arcmin^2
 Horsehead at pixel (549.0, 445.8), Galactic l, b = 206.96, -16.78 deg
 MOC order 15: 674 cells, area 229 arcmin^2 (1.020 x polygon)
+MOC degraded to order 12: 104 cells, 1 boundary loop(s), area 258 arcmin^2
 rotated TAN grid (1219, 1219), CAR grid (895, 893); original -> CAR -> original residual rms = 0.015 of the image std
 mean surface brightness: original 9831.5, CAR 9832.0 (ratio 1.0001)

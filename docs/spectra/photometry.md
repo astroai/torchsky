@@ -162,10 +162,13 @@ torch.testing.assert_close(mags.value[1] - mags.value[0], torch.full((2,), 2.5, 
 
 ### Photon or Energy Weighting
 
-Bolometers and some published curves give the response per unit *energy*,
-\(R_E\). The module's integral is photon-weighted; to get the energy-weighted
-mean \(\int F R_E\,\mathrm d\lambda / \int R_E\,\mathrm d\lambda\), pass
-\(R_E/\lambda\) as the throughput.
+CCDs count photons, so the default is photon weighting. Bolometers and some
+published curves give the response per unit *energy*, \(R_E\); pass
+`weighting="energy"` for the mean \(\int F_\lambda R_E\,\mathrm d\lambda /
+\int R_E\,\mathrm d\lambda\), and \(\langle F_\nu\rangle = \int F_\lambda R_E\,
+\mathrm d\lambda / (c \int R_E \lambda^{-2}\,\mathrm d\lambda)\) (Bessell & Murphy
+2012). Coverage uses the same weight. A constant \(F_\nu\) has the same AB
+magnitude in both modes.
 
 <!-- docs: run -->
 ```python
@@ -176,28 +179,53 @@ from torchsky.spectrophotometry import Passband, synthetic_photometry
 wave = torch.linspace(4000.0, 6000.0, 201, dtype=torch.float64)
 response_energy = torch.exp(-0.5 * ((wave - 5000.0) / 300.0) ** 2)
 flux = (wave / 5000.0) ** -2.0
+band = Passband(wave, response_energy)
 
-energy_mean = synthetic_photometry(wave, flux, Passband(wave, response_energy / wave)).value
+energy_mean = synthetic_photometry(wave, flux, band, weighting="energy").value
 expected = torch.trapezoid(flux * response_energy, wave) / torch.trapezoid(response_energy, wave)
 torch.testing.assert_close(energy_mean, expected)
+photon_mean = synthetic_photometry(wave, flux, band).value
+assert photon_mean < energy_mean                  # photon weighting favours the red side
 ```
 
 ### Vega Magnitudes
 
-Only the AB zero point is built in. For a Vega system, integrate a Vega
-spectrum (for example CALSPEC `alpha_lyr_stis`) through the same band and use
-its mean flux as the zero point with
-[`flux_to_magnitude`](../reference/spectrophotometry.md#torchsky.spectrophotometry.flux_to_magnitude):
+[`vega_zero_point`](../reference/spectrophotometry.md#torchsky.spectrophotometry.vega_zero_point)
+integrates Vega through a band, with the same `output` and `weighting` as
+`synthetic_photometry`; pass it to
+[`flux_to_magnitude`](../reference/spectrophotometry.md#torchsky.spectrophotometry.flux_to_magnitude).
+Vega is the STScI CALSPEC spectrum `alpha_lyr_stis_012` (Bohlin, Hubeny &
+Rauch 2020: HST/STIS from 1152 to 10200 Å joined to a model, 900 Å to
+300 µm, vacuum wavelengths), public-domain data shipped with torchsky (92 kB)
+and returned by
+[`vega_spectrum`](../reference/spectrophotometry.md#torchsky.spectrophotometry.vega_spectrum).
+It matches `synphot` given the same spectrum to \(2\times10^{-6}\).
 
+<!-- docs: run -->
 ```python
-# fragment: vega_wave, vega_flux from a CALSPEC Vega spectrum; wave, flux, band as above
-from torchsky.spectrophotometry import flux_to_magnitude, synthetic_photometry
+import torch
 
-vega_zero = synthetic_photometry(vega_wave, vega_flux, band).value
-m_vega = flux_to_magnitude(synthetic_photometry(wave, flux, band).value, zero_point=vega_zero)
+from torchsky.spectrophotometry import (Passband, flux_to_magnitude, synthetic_photometry,
+                                        vega_spectrum, vega_zero_point)
+
+band = Passband(torch.tensor([4800.0, 5500.0, 6200.0], dtype=torch.float64),
+                torch.tensor([0.0, 1.0, 0.0], dtype=torch.float64))
+zero = vega_zero_point(band)                     # erg/s/cm2/A
+assert 3.4e-9 < float(zero) < 3.8e-9
+
+wave = torch.linspace(4500.0, 6500.0, 401, dtype=torch.float64)
+f_nu = 3631e-23 * 10 ** (-0.4 * 10.0)            # an AB = 10 source
+ab_source = f_nu * 2.99792458e18 / wave**2
+m_vega = flux_to_magnitude(synthetic_photometry(wave, ab_source, band).value, zero_point=zero)
+assert abs(float(m_vega) - 9.995) < 1e-3          # Vega is AB = 0.005 in this band
+
+vega_wave, vega_flux = vega_spectrum()
+assert abs(float(flux_to_magnitude(synthetic_photometry(vega_wave, vega_flux, band).value, zero))) < 1e-12
 ```
 
-`flux_to_magnitude` returns `NaN`, not `-inf`, for non-positive fluxes.
+Some systems assign Vega a small non-zero magnitude (for example 0.03 in V);
+add that offset yourself. `flux_to_magnitude` returns `NaN`, not `-inf`, for
+non-positive fluxes.
 
 ### Gaps and Coverage
 

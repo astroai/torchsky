@@ -16,6 +16,7 @@ version = 1
 "torchsky.field.SpectralCapacityProfile" = "Observation-derived spectral-capacity regime."
 "torchsky.spectrophotometry.PhotometryOutput" = "Output representation for synthetic photometry."
 "torchsky.spectrophotometry.WavelengthUnit" = "Wavelength unit accepted by spectrophotometry functions."
+"torchsky.spectrophotometry.Weighting" = "Photon- or energy-counting detector response for synthetic photometry."
 "torchsky.wcs.TabularBoundsMode" = "Out-of-bounds behavior for tabular WCS interpolation."
 
 [group_titles]
@@ -183,6 +184,14 @@ name = "torchsky.map.operators.pixel_calibration"
 slug = "map-operators-pixel-calibration"
 tier = "experimental"
 related = ["models/likelihoods.md"]
+
+[[module]]
+name = "torchsky.map.operators.noise"
+slug = "map-operators-noise"
+tier = "experimental"
+related = ["models/likelihoods.md"]
+members = ["gaussian_nll", "poisson_gaussian_nll"]
+intro = "Per-pixel detector likelihoods: the normalized Gaussian negative log-likelihood, and the Poisson-Gaussian mixture for a few electrons per pixel read out with Gaussian noise. Both are also importable from `torchsky.map.operators`."
 
 [[namespace]]
 name = "torchsky.map.field.gaussian"

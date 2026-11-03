@@ -227,15 +227,18 @@ class _SetupTensorsMixin:
             if "PV1_2" in pj:
                 theta0_cel = float(pj["PV1_2"])
             self._fiducial_override = phi0_cel != 0.0 or theta0_cel != cel_theta0
+        # Under TPV the longitude-axis PV1_m are distortion coefficients, not
+        # Paper II (phi_0, theta_0, LONPOLE, LATPOLE); DECam writes PV1_3 = 0.
+        pv_poles = not (self._is_tpv or self._proj_code == "TPV")
         if "LONPOLE" in self.wcs_params:
             lonpole = float(self.wcs_params["LONPOLE"])
-        elif "PV1_3" in pj:
+        elif pv_poles and "PV1_3" in pj:
             lonpole = float(pj["PV1_3"])
         else:
             lonpole = _celprm.default_lonpole(self.delta0, theta0_cel, phi0_cel)
         if "LATPOLE" in self.wcs_params:
             latpole = float(self.wcs_params["LATPOLE"])
-        elif "PV1_4" in pj:
+        elif pv_poles and "PV1_4" in pj:
             latpole = float(pj["PV1_4"])
         else:
             latpole = 90.0

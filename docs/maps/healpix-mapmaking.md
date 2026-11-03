@@ -22,35 +22,59 @@ is simpler.
 flowchart LR
     O["exposure<br/>data, WCS, weight"] --> M["MOC of the<br/>footprint at Nside"]
     M --> P["HEALPix cells<br/>inside the footprint"]
-    P -->|"cell centre → sky →<br/>exposure pixel"| S["interpolate data<br/>and weight (kernel)"]
+    P -->|"cells finer than<br/>kernel support"| S["interpolate data and<br/>weight at cell centre"]
+    P -->|"coarser cells"| I["integrate pixels over<br/>their overlap with each cell"]
     S --> A["accumulate Σ w·d, Σ w<br/>dense or sparse"]
+    I --> A
     A --> R["HealpixResult<br/>data, weight, overlap_count,<br/>coverage MOC"]
 ```
 
-For each exposure, torchsky lists the HEALPix cells inside its footprint,
-maps each cell centre into the exposure's pixel coordinates, interpolates data
-and weight there with the chosen kernel, and accumulates. The map value of cell
-\(p\) is the weighted mean over exposures \(k\),
+Values are surface brightness. Each exposure enters in one of two regimes,
+chosen from the cell size \(L\) (`nside2resol`) and the exposure's pixel size
+\(p\) (the square root of the solid angle of its central pixel).
+
+**Centre sampling**, when \(L \le s\,p\) with \(s\) the kernel support (1 pixel
+for `nearest`, 2 `bilinear`, 4 `bicubic` and `lanczos2`, 6 `lanczos3`, 8
+`lanczos4`). torchsky lists the HEALPix cells inside the footprint, maps each
+cell centre into the exposure's pixel coordinates, and interpolates data and
+weight there with the kernel:
 
 \[
 M_p = \frac{\sum_k w_k(\mathbf x_{kp})\, d_k(\mathbf x_{kp})}{\sum_k w_k(\mathbf x_{kp})},
 \]
 
 with \(\mathbf x_{kp}\) the position of the centre of cell \(p\) in exposure \(k\).
+
+**Overlap integration**, when \(L > s\,p\) (centre samples would leave image
+pixels unused) or when the footprint contains no cell centre. Each image pixel
+\(i\) is shared among the cells it overlaps, as drizzle does at `pixfrac = 1`:
+
+\[
+M_p = \frac{\sum_k \sum_i A_{ip}\, w_{ki}\, d_{ki}}{\sum_k \sum_i A_{ip}\, w_{ki}},
+\qquad W_p = \sum_k \sum_i A_{ip}\, w_{ki},
+\]
+
+with \(A_{ip}\) the area of pixel \(i\) inside cell \(p\) in units of the cell
+area. A cell only partly covered by an exposure gets that exposure's mean over
+the covered part, weighted by the covered fraction; a fully covered cell gets
+weight \(w\), as in centre sampling. The overlap is computed exactly in
+HEALPix's equal-area lattice coordinates, where every cell is a unit square:
+each pixel is the quadrilateral of its projected corners, clipped against the
+cells and the equatorial or polar zone it falls in. The kernel is not used.
+
 Cells are processed in chunks, so memory is the map plus one chunk. Optional
 `sky=` and `outliers=` configurations work as in [coadds](coadds.md).
 
-**Assumptions.** Each cell is sampled at its centre, so the map resolution
-should match or exceed the image resolution (see *Choose Nside* below). The map
-is in ICRS: exposures with Galactic, ecliptic, FK4, or FK5 WCS are converted.
+**Assumptions.** The map is in ICRS: exposures with Galactic, ecliptic, FK4, or FK5 WCS are converted.
 An FK5 (J2000) header gets the roughly 20 mas FK5 to ICRS frame bias and emits
 `CelestialFrameBiasWarning`, as in the image-plane path; set `RADESYS = 'ICRS'`
-if the astrometry was solved against Gaia. An exposure whose footprint overlaps
-cells but contains none of their centres (cells larger than the image) raises
-`ValueError`; use a higher `nside`. **Validation.** HEALPix indexing matches healpy exactly
-([parity](../performance/parity.md)), and the
+if the astrometry was solved against Gaia. **Validation.** HEALPix indexing
+matches healpy exactly ([parity](../performance/parity.md)), and the
 [multiband example](../published-examples/coadd_to_healpix.py) checks the map
-against an analytic sky at every cell centre.
+against an analytic sky at every cell centre. The package tests check the
+overlap weights against an independent 24 × 24 sub-pixel integration to
+\(2\times10^{-3}\) of a cell, and the total covered area to \(10^{-5}\),
+including cells that straddle the polar zones, the 0° meridian, and a pole.
 
 ## Four MegaPipe Cutouts on HEALPix
 
@@ -132,12 +156,11 @@ consumer expects NESTED. Kernels are `nearest`, `bilinear`, `bicubic`, and
 ### Choose Nside
 
 The cell size is about \(58.6°/N_{\rm side}\)
-([`nside2resol`](../reference/sphere.md#torchsky.sphere.nside2resol)). Because
-cells are sampled at their centres, pick \(N_{\rm side}\) so that cells are no
-larger than about twice the image pixels; coarser cells skip image pixels
-instead of averaging them. For a coarse map from fine images, build it at the
-fine resolution and average down with `SparseHealpixMap.ud_grade(nside_out,
-reduction="mean")`.
+([`nside2resol`](../reference/sphere.md#torchsky.sphere.nside2resol)). Cells
+up to the kernel support (two pixels for `bilinear`) are centre-sampled and
+keep the interpolation quality of the kernel. Coarser cells, down to cells
+larger than the whole image, are overlap-integrated: each cell is the mean of
+the pixels inside it, so a coarse map can be built directly from fine images.
 
 ### Make one map per band
 
@@ -199,8 +222,10 @@ not computed.
   Pass the ordering along with the map; most bugs show as a scrambled sky.
 - **Frame.** The map is ICRS. To compare with a Galactic HEALPix product, rotate
   one of them; see [SHT](../sphere/sht.md) for harmonic-space rotation.
-- **Undersampling.** Cells much larger than image pixels sample rather than
-  average the image; see *Choose Nside*.
+- **Edge cells.** With overlap integration, a cell at the edge of an exposure
+  carries a weight equal to the covered fraction; its value is the mean of the
+  covered part only. Check `weight` before treating such a cell as a full-cell
+  average.
 - **Zero means empty.** Uncovered cells have `weight == 0` and value 0; use the
   weight or the coverage MOC, not the value, to find them.
 

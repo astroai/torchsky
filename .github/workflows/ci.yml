@@ -196,7 +196,7 @@ jobs:
           tests: tests/test_map_healpix_coadd_bridge_smoke.py tests/test_map_healpix_native_tan.py tests/test_map_radio_fixture.py tests/test_map_radio_smoke.py tests/test_map_spectral_affine.py tests/test_map_spectral_nonuniform.py tests/test_map_spectral_nufft.py tests/test_map_sphere_sh_map_smoke.py
           pytest_args: ''
         - shard: products-geometry
-          tests: tests/test_map_adaptive_reprojection.py tests/test_map_clean_api.py tests/test_map_cube_spectral_axis.py tests/test_map_dq_parity.py tests/test_map_geometry_scalability.py tests/test_map_healpix_coadd.py tests/test_map_ifu_cube.py tests/test_map_ifu_variance.py tests/test_map_plan.py
+          tests: tests/test_map_adaptive_reprojection.py tests/test_map_clean_api.py tests/test_map_cube_spectral_axis.py tests/test_map_dq_parity.py tests/test_map_geometry_scalability.py tests/test_map_healpix_coadd.py tests/test_map_healpix_overlap.py tests/test_map_ifu_cube.py tests/test_map_ifu_variance.py tests/test_map_plan.py
           pytest_args: ''
         - shard: operators-extra
           tests: tests/test_map_operator_chunking.py tests/test_map_operator_coverage.py tests/test_map_operator_foundations.py tests/test_map_operator_noise.py

@@ -4,7 +4,7 @@
 
 **Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
 
-Milky Way dust laws (CCM89 / O'Donnell94) on torch tensors.
+Milky Way and starburst dust laws on torch tensors.
 
 **Guides:** [extinction](../spectra/extinction.md), [spectral-axes](../spectra/spectral-axes.md)
 
@@ -26,8 +26,11 @@ namespace `torchsky.extinction` unless the group text says otherwise.
         - calzetti_k_ebv
         - ccm89
         - ccm89_ab
+        - f19_a_lambda
         - f99_a_lambda
         - fitzpatrick99
+        - g23_a_lambda
+        - gcc09_a_lambda
         - k_lambda
         - odonnell94
         - odonnell94_ab
@@ -44,7 +47,7 @@ namespace `torchsky.extinction` unless the group text says otherwise.
 **`ExtinctionLaw`**
 
 ```python
-typing.Literal['ccm89', 'odonnell94', 'odonnell', 'f99', 'fitzpatrick99', 'calzetti']
+typing.Literal['ccm89', 'odonnell94', 'odonnell', 'f99', 'fitzpatrick99', 'calzetti', 'g23', 'f19', 'gcc09']
 ```
 
 <a id="torchsky.extinction.WavelengthUnit"></a>

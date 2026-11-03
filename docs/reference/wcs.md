@@ -14,6 +14,17 @@ This reference is generated from the package source. Names are grouped by
 the module that defines them; import every name from the public
 namespace `torchsky.wcs` unless the group text says otherwise.
 
+## Header parse
+
+::: torchsky.wcs
+    options:
+      members:
+        - WCSHeaderWarning
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Alignment
 
 ::: torchsky.wcs

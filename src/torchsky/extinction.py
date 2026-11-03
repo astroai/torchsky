@@ -1,4 +1,4 @@
-"""Milky Way dust laws (CCM89 / O'Donnell94) on torch tensors.
+"""Milky Way and starburst dust laws on torch tensors.
 
 Wavelengths are Angstrom-native internally. Pass ``wavelength_unit='nm'`` at
 the boundary. ``A(λ)`` is in magnitudes; transmission is ``10**(-0.4 A)``.
@@ -7,6 +7,12 @@ The infrared power law is extrapolated below the CCM89 ``x=0.3`` cutoff so
 broadband work stays defined into the far-IR. Optical and UV pieces follow
 Cardelli, Clayton & Mathis (1989); ``odonnell94`` replaces the optical
 polynomials only.
+
+``g23`` (Gordon et al. 2023), ``f19`` (Fitzpatrick et al. 2019), and
+``gcc09`` (Gordon, Cartledge & Clayton 2009) use the published coefficients as
+implemented in ``dust_extinction`` (K. Gordon, BSD 3-Clause), and fail closed
+outside their calibrated wavelength and ``R_V`` ranges instead of
+extrapolating.
 """
 
 from __future__ import annotations
@@ -25,6 +31,9 @@ ExtinctionLaw = Literal[
     "f99",
     "fitzpatrick99",
     "calzetti",
+    "g23",
+    "f19",
+    "gcc09",
 ]
 
 # Fitzpatrick (1999) FM90 UV + optical/IR spline, matching kbarbary/extinction
@@ -149,6 +158,12 @@ def _normalize_law(law: str) -> str:
         return "f99"
     if name in {"calzetti", "calzetti00"}:
         return "calzetti"
+    if name in {"g23", "gordon23"}:
+        return "g23"
+    if name in {"f19", "fitzpatrick19"}:
+        return "f19"
+    if name in {"gcc09", "gordon09"}:
+        return "gcc09"
     raise ValueError(f"Unknown extinction law: {law!r}")
 
 
@@ -259,6 +274,524 @@ def f99_a_lambda(wave_angstrom: Tensor, a_v: Tensor, r_v: Tensor) -> Tensor:
     return out.reshape(x_b.shape)
 
 
+def _check_range(
+    x: Tensor,
+    r_v: Tensor,
+    x_range: tuple[float, float],
+    rv_range: tuple[float, float],
+    law: str,
+) -> None:
+    """Fail closed outside a law's calibrated domain (no extrapolation)."""
+    if x.numel() and bool(((x < x_range[0]) | (x > x_range[1])).any()):
+        raise ValueError(
+            f"{law} is defined for {1e4 / x_range[1]:.0f}-{1e4 / x_range[0]:.0f} Angstrom"
+        )
+    if r_v.numel() and bool(((r_v < rv_range[0]) | (r_v > rv_range[1])).any()):
+        raise ValueError(f"{law} is defined for {rv_range[0]} <= R_V <= {rv_range[1]}")
+
+
+def _smoothstep(value: Tensor, low: float, high: float) -> Tensor:
+    """First-order smoothstep ``3s^2 - 2s^3`` on ``[low, high]``."""
+    s = ((value - low) / (high - low)).clamp(0.0, 1.0)
+    return s * s * (3.0 - 2.0 * s)
+
+
+def _drude(x: Tensor, amplitude: float, center: float, fwhm: float) -> Tensor:
+    ratio = fwhm / center
+    return amplitude * ratio**2 / ((x / center - center / x) ** 2 + ratio**2)
+
+
+def _modified_drude(
+    wave_um: Tensor, amplitude: float, center: float, fwhm: float, asym: float
+) -> Tensor:
+    gamma = 2.0 * fwhm / (1.0 + torch.exp(asym * (wave_um - center)))
+    return (
+        amplitude
+        * (gamma / center) ** 2
+        / ((wave_um / center - center / wave_um) ** 2 + (gamma / center) ** 2)
+    )
+
+
+def _fm90(
+    x: Tensor, c1: float, c2: float, c3: float, c4: float, x0: float, gamma: float
+) -> Tensor:
+    x2 = x * x
+    value = c1 + c2 * x + c3 * x2 / ((x2 - x0 * x0) ** 2 + x2 * gamma * gamma)
+    y = x - 5.9
+    return value + torch.where(
+        x >= 5.9, c4 * (0.5392 * y * y + 0.05644 * y**3), torch.zeros_like(x)
+    )
+
+
+# Gordon et al. (2023, ApJ 950, 86), Table 3, as in dust_extinction.G23.
+_G23_IR_A = (0.38526, 1.68467, 0.78791, 4.30578, 4.78338)
+_G23_IR_SIL = ((0.06652, 9.8434, 2.21205, -0.24703), (0.0267, 19.58294, 17.0, -0.27))
+_G23_OPT_A = (-0.35848, 0.7122, 0.08746, -0.05403, 0.00674)
+_G23_OPT_B = (0.12354, -2.68335, 2.01901, -0.39299, 0.03355)
+_G23_ISS = ((2.288, 0.243), (2.054, 0.179), (1.587, 0.243))
+_G23_ISS_A = (0.03893, 0.02965, 0.01747)
+_G23_ISS_B = (0.18453, 0.19728, 0.1713)
+_G23_UV_A = (0.81297, 0.2775, 1.06295, 0.11303, 4.60, 0.99)
+_G23_UV_B = (-2.97868, 1.89808, 3.10334, 0.65484, 4.60, 0.99)
+#: Divides the curve to put the F19 ground-based photometry on the HST/STIS
+#: scale (Gordon et al. 2023, sec. 5; dust_extinction ``renorm=True``).
+_G23_NORM = 0.9854
+
+
+def _g23_ir_a(x: Tensor) -> Tensor:
+    scale, alpha1, alpha2, swave, swidth = _G23_IR_A
+    wave = 1.0 / x
+    first = scale * wave ** (-alpha1)
+    second = scale * swave ** (alpha2 - alpha1) * wave ** (-alpha2)
+    weight = _smoothstep(wave, swave - 0.5 * swidth, swave + 0.5 * swidth)
+    value = first * (1.0 - weight) + second * weight
+    for amplitude, center, fwhm, asym in _G23_IR_SIL:
+        value = value + _modified_drude(wave, amplitude, center, fwhm, asym)
+    return value
+
+
+def _g23_opt(x: Tensor, poly: tuple[float, ...], iss: tuple[float, ...]) -> Tensor:
+    value = torch.zeros_like(x)
+    for power, coefficient in enumerate(poly):
+        value = value + coefficient * x**power
+    for amplitude, (center, fwhm) in zip(iss, _G23_ISS, strict=True):
+        value = value + _drude(x, amplitude, center, fwhm)
+    return value
+
+
+def _g23_ab(x_um_inv: Tensor) -> tuple[Tensor, Tensor]:
+    """G23 ``a(x), b(x)`` with ``A(x)/A(V) = [a + b (1/R_V - 1/3.1)] / 0.9854``.
+
+    Gordon, Clayton, Decleir & Fitzpatrick (2023, ApJ 950, 86): IR broken
+    power law with silicate features, optical polynomial with three
+    intermediate-scale features, and FM90 ultraviolet, joined by smoothstep
+    weights over 0.9-1.1 um and 0.30-0.33 um.
+    """
+    x = torch.as_tensor(x_um_inv)
+    wave = 1.0 / x
+    a_ir = _g23_ir_a(x)
+    b_ir = -1.01251 * x**1.06099
+    a_opt = _g23_opt(x, _G23_OPT_A, _G23_ISS_A)
+    b_opt = _g23_opt(x, _G23_OPT_B, _G23_ISS_B)
+    a_uv = _fm90(x, *_G23_UV_A)
+    b_uv = _fm90(x, *_G23_UV_B)
+    w_ir = _smoothstep(wave, 0.9, 1.1)
+    w_opt = _smoothstep(wave, 0.3, 0.33)
+    optir = (x >= 1.0 / 1.1) & (x <= 1.0 / 0.9)
+    uvopt = (x >= 1.0 / 0.33) & (x <= 1.0 / 0.3)
+    a = torch.where(x < 1.0, a_ir, torch.where(x < 1.0 / 0.3, a_opt, a_uv))
+    b = torch.where(x < 1.0, b_ir, torch.where(x < 1.0 / 0.3, b_opt, b_uv))
+    a = torch.where(optir, (1.0 - w_ir) * a_opt + w_ir * a_ir, a)
+    b = torch.where(optir, (1.0 - w_ir) * b_opt + w_ir * b_ir, b)
+    a = torch.where(uvopt, (1.0 - w_opt) * a_uv + w_opt * a_opt, a)
+    b = torch.where(uvopt, (1.0 - w_opt) * b_uv + w_opt * b_opt, b)
+    return a, b
+
+
+def g23_a_lambda(wave_angstrom: Tensor, a_v: Tensor, r_v: Tensor) -> Tensor:
+    """Gordon et al. (2023) ``A(λ)``; 912 Å to 32 μm, ``2.3 <= R_V <= 5.6``."""
+    x = 10000.0 / wave_angstrom
+    _check_range(x, torch.as_tensor(r_v), (1.0 / 32.0, 1.0 / 0.0912), (2.3, 5.6), "g23")
+    a, b = _g23_ab(x)
+    return (a + b * (1.0 / r_v - 1.0 / 3.1)) / _G23_NORM * a_v
+
+
+def gcc09_a_lambda(wave_angstrom: Tensor, a_v: Tensor, r_v: Tensor) -> Tensor:
+    """Gordon, Cartledge & Clayton (2009, with 2014 erratum) ultraviolet ``A(λ)``.
+
+    Defined only for 909-3030 Å (``3.3 <= x <= 11``) and ``2 <= R_V <= 6``;
+    the law was not derived for the optical or infrared.
+    """
+    x = 10000.0 / wave_angstrom
+    _check_range(x, torch.as_tensor(r_v), (3.3, 11.0), (2.0, 6.0), "gcc09")
+    a = 1.894 - 0.373 * x - 0.0101 / ((x - 4.57) ** 2 + 0.0384)
+    b = -3.490 + 2.057 * x + 0.706 / ((x - 4.59) ** 2 + 0.169)
+    y = x - 5.9
+    far = x >= 5.9
+    a = a + torch.where(far, -0.110 * y * y - 0.0100 * y**3, torch.zeros_like(x))
+    b = b + torch.where(far, 0.531 * y * y + 0.0544 * y**3, torch.zeros_like(x))
+    return (a + b / r_v) * a_v
+
+
+# Fitzpatrick et al. (2019, ApJ 886, 108), Table 3: x [1/um], k(λ-55) at
+# R(55) = 3.02, and its R(55) derivative; as distributed with dust_extinction.
+_F19_X = (
+    0.000,
+    0.455,
+    0.606,
+    0.800,
+    1.000,
+    1.100,
+    1.200,
+    1.250,
+    1.300,
+    1.350,
+    1.400,
+    1.450,
+    1.500,
+    1.550,
+    1.600,
+    1.650,
+    1.700,
+    1.750,
+    1.800,
+    1.818,
+    1.850,
+    1.900,
+    1.950,
+    2.000,
+    2.050,
+    2.100,
+    2.150,
+    2.200,
+    2.250,
+    2.273,
+    2.300,
+    2.350,
+    2.400,
+    2.450,
+    2.500,
+    2.550,
+    2.600,
+    2.650,
+    2.700,
+    2.750,
+    2.800,
+    2.850,
+    2.900,
+    2.950,
+    3.000,
+    3.100,
+    3.200,
+    3.300,
+    3.400,
+    3.500,
+    3.600,
+    3.700,
+    3.800,
+    3.900,
+    4.000,
+    4.100,
+    4.200,
+    4.300,
+    4.400,
+    4.500,
+    4.600,
+    4.700,
+    4.800,
+    4.900,
+    5.000,
+    5.100,
+    5.200,
+    5.300,
+    5.400,
+    5.500,
+    5.600,
+    5.700,
+    5.800,
+    5.900,
+    6.000,
+    6.100,
+    6.200,
+    6.300,
+    6.400,
+    6.500,
+    6.600,
+    6.700,
+    6.800,
+    6.900,
+    7.000,
+    7.100,
+    7.200,
+    7.300,
+    7.400,
+    7.500,
+    7.600,
+    7.700,
+    7.800,
+    7.900,
+    8.000,
+    8.100,
+    8.200,
+    8.300,
+    8.400,
+    8.500,
+    8.600,
+    8.700,
+)
+_F19_K302 = (
+    -3.020,
+    -2.747,
+    -2.528,
+    -2.222,
+    -1.757,
+    -1.567,
+    -1.300,
+    -1.216,
+    -1.070,
+    -0.973,
+    -0.868,
+    -0.750,
+    -0.629,
+    -0.509,
+    -0.407,
+    -0.320,
+    -0.221,
+    -0.133,
+    -0.048,
+    0.000,
+    0.071,
+    0.188,
+    0.319,
+    0.438,
+    0.575,
+    0.665,
+    0.744,
+    0.838,
+    0.951,
+    1.000,
+    1.044,
+    1.113,
+    1.181,
+    1.269,
+    1.346,
+    1.405,
+    1.476,
+    1.558,
+    1.632,
+    1.723,
+    1.791,
+    1.869,
+    1.948,
+    2.009,
+    2.090,
+    2.253,
+    2.408,
+    2.565,
+    2.746,
+    2.933,
+    3.124,
+    3.328,
+    3.550,
+    3.815,
+    4.139,
+    4.534,
+    5.012,
+    5.560,
+    6.118,
+    6.565,
+    6.767,
+    6.681,
+    6.394,
+    6.038,
+    5.704,
+    5.432,
+    5.226,
+    5.078,
+    4.978,
+    4.913,
+    4.877,
+    4.862,
+    4.864,
+    4.879,
+    4.904,
+    4.938,
+    4.982,
+    5.038,
+    5.105,
+    5.181,
+    5.266,
+    5.359,
+    5.460,
+    5.569,
+    5.684,
+    5.805,
+    5.933,
+    6.067,
+    6.207,
+    6.352,
+    6.502,
+    6.657,
+    6.817,
+    6.981,
+    7.150,
+    7.323,
+    7.500,
+    7.681,
+    7.866,
+    8.054,
+    8.246,
+    8.441,
+)
+_F19_DELTAK = (
+    -1.000,
+    -0.842,
+    -0.728,
+    -0.531,
+    -0.360,
+    -0.284,
+    -0.223,
+    -0.198,
+    -0.173,
+    -0.150,
+    -0.130,
+    -0.110,
+    -0.096,
+    -0.081,
+    -0.063,
+    -0.048,
+    -0.032,
+    -0.017,
+    -0.005,
+    0.000,
+    0.007,
+    0.013,
+    0.012,
+    0.010,
+    0.004,
+    0.003,
+    0.000,
+    0.002,
+    0.001,
+    0.000,
+    -0.000,
+    0.001,
+    0.001,
+    -0.002,
+    0.000,
+    -0.002,
+    -0.002,
+    -0.006,
+    -0.009,
+    -0.011,
+    -0.017,
+    -0.025,
+    -0.029,
+    -0.037,
+    -0.043,
+    -0.064,
+    -0.092,
+    -0.122,
+    -0.161,
+    -0.201,
+    -0.249,
+    -0.303,
+    -0.366,
+    -0.437,
+    -0.517,
+    -0.603,
+    -0.692,
+    -0.774,
+    -0.843,
+    -0.888,
+    -0.908,
+    -0.903,
+    -0.880,
+    -0.849,
+    -0.816,
+    -0.785,
+    -0.760,
+    -0.741,
+    -0.729,
+    -0.722,
+    -0.722,
+    -0.726,
+    -0.734,
+    -0.745,
+    -0.760,
+    -0.778,
+    -0.798,
+    -0.820,
+    -0.845,
+    -0.870,
+    -0.898,
+    -0.926,
+    -0.956,
+    -0.988,
+    -1.020,
+    -1.053,
+    -1.087,
+    -1.122,
+    -1.158,
+    -1.195,
+    -1.232,
+    -1.270,
+    -1.309,
+    -1.349,
+    -1.389,
+    -1.429,
+    -1.471,
+    -1.513,
+    -1.555,
+    -1.598,
+    -1.641,
+    -1.685,
+)
+
+
+@lru_cache(maxsize=1)
+def _f19_spline_second_derivatives() -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Not-a-knot cubic spline second derivatives of both F19 columns.
+
+    ``scipy.interpolate.splrep(x, y, s=0)`` (used by ``dust_extinction``) is
+    this interpolant. The spline is linear in the tabulated values, so the
+    ``R(55)``-dependent curve is the same combination of the two splines.
+    """
+    import numpy as np
+
+    x = np.asarray(_F19_X, dtype=np.float64)
+    h = np.diff(x)
+    n = x.size
+    matrix = np.zeros((n, n))
+    matrix[0, 0], matrix[0, 1], matrix[0, 2] = h[1], -(h[0] + h[1]), h[0]
+    matrix[-1, -3], matrix[-1, -2], matrix[-1, -1] = h[-1], -(h[-2] + h[-1]), h[-2]
+    for i in range(1, n - 1):
+        matrix[i, i - 1] = h[i - 1]
+        matrix[i, i] = 2.0 * (h[i - 1] + h[i])
+        matrix[i, i + 1] = h[i]
+    out = []
+    for column in (_F19_K302, _F19_DELTAK):
+        y = np.asarray(column, dtype=np.float64)
+        slope = np.diff(y) / h
+        rhs = np.zeros(n)
+        rhs[1:-1] = 6.0 * np.diff(slope)
+        out.append(tuple(np.linalg.solve(matrix, rhs).tolist()))
+    return out[0], out[1]
+
+
+def _cubic_spline(
+    x: Tensor, y_knots: tuple[float, ...], m_knots: tuple[float, ...]
+) -> Tensor:
+    xk = torch.tensor(_F19_X, device=x.device, dtype=x.dtype)
+    yk = torch.tensor(y_knots, device=x.device, dtype=x.dtype)
+    mk = torch.tensor(m_knots, device=x.device, dtype=x.dtype)
+    i = (torch.searchsorted(xk, x.detach(), right=True) - 1).clamp(0, xk.numel() - 2)
+    h = xk[i + 1] - xk[i]
+    t0 = xk[i + 1] - x
+    t1 = x - xk[i]
+    return (
+        mk[i] * t0**3 / (6.0 * h)
+        + mk[i + 1] * t1**3 / (6.0 * h)
+        + (yk[i] / h - mk[i] * h / 6.0) * t0
+        + (yk[i + 1] / h - mk[i + 1] * h / 6.0) * t1
+    )
+
+
+def f19_a_lambda(wave_angstrom: Tensor, a_v: Tensor, r_v: Tensor) -> Tensor:
+    """Fitzpatrick et al. (2019) ``A(λ)``; 1150 Å to 3.3 μm, ``2 <= R_V <= 6``.
+
+    F19 is normalized at 5500 Å: ``a_v`` and ``r_v`` are ``A(55)`` and
+    ``R(55)``, with ``k(λ-55) = k_3.02 + 0.990 Δk (R(55) - 3.10)``.
+    """
+    x = 10000.0 / wave_angstrom
+    _check_range(x, torch.as_tensor(r_v), (0.3, 8.7), (2.0, 6.0), "f19")
+    m_base, m_delta = _f19_spline_second_derivatives()
+    base = _cubic_spline(x, _F19_K302, m_base)
+    delta = _cubic_spline(x, _F19_DELTAK, m_delta)
+    k = base + delta * (r_v - 3.10) * 0.990
+    return (k / r_v + 1.0) * a_v
+
+
 def calzetti_k_ebv(wave_angstrom: Tensor, r_v: Tensor) -> Tensor:
     """Calzetti (2000) ``k(λ) = A(λ)/E(B-V)``. ``λ`` clamped to 0.12–2.20 μm."""
     lam_um = (wave_angstrom / 1.0e4).clamp(0.12, 2.20)
@@ -295,6 +828,12 @@ def _compute_ab(wave_angstrom: Tensor, law: str) -> tuple[Tensor, Tensor]:
     raise ValueError(f"{law!r} is not a polynomial extinction law")
 
 
+def _as_tensor_like(value: Tensor | float, like: Tensor) -> Tensor:
+    if isinstance(value, Tensor):
+        return value
+    return torch.as_tensor(value, device=like.device, dtype=like.dtype)
+
+
 def _align_scale(scale: Tensor, wave: Tensor) -> Tensor:
     """Broadcast a per-object scale against a spectral (or spatial) grid.
 
@@ -329,13 +868,25 @@ def a_lambda(
     law_name = _normalize_law(law)
     wave_a = _to_angstrom(wave, wavelength_unit)
     scale = a_v if a_v is not None else ebv
-    scale_t = _align_scale(torch.as_tensor(scale), wave_a)
-    r_v_t = _align_scale(torch.as_tensor(r_v), wave_a)
+    assert scale is not None
+    wave_a = torch.as_tensor(wave_a)
+    if not wave_a.is_floating_point():
+        wave_a = wave_a.to(torch.get_default_dtype())
+    # Python scalars are built in the grid dtype: a float32 detour would move
+    # R_V = 2.3 below a law's calibrated range.
+    scale_t = _align_scale(_as_tensor_like(scale, wave_a), wave_a)
+    r_v_t = _align_scale(_as_tensor_like(r_v, wave_a), wave_a)
     a_v_t = scale_t if a_v is not None else r_v_t * scale_t
     if law_name == "f99":
         return f99_a_lambda(wave_a, a_v_t, r_v_t)
     if law_name == "calzetti":
         return calzetti_a_lambda(wave_a, a_v_t, r_v_t)
+    if law_name == "g23":
+        return g23_a_lambda(wave_a, a_v_t, r_v_t)
+    if law_name == "f19":
+        return f19_a_lambda(wave_a, a_v_t, r_v_t)
+    if law_name == "gcc09":
+        return gcc09_a_lambda(wave_a, a_v_t, r_v_t)
     a, b = _compute_ab(wave_a, law_name)
     return (a + b / r_v_t) * a_v_t
 
@@ -498,8 +1049,11 @@ __all__ = [
     "calzetti_k_ebv",
     "ccm89",
     "ccm89_ab",
+    "f19_a_lambda",
     "f99_a_lambda",
     "fitzpatrick99",
+    "g23_a_lambda",
+    "gcc09_a_lambda",
     "k_lambda",
     "odonnell94",
     "odonnell94_ab",

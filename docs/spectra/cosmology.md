@@ -39,15 +39,17 @@ with the Hubble distance \(D_H = c/H_0\):
 | Distance modulus \(\mu\) | \(5 \log_{10}(D_L / 10\,\mathrm{pc})\) | [`distance_modulus`](../reference/cosmology.md#torchsky.cosmology.distance_modulus) |
 | Volume element | \(\mathrm dV/\mathrm dz\,\mathrm d\Omega = D_H D_M^2/E(z)\) | [`differential_comoving_volume`](../reference/cosmology.md#torchsky.cosmology.differential_comoving_volume) |
 | Expansion rate | \(H(z)\), \(E(z)\) | [`hubble_parameter`](../reference/cosmology.md#torchsky.cosmology.hubble_parameter), [`e_of_z`](../reference/cosmology.md#torchsky.cosmology.e_of_z) |
+| Lookback time \(t_L\) | \(t_H \int_0^z \mathrm dz'/[(1+z')E(z')]\), \(t_H = 1/H_0\) | [`lookback_time`](../reference/cosmology.md#torchsky.cosmology.lookback_time) |
+| Age \(t(z)\) | \(t_H \int_z^\infty \mathrm dz'/[(1+z')E(z')]\) | [`age`](../reference/cosmology.md#torchsky.cosmology.age) |
 
 Parameters are given either as keyword arguments to these functions or once in
 an [`FLRW`](../reference/cosmology.md#torchsky.cosmology.FLRW) object, whose
-methods have the same names. Lookback time and age are integrals of the same
-\(E(z)\) and are computed in a recipe below.
+methods have the same names.
 
 ## Assumptions and Accuracy
 
-- Units: distances in Mpc, \(H_0\) in km s⁻¹ Mpc⁻¹, \(\mu\) in magnitudes.
+- Units: distances in Mpc, \(H_0\) in km s⁻¹ Mpc⁻¹, \(\mu\) in magnitudes,
+  times in Gyr of Julian years.
 - Defaults are Planck 2018: \(H_0 = 67.66\), \(\Omega_m = 0.3111\), flat,
   \(w_0 = -1\), \(w_a = 0\).
 - **Radiation is neglected.** For Planck parameters, adding photons and
@@ -57,7 +59,12 @@ methods have the same names. Lookback time and age are integrals of the same
 - The integral uses a fixed 64-node Gauss–Legendre rule in \(\ln(1+z)\), per
   point, so a result never depends on the rest of the batch. In float64 the
   flat and curved distances match `astropy.cosmology` (with radiation switched
-  off, `Tcmb0=0`) to better than \(10^{-13}\) relative for \(0.01 \le z \le 100\).
+  off, `Tcmb0=0`) to better than \(10^{-13}\) relative for \(0.01 \le z \le 100\),
+  and so does the lookback time. The age integral runs in scale factor,
+  substituted so the integrand is smooth at the big bang; it matches the flat
+  ΛCDM closed form to \(10^{-14}\) and astropy's numerical integral (whose own
+  tolerance is \(1.5\times10^{-8}\)) to \(10^{-7}\). It requires
+  \(\Omega_m > 0\).
 - Negative redshifts are treated as zero, so \(D_C(0) = D_L(0) = 0\) and
   \(D_A\) never divides by zero.
 
@@ -106,39 +113,24 @@ print(kpc_per_arcsec)                              # about 1.8, 8.0, 7.7 kpc per
 
 ### Lookback Time and Age
 
-The lookback time is \(t_L(z) = t_H \int_0^z \mathrm dz' / [(1+z')E(z')]\),
-with the Hubble time \(t_H = 1/H_0 = 977.79/H_0\) Gyr. In \(u = \ln(1+z)\) the
-integrand is \(1/E\). The age of the universe is the same integral to
-\(z \to \infty\). This matches the flat ΛCDM closed form and, at
-\(z = 0.5\), 1, and 3, the values of `astropy.cosmology` (5.196, 7.936,
-11.645 Gyr) for the same parameters.
+[`lookback_time`](../reference/cosmology.md#torchsky.cosmology.lookback_time)
+and [`age`](../reference/cosmology.md#torchsky.cosmology.age) return Gyr. Their
+sum at any redshift is the present age.
 
 <!-- docs: run -->
 ```python
-import math
-
 import torch
 
-from torchsky.cosmology import FLRW, e_of_z
-
-HUBBLE_TIME_GYR = 977.792221        # 1/H0 in Gyr for H0 in km/s/Mpc
-
-
-def lookback_time_gyr(z, cosmology=FLRW(), nodes=8192):
-    u = torch.linspace(0.0, 1.0, nodes, dtype=torch.float64) * torch.log1p(z).unsqueeze(-1)
-    inv_e = 1.0 / e_of_z(torch.expm1(u), om0=cosmology.Om0, ok0=cosmology.Ok0,
-                         w0=cosmology.w0, wa=cosmology.wa)
-    return HUBBLE_TIME_GYR / cosmology.H0 * torch.trapezoid(inv_e, u, dim=-1)
-
+from torchsky.cosmology import FLRW, age, lookback_time
 
 planck = FLRW()
-lookback = lookback_time_gyr(torch.tensor([0.5, 1.0, 3.0], dtype=torch.float64), planck)
-torch.testing.assert_close(lookback, torch.tensor([5.1964, 7.9360, 11.6446], dtype=torch.float64), atol=1e-3, rtol=0.0)
+z = torch.tensor([0.5, 1.0, 3.0], dtype=torch.float64)
+torch.testing.assert_close(planck.lookback_time(z),
+                           torch.tensor([5.1964, 7.9360, 11.6446], dtype=torch.float64), atol=1e-4, rtol=0.0)
 
-age = lookback_time_gyr(torch.tensor([1e5], dtype=torch.float64), planck)
-omega_l = 1.0 - planck.Om0
-exact = HUBBLE_TIME_GYR / planck.H0 * 2.0 / (3.0 * math.sqrt(omega_l)) * math.asinh(math.sqrt(omega_l / planck.Om0))
-assert abs(float(age) - exact) < 1e-3                # 13.79 Gyr without radiation
+now = age(torch.tensor(0.0, dtype=torch.float64))            # 13.79 Gyr without radiation
+torch.testing.assert_close(lookback_time(z) + age(z), now.expand(3))
+print(float(now), age(torch.tensor(10.0, dtype=torch.float64)).item())   # about 13.79 and 0.47
 ```
 
 ### Curved and Dynamical Dark Energy Models

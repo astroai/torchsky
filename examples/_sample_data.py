@@ -33,6 +33,11 @@ _GZIP = (b"\x1f\x8b",)
 _ASCII = tuple(str(d).encode() for d in range(10))
 _SVO = "http://svo2.cab.inta-csic.es/theory/fps/getdata.php?format=ascii&id="
 _CADC = "https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/data/pub/CFHTSG"
+_LEGACY = "https://www.legacysurvey.org/viewer/fits-cutout"
+_LEGACY_CREDIT = (
+    "Legacy Surveys DR10 (Dey et al. 2019), public data; acknowledge the Legacy "
+    "Surveys, DECam/DES and NOIRLab per legacysurvey.org/acknowledgment"
+)
 _PLA = "https://irsa.ipac.caltech.edu/data/Planck/release_2/all-sky-maps/maps/component-maps"
 
 
@@ -272,6 +277,123 @@ SAMPLES: dict[str, dict[str, Any]] = {
         "large": True,
         "description": "SDSS-IV MaNGA DR17 LOGCUBE, plate-IFU 7443-12703.",
         "license": "SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015)",
+    },
+    "manga_8485_1901": {
+        "url": (
+            "https://data.sdss.org/sas/dr17/manga/spectro/redux/v3_1_1/8485/"
+            "stack/manga-8485-1901-LOGCUBE.fits.gz"
+        ),
+        "bytes": 38872704,
+        "sha256": "eb152722718b2420b4a50081abe66a8cee0cdb1b23e84b9eaf0ad83ea14cd567",
+        "magic": _GZIP,
+        "suffix": ".fits.gz",
+        "large": False,
+        "description": (
+            "SDSS-IV MaNGA DR17 LOGCUBE, plate-IFU 8485-1901 (19-fibre bundle, "
+            "34 x 34 spaxels of 0.5 arcsec, 4563 log-lambda channels, 3622-10354 A); "
+            "the smallest MaNGA cube format, a star-forming disc galaxy at z = 0.037."
+        ),
+        "license": "SDSS public data; cite SDSS DR17 and MaNGA (Bundy et al. 2015)",
+    },
+    "legacy_cartwheel_griz": {
+        "url": (
+            f"{_LEGACY}?ra=9.4213&dec=-33.7163&layer=ls-dr10&pixscale=0.524"
+            "&bands=griz&size=128&invvar"
+        ),
+        "bytes": 535680,
+        "sha256": "02775297fa6f9daa52f004620276e63d2e4f34afc9bfeaa974c9e77436d0e534",
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "Legacy Surveys DR10 g/r/i/z cutout of the Cartwheel galaxy, 128 x 128 px "
+            "at 0.524 arcsec/px (TAN), image cube in HDU 0 and inverse variance in "
+            "HDU 1, nanomaggies."
+        ),
+        "license": _LEGACY_CREDIT,
+    },
+    "legacy_cartwheel_gz_fine": {
+        "url": (
+            f"{_LEGACY}?ra=9.4223&dec=-33.7170&layer=ls-dr10&pixscale=0.35"
+            "&bands=gz&size=160&invvar"
+        ),
+        "bytes": 420480,
+        "sha256": "0555ef7a087d61860b20d71aefa85cb9fdcc6b344c5f89de5d9109f1f06b8084",
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "Legacy Surveys DR10 g/z cutout of the Cartwheel on a second grid: "
+            "160 x 160 px at 0.35 arcsec/px, centre offset by 3 and 2.5 arcsec."
+        ),
+        "license": _LEGACY_CREDIT,
+    },
+    "legacy_ngc288_grz": {
+        "url": (
+            f"{_LEGACY}?ra=13.12&dec=-26.5525&layer=ls-dr10&pixscale=0.262"
+            "&bands=grz&size=384&invvar"
+        ),
+        "bytes": 3548160,
+        "sha256": "330711c8ea53077530b756c11c1af929098274c3f2eeff6df3bb3ced0328d41a",
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "Legacy Surveys DR10 g/r/z cutout 4 arcmin west of the globular cluster "
+            "NGC 288, 384 x 384 px at the native 0.262 arcsec/px, image cube in "
+            "HDU 0 and inverse variance in HDU 1, nanomaggies."
+        ),
+        "license": _LEGACY_CREDIT,
+    },
+    "legacy_ngc288_catalog": {
+        "url": (
+            "https://www.legacysurvey.org/viewer/ls-dr10/cat.fits"
+            "?ralo=13.105&rahi=13.135&declo=-26.565&dechi=-26.540"
+        ),
+        "bytes": 429120,
+        "sha256": "a519b6d4192e32a833548551c6606726a752a9d685a0da4c2d0a0b65aa894675",
+        "magic": _FITS,
+        "suffix": ".fits",
+        "large": False,
+        "description": (
+            "Legacy Surveys DR10 Tractor catalogue of the same field (143 Gaia "
+            "stars with Tractor g/r/z fluxes and inverse variances)."
+        ),
+        "license": _LEGACY_CREDIT + "; Gaia DR3 (ESA/DPAC) astrometry",
+    },
+    **{
+        f"svo_decam_{band}": {
+            "url": f"{_SVO}CTIO/DECam.{band}",
+            "bytes": size,
+            "sha256": digest,
+            "magic": _ASCII,
+            "suffix": ".dat",
+            "large": False,
+            "description": f"DECam {band}-band total throughput (wavelength [A], transmission) from the SVO Filter Profile Service.",
+            "license": "SVO Filter Profile Service (Rodrigo, Solano & Bayo 2012); DECam throughputs from CTIO/DES",
+        }
+        for band, size, digest in (
+            (
+                "g",
+                4565,
+                "35936fc027e8e88576c863ac9fe329fb13d0422c57552120dcee0543bf9bca3f",
+            ),
+            (
+                "r",
+                5017,
+                "15c0d56823563a9829233a70d19a229593d7eb516560177dabbfd8a93d083956",
+            ),
+            (
+                "i",
+                5036,
+                "f975476f14a3ef227a351b481576bd0d2d713dc9c113080e992a7a525c2bc97f",
+            ),
+            (
+                "z",
+                4937,
+                "c5e6ab3c3806b0a058bfb97bd4758a4b30ade19096e3085231edf1a2ddbba96e",
+            ),
+        )
     },
     # Follow-up: the JWST SMACS0723 NIRCam i2d products on MAST are ~1.7 GB each
     # and MAST offers no stable server-side FITS cutout URL; the mini-cutouts are

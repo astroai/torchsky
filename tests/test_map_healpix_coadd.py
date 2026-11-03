@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import importlib
 from typing import Any, cast
 
@@ -185,7 +187,7 @@ def test_coadd_chunking_matches_single_chunk_and_bounds_sampling(
     ]
     reference = coadd_healpix(
         observations,
-        nside=64,
+        nside=512,
         nest=nest,
         sparse=False,
         kernel="nearest",
@@ -194,7 +196,7 @@ def test_coadd_chunking_matches_single_chunk_and_bounds_sampling(
     monkeypatch.setattr(module, "sample_image_plane_batched_channels", tracked_sample)
     chunked = coadd_healpix(
         observations,
-        nside=64,
+        nside=512,
         nest=nest,
         sparse=False,
         kernel="nearest",
@@ -202,7 +204,7 @@ def test_coadd_chunking_matches_single_chunk_and_bounds_sampling(
     )
     sparse_result = coadd_healpix(
         observations,
-        nside=64,
+        nside=512,
         nest=nest,
         sparse=True,
         nside_coverage=16,
@@ -243,7 +245,7 @@ def test_coadd_many_observations_preserves_weight_and_calibration_contracts() ->
     ]
     result = coadd_healpix(
         observations,
-        nside=32,
+        nside=512,
         nest=True,
         sparse=False,
         kernel="nearest",
@@ -372,15 +374,36 @@ def test_coadd_linear_ramp_is_exact_on_every_covered_cell() -> None:
     assert float((values - truth).abs().max()) < 1e-3
 
 
-def test_coadd_healpix_cells_larger_than_image_fail_closed() -> None:
+def test_coadd_healpix_cells_larger_than_image_integrate_overlap() -> None:
+    # A 0.64 deg image inside 1.83 deg cells (nside 32): no cell centre falls in
+    # the image, so each cell gets the overlap integral, not an error.
+    from torchsky.map._healpix_overlap import _spherical_quad_area, _world
+
     header = _header((32, 32), cdelt=0.02)
-    obs = Observation(data=torch.ones(32, 32), header=header, wcs=WCS(header))
-    with pytest.raises(ValueError, match="higher nside"):
-        coadd_healpix([obs], nside=32)
-    with pytest.raises(ValueError, match="higher nside"):
-        coadd_healpix([obs], nside=32, sparse=True, nest=True)
-    result = coadd_healpix([obs], nside=1024)
-    assert float(result.weight.sum()) > 0.0
+    obs = Observation(data=torch.full((32, 32), 3.0), header=header, wcs=WCS(header))
+    dense = coadd_healpix([obs], nside=32)
+    sparse = coadd_healpix([obs], nside=32, sparse=True, nest=True)
+    covered = dense.weight > 0.0
+    assert 1 <= int(covered.sum()) <= 4
+    torch.testing.assert_close(
+        dense.data[covered], torch.full_like(dense.data[covered], 3.0)
+    )
+    # Weights are covered fractions of each cell: they sum to the image area.
+    edges = torch.arange(33, dtype=torch.float64) - 0.5
+    yy, xx = torch.meshgrid(edges, edges, indexing="ij")
+    lon, lat = _world(WCS(header), xx.reshape(-1), yy.reshape(-1))
+    lon, lat = lon.view(33, 33), lat.view(33, 33)
+
+    def quads(a: torch.Tensor) -> torch.Tensor:
+        return torch.stack((a[:-1, :-1], a[:-1, 1:], a[1:, 1:], a[1:, :-1]), -1)
+
+    area = _spherical_quad_area(quads(lon).reshape(-1, 4), quads(lat).reshape(-1, 4))
+    cell = 4.0 * math.pi / (12 * 32**2)
+    assert abs(float(dense.weight.sum()) - float(area.sum()) / cell) < 1e-6
+    pixels = sparse.weight.valid_pixels
+    assert int(pixels.numel()) == int(covered.sum())
+    total = float(sparse.weight.get_values(pixels).sum())
+    assert abs(total - float(dense.weight.sum())) < 1e-6
 
 
 def _fk5_obs(radesys: str | None) -> Observation:

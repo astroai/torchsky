@@ -99,15 +99,21 @@ import torchsky.sphere as sphere
 path = Path.home() / ".cache/torchsky/samples/planck_commander_sync_256.fits"
 sky = torchfits.read(str(path), hdu=1)["I_MEAN"].to(torch.float64)
 cl_full = sphere.anafast(sky, nest=True, lmax=383)            # C_ell ~ ell^-1.8
-cl_cut = sphere.anafast(sky * mask, nest=True, lmax=383) / f_sky   # mask: |b| > 20 deg
+clean = sphere.remove_monopole_dipole(sky, 256, nest=True, valid_mask=weight > 0)
+w2 = float((weight * weight).mean())  # weight: |b| > 20 deg, 10 deg cosine taper
+cl_cut = sphere.anafast(clean * weight, nest=True, lmax=383) / w2
 ```
 
 ![Planck synchrotron map with a Galactic cut and its pseudo-C_ell](../assets/gallery/examples/planck_power_spectrum.png)
 
-For a Gaussian simulation with the same spectrum, the \(f_\mathrm{sky}\)
-correction recovers the full-sky spectrum to a few percent. For the real map
-it falls 10–40 times low: synchrotron power is concentrated in the Galactic
-plane, and the correction assumes a statistically isotropic sky.
+The mask is apodised with a 10° cosine taper, the monopole and dipole are
+removed on the unmasked sky, and the pseudo-\(C_\ell\) is divided by
+\(w_2\), the mean of the squared mask. On Gaussian simulations masked the same
+way this recovers the input spectrum to within 4 % above \(\ell = 30\).
+The real high-latitude spectrum still lies 30–60 times below the full-sky one.
+That is physical, not a normalisation error: most synchrotron power sits in
+the Galactic plane, which the mask removes, so the high-latitude sky is not
+a statistically isotropic sample of the full sky.
 
 ## Recipes
 
@@ -168,8 +174,46 @@ assert abs(float(window[0]) - 1.0) < 1e-6 and float(window[-1]) < 0.9
 ```
 
 The pixel window \(W_\ell\) is the transfer function of averaging over a
-HEALPix pixel. Its tables are embedded package data for `nside` 8 and 16;
-other `nside` values raise rather than approximate.
+HEALPix pixel. Following the definition behind the HEALPix tables,
+\(W_\ell^2\) is the mean over pixels of each pixel's harmonic power,
+
+\[
+W_\ell^2 = \frac{1}{N_\mathrm{pix}} \sum_p \frac{1}{\Omega_p^2}
+\iint_{p \times p} P_\ell(\hat n \cdot \hat n')\, \mathrm d\Omega\, \mathrm d\Omega' .
+\]
+
+[`pixwin`](../reference/sphere.md#torchsky.sphere.pixwin) computes it for any
+`nside` up to 8192 and \(\ell \le 4\,n_\mathrm{side}\) from the pixel shapes,
+with no tables. With \(t = (1 - \hat n\cdot\hat n')/2\), \(P_\ell(1-2t)\) is
+a terminating hypergeometric series in \(t\), so \(W_\ell^2\) is a short sum
+of pixel-averaged moments \(\langle t^k\rangle\) with a rigorous truncation
+bound. The moments are integrated with Gauss–Legendre rules on every distinct
+pixel shape (pixels at the poles and on the polar-cap boundary are split into
+triangles). `pol=True` adds the spin-2 window from \(d^\ell_{22}\), with the
+polarization frame parallel-transported across the pixel.
+
+- **Accuracy:** to \(10^{-12}\) or better. It reproduces the healpy tables to
+  \(10^{-12}\) for `nside` up to 128. For `nside` 256 to 2048 the healpy
+  tables differ by up to \(1.3\times10^{-5}\), an error in the tables:
+  \(1 - W_\ell\) here keeps its exact \(n_\mathrm{side}^{-2}\) scaling, and an
+  independent transform of every pixel's indicator map converges to the same
+  values. The healpy polarization windows use a frame convention that differs
+  by \(10^{-6}\) at `nside` 8, falling as \(n_\mathrm{side}^{-4}\).
+- **Cost:** \(O(n_\mathrm{side}^2)\) once per `nside`, on the CPU: under a
+  second up to `nside` 256, about 15 s at 1024 and a minute at 2048 on a
+  laptop CPU. Results
+  are cached in memory and, from `nside` 256, in
+  `$TORCHSKY_CACHE_DIR/pixwin` (default `~/.cache/torchsky/pixwin`).
+
+<!-- docs: run -->
+```python
+import torchsky.sphere as sphere
+
+w_t, w_p = sphere.pixwin(64, pol=True)              # l = 0 .. 191
+assert w_t.shape == w_p.shape == (192,) and float(w_p[1]) == 0.0
+w_ratio = (1.0 - sphere.pixwin(128)[2]) / (1.0 - w_t[2])
+assert abs(float(w_ratio) - 0.25) < 1e-3            # 1 - W_l at fixed l ~ nside^-2
+```
 
 ### Polarization (Spin 2)
 

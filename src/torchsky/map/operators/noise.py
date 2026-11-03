@@ -839,7 +839,31 @@ def gaussian_nll(
     *,
     reduction: Literal["none", "mean", "sum"] = "mean",
 ) -> Tensor:
-    """Normalized Gaussian detector negative log likelihood."""
+    """Normalized Gaussian detector negative log likelihood.
+
+    Per pixel ``0.5 * (log(2 pi variance) + (observed - expected)^2 / variance)``,
+    including the normalization, so values are comparable across noise models
+    and differentiable with respect to ``expected`` and ``variance``.
+
+    Args:
+        observed: Measured values.
+        expected: Model prediction, broadcastable against ``observed``.
+        variance: Strictly positive per-pixel variance, broadcastable.
+        reduction: ``"none"`` (per pixel), ``"mean"``, or ``"sum"``.
+
+    Returns:
+        Negative log-likelihood in nats, reduced as requested.
+
+    Raises:
+        ValueError: If inputs are not finite or a variance is not positive.
+
+    Examples:
+        >>> import math, torch
+        >>> from torchsky.map.operators import gaussian_nll
+        >>> value = gaussian_nll(torch.zeros(3), torch.zeros(3), torch.ones(3))
+        >>> abs(float(value) - 0.5 * math.log(2.0 * math.pi)) < 1e-6
+        True
+    """
     observed = torch.as_tensor(observed)
     expected = torch.as_tensor(expected, device=observed.device, dtype=observed.dtype)
     variance = torch.as_tensor(variance, device=observed.device, dtype=observed.dtype)
@@ -1791,6 +1815,30 @@ def poisson_gaussian_nll(
     Observations require real float32/float64 tensors; integer and low-precision
     observations are unsupported. Other tensor parameters follow observation
     dtype/device by the existing explicit coercion convention.
+
+    Args:
+        observed: Measured values in output units (float32 or float64).
+        expected_electrons: Non-negative Poisson mean of the electron count.
+        read_noise_variance: Positive Gaussian read variance in output units
+            squared.
+        gain: Output units per electron.
+        background: Signed deterministic offset in output units.
+        tail_sigma: Retained Poisson and posterior support, in standard
+            deviations.
+        max_terms: Largest retained count window per pixel.
+        reduction: ``"none"`` (per pixel), ``"mean"``, or ``"sum"``.
+
+    Returns:
+        Negative log-likelihood in nats, reduced as requested.
+
+    Examples:
+        >>> import torch
+        >>> from torchsky.map.operators import poisson_gaussian_nll
+        >>> observed = torch.tensor([0.4, 2.1, 5.3], dtype=torch.float64)
+        >>> rate = torch.full((3,), 2.0, dtype=torch.float64)
+        >>> nll = poisson_gaussian_nll(observed, rate, torch.tensor(0.25, dtype=torch.float64))
+        >>> bool(torch.isfinite(nll))
+        True
     """
     observed, rate, read_var, gain_t, background_t = _prepare_poisson_gaussian(
         observed,

@@ -64,8 +64,9 @@ Every step is differentiable and batched over any tensor shape.
 | HEALPix | `HPX`, `XPH` | HEALPix grids rendered as images |
 | Distortion-carrying | `TPV`, `TNX`, `ZPX` | See [Distortions](distortions.md) |
 
-`TAN` with any `PV` card is read as SCAMP `TPV`, so its `PV1_1`/`PV1_2` are
-distortion terms, not a fiducial point.
+On `TAN`, `PV1_1`/`PV1_2` are the fiducial point unless a `PVi_m` card with
+`m >= 5` marks the header as pre-2012 SCAMP `TPV`; see
+[When Headers Lie](distortions.md#when-headers-lie).
 
 ## Pixel Origin
 

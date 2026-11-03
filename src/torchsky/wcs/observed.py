@@ -4,9 +4,12 @@ This module is separate from geometric frames. Earth orientation is never
 inferred. One path serves every option: ICRS → (aberration) → celestial-to-
 terrestrial rotation → geodetic AltAz. ``pn='iau2006'`` is Fukushima-Williams
 precession-bias plus full IAU 2000A nutation (IAU 2006/P03 adjustments) on
-the CIO/ERA path (GCRS → CIRS → ERA). ``pn='none'`` skips precession-nutation
-and rotates by GMST (equinox hour angle), so it is only an approximation
-(~0.3 deg in 2024) to a true observed place. Polar motion, when supplied, is
+the CIO/ERA path (GCRS → CIRS → ERA); it is the default. TT−UTC comes from
+``EarthOrientation.tt_minus_utc_s`` or, when that is unset, from torchsky's
+leap-second table (ERFA ``dat`` + 32.184 s), which raises outside 1972 to the
+table expiry. ``pn='none'`` is an explicit opt-in that skips
+precession-nutation and rotates by GMST (equinox hour angle), so it is only an
+approximation (~0.3 deg in 2024) to a true observed place. Polar motion, when supplied, is
 applied after the Earth rotation in both models.
 
 All scalar time quantities (UT1, TT, ERA, GMST, PN/CIO matrices, Earth
@@ -24,6 +27,7 @@ import torch
 from torch import Tensor
 
 from .catalog_state import CatalogState
+from .temporal import _tt_minus_utc_seconds_checked
 from .frames import ARCSEC_TO_RAD, D2R, R2D, _as_tensor, _work_dtype, _wrap360
 from .iau2006 import (
     _rx,
@@ -51,8 +55,10 @@ class EarthOrientation:
 
     Polar motion ``xp_arcsec`` / ``yp_arcsec`` is optional. If either is set,
     both are applied (missing member treated as 0) via SOFA ``pom00`` with
-    TIO locator ``s' = 0``. ``tt_minus_utc_s`` is required for ``pn='iau2006'``
-    (TT−UTC is never inferred from leap-second tables).
+    TIO locator ``s' = 0``. ``tt_minus_utc_s`` overrides TT−UTC; when it is
+    ``None``, TT−UTC is ``32.184 s + TAI−UTC`` from torchsky's leap-second
+    table, and epochs outside that table (before 1972 or after its expiry)
+    raise ``ValueError``.
     """
 
     dut1_s: Tensor
@@ -177,17 +183,18 @@ def _time64(value: Any) -> Tensor:
 
 
 def _resolve_pn(pn: PNModel | None, eop: EarthOrientation) -> PNModel:
-    """``None`` selects the astropy-matching IAU 2006 model when TT-UTC is known."""
+    """``None`` selects the astropy-matching IAU 2006 model; ``'none'`` is opt-in."""
     if pn is None:
-        return "iau2006" if eop.tt_minus_utc_s is not None else "none"
+        return "iau2006"
     if pn not in ("none", "iau2006"):
         raise ValueError("pn must be 'none' or 'iau2006'")
     return pn
 
 
-def _tt64(utc64: Tensor, eop: EarthOrientation, why: str) -> Tensor:
+def _tt64(utc64: Tensor, eop: EarthOrientation) -> Tensor:
+    """TT MJD from UTC: ``eop.tt_minus_utc_s`` or the checked leap-second table."""
     if eop.tt_minus_utc_s is None:
-        raise ValueError(f"{why} requires eop.tt_minus_utc_s")
+        return tt_mjd_from_utc(utc64, _tt_minus_utc_seconds_checked(utc64))
     return tt_mjd_from_utc(utc64, _time64(eop.tt_minus_utc_s))
 
 
@@ -201,7 +208,7 @@ def _gcrs_to_tirs_and_pom(
     """GCRS -> TIRS rotation and the TIRS -> ITRS polar-motion matrix (or None)."""
     ut1 = _ut1_64(utc64, eop)
     if pn == "iau2006":
-        tt = _tt64(utc64, eop, "pn='iau2006'")
+        tt = _tt64(utc64, eop)
         rot = _rz(_era_rad_from_ut1_mjd(ut1)) @ cirs_matrix(tt)
     else:
         rot = _rz(_gmst_deg_from_ut1_mjd(ut1) * D2R)
@@ -277,13 +284,15 @@ def observed_altaz(
     ``obstime_mjd_utc`` is UTC MJD. UT1 = UTC + DUT1. Polar motion is applied
     when ``xp``/``yp`` are set.
 
-    ``pn=None`` (default) selects ``'iau2006'`` when ``eop.tt_minus_utc_s`` is
-    given, which matches astropy ``AltAz`` (with ``aberration=True``) to about
-    1 arcsec, and ``'none'`` otherwise. ``pn='iau2006'`` applies
-    Fukushima-Williams bias-precession and IAU 2000A nutation via the CIRS
-    matrix (requires ``eop.tt_minus_utc_s``). ``pn='none'`` omits
-    precession-nutation and uses GMST; it is approximate (~0.3 deg off) and is
-    continuous in ``xp``/``yp`` (zero polar motion equals no polar motion).
+    ``pn=None`` (default) and ``pn='iau2006'`` apply Fukushima-Williams
+    bias-precession and IAU 2000A nutation via the CIRS matrix; with
+    ``aberration=True`` this matches astropy ``AltAz`` to about 1 arcsec.
+    TT−UTC is ``eop.tt_minus_utc_s`` when set, otherwise ``32.184 s + TAI−UTC``
+    from torchsky's leap-second table; an epoch outside that table (before
+    1972, or after its expiry) raises ``ValueError`` rather than guessing.
+    ``pn='none'`` is an explicit opt-in that omits precession-nutation and uses
+    GMST; it is approximate (~0.3 deg off) and is continuous in ``xp``/``yp``
+    (zero polar motion equals no polar motion).
     ``aberration=True`` converts the astrometric ICRS direction to the apparent
     place as ERFA ``atciq`` does: solar light deflection plus annual and diurnal
     aberration (the observer's Earth-rotation velocity), with the ``epv00`` Earth
@@ -388,10 +397,8 @@ def _icrs_to_gcrs_unit(
     dtype = _work_dtype(device)
     v = _unit_xyz_from_lonlat_deg(icrs.lon.to(dtype=dtype), icrs.lat.to(dtype=dtype))
     if aberration:
-        if eop.tt_minus_utc_s is None:
-            raise ValueError("aberration requires eop.tt_minus_utc_s")
         utc64 = _time64(obstime)
-        tt = _tt64(utc64, eop, "aberration")
+        tt = _tt64(utc64, eop)
         pobs = vobs = None
         if site is not None:
             pobs, vobs = _observer_pv_gcrs(site, utc64, eop, _resolve_pn(pn, eop))
@@ -421,7 +428,7 @@ def icrs_to_cirs_xyz(
     """GCRS then IAU 2006 CIRS matrix (SOFA c2i06a)."""
     icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
     v = _icrs_to_gcrs_unit(icrs, obstime_mjd_utc, eop, aberration=aberration)
-    tt = _tt64(_time64(obstime_mjd_utc), eop, "CIRS")
+    tt = _tt64(_time64(obstime_mjd_utc), eop)
     return _apply_matrix(cirs_matrix(tt), v)
 
 
@@ -435,7 +442,7 @@ def icrs_to_tete_xyz(
     """GCRS then IAU 2006 true equator/equinox of date (SOFA pnm06a)."""
     icrs = state if state.frame == "ICRS" else state.to_frame("ICRS")
     v = _icrs_to_gcrs_unit(icrs, obstime_mjd_utc, eop, aberration=aberration)
-    tt = _tt64(_time64(obstime_mjd_utc), eop, "TETE")
+    tt = _tt64(_time64(obstime_mjd_utc), eop)
     return _apply_matrix(npb_matrix(tt), v)
 
 

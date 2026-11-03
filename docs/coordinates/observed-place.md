@@ -21,7 +21,7 @@ flowchart LR
 | Step | Physics | Size | Inputs |
 |---|---|---|---|
 | Aberration and deflection | The Earth's orbital velocity tilts incoming light; the Sun bends it | up to 20.5 arcsec | `aberration=True`; Earth ephemeris (ERFA `epv00`, built in) |
-| Precession-nutation | The equator and equinox move | 50 arcsec per year since J2000 | `pn="iau2006"` and `EarthOrientation.tt_minus_utc_s` |
+| Precession-nutation | The equator and equinox move | 50 arcsec per year since J2000 | On by default (`pn=None` or `"iau2006"`); TT from `EarthOrientation.tt_minus_utc_s` or the leap-second table |
 | Earth rotation | Sidereal angle from UT1; the pole wanders | 15 arcsec per second of DUT1; ~0.3 arcsec polar motion | `EarthOrientation.dut1_s`, `xp_arcsec`, `yp_arcsec` |
 | Refraction | The atmosphere lifts sources toward the zenith | ~1 arcmin at 45° altitude at sea level, 35 arcmin at the horizon | `refraction=True`, `Site.pressure_mbar`, `temperature_c`, `relative_humidity`, `wavelength_um` |
 
@@ -41,9 +41,14 @@ not download or interpolate IERS tables. You pass the values in an
 the site in a [`Site`](../reference/coords.md#torchsky.coords.Site), and every
 correction is off unless requested.
 
-- `pn=None` selects `"iau2006"` when `tt_minus_utc_s` is given and `"none"`
-  otherwise. `"none"` uses GMST with no precession or nutation and is off by
-  about 0.3 degree in 2025: use it only for rough visibility checks.
+- Precession-nutation (`pn=None`, the default, or `"iau2006"`) is always
+  applied. TT − UTC is `tt_minus_utc_s` when you set it, otherwise
+  32.184 s + TAI − UTC from torchsky's built-in leap-second table (ERFA
+  `dat`). Epochs before 1972 or after the table expires (2027-06-28) raise
+  `ValueError`: pass `tt_minus_utc_s` for them.
+- `pn="none"` is an explicit opt-in that uses GMST with no precession or
+  nutation; it is off by about 0.3 degree in 2025, so use it only for rough
+  visibility checks.
 - Polar motion, when `xp_arcsec`/`yp_arcsec` are set, applies the CIO/ERA
   chain and the SOFA polar-motion matrix into ITRS geodetic alt/az.
 - `Site.height_m` is the WGS84 ellipsoidal height. It enters diurnal
@@ -77,13 +82,13 @@ az, alt = observed_altaz(stars, obstime_mjd_utc=when, site=site, eop=eop,
                          aberration=True)
 _, alt_refr = observed_altaz(stars, obstime_mjd_utc=when, site=site, eop=eop,
                              aberration=True, refraction=True)
-_, alt_gmst = observed_altaz(stars, obstime_mjd_utc=when, site=site,
-                             eop=EarthOrientation(dut1_s=eop.dut1_s))
+_, alt_gmst = observed_altaz(stars, obstime_mjd_utc=when, site=site, eop=eop,
+                             pn="none")
 
 assert bool((alt > 30.0).all()) and bool(((az >= 0.0) & (az < 360.0)).all())
 lift = (alt_refr - alt) * 3600.0                  # arcsec, at 615 mbar
 assert bool((lift > 5.0).all()) and bool((lift < 60.0).all())
-assert float((alt_gmst - alt).abs().max()) > 0.1  # no precession: tenths of a degree off
+assert float((alt_gmst - alt).abs().max()) > 0.1  # pn="none": tenths of a degree off
 ```
 
 The [frames and motion example](../published-examples/frames_and_motion.py)

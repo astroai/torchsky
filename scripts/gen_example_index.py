@@ -56,18 +56,36 @@ REAL_SCENARIOS: list[tuple[str, str, list[tuple[str, str]]]] = [
         [
             (
                 "planck_power_spectrum",
-                "Masked power spectrum of the Commander synchrotron map",
+                "Apodised-mask power spectrum of the Commander synchrotron map",
             )
         ],
     ),
     (
         "SDSS",
-        "Calibrated spectra, rest frames, dust and synthetic photometry.",
+        "Calibrated spectra and IFU cubes: rest frames, dust, emission-line maps and synthetic photometry.",
         [
             (
                 "sdss_spectrum_photometry",
                 "A quasar spectrum: rest frame, dust and ugriz magnitudes",
-            )
+            ),
+            (
+                "manga_ifu_cube",
+                "A MaNGA IFU cube: Hα map, rotation and reprojection",
+            ),
+        ],
+    ),
+    (
+        "Legacy Surveys (DECam)",
+        "Multi-band DECam images: a continuous field fit and catalogue forced photometry.",
+        [
+            (
+                "legacy_field_fit",
+                "One continuous field fitted to g/r/i/z images of the Cartwheel",
+            ),
+            (
+                "legacy_forced_photometry",
+                "Forced photometry of 143 Gaia stars near NGC 288",
+            ),
         ],
     ),
     (

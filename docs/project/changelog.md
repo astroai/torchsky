@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Changes after 0.5.0rc1 are listed here.
 
+### Added
+
+- `cosmology.lookback_time` and `cosmology.age` (also as `FLRW` methods), and
+  `HUBBLE_TIME_GYR`.
+- `weighting="energy"` for `synthetic_photometry` and
+  `synthetic_photometry_bands`; `vega_spectrum` and `vega_zero_point` from the
+  packaged CALSPEC `alpha_lyr_stis_012` spectrum.
+- G23, F19 and GCC09 extinction laws (`law="g23"`, `"f19"`, `"gcc09"`). They
+  raise outside their calibrated wavelength and R_V ranges.
+- `sphere.pixwin` computes the HEALPix pixel window (T and P) for any nside up
+  to 8192 and l up to 4·nside, instead of shipping nside 8/16 tables.
+- `torchsky.wcs.WCSHeaderWarning` for header interpretations that go beyond
+  the literal `CTYPE`.
+- API reference for `gaussian_nll` and `poisson_gaussian_nll`.
+- Real-data examples: MaNGA IFU cube, Legacy Surveys multi-band field fit,
+  Gaia forced photometry against Tractor; the distortions guide uses real
+  HST SIP and DECam TPV headers.
+
+### Changed
+
+- WCS: SIP coefficients without a `-SIP` `CTYPE`, and ambiguous `TAN`+`PV`
+  headers, raise `ValueError`. `TAN` with SCAMP `PVi_m` (m ≥ 5) is read as TPV
+  with a `WCSHeaderWarning`.
+- `observed_altaz` always applies precession; TT−UTC defaults to the built-in
+  leap-second table and raises outside it.
+- `coadd_healpix` integrates the exact image overlap for HEALPix cells coarser
+  than the kernel support, so cells larger than the image no longer drop out.
+- HEALPix mapmaking applies the FK5→ICRS frame bias, with
+  `CelestialFrameBiasWarning`, instead of treating FK5 as ICRS.
+- Planck power-spectrum example: apodised Galactic mask, monopole and dipole
+  removal, w₂ normalisation.
+
+### Fixed
+
+- WCS: TPV `PV1_3`/`PV1_4` are no longer read as `LONPOLE`/`LATPOLE`; DECam
+  fields were mirrored about `CRVAL`.
+- `spectral_axis_from_header` and `SpectralReader.read_data_cube` read
+  `CDi_i` and `PCi_i·CDELTi` and apply `-LOG`, `-F2W`, `-V2W` and grism
+  codes through the WCS; unsupported codes raise. MaNGA cubes were truncated
+  at 8184 Å instead of 10354 Å.
+- `SkyConfig(mode="per_exposure")` works on images no larger than the mesh.
+- `Passband.to("mps")` holds the curve in float32 instead of raising.
+- Scalar `R_V` and `E(B-V)` in `extinction.a_lambda` are built in the
+  wavelength dtype, with no float32 round-trip.
+- The Horsehead example draws the MOC boundary its caption describes.
+
 ## [0.5.0rc1] - 2026-11-03
 
 First public release of torchsky: a torch-native astronomy stack for sky
