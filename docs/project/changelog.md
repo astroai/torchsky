@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-03
+
+First stable release. Identical to 0.5.0rc2 apart from the version number;
+the changes since 0.5.0rc1 are listed under 0.5.0rc2 below.
+
 ## [0.5.0rc2] - 2026-11-03
 
 Second release candidate for 0.5.0. Changes since 0.5.0rc1:
