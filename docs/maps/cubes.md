@@ -149,6 +149,30 @@ The weights must be equal per sample, as in the pipeline. Inverse-variance
 weights favour the fainter fibre of each overlapping pair, because its Poisson
 noise is lower, and bias this cube 17 % low.
 
+### Exact Fibre Footprints
+
+`emsm` reproduces the pipeline because the pipeline uses a similar Shepard
+kernel. To drizzle each fibre as what it is, a 2 arcsec disk, give the
+footprint explicitly. Each spaxel then receives the fibre's flux in proportion
+to the exact overlap area of the disk with it:
+
+```python
+# fragment: same sb (surface brightness), ifu, good and target as above
+from torchsky.map import IFUObservation, coadd_cube
+
+frame = IFUObservation(sci=sb, detector_to_world=ifu, weight=good.float(),
+                       aperture_diameter_arcsec=2.0)
+cube = coadd_cube([frame], target, spectral_kernel="drizzle")
+```
+
+On the same MaNGA data the total flux agrees with the DRP cube to 1.1 % and the
+integrated spectrum to 0.74 % rms, against 2.5 % with `emsm`. The Hα image is
+less smooth than the pipeline's Shepard-kernel image, so it correlates with it
+at 0.981 instead of 0.997. `aperture_diameter_arcsec` takes one value or one
+per sample. Without a footprint, `drizzle` takes each sample's extent from its
+neighbours in the same slice, and raises when a sample has none, as a fibre
+does.
+
 ## Which Path Am I On?
 
 | Input | Path | Notes |

@@ -68,6 +68,42 @@ def _has_3d_ifu_observations(
     )
 
 
+def _same_slice_steps(
+    slice_ids: Tensor, rows: Tensor, columns: Tensor
+) -> tuple[Tensor, Tensor]:
+    """Per-sample ``+1``/``-1`` detector steps for the drizzle Jacobian.
+
+    The step stays inside the sample's slice whenever the slice has a neighbour
+    along that detector axis (forward first, then backward), so pixels on a slice
+    edge are not differenced against the next slice. A one-pixel-wide slice has
+    no such neighbour: it then follows the slicer convention of this path, in
+    which adjacent slices are adjacent on the sky, and steps to the neighbouring
+    slice. Row-stacked fibre spectra break that convention; they need
+    ``IFUObservation(aperture_diameter_arcsec=...)``.
+    """
+    height, width = slice_ids.shape
+    own = slice_ids[rows, columns]
+    steps = []
+    for axis, (size, coordinate) in enumerate(((width, columns), (height, rows))):
+        usable = []
+        for step in (1, -1):
+            neighbour = coordinate + step
+            clamped = neighbour.clamp(0, size - 1)
+            other = (
+                slice_ids[rows, clamped] if axis == 0 else slice_ids[clamped, columns]
+            )
+            usable.append((neighbour >= 0) & (neighbour < size) & (other == own))
+        forward, backward = usable
+        steps.append(
+            torch.where(
+                forward | (~backward & (coordinate + 1 < size)),
+                1,
+                -1,
+            )
+        )
+    return steps[0], steps[1]
+
+
 def _coadd_ifu_3d_cube(
     observations: Sequence[Observation],
     target: CubeTarget | Target | Mapping[str, Any] | WCS | None,
@@ -246,8 +282,13 @@ def _coadd_ifu_3d_cube(
             mapper = make_detector_to_cube(jdev, jdtype)
             xxj, yyj = xx.to(jdev), yy.to(jdev)
             xj, yj = xxj.to(jdtype), yyj.to(jdtype)
-            step_x = torch.where(xxj + 1 < raw_img.shape[1], 1, -1)
-            step_y = torch.where(yyj + 1 < raw_img.shape[0], 1, -1)
+            if ifu_obj is None:
+                step_x = torch.where(xxj + 1 < raw_img.shape[1], 1, -1)
+                step_y = torch.where(yyj + 1 < raw_img.shape[0], 1, -1)
+            else:
+                step_x, step_y = _same_slice_steps(
+                    ifu_obj.slice_id_map.to(device=jdev), yyj, xxj
+                )
             x0, y0, z0_ = mapper(xj, yj, xxj, yyj)
             xp, yp, zp = mapper(xj + step_x.to(jdtype), yj, xxj + step_x, yyj)
             xq, yq, zq = mapper(xj, yj + step_y.to(jdtype), xxj, yyj + step_y)

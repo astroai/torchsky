@@ -107,7 +107,25 @@ Observation = ImageObservation
 
 @dataclass(frozen=True)
 class IFUObservation:
-    """In-memory detector product for runtime-independent IFU cube building."""
+    """In-memory detector product for runtime-independent IFU cube building.
+
+    Each detector sample (one pixel of ``sci``) is mapped to ``(ra, dec,
+    wavelength)`` by ``detector_to_world``. The ``drizzle`` kernel needs the sky
+    footprint of every sample, given in one of three ways:
+
+    - by default, the detector pixel square mapped through ``detector_to_world``,
+      which is only meaningful when neighbouring detector pixels are neighbours on
+      the sky. When slice ids are known (``slice_id`` or the transform's
+      ``slice_id_map``), a sample without a same-slice neighbour along a detector
+      axis has no grid footprint and planning raises;
+    - ``detector_pixel_footprint``: explicit per-sample polygons, shape
+      ``(H, W, V, 2)`` in detector pixels or ``(H, W, V, 3)`` in
+      ``(ra, dec, wavelength)``;
+    - ``aperture_diameter_arcsec``: a circular aperture (an optical fibre)
+      centred on each sample's sky position, scalar or one value per sample.
+      Its exact area overlap with every output spaxel is used, so fibre-fed
+      (row-stacked) spectra need no pixel-grid adjacency.
+    """
 
     sci: Tensor
     detector_to_world: Any
@@ -121,11 +139,29 @@ class IFUObservation:
     weight: Tensor | float | None = None
     dq_policy: DQPolicy | None = None
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    aperture_diameter_arcsec: Tensor | float | None = None
 
     def __post_init__(self) -> None:
         science = torch.as_tensor(self.sci)
         if science.ndim != 2 or not science.is_floating_point():
             raise ValueError("IFU science must be a floating detector image")
+        if self.aperture_diameter_arcsec is not None:
+            if self.detector_pixel_footprint is not None:
+                raise ValueError(
+                    "give either detector_pixel_footprint or aperture_diameter_arcsec"
+                )
+            aperture = torch.as_tensor(
+                self.aperture_diameter_arcsec,
+                device=science.device,
+                dtype=science.dtype,
+            )
+            if aperture.numel() != 1 and aperture.shape != science.shape:
+                raise ValueError(
+                    "aperture_diameter_arcsec must be scalar or match the science image"
+                )
+            if not bool(torch.isfinite(aperture).all()) or bool((aperture <= 0).any()):
+                raise ValueError("aperture_diameter_arcsec must be finite and positive")
+            object.__setattr__(self, "aperture_diameter_arcsec", aperture)
         if not callable(getattr(self.detector_to_world, "pixel_to_world", None)):
             raise TypeError("detector_to_world must expose pixel_to_world(x, y)")
         if self.dq is not None:

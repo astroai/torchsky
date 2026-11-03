@@ -317,11 +317,19 @@ class IFUSliceWCS:
     def to(self, device: Any) -> "IFUSliceWCS":
         dev = torch.device(device)
         dt = torch.float32 if dev.type == "mps" else torch.float64
+
+        def move(value: Tensor, dtype: torch.dtype) -> Tensor:
+            # Never a fused cross-device dtype copy: MPS float32 -> CPU float64 in
+            # one ``.to`` returns zeros in PyTorch 2.14. Cast where the dtype exists.
+            if dev.type == "mps":
+                return value.to(dtype=dtype).to(device=dev)
+            return value.to(device=dev).to(dtype=dtype)
+
         return IFUSliceWCS(
-            ra_map=self.ra_map.to(device=dev, dtype=dt),
-            dec_map=self.dec_map.to(device=dev, dtype=dt),
-            wavelength_map=self.wavelength_map.to(device=dev, dtype=dt),
-            slice_id_map=self.slice_id_map.to(device=dev, dtype=torch.int64),
+            ra_map=move(self.ra_map, dt),
+            dec_map=move(self.dec_map, dt),
+            wavelength_map=move(self.wavelength_map, dt),
+            slice_id_map=move(self.slice_id_map, torch.int64),
         )
 
     @classmethod

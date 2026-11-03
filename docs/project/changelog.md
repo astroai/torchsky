@@ -57,6 +57,16 @@ Changes after 0.5.0rc1 are listed here.
   at 8184 Å instead of 10354 Å.
 - `SkyConfig(mode="per_exposure")` works on images no larger than the mesh.
 - `Passband.to("mps")` holds the curve in float32 instead of raising.
+- `MOC.read_fits` reads IVOA MOC files without `EXTNAME='MOC'` (the table in
+  the first extension with `ORDERING='NUNIQ'`, as CDS publishes them); time
+  MOCs and non-ICRS coverage raise.
+- `build_ifu_cube` and `plan_ifu_cube_response` are vectorised: the same plans
+  as before, 780k MaNGA samples in about 10–80 s instead of 30–40 min.
+- `IFUObservation.aperture_diameter_arcsec` gives fibre spectra exact circular
+  footprints; `drizzle` without a footprint raises for samples with no
+  neighbour in their own slice, instead of borrowing one from another slice.
+- `IFUSliceWCS.to` works around a PyTorch 2.14 MPS bug where an MPS float32 to
+  CPU float64 copy returns zeros.
 - Scalar `R_V` and `E(B-V)` in `extinction.a_lambda` are built in the
   wavelength dtype, with no float32 round-trip.
 - The Horsehead example draws the MOC boundary its caption describes.
