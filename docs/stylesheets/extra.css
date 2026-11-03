@@ -202,3 +202,17 @@ body,
   color: #14345c;
   font-weight: 600;
 }
+
+/* real-data gallery on the landing page: figures of mixed aspect share one frame */
+.ts-below .ts-gallery > ul > li > p:first-child {
+  margin: -0.4rem -0.4rem 0.6rem;
+}
+
+.ts-below .ts-gallery img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 0.45rem;
+}

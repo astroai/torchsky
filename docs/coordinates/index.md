@@ -46,6 +46,10 @@ Every arrow is differentiable, and every step is batched over any tensor shape.
 ## Pixel to World and Back
 
 Build a `WCS` from the header dict torchfits returns, then transform tensors.
+The header below is a 512 × 512 pixel cutout of CFHT MegaPipe tile 712.165
+(g band, 0.186 arcsec pixels), copied from the CADC cutout service. Its
+reference pixel lies far outside the cutout, at the tangent point of the full
+tile.
 
 <!-- docs: run -->
 ```python
@@ -53,23 +57,24 @@ import torch
 
 from torchsky.wcs import WCS
 
-header = {
-    "NAXIS": 2, "NAXIS1": 512, "NAXIS2": 512,
-    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-    "CRPIX1": 256.5, "CRPIX2": 256.5,
-    "CRVAL1": 150.0, "CRVAL2": 2.0,
-    "CD1_1": -1e-5, "CD1_2": 0.0, "CD2_1": 0.0, "CD2_2": 1e-5,
+header = {   # CADC MegaPipe cutout of tile 712.165 (megapipe_mosaic_a in the examples)
+    "NAXIS": 2, "NAXIS1": 512, "NAXIS2": 512, "RADESYS": "ICRS", "EQUINOX": 2000.0,
+    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN", "CUNIT1": "deg", "CUNIT2": "deg",
+    "CRVAL1": 359.07190997, "CRVAL2": -7.5, "CRPIX1": -4488.0, "CRPIX2": -4488.0,
+    "CD1_1": -5.160234650248e-05, "CD1_2": 0.0, "CD2_1": 0.0, "CD2_2": 5.160234650248e-05,
 }
 wcs = WCS(header)
 
-x = torch.linspace(0.0, 511.0, 5, dtype=torch.float64)
-y = x.flip(0)
+x = torch.tensor([0.0, 477.0, 511.0], dtype=torch.float64)   # a corner, a star, a corner
+y = torch.tensor([0.0, 315.0, 511.0], dtype=torch.float64)
 ra, dec = wcs.pixel_to_world(x, y)
 x_back, y_back = wcs.world_to_pixel(ra, dec)
 
 torch.testing.assert_close(x_back, x, atol=1e-7, rtol=0.0)
 torch.testing.assert_close(y_back, y, atol=1e-7, rtol=0.0)
-assert wcs.footprint(shape=(512, 512)).shape == (4, 2)
+assert abs(ra[1].item() - 358.81359) < 1e-5 and abs(dec[1].item() + 7.25203) < 1e-5
+corners = wcs.footprint(shape=(512, 512))                     # (4, 2) RA, Dec in degrees
+assert corners.shape == (4, 2) and abs(3600 * wcs.pixel_scales()[0] - 0.186) < 1e-3
 ```
 
 `footprint`, `pixel_scales`, `pixel_area`, and `position_angle` describe the
@@ -77,10 +82,11 @@ grid itself. `wcs.to("cuda")` moves the cached parameters with your tensors.
 
 ## Alternate Keys, Slicing, and Compiled Paths
 
-`WCS(header, key="A")` selects an alternate WCS. `slice`, `sub`, `dropaxis`, and
-`celestial` derive new objects with the CRPIX/CD bookkeeping already updated.
-`wcs.compile()` returns a tensor-path object for repeated small-batch calls, where
-the transform takes an `(..., 2)` pixel tensor.
+`WCS(header, key="A")` selects an alternate WCS, such as the `O` solution that
+HST and JWST files carry next to the primary one. `slice`, `sub`, `dropaxis`,
+and `celestial` derive new objects with the CRPIX/CD bookkeeping already
+updated. `wcs.compile()` returns a tensor-path object for repeated small-batch
+calls, where the transform takes an `(..., 2)` pixel tensor.
 
 <!-- docs: run -->
 ```python
@@ -88,31 +94,32 @@ import torch
 
 from torchsky.wcs import WCS
 
-header = {
-    "NAXIS": 2, "NAXIS1": 64, "NAXIS2": 64,
-    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-    "CRPIX1": 32.5, "CRPIX2": 32.5, "CRVAL1": 10.0, "CRVAL2": 20.0,
-    "CDELT1": -1e-3, "CDELT2": 1e-3,
-    "CRVAL1A": 11.0, "CRVAL2A": 21.0, "CRPIX1A": 1.0, "CRPIX2A": 1.0,
-    "CTYPE1A": "RA---TAN", "CTYPE2A": "DEC--TAN",
-    "CDELT1A": -1e-3, "CDELT2A": 1e-3,
+header = {   # the MegaPipe cutout of the previous block
+    "NAXIS": 2, "NAXIS1": 512, "NAXIS2": 512, "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+    "CRVAL1": 359.07190997, "CRVAL2": -7.5, "CRPIX1": -4488.0, "CRPIX2": -4488.0,
+    "CD1_1": -5.160234650248e-05, "CD1_2": 0.0, "CD2_1": 0.0, "CD2_2": 5.160234650248e-05,
 }
-primary, alternate = WCS(header), WCS(header, key="A")
-pixel = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
-assert (primary.compile().pixel_to_world(pixel) != alternate.compile().pixel_to_world(pixel)).any()
+wcs = WCS(header)
 
-cutout = primary.slice((slice(16, 48), slice(16, 48)))
-full_ra, full_dec = primary.pixel_to_world(torch.tensor([20.0]), torch.tensor([30.0]))
-cut_ra, cut_dec = cutout.pixel_to_world(torch.tensor([4.0]), torch.tensor([14.0]))
-torch.testing.assert_close(full_ra, cut_ra)
-torch.testing.assert_close(full_dec, cut_dec)
+stamp = wcs.slice((slice(305, 326), slice(467, 488)))     # 21 x 21 pixels around the star
+assert stamp.pixel_shape == (21, 21)
+full = wcs.pixel_to_world(torch.tensor([477.0]), torch.tensor([315.0]))
+cut = stamp.pixel_to_world(torch.tensor([10.0]), torch.tensor([10.0]))
+torch.testing.assert_close(full, cut)
+
+fast = wcs.compile()
+pixels = torch.tensor([[477.0, 315.0], [0.0, 0.0]], dtype=torch.float64)
+world = fast.pixel_to_world(pixels)                     # (2, 2) RA, Dec
+torch.testing.assert_close(world[0], torch.cat(full))
 ```
 
 ## Jacobians and Gradients
 
 `jacobian` returns the local `d(world)/d(pixel)` matrix per point, and the
 `*_differentiable` variants keep the autograd graph in pure torch for geometry
-fitting.
+fitting. The header below is the Digitized Sky Survey plate of the Horsehead
+Nebula (UK Schmidt, 1990) from `data.astropy.org`. Its `CD` matrix has a small
+skew, so the two axes have slightly different scales.
 
 <!-- docs: run -->
 ```python
@@ -120,17 +127,20 @@ import torch
 
 from torchsky.wcs import WCS
 
-header = {
-    "NAXIS": 2, "NAXIS1": 64, "NAXIS2": 64,
-    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
-    "CRPIX1": 32.5, "CRPIX2": 32.5, "CRVAL1": 10.0, "CRVAL2": 20.0,
-    "CDELT1": -1e-3, "CDELT2": 1e-3,
+horsehead = {   # data.astropy.org tutorials/FITS-images/HorseHead.fits, primary HDU
+    "NAXIS": 2, "NAXIS1": 891, "NAXIS2": 893, "RADESYS": "ICRS", "EQUINOX": 2000.0,
+    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN", "CRPIX1": 446.0, "CRPIX2": 447.0,
+    "CRVAL1": 85.27497, "CRVAL2": -2.458265, "CD1_1": -0.0002802651, "CD1_2": 3.159e-07,
+    "CD2_1": 2.767e-07, "CD2_2": 0.0002798187,
 }
-wcs = WCS(header)
-pixels = torch.tensor([[10.0, 12.0], [40.0, 50.0]], dtype=torch.float64)
-jac = wcs.jacobian(pixels)
-assert jac.shape == (2, 2, 2)
-assert torch.isfinite(jac).all()
+wcs = WCS(horsehead)
+pixels = torch.tensor([[549.0, 445.8], [0.0, 0.0], [890.0, 892.0]], dtype=torch.float64)
+jac = wcs.jacobian(pixels)                                   # (3, 2, 2) degrees per pixel
+assert jac.shape == (3, 2, 2)
+
+ra, dec = wcs.pixel_to_world(pixels[:, 0], pixels[:, 1])
+area = jac.det().abs() * torch.cos(torch.deg2rad(dec)) * 3600**2   # arcsec^2 per pixel
+assert torch.allclose(area, torch.full_like(area, 1.009 * 1.007), rtol=2e-3)
 ```
 
 At the reference point (CRPIX) the native longitude is undefined for zenithal
@@ -184,5 +194,7 @@ the WCS of each exposure.
 
 Exhaustive Astropy/WCSLIB parity and throughput are measured in
 [torchsky-harness](https://github.com/astroai/torchsky-harness) and summarized
-on the [parity page](../performance/parity.md). Example:
-[WCS tour](../published-examples/wcs_tour.py).
+on the [parity page](../performance/parity.md). Examples: the
+[Horsehead WCS tour](../examples/index.md#horsehead-nebula-wcs-footprint-and-reprojection)
+on a real plate, and the synthetic [WCS tour](../published-examples/wcs_tour.py) of
+SIP, TPV, and the extended projections.

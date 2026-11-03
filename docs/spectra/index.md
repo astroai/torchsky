@@ -38,36 +38,58 @@ in a mask rather than renormalized.
 
 ## A Differentiable Magnitude
 
-A power-law SED, redshifted to \(z = 0.2\), dimmed by Milky Way dust with
-\(E(B-V) = 0.05\), and integrated through a triangular passband. The magnitude
-has a gradient with respect to the redshift.
+The spectrum below is the SDSS quasar 0751-52251-0160 (z = 0.0456), averaged in
+50 Å bins across the r band; the bump at 6870 Å is its redshifted Hα line. The
+passband is the SDSS r total throughput from the SVO Filter Profile Service,
+sampled every 50 Å. The synthetic AB magnitude agrees with the one the SDSS
+pipeline computed from the full-resolution spectrum (16.764) to 0.012 mag.
+Correcting for Milky Way dust with \(E(B-V) = 0.0698\) (Schlafly and
+Finkbeiner 2011 at this position) brightens it by 0.18 mag, and the gradient
+of the magnitude with respect to \(E(B-V)\) is the extinction coefficient of
+the band.
 
 <!-- docs: run -->
 ```python
 import torch
 
 from torchsky.extinction import a_lambda
-from torchsky.redshift import dimming_f_lambda, shift_wavelength
 from torchsky.spectrophotometry import Passband, synthetic_photometry
 
-band = Passband(
-    torch.tensor([5000.0, 6000.0, 7000.0], dtype=torch.float64),
-    torch.tensor([0.0, 1.0, 0.0], dtype=torch.float64),
-    name="toy-r",
+f64 = dict(dtype=torch.float64)
+wave = torch.arange(5325.0, 7350.0, 50.0, **f64)   # bin centres, Angstrom
+flux = 1e-17 * torch.tensor([                       # erg/s/cm2/A
+    52.11, 52.35, 50.37, 54.77, 54.70, 55.99, 55.68, 54.61, 53.47, 54.81, 54.05, 53.31,
+    53.13, 54.38, 55.37, 56.69, 56.59, 54.48, 55.89, 55.18, 56.72, 55.88, 54.85, 53.92,
+    52.73, 55.15, 55.09, 56.96, 58.42, 67.85, 78.72, 84.65, 70.60, 59.98, 58.63, 53.83,
+    54.05, 53.48, 54.12, 54.38, 54.44,
+], **f64)
+sdss_r = Passband(
+    torch.arange(5350.0, 7301.0, 50.0, **f64),
+    torch.tensor([
+        0.0000, 0.0011, 0.0227, 0.0745, 0.1537, 0.2463, 0.3256, 0.3789, 0.4120, 0.4317,
+        0.4436, 0.4519, 0.4592, 0.4659, 0.4700, 0.4716, 0.4741, 0.4787, 0.4839, 0.4883,
+        0.4908, 0.4912, 0.4914, 0.4913, 0.4883, 0.4825, 0.4476, 0.3601, 0.2439, 0.1265,
+        0.0441, 0.0150, 0.0081, 0.0042, 0.0021, 0.0013, 0.0008, 0.0002, 0.0000, 0.0000,
+    ], **f64),
+    name="SDSS r",
 )
-rest = torch.linspace(3000.0, 8000.0, 501, dtype=torch.float64)    # Angstrom
-f_lambda = 1e-17 * (rest / 5000.0) ** -1.5                        # erg/s/cm2/A
 
-z = torch.tensor(0.2, dtype=torch.float64, requires_grad=True)
-observed = shift_wavelength(rest, 1.0 + z)
-redshifted = f_lambda * dimming_f_lambda(1.0 + z)
-attenuated = redshifted * 10.0 ** (-0.4 * a_lambda(observed, ebv=0.05))
+observed = synthetic_photometry(wave, flux, sdss_r, output="ab_mag")
+assert bool(observed.valid) and abs(observed.value.item() - 16.764) < 0.02
 
-mag = synthetic_photometry(observed, attenuated, band, output="ab_mag")
-assert bool(mag.valid)
-mag.value.backward()
-assert torch.isfinite(z.grad)
+ebv = torch.tensor(0.0698, **f64, requires_grad=True)
+dereddened = flux * 10.0 ** (0.4 * a_lambda(wave, ebv=ebv, law="f99"))
+corrected = synthetic_photometry(wave, dereddened, sdss_r, output="ab_mag")
+corrected.value.backward()
+
+r_band = a_lambda(sdss_r.pivot_wavelength.reshape(1), ebv=1.0, law="f99")   # A_r / E(B-V)
+assert abs((observed.value - corrected.value).item() - 0.18) < 0.01
+assert abs(-ebv.grad.item() / r_band.item() - 1.0) < 0.01
 ```
+
+The [SDSS spectrum example](../examples/index.md#a-quasar-spectrum-rest-frame-dust-and-ugriz-magnitudes)
+reads the full spectrum, moves it to the rest frame with the pipeline redshift,
+checks the [O III] line centroids, and computes all five ugriz magnitudes.
 
 ## Conventions and Pitfalls
 
@@ -100,3 +122,7 @@ Spectral FITS axes are decoded by the [WCS](../coordinates/index.md#spectral-and
 and the experimental [field models](../models/fields.md) render through the
 same passband integrals. Photometric redshift encoders for machine learning are
 described with the [encoders](../models/encoders.md).
+
+Examples on real data: the
+[SDSS quasar spectrum](../examples/index.md#a-quasar-spectrum-rest-frame-dust-and-ugriz-magnitudes)
+and the [MaNGA IFU cube](../examples/index.md#a-manga-ifu-cube-h-map-rotation-and-reprojection).

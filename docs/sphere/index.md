@@ -47,25 +47,31 @@ Fourier transform.
 
 ## Positions, Pixels, and Discs
 
+The positions below are the targets of three [examples](../examples/index.md):
+Sgr A* and the pointing of Chandra ObsID 5950, the open cluster M67, and the
+globular cluster NGC 288. At `nside = 2048` a pixel is 1.7 arcmin across, and a
+10 arcmin disc around the Chandra pointing contains Sgr A* but neither cluster.
+
 <!-- docs: run -->
 ```python
+import math
+
 import torch
 
 import torchsky.sphere as sphere
 
-nside = 64                                    # about 55 arcmin pixels
-lon = torch.tensor([10.0, 10.5, 200.0], dtype=torch.float64)
-lat = torch.tensor([-30.0, -30.2, 45.0], dtype=torch.float64)
-pix = sphere.ang2pix(nside, lon, lat, lonlat=True, nest=True)
+#                  Sgr A*       Chandra 5950  M67      NGC 288
+ra = torch.tensor([266.4168371, 266.401, 132.825, 13.1885], dtype=torch.float64)
+dec = torch.tensor([-29.0078106, -28.987, 11.800, -26.5826], dtype=torch.float64)
 
+nside = 2048
+pix = sphere.ang2pix(nside, ra, dec, lonlat=True, nest=True)
 counts = torch.bincount(pix, minlength=sphere.nside2npix(nside))
-assert counts.sum() == 3 and counts.numel() == 12 * nside**2
+assert counts.sum() == 4 and counts.numel() == 12 * nside**2
 
-centre = sphere.lonlat_to_unit_xyz(
-    torch.tensor(10.0, dtype=torch.float64), torch.tensor(-30.0, dtype=torch.float64)
-)
-disc = sphere.query_disc(nside, centre, torch.deg2rad(torch.tensor(1.0)).item(), nest=True)
-assert torch.isin(pix, disc).tolist() == [True, True, False]
+pointing = sphere.lonlat_to_unit_xyz(ra[1], dec[1])
+disc = sphere.query_disc(nside, pointing, math.radians(10 / 60), nest=True)
+assert torch.isin(pix, disc).tolist() == [True, True, False, False]
 ```
 
 Queries take a unit 3-vector and a radius in radians, as in healpy.
@@ -74,33 +80,42 @@ Queries take a unit 3-vector and a radius in radians, as in healpy.
 
 `SphericalPolygon`, `SphericalCap`, and `SphericalMultiPolygon` are exact region
 objects with containment, area, and pixel queries. Boolean algebra works on the
-polygons themselves and, at a fixed `nside`, on `PixelizedRegion` sets.
+polygons themselves and, at a fixed `nside`, on `PixelizedRegion` sets. The two
+polygons below are the footprints of two CFHT MegaPipe cutouts from the
+[mosaic example](../examples/index.md#four-megapipe-cutouts-coadded-with-lanczos3-and-drizzle),
+from tiles with different tangent points. The corners are the centres of the
+corner pixels, as `WCS.footprint` returns them.
 
 <!-- docs: run -->
 ```python
+import math
+
 import torch
+
 from torchsky.sphere import SphericalPolygon
 
-a = SphericalPolygon(
-    lon_deg=torch.tensor([10.0, 20.0, 20.0, 10.0]),
-    lat_deg=torch.tensor([0.0, 0.0, 10.0, 10.0]),
+tile_712_165 = SphericalPolygon(   # 512 x 512 px at 0.18577 arcsec
+    lon_deg=torch.tensor([358.83839378, 358.83840792, 358.81182784, 358.81181209], dtype=torch.float64),
+    lat_deg=torch.tensor([-7.26829861, -7.24193051, -7.24191619, -7.26828424], dtype=torch.float64),
 )
-b = SphericalPolygon(
-    lon_deg=torch.tensor([15.0, 25.0, 25.0, 15.0]),
-    lat_deg=torch.tensor([5.0, 5.0, 15.0, 15.0]),
+tile_712_166 = SphericalPolygon(
+    lon_deg=torch.tensor([358.83319463, 358.83318560, 358.80655375, 358.80656127], dtype=torch.float64),
+    lat_deg=torch.tensor([-7.25793050, -7.23156228, -7.23157078, -7.25793902], dtype=torch.float64),
 )
 
-assert bool(a.contains(lon_deg=15.0, lat_deg=5.0))
-assert a.intersects(b)
-union = a.union(b)
-assert bool(union.contains(lon_deg=12.0, lat_deg=2.0))
+area = 3600 * tile_712_165.area(degrees=True)                 # arcmin^2
+assert abs(area - (511 * 0.18577 / 60) ** 2) < 0.005        # corner pixel centres are 511 px apart
+assert tile_712_165.intersects(tile_712_166)
+both = tile_712_165.intersection(tile_712_166)
+assert bool(both.contains(lon_deg=358.81359, lat_deg=-7.252031))   # a star seen by both
 
-ra, rb = a.pixelize(nside=64), b.pixelize(nside=64)
-overlap = ra.intersection(rb)
-assert 0.0 < overlap.area() < ra.area()
+overlap = tile_712_165.pixelize(nside=2**16).intersection(tile_712_166.pixelize(nside=2**16))
+overlap_arcmin2 = overlap.area() * (180 * 60 / math.pi) ** 2  # steradians to arcmin^2
+assert 1.1 < overlap_arcmin2 < 1.3
 ```
 
-Areas are in steradians. Polygon edges are great circles.
+`area` and `PixelizedRegion.area` are in steradians unless `degrees=True`.
+Polygon edges are great circles.
 
 ## Conventions and Pitfalls
 
@@ -131,3 +146,9 @@ Indexing, queries, and transforms are validated against healpy, hpgeom,
 astropy-healpix, mocpy, and spherical-geometry in
 [torchsky-harness](https://github.com/astroai/torchsky-harness); see the
 [parity page](../performance/parity.md).
+
+Examples on real data: the
+[Planck power spectrum](../examples/index.md#apodised-mask-power-spectrum-of-the-commander-synchrotron-map)
+(masks, apodisation, and \(C_\ell\) of a HEALPix map) and the
+[Chandra events](../examples/index.md#sgr-a-events-as-a-sparse-healpix-map-and-moc)
+(a sparse counts map and a MOC).
