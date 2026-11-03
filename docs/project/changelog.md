@@ -51,6 +51,13 @@ Second release candidate for 0.5.0. Changes since 0.5.0rc1:
 
 ### Fixed
 
+- Without the compiled extension (and on MPS), `query_disc`, RING
+  `query_polygon` and `SphericalPolygon.pixelize` no longer scan every sky
+  pixel: a torch quadtree descent selects the same pixels as the native path
+  in `O(boundary cells x depth + output)`. A 1.6-arcmin polygon at NSIDE 2^12
+  took 38 s and now takes 0.02 s; NSIDE 2^16 takes 0.04 s. RING polygons whose
+  centroid lies outside them also no longer scan the full sky with the
+  extension.
 - `SparseHealpixMap` with `nside_coverage` no longer allocates a dense
   lookup block of `(nside / nside_coverage)**2` values per covered coverage
   cell when that exceeds eight slots per stored pixel; such maps look values

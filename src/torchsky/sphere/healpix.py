@@ -34,8 +34,10 @@ from ._healpix_query_support import (  # noqa: F401
     _CELL_RADIUS_CACHE,
     _CELL_RADIUS_EXACT_LEVELS,
     _cell_radius_bound,
+    _disc_nest_ranges_torch,
     _get_ring_info2,
     _nest_ranges_by_descent,
+    _nest_ranges_to_ring_pixels,
     _normalize_order,
     _normalize_xyz,
     _pixel_range_chunks,
@@ -1099,9 +1101,10 @@ def query_disc(
 
     Performance: when the C++ extension is available on CPU (or CUDA via a host
     copy of ``vec``), queries use **ring pruning** (``O(nside + output)``).
-    MPS stays on-device via the chunked tensor fallback. CUDA copies a length-3
-    ``vec`` to host; that copy is O(1) and far below 10% of nside≥512 wall, so
-    the query stays on the CPU kernel.
+    Without the extension, and on MPS, a torch quadtree descent selects the same
+    pixel centres in ``O(boundary cells x depth + output)``, never ``O(npix)``.
+    CUDA copies a length-3 ``vec`` to host; that copy is O(1) and far below 10%
+    of nside≥512 wall, so the query stays on the CPU kernel.
 
     Args:
         nside: HEALPix resolution parameter.
@@ -1110,7 +1113,7 @@ def query_disc(
         inclusive: Include pixels overlapping the disc boundary.
         fact: Oversampling factor for inclusive queries.
         nest: Return nested rather than ring indices.
-        chunk_size: Pixel chunk size for the tensor fallback.
+        chunk_size: Accepted for API compatibility; unused.
 
     Returns:
         One-dimensional integer tensor of matching pixels.
@@ -1192,18 +1195,16 @@ def query_disc(
             return out.to(device=out_device)
         return out
 
-    npix = nside2npix(nside)
-    selected: list[Tensor] = []
-    for start, end in _pixel_range_chunks(npix, chunk_size=chunk_size):
-        pix = torch.arange(start, end, dtype=torch.int64, device=out_device)
-        x, y, z = pix2vec(nside, pix, nest=nest)
-        dots = x * vx + y * vy + z * vz
-        keep = dots >= cos_lim
-        if torch.any(keep):
-            selected.append(pix[keep])
-    if not selected:
-        return torch.empty((0,), dtype=torch.int64, device=out_device)
-    return torch.cat(selected, dim=0)
+    # Torch fallback (no extension, or MPS): the same quadtree descent as the
+    # native kernel, O(boundary cells x depth + output) instead of O(npix).
+    ranges = _disc_nest_ranges_torch(
+        int(nside), torch.stack((vx, vy, vz)), float(cos_lim)
+    )
+    if nest:
+        out = _ranges_to_sorted_pixels(ranges)
+    else:
+        out = _nest_ranges_to_ring_pixels(int(nside), ranges)
+    return out.to(device=out_device) if out.device != out_device else out
 
 
 def query_circle(
@@ -1412,7 +1413,6 @@ def query_polygon(
     edge_normals = edge_normals * torch.sign(dot_probes).unsqueeze(1)
 
     tol = math.sin(max_pixel_radius(nside, degrees=False)) if inclusive else 0.0
-    npix = nside2npix(nside)
 
     d_cent = (centroid.unsqueeze(0) * edge_normals).sum(dim=1)
     centroid_inside = bool(torch.all(d_cent >= -1.0e-11).item())
@@ -1424,10 +1424,18 @@ def query_polygon(
             cap_radius += max_pixel_radius(nside, degrees=False)
         cap_radius = min(math.pi, cap_radius)
 
-    if nest:
+    use_native_cap = (
+        not nest
+        and centroid_inside
+        and vv.device.type != "mps"
+        and _ops.has_fixed_dispatcher()
+    )
+    if not use_native_cap:
         # Hierarchical: interior cells become ranges; only boundary cells are
         # refined, and pixel centres are tested exactly as in the flat path
         # (half-spaces, and the circumscribing cap when the centroid is inside).
+        # Also the RING path without the native ring-pruned cap, so no query
+        # costs O(npix).
         normals_cpu = edge_normals.detach().to(device="cpu").to(torch.float64)
         cap_c = centroid.detach().to(device="cpu").to(torch.float64)
         cap_cos = math.cos(cap_radius) if cap_radius is not None else None
@@ -1457,7 +1465,9 @@ def query_polygon(
             return keep
 
         ranges = _nest_ranges_by_descent(nside, _classify, _leaf)
-        return _ranges_to_sorted_pixels(ranges).to(device=vv.device)
+        if nest:
+            return _ranges_to_sorted_pixels(ranges).to(device=vv.device)
+        return _nest_ranges_to_ring_pixels(nside, ranges).to(device=vv.device)
 
     def _filter_pixel_chunk(pix: Tensor) -> Tensor:
         if pix.numel() == 0:
@@ -1468,37 +1478,26 @@ def query_polygon(
         keep = torch.all(side >= -tol, dim=1)
         return pix[keep]
 
-    if centroid_inside:
-        assert cap_radius is not None
-        r_cap = cap_radius
-        cand = query_disc(
-            nside,
-            centroid,
-            r_cap,
-            inclusive=False,
-            nest=nest,
-            chunk_size=chunk_size,
-        )
-        parts: list[Tensor] = []
-        n_c = int(cand.numel())
-        for start in range(0, n_c, chunk_size):
-            sl = cand[start : start + chunk_size]
-            kept = _filter_pixel_chunk(sl)
-            if kept.numel() > 0:
-                parts.append(kept)
-        if not parts:
-            return torch.empty((0,), dtype=torch.int64, device=vv.device)
-        return torch.cat(parts, dim=0)
-
-    selected: list[Tensor] = []
-    for start, end in _pixel_range_chunks(npix, chunk_size=chunk_size):
-        pix = torch.arange(start, end, dtype=torch.int64, device=vv.device)
-        kept = _filter_pixel_chunk(pix)
+    # Native ring-pruned cap (O(nside + cap pixels)), then exact half-spaces.
+    assert cap_radius is not None
+    cand = query_disc(
+        nside,
+        centroid,
+        cap_radius,
+        inclusive=False,
+        nest=False,
+        chunk_size=chunk_size,
+    )
+    parts: list[Tensor] = []
+    n_c = int(cand.numel())
+    for start in range(0, n_c, chunk_size):
+        sl = cand[start : start + chunk_size]
+        kept = _filter_pixel_chunk(sl)
         if kept.numel() > 0:
-            selected.append(kept)
-    if not selected:
+            parts.append(kept)
+    if not parts:
         return torch.empty((0,), dtype=torch.int64, device=vv.device)
-    return torch.cat(selected, dim=0)
+    return torch.cat(parts, dim=0)
 
 
 def query_polygon_vec(

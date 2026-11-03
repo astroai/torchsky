@@ -149,8 +149,8 @@ def _query_disc_nest_ranges(
 
     Hierarchical quadtree descent: cells inside the disc become one range
     without visiting their pixels, so the cost is ``O(nside + ranges)`` rather
-    than ``O(pixels)``. Returns ``None`` when the native kernel is unavailable
-    (MPS or no extension); callers then compress ``query_disc`` output.
+    than ``O(pixels)``. Without the native kernel (MPS or no extension) the same
+    descent runs in torch (:func:`_disc_nest_ranges_torch`).
     """
     _validate_nside(nside)
     radius = float(radius)
@@ -169,8 +169,6 @@ def _query_disc_nest_ranges(
         raise ValueError("vec must contain exactly 3 finite values")
     if not bool(torch.any(v_any != 0)):
         raise ValueError("vec norm must be positive")
-    if out_device.type == "mps" or not _ops.has_fixed_dispatcher():
-        return None
     if inclusive and fact_i != 4:
         nside_hi = int(nside) * fact_i
         _validate_nside(nside_hi)
@@ -192,10 +190,53 @@ def _query_disc_nest_ranges(
         radius
         + (_core_mod.max_pixel_radius(nside, degrees=False) if inclusive else 0.0),
     )
-    out = torch.ops.torchsky.sphere_query_disc_nest_ranges(
-        int(nside), v64.contiguous(), float(math.cos(radius_eff))
-    )
+    cos_lim = float(math.cos(radius_eff))
+    if out_device.type == "mps" or not _ops.has_fixed_dispatcher():
+        out = _disc_nest_ranges_torch(int(nside), v64, cos_lim)
+    else:
+        out = torch.ops.torchsky.sphere_query_disc_nest_ranges(
+            int(nside), v64.contiguous(), cos_lim
+        )
     return out if out_device.type == "cpu" else out.to(device=out_device)
+
+
+def _disc_nest_ranges_torch(nside: int, vec: Tensor, cos_lim: float) -> Tensor:
+    """Torch twin of the native ``sphere_query_disc_nest_ranges`` kernel.
+
+    NESTED half-open ranges of pixels whose centre ``p`` satisfies
+    ``p . vec >= cos_lim`` (``vec`` a float64 CPU 3-vector). Quadtree descent
+    from the 12 base cells: cells wholly inside the cap emit one range, cells
+    wholly outside are dropped, and only boundary cells are refined, so the cost
+    is ``O(boundary cells x depth + ranges)`` rather than ``O(npix)``.
+    """
+    if cos_lim <= -1.0:
+        return torch.tensor([[0, 12 * nside * nside]], dtype=torch.int64)
+    v = vec.detach().to(device="cpu").to(dtype=torch.float64).reshape(3)
+    vx, vy, vz = _normalize_xyz(v[0], v[1], v[2])
+    centre = torch.stack((vx, vy, vz))
+    radius = math.atan2(math.sqrt(max(0.0, 1.0 - cos_lim * cos_lim)), cos_lim)
+    margin = 1.0e-9
+
+    def _classify(centres: Tensor, cell_radius: float) -> tuple[Tensor, Tensor]:
+        cross = torch.linalg.cross(centres, centre.expand_as(centres), dim=1)
+        dist = torch.atan2(cross.norm(dim=1), centres @ centre)
+        inside = (dist + cell_radius) <= (radius - margin)
+        outside = (dist - cell_radius) >= (radius + margin)
+        return inside, outside
+
+    def _leaf(pix: Tensor) -> Tensor:
+        x, y, z = _core_mod.pix2vec(nside, pix, nest=True)
+        return (x * vx + y * vy + z * vz) >= cos_lim
+
+    return _nest_ranges_by_descent(nside, _classify, _leaf)
+
+
+def _nest_ranges_to_ring_pixels(nside: int, ranges: Tensor) -> Tensor:
+    """Ascending RING pixels of NESTED half-open ``ranges`` (``O(output)``)."""
+    nest_pix = _ranges_to_sorted_pixels(ranges)
+    if nest_pix.numel() == 0:
+        return nest_pix
+    return torch.sort(_core_mod.nest2ring(nside, nest_pix)).values
 
 
 _CELL_RADIUS_EXACT_LEVELS = 5
