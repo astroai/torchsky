@@ -214,7 +214,7 @@ def main() -> None:
         ("g-to-i white light", white, "gray_r", None),
         (
             "Hα flux (1e-17 erg/s/cm²)",
-            torch.where(good, halpha.cpu(), torch.nan),
+            torch.where(good.cpu(), halpha.cpu(), torch.nan),
             "magma",
             None,
         ),
