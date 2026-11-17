@@ -44,9 +44,9 @@ reference pages carry the contracts.
 | `torchsky.spectrophotometry` | core | 13 | [reference](spectrophotometry.md) |
 | `torchsky.sphere` | core | 134 | [reference](sphere.md) |
 | `torchsky.transforms` | core | 20 | [reference](transforms.md) |
-| `torchsky.wcs` | core | 141 | [reference](wcs.md) |
+| `torchsky.wcs` | core | 144 | [reference](wcs.md) |
 | `torchsky.encoders` | experimental | 8 | [reference](encoders.md) |
-| `torchsky.field` | experimental | 52 | [reference](field.md) |
+| `torchsky.field` | experimental | 53 | [reference](field.md) |
 | `torchsky.filter_profiles` | experimental | 6 | [reference](filter-profiles.md) |
 | `torchsky.map.evidence` | experimental | 1 | [reference](map-evidence.md) |
 | `torchsky.map.field.chromatic` | experimental | 4 | [reference](map-field-chromatic.md) |
@@ -62,7 +62,7 @@ reference pages carry the contracts.
 | `torchsky.map.operators.pixel_calibration` | experimental | 1 | [reference](map-operators-pixel-calibration.md) |
 | `torchsky.map.query` | experimental | 2 | [reference](map-query.md) |
 | `torchsky.map.solvers` | experimental | 18 | [reference](map-solvers.md) |
-| `torchsky.scene` | experimental | 36 | [reference](scene.md) |
+| `torchsky.scene` | experimental | 37 | [reference](scene.md) |
 | `torchsky.viz` | experimental | 10 | [reference](viz.md) |
 
 ## Public modules

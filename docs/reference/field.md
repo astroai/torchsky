@@ -84,6 +84,17 @@ namespace `torchsky.field` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Exposure io
+
+::: torchsky.field
+    options:
+      members:
+        - field_observation_from_exposure_file
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Models component
 
 ::: torchsky.field

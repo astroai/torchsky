@@ -49,6 +49,17 @@ namespace `torchsky.scene` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Gaussians
+
+::: torchsky.scene
+    options:
+      members:
+        - GaussianItemScene
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Observations and targets
 
 ::: torchsky.scene

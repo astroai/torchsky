@@ -149,6 +149,62 @@ do: stars missing from the input catalogue stay in the data, and each blend
 group absorbs them into its local background. A full fit of all 143 stars and
 three bands takes about a second on a CPU.
 
+## Many Gaussian Items
+
+When a sky is better described by thousands of Gaussians than by a pixel grid,
+[`GaussianItemScene`](../reference/scene.md#torchsky.scene.GaussianItemScene)
+holds them as learnable tensors in sky units: longitude and latitude in degrees,
+major and minor sigma in arcseconds, a position angle east of north in degrees
+(the `SourceCatalogScene` Gaussian convention), and K linear coefficients per
+item. `render_coefficients` evaluates the items on any tangent-plane grid and
+returns K planes of flux per pixel, so the sum of a plane is the total
+coefficient of the items inside the grid; flux that falls off the grid is
+dropped, not renormalised. Each item is a Gaussian whose covariance gains
+1/12 pixel^2 to stand in for the pixel cell integral (switch it off with
+`pixel_integration=False`), sampled on a patch of four widths and normalised to
+exact flux. The backward pass recomputes the patches chunk by chunk, so memory
+is bounded by `chunk_elements`, not by the number of items. `mode="pyramid"`
+samples items wider than about 2.8 pixels on coarser grids, so a few wide items
+cost no more than many narrow ones; the largest error against the analytic
+profile stays near 2e-4 of an item's peak in both modes. The scene applies no
+PSF; compose it with an operator bundle when the PSF matters.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.scene import GaussianItemScene
+
+header = {
+    "NAXIS": 2, "NAXIS1": 96, "NAXIS2": 64,
+    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN",
+    "CRPIX1": 48.5, "CRPIX2": 32.5, "CRVAL1": 150.0, "CRVAL2": 2.0,
+    "CDELT1": -0.2 / 3600.0, "CDELT2": 0.2 / 3600.0,
+}
+g = torch.Generator().manual_seed(0)
+n, k = 200, 3
+lon = 150.0 + (torch.rand(n, generator=g, dtype=torch.float64) - 0.5) * 12.0 / 3600.0
+lat = 2.0 + (torch.rand(n, generator=g, dtype=torch.float64) - 0.5) * 8.0 / 3600.0
+major = 0.3 + 1.2 * torch.rand(n, generator=g, dtype=torch.float64)       # arcsec
+shape_params = torch.stack(
+    (major, 0.5 * major, 180.0 * torch.rand(n, generator=g, dtype=torch.float64)), dim=1
+)
+scene = GaussianItemScene(
+    lon, lat, shape_params, torch.rand(n, k, generator=g, dtype=torch.float64),
+    min_sigma_arcsec=0.1, mode="pyramid",
+)
+planes = scene.render_coefficients(header)            # (3, 64, 96): flux per pixel
+assert planes.shape == (k, 64, 96)
+inside = planes.sum(dim=(1, 2))
+assert torch.all(inside <= scene.coefficients.sum(0) + 1e-9)   # flux off the grid is dropped
+assert torch.all(inside > 0.95 * scene.coefficients.sum(0))    # this field holds almost all of it
+
+loss = planes.square().sum()
+loss.backward()                                       # every parameter receives a gradient
+assert all(p.grad is not None and torch.isfinite(p.grad).all()
+           for p in scene.parameters())
+```
+
 ## Recipes
 
 ### Invert Several Dithered Exposures

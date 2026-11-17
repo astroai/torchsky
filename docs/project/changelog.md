@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `torchsky.scene.GaussianItemScene`: a differentiable sky of many anisotropic
+  Gaussian items (position, two widths, position angle, K coefficients each),
+  rendered in batch onto a tangent-plane grid through a WCS. Memory in the
+  backward pass is bounded by `chunk_elements`, not by items x patch x K, and
+  `mode="pyramid"` keeps the cost per item independent of its size. Item
+  parameters use the `SourceCatalogScene` Gaussian conventions.
+- `torchsky.wcs.PolynomialDetectorDistortion`, `TelescopeAttitude` and
+  `TelescopeFrameDetectorToSky`: detector-to-sky astrometry for exposures that
+  carry no distortion in the header (JWST count-rate `_rate` files). A
+  differentiable SIAF polynomial maps science pixels to the ideal frame, a
+  rotation by `V3IdlYAngle` and parity maps that to the telescope frame, and an
+  exact spherical attitude from `V2_REF`, `V3_REF`, `RA_REF`, `DEC_REF` and
+  `ROLL_REF` maps it to the sky. The composed transform satisfies the
+  `FieldObservation.detector_to_sky` protocol and also provides `world_to_pixel`
+  (needed by shared-sky cropping). Coefficients are tensors; torchsky ships no
+  calibration data.
+- `field.field_observation_from_exposure_file` reads one calibrated exposure file
+  (JWST `_cal` / `_rate`, HST `_flt` / `_flc` chips) into a `FieldObservation` through
+  torchfits: validity mask and inverse-variance weight from the image, error and
+  data-quality extensions under an explicit `DQPolicy`, `BUNIT`, exposure time and band
+  from the headers, and an optional sky-box cut that reads only the needed region and
+  records its offset in `detector_x0_pix` / `detector_y0_pix`.
+- `torchsky.map.operators.NestedKernelPSF`: a PSF with a sharp core and wings out to hundreds of pixels,
+  applied at a cost that grows with the logarithm of the extent instead of its area. The kernel is split
+  into shells sampled at pitches 1, 2, 4, ... pixels and combined by FFT; it may vary over the detector
+  through a grid of region nodes blended with tent weights. It follows the PSF conventions (impulse-response
+  stamps, zero outside the image, edge loss, exact adjoint, flux conserved for source-conditioned unit-sum
+  kernels) and the `ConditionedKernelPSF` call contract, so `LearnedPSFOp(model=...)` and tiled rendering
+  accept it. Experimental.
+
 ## [0.5.0] - 2026-11-03
 
 First stable release. Identical to 0.5.0rc2 apart from the version number;

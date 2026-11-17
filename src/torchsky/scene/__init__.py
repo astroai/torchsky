@@ -29,6 +29,7 @@ from ..map.scenes import (
 )
 from ..map.splat import SplatDiagnostics
 from ..map.target import TargetRenderSpec
+from .gaussians import GaussianItemScene
 from .operators import (
     ObservationOperatorAdapter,
     ObservationOperatorBundle,
@@ -155,6 +156,7 @@ __all__ = [
     "DiscreteTargetImage",
     "FieldObservation",
     "ForwardContext",
+    "GaussianItemScene",
     "HarmonicAlmScene",
     "GAUSSIAN_MORPHOLOGY",
     "HealpixMapScene",

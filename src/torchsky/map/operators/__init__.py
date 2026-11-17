@@ -187,6 +187,7 @@ from .magnification import (
     scale_source_sizes,
 )
 from .mask_weight import load_image_observation_weight_map
+from .nested_kernel import NestedKernelPSF
 from .noise import (
     ExplicitNoiseOp,
     LearnedNoiseOp,
@@ -387,6 +388,7 @@ __all__ = [
     "MapResamplingKernel",
     "MapStackingMethod",
     "MapValueSemantics",
+    "NestedKernelPSF",
     "NoiseOp",
     "NuisanceCovariance",
     "NuisancePrecisionAdapter",

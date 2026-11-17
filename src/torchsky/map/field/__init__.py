@@ -11,6 +11,8 @@ Submodules
     :data:`FIELD_MODEL_KINDS` tuple derived from :class:`FieldModelKind`.
 ``observation_builders``
     :class:`FieldObservation` factories for binned spectra, IFU cubes, and energy channels.
+``exposure_io``
+    :func:`field_observation_from_exposure_file`: one exposure file to one :class:`FieldObservation`.
 ``implicit_forward``
     Forward-model shell (context ``c``, kinematics ``ζ``, modular survey losses); see ``docs/models/fields.md``."""
 
@@ -218,6 +220,10 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
         "field_observations_from_ifu_cube",
     ),
     "make_tangent_plane_header": (".observation_builders", "make_tangent_plane_header"),
+    "field_observation_from_exposure_file": (
+        ".exposure_io",
+        "field_observation_from_exposure_file",
+    ),
     "FIELD_MODEL_PRESET_NAMES": (".presets", "FIELD_MODEL_PRESET_NAMES"),
     "FIELD_MODEL_PRESETS": (".presets", "FIELD_MODEL_PRESETS"),
     "FieldModelPreset": (".presets", "FieldModelPreset"),
@@ -371,6 +377,7 @@ __all__ = [
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
+    "field_observation_from_exposure_file",
     "field_image_quality_metrics",
     "field_image_residual_product",
     "field_quality_scorecard",

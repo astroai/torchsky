@@ -21,6 +21,7 @@ from ..map.field.core import (
     make_field_component_decomposition as component_decomposition,
     make_field_model as model,
 )
+from ..map.field.exposure_io import field_observation_from_exposure_file
 from ..map.field.observation_builders import (
     field_observations_from_bin_centers,
     field_observations_from_bin_edges,
@@ -225,6 +226,7 @@ __all__ = [
     "component_decomposition",
     "distribution",
     "estimate_domain",
+    "field_observation_from_exposure_file",
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
