@@ -20,6 +20,7 @@ from __future__ import annotations
 import math
 import re
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import torch
 import torchfits
@@ -29,9 +30,34 @@ from ...device import _to
 from ...wcs import WCS
 from ..quality import DQPolicy
 from .observation_ops import copy_header_with_crop
-from .types import DetectorToSkyTransform, FieldObservation
+from .types import (
+    DetectorToSkyTransform,
+    FieldObservation,
+    _validate_value_semantics,
+)
 
-__all__ = ["field_observation_from_exposure_file"]
+__all__ = ["ExposureFileData", "field_observation_from_exposure_file"]
+
+
+class ExposureFileData(NamedTuple):
+    """Result of :func:`field_observation_from_exposure_file` with ``with_extras=True``.
+
+    Attributes:
+        observation: The :class:`FieldObservation`.
+        quality: The data-quality plane of the same cut as ``observation.image``, as
+            ``int64`` holding the unsigned bit pattern (see
+            :meth:`~torchsky.map.quality.DQPolicy._coerce`), on the requested device; ``None``
+            when ``quality_hdu`` is ``None``.
+        metadata: ``INSTRUME`` and ``DETECTOR`` (strings, read from the PRIMARY header and
+            then the science header; a key is absent when the file has no such card) and
+            ``AREA`` (the pixel-area plane of the same cut, in ``dtype``, when the file has an
+            ``AREA`` extension of the right shape, as JWST ``_cal`` files do; absent otherwise).
+    """
+
+    observation: FieldObservation
+    quality: Tensor | None
+    metadata: dict[str, Any]
+
 
 # Keywords tried in order for the exposure time [s], PRIMARY header first and then the science
 # header. EFFEXPTM (JWST effective exposure time) is the duration that converts a count rate
@@ -39,6 +65,8 @@ __all__ = ["field_observation_from_exposure_file"]
 _EXPOSURE_TIME_KEYWORDS = ("EFFEXPTM", "XPOSURE", "EXPTIME")
 # PUPIL values that mean "no pupil element" and are therefore not part of the band name.
 _EMPTY_PUPIL = {"", "CLEAR", "N/A", "NONE"}
+# HST ACS filter-wheel elements that mean "no filter in this wheel": CLEAR, CLEAR1L, CLEAR2L, ...
+_CLEAR_ELEMENT = re.compile(r"^(CLEAR\w*|N/A|NONE|)$", re.IGNORECASE)
 _VARIANCE_HDUS = (
     ("var_poisson", "VAR_POISSON"),
     ("var_rnoise", "VAR_RNOISE"),
@@ -76,7 +104,9 @@ def field_observation_from_exposure_file(
     value_unit: str | None = None,
     value_semantics: str | None = None,
     exposure_time_s: float | None = None,
-) -> FieldObservation | None:
+    zero_fill_unusable: bool = True,
+    with_extras: bool = False,
+) -> FieldObservation | ExposureFileData | None:
     """Read one exposure file (one detector chip) into a :class:`FieldObservation`.
 
     Reads the ``science_hdu`` image, the ``error_hdu`` image (one-sigma uncertainty, same
@@ -85,8 +115,11 @@ def field_observation_from_exposure_file(
     value is finite, its error is finite and positive, its inverse variance ``1 / err**2``
     is finite in the working precision, and ``dq_policy`` accepts its data-quality value.
     The weight is ``1 / err**2`` on usable pixels and ``0`` elsewhere; unusable pixels hold
-    ``0`` in ``image`` (so that no ``NaN`` reaches a loss) and keep their finite ``err``
-    (non-finite ``err`` becomes ``0``).
+    ``0`` in ``image`` (so that no ``NaN`` reaches a loss; see ``zero_fill_unusable``) and keep
+    their finite ``err`` (non-finite ``err`` becomes ``0``). A pixel whose ``1 / err**2``
+    exceeds the largest finite value of ``dtype`` stays usable when ``err`` is finite and
+    positive; its weight is clipped to that largest finite value. (An error so large that
+    ``1 / err**2`` underflows to zero still makes the pixel unusable, as before.)
 
     With ``sky_box``, only the smallest detector rectangle that contains every pixel centre
     inside the box is read (a region read, not a whole-image read). The box is a square on
@@ -105,8 +138,10 @@ def field_observation_from_exposure_file(
     reject: ``DQPolicy(reject_bits=1)`` rejects only ``DO_NOT_USE`` pixels and keeps
     pixels flagged only with other bits.
 
-    The pixel-area plane (JWST ``AREA``) is not read: :class:`FieldObservation` has no slot
-    for it. Slice it with the returned offsets, or evaluate it from the WCS with
+    :class:`FieldObservation` has no slot for the data-quality plane, the instrument names or
+    the pixel-area plane (JWST ``AREA``). With ``with_extras=True`` the function returns an
+    :class:`ExposureFileData` that carries them next to the observation. Without it the pixel
+    area is not read; evaluate it from the WCS with
     :func:`torchsky.map.operators.pixel_area.pixel_area_sr_map`.
 
     Args:
@@ -131,7 +166,11 @@ def field_observation_from_exposure_file(
             coordinates (CPU float64 tensors in, degrees out). It replaces the header WCS
             for the sky-box test and is attached to the result.
         band_name: Band label. ``None`` reads ``FILTER`` (and a non-trivial ``PUPIL`` as
-            ``"FILTER-PUPIL"``) from the PRIMARY header, then the science header.
+            ``"FILTER-PUPIL"``) from the PRIMARY header, then the science header. When there
+            is no ``FILTER`` card, the HST ACS wheels ``FILTER1`` and ``FILTER2`` are read
+            instead, ignoring ``CLEAR*`` elements (``FILTER1='F814W'``,
+            ``FILTER2='CLEAR2L'`` gives ``"F814W"``; two real elements join as
+            ``"FILTER1-FILTER2"``).
         value_unit: Unit string of the pixel values. ``None`` reads ``BUNIT``.
         value_semantics: ``FieldObservation.value_semantics``. ``None`` gives
             ``"surface_brightness"`` when the unit is per solid angle (``MJy/sr``,
@@ -139,9 +178,15 @@ def field_observation_from_exposure_file(
         exposure_time_s: Exposure time [s]. ``None`` reads ``EFFEXPTM``, ``XPOSURE`` or
             ``EXPTIME`` (first present and positive) from the PRIMARY header, then the
             science header.
+        zero_fill_unusable: ``True`` (the default) writes ``0`` into ``image`` where a pixel is
+            unusable. ``False`` keeps the file's science value there (including ``NaN`` or
+            flagged values), so the caller must apply ``mask`` before using ``image`` in a
+            loss. ``weight`` is ``0`` on those pixels in both cases.
+        with_extras: ``True`` returns an :class:`ExposureFileData` (observation, data-quality
+            plane, metadata) instead of the observation alone.
 
     Returns:
-        The observation, or ``None`` when the cut is empty: no pixel centre inside
+        The observation (an :class:`ExposureFileData` with ``with_extras=True``), or ``None`` when the cut is empty: no pixel centre inside
         ``sky_box``, or fewer than ``min_valid_pixels`` usable pixels in the cut. An empty
         cut is the normal outcome of scanning many files for the ones that overlap a
         region, so it is not an error; every malformed input raises.
@@ -175,6 +220,7 @@ def field_observation_from_exposure_file(
         extver=extver,
         dtype=dtype,
         exposure_time_s=exposure_time_s,
+        value_semantics=value_semantics,
     )
     path_str = str(path)
     if not Path(path_str).is_file():
@@ -234,6 +280,11 @@ def field_observation_from_exposure_file(
             raise ValueError(f"{name} plane has unsupported dtype {plane.dtype}")
     dq = None if hdu_quality is None else region(hdu_quality)
     variances = {name: region(index) for name, index in hdu_variance.items()}
+    area = None
+    if with_extras:
+        hdu_area = _find_hdu(path_str, "AREA", extver, required=False)
+        if hdu_area is not None and _plane_shape(path_str, hdu_area, "AREA") == shape:
+            area = region(hdu_area)
 
     compute = torch.float32 if out_device.type == "mps" else torch.float64
     image = _to(image, out_device, compute)
@@ -241,16 +292,21 @@ def field_observation_from_exposure_file(
     usable = torch.isfinite(image) & torch.isfinite(err) & (err > 0)
     safe_err = torch.where(usable, err, torch.ones_like(err))
     weight = torch.where(usable, safe_err.reciprocal().square(), torch.zeros_like(err))
-    weight = weight.to(dtype)
-    # An error so small that 1 / err**2 overflows the output precision is not usable either.
-    usable = usable & torch.isfinite(weight) & (weight > 0)
+    # An error so small that 1 / err**2 overflows the output precision keeps its pixel: the
+    # weight is clipped to the largest finite value of ``dtype`` (finite, positive err only
+    # reaches here). A weight that underflows to zero makes the pixel unusable.
+    weight = weight.clamp(max=torch.finfo(dtype).max).to(dtype)
+    usable = usable & (weight > 0)
     if dq is not None:
         assert policy is not None
         usable = usable & policy.usability_mask(dq.to(out_device))
     if mask_outside_box and inside is not None:
         usable = usable & inside.to(out_device)
     weight = torch.where(usable, weight, torch.zeros_like(weight))
-    image_out = torch.where(usable, image, torch.zeros_like(image)).to(dtype)
+    if zero_fill_unusable:
+        image_out = torch.where(usable, image, torch.zeros_like(image)).to(dtype)
+    else:
+        image_out = image.to(dtype)
     err_out = torch.where(torch.isfinite(err), err, torch.zeros_like(err)).to(dtype)
 
     if int(usable.sum()) < int(min_valid_pixels):
@@ -263,7 +319,7 @@ def field_observation_from_exposure_file(
     if semantics is None and unit is not None and _PER_SOLID_ANGLE.search(unit):
         semantics = "surface_brightness"
 
-    return FieldObservation(
+    observation = FieldObservation(
         image=image_out,
         header=copy_header_with_crop(
             science_header, x0=x0, y0=y0, width=x1 - x0, height=y1 - y0
@@ -288,6 +344,17 @@ def field_observation_from_exposure_file(
             else _exposure_time(primary, science_header)
         ),
     )
+    if not with_extras:
+        return observation
+    metadata: dict[str, Any] = {}
+    for key in ("INSTRUME", "DETECTOR"):
+        text = _text(primary.get(key)) or _text(science_header.get(key))
+        if text is not None:
+            metadata[key] = text
+    if area is not None:
+        metadata["AREA"] = _to(area, out_device, dtype)
+    quality = None if dq is None else DQPolicy._coerce(dq).to(out_device)
+    return ExposureFileData(observation, quality, metadata)
 
 
 _INTEGER_DTYPES = (
@@ -310,7 +377,11 @@ def _checked_arguments(
     extver: int | None,
     dtype: torch.dtype,
     exposure_time_s: float | None,
+    value_semantics: str | None = None,
 ) -> DQPolicy | None:
+    if value_semantics is not None:
+        # Fail before any file is read; the observation validates again on construction.
+        _validate_value_semantics(str(value_semantics))
     if not dtype.is_floating_point:
         raise TypeError("dtype must be a floating-point torch dtype")
     if dq_policy is not None and quality_hdu is None:
@@ -402,10 +473,23 @@ def _text(value: object) -> str | None:
     return text or None
 
 
+def _wheel_band_name(header: dict) -> str | None:
+    """Band from the ACS-style ``FILTER1`` / ``FILTER2`` wheels, ignoring ``CLEAR*``."""
+    elements = []
+    for key in ("FILTER1", "FILTER2"):
+        element = _text(header.get(key))
+        if element is not None and not _CLEAR_ELEMENT.match(element):
+            elements.append(element)
+    return "-".join(elements) if elements else None
+
+
 def _band_name(primary: dict, science: dict) -> str | None:
     for header in (primary, science):
         filt = _text(header.get("FILTER"))
         if filt is None:
+            wheels = _wheel_band_name(header)
+            if wheels is not None:
+                return wheels
             continue
         pupil = _text(header.get("PUPIL"))
         if pupil is not None and pupil.upper() not in _EMPTY_PUPIL:

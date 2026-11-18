@@ -7,15 +7,20 @@ throughputs (2025-01), and PSF widths use the STScI on-orbit PSF table.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-from typing import Any, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from enum import IntFlag
+from typing import Any
 
 __all__ = [
     "NIRCAM_METADATA_SOURCES",
     "NIRCAM_UPDEC_BANDS",
-    "NIRCamImagingBand",
+    "ACSWFCDataQuality",
+    "JWSTDataQuality",
     "JWSTExposureTiming",
+    "NIRCamImagingBand",
+    "WFC3IRDataQuality",
     "jwst_exposure_timing",
     "nircam_imaging_band",
 ]
@@ -27,6 +32,98 @@ NIRCAM_METADATA_SOURCES = {
     "psf": "https://jwst-docs.stsci.edu/jwst-near-infrared-camera/nircam-performance/nircam-point-spread-functions",
 }
 NIRCAM_UPDEC_BANDS = ("F090W", "F150W", "F200W", "F277W", "F356W", "F444W")
+
+
+class JWSTDataQuality(IntFlag):
+    """JWST pixel data-quality (``DQ``) bits, as set by the calibration pipeline.
+
+    Each member is ``1 << bit``; combine with ``|`` and pass the result as
+    ``DQPolicy(reject_bits=JWSTDataQuality.DO_NOT_USE | JWSTDataQuality.SATURATED)``.
+    Source: the JWST pipeline documentation, "Data Quality Flags" (``jwst`` and
+    ``stdatamodels.jwst.datamodels.dqflags.pixel``), also summarised in the JWST User
+    Documentation, "Understanding Data Quality Flags". The pipeline writes the plane
+    as ``uint32``.
+
+    Not included, because their meaning is not certain from the sources the author
+    could consult offline: bit 7 (value 128, listed as reserved) and any bit added to
+    the pipeline after this table was written. A bit that is absent here is simply not
+    named; it is still handled correctly as a number.
+    """
+
+    DO_NOT_USE = 1 << 0
+    SATURATED = 1 << 1
+    JUMP_DET = 1 << 2
+    DROPOUT = 1 << 3
+    OUTLIER = 1 << 4
+    PERSISTENCE = 1 << 5
+    AD_FLOOR = 1 << 6
+    UNRELIABLE_ERROR = 1 << 8
+    NON_SCIENCE = 1 << 9
+    DEAD = 1 << 10
+    HOT = 1 << 11
+    WARM = 1 << 12
+    LOW_QE = 1 << 13
+    RC = 1 << 14
+    TELEGRAPH = 1 << 15
+    NONLINEAR = 1 << 16
+    BAD_REF_PIXEL = 1 << 17
+    NO_FLAT_FIELD = 1 << 18
+    NO_GAIN_VALUE = 1 << 19
+    NO_LIN_CORR = 1 << 20
+    NO_SAT_CHECK = 1 << 21
+    UNRELIABLE_BIAS = 1 << 22
+    UNRELIABLE_DARK = 1 << 23
+    UNRELIABLE_SLOPE = 1 << 24
+    UNRELIABLE_FLAT = 1 << 25
+    OPEN = 1 << 26
+    ADJ_OPEN = 1 << 27
+    UNRELIABLE_RESET = 1 << 28
+    MSA_FAILED_OPEN = 1 << 29
+    OTHER_BAD_PIXEL = 1 << 30
+    REFERENCE_PIXEL = 1 << 31
+
+
+class WFC3IRDataQuality(IntFlag):
+    """HST WFC3/IR ``DQ`` bits that are certain, for ``_flt`` and ``_ima`` files.
+
+    Source: the WFC3 Data Handbook (STScI), chapter "WFC3 Data Calibration" (the
+    data-quality flags table for the IR channel). Only bits whose meaning the author
+    is sure of are named; combine with ``|`` for ``DQPolicy(reject_bits=...)``.
+
+    Left out on purpose (not certain enough to name): 8, 32, 64, 128 (zero-read,
+    unstable, warm and reference-pixel flags, whose order differs between the UVIS and
+    IR tables), 1024, 2048 (zero-read signal), 4096 and above (cosmic-ray and
+    related flags). Use the number directly for those after checking the handbook.
+    """
+
+    RS_DECODE_ERROR = 1 << 0
+    DATA_LOST = 1 << 1
+    BAD_DETECTOR_PIXEL = 1 << 2
+    HOT_PIXEL = 1 << 4
+    FULL_WELL_SATURATION = 1 << 8
+    BAD_FLAT = 1 << 9
+
+
+class ACSWFCDataQuality(IntFlag):
+    """HST ACS/WFC ``DQ`` bits that are certain, for ``_flt`` and ``_flc`` files.
+
+    Source: the ACS Data Handbook (STScI), chapter "ACS Data Calibration" (the
+    data-quality flags table). Only bits whose meaning the author is sure of are
+    named; combine with ``|`` for ``DQPolicy(reject_bits=...)``.
+
+    Left out on purpose (not certain enough to name): 8, 32, 64, 128 (aperture mask,
+    warm-pixel, bad column and bias flags), 1024 (charge trap), 4096, 8192 and 16384 (the
+    cosmic-ray and related flags: which of them calacs and AstroDrizzle set differs
+    by product). Use the number directly for those after checking the handbook.
+    """
+
+    RS_DECODE_ERROR = 1 << 0
+    DATA_LOST = 1 << 1
+    BAD_DETECTOR_PIXEL = 1 << 2
+    HOT_PIXEL = 1 << 4
+    FULL_WELL_SATURATION = 1 << 8
+    BAD_FLAT = 1 << 9
+    AD_SATURATION = 1 << 11
 
 
 @dataclass(frozen=True)

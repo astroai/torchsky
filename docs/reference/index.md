@@ -62,7 +62,7 @@ reference pages carry the contracts.
 | `torchsky.map.operators.pixel_calibration` | experimental | 1 | [reference](map-operators-pixel-calibration.md) |
 | `torchsky.map.query` | experimental | 2 | [reference](map-query.md) |
 | `torchsky.map.solvers` | experimental | 18 | [reference](map-solvers.md) |
-| `torchsky.scene` | experimental | 37 | [reference](scene.md) |
+| `torchsky.scene` | experimental | 38 | [reference](scene.md) |
 | `torchsky.viz` | experimental | 10 | [reference](viz.md) |
 
 ## Public modules

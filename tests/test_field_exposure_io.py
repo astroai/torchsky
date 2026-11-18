@@ -11,10 +11,12 @@ import torchfits
 
 from torchsky.map.field import observation_ops
 from torchsky.map.field.exposure_io import (
+    ExposureFileData,
     _window_for_sky_box,
     field_observation_from_exposure_file,
 )
 from torchsky.map.field.observation_ops import observation_pixel_to_world
+from torchsky.map.field.types import FieldObservation
 from torchsky.map.quality import DQPolicy
 from torchsky.wcs import WCS
 
@@ -272,16 +274,32 @@ def test_no_quality_extension_requested(tmp_path: Path) -> None:
         field_observation_from_exposure_file(path)
 
 
-def test_weight_overflow_in_output_precision_is_unusable(tmp_path: Path) -> None:
+def test_weight_overflow_in_output_precision_stays_usable_with_clipped_weight(
+    tmp_path: Path,
+) -> None:
     image, err, dq = _planes(4)
     err[10, 10] = 1e-30  # 1 / err**2 = 1e60: finite in float64, infinite in float32
     path = _write(tmp_path / "tiny.fits", image, err, dq)
     f32 = field_observation_from_exposure_file(path)
-    assert not bool(f32.mask[10, 10]) and float(f32.weight[10, 10]) == 0.0
+    assert bool(f32.mask[10, 10])
+    assert float(f32.weight[10, 10]) == torch.finfo(torch.float32).max
+    assert bool(torch.isfinite(f32.weight).all())
+    assert float(f32.image[10, 10]) == pytest.approx(float(image[10, 10]))
     f64 = field_observation_from_exposure_file(path, dtype=torch.float64)
     assert bool(f64.mask[10, 10]) and float(f64.weight[10, 10]) == pytest.approx(
         1e60, rel=1e-6
     )
+
+
+def test_unusable_err_still_drops_pixels_near_the_overflow_case(tmp_path: Path) -> None:
+    image, err, dq = _planes(4)
+    err[3, 3] = 0.0
+    err[4, 4] = -1.0
+    err[5, 5] = float("nan")
+    path = _write(tmp_path / "bad_err.fits", image, err, dq)
+    obs = field_observation_from_exposure_file(path)
+    assert not bool(obs.mask[3, 3] | obs.mask[4, 4] | obs.mask[5, 5])
+    assert int(obs.mask.sum()) == H * W - 3
 
 
 # ---------------------------------------------------------------- sky-box cut
@@ -753,4 +771,149 @@ def test_invalid_arguments_raise(basic, kwargs) -> None:
 def test_exported_through_lazy_facade() -> None:
     from torchsky.map.field.exposure_io import __all__ as exported
 
-    assert exported == ["field_observation_from_exposure_file"]
+    assert sorted(exported) == [
+        "ExposureFileData",
+        "field_observation_from_exposure_file",
+    ]
+
+
+# ------------------------------------------------- quality plane, metadata, band names
+
+
+def test_default_call_still_returns_a_bare_observation_without_instrument_cards(
+    tmp_path: Path,
+) -> None:
+    image, err, dq = _planes(20)
+    path = _write(
+        tmp_path / "x_cal.fits",
+        image,
+        err,
+        dq,
+        primary={"INSTRUME": "NIRCAM", "DETECTOR": "NRCB1"},
+        extra=[_hdu(torch.ones(H, W), "AREA", 1)],
+    )
+    obs = field_observation_from_exposure_file(path)
+    assert isinstance(obs, FieldObservation)
+    assert "DETECTOR" not in obs.header and "INSTRUME" not in obs.header
+
+
+def test_with_extras_returns_dq_plane_instrument_names_and_area(tmp_path: Path) -> None:
+    image, err, dq = _planes(21)
+    dq[7, 9] = 2
+    dq[2, 3] = 1
+    area = 1.0 + 0.01 * torch.arange(H * W, dtype=torch.float32).reshape(H, W)
+    path = _write(
+        tmp_path / "x_cal.fits",
+        image,
+        err,
+        dq,
+        primary={"INSTRUME": "NIRCAM", "DETECTOR": "NRCB1"},
+        extra=[_hdu(area, "AREA", 1)],
+    )
+    result = field_observation_from_exposure_file(path, with_extras=True)
+    assert isinstance(result, ExposureFileData)
+    assert torch.equal(result.quality, dq)
+    assert result.quality.dtype == torch.int64
+    assert result.metadata["INSTRUME"] == "NIRCAM"
+    assert result.metadata["DETECTOR"] == "NRCB1"
+    torch.testing.assert_close(result.metadata["AREA"], area)
+    plain = field_observation_from_exposure_file(path)
+    assert torch.equal(result.observation.image, plain.image)
+    assert torch.equal(result.observation.mask, plain.mask)
+
+
+def test_with_extras_follows_the_sky_box_cut(tmp_path: Path) -> None:
+    image, err, dq = _planes(22)
+    area = torch.arange(H * W, dtype=torch.float32).reshape(H, W)
+    dq = torch.arange(H * W, dtype=torch.int64).reshape(H, W) % 8
+    path = _write(
+        tmp_path / "x_cal.fits", image, err, dq, extra=[_hdu(area, "AREA", 1)]
+    )
+    box = (CRVAL[0], CRVAL[1], 0.6)
+    result = field_observation_from_exposure_file(
+        path, sky_box=box, with_extras=True, dq_policy=DQPolicy(reject_bits=0)
+    )
+    obs = result.observation
+    x0, y0 = int(obs.detector_x0_pix), int(obs.detector_y0_pix)
+    h, w = obs.image.shape
+    assert (x0, y0) != (0, 0) and result.quality.shape == (h, w)
+    assert torch.equal(result.quality, dq[y0 : y0 + h, x0 : x0 + w])
+    assert torch.equal(result.metadata["AREA"], area[y0 : y0 + h, x0 : x0 + w])
+
+
+def test_with_extras_without_area_or_instrument_cards_omits_those_keys(
+    tmp_path: Path,
+) -> None:
+    image, err, _dq = _planes(23)
+    path = _write(tmp_path / "x_flt.fits", image, err, None)
+    result = field_observation_from_exposure_file(
+        path, quality_hdu=None, with_extras=True
+    )
+    assert result.quality is None
+    assert result.metadata == {}
+    assert field_observation_from_exposure_file(
+        path, quality_hdu=None, with_extras=True
+    )
+
+
+def test_empty_cut_with_extras_is_still_none(basic) -> None:
+    path, _, _, _ = basic
+    assert (
+        field_observation_from_exposure_file(
+            path, sky_box=(151.0, 2.2, 0.1), with_extras=True
+        )
+        is None
+    )
+
+
+def test_zero_fill_can_be_switched_off(tmp_path: Path) -> None:
+    image, err, dq = _planes(24)
+    dq[6, 8] = 1
+    image[12, 13] = float("nan")
+    path = _write(tmp_path / "x_cal.fits", image, err, dq)
+    filled = field_observation_from_exposure_file(path)
+    kept = field_observation_from_exposure_file(path, zero_fill_unusable=False)
+    assert float(filled.image[6, 8]) == 0.0 and float(filled.image[12, 13]) == 0.0
+    assert float(kept.image[6, 8]) == pytest.approx(float(image[6, 8]))
+    assert bool(torch.isnan(kept.image[12, 13]))
+    assert torch.equal(kept.mask, filled.mask) and torch.equal(
+        kept.weight, filled.weight
+    )
+    assert float(kept.weight[6, 8]) == 0.0 and not bool(kept.mask[6, 8])
+    usable = filled.mask
+    assert torch.equal(kept.image[usable], filled.image[usable])
+
+
+@pytest.mark.parametrize(
+    "cards, expected",
+    [
+        ({"FILTER1": "F814W", "FILTER2": "CLEAR2L"}, "F814W"),
+        ({"FILTER1": "CLEAR1L", "FILTER2": "F606W"}, "F606W"),
+        ({"FILTER1": "CLEAR1L", "FILTER2": "CLEAR2L"}, None),
+        ({"FILTER1": "F475W", "FILTER2": "FR459M"}, "F475W-FR459M"),
+        ({"FILTER1": "clear1l", "FILTER2": " f555w "}, "f555w"),
+        ({"FILTER": "F160W"}, "F160W"),
+        ({"FILTER": "F160W", "FILTER1": "F814W", "FILTER2": "CLEAR2L"}, "F160W"),
+    ],
+)
+def test_hst_band_names_from_filter_wheels(
+    tmp_path: Path, cards: dict, expected: str | None
+) -> None:
+    image, err, dq = _planes(25)
+    primary = {"FILTER": None, "PUPIL": None, **cards}
+    path = _write(tmp_path / "x_flc.fits", image, err, dq, primary=primary)
+    assert field_observation_from_exposure_file(path).band_name == expected
+
+
+def test_value_semantics_typo_fails_before_the_file_is_read(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="value_semantics"):
+        field_observation_from_exposure_file(
+            tmp_path / "missing.fits", value_semantics="surface_brigthness"
+        )
+    image, err, dq = _planes(26)
+    path = _write(tmp_path / "x_flt.fits", image, err, dq, sci_cards={"BUNIT": "DN/s"})
+    obs = field_observation_from_exposure_file(
+        path, value_semantics="count_rate_per_pixel"
+    )
+    assert obs.value_semantics == "count_rate_per_pixel"
+    assert field_observation_from_exposure_file(path).value_semantics is None

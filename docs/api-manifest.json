@@ -397,6 +397,7 @@
     "predict",
     "product_spec",
     "render",
+    "render_gaussian_items",
     "target_from_header",
     "target_from_product",
     "target_to_field_observation"

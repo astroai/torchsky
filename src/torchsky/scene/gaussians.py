@@ -2,8 +2,8 @@
 
 A sky made of many Gaussian "items" (continuous position, two widths, a position
 angle, and ``K`` linear coefficients each) is rasterised onto ``K`` coefficient
-planes.  The pixel kernel is private and WCS-free (:func:`_rasterize_gaussians`);
-the public class :class:`GaussianItemScene` holds the item parameters in sky units
+planes.  The pixel kernel is public and WCS-free (:func:`render_gaussian_items`: tensors
+in, tensors out, nothing held); the public class :class:`GaussianItemScene` holds the item parameters in sky units
 and maps them to pixel centres and pixel covariances through a WCS.
 
 Pixel convention (as :mod:`torchsky.map.splat`): 0-indexed pixel centres, ``x``
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
@@ -37,6 +37,11 @@ _HALF_BUCKETS = (2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 1
 _BUCKET_STEP = 32
 # Elements (items x patch nodes x K) per rasterisation chunk.
 _DEFAULT_CHUNK_ELEMENTS = 4_000_000
+# Largest patch half-size [nodes of the level an item is sampled on]: a patch has at most
+# (2 * cap + 1)^2 nodes.  128 is the last entry of ``_HALF_BUCKETS``, so every item whose
+# larger principal width is at most 32 nodes (4 widths = 128) is untouched.
+_DEFAULT_PATCH_CAP = 128
+_OUTPUTS = ("flux_per_pixel", "surface_brightness")
 # Variance of a unit pixel box along one axis: the cell integral of a Gaussian is
 # approximated by the point sample of the Gaussian whose covariance is Sigma + I / 12.
 _PIXEL_VARIANCE = 1.0 / 12.0
@@ -122,6 +127,7 @@ class _Level:
     threshold: float = (
         0.0  # smaller principal variance of Sigma + q needed to be sent here
     )
+    cap: int | None = None  # largest patch half-size [nodes]; None means unbounded
 
 
 def _pyramid_levels(height: int, width: int, q: float, tmin_max: float) -> list[_Level]:
@@ -200,7 +206,8 @@ def _principal_variances(cov: Tensor, offset: float) -> tuple[Tensor, Tensor]:
 
 
 def _patch_half_sizes(cov: Tensor, level: _Level, truncation_sigma: float) -> Tensor:
-    """Patch half-size [nodes of ``level``] of each item: bucketed ``ceil(R sqrt(lambda_max) / pitch)``."""
+    """Patch half-size [nodes of ``level``] of each item: bucketed ``ceil(R sqrt(lambda_max) / pitch)``,
+    at most ``level.cap`` (the patch of a wider item is truncated, see ``render_gaussian_items``)."""
     lam_max, _ = _principal_variances(cov, level.qoff)
     need = (
         torch.ceil(truncation_sigma * torch.sqrt(lam_max.clamp_min(0.0)) / level.pitch)
@@ -210,7 +217,8 @@ def _patch_half_sizes(cov: Tensor, level: _Level, truncation_sigma: float) -> Te
     table = torch.tensor(_HALF_BUCKETS, device=need.device)
     bucketed = table[torch.searchsorted(table, need.clamp(max=_HALF_BUCKETS[-1]))]
     stepped = ((need + _BUCKET_STEP - 1) // _BUCKET_STEP) * _BUCKET_STEP
-    return torch.where(need > _HALF_BUCKETS[-1], stepped, bucketed)
+    half = torch.where(need > _HALF_BUCKETS[-1], stepped, bucketed)
+    return half if level.cap is None else half.clamp(max=level.cap)
 
 
 def _chunks(
@@ -363,56 +371,124 @@ def _scatter_level(
 
 
 # ---------------------------------------------------------------------------- kernel
-def _rasterize_gaussians(
+def _check_patch_cap(patch_cap: Any) -> int | None:
+    if patch_cap is None:
+        return None
+    if isinstance(patch_cap, bool) or int(patch_cap) != patch_cap or int(patch_cap) < 1:
+        raise ValueError("patch_cap must be None or a positive integer")
+    return int(patch_cap)
+
+
+def render_gaussian_items(
     centers_pix: Tensor,
     shape_pix: Tensor,
-    coefficients: Tensor,
+    flux: Tensor,
     shape: tuple[int, int],
     *,
     mode: str = "direct",
+    output: str = "flux_per_pixel",
+    pixel_area: float | None = None,
     pixel_integration: bool = True,
     chunk_elements: int = _DEFAULT_CHUNK_ELEMENTS,
     truncation_sigma: float = _TRUNCATION_SIGMA,
+    patch_cap: int | None = _DEFAULT_PATCH_CAP,
 ) -> Tensor:
     """Rasterise Gaussian items onto ``K`` planes of a regular ``(H, W)`` pixel grid.
 
-    Item ``n`` contributes ``coefficients[n, k] * g_n(node)`` to plane ``k``, where ``g_n``
-    is a Gaussian density per pixel (``sum_nodes g_n = 1`` for an item inside the grid), so
-    the flux of item ``n`` in plane ``k`` is its coefficient.  Flux falling off the grid is
-    dropped, not renormalised.
+    Tensors in, tensors out, nothing held: the item parameters may be any differentiable
+    function of the caller's own parameters (log fluxes, widths above a floor, positions in
+    a tangent plane, ...).  This is the one implementation behind
+    :class:`GaussianItemScene`, which only adds the WCS geometry.
+
+    Item ``n`` contributes ``flux[n, k] * g_n(node)`` to plane ``k``, where ``g_n`` is a
+    Gaussian density per pixel (``sum_nodes g_n = 1`` for an item inside the grid), so the
+    flux of item ``n`` in plane ``k`` is ``flux[n, k]`` (units of ``flux``).  Flux falling
+    off the grid is dropped, not renormalised.  Pixel units throughout: pixel centres are
+    0-indexed (``x`` along columns, ``y`` along rows) and widths are in pixels.  Positions
+    are handled in float64 whatever the dtype of the inputs, so a float32 position keeps
+    its own resolution (about 2e-3 pixel at pixel 20000) and loses nothing more.
 
     Args:
-        centers_pix: ``(C, 2)`` item centres ``(x, y)``, 0-indexed pixel centres (``x`` along
-            columns, ``y`` along rows).
-        shape_pix: ``(C, 2, 2)`` covariance in pixels squared (symmetric positive definite),
-            or ``(C, 3)`` rows ``(major_sigma, minor_sigma, angle)`` in pixels and radians,
-            with the major axis along ``(cos angle, sin angle)`` in ``(x, y)``.
-        coefficients: ``(C, K)`` coefficients (fluxes); sets the output dtype.
+        centers_pix: ``(C, 2)`` item centres ``(x, y)`` [pixels].
+        shape_pix: ``(C, 2, 2)`` covariance [pixels^2] (symmetric positive definite), or
+            ``(C, 3)`` rows ``(major_sigma, minor_sigma, angle)`` [pixels, pixels, radians]
+            with ``0 < minor <= major`` and the major axis along ``(cos angle, sin angle)``
+            in ``(x, y)``.
+        flux: ``(C, K)`` fluxes, in any unit; ``K`` planes are rendered at once.  Sets the
+            output dtype.
         shape: ``(H, W)`` of the grid.
         mode: ``"direct"`` samples every item on the fine grid on a patch of
             ``+-truncation_sigma`` widths.  ``"pyramid"`` samples items wider than about
             2.8 nodes on coarser grids with the covariance left after a fixed Gaussian
             cascade, so the cost per item does not grow with its size.
+        output: ``"flux_per_pixel"`` (default): each pixel holds the flux in it, so a plane
+            sums to the flux of the items inside the grid.  ``"surface_brightness"``: that
+            divided by ``pixel_area``, i.e. flux per unit area (per arcsec^2 if
+            ``pixel_area`` is in arcsec^2).
+        pixel_area: area of one pixel in the unit the surface brightness is wanted in;
+            required (and only allowed) for ``output="surface_brightness"``.
         pixel_integration: if true the pixel cell integral is approximated by adding
             ``1/12`` pixel^2 to the covariance before point sampling; if false the item is
             point sampled with its own covariance.
         chunk_elements: elements (items x patch nodes x K) held per chunk, in the forward
             and, recomputed, in the backward pass.
         truncation_sigma: patch half-size in larger principal widths.
+        patch_cap: largest patch half-size [nodes], so a patch has at most
+            ``(2 * patch_cap + 1)^2`` nodes and the memory of one item is bounded whatever
+            its width; ``None`` removes the bound.  The default, 128, leaves every item
+            with a larger principal width of at most 32 pixels unchanged.  An item whose
+            patch would be larger (a larger principal width above ``patch_cap /
+            truncation_sigma`` nodes) is treated as follows.  (1) If its smaller principal
+            variance allows it, it is sampled on the coarsest pyramid level it qualifies
+            for, as in ``mode="pyramid"`` (even when ``mode="direct"``): the error against
+            the analytic profile is then that of the pyramid, about 2e-4 of the item's
+            peak.  (2) Otherwise (a long thin item) its patch is cut to ``+-patch_cap``
+            nodes and renormalised to the full flux: the flux is exact, but the profile is
+            that of a Gaussian truncated at ``patch_cap`` nodes, a real approximation.
+            Measured against the analytic profile as a fraction of the item's own peak
+            (minor width 1.5 pixels, cap 128): major width 40 pixels, 0.002; 60, 0.07;
+            100, 0.38; 200, 0.94.  Pass a larger ``patch_cap`` (memory grows as its square)
+            or ``None`` for such items.
 
     Returns:
-        ``(K, H, W)`` tensor in ``coefficients.dtype``, differentiable (first order) in
-        ``centers_pix``, ``shape_pix`` and ``coefficients``.
+        ``(K, H, W)`` tensor in ``flux.dtype``, differentiable (first order) in
+        ``centers_pix``, ``shape_pix`` and ``flux``.
 
     Raises:
         ValueError: on malformed shapes, non-finite values, non-positive or ordered-wrongly
-            widths, a non-positive-definite covariance, an unknown mode or a non-positive
-            ``chunk_elements`` / ``truncation_sigma``.
+            widths, a non-positive-definite covariance, an unknown ``mode`` or ``output``,
+            a missing or misplaced ``pixel_area``, or a non-positive ``chunk_elements``,
+            ``truncation_sigma`` or ``patch_cap``.
+
+    Examples:
+        >>> import torch
+        >>> xy = torch.tensor([[8.3, 5.6]], dtype=torch.float64, requires_grad=True)
+        >>> widths = torch.tensor([[2.0, 1.0, 0.3]], dtype=torch.float64)
+        >>> planes = render_gaussian_items(xy, widths, torch.tensor([[5.0, 1.0]], dtype=torch.float64), (12, 16))
+        >>> tuple(planes.shape)
+        (2, 12, 16)
+        >>> planes.sum().backward()
+        >>> tuple(xy.grad.shape)
+        (1, 2)
     """
     height, width = _check_shape(shape)
     if mode not in _MODES:
         raise ValueError(f"mode must be one of {_MODES}, got {mode!r}")
+    if output not in _OUTPUTS:
+        raise ValueError(f"output must be one of {_OUTPUTS}, got {output!r}")
+    if output == "surface_brightness":
+        if (
+            pixel_area is None
+            or not math.isfinite(float(pixel_area))
+            or float(pixel_area) <= 0
+        ):
+            raise ValueError(
+                "output='surface_brightness' needs pixel_area, positive and finite"
+            )
+    elif pixel_area is not None:
+        raise ValueError("pixel_area is only used with output='surface_brightness'")
     chunk_elements = _check_chunk(chunk_elements)
+    cap = _check_patch_cap(patch_cap)
     if not math.isfinite(truncation_sigma) or truncation_sigma <= 0:
         raise ValueError("truncation_sigma must be positive and finite")
     if not isinstance(centers_pix, Tensor) or not centers_pix.is_floating_point():
@@ -420,41 +496,60 @@ def _rasterize_gaussians(
     if centers_pix.ndim != 2 or centers_pix.shape[1] != 2:
         raise ValueError("centers_pix must have shape (C, 2)")
     if (
-        not isinstance(coefficients, Tensor)
-        or not coefficients.is_floating_point()
-        or coefficients.ndim != 2
-        or coefficients.shape[1] < 1
+        not isinstance(flux, Tensor)
+        or not flux.is_floating_point()
+        or flux.ndim != 2
+        or flux.shape[1] < 1
     ):
         raise ValueError(
-            "coefficients must be a floating tensor of shape (C, K), K >= 1"
+            "flux (the coefficients) must be a floating tensor of shape (C, K), K >= 1"
         )
-    n_items, k = coefficients.shape
+    n_items, k = flux.shape
     if centers_pix.shape[0] != n_items or shape_pix.shape[0] != n_items:
-        raise ValueError("centers_pix, shape_pix and coefficients must share C items")
+        raise ValueError(
+            "centers_pix, shape_pix and flux (coefficients) must share C items"
+        )
     if not bool(torch.isfinite(centers_pix).all()) or not bool(
-        torch.isfinite(coefficients).all()
+        torch.isfinite(flux).all()
     ):
-        raise ValueError("centers_pix and coefficients must be finite")
-    if not (centers_pix.device == shape_pix.device == coefficients.device):
+        raise ValueError("centers_pix and flux (coefficients) must be finite")
+    if not (centers_pix.device == shape_pix.device == flux.device):
         raise ValueError("inputs must be on one device")
     cov = _covariance_entries(shape_pix)  # (C, 3)
-    dtype = coefficients.dtype
+    dtype = flux.dtype
     q = _PIXEL_VARIANCE if pixel_integration else 0.0
-    zero = torch.zeros(k, height, width, device=coefficients.device, dtype=dtype)
+    zero = torch.zeros(k, height, width, device=flux.device, dtype=dtype)
     if n_items == 0:
         return zero
 
     tmin = _principal_variances(cov, q)[1]
+    # Which items would need a patch above the cap on the fine grid (direct mode only:
+    # pyramid mode already puts every wide item on the level that suits it).
+    over = torch.zeros(n_items, dtype=torch.bool, device=tmin.device)
+    if mode == "direct" and cap is not None:
+        wanted = _patch_half_sizes(
+            cov, _Level(height, width, 1.0, 0.0, q), truncation_sigma
+        )
+        over = wanted > cap
+    if mode == "pyramid":
+        tmin_levels = float(tmin.max())
+    elif bool(over.any()):
+        tmin_levels = float(tmin[over].max())
+    else:
+        tmin_levels = 0.0
     levels = (
-        _pyramid_levels(height, width, q, float(tmin.max()))
-        if mode == "pyramid"
+        _pyramid_levels(height, width, q, tmin_levels)
+        if mode == "pyramid" or bool(over.any())
         else [_Level(height, width, 1.0, 0.0, q)]
     )
+    levels = [replace(lv, cap=cap) for lv in levels]
     if len(levels) > 1:
         thresholds = torch.tensor(
             [lv.threshold for lv in levels[1:]], dtype=torch.float64, device=tmin.device
         )
         assigned = torch.searchsorted(thresholds, tmin, right=True)
+        if mode == "direct":
+            assigned = torch.where(over, assigned, torch.zeros_like(assigned))
     else:
         assigned = torch.zeros(n_items, dtype=torch.long, device=tmin.device)
 
@@ -465,7 +560,7 @@ def _rasterize_gaussians(
             plane = _scatter_level(
                 centers_pix[idx],
                 cov[idx],
-                coefficients[idx],
+                flux[idx],
                 levels[lev],
                 chunk_elements,
                 truncation_sigma,
@@ -474,8 +569,36 @@ def _rasterize_gaussians(
         if lev > 0 and total is not None:
             total = _upsample(total, levels, lev)
     if total is None:  # every item is off the grid: keep the graph connected
-        return zero + 0.0 * (centers_pix.sum() + cov.sum() + coefficients.sum())
+        total = zero + 0.0 * (centers_pix.sum() + cov.sum() + flux.sum())
+    if output == "surface_brightness":
+        total = total / float(pixel_area)  # type: ignore[arg-type]
     return total
+
+
+def _rasterize_gaussians(
+    centers_pix: Tensor,
+    shape_pix: Tensor,
+    coefficients: Tensor,
+    shape: tuple[int, int],
+    *,
+    mode: str = "direct",
+    pixel_integration: bool = True,
+    chunk_elements: int = _DEFAULT_CHUNK_ELEMENTS,
+    truncation_sigma: float = _TRUNCATION_SIGMA,
+    patch_cap: int | None = _DEFAULT_PATCH_CAP,
+) -> Tensor:
+    """Private name kept for the module's callers and tests; see :func:`render_gaussian_items`."""
+    return render_gaussian_items(
+        centers_pix,
+        shape_pix,
+        coefficients,
+        shape,
+        mode=mode,
+        pixel_integration=pixel_integration,
+        chunk_elements=chunk_elements,
+        truncation_sigma=truncation_sigma,
+        patch_cap=patch_cap,
+    )
 
 
 # ------------------------------------------------------------------------ the scene
@@ -517,11 +640,13 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
         coefficients: ``(C, K)`` coefficients (fluxes per plane).
         min_sigma_arcsec: optional width floor [arcsec]; each width is replaced by
             ``sqrt(floor**2 + sigma**2)`` when rendering.  ``None`` means no floor.
-        mode: ``"direct"`` or ``"pyramid"`` (see :func:`_rasterize_gaussians`).
+        mode: ``"direct"`` or ``"pyramid"`` (see :func:`render_gaussian_items`).
         pixel_integration: approximate the pixel cell integral by adding ``1/12``
             pixel^2 to the covariance (default); ``False`` point-samples the Gaussian.
         chunk_elements: elements (items x patch nodes x K) held per chunk.
         truncation_sigma: patch half-size in larger principal widths.
+        patch_cap: largest patch half-size [nodes]; see :func:`render_gaussian_items`
+            for what happens to an item wider than that.  ``None``: unbounded.
 
     Raises:
         ValueError: on malformed or non-finite parameters, a latitude outside
@@ -559,6 +684,7 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
         pixel_integration: bool = True,
         chunk_elements: int = _DEFAULT_CHUNK_ELEMENTS,
         truncation_sigma: float = _TRUNCATION_SIGMA,
+        patch_cap: int | None = _DEFAULT_PATCH_CAP,
     ) -> None:
         super().__init__()
         lon_t = _as_float_rows(lon, "lon", 1)
@@ -593,6 +719,7 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
         self.pixel_integration = bool(pixel_integration)
         self.chunk_elements = _check_chunk(chunk_elements)
         self.truncation_sigma = float(truncation_sigma)
+        self.patch_cap = _check_patch_cap(patch_cap)
         device = lon_t.device
         self.lon = nn.Parameter(torch.remainder(lon_t, 360.0).clone())
         self.lat = nn.Parameter(lat_t.clone())
@@ -686,7 +813,7 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
         """
         wcs_obj, grid = self._resolve_grid(wcs, shape)
         centre, cov, index = self._pixel_geometry(wcs_obj)
-        return _rasterize_gaussians(
+        return render_gaussian_items(
             centre,
             cov,
             self.coefficients[index],
@@ -695,6 +822,7 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
             pixel_integration=self.pixel_integration,
             chunk_elements=self.chunk_elements,
             truncation_sigma=self.truncation_sigma,
+            patch_cap=self.patch_cap,
         ) + self._graph_anchor(index)
 
     def _graph_anchor(self, index: Tensor) -> Tensor:
@@ -764,7 +892,7 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
         wcs_obj, grid = self._resolve_grid(target.header, target.shape)
         centre, cov, index = self._pixel_geometry(wcs_obj)
         folded = (self.coefficients[index] @ w)[:, None]
-        image = _rasterize_gaussians(
+        image = render_gaussian_items(
             centre,
             cov,
             folded,
@@ -773,8 +901,9 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
             pixel_integration=self.pixel_integration,
             chunk_elements=self.chunk_elements,
             truncation_sigma=self.truncation_sigma,
+            patch_cap=self.patch_cap,
         )[0]
         return image + self._graph_anchor(index)
 
 
-__all__ = ["GaussianItemScene"]
+__all__ = ["GaussianItemScene", "render_gaussian_items"]

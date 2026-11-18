@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backward pass is bounded by `chunk_elements`, not by items x patch x K, and
   `mode="pyramid"` keeps the cost per item independent of its size. Item
   parameters use the `SourceCatalogScene` Gaussian conventions.
+- `torchsky.scene.render_gaussian_items`: the functional form of the Gaussian-item
+  rasteriser (pixel centres, covariances or `(major, minor, angle)`, and `(C, K)`
+  fluxes in; `(K, H, W)` flux per pixel or surface brightness out; no parameters
+  held, first-order differentiable in every input). `GaussianItemScene` now calls it.
+  New `patch_cap` (default 128 nodes) bounds the patch of one item: items whose larger
+  width is about 32 pixels or less are unchanged; wider round items go to the
+  pyramid levels in `mode="direct"`, and long thin items are truncated at the cap
+  (see the docstring for the size of the error).
 - `torchsky.wcs.PolynomialDetectorDistortion`, `TelescopeAttitude` and
   `TelescopeFrameDetectorToSky`: detector-to-sky astrometry for exposures that
   carry no distortion in the header (JWST count-rate `_rate` files). A
@@ -48,6 +56,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stamps, zero outside the image, edge loss, exact adjoint, flux conserved for source-conditioned unit-sum
   kernels) and the `ConditionedKernelPSF` call contract, so `LearnedPSFOp(model=...)` and tiled rendering
   accept it. Experimental.
+- `torchsky.instrument.JWSTDataQuality`, `WFC3IRDataQuality` and `ACSWFCDataQuality`: named
+  data-quality bit tables (`IntFlag`) for `DQPolicy(reject_bits=JWSTDataQuality.DO_NOT_USE | ...)`.
+  The HST tables name only the bits that are certain; the docstrings list what is left out.
+- `DQPolicy.strict()` and `DQPolicy.accept_all()` spell the two meanings of `reject_bits`
+  (`None`: any set bit rejects; `0`: no bit rejects), now documented. Behaviour is unchanged.
+- `field_observation_from_exposure_file(..., with_extras=True)` returns an `ExposureFileData`
+  with the data-quality plane, `INSTRUME`, `DETECTOR` and the `AREA` plane;
+  `zero_fill_unusable=False` keeps the file's science values in unusable pixels; HST ACS band
+  names are read from `FILTER1` / `FILTER2`, ignoring `CLEAR*`.
+- `FieldValueSemantics` and `VALUE_SEMANTICS` (in `map.field.types`): the accepted values of
+  `FieldObservation.value_semantics`, with the new `"count_rate_per_pixel"`.
+
+### Changed
+
+- `FieldObservation(value_semantics=...)` now raises `ValueError` for a string outside
+  `VALUE_SEMANTICS` instead of accepting any non-empty string.
+- `DQPolicy` reads signed `int8` / `int16` / `int32` data-quality planes as unsigned bit fields,
+  so a set top bit no longer sign-extends into higher bits.
+- `FieldObservation.to(dtype=...)` no longer narrows a float64 detector-to-sky module to float32;
+  float32 modules still widen to float64.
+- `crop_field_observation_to_shared_sky_patch` asks `world_to_pixel` for NaN (`fail_closed=False`)
+  when the transform accepts it, so an exposure far from the reference patch gives `None`
+  instead of a convergence error.
+- In float32, `field_observation_from_exposure_file` keeps a pixel usable when `1 / err**2`
+  overflows (`err` finite and positive); the weight is clipped to the largest finite value.
 
 ### Changed
 

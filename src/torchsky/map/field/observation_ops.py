@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import inspect
 import math
+from collections.abc import Callable, Sequence
 from dataclasses import replace
-
-from typing import Callable, Sequence, cast
+from typing import cast
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from ...device import require_float64, _to
+from ...device import _to, require_float64
 from ...wcs import WCS
 from ..exposure_pose import ExposurePose
 from ..operators.psf import psf_support_radius
@@ -382,6 +383,18 @@ def crop_field_observation_for_training(
     return cropped
 
 
+def _accepts_keyword(function: Callable[..., object], name: str) -> bool:
+    """True when ``function`` declares a parameter called ``name`` that can be passed by keyword."""
+    try:
+        parameter = inspect.signature(function).parameters.get(name)
+    except (TypeError, ValueError):
+        return False
+    return parameter is not None and parameter.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    )
+
+
 def crop_field_observation_to_shared_sky_patch(
     observation: FieldObservation,
     *,
@@ -425,7 +438,14 @@ def crop_field_observation_to_shared_sky_patch(
                 "shared-sky cropping requires detector_to_sky.world_to_pixel for "
                 "non-reference native observations"
             )
-        px, py = cast(Callable[..., tuple[Tensor, Tensor]], inverse)(ra_deg, dec_deg)
+        inverse_call = cast(Callable[..., tuple[Tensor, Tensor]], inverse)
+        # A sky point far from this detector is "not on this detector", not an error:
+        # transforms that can fail closed (such as TelescopeFrameDetectorToSky) are asked
+        # for NaN there, which the crop below drops.
+        if _accepts_keyword(inverse_call, "fail_closed"):
+            px, py = inverse_call(ra_deg, dec_deg, fail_closed=False)
+        else:
+            px, py = inverse_call(ra_deg, dec_deg)
 
         px = px - float(observation.detector_x0_pix)
         py = py - float(observation.detector_y0_pix)
@@ -599,9 +619,9 @@ __all__ = [
     "crop_field_observation_for_training",
     "crop_field_observation_to_shared_sky_patch",
     "epoch_permutation",
-    "observation_pixel_to_world",
     "header_shape",
     "observation_band_key",
+    "observation_pixel_to_world",
     "observation_support_mask",
     "observation_weight_sum_scalar",
     "sample_observation_indices",

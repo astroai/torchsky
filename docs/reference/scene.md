@@ -55,6 +55,7 @@ namespace `torchsky.scene` unless the group text says otherwise.
     options:
       members:
         - GaussianItemScene
+        - render_gaussian_items
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false

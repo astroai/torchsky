@@ -169,6 +169,15 @@ cost no more than many narrow ones; the largest error against the analytic
 profile stays near 2e-4 of an item's peak in both modes. The scene applies no
 PSF; compose it with an operator bundle when the PSF matters.
 
+When a fit computes its own item parameters at every step, call the functional form
+[`render_gaussian_items`](../reference/scene.md#torchsky.scene.render_gaussian_items)
+directly: it takes pixel centres, covariances (or major, minor and angle) in pixels and
+`(C, K)` fluxes, returns `K` planes of flux per pixel (or surface brightness with
+`output="surface_brightness"` and a `pixel_area`), holds nothing, and is differentiable
+in every input. `patch_cap` (default 128 nodes) bounds the memory of one item: wider
+round items are sampled on the pyramid levels, and long thin items are truncated at the
+cap, so raise it for those.
+
 <!-- docs: run -->
 ```python
 import torch
