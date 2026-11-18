@@ -178,6 +178,7 @@ endif()
 set(SOURCES
     bindings.cpp
     cpu_isa.cpp
+    crossmatch.cpp
     geom.cpp
     healpix.cpp
     ishioka_scalar.cpp

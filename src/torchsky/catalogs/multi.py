@@ -199,7 +199,7 @@ def _self_pairs(
         radius_left=cast(Tensor, rl),
         radius_right=rr,
         find="all",
-        accept=lambda lrows, rrows: lrows < rrows,
+        self_upper=True,
         left_chunk_size=left_chunk_size,
         right_chunk_size=right_chunk_size,
         combine=combine,

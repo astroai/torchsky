@@ -30,7 +30,10 @@ from ._zones import (
     ZoneIndex,
     combine_radii,
     default_zone_height_deg,
+    native_knn,
     occupied_spacing_deg,
+    separation_arcsec,
+    unit_vectors,
     zone_query,
 )
 from .core import CrossmatchResult
@@ -271,6 +274,18 @@ class SkyIndex:
             density > 0, start_deg, torch.full_like(start_deg, fallback)
         )
         radius = (radius * 3600.0).clamp(max=cap)
+        native = native_knn(self._zones, lon, lat, radius, k, cap)
+        if native is not None:
+            nj, _ = native
+            found = nj >= 0
+            sep = torch.full((n, k), math.inf, dtype=lon.dtype, device=dev)
+            if bool(found.any()):
+                # Separations recomputed in torch (differentiable, same values as
+                # the torch path).
+                rows = torch.nonzero(found, as_tuple=True)[0]
+                right = self._zones.xyz[self._zones.inverse_order()[nj[found]]]
+                sep[found] = separation_arcsec(unit_vectors(lon, lat)[rows], right)
+            return NearestResult(nj, sep)
         todo = torch.arange(n, device=dev)
         while todo.numel():
             last = radius >= cap

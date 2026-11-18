@@ -60,6 +60,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   9.3 s). Uniform all-sky matching evaluates about one candidate per row. Pair
   sets are unchanged. `right_chunk_size` now bounds the candidate pairs held
   per batch (default 2²²).
+- A torch-free native kernel (`cpp_src/crossmatch.cpp`: nanobind `ndarray`
+  buffers, its own thread pool, no libtorch) runs the zone index on CPU float64
+  for within-radius pairs, nearest matches, counts and exact `k` nearest
+  neighbours. It walks left rows in zone order for locality and keeps the `k`
+  best per row without materialising all pairs. The torch path remains the
+  reference and the CUDA/MPS path; both give identical pairs and separations.
+  Dense field, 4 threads: `find="best"` 0.27 s at 10⁶ and 1.3 s at 4 × 10⁶
+  (scipy `cKDTree` 0.52 s and 3.0 s); `match_nearest(k=2)` 0.55 s at 10⁶
+  (`cKDTree` 0.72 s), on crowded clusters 0.63 s (`cKDTree` 0.85 s).
 - `crossmatch_sky(..., index=)` and `Catalog.crossmatch(..., index=)` take a
   `SkyIndex`, usable with every matcher and `find` mode; `right_index=`
   (a `HealpixIndex`) is removed. `Catalog.crossmatch` no longer builds a

@@ -279,6 +279,7 @@ def zone_query(
     combine: Combine = "sum",
     find: Literal["all", "best", "count"] = "all",
     accept: Callable[[Tensor, Tensor], Tensor] | None = None,
+    self_upper: bool = False,
     left_chunk_size: int = 1 << 16,
     max_pairs: int = DEFAULT_MAX_PAIRS,
     stats: EngineStats | None = None,
@@ -292,11 +293,41 @@ def zone_query(
     ``"best"`` returns the nearest right row per left row, with ties going to the
     lowest right index, ordered by left. ``"count"`` returns ``(left rows, counts, empty)``
     for left rows with at least one pair. ``accept(left_rows, right_rows)`` is an extra
-    predicate on global left / original right indices.
+    predicate on global left / original right indices; ``self_upper`` keeps
+    only ``right > left`` (self-joins, left and right the same catalogue).
+
+    CPU float64 queries without ``accept`` run in the native kernel
+    (``crossmatch.cpp``); everything else, and every other device, runs the
+    torch path below. Both produce the same pairs.
     """
     dev = left_ra.device
     left_xyz = unit_vectors(left_ra, left_dec)
     n_left = int(left_ra.numel())
+    ext = _native_ext()
+    if (
+        ext is not None
+        and accept is None
+        and stats is None
+        and dev.type == "cpu"
+        and left_ra.dtype == torch.float64
+        and index.xyz.dtype == torch.float64
+        and index.n
+        and n_left
+    ):
+        return _zone_query_native(
+            ext,
+            index,
+            left_ra,
+            left_dec,
+            left_xyz,
+            radius_left,
+            radius_right,
+            combine,
+            find,
+            self_upper,
+        )
+    if self_upper:
+        accept = _upper if accept is None else _both(accept, _upper)
     out_l: list[Tensor] = []
     out_r: list[Tensor] = []
     out_s: list[Tensor] = []
@@ -400,6 +431,143 @@ def zone_query(
     order = order[torch.argsort(li[order], stable=True)]
     li, rj = li[order], rj[order]
     return li, rj, _pair_separation(index, left_xyz, li, rj)
+
+
+_COMBINE_CODE = {"sum": 0, "quadrature": 1, "max": 2}
+
+
+def _native_ext():
+    from .._native import cpp
+
+    if cpp is None:
+        return None
+    from .. import _cpp_ext
+
+    return _cpp_ext if hasattr(_cpp_ext, "xmatch_count") else None
+
+
+def _upper(left_rows: Tensor, right_rows: Tensor) -> Tensor:
+    return right_rows > left_rows
+
+
+def _both(a: Callable[[Tensor, Tensor], Tensor], b: Callable[[Tensor, Tensor], Tensor]):
+    return lambda li, rj: a(li, rj) & b(li, rj)
+
+
+def _zone_query_native(
+    ext,
+    index: ZoneIndex,
+    left_ra: Tensor,
+    left_dec: Tensor,
+    left_xyz: Tensor,
+    radius_left: Tensor,
+    radius_right: Tensor | None,
+    combine: Combine,
+    find: str,
+    self_upper: bool,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """CPU float64 path: the native kernel finds pairs; torch computes separations."""
+    n = int(left_ra.numel())
+    f64, i64 = torch.float64, torch.int64
+    with torch.no_grad():
+        ra = left_ra.detach().contiguous()
+        dec = left_dec.detach().contiguous()
+        lx = left_xyz.detach().contiguous()
+        rl = radius_left.detach().to(f64).contiguous()
+        rr = (
+            radius_right.detach().to(f64)[index.order].contiguous()
+            if radius_right is not None
+            else torch.empty(0, dtype=f64)
+        )
+        rr_max = float(rr.max()) if rr.numel() else 0.0
+        # Visit left rows in (zone, RA) order: neighbouring queries touch the
+        # same right rows, which keeps them in cache.
+        perm = torch.argsort(
+            (index._zone_of(dec) << _RA_BITS) | _ra_key(ra)
+        ).contiguous()
+        common = (
+            index.key,
+            index.xyz.detach().contiguous(),
+            index.order,
+            rr,
+            index.zone_height,
+            index.n_zones,
+            rr_max,
+            ra,
+            dec,
+            lx,
+            rl,
+            perm,
+            _COMBINE_CODE[combine],
+        )
+        threads = torch.get_num_threads()
+        if find == "best":
+            j = torch.empty(n, dtype=i64)
+            sep = torch.empty(n, dtype=f64)
+            ext.xmatch_best(*common, j, sep, threads)
+            if self_upper:
+                raise ValueError("self_upper applies to find='all' or 'count'")
+            rows = torch.nonzero(j >= 0, as_tuple=True)[0]
+            li, rj = rows, j[rows]
+        else:
+            counts = torch.empty(n, dtype=i64)
+            ext.xmatch_count(*common, self_upper, 0, counts, threads)
+            if find == "count":
+                rows = torch.nonzero(counts, as_tuple=True)[0]
+                return rows, counts[rows], torch.empty(0, dtype=left_ra.dtype)
+            total = int(counts.sum())
+            offsets = torch.cumsum(counts, 0) - counts
+            rj = torch.empty(total, dtype=i64)
+            sep = torch.empty(total, dtype=f64)
+            ext.xmatch_fill(*common, self_upper, 0, offsets, rj, sep, threads)
+            li = torch.repeat_interleave(torch.arange(n), counts, output_size=total)
+    return li, rj, _pair_separation(index, left_xyz, li, rj)
+
+
+def native_knn(
+    index: ZoneIndex,
+    ra: Tensor,
+    dec: Tensor,
+    start_radius_arcsec: Tensor,
+    k: int,
+    cap_arcsec: float,
+) -> tuple[Tensor, Tensor] | None:
+    """Native exact k nearest neighbours (``None`` when the kernel does not apply)."""
+    ext = _native_ext()
+    if (
+        ext is None
+        or ra.device.type != "cpu"
+        or ra.dtype != torch.float64
+        or index.xyz.dtype != torch.float64
+    ):
+        return None
+    n = int(ra.numel())
+    with torch.no_grad():
+        ra_c, dec_c = ra.detach().contiguous(), dec.detach().contiguous()
+        lx = unit_vectors(ra_c, dec_c).contiguous()
+        perm = torch.argsort(
+            (index._zone_of(dec_c) << _RA_BITS) | _ra_key(ra_c)
+        ).contiguous()
+        j = torch.empty(n * k, dtype=torch.int64)
+        sep = torch.empty(n * k, dtype=torch.float64)
+        ext.xmatch_knn(
+            index.key,
+            index.xyz.detach().contiguous(),
+            index.order,
+            index.zone_height,
+            index.n_zones,
+            ra_c,
+            dec_c,
+            lx,
+            start_radius_arcsec.detach().to(torch.float64).contiguous(),
+            perm,
+            int(k),
+            float(cap_arcsec),
+            j,
+            sep,
+            torch.get_num_threads(),
+        )
+    return j.reshape(n, k), sep.reshape(n, k)
 
 
 def _pair_separation(

@@ -187,6 +187,7 @@ def sky_pairs(
     combine: Combine = "sum",
     stats: EngineStats | None = None,
     zones: ZoneIndex | None = None,
+    self_upper: bool = False,
 ) -> CrossmatchResult:
     """Zone-index pairs with ``sep <= combine(radius_left, radius_right)`` for any ``find``.
 
@@ -268,6 +269,7 @@ def sky_pairs(
         combine=combine,
         find="best" if find == "best1" else "all",
         accept=accept,
+        self_upper=self_upper,
         left_chunk_size=left_chunk_size,
         max_pairs=right_chunk_size,
         stats=stats,

@@ -15,6 +15,7 @@ import pytest
 import torch
 
 from torchsky.catalogs import crossmatch_sky
+from torchsky.catalogs import _zones
 
 D = torch.float64
 # Pairs whose separation lies within this band of their threshold are
@@ -101,6 +102,17 @@ def oracle_best(
             continue
         expected[i] = int(arg[i])
     return expected, ambiguous
+
+
+@pytest.fixture(params=["native", "torch"], autouse=True)
+def engine_path(request, monkeypatch):
+    """Run every oracle test on the native kernel and on the torch path."""
+    if request.param == "native":
+        if _zones._native_ext() is None:
+            pytest.skip("native crossmatch kernel not built")
+    else:
+        monkeypatch.setattr(_zones, "_native_ext", lambda: None)
+    return request.param
 
 
 # --------------------------------------------------------------------- geometry
@@ -541,3 +553,28 @@ def test_invalid_inputs_fail_closed() -> None:
         match_within(one, one * 0, one, one * 0, 0.0)
     with pytest.raises(ValueError, match="k must"):
         match_nearest(one, one * 0, one, one * 0, k=0)
+
+
+def test_native_and_torch_paths_agree_at_scale(monkeypatch) -> None:
+    from torchsky.catalogs import match_nearest, match_within
+
+    if _zones._native_ext() is None:
+        pytest.skip("native crossmatch kernel not built")
+    la, lb = uniform_sky(40_000, 61)
+    ra, rb = jitter(la, lb, 20.0, 62)
+    g = _gen(63)
+    radius = 1.0 + 59.0 * torch.rand(40_000, generator=g, dtype=D)
+    native_all = match_within(la, lb, ra, rb, radius)
+    native_knn = match_nearest(la, lb, ra, rb, k=3)
+    monkeypatch.setattr(_zones, "_native_ext", lambda: None)
+    torch_all = match_within(la, lb, ra, rb, radius)
+    torch_knn = match_nearest(la, lb, ra, rb, k=3)
+    assert torch.equal(native_all.left_index, torch_all.left_index)
+    assert torch.equal(native_all.right_index, torch_all.right_index)
+    torch.testing.assert_close(
+        native_all.separation_arcsec, torch_all.separation_arcsec, rtol=0, atol=0
+    )
+    assert torch.equal(native_knn.index, torch_knn.index)
+    torch.testing.assert_close(
+        native_knn.separation_arcsec, torch_knn.separation_arcsec, rtol=0, atol=0
+    )

@@ -3,6 +3,7 @@
 #include <Python.h>
 #include <string>
 
+#include "torchsky/crossmatch.h"
 #include "torchsky/drizzle_operators.h"
 #include "torchsky/fixed_operators.h"
 #include "torchsky/healpix.h"
@@ -41,4 +42,5 @@ NB_MODULE(_cpp_ext, m) {
     }
 
     m.def("selected_cpu_isa", []() { return torchsky::selected_cpu_isa(); });
+    torchsky::xmatch::register_crossmatch(m);
 }
