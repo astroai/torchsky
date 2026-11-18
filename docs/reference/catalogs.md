@@ -44,8 +44,6 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
         - CatalogStreamDataset
         - CrossmatchResult
         - crossmatch_sky
-        - crossmatch_sky_from_arrow
-        - crossmatch_sky_streamed
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false
@@ -217,6 +215,21 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       heading_level: 3
       show_root_heading: true
       show_root_toc_entry: true
+      filters: []
+
+## Sky index
+
+::: torchsky.catalogs
+    options:
+      members:
+        - NearestResult
+        - SkyIndex
+        - count_within
+        - match_nearest
+        - match_within
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
       filters: []
 
 ## Typing

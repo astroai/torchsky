@@ -15,6 +15,7 @@ from ..wcs.frames import _to_device, _work_dtype, canonical_celestial_frame
 from ..wcs.observed import EarthOrientation, PNModel, Site
 from .core import CrossmatchResult, crossmatch_sky
 from .index import HealpixIndex
+from .sky_index import SkyIndex
 from ..device import _as_tensor, _to
 
 _OBSERVED_FRAMES = {"ALTAZ", "ITRS", "GCRS", "CIRS", "TETE"}
@@ -332,7 +333,7 @@ class Catalog:
         radius_arcsec: float | Tensor | None = None,
         *,
         find: str = "best",
-        right_index: HealpixIndex | None = None,
+        index: SkyIndex | None = None,
         target_epoch: float | Tensor | None = None,
         motion: str = "angular",
         left_err_arcsec: float | Tensor | str | None = None,
@@ -342,8 +343,9 @@ class Catalog:
 
         ``motion="angular"`` requires both PM components for rows whose epoch
         changes; ``"physical"`` additionally requires parallax and radial
-        velocity. Missing motion is never filled with zero. A supplied index
-        must be rebuilt by the caller after frame/epoch changes.
+        velocity. Missing motion is never filled with zero. ``index`` is a
+        :class:`SkyIndex` of ``other``'s stored positions; it cannot be reused
+        once ``target_epoch`` or a frame change moves them.
 
         ``find`` and the error options follow :func:`crossmatch_sky`;
         ``left_err_arcsec`` / ``right_err_arcsec`` may also name a column of
@@ -352,12 +354,10 @@ class Catalog:
         """
         if motion not in ("angular", "physical"):
             raise ValueError("motion must be 'angular' or 'physical'")
-        if right_index is not None and (
+        if index is not None and (
             target_epoch is not None or other.frame != self.frame
         ):
-            raise ValueError(
-                "right_index cannot be reused after epoch or frame conversion"
-            )
+            raise ValueError("index cannot be reused after epoch or frame conversion")
         left = self
         right = other if other.device == self.device else other.to(self.device)
         if target_epoch is not None:
@@ -381,23 +381,6 @@ class Catalog:
 
         left_err = _err(left_err_arcsec, self)
         right_err = _err(right_err_arcsec, other)
-        if (
-            left_err is not None
-            or right_err is not None
-            or find not in ("best", "best1", "all")
-        ):
-            # Error radii, best2, mutual and symmetric use the strip index directly.
-            return crossmatch_sky(
-                left.lon,
-                left.lat,
-                right.lon,
-                right.lat,
-                radius_arcsec=radius_arcsec,
-                find=find,
-                left_err_arcsec=left_err,
-                right_err_arcsec=right_err,
-            )
-        index = right_index if right_index is not None else right.index()
         return crossmatch_sky(
             left.lon,
             left.lat,
@@ -405,7 +388,9 @@ class Catalog:
             right.lat,
             radius_arcsec=radius_arcsec,
             find=find,
-            right_index=index,
+            index=index,
+            left_err_arcsec=left_err,
+            right_err_arcsec=right_err,
         )
 
     @classmethod

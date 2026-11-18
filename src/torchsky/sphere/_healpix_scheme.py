@@ -21,9 +21,6 @@ _FACE_CONST_CACHE: dict[tuple[str, int], tuple[Tensor, Tensor]] = {}
 _CAP_START_CACHE: dict[tuple[str, int, int], Tensor] = {}
 
 
-_MAX_PIXEL_RADIUS_CACHE: dict[int, float] = {}
-
-
 _NB_XOFFSET = torch.tensor([-1, -1, 0, 1, 1, 1, 0, -1], dtype=torch.int64)
 
 

@@ -12,7 +12,6 @@ from ._healpix_scheme import (  # noqa: F401
     _FACE_CONST_CACHE,
     _JPLL,
     _JRLL,
-    _MAX_PIXEL_RADIUS_CACHE,
     _NB_FACEARRAY,
     _NB_SWAPARRAY,
     _NB_XOFFSET,
@@ -1022,30 +1021,27 @@ def get_interp_val(
 
 
 def max_pixel_radius(nside: int, degrees: bool = False) -> float:
-    """
-    Return a conservative maximum center-to-corner radius for pixels at `nside`.
+    """Maximum angular distance from any pixel center to any point of its pixel.
 
-    Uses representative polar/equatorial/southern pixels and caches result.
+    Closed form of ``Healpix_Base::max_pixrad`` (Górski et al. 2005): the
+    largest center-to-vertex angle over the sphere is attained by the pixels
+    adjacent to the polar-cap/equatorial transition (``z = 2/3``), between the
+    center ``(z = 2/3, phi = pi / (4 nside))`` and the vertex
+    ``(z = 1 - (1 - 1/nside)^2 / 3, phi = 0)``. Coverings use this as the
+    pixel radius in the ``r + 2 rho`` soundness lemma.
     """
     _validate_nside(nside)
-    cached = _MAX_PIXEL_RADIUS_CACHE.get(nside)
-    if cached is None:
-        npix = nside2npix(nside)
-        reps = torch.tensor([0, 2 * nside * (nside - 1), npix - 1], dtype=torch.int64)
-        lon_c, lat_c = pix2ang_ring(nside, reps)
-        b = boundaries(nside, reps, step=1, nest=False)  # (N,3,4)
-        lon_b, lat_b = xyz_to_lonlat(b[:, 0, :], b[:, 1, :], b[:, 2, :])
-        d = angular_distance_deg(
-            lon_c.unsqueeze(-1),
-            lat_c.unsqueeze(-1),
-            lon_b,
-            lat_b,
-        )
-        cached = float(torch.max(d).item())
-        _MAX_PIXEL_RADIUS_CACHE[nside] = cached
-    if degrees:
-        return cached
-    return math.radians(cached)
+
+    def _unit(z: float, phi: float) -> tuple[float, float, float]:
+        s = math.sqrt((1.0 - z) * (1.0 + z))
+        return (s * math.cos(phi), s * math.sin(phi), z)
+
+    ax, ay, az = _unit(2.0 / 3.0, math.pi / (4.0 * nside))
+    t = (1.0 - 1.0 / nside) ** 2
+    bx, by, bz = _unit(1.0 - t / 3.0, 0.0)
+    cross = math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+    rad = math.atan2(cross, ax * bx + ay * by + az * bz)
+    return math.degrees(rad) if degrees else rad
 
 
 def pixel_resolution_to_nside(

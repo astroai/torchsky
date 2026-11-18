@@ -17,11 +17,13 @@ as the candidate list and score them yourself.
 ## How It Works
 
 Testing every left row against every right row costs \(O(NM)\). torchsky
-sorts the right catalog once by **declination strip** (strips at least one
-radius high) and right ascension inside each strip. The match cap of a left row
-then touches a few adjacent strips, and in each strip it covers one contiguous
-range of right ascension (two at the 0/360° wrap, the whole strip near a pole),
-found with a binary search. Only those candidates go through the exact test
+sorts the right catalog once into **zones**, declination bands, and by right
+ascension inside each zone (Gray, Szalay and Nieto-Santisteban 2006). The match
+cap of a left row of radius \(r\) at declination \(\delta\) meets the zones
+covering \([\delta - r, \delta + r]\). Within each zone it covers one contiguous
+range of right ascension of half-width \(\arcsin(\sin r / \cos\delta)\): two
+pieces at the 0/360° wrap, and the whole zone when the cap holds a pole. A binary
+search finds each range. Only those candidates go through the exact test
 
 \[
 \theta = \operatorname{atan2}\left(\lVert \mathbf a \times \mathbf b \rVert,\; \mathbf a \cdot \mathbf b\right) \le r,
@@ -32,25 +34,27 @@ sub-milliarcsecond separations, where the arccosine of a dot product does not.
 
 ```mermaid
 flowchart LR
-    R["right catalog"] -->|"sort by<br/>(dec strip, RA)"| I["strip index"]
+    R["right catalog"] -->|"sort by<br/>(zone, RA)"| I["SkyIndex"]
     L["left catalog<br/>(chunks)"] --> C["candidate ranges<br/>binary search"]
     I --> C
     C -->|"exact great-circle test"| P["pairs within threshold"]
     P -->|"find= best1, best2,<br/>mutual, symmetric, all"| M["CrossmatchResult"]
 ```
 
-The cost is \(O((N + M)\log M + K)\) for \(K\) candidate pairs, and candidate
-generation never drops a pair that passes the exact test. Chunk sizes bound
-memory without changing the result. When you pass a prebuilt
-[`HealpixIndex`](../reference/catalogs.md#torchsky.catalogs.HealpixIndex) as
-`right_index=`, the candidates come from nested HEALPix cells instead, with the
-same exact test.
+The cost is \(O((N + M)\log M + K)\) for \(K\) candidate pairs. Candidate
+ranges are padded by a few float64 ulp, so they never drop a pair that passes
+the exact test. The zone height changes the cost, never the result, and so do
+chunk sizes, thread count and device. Build the index once with
+[`SkyIndex`](../reference/catalogs.md#torchsky.catalogs.SkyIndex) and pass it
+as `index=` to reuse it across calls.
 
 **Assumptions.** Both tables are in the same frame at the same epoch; positions
 are degrees and thresholds arcseconds; the threshold is a circle (no error
-ellipses). **Validation.** Every `find` mode is tested against a brute-force
-\(O(NM)\) search, and separations agree with Astropy `SkyCoord` to about
-\(10^{-10}\) arcsec; see [parity](../performance/parity.md).
+ellipses). **Validation.** Every `find` mode, `match_within`, `match_nearest` and
+`count_within` is tested against a brute-force \(O(NM)\) search at the poles
+(including exactly ±90°), across the RA wrap, in a crowded cluster, and with
+per-row radii spanning five decades. Separations agree with Astropy `SkyCoord`
+to about \(10^{-10}\) arcsec; see [parity](../performance/parity.md).
 
 ## Gaia, 2MASS and AllWISE Around M67
 
@@ -91,9 +95,9 @@ search on a subset reproduces the indexed result exactly.
 Every matcher returns a
 [`CrossmatchResult`](../reference/catalogs.md#torchsky.catalogs.CrossmatchResult)
 with `left_index`, `right_index`, and `separation_arcsec`. Indices refer to the
-original input row order, also for Arrow and streamed inputs. Exact ties go to
-the lowest row index, so results do not depend on chunking or device. An empty
-input returns empty tensors.
+original input row order. Exact ties go to the lowest row index, so results do
+not depend on chunking, threads or device. An empty input returns empty tensors;
+positions must be finite.
 
 <!-- docs: run -->
 ```python
@@ -225,32 +229,61 @@ rather than being treated as fixed; fill them explicitly if that is what you
 want. See [Frames and time](../coordinates/frames.md) and
 [Catalog containers](containers.md#frames-epochs-and-motion).
 
-### Per-row radii and streaming
+### Per-row radii, nearest neighbours and counts
 
-`radius_arcsec` may be a tensor with one radius per left row; candidate windows
-use the largest radius, the exact test each row's own.
-[`crossmatch_sky_streamed`](../reference/catalogs.md#torchsky.catalogs.crossmatch_sky_streamed)
-takes an iterable of `(ra, dec)` left batches against one in-memory right
-catalog and returns `best1` pairs with left indices into the concatenated
-stream. Scalar radii only.
+`radius_arcsec` may be a tensor with one radius per left row. Each row's window
+uses its own radius, so one large radius does not slow the others.
+[`match_within`](../reference/catalogs.md#torchsky.catalogs.match_within) returns
+every pair. With `right_radius_arcsec=` it applies a two-sided threshold
+`combine(r_left[i], r_right[j])`, with `combine` one of `"sum"` (STILTS `skyerr`),
+`"quadrature"` or `"max"`.
+[`match_nearest`](../reference/catalogs.md#torchsky.catalogs.match_nearest)
+returns the exact `k` nearest right rows per left row, optionally capped by
+`max_radius_arcsec`. [`count_within`](../reference/catalogs.md#torchsky.catalogs.count_within)
+counts the neighbours of each row. All three accept a prebuilt
+[`SkyIndex`](../reference/catalogs.md#torchsky.catalogs.SkyIndex) as `index=`,
+and the index has the same three queries as methods.
 
 <!-- docs: run -->
 ```python
 import torch
 
-from torchsky.catalogs import crossmatch_sky, crossmatch_sky_streamed
+from torchsky.catalogs import SkyIndex, count_within, match_nearest, match_within
 
 left_ra = torch.tensor([10.0, 10.0], dtype=torch.float64)
 left_dec = torch.tensor([0.0, 0.001], dtype=torch.float64)
-right_ra, right_dec = left_ra[:1].clone(), left_dec[:1].clone()
+right_ra = torch.tensor([10.0, 10.0002, 50.0], dtype=torch.float64)
+right_dec = torch.zeros(3, dtype=torch.float64)
 
-per_row = crossmatch_sky(left_ra, left_dec, right_ra, right_dec, radius_arcsec=torch.tensor([1.0, 1.0]))
-assert per_row.left_index.tolist() == [0]
+per_row = match_within(left_ra, left_dec, right_ra, right_dec, torch.tensor([1.0, 0.5]))
+assert per_row.left_index.tolist() == [0, 0]
 
-batches = iter([(left_ra[:1], left_dec[:1]), (left_ra[1:], left_dec[1:])])
-streamed = crossmatch_sky_streamed(batches, right_ra, right_dec, radius_arcsec=4.0)
-assert streamed.left_index.tolist() == [0, 1]
+nearest = match_nearest(left_ra, left_dec, right_ra, right_dec, k=2)
+assert nearest.index.tolist() == [[0, 1], [0, 1]]
+
+index = SkyIndex.build(right_ra, right_dec)
+assert count_within(left_ra, left_dec, right_ra, right_dec, 4.0, index=index).tolist() == [2, 2]
+assert index.query_nearest(left_ra, left_dec, 1, max_radius_arcsec=1.0).index.tolist() == [[0], [-1]]
 ```
+
+`match_nearest` is exact without a radius: search radii double from a guess set
+by the mean density until each row has `k` neighbours, so dense fields resolve
+in the first rounds and sparse targets far from a small catalog still find
+their neighbours.
+
+### Coming from Astropy or SciPy
+
+| Astropy / SciPy | torchsky |
+|---|---|
+| `SkyCoord.match_to_catalog_sky(c2, nthneighbor=n)` | `match_nearest(..., k=n).index[:, n - 1]` |
+| `search_around_sky(c1, c2, seplimit)` | `match_within(..., radius_arcsec)` |
+| `cKDTree(xyz).query(xyz, k, distance_upper_bound=chord)` | `match_nearest(..., k, max_radius_arcsec=r)` |
+| `cKDTree(xyz).query_ball_point(xyz, chord)` | `match_within(..., radius_arcsec=r)` |
+| `query_ball_point(..., return_length=True)` | `count_within(...)` |
+
+Radii are angles in arcseconds rather than chord lengths, inputs are degrees,
+and results never depend on the order of the catalogue on disk: ties go to the
+lowest row index.
 
 ### Scale to large catalogs and other devices
 
@@ -260,10 +293,10 @@ assert streamed.left_index.tolist() == [0, 1]
   with the CPU; separations agree to floating-point tolerance. On MPS positions
   are float32 (about 0.1 arcsec near RA 360°), so smaller radii are not
   meaningful there.
-- When the left table does not fit in memory, stream it; when both tables are
-  Arrow tables or IPC files, use
-  [`crossmatch_sky_from_arrow`](containers.md#arrow-and-fits-tables), which
-  tiles both on disk.
+- For catalogs larger than memory, read them in sky partitions (HEALPix or
+  HATS tiles) with torchfits, pyarrow or polars. Match each partition against
+  the right partition plus a margin at least as wide as the match radius, and
+  keep the pairs whose left row the partition owns.
 - The [million-row example](../published-examples/crossmatch_million.py)
   matches \(10^6 \times 10^6\) rows in about 0.5 s per mode on a CPU.
 

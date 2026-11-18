@@ -204,16 +204,18 @@ accelerate measured hotspots; a pure-torch path gives the same results
 ```python
 import torch
 
-from torchsky.catalogs import crossmatch_sky_streamed
+from torchsky.catalogs import SkyIndex
 
 g = torch.Generator().manual_seed(0)
 ref_ra = 149.0 + 2.0 * torch.rand(5000, generator=g, dtype=torch.float64)
 ref_dec = 1.0 + 2.0 * torch.rand(5000, generator=g, dtype=torch.float64)
 
-# The left catalog arrives in batches of 1000 rows; indices stay global.
-batches = ((ref_ra[i:i + 1000] + 1e-5, ref_dec[i:i + 1000]) for i in range(0, 5000, 1000))
-matches = crossmatch_sky_streamed(batches, ref_ra, ref_dec, radius_arcsec=1.0)
-assert torch.equal(matches.left_index, matches.right_index)
+# Index the reference once; the left catalog arrives in batches of 1000 rows.
+index = SkyIndex.build(ref_ra, ref_dec)
+for start in range(0, 5000, 1000):
+    batch_ra, batch_dec = ref_ra[start:start + 1000] + 1e-5, ref_dec[start:start + 1000]
+    matches = index.query_within(batch_ra, batch_dec, 1.0, find="best")
+    assert torch.equal(matches.left_index + start, matches.right_index)
 ```
 
 ## Shared Conventions

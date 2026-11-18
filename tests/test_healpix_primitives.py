@@ -880,3 +880,22 @@ def test_lonlat_xyz_mps_matches_cpu() -> None:
     torch.testing.assert_close(
         z_mps.cpu(), z_cpu.to(torch.float32), atol=5e-6, rtol=0.0
     )
+
+
+@pytest.mark.parametrize("nside", [1, 2, 4, 8, 16, 32])
+def test_max_pixel_radius_bounds_every_pixel_densely(nside: int) -> None:
+    # Exhaustive over all pixels, 32 samples per edge: the closed form must
+    # bound the center-to-boundary angle everywhere and be attained.
+    pix = torch.arange(12 * nside * nside, dtype=torch.int64)
+    centers = torch.stack(
+        [c.to(torch.float64) for c in healpix_mod.pix2vec(nside, pix, nest=True)],
+        dim=1,
+    )
+    edge = boundaries(nside, pix, step=32, nest=True).to(torch.float64)
+    c = centers[:, :, None].expand_as(edge)
+    sep = torch.atan2(
+        torch.linalg.cross(c, edge, dim=1).norm(dim=1), (c * edge).sum(dim=1)
+    )
+    bound = max_pixel_radius(nside)
+    assert float(sep.max()) <= bound * (1.0 + 1e-12)
+    assert float(sep.max()) >= bound * (1.0 - 1e-9)

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `torchsky.catalogs.SkyIndex`, `match_within`, `match_nearest` and
+  `count_within`: an exact, reusable sky index with the queries of astropy
+  `search_around_sky` / `match_to_catalog_sky` and scipy `cKDTree`
+  (`query_ball_point`, `query(k, distance_upper_bound)`,
+  `return_length=True`). `match_nearest` returns the exact `k` nearest
+  neighbours with or without a radius cap (doubling search radii, so crowded
+  fields resolve early and sparse targets still find a distant catalogue).
+  `match_within` takes per-row radii on both sides, combined by `"sum"`,
+  `"quadrature"` or `"max"`. Separations are differentiable.
+
 - `torchsky.scene.GaussianItemScene`: a differentiable sky of many anisotropic
   Gaussian items (position, two widths, position angle, K coefficients each),
   rendered in batch onto a tangent-plane grid through a WCS. Memory in the
@@ -38,6 +48,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stamps, zero outside the image, edge loss, exact adjoint, flux conserved for source-conditioned unit-sum
   kernels) and the `ConditionedKernelPSF` call contract, so `LearnedPSFOp(model=...)` and tiled rendering
   accept it. Experimental.
+
+### Changed
+
+- Crossmatch candidates come from a declination-zone index (Gray, Szalay and
+  Nieto-Santisteban 2006) shared by every matcher, replacing the strip, HEALPix
+  ring and declination-window engines. On a dense 100 deg² field (2″ radius,
+  0.3″ jitter, 4 CPU threads) `find="best"` takes 0.61 s at 10⁶ × 10⁶ rows
+  (was 1.48 s; scipy `cKDTree` 0.82 s) and 2.8 s at 4 × 10⁶ (was 6.0 s;
+  `cKDTree` 4.6 s); `find="all"` 0.89 s and 5.4 s (`cKDTree` 2.0 s and
+  9.3 s). Uniform all-sky matching evaluates about one candidate per row. Pair
+  sets are unchanged. `right_chunk_size` now bounds the candidate pairs held
+  per batch (default 2²²).
+- `crossmatch_sky(..., index=)` and `Catalog.crossmatch(..., index=)` take a
+  `SkyIndex`, usable with every matcher and `find` mode; `right_index=`
+  (a `HealpixIndex`) is removed. `Catalog.crossmatch` no longer builds a
+  HEALPix index sized for ~64 rows per pixel, which produced ~3000
+  candidates per row at 1″ and unbounded memory.
+- `crossmatch_self` with a per-row radius keeps a pair when
+  `separation <= max(radius[i], radius[j])`; it used `radius[i]` only, so the
+  result depended on row order.
+- `max_pixel_radius` is the closed-form HEALPix bound (`Healpix_Base::max_pixrad`)
+  instead of a three-pixel sample (same values), pinned by an exhaustive test.
+- `wcs.match_approximate_wcs` uses one exact nearest-neighbour query instead of
+  a per-row disc query loop; ties go to the lowest reference row. Its `index=`
+  is a `SkyIndex`.
+
+### Removed
+
+- `crossmatch_sky_from_arrow`, `crossmatch_sky_streamed`, and the Arrow /
+  `streamed=` branches of `catalogs.crossmatch`: read tables with torchfits,
+  pyarrow or polars and pass tensors; match batches against a prebuilt
+  `SkyIndex`. `catalogs.index.nested_neighbor_rings`,
+  `candidate_coarse_pixels_for_left_pixel` and `HealpixIndex.expand`
+  (crossmatch-only helpers) are removed.
 
 ## [0.5.0] - 2026-11-03
 

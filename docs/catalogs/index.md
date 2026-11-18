@@ -11,17 +11,17 @@ sphere, selects rows by cone or footprint, and crossmatches tables of any size.
 
 A crossmatch pairs each row of one catalog with rows of another that lie within
 a radius. Comparing every pair is \(O(NM)\). torchsky first sorts the right
-catalog by declination strip and right ascension, uses binary search to produce
-a small set of candidate pairs per left row, and then applies the exact
-great-circle distance test to each candidate. The strips are at least one radius
-high, so pruning never drops a true match inside the radius. When you pass a
-prebuilt `HealpixIndex` as `right_index=`, candidates come from nested HEALPix
-cells (padded by the maximum pixel radius) instead.
+catalog into declination zones and by right ascension, uses binary search to
+produce a small set of candidate pairs per left row, and then applies the exact
+great-circle distance test to each candidate. Candidate ranges cover the whole
+match cap, poles and the RA wrap included, so pruning never drops a true match.
+Build a [`SkyIndex`](../reference/catalogs.md#torchsky.catalogs.SkyIndex) once
+to reuse it for many queries.
 
 ```mermaid
 flowchart LR
     L["left catalog"] --> C["candidate ranges<br/>binary search"]
-    R["right catalog"] -->|"sort by<br/>(dec strip, RA)"| C
+    R["right catalog"] -->|"sort by<br/>(zone, RA)"| C
     C -->|"exact great-circle<br/>test"| M["CrossmatchResult<br/>left_index, right_index,<br/>separation_arcsec"]
 ```
 
@@ -34,8 +34,8 @@ you can gather any column of either table with them.
 |---|---|---|
 | Nearest match within a radius | [Crossmatch](crossmatch.md) | [`crossmatch_sky`](../reference/catalogs.md#torchsky.catalogs.crossmatch_sky), [`Catalog.crossmatch`](../reference/catalogs.md#torchsky.catalogs.Catalog) |
 | All pairs, one-to-one, groups, per-row error radii (STILTS modes) | [Crossmatch](crossmatch.md#stilts-style-matching) | `find=` on [`crossmatch_sky`](../reference/catalogs.md#torchsky.catalogs.crossmatch_sky) |
-| Left catalog larger than memory | [Crossmatch](crossmatch.md#per-row-radii-and-streaming) | [`crossmatch_sky_streamed`](../reference/catalogs.md#torchsky.catalogs.crossmatch_sky_streamed) |
-| Both catalogs are Arrow tables or IPC files | [Crossmatch](crossmatch.md) | [`crossmatch_sky_from_arrow`](../reference/catalogs.md#torchsky.catalogs.crossmatch_sky_from_arrow) |
+| k nearest neighbours, all pairs within a radius, neighbour counts | [Crossmatch](crossmatch.md#per-row-radii-nearest-neighbours-and-counts) | [`match_nearest`](../reference/catalogs.md#torchsky.catalogs.match_nearest), [`match_within`](../reference/catalogs.md#torchsky.catalogs.match_within), [`count_within`](../reference/catalogs.md#torchsky.catalogs.count_within) |
+| Reuse one index for many queries | [Crossmatch](crossmatch.md#per-row-radii-nearest-neighbours-and-counts) | [`SkyIndex`](../reference/catalogs.md#torchsky.catalogs.SkyIndex) |
 | Hold columns with frame and epoch; cone, footprint, and frame operations | [Catalog containers](containers.md) | [`Catalog`](../reference/catalogs.md#torchsky.catalogs.Catalog), [`HealpixIndex`](../reference/catalogs.md#torchsky.catalogs.HealpixIndex) |
 | Propagate proper motion to another epoch before matching | [Frames and time](../coordinates/frames.md) | [`CatalogState`](../reference/coords.md#torchsky.coords.CatalogState) |
 
@@ -100,8 +100,8 @@ refer to the rows as you passed them, before any propagation.
 - **Frames and epochs.** Two catalogs are compared in one frame at one epoch.
   `Catalog` carries both; convert or propagate proper motion before matching
   high-proper-motion sources.
-- **Index reuse.** Build the right index once and pass `right_index=` when you
-  match many left batches against the same table.
+- **Index reuse.** Build a `SkyIndex` of the right table once and pass
+  `index=` when you match many left batches against it.
 - **I/O.** Read FITS tables with `torchfits.table` and pass the columns as
   tensors or Arrow batches; see [the file boundary](../introduction/concepts.md#file-boundary).
 

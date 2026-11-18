@@ -4,11 +4,6 @@ import pytest
 import torch
 
 from torchsky.catalogs import cap_covering_pixels, crossmatch_sky, nside_for_cap
-from torchsky.catalogs.index import (
-    HealpixIndex,
-    candidate_coarse_pixels_for_left_pixel,
-    nested_neighbor_rings,
-)
 from torchsky.sphere import great_circle_distance
 from torchsky.sphere.core import _chord_radius
 from torchsky.sphere import healpix as _healpix
@@ -155,21 +150,6 @@ def test_ra_wrap_and_pole_caps() -> None:
     assert result_pole.left_index.numel() == 1
 
 
-def test_candidate_pixels_match_cap_covering() -> None:
-    nside = 16
-    pix = 100
-    radius = math.radians(8.0)
-    device = torch.device("cpu")
-    got = candidate_coarse_pixels_for_left_pixel(
-        nside, pix, radius_rad=radius, device=device
-    )
-    lon, lat = _healpix.pix2ang(
-        nside, torch.tensor([pix], dtype=torch.int64), nest=True, lonlat=True
-    )
-    expect = cap_covering_pixels(nside, lon, lat, radius, nest=True)
-    assert torch.equal(got.sort().values, expect.sort().values)
-
-
 def test_cap_covering_matches_healpy_query_disc() -> None:
     healpy = pytest.importorskip("healpy")
     nside = 32
@@ -199,29 +179,3 @@ def test_cap_covering_matches_hpgeom_query_circle() -> None:
         nest=True,
     )
     assert set(got.tolist()) == {int(p) for p in hp_pix}
-
-
-def test_index_expand_keeps_query_alignment() -> None:
-    ra = torch.tensor([10.0, 10.0, 40.0], dtype=torch.float64)
-    dec = torch.tensor([20.0, 20.0, -10.0], dtype=torch.float64)
-    index = HealpixIndex.build(ra, dec, nside=32, nest=True)
-    pix = _healpix.ang2pix(32, ra, dec, nest=True, lonlat=True).to(torch.int64)
-    query, rows = index.expand(pix)
-    got = {(int(q), int(r)) for q, r in zip(query.tolist(), rows.tolist(), strict=True)}
-    assert (0, 0) in got
-    assert (0, 1) in got
-    assert (1, 0) in got
-    assert (1, 1) in got
-    assert (2, 2) in got
-    assert (2, 0) not in got
-
-
-def test_nested_rings_dedupe_keep_home_pixel() -> None:
-    nside = 32
-    pix = torch.tensor([100, 101], dtype=torch.int64)
-    rings = nested_neighbor_rings(nside, pix, hops=3)
-    assert rings.shape[1] == 2
-    home = rings[:, 0]
-    valid = home[home >= 0]
-    assert 100 in set(valid.tolist())
-    assert int(valid.unique().numel()) == int(valid.numel())

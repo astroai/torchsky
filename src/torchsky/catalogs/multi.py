@@ -135,11 +135,12 @@ def crossmatch_self(
     """Pairs within one catalogue (STILTS ``tmatch1``).
 
     Returns every pair ``i < j`` (no self pairs, each pair once) with
-    ``separation <= radius_arcsec`` or, with ``err_arcsec`` (scalar or per row),
-    ``separation <= err[i] + err[j]``. With ``group=True`` also returns
-    friends-of-friends groups (connected components of the pair graph) as
-    per-row ``group_id`` and ``group_size`` (STILTS ``action=identify``).
-    Candidate generation is the declination-strip index, so cost is
+    ``separation <= radius_arcsec``, or ``<= max(radius[i], radius[j])`` for a
+    per-row radius (symmetric in ``i`` and ``j``), or, with ``err_arcsec``
+    (scalar or per row), ``separation <= err[i] + err[j]``. With ``group=True``
+    also returns friends-of-friends groups (connected components of the pair
+    graph) as per-row ``group_id`` and ``group_size`` (STILTS
+    ``action=identify``). Candidates come from the zone index, so cost is
     ``O(N log N + K)``; components use scatter-min union-find.
     """
     ra = torch.as_tensor(lon_deg).reshape(-1)
@@ -181,9 +182,10 @@ def _self_pairs(
     n, device = int(ra.numel()), ra.device
     if (radius_arcsec is None) == (err_arcsec is None):
         raise ValueError("pass exactly one of radius_arcsec and err_arcsec")
+    combine = "sum"
     if radius_arcsec is not None:
         rl, _ = _normalize_radius_arcsec(radius_arcsec, n, device)
-        rr = None
+        rr, combine = rl, "max"
     else:
         rl = _error_radii(err_arcsec, n, device, "err_arcsec")  # type: ignore[assignment]
         rr = rl
@@ -200,6 +202,7 @@ def _self_pairs(
         accept=lambda lrows, rrows: lrows < rrows,
         left_chunk_size=left_chunk_size,
         right_chunk_size=right_chunk_size,
+        combine=combine,
     )
 
 
