@@ -15,6 +15,7 @@ from ..wcs.frames import _to_device, _work_dtype, canonical_celestial_frame
 from ..wcs.observed import EarthOrientation, PNModel, Site
 from .core import CrossmatchResult, crossmatch_sky
 from .index import HealpixIndex
+from .astrometry import Astrometry, MotionPrior
 from .sky_index import SkyIndex
 from ..device import _as_tensor, _to
 
@@ -60,6 +61,10 @@ class Catalog:
         radial_velocity_km_s: Radial velocity in km/s.
         valid: Optional per-row validity mask.
         columns: Additional tensors whose leading dimension matches the catalog.
+        astrometry: Optional per-row :class:`Astrometry` covariance at ``epoch``.
+            ``to`` and ``take`` carry it; propagation drops it, because a
+            covariance at the old epoch would be stale (use
+            :func:`propagate_astrometry`).
 
     Examples:
         >>> import torch
@@ -79,6 +84,7 @@ class Catalog:
     radial_velocity_km_s: Tensor | None = None
     valid: Tensor | None = None
     columns: dict[str, Tensor] = field(default_factory=dict)
+    astrometry: Astrometry | None = None
     _index: HealpixIndex | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -123,6 +129,11 @@ class Catalog:
                 raise ValueError(f"columns[{name!r}] must match the number of rows")
             extras[str(name)] = tensor
         self.columns = extras
+        if self.astrometry is not None:
+            if len(self.astrometry) != n:
+                raise ValueError("astrometry must have one covariance per row")
+            if self.astrometry.cov.device != device:
+                self.astrometry = self.astrometry.to(device)
         self._index = None
 
     @staticmethod
@@ -168,6 +179,9 @@ class Catalog:
             columns={
                 name: col.to(device=device_t) for name, col in self.columns.items()
             },
+            astrometry=None
+            if self.astrometry is None
+            else self.astrometry.to(device_t),
         )
 
     @property
@@ -222,6 +236,21 @@ class Catalog:
                 "observed frames require Catalog.observe with site and EOP"
             )
         return self._with_state(self.to_state().to_frame(dest, tt_mjd=tt_mjd))
+
+    def propagate(
+        self, epoch: Tensor | float, *, motion_prior: MotionPrior | None = None
+    ) -> Catalog:
+        """Per-row propagation with the richest measured motion (see :meth:`CatalogState.propagate`).
+
+        Rows without proper motion move with ``motion_prior``'s mean, and
+        must not change epoch without one. ``astrometry`` is dropped; use
+        :func:`propagate_astrometry` for the propagated covariance.
+        """
+        prior = None
+        if motion_prior is not None:
+            mean, _ = motion_prior.at(self.lon, self.lat)
+            prior = (mean[:, 0], mean[:, 1])
+        return self._with_state(self.to_state().propagate(epoch, prior_pm_mas_yr=prior))
 
     def propagate_angular(self, epoch: Tensor | float) -> Catalog:
         return self._with_state(self.to_state().propagate_angular(epoch))
@@ -325,6 +354,7 @@ class Catalog:
             radial_velocity_km_s=_sel(self.radial_velocity_km_s),
             valid=_sel(self.valid),
             columns=extras,
+            astrometry=None if self.astrometry is None else self.astrometry.take(sel),
         )
 
     def crossmatch(
@@ -335,15 +365,17 @@ class Catalog:
         find: str = "best",
         index: SkyIndex | None = None,
         target_epoch: float | Tensor | None = None,
-        motion: str = "angular",
+        motion_prior: MotionPrior | None = None,
         left_err_arcsec: float | Tensor | str | None = None,
         right_err_arcsec: float | Tensor | str | None = None,
     ) -> CrossmatchResult:
         """Match stored positions, or explicitly propagate to a common Julian year.
 
-        ``motion="angular"`` requires both PM components for rows whose epoch
-        changes; ``"physical"`` additionally requires parallax and radial
-        velocity. Missing motion is never filled with zero. ``index`` is a
+        With ``target_epoch`` both catalogs move per row with
+        :meth:`Catalog.propagate`: full space motion where proper motion,
+        parallax > 0 and radial velocity are present, otherwise linear proper
+        motion; rows without proper motion need ``motion_prior``. Missing
+        motion is never filled with zero and parallax is never imputed. ``index`` is a
         :class:`SkyIndex` of ``other``'s stored positions; it cannot be reused
         once ``target_epoch`` or a frame change moves them.
 
@@ -352,8 +384,6 @@ class Catalog:
         ``self`` / ``other`` (values in arcsec). Epoch/frame alignment reorders
         nothing, so returned indices always refer to the original rows.
         """
-        if motion not in ("angular", "physical"):
-            raise ValueError("motion must be 'angular' or 'physical'")
         if index is not None and (
             target_epoch is not None or other.frame != self.frame
         ):
@@ -369,9 +399,7 @@ class Catalog:
                 epoch = torch.as_tensor(catalog.epoch)
                 if bool(torch.all(epoch == target.to(epoch.device))):
                     return catalog
-                if motion == "angular":
-                    return catalog.propagate_angular(target.reshape(()))
-                return catalog.propagate_physical(target.reshape(()))
+                return catalog.propagate(target.reshape(()), motion_prior=motion_prior)
 
             left, right = align(left), align(right)
         right = right if right.frame == left.frame else right.to_frame(left.frame)

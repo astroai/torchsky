@@ -25,6 +25,19 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Astrometric calibration
+
+::: torchsky.catalogs
+    options:
+      members:
+        - Astrometry
+        - MotionPrior
+        - propagate_astrometry
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Catalog
 
 ::: torchsky.catalogs

@@ -600,24 +600,44 @@ def propagate_proper_motion(
         lon, lat, pm_lon, pm_lat, source_epoch, target_epoch
     )
 
-    lon_rad = lon * D2R
-    lat_rad = lat * D2R
+    lon_out, lat_out, _, _ = _linear_angular_motion(
+        lon, lat, pm_lon, pm_lat, target_epoch - source_epoch
+    )
+    return lon_out, lat_out
+
+
+def _local_basis(lon_deg: Tensor, lat_deg: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    lon_rad = lon_deg * D2R
+    lat_rad = lat_deg * D2R
     sin_lon, cos_lon = torch.sin(lon_rad), torch.cos(lon_rad)
     sin_lat, cos_lat = torch.sin(lat_rad), torch.cos(lat_rad)
     position = torch.stack((cos_lat * cos_lon, cos_lat * sin_lon, sin_lat), dim=-1)
-    tangent_lon = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon)), dim=-1)
-    tangent_lat = torch.stack((-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1)
+    east = torch.stack((-sin_lon, cos_lon, torch.zeros_like(lon_rad)), dim=-1)
+    north = torch.stack((-sin_lat * cos_lon, -sin_lat * sin_lon, cos_lat), dim=-1)
+    return position, east, north
 
-    velocity = MAS_TO_RAD * (
-        pm_lon.unsqueeze(-1) * tangent_lon + pm_lat.unsqueeze(-1) * tangent_lat
-    )
-    propagated = position + (target_epoch - source_epoch).unsqueeze(-1) * velocity
-    # ponytail: unit-distance linear motion is the exact no-distance Astropy
-    # contract; add parallax/radial velocity here when 6D phase space is needed.
-    propagated = propagated / torch.linalg.norm(
-        propagated, dim=-1, keepdim=True
-    ).clamp_min(1e-30)
-    return unit_to_radec(propagated)
+
+def _linear_angular_motion(
+    lon: Tensor, lat: Tensor, pm_lon: Tensor, pm_lat: Tensor, dt_yr: Tensor
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Unit-distance linear motion: position and proper motion at ``t + dt``.
+
+    The 3-D velocity ``v`` stays constant (the no-distance Astropy contract).
+    The new direction is ``(p + dt v) / |p + dt v|``, and the proper motion
+    there is ``v`` projected onto the new local east/north basis and divided
+    by ``|p + dt v|``. This matches ``SkyCoord.apply_space_motion`` without
+    distance to ~1e-10 relative, poles included.
+    """
+    position, east, north = _local_basis(lon, lat)
+    velocity = MAS_TO_RAD * (pm_lon.unsqueeze(-1) * east + pm_lat.unsqueeze(-1) * north)
+    moved = position + dt_yr.unsqueeze(-1) * velocity
+    length = torch.linalg.norm(moved, dim=-1, keepdim=True).clamp_min(1e-30)
+    lon_out, lat_out = unit_to_radec(moved / length)
+    _, east_out, north_out = _local_basis(lon_out, lat_out)
+    scale = 1.0 / (MAS_TO_RAD * length.squeeze(-1))
+    pm_lon_out = (velocity * east_out).sum(-1) * scale
+    pm_lat_out = (velocity * north_out).sum(-1) * scale
+    return lon_out, lat_out, pm_lon_out, pm_lat_out
 
 
 def _proper_motion_position_delta(

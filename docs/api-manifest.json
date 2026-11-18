@@ -20,6 +20,7 @@
     "wcs"
   ],
   "torchsky.catalogs": [
+    "Astrometry",
     "BackgroundModel",
     "BlendFitDiagnostics",
     "BlockSparseCovariance",
@@ -34,6 +35,7 @@
     "KnownComponentFitError",
     "ManyMatchResult",
     "MorphologySpectrumDeblendResult",
+    "MotionPrior",
     "NearestResult",
     "ParametricBlendDiagnostics",
     "ParametricBounds",
@@ -56,7 +58,8 @@
     "join_rows",
     "match_nearest",
     "match_within",
-    "nside_for_cap"
+    "nside_for_cap",
+    "propagate_astrometry"
   ],
   "torchsky.coords": [
     "CatalogState",

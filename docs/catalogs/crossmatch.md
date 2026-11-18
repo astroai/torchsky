@@ -222,12 +222,54 @@ per catalog, the member with the smallest separation to the rest of the group;
 ### Match catalogs at different epochs
 
 Stars move. For catalogs observed years apart, propagate positions to one epoch
-before matching: `Catalog.crossmatch(..., target_epoch=2000.0)` applies linear
-proper motion (`motion="angular"`) or full space motion with parallax and
-radial velocity (`motion="physical"`). Rows with missing or NaN motion raise
-rather than being treated as fixed; fill them explicitly if that is what you
-want. See [Frames and time](../coordinates/frames.md) and
+before matching: `Catalog.crossmatch(..., target_epoch=2000.0)` moves each row
+with the richest motion it has. Rows with proper motion, positive parallax and
+radial velocity get full space motion. Rows with proper motion only get linear
+proper motion; a non-positive parallax is then ignored, never "fixed". Rows
+without proper motion need an explicit
+[`MotionPrior`](../reference/catalogs.md#torchsky.catalogs.MotionPrior), for
+example the Gaia proper-motion distribution of their sky cell. Missing motion
+is never treated as zero, and the call raises instead. See
+[Frames and time](../coordinates/frames.md) and
 [Catalog containers](containers.md#frames-epochs-and-motion).
+
+### Positional uncertainties
+
+[`Astrometry`](../reference/catalogs.md#torchsky.catalogs.Astrometry) holds one
+6x6 covariance per row in the local east/north basis: position, proper motion,
+parallax and radial velocity, in mas and mas/yr. Build it from Gaia's archive
+columns (`Astrometry.from_gaia`), a 2MASS-style error ellipse
+(`from_ellipse`) or plain errors (`from_errors`). Quantities a catalogue does
+not measure stay NaN, never zero.
+[`propagate_astrometry`](../reference/catalogs.md#torchsky.catalogs.propagate_astrometry)
+returns positions and the position covariance at another epoch, \(J C J^T\)
+with the exact motion Jacobian. For rows without proper motion the covariance
+grows by \(\Delta t^2\) times the prior's covariance.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import Astrometry, propagate_astrometry
+from torchsky.coords import CatalogState
+
+state = CatalogState(
+    lon=torch.tensor([269.45]), lat=torch.tensor([4.69]), epoch=2016.0,
+    pm_lon_coslat_mas_yr=torch.tensor([-798.6]), pm_lat_mas_yr=torch.tensor([10328.1]),
+)
+errors = Astrometry.from_gaia({
+    "ra_error": torch.tensor([0.03]), "dec_error": torch.tensor([0.03]),
+    "parallax_error": torch.tensor([0.04]), "pmra_error": torch.tensor([0.04]),
+    "pmdec_error": torch.tensor([0.04]),
+    **{f"{a}_{b}_corr": torch.tensor([0.0]) for a, b in [
+        ("ra", "dec"), ("ra", "parallax"), ("ra", "pmra"), ("ra", "pmdec"),
+        ("dec", "parallax"), ("dec", "pmra"), ("dec", "pmdec"),
+        ("parallax", "pmra"), ("parallax", "pmdec"), ("pmra", "pmdec")]},
+})
+moved, cov = propagate_astrometry(state, errors, 2000.0)
+sigma = cov[0].diagonal().sqrt()  # mas: 16 yr of 0.04 mas/yr pm error on 0.03 mas
+assert torch.allclose(sigma, torch.full((2,), (0.03**2 + (16 * 0.04) ** 2) ** 0.5, dtype=torch.float64), rtol=1e-3)
+```
 
 ### Per-row radii, nearest neighbours and counts
 

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from .index import HealpixIndex
 from .index import cap_covering_pixels
 from .index import nside_for_cap
+from .astrometry import Astrometry, MotionPrior, propagate_astrometry
 from .catalog import Catalog
 from .multi import (
     ManyMatchResult,
@@ -148,6 +149,9 @@ def crossmatch(
 
 
 __all__ = [
+    "Astrometry",
+    "MotionPrior",
+    "propagate_astrometry",
     "Catalog",
     "CatalogStreamDataset",
     "BackgroundModel",

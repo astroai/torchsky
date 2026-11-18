@@ -165,16 +165,22 @@ for partition in DataLoader(dataset, num_workers=2, batch_size=None):
 
 `to_frame(name)` converts positions and rotates proper motion with them; the
 rigid ICRS, Galactic, FK5 (J2000), and ecliptic rotations keep the motion's
-length and are differentiable. `propagate_angular(epoch)` moves positions along
-their proper motion; `propagate_physical(epoch)` also uses parallax and radial
-velocity. Both require the motion they need and raise otherwise.
+length and are differentiable. `propagate(epoch, motion_prior=None)` moves
+each row with the richest motion it has: full space motion with parallax and
+radial velocity, linear proper motion otherwise, and a `MotionPrior` mean for
+rows without proper motion. `propagate_angular(epoch)` and
+`propagate_physical(epoch)` force one model for every row. All of them carry
+proper motion to the new epoch and raise rather than treat missing motion as
+zero.
 
 `Catalog.crossmatch(..., target_epoch=2016.0)` propagates both catalogs to one
 epoch before matching, preserving row indices and columns. A prebuilt
 `index` cannot be combined with an epoch or frame change, because the matched
-positions are new. Conversions do not propagate covariances; use the
-motion Jacobians in [Frames and time](../coordinates/frames.md) for that. FK4
-motion conversion is not provided.
+positions are new. Propagation drops a catalog's `astrometry`, because the
+covariance would be stale; `propagate_astrometry` returns positions together
+with the propagated covariance (see
+[Crossmatch](crossmatch.md#positional-uncertainties)). FK4 motion conversion is
+not provided.
 
 ### Observe from a site
 

@@ -15,10 +15,10 @@ from torch import Tensor
 
 from .._dtype import as_work_tensor as _as_f64
 from .frames import (
+    _linear_angular_motion,
     _to_device,
     canonical_celestial_frame,
     convert_celestial,
-    propagate_proper_motion,
     propagate_space_motion,
     radec_to_unit,
 )
@@ -187,6 +187,11 @@ class CatalogState:
         return _to_device(_as_f64(epoch), self.lon.device)
 
     def propagate_angular(self, epoch: Tensor | float | Epoch) -> CatalogState:
+        """Linear unit-distance motion; proper motion is carried to the new epoch.
+
+        Rows whose epoch changes must have finite proper motion (missing motion
+        is never treated as zero). Rows already at ``epoch`` are unchanged.
+        """
         if self.pm_lon_coslat_mas_yr is None or self.pm_lat_mas_yr is None:
             raise ValueError(
                 "angular propagation requires pm_lon_coslat_mas_yr and pm_lat_mas_yr"
@@ -194,15 +199,172 @@ class CatalogState:
         if self.epoch_format != "jyear":
             raise ValueError("angular propagation requires jyear epochs")
         target_epoch = self._target_epoch_value(epoch)
-        lon, lat = propagate_proper_motion(
+        source = torch.as_tensor(self.epoch)
+        dt = torch.broadcast_to(target_epoch - source, self.lon.shape)
+        pm_lon, pm_lat = self.pm_lon_coslat_mas_yr, self.pm_lat_mas_yr
+        finite = torch.isfinite(pm_lon) & torch.isfinite(pm_lat)
+        moving = dt != 0
+        missing = moving & ~finite
+        if bool(missing.any()):
+            raise ValueError(
+                f"{int(missing.sum())} row(s) change epoch without finite proper "
+                "motion; drop them, or use CatalogState.propagate with a motion prior"
+            )
+        lon, lat, pm_lon_out, pm_lat_out = _linear_angular_motion(
             self.lon,
             self.lat,
-            self.pm_lon_coslat_mas_yr,
-            self.pm_lat_mas_yr,
-            source_epoch_jyear=self.epoch,
-            target_epoch_jyear=target_epoch,
+            torch.where(finite, pm_lon, torch.zeros_like(pm_lon)),
+            torch.where(finite, pm_lat, torch.zeros_like(pm_lat)),
+            dt,
         )
-        return replace(self, lon=lon, lat=lat, epoch=target_epoch)
+        return replace(
+            self,
+            lon=lon,
+            lat=lat,
+            epoch=target_epoch,
+            pm_lon_coslat_mas_yr=torch.where(finite, pm_lon_out, pm_lon),
+            pm_lat_mas_yr=torch.where(finite, pm_lat_out, pm_lat),
+        )
+
+    def motion_level(self) -> Tensor:
+        """Per-row astrometric level: 6 (pm, parallax > 0, RV), 4 (pm), 2 (none).
+
+        Level 6 requires finite proper motion, positive finite parallax, and a
+        finite radial velocity. Level 4 only needs finite proper motion; its
+        parallax is ignored, even when present but non-positive. Nothing is imputed.
+        """
+        n = self.lon.shape
+        level = torch.full(n, 2, dtype=torch.int8, device=self.lon.device)
+        if self.pm_lon_coslat_mas_yr is None or self.pm_lat_mas_yr is None:
+            return level
+        pm = torch.isfinite(self.pm_lon_coslat_mas_yr) & torch.isfinite(
+            self.pm_lat_mas_yr
+        )
+        level = torch.where(pm, torch.full_like(level, 4), level)
+        if self.parallax_mas is not None and self.radial_velocity_km_s is not None:
+            full = (
+                pm
+                & torch.isfinite(self.parallax_mas)
+                & (self.parallax_mas > 0.0)
+                & torch.isfinite(self.radial_velocity_km_s)
+            )
+            level = torch.where(full, torch.full_like(level, 6), level)
+        return level
+
+    def propagate(
+        self,
+        epoch: Tensor | float | Epoch,
+        *,
+        prior_pm_mas_yr: tuple[Tensor, Tensor] | None = None,
+    ) -> CatalogState:
+        """Per-row propagation with the most complete motion each row has.
+
+        - Level 6 rows (see :meth:`motion_level`) use full space motion
+          (:meth:`propagate_physical`, ERFA ``starpv``/``pvstar``).
+        - Level 4 rows use linear unit-distance proper motion
+          (:meth:`propagate_angular`).
+        - Level 2 rows (no proper motion) move with ``prior_pm_mas_yr``, a
+          per-row (east, north) prior mean motion, for example from
+          ``torchsky.catalogs.MotionPrior``. Without a prior they must not
+          change epoch.
+
+        Parallax is never imputed and missing motion is never treated as zero.
+        Proper motion is carried to the new epoch; level-2 rows keep NaN proper
+        motion, because the prior is not a measurement.
+        """
+        if self.epoch_format != "jyear":
+            raise ValueError("propagation requires jyear epochs")
+        target_epoch = self._target_epoch_value(epoch)
+        shape = self.lon.shape
+        dt = torch.broadcast_to(target_epoch - torch.as_tensor(self.epoch), shape)
+        level = self.motion_level()
+        nan = torch.full(shape, math.nan, dtype=self.lon.dtype, device=self.lon.device)
+        pm_lon = (
+            self.pm_lon_coslat_mas_yr if self.pm_lon_coslat_mas_yr is not None else nan
+        )
+        pm_lat = self.pm_lat_mas_yr if self.pm_lat_mas_yr is not None else nan
+        no_pm = level == 2
+        if bool((no_pm & (dt != 0)).any()):
+            if prior_pm_mas_yr is None:
+                raise ValueError(
+                    f"{int((no_pm & (dt != 0)).sum())} row(s) without proper motion "
+                    "change epoch; pass prior_pm_mas_yr (torchsky.catalogs.MotionPrior)"
+                )
+            prior_lon = torch.broadcast_to(
+                _as_f64(prior_pm_mas_yr[0]).to(self.lon.device), shape
+            )
+            prior_lat = torch.broadcast_to(
+                _as_f64(prior_pm_mas_yr[1]).to(self.lon.device), shape
+            )
+            if not bool(
+                torch.isfinite(prior_lon[no_pm]).all()
+                & torch.isfinite(prior_lat[no_pm]).all()
+            ):
+                raise ValueError(
+                    "prior_pm_mas_yr must be finite for rows without proper motion"
+                )
+        else:
+            prior_lon = prior_lat = torch.zeros_like(nan)
+        # Level 2 and 4: linear angular motion (prior mean for level 2).
+        use_lon = torch.where(no_pm, prior_lon, pm_lon)
+        use_lat = torch.where(no_pm, prior_lat, pm_lat)
+        safe = torch.isfinite(use_lon) & torch.isfinite(use_lat)
+        lon, lat, pm_lon_out, pm_lat_out = _linear_angular_motion(
+            self.lon,
+            self.lat,
+            torch.where(safe, use_lon, torch.zeros_like(use_lon)),
+            torch.where(safe, use_lat, torch.zeros_like(use_lat)),
+            dt,
+        )
+        pm_lon_out = torch.where(no_pm, pm_lon, pm_lon_out)
+        pm_lat_out = torch.where(no_pm, pm_lat, pm_lat_out)
+        plx, rv = self.parallax_mas, self.radial_velocity_km_s
+        full = level == 6
+        if bool(full.any()):
+            rows = torch.nonzero(full, as_tuple=True)[0]
+            sub = CatalogState(
+                lon=self.lon[rows],
+                lat=self.lat[rows],
+                frame=self.frame,
+                epoch=Epoch(
+                    torch.broadcast_to(torch.as_tensor(self.epoch), shape)[rows],
+                    TimeSpec(format="jyear", scale=self.epoch_scale or "tcb"),
+                ),
+                pm_lon_coslat_mas_yr=pm_lon[rows],
+                pm_lat_mas_yr=pm_lat[rows],
+                parallax_mas=plx[rows] if plx is not None else None,
+                radial_velocity_km_s=rv[rows] if rv is not None else None,
+            )
+            target_rows = torch.broadcast_to(target_epoch, shape)[rows]
+            moved = sub.propagate_physical(target_rows)
+            lon, lat = lon.clone(), lat.clone()
+            pm_lon_out, pm_lat_out = pm_lon_out.clone(), pm_lat_out.clone()
+            lon[rows], lat[rows] = moved.lon, moved.lat
+            assert moved.pm_lon_coslat_mas_yr is not None
+            assert moved.pm_lat_mas_yr is not None
+            assert moved.parallax_mas is not None
+            assert moved.radial_velocity_km_s is not None
+            pm_lon_out[rows] = moved.pm_lon_coslat_mas_yr
+            pm_lat_out[rows] = moved.pm_lat_mas_yr
+            if plx is not None and rv is not None:
+                plx, rv = plx.clone(), rv.clone()
+                plx[rows] = moved.parallax_mas
+                rv[rows] = moved.radial_velocity_km_s
+        keep = dt == 0
+        return replace(
+            self,
+            lon=torch.where(keep, self.lon, lon),
+            lat=torch.where(keep, self.lat, lat),
+            epoch=target_epoch,
+            pm_lon_coslat_mas_yr=None
+            if self.pm_lon_coslat_mas_yr is None
+            else torch.where(keep, pm_lon, pm_lon_out),
+            pm_lat_mas_yr=None
+            if self.pm_lat_mas_yr is None
+            else torch.where(keep, pm_lat, pm_lat_out),
+            parallax_mas=plx,
+            radial_velocity_km_s=rv,
+        )
 
     def propagate_physical(self, epoch: Tensor | float | Epoch) -> CatalogState:
         if (

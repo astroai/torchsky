@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `torchsky.catalogs.Astrometry`, `MotionPrior` and `propagate_astrometry`:
+  per-row 6x6 astrometric covariances (position, proper motion, parallax,
+  radial velocity; local east/north basis), built from Gaia archive columns,
+  error ellipses or plain errors, validated fail-closed (unmeasured blocks are
+  NaN, never zero). `propagate_astrometry` returns positions and the target-epoch
+  position covariance `J C J^T` with the exact motion Jacobians, routed per
+  row. `MotionPrior.from_reference` turns a reference catalogue's proper
+  motions (for example Gaia) into a per-HEALPix-cell prior, with explicit
+  parent-cell pooling below `min_count` stars, for rows without proper
+  motion. `Catalog(astrometry=...)` carries the covariance through `to` and `take`.
+- `CatalogState.propagate` / `Catalog.propagate` and `CatalogState.motion_level`:
+  per-row propagation with the richest measured motion. Full space motion
+  needs proper motion, parallax > 0 and radial velocity; otherwise linear
+  proper motion (parallax ignored, never imputed); otherwise an explicit
+  prior mean.
 - `torchsky.catalogs.SkyIndex`, `match_within`, `match_nearest` and
   `count_within`: an exact, reusable sky index with the queries of astropy
   `search_around_sky` / `match_to_catalog_sky` and scipy `cKDTree`
@@ -107,6 +122,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (a `HealpixIndex`) is removed. `Catalog.crossmatch` no longer builds a
   HEALPix index sized for ~64 rows per pixel, which produced ~3000
   candidates per row at 1″ and unbounded memory.
+- `CatalogState.propagate_angular` carries proper motion to the new epoch
+  (projected onto the new local basis, as `SkyCoord.apply_space_motion` does
+  without distance), and it raises when a row changes epoch without finite proper
+  motion. Before, the proper motion stayed at its old-epoch value, and NaN proper
+  motion silently produced NaN positions.
+- `Catalog.crossmatch(target_epoch=...)` propagates per row (see
+  `Catalog.propagate`) and takes `motion_prior=`; `motion="angular"|"physical"`
+  is removed. Before, `"physical"` raised for a whole catalogue as soon as one
+  row had a non-positive parallax.
+- Motion Jacobians are pinned against astropy central finite differences:
+  proper motion only, to 1e-6 relative; full space motion, to 5e-6 relative.
+  Both hold at Dec ±89.98° for a Barnard's-star path that crosses the pole.
 - `crossmatch_self` with a per-row radius keeps a pair when
   `separation <= max(radius[i], radius[j])`; it used `radius[i]` only, so the
   result depended on row order.

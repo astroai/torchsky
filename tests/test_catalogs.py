@@ -80,9 +80,7 @@ def test_catalog_crossmatch_physical_epoch_alignment_uses_complete_motion() -> N
         lat=torch.tensor([moved.dec.deg]),
         epoch=2020.0,
     )
-    result = left.crossmatch(
-        right, radius_arcsec=0.001, target_epoch=2020.0, motion="physical"
-    )
+    result = left.crossmatch(right, radius_arcsec=0.001, target_epoch=2020.0)
     assert result.left_index.tolist() == result.right_index.tolist() == [0]
     assert result.separation_arcsec.item() < 0.001
 
@@ -91,7 +89,7 @@ def test_catalog_crossmatch_epoch_alignment_refuses_missing_motion_and_stale_ind
     None
 ):
     cat = Catalog(lon=torch.tensor([10.0]), lat=torch.tensor([0.0]), epoch=2000.0)
-    with pytest.raises(ValueError, match="pm_lon"):
+    with pytest.raises(ValueError, match="motion_prior|prior_pm"):
         cat.crossmatch(cat, radius_arcsec=1.0, target_epoch=2020.0)
     with pytest.raises(ValueError, match="index"):
         cat.crossmatch(
@@ -104,8 +102,6 @@ def test_catalog_crossmatch_epoch_alignment_refuses_missing_motion_and_stale_ind
         cat.crossmatch(
             cat, radius_arcsec=1.0, target_epoch=torch.tensor([2000.0, 2020.0])
         )
-    with pytest.raises(ValueError, match="motion"):
-        cat.crossmatch(cat, radius_arcsec=1.0, target_epoch=2000.0, motion="invented")
 
 
 def test_catalog_preserves_fractional_epoch_precision() -> None:
