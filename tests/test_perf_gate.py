@@ -194,3 +194,25 @@ def test_gate_sht_scalable_at_two_and_three_nside() -> None:
             os.environ.get("TORCHSKY_PERF_GATE_SHT_S", "5.0")
         )
         assert alm is not None and bool(torch.isfinite(alm).all())
+
+
+def test_gate_match_nearest_on_concentrated_catalogue() -> None:
+    """kNN start radii follow local density, not the all-sky mean.
+
+    A 100 deg^2 field holds every point; an all-sky starting radius (~0.4 deg)
+    materialised hundreds of pairs per row (35 s and 8 GB at 1e5 rows).
+    """
+    from torchsky.catalogs import match_nearest
+
+    n = 200_000
+    g = torch.Generator().manual_seed(9)
+    ra = 150.0 + 10.0 * torch.rand(n, generator=g, dtype=torch.float64)
+    dec = 2.0 + 10.0 * torch.rand(n, generator=g, dtype=torch.float64)
+    ra_r = ra + torch.randn(n, generator=g, dtype=torch.float64) * 1e-4
+    dec_r = dec + torch.randn(n, generator=g, dtype=torch.float64) * 1e-4
+
+    def run() -> None:
+        match_nearest(ra, dec, ra_r, dec_r, k=2)
+
+    max_s = float(os.environ.get("TORCHSKY_PERF_GATE_KNN_S", "5.0"))
+    assert _median_seconds(run, iters=1) < max_s

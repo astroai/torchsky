@@ -30,6 +30,7 @@ from ._zones import (
     ZoneIndex,
     combine_radii,
     default_zone_height_deg,
+    occupied_spacing_deg,
     zone_query,
 )
 from .core import CrossmatchResult
@@ -109,7 +110,9 @@ class SkyIndex:
     ) -> SkyIndex:
         lon, lat = _coords(lon_deg, lat_deg, device)
         h = (
-            default_zone_height_deg(int(lon.numel()), None)
+            default_zone_height_deg(
+                int(lon.numel()), None, occupied_spacing_deg(lon, lat)
+            )
             if zone_height_deg is None
             else zone_height_deg
         )
@@ -256,19 +259,31 @@ class SkyIndex:
         )
         if not cap > 0.0:
             raise ValueError("max_radius_arcsec must be positive")
-        # Expected k neighbours at uniform density: pi r^2 * M / (4 pi) = k.
-        radius = min(cap, math.degrees(math.sqrt(4.0 * k / max(len(self), 1))) * 3600.0)
+        # Start each row where its local density predicts ~k neighbours, then
+        # double. Concentrated catalogues and sparse targets both resolve in a
+        # few rounds without materialising far more pairs than needed.
+        density = self._zones.local_density(lon, lat)  # per deg^2
+        # Aim for a Poisson mean of k: overshooting costs more pairs than an
+        # extra round for the rows still short of k (measured).
+        start_deg = torch.sqrt(k / (math.pi * density.clamp(min=1e-300)))
+        fallback = 4.0 * self._zones.zone_height
+        radius = torch.where(
+            density > 0, start_deg, torch.full_like(start_deg, fallback)
+        )
+        radius = (radius * 3600.0).clamp(max=cap)
         todo = torch.arange(n, device=dev)
         while todo.numel():
             last = radius >= cap
-            rl = torch.full((int(todo.numel()),), radius, dtype=lon.dtype, device=dev)
             li, rj, sep = zone_query(
-                self._zones, lon[todo], lat[todo], rl, find="all", max_pairs=max_pairs
+                self._zones,
+                lon[todo],
+                lat[todo],
+                radius,
+                find="all",
+                max_pairs=max_pairs,
             )
             counts = torch.bincount(li, minlength=int(todo.numel()))
-            done = (
-                counts >= k if not last else torch.ones_like(counts, dtype=torch.bool)
-            )
+            done = (counts >= k) | last
             first = torch.cumsum(counts, 0) - counts
             rank = torch.arange(li.numel(), device=dev) - first[li]
             take = (rank < k) & done[li]
@@ -276,7 +291,7 @@ class SkyIndex:
             index[rows, rank[take]] = rj[take]
             sep_out[rows, rank[take]] = sep[take]
             todo = todo[~done]
-            radius = min(cap, radius * 2.0)
+            radius = (radius[~done] * 2.0).clamp(max=cap)
         return NearestResult(index, sep_out)
 
 
@@ -289,7 +304,11 @@ def _index_for(
     if index is not None:
         index._check_same(right_lon, right_lat)
         return index
-    h = default_zone_height_deg(int(right_lon.numel()), typical_arcsec)
+    h = default_zone_height_deg(
+        int(right_lon.numel()),
+        typical_arcsec,
+        occupied_spacing_deg(right_lon, right_lat),
+    )
     return SkyIndex(
         ZoneIndex(right_lon, right_lat, zone_height_deg=h), right_lon, right_lat
     )

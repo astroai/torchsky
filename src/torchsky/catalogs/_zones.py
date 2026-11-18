@@ -69,16 +69,47 @@ def combine_radii(left: Tensor, right: Tensor | float, how: Combine) -> Tensor:
     raise ValueError(f"unknown radius combination {how!r}")
 
 
-def default_zone_height_deg(
-    n_points: int, typical_window_arcsec: float | None
+def occupied_spacing_deg(
+    ra_deg: Tensor, dec_deg: Tensor, *, cell_deg: float = 0.25
 ) -> float:
-    """Zone height: the typical query window, else the mean point spacing.
+    """Mean point spacing over the occupied sky, from ``cell_deg`` cells.
+
+    The cells are a cost heuristic only: about ``cell_deg`` on a side, in declination
+    bands. For data packed into a small footprint or clusters this is the
+    spacing that sets candidate counts. The all-sky mean overestimates it by
+    ``sqrt(41253 deg^2 / footprint)``.
+    """
+    n = int(ra_deg.numel())
+    if n == 0:
+        return 180.0
+    with torch.no_grad():
+        band = torch.floor((dec_deg.detach() + 90.0) / cell_deg)
+        cos_c = torch.cos(torch.deg2rad((band + 0.5) * cell_deg - 90.0)).clamp(min=1e-3)
+        per_band = torch.ceil(360.0 * cos_c / cell_deg)
+        col = torch.floor(torch.remainder(ra_deg.detach(), 360.0) / 360.0 * per_band)
+        cell = band.to(torch.int64) * (1 << 20) + col.to(torch.int64)
+        occupied = int(torch.unique(cell).numel())
+    return math.sqrt(occupied * cell_deg * cell_deg / n)
+
+
+def default_zone_height_deg(
+    n_points: int,
+    typical_window_arcsec: float | None,
+    spacing_deg: float | None = None,
+) -> float:
+    """Zone height: the typical query window, capped by the point spacing.
 
     Results never depend on it. With ``h ~ W`` a query scans about three zones
     and visits about ``density * 2W * (2W + 2h)`` candidates. Coarser zones
     are cheaper only when windows are far below the point spacing.
+    ``spacing_deg`` defaults to the all-sky mean spacing; pass
+    :func:`occupied_spacing_deg` for concentrated catalogues.
     """
-    spacing = math.degrees(math.sqrt(4.0 * math.pi / max(n_points, 1)))
+    spacing = (
+        math.degrees(math.sqrt(4.0 * math.pi / max(n_points, 1)))
+        if spacing_deg is None
+        else spacing_deg
+    )
     h = (
         spacing
         if typical_window_arcsec is None
@@ -135,6 +166,34 @@ class ZoneIndex:
             inv[self.order] = torch.arange(self.n, device=self.order.device)
             self._inv = inv
         return self._inv
+
+    def local_density(self, ra_deg: Tensor, dec_deg: Tensor) -> Tensor:
+        """Right rows per square degree around each query (cost heuristic).
+
+        Counts rows in the three zones around the query, within ``4 h`` of it on
+        the sky in RA. The RA wrap is ignored; the estimate only steers search radii.
+        """
+        h = self.zone_height
+        with torch.no_grad():
+            z = self._zone_of(dec_deg)
+            cos_d = torch.cos(torch.deg2rad(dec_deg)).clamp(min=1e-6)
+            half = (4.0 * h / cos_d).clamp(max=180.0)
+            ra = torch.remainder(ra_deg, 360.0)
+            klo = _ra_key(ra - half)
+            khi = _ra_key(ra + half)
+            whole = half >= 180.0
+            klo = torch.where(whole, torch.zeros_like(klo), torch.minimum(klo, khi))
+            khi = torch.where(
+                whole, torch.full_like(khi, _RA_TOP), torch.maximum(klo, khi)
+            )
+            count = torch.zeros_like(z)
+            for dz in (-1, 0, 1):
+                zz = (z + dz).clamp(0, self.n_zones - 1)
+                lo = torch.searchsorted(self.key, (zz << _RA_BITS) | klo, right=False)
+                hi = torch.searchsorted(self.key, (zz << _RA_BITS) | khi, right=True)
+                count = count + (hi - lo) * ((z + dz >= 0) & (z + dz < self.n_zones))
+            area = 3.0 * h * torch.where(whole, 360.0 * cos_d, 8.0 * h)
+            return count.to(ra_deg.dtype) / area
 
     def _zone_of(self, dec_deg: Tensor) -> Tensor:
         z = torch.floor((dec_deg + 90.0) / self.zone_height).to(torch.int64)
