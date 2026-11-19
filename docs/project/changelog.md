@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covariances), completeness and density. Primaries over `budget` hypotheses are
   enumerated best-first with a certified residual mass instead of a silent cut.
   With two catalogues it reproduces `associate` exactly.
+  Catalogues with per-row epochs (2MASS dates) are gated at pair epochs and
+  placed relative to the primary propagated to each candidate's epoch.
 - `associate` evaluates pairs at the right row's own epoch when the right
   catalogue has per-row epochs (2MASS observation dates). The left row is
   propagated with its covariance to each candidate's epoch, and the search
