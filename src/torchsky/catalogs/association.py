@@ -1113,11 +1113,23 @@ def associate_many(
             raise ValueError("the primary has per-row epochs; pass a scalar epoch")
         epoch = ep.reshape(())
     pos_lonlat, covs = [], []
-    for cat in cats:
+    for c_idx, cat in enumerate(cats):
         cat = cat if cat.frame == ref.frame else cat.to_frame(ref.frame)
-        lon, lat, cov = _epoch_positions(
-            cat, torch.as_tensor(epoch, dtype=_F64), motion_prior
-        )
+        if c_idx > 0 and _per_row_epochs(cat) is not None:
+            # Evaluated at pair epochs below; stored positions serve the density.
+            if cat.astrometry is None:
+                raise ValueError(
+                    "associate_many needs Catalog.astrometry on every catalogue"
+                )
+            lon, lat, cov = (
+                cat.lon.to(_F64),
+                cat.lat.to(_F64),
+                cat.astrometry.position_cov(),
+            )
+        else:
+            lon, lat, cov = _epoch_positions(
+                cat, torch.as_tensor(epoch, dtype=_F64), motion_prior
+            )
         pos_lonlat.append((lon, lat))
         covs.append(cov)
     n0 = int(pos_lonlat[0][0].numel())
