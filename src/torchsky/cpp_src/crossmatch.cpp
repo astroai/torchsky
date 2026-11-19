@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <limits>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -143,15 +144,15 @@ inline void for_each_pair(const Index& z, double ra_in, double dec, const double
                 const double chord2 = dx * dx + dy * dy + dz * dz;
                 if constexpr (kChord) {
                     if (chord2 <= s * s) fn(j, chord2);
-                    continue;
+                } else {
+                    if (!(chord2 <= s * s * (1.0 + 64.0 * kEps) + 1e-300)) continue;
+                    const double cx = q[1] * r[2] - q[2] * r[1];
+                    const double cy = q[2] * r[0] - q[0] * r[2];
+                    const double cz = q[0] * r[1] - q[1] * r[0];
+                    const double dot = std::clamp(q[0] * r[0] + q[1] * r[1] + q[2] * r[2], -1.0, 1.0);
+                    const double sep = std::atan2(std::sqrt(cx * cx + cy * cy + cz * cz), dot) * kArcsecPerRad;
+                    if (sep <= thr) fn(j, sep, chord2);
                 }
-                if (!(chord2 <= s * s * (1.0 + 64.0 * kEps) + 1e-300)) continue;
-                const double cx = q[1] * r[2] - q[2] * r[1];
-                const double cy = q[2] * r[0] - q[0] * r[2];
-                const double cz = q[0] * r[1] - q[1] * r[0];
-                const double dot = std::clamp(q[0] * r[0] + q[1] * r[1] + q[2] * r[2], -1.0, 1.0);
-                const double sep = std::atan2(std::sqrt(cx * cx + cy * cy + cz * cz), dot) * kArcsecPerRad;
-                if (sep <= thr) fn(j, sep);
             }
         }
     }
@@ -255,7 +256,7 @@ void count_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<dou
             int64_t c = 0;
             const int64_t gi = q.row_offset + i;
             for_each_pair(z, q.ra[i], q.dec[i], qv, q.rl[i], window, how,
-                          [&](int64_t j, double) { c += (!self_upper || z.order[j] > gi); });
+                          [&](int64_t j, double, double) { c += (!self_upper || z.order[j] > gi); });
             out[i] = c;
         }
     });
@@ -273,7 +274,9 @@ void fill_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<doub
     const int64_t total = static_cast<int64_t>(out_j.shape(0));
     nb::gil_scoped_release release;
     parallel_rows(q.n, threads, [&](int64_t b, int64_t e) {
-        std::vector<std::pair<double, int64_t>> buf;
+        // (chord^2, original right row, separation): order by chord^2 (exactly
+        // rounded, same as the torch path), ties by the lowest right row.
+        std::vector<std::tuple<double, int64_t, double>> buf;
         for (int64_t t = b; t < e; ++t) {
             const int64_t i = row_at(q, t);
             const double window = combine(q.rl[i], z.rr_max, how);
@@ -281,13 +284,13 @@ void fill_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<doub
             double qv[3];
             unit_of(q.ra[i], q.dec[i], qv);
             buf.clear();
-            for_each_pair(z, q.ra[i], q.dec[i], qv, q.rl[i], window, how, [&](int64_t j, double sep) {
+            for_each_pair(z, q.ra[i], q.dec[i], qv, q.rl[i], window, how, [&](int64_t j, double sep, double c2) {
                 const int64_t jo = z.order[j];
-                if (!self_upper || jo > gi) buf.emplace_back(sep, jo);
+                if (!self_upper || jo > gi) buf.emplace_back(c2, jo, sep);
             });
             std::sort(buf.begin(), buf.end());
             int64_t o = off[i];
-            for (const auto& [sep, jo] : buf) {
+            for (const auto& [c2, jo, sep] : buf) {
                 if (o >= total) break;  // guarded: counts and fill disagree only on misuse
                 oj[o] = jo;
                 os[o] = sep;
@@ -312,16 +315,18 @@ void best_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<doub
             double qv[3];
             unit_of(q.ra[i], q.dec[i], qv);
             double best = std::numeric_limits<double>::infinity();
+            double best_sep = best;
             int64_t bj = -1;
-            for_each_pair(z, q.ra[i], q.dec[i], qv, q.rl[i], window, how, [&](int64_t j, double sep) {
+            for_each_pair(z, q.ra[i], q.dec[i], qv, q.rl[i], window, how, [&](int64_t j, double sep, double c2) {
                 const int64_t jo = z.order[j];
-                if (sep < best || (sep == best && jo < bj)) {
-                    best = sep;
+                if (c2 < best || (c2 == best && jo < bj)) {
+                    best = c2;
+                    best_sep = sep;
                     bj = jo;
                 }
             });
             oj[i] = bj;
-            os[i] = best;
+            os[i] = best_sep;
         }
     });
 }

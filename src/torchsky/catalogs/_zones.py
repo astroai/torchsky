@@ -47,9 +47,18 @@ def unit_vectors(ra_deg: Tensor, dec_deg: Tensor) -> Tensor:
 
 
 def separation_arcsec(a: Tensor, b: Tensor) -> Tensor:
-    """Great-circle angle between unit vectors, atan2 form, in arcsec."""
-    cross = torch.linalg.norm(torch.cross(a, b, dim=-1), dim=-1)
-    dot = (a * b).sum(dim=-1).clamp(-1.0, 1.0)
+    """Great-circle angle between unit vectors, atan2 form, in arcsec.
+
+    Written element-wise (no reductions over the vector axis), so a pair's value
+    does not depend on how pairs are batched: results are chunk-invariant.
+    """
+    ax, ay, az = a[..., 0], a[..., 1], a[..., 2]
+    bx, by, bz = b[..., 0], b[..., 1], b[..., 2]
+    cx = ay * bz - az * by
+    cy = az * bx - ax * bz
+    cz = ax * by - ay * bx
+    cross = torch.sqrt(cx * cx + cy * cy + cz * cz)
+    dot = (ax * bx + ay * by + az * bz).clamp(-1.0, 1.0)
     return torch.atan2(cross, dot) * _ARCSEC_PER_RAD
 
 
@@ -366,7 +375,13 @@ def zone_query(
                 i = seg_row[seg]
                 rxyz = index.xyz[j].detach()
                 diff = lx[i] - rxyz
-                chord2 = (diff * diff).sum(-1)
+                # Element-wise (exactly rounded, batch-independent): the
+                # ordering key and tie rule must not depend on chunking.
+                chord2 = (
+                    diff[:, 0] * diff[:, 0]
+                    + diff[:, 1] * diff[:, 1]
+                    + diff[:, 2] * diff[:, 2]
+                )
                 rr = rr_sorted[j] if rr_sorted is not None else 0.0
                 thr = combine_radii(rl[i], rr, combine)
                 half = torch.deg2rad(thr / 3600.0).clamp(max=math.pi) * 0.5
@@ -377,22 +392,23 @@ def zone_query(
                     * (1.0 + 64.0 * torch.finfo(chord2.dtype).eps)
                     + 1e-300
                 )
-                i, j, thr = i[pre], j[pre], thr[pre]
+                i, j, thr, chord2 = i[pre], j[pre], thr[pre], chord2[pre]
                 sep = separation_arcsec(lx[i], index.xyz[j].detach())
                 ok = sep <= thr
-                i, j, sep = i[ok], j[ok], sep[ok]
+                i, j, chord2 = i[ok], j[ok], chord2[ok]
                 jo = index.order[j]
                 if accept is not None and i.numel():
                     keep = accept(i + c0, jo)
-                    i, j, jo, sep = i[keep], j[keep], jo[keep], sep[keep]
+                    i, j, jo, chord2 = i[keep], j[keep], jo[keep], chord2[keep]
                 if stats is not None:
                     stats.candidates += k1 - k0
                     stats.pairs += int(i.numel())
                 if find == "best":
+                    # Nearest by chord^2 (monotone in the angle, exactly rounded).
                     new_best = best_sep.scatter_reduce(
-                        0, i, sep, "amin", include_self=True
+                        0, i, chord2, "amin", include_self=True
                     )
-                    tie = sep == new_best[i]
+                    tie = chord2 == new_best[i]
                     cand_j = _scatter_reduce_int(
                         torch.full_like(best_j, big), 0, i[tie], jo[tie], "amin"
                     )
@@ -406,9 +422,9 @@ def zone_query(
                 else:
                     out_l.append(i + c0)
                     out_r.append(jo)
-                    out_s.append(sep)
+                    out_s.append(chord2)
         if find == "all" and len(out_l) > chunk_start:
-            # Order this chunk by (left, sep, right) now: chunks are contiguous in
+            # Order this chunk by (left, chord^2, right) now: chunks are contiguous in
             # left index, so the concatenation is ordered with no global sort
             # (and no global sort temporaries, which ran out of GPU memory).
             cl_ = torch.cat(out_l[chunk_start:])
@@ -435,13 +451,13 @@ def zone_query(
     rj = torch.cat(out_r)
     if find == "count":
         return li, rj, torch.empty(0, dtype=left_ra.dtype, device=dev)
-    if find == "best":
-        sep = _pair_separation(index, left_xyz, li, rj)
-        return li, rj, sep
-    # "all": chunks are already ordered by (left, sep, right). Separations are
-    # recomputed with autograd.
     del out_s
-    return li, rj, _pair_separation(index, left_xyz, li, rj)
+    # Separations of the final pairs: with autograd in one call, otherwise in
+    # fixed blocks aligned to output positions (bit-identical for any chunking,
+    # bounded memory: pair-sized gathers ran a 10.75 GB GPU out of memory).
+    if left_xyz.requires_grad or index.xyz.requires_grad:
+        return li, rj, _pair_separation(index, left_xyz, li, rj)
+    return li, rj, _blocked_separation(index, left_xyz, li, rj)
 
 
 _COMBINE_CODE = {"sum": 0, "quadrature": 1, "max": 2}
@@ -516,7 +532,7 @@ def _zone_query_native(
             if self_upper:
                 raise ValueError("self_upper applies to find='all' or 'count'")
             rows = torch.nonzero(j >= 0, as_tuple=True)[0]
-            li, rj = rows, j[rows]
+            li, rj, sep = rows, j[rows], sep[rows]
         else:
             counts = torch.empty(n, dtype=i64)
             ext.xmatch_count(*common, self_upper, 0, counts, threads)
@@ -529,12 +545,10 @@ def _zone_query_native(
             sep = torch.empty(total, dtype=f64)
             ext.xmatch_fill(*common, self_upper, 0, offsets, rj, sep, threads)
             li = torch.repeat_interleave(torch.arange(n), counts, output_size=total)
-    # Separations of matched pairs only (differentiable through the inputs).
-    return (
-        li,
-        rj,
-        _pair_separation(index, unit_vectors(left_ra[li], left_dec[li]), None, rj),
-    )
+    if left_ra.requires_grad or left_dec.requires_grad or index.xyz.requires_grad:
+        # Separations of matched pairs, differentiable through the inputs.
+        sep = _pair_separation(index, unit_vectors(left_ra[li], left_dec[li]), None, rj)
+    return li, rj, sep
 
 
 def native_knn(
@@ -585,6 +599,24 @@ def native_knn(
             torch.get_num_threads(),
         )
     return j.reshape(n, k), sep.reshape(n, k)
+
+
+def _blocked_separation(
+    index: ZoneIndex,
+    left_xyz: Tensor,
+    li: Tensor,
+    rj_orig: Tensor,
+    block: int = 1 << 20,
+) -> Tensor:
+    out = torch.empty(li.shape, dtype=left_xyz.dtype, device=li.device)
+    inv = index.inverse_order()
+    with torch.no_grad():
+        for b0 in range(0, int(li.numel()), block):
+            b1 = min(b0 + block, int(li.numel()))
+            out[b0:b1] = separation_arcsec(
+                left_xyz[li[b0:b1]], index.xyz[inv[rj_orig[b0:b1]]]
+            )
+    return out
 
 
 def _pair_separation(

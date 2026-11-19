@@ -571,8 +571,10 @@ def test_native_and_torch_paths_agree_at_scale(monkeypatch) -> None:
     torch_knn = match_nearest(la, lb, ra, rb, k=3)
     assert torch.equal(native_all.left_index, torch_all.left_index)
     assert torch.equal(native_all.right_index, torch_all.right_index)
+    # Native separations come from libm trig; at small angles a 1e-16 rad
+    # difference in unit vectors is ~2e-11 arcsec.
     torch.testing.assert_close(
-        native_all.separation_arcsec, torch_all.separation_arcsec, rtol=0, atol=0
+        native_all.separation_arcsec, torch_all.separation_arcsec, rtol=0, atol=1e-9
     )
     assert torch.equal(native_knn.index, torch_knn.index)
     torch.testing.assert_close(
