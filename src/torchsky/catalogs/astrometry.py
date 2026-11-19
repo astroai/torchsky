@@ -91,8 +91,16 @@ class Astrometry:
         pos = self.cov[:, _POS, _POS]
         return pos if self.floor_mas2 is None else pos + self.floor_mas2
 
+    @classmethod
+    def _trusted(cls, cov: Tensor, floor_mas2: Tensor | None) -> Astrometry:
+        """Wrap a covariance derived from a validated one (rows of it): no re-check."""
+        obj = object.__new__(cls)
+        object.__setattr__(obj, "cov", cov)
+        object.__setattr__(obj, "floor_mas2", floor_mas2)
+        return obj
+
     def take(self, index: Tensor) -> Astrometry:
-        return Astrometry(self.cov[index], self.floor_mas2)
+        return Astrometry._trusted(self.cov[index], self.floor_mas2)
 
     def to(self, device: torch.device | str) -> Astrometry:
         if torch.device(device).type == "mps":
@@ -100,7 +108,7 @@ class Astrometry:
                 "astrometric covariances are float64; keep them on CPU or CUDA"
             )
         floor = None if self.floor_mas2 is None else self.floor_mas2.to(device)
-        return Astrometry(self.cov.to(device), floor)
+        return Astrometry._trusted(self.cov.to(device), floor)
 
     # ------------------------------------------------------------ builders
 

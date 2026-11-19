@@ -845,10 +845,11 @@ def assign_one_to_one(
     _, comp_id = torch.unique(comp, return_inverse=True)
     n_comp = int(comp_id.max()) + 1
     # Distinct left and right rows per component.
-    lkey = torch.unique(torch.stack((comp_id, li)), dim=1)
-    rkey = torch.unique(torch.stack((comp_id, rj)), dim=1)
-    lefts = torch.bincount(lkey[0], minlength=n_comp)
-    rights = torch.bincount(rkey[0], minlength=n_comp)
+    # Distinct left / right rows per component (1-D unique on packed keys).
+    lkey = torch.unique(comp_id * n_left + li)
+    rkey = torch.unique(comp_id * n_right + rj)
+    lefts = torch.bincount(lkey // n_left, minlength=n_comp)
+    rights = torch.bincount(rkey // n_right, minlength=n_comp)
     star = (lefts == 1) | (rights == 1)
     in_star = star[comp_id]
     if bool(in_star.any()):
