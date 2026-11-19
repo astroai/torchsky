@@ -85,6 +85,9 @@ def kernel_stamp(
         g = (torch.arange(-nh, nh + 1, device=dev, dtype=torch.float32)) * pitch
         yy, xx = torch.meshgrid(g, g, indexing="ij")
         u = torch.stack([xx.reshape(-1), yy.reshape(-1)], -1)
+        # kernel-centroid gauge: the finished kernel is moved by its class's offset
+        if getattr(op, "kc_on", False):
+            u = u - op.kc_off[op.kc_pairs.index((int(f), int(ins)))]
         v = u if dil is None else u / dil
         lg = op.net(op.net.enc(v), h)  # (Q, n*n)
         taper = smooth_down(u.norm(dim=-1), lv.taper * lv.r_ext, lv.r_ext)

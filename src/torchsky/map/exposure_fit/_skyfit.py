@@ -606,6 +606,11 @@ def _fit_exposures(
             "n_train": sum(e.split == "train" for e in exps),
             "n_held": len(held),
             "total_seconds": time.perf_counter() - t_start,
+            **(
+                {"kernel_centroid_gauge": rec["kernel_centroid_gauge"]}
+                if "kernel_centroid_gauge" in rec
+                else {}
+            ),  # only when the kernel-centroid gauge is on (internal setting)
         }
     )
     chans = _names_by_index(exps, "chan_name", "channel")

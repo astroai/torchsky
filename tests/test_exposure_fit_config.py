@@ -75,6 +75,7 @@ INTERNAL_DEFAULTS = {
     "k_exp": "learned",
     "k_hidden": 64,
     "k_layers": 3,
+    "kernel_centroid_gauge": 0,
     "level_factor": 2,
     "level_nh": 24,
     "level_overlap": 0.5,
@@ -123,7 +124,7 @@ def test_public_defaults_pinned():
 
 def test_internal_defaults_pinned():
     assert dict(_INTERNAL_SETTINGS) == INTERNAL_DEFAULTS
-    assert len(INTERNAL_DEFAULTS) == 80
+    assert len(INTERNAL_DEFAULTS) == 81
     with pytest.raises(TypeError):
         _INTERNAL_SETTINGS["loss"] = "gauss"  # a read-only mapping
 

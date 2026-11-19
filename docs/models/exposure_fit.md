@@ -64,6 +64,11 @@ scale and fractional floor.
   defaults (a test pins them). The kernel is the same for every position on the detector within an exposure's learned code; no distortion
   beyond the header solution, no detector pattern, no non-linearity, no per-pixel gain.
 - One tile only (a single square box). `reference_instrument` fixes the absolute flux scale with the published curves of that instrument.
+- The astrometric frame: the learned translations of the training exposures have zero mean, but nothing fixes the centroid of the learned
+  kernels, so a shift of the kernels against the sky and the translations leaves every prediction unchanged and two fits can differ by a
+  common sky shift (about 20 milliarcseconds between half fits of SMACS 0723). An optional convention, the private setting
+  `kernel_centroid_gauge` (off by default until it has been checked on real data), holds the windowed first moment of each band's mean
+  kernel at zero by an exact projection after every optimiser step that puts the shift into the translations and the sky.
 - `background_order` must be 2: the moved code fits six Legendre terms.
 - The sky half-size is the box half-size minus 1 arcsec plus 2 arcsec when the observations carry the same `TSBOXHS`; otherwise it is derived
   from the pixel positions.

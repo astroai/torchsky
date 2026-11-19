@@ -63,6 +63,7 @@ _INTERNAL_SETTINGS: Mapping[str, Any] = MappingProxyType(
         "amplitude": "structured",  # 'structured' (A = alpha g), 'unit' or 'free'
         "dilation_stop": 0.0,  # end the fit when the common-blur dilation exceeds this (0 = off)
         "blur_floor": 1.0,  # blur gauge: core second moment floor in units of sky_pitch^2 / 3 (0 = off)
+        "kernel_centroid_gauge": 0,  # 1 = hold the windowed first moment of every kernel class's mean kernel at zero (exact projection; off until validated on real data)
         "pedestal_gauge": 1,  # per filter, training background constants sum to zero (1 = on)
         "coarse_reg": "off",  # 'off' or 'xcorr' (coarse registration by cross-correlation)
         "coarse_reg_radius": 1.0,  # search radius [arcsec] of the coarse registration
