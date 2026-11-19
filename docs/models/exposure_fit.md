@@ -67,7 +67,7 @@ scale and fractional floor.
 - The astrometric frame: the learned translations of the training exposures have zero mean, but nothing fixes the centroid of the learned
   kernels, so a shift of the kernels against the sky and the translations leaves every prediction unchanged and two fits can differ by a
   common sky shift (about 20 milliarcseconds between half fits of SMACS 0723). An optional convention, the private setting
-  `kernel_centroid_gauge` (off by default until it has been checked on real data), holds the windowed first moment of each band's mean
+  `kernel_centroid_gauge` (off by default: on SMACS 0723 half fits of 19 November 2026 it worsened held-out prediction and did not clearly reduce the 3 to 5 milliarcsecond difference between two fits), holds the windowed first moment of each band's mean
   kernel at zero by an exact projection after every optimiser step that puts the shift into the translations and the sky.
 - `background_order` must be 2: the moved code fits six Legendre terms.
 - The sky half-size is the box half-size minus 1 arcsec plus 2 arcsec when the observations carry the same `TSBOXHS`; otherwise it is derived
