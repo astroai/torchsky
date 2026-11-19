@@ -5,7 +5,7 @@ All notable changes to torchsky are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0rc1] - Unreleased
 
 ### Added
 
@@ -187,9 +187,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of a convergence error.
 - In float32, `field_observation_from_exposure_file` keeps a pixel usable when `1 / err**2`
   overflows (`err` finite and positive); the weight is clipped to the largest finite value.
-
-### Changed
-
 - Crossmatch candidates come from a declination-zone index (Gray, Szalay and
   Nieto-Santisteban 2006) shared by every matcher, replacing the strip, HEALPix
   ring and declination-window engines. On a dense 100 deg² field (2″ radius,

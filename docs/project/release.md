@@ -15,7 +15,7 @@ source of truth:
 
 | PyTorch lane | torchsky release | torchfits |
 |---|---|---|
-| **2.14.x** | **0.5.0** | `>=1.3.1` |
+| **2.14.x** | **0.5.0**, **0.6.0** | `>=1.3.1` |
 
 0.5.0 is the first supported release.
 
