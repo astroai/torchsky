@@ -29,6 +29,7 @@ NAMESPACES = (
     "torchsky.cosmology",
     "torchsky.transforms",
     "torchsky.quality",
+    "torchsky.instrument",
     "torchsky.viz",
     "torchsky.map",
     "torchsky.scene",
@@ -51,6 +52,7 @@ NAMESPACES = (
     "torchsky.map.field.gaussian",
     "torchsky.map.field.chromatic",
     "torchsky.map.field.joint_native_likelihood",
+    "torchsky.map.exposure_fit",
 )
 
 

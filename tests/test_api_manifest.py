@@ -28,6 +28,7 @@ NAMESPACES = (
     "torchsky.map.field.gaussian",
     "torchsky.map.field.chromatic",
     "torchsky.map.field.joint_native_likelihood",
+    "torchsky.map.exposure_fit",
 )
 
 

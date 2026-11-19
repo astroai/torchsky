@@ -75,6 +75,7 @@ nav = [
     "models/psf-conventions.md",
     "models/encoders.md",
     "models/formulation.md",
+    "models/exposure_fit.md",
   ]},
   {"Examples" = ["examples/index.md", "examples/gallery.md"]},
   {"Performance" = [
@@ -102,6 +103,7 @@ nav = [
       "reference/transforms.md",
       "reference/encoders.md",
       "reference/quality.md",
+      "reference/instrument.md",
     ]},
     {"Experimental" = [
       "reference/scene.md",
@@ -122,6 +124,7 @@ nav = [
       "reference/map-field-joint-native-likelihood.md",
       "reference/map-field-native-integrated-read.md",
       "reference/map-field-native-response.md",
+      "reference/map-exposure-fit.md",
       "reference/viz.md",
     ]},
     {"Compatibility" = ["reference/sphere-compat.md"]},

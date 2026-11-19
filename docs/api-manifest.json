@@ -195,6 +195,19 @@
     "photon_quadrature",
     "resolve_field_bandpass"
   ],
+  "torchsky.instrument": [
+    "ACSWFCDataQuality",
+    "InstrumentDescription",
+    "JWSTDataQuality",
+    "JWSTExposureTiming",
+    "NIRCAM_METADATA_SOURCES",
+    "NIRCAM_UPDEC_BANDS",
+    "NIRCamImagingBand",
+    "WFC3IRDataQuality",
+    "instrument_description",
+    "jwst_exposure_timing",
+    "nircam_imaging_band"
+  ],
   "torchsky.log_lambda": [
     "C_KM_S",
     "convolve_log_lambda",
@@ -245,6 +258,16 @@
   ],
   "torchsky.map.evidence": [
     "EvidenceSnapshot"
+  ],
+  "torchsky.map.exposure_fit": [
+    "ExposurePrediction",
+    "ReferenceCatalogue",
+    "SkyFit",
+    "SkyFitConfig",
+    "SkyProduct",
+    "fit_sky",
+    "load_exposures",
+    "predict_exposure"
   ],
   "torchsky.map.field.chromatic": [
     "ChromaticPSFField",

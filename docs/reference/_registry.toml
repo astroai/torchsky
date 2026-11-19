@@ -225,6 +225,13 @@ tier = "experimental"
 related = ["models/likelihoods.md"]
 
 [[namespace]]
+name = "torchsky.map.exposure_fit"
+slug = "map-exposure-fit"
+tier = "experimental"
+related = ["models/exposure_fit.md"]
+intro = "Item-sky fit to individual exposures of several instruments: load_exposures, fit_sky, SkyFit and predict_exposure (uncertainty products and catalogues are not available yet)."
+
+[[namespace]]
 name = "torchsky.scene"
 slug = "scene"
 tier = "experimental"
@@ -291,6 +298,13 @@ name = "torchsky.transforms"
 slug = "transforms"
 tier = "core"
 related = ["models/encoders.md"]
+
+[[namespace]]
+name = "torchsky.instrument"
+slug = "instrument"
+tier = "experimental"
+related = ["models/exposure_fit.md"]
+intro = "Instrument facts: data-quality bit tables, NIRCam band metadata, and the descriptions used to load and fit exposures."
 
 [[namespace]]
 name = "torchsky.quality"

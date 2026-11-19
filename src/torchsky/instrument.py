@@ -8,19 +8,27 @@ throughputs (2025-01), and PSF widths use the STScI on-orbit PSF table.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import IntFlag
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from torch import Tensor
+
+    from .map.quality import DQPolicy
 
 __all__ = [
     "NIRCAM_METADATA_SOURCES",
     "NIRCAM_UPDEC_BANDS",
     "ACSWFCDataQuality",
+    "InstrumentDescription",
     "JWSTDataQuality",
     "JWSTExposureTiming",
     "NIRCamImagingBand",
     "WFC3IRDataQuality",
+    "instrument_description",
     "jwst_exposure_timing",
     "nircam_imaging_band",
 ]
@@ -298,3 +306,271 @@ def jwst_exposure_timing(
         end_mjd_utc=end,
         midpoint_source=midpoint_source,
     )
+
+
+# ---------------------------------------------------------------------------------------------
+# Instrument descriptions for exposure-level fitting
+# ---------------------------------------------------------------------------------------------
+
+_C_ANGSTROM_PER_S = 2.99792458e18
+_ARCSEC2_TO_SR = (math.pi / 648000.0) ** 2
+_NIRCAM_CHANNEL = {
+    **{f"NRC{module}{index}": "NIRCAM_SW" for module in "AB" for index in "1234"},
+    **{f"NRC{module}LONG": "NIRCAM_LW" for module in "AB"},
+}
+_UNIT_PER_SR = re.compile(r"^\s*MJY\s*(/|\s)\s*SR\s*$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class InstrumentDescription:
+    """What the exposure-level fit and the exposure loader assume about one camera.
+
+    Build one with :func:`instrument_description`. The description holds facts only (no file is
+    opened). Attributes:
+
+    * ``name``: ``"NIRCAM"``, ``"WFC3_IR"`` or ``"ACS_WFC"``; ``telescope``; ``diameter_m``,
+      the telescope aperture diameter [m] (used for the diffraction scale of the kernel
+      start).
+    * ``detectors``: detector names the camera produces, as the ``DETECTOR`` header card
+      spells them (NIRCam); the two ACS chips are named ``ACS_WFC1`` and ``ACS_WFC2`` after their
+      ``CCDCHIP`` card; ``channel_of(detector)`` gives the channel, and ``pixel_scale_arcsec[channel]`` the
+      nominal pixel scale [arcsec] of that channel.
+    * ``science_unit``: unit of the science plane in the calibrated file. The factor to
+      MJy/sr is ``sky_factor(...)``: 1 for ``"MJy/sr"`` (JWST ``_cal``), and for the HST unit
+      ``"ELECTRONS"`` or ``"ELECTRONS/S"`` ``PHOTFNU * 1e-6 / (Omega_nominal * t_unit)`` with
+      ``PHOTFNU`` [Jy s / electron] from the header (or ``1e23 PHOTFLAM PHOTPLAM**2 / c``
+      when absent), ``Omega_nominal = IDCSCALE**2`` [sr], and ``t_unit = EXPTIME`` for
+      ``ELECTRONS`` and 1 for ``ELECTRONS/S``. The result is surface brightness per
+      *nominal* pixel area (the pixel-area map is not applied).
+    * ``dq_flags``, ``dq_bit_width`` and ``dq_ignore_bits``: the bit table of the data-quality
+      plane (from this module), the width of the plane in bits (the bits above it are not
+      read), and the bits that do **not** reject a pixel by default. ``dq_policy()`` returns
+      the matching :class:`~torchsky.map.quality.DQPolicy`.
+    * ``detector_terms``: per-exposure detector terms the fit may add (``"stripes"``: row and
+      column offsets).
+    * ``bandpass_prefix``: the filter-profile identifier is the prefix plus the filter name;
+      ``filter_curves`` optionally maps a filter name to ``(wavelength_um, transmission)``
+      tensors (see :meth:`with_filter_curves`); nothing is fetched from the network.
+    * ``science_hdu``, ``error_hdu``, ``quality_hdu`` and ``chip_extvers``: extension names
+      and the ``EXTVER`` of each chip (one observation per chip).
+    * ``wcs_policy``: ``"header"`` uses the science header's own solution; ``"apriori"`` (HST)
+      uses the alternate solution written from the guide-star catalogue, as the JWST
+      ``_cal`` files do, and never an alternate solution fitted to other images.
+    * ``min_valid_pixels``: a cut with fewer usable pixels is dropped.
+    """
+
+    name: str
+    telescope: str
+    diameter_m: float
+    pixel_scale_arcsec: Mapping[str, float]
+    detectors: tuple[str, ...]
+    science_unit: str
+    dq_flags: type[IntFlag]
+    dq_bit_width: int
+    dq_ignore_bits: int
+    detector_terms: tuple[str, ...]
+    bandpass_prefix: str
+    chip_extvers: tuple[int, ...] = (1,)
+    science_hdu: str = "SCI"
+    error_hdu: str = "ERR"
+    quality_hdu: str = "DQ"
+    wcs_policy: str = "header"
+    min_valid_pixels: int = 2000
+    filter_curves: Mapping[str, tuple[Tensor, Tensor]] | None = None
+    notes: tuple[str, ...] = ()
+
+    def channel_of(self, detector: str) -> str:
+        """Channel (kernel and render grid are per channel) of a detector name."""
+        if self.name == "NIRCAM":
+            return _NIRCAM_CHANNEL.get(str(detector).strip().upper(), str(detector))
+        return self.name
+
+    def bandpass_id(self, band: str) -> str:
+        """Filter-profile identifier of ``band`` (prefix + name)."""
+        return f"{self.bandpass_prefix}{band}"
+
+    def dq_policy(self, ignore_bits: int | None = None) -> DQPolicy:
+        """:class:`~torchsky.map.quality.DQPolicy` that rejects every bit of the plane except ``ignore_bits``.
+
+        ``None`` uses ``dq_ignore_bits``. The policy reads only the low ``dq_bit_width``
+        bits (16 for HST), as the plane is an unsigned bit field.
+        """
+        from .map.quality import DQPolicy
+
+        ignore = self.dq_ignore_bits if ignore_bits is None else int(ignore_bits)
+        full = (1 << self.dq_bit_width) - 1
+        return DQPolicy(reject_bits=full & ~ignore)
+
+    def sky_factor(
+        self,
+        primary: Mapping[str, Any],
+        science: Mapping[str, Any],
+        *,
+        nominal_scale_arcsec: float | None = None,
+    ) -> tuple[float, dict[str, Any]]:
+        """Factor from the science plane to MJy/sr, and how it was obtained.
+
+        Reads ``BUNIT``, ``EXPTIME``, ``PHOTFNU``, ``PHOTFLAM``, ``PHOTPLAM`` (science header
+        first, then primary) and, for HST, ``IDCSCALE`` (or ``nominal_scale_arcsec``, or the
+        nominal scale of the channel). Raises ``ValueError`` for a unit the description does
+        not know (fail closed).
+        """
+
+        def get(key: str, default: Any = None) -> Any:
+            for header in (science, primary):
+                if key in header and header[key] not in (None, ""):
+                    return header[key]
+            return default
+
+        unit = str(get("BUNIT", "")).strip().upper()
+        if self.science_unit == "MJy/sr":
+            if not _UNIT_PER_SR.match(unit):
+                raise ValueError(
+                    f"{self.name}: BUNIT {unit!r}, expected MJy/sr (calibrated file)"
+                )
+            return 1.0, {"bunit": unit, "source": "file is MJy/sr"}
+        if unit == "ELECTRONS/S":
+            t_unit = 1.0
+        elif unit == "ELECTRONS":
+            exptime = float(get("EXPTIME", 0.0) or 0.0)
+            if exptime <= 0:
+                raise ValueError("BUNIT ELECTRONS without a positive EXPTIME")
+            t_unit = exptime
+        else:
+            raise ValueError(
+                f"{self.name}: unsupported BUNIT {get('BUNIT', '')!r} (ELECTRONS or ELECTRONS/S)"
+            )
+        photfnu = get("PHOTFNU")
+        source = "PHOTFNU"
+        if photfnu is None:
+            photflam, photplam = get("PHOTFLAM"), get("PHOTPLAM")
+            if photflam is None or photplam is None:
+                raise ValueError(
+                    "neither PHOTFNU nor PHOTFLAM and PHOTPLAM in the header"
+                )
+            photfnu = 1e23 * float(photflam) * float(photplam) ** 2 / _C_ANGSTROM_PER_S
+            source = "1e23 PHOTFLAM PHOTPLAM^2 / c"
+        scale = nominal_scale_arcsec
+        scale_source = "argument"
+        if scale is None:
+            scale = get("IDCSCALE")
+            scale_source = "IDCSCALE"
+        if scale is None:
+            scale = self.pixel_scale_arcsec[self.channel_of("")]
+            scale_source = "nominal table"
+        omega = float(scale) ** 2 * _ARCSEC2_TO_SR
+        factor = float(photfnu) * 1e-6 / (omega * t_unit)
+        return factor, {
+            "bunit": unit,
+            "photfnu_jy_s_per_e": float(photfnu),
+            "photfnu_source": source,
+            "omega_nominal_sr": omega,
+            "t_unit_s": t_unit,
+            "nominal_scale_arcsec": float(scale),
+            "nominal_scale_source": scale_source,
+        }
+
+    def with_filter_curves(
+        self, curves: Mapping[str, tuple[Tensor, Tensor]]
+    ) -> InstrumentDescription:
+        """Copy with filter curves ``{band: (wavelength_um, transmission)}`` (1D tensors of equal length, at least 2 points)."""
+        checked: dict[str, tuple[Tensor, Tensor]] = {}
+        for band, pair in curves.items():
+            wavelength, transmission = pair
+            if (
+                wavelength.ndim != 1
+                or wavelength.shape != transmission.shape
+                or wavelength.numel() < 2
+            ):
+                raise ValueError(
+                    f"filter curve {band!r} needs two 1D tensors of equal length >= 2"
+                )
+            checked[str(band).strip().upper()] = (wavelength, transmission)
+        return replace(self, filter_curves=checked)
+
+
+# HST defaults follow drizzlepac's final bits for these detectors (WFC3/IR 528 = hot pixel + bad flat;
+# ACS 80 = hot pixel + warm pixel, bit 64, which the ACS table of this module does not name) without the
+# saturated bit: a saturated pixel is not linear and the fit has no non-linear detector term.
+_WFC3_IR_IGNORE = int(WFC3IRDataQuality.HOT_PIXEL | WFC3IRDataQuality.BAD_FLAT)
+_ACS_WFC_IGNORE = int(ACSWFCDataQuality.HOT_PIXEL) | 64
+
+_INSTRUMENTS: dict[str, InstrumentDescription] = {
+    "NIRCAM": InstrumentDescription(
+        name="NIRCAM",
+        telescope="JWST",
+        diameter_m=6.5,
+        pixel_scale_arcsec={"NIRCAM_SW": 0.031, "NIRCAM_LW": 0.063},
+        detectors=tuple(_NIRCAM_CHANNEL),
+        science_unit="MJy/sr",
+        dq_flags=JWSTDataQuality,
+        dq_bit_width=32,
+        dq_ignore_bits=0,
+        detector_terms=("stripes",),
+        bandpass_prefix="JWST/NIRCam.",
+        notes=(
+            "saturation: DQ bit 2; the pipeline corrects non-linearity below saturation",
+        ),
+    ),
+    "WFC3_IR": InstrumentDescription(
+        name="WFC3_IR",
+        telescope="HST",
+        diameter_m=2.4,
+        pixel_scale_arcsec={"WFC3_IR": 0.12825},
+        detectors=("WFC3_IR",),
+        science_unit="ELECTRONS/S",
+        dq_flags=WFC3IRDataQuality,
+        dq_bit_width=16,
+        dq_ignore_bits=_WFC3_IR_IGNORE,
+        detector_terms=(),
+        bandpass_prefix="HST/WFC3_IR.",
+        wcs_policy="apriori",
+        notes=("SIP distortion only, no look-up tables",),
+    ),
+    "ACS_WFC": InstrumentDescription(
+        name="ACS_WFC",
+        telescope="HST",
+        diameter_m=2.4,
+        pixel_scale_arcsec={"ACS_WFC": 0.05},
+        detectors=("ACS_WFC1", "ACS_WFC2"),
+        science_unit="ELECTRONS",
+        dq_flags=ACSWFCDataQuality,
+        dq_bit_width=16,
+        dq_ignore_bits=_ACS_WFC_IGNORE,
+        detector_terms=(),
+        bandpass_prefix="HST/ACS_WFC.",
+        chip_extvers=(1, 2),
+        wcs_policy="apriori",
+        notes=(
+            "two chips are two observations, each with its own detector terms",
+            "look-up-table distortion corrections (D2IMARR, WCSDVARR) are not applied by torchsky's WCS",
+        ),
+    ),
+}
+_ALIASES = {
+    "WFC3": "WFC3_IR",
+    "WFC3/IR": "WFC3_IR",
+    "ACS": "ACS_WFC",
+    "ACS/WFC": "ACS_WFC",
+}
+
+
+def instrument_description(name: str) -> InstrumentDescription:
+    """Return the description of ``"NIRCAM"``, ``"WFC3_IR"`` or ``"ACS_WFC"`` (aliases ``WFC3``, ``WFC3/IR``, ``ACS``, ``ACS/WFC``).
+
+    Raises:
+        KeyError: The name is not known.
+
+    Examples:
+        >>> d = instrument_description("wfc3/ir")
+        >>> d.name, d.diameter_m, d.dq_bit_width
+        ('WFC3_IR', 2.4, 16)
+    """
+    key = str(name).strip().upper()
+    key = _ALIASES.get(key, key)
+    try:
+        return _INSTRUMENTS[key]
+    except KeyError as exc:
+        raise KeyError(
+            f"unknown instrument {name!r}; known: {sorted(_INSTRUMENTS)}"
+        ) from exc

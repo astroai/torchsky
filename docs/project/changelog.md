@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `torchsky.map.exposure_fit` (experimental; moved from a research prototype
+  with unchanged numerics, checked bit for bit against it): `load_exposures`
+  reads JWST NIRCam and HST WFC3/IR and ACS/WFC exposure files through
+  `torchfits` into `FieldObservation` objects; `fit_sky(observations,
+  SkyFitConfig)` fits a sky of Gaussian items and an instrument response in
+  each exposure's own pixels (no resampling); `SkyFit` (save and load) and
+  `predict_exposure` (cross-fitted held-out prediction). `SkyProduct`,
+  `ReferenceCatalogue` and `SkyFit.product` are placeholders that raise
+  `NotImplementedError`.
+- `torchsky.instrument.InstrumentDescription` and `instrument_description`
+  ("NIRCAM", "WFC3_IR", "ACS_WFC"): detector names and channels, pixel scales,
+  aperture, data-quality policy from the bit tables, conversion of the science
+  plane to MJy/sr from header cards, extension layout.
 - `torchsky.catalogs.Astrometry`, `MotionPrior` and `propagate_astrometry`:
   per-row 6x6 astrometric covariances (position, proper motion, parallax,
   radial velocity; local east/north basis), built from Gaia archive columns,
