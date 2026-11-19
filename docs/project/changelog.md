@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `calibrate_by=` / `calibrate_edges=` fit the terms per bin of any per-row
   variable (magnitude, or a blending count from `count_within`), because
   blended sources in crowded fields have larger errors than isolated ones.
+- `HistogramRatio(..., left_values=...)`: pair-colour likelihood ratios
+  (e.g. W1 - G). Both the counterpart and background colour distributions are learnt by
+  EM from the candidate pairs; this separates a blend's true counterpart from
+  its neighbours. Photometric terms are now fitted by EM also with a fixed
+  completeness. Calibration fits stay within physical bounds and fall back to the
+  previous estimate on divergence (an overflow crashed one real field).
 - `torchsky.catalogs.associate`, `HistogramRatio` and `assign_one_to_one`:
   probabilistic counterparts. The pipeline is common-epoch propagation with
   covariances, then a Mahalanobis chi^2 gate with provably sound per-row search

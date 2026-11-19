@@ -595,3 +595,64 @@ def test_binned_calibration_recovers_per_population_scales() -> None:
     assert abs(float(scale[0]) - 1.0) < 0.1 and abs(float(scale[1]) - 3.0) < 0.2
     true = res.left_index == res.right_index
     assert abs(float(res.d2[true].mean()) - 2.0) < 0.15
+
+
+def test_pair_colour_term_resolves_blends() -> None:
+    g = _gen(37)
+    n = 3000
+    lon = 150 + torch.rand(n, generator=g, dtype=D) * 0.3
+    lat = 2 + torch.rand(n, generator=g, dtype=D) * 0.3
+    gmag_true = 14 + 4 * torch.rand(n, generator=g, dtype=D)
+    # A faint Gaia neighbour ~1.5" from every true counterpart (a blend).
+    ang = torch.rand(n, generator=g, dtype=D) * 2 * math.pi
+    nlon, nlat = _offset(lon, lat, 1500 * torch.cos(ang), 1500 * torch.sin(ang))
+    gaia_lon = torch.cat((lon, nlon))
+    gaia_lat = torch.cat((lat, nlat))
+    gaia_g = torch.cat(
+        (gmag_true, gmag_true + 2 + 2 * torch.rand(n, generator=g, dtype=D))
+    )
+    w1 = (
+        gmag_true - 1.0 + 0.2 * torch.randn(n, generator=g, dtype=D)
+    )  # W1 - G ~ -1 for the true star
+    off = torch.randn(n, 2, generator=g, dtype=D) * 800.0  # large WISE errors
+    wlon, wlat = _offset(lon, lat, off[:, 0], off[:, 1])
+    gaia = Catalog(
+        lon=gaia_lon,
+        lat=gaia_lat,
+        epoch=2016.0,
+        astrometry=Astrometry.from_errors(
+            torch.full((2 * n,), 30.0, dtype=D), torch.full((2 * n,), 30.0, dtype=D)
+        ),
+    )
+    wise = Catalog(
+        lon=wlon,
+        lat=wlat,
+        epoch=2016.0,
+        astrometry=Astrometry.from_errors(
+            torch.full((n,), 800.0, dtype=D), torch.full((n,), 800.0, dtype=D)
+        ),
+    )
+    box = MOC.from_polygon(
+        [150.0, 150.3, 150.3, 150.0], [2.0, 2.0, 2.3, 2.3], max_order=16
+    )
+    common = dict(
+        gate_pvalue=1e-4, max_radius_arcsec=30.0, right_footprint=box, assign="optimal"
+    )
+    plain = associate(gaia, wise, **common)
+    colour = associate(
+        gaia,
+        wise,
+        terms=(
+            HistogramRatio(
+                w1, [torch.linspace(-6, 4, 41, dtype=D)], left_values=gaia_g
+            ),
+        ),
+        **common,
+    )
+
+    def purity(res):
+        m = res.match
+        return float((res.left_index[m] == res.right_index[m]).float().mean())
+
+    assert purity(colour) > purity(plain) + 0.1
+    assert purity(colour) > 0.9

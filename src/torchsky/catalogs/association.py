@@ -163,26 +163,37 @@ def gate_k2(pvalue: float) -> float:
 
 @dataclass
 class HistogramRatio:
-    """Photometric likelihood-ratio term ``rho(m) = q(m) / n(m)`` on fixed bins.
+    """Photometric likelihood-ratio term ``rho = q / n`` on fixed bins.
 
-    ``right_values`` is ``[M]`` or ``[M, D]`` (magnitudes or colours of the right
-    catalogue); ``edges`` is one tensor of bin edges per dimension. ``n`` is the
-    normalised histogram of all right rows in the footprint; ``q`` (counterparts)
-    starts equal to ``n`` and is re-estimated by EM from posterior
-    responsibilities. Rows with a NaN value get ``rho = 1`` (marginalised).
-    ``pseudocount`` (default one count per bin) regularises empty bins; it is the
-    only smoothing and is explicit.
+    Two forms:
+
+    - **Right magnitudes** (``left_values=None``): the feature is
+      ``right_values[j]`` (``[M]`` or ``[M, D]``). ``n`` is the normalised
+      histogram of all right rows in the footprint (Sutherland & Saunders).
+      ``q`` (counterparts) starts equal to ``n`` and is re-estimated by EM from
+      the posteriors.
+    - **Pair colours** (``left_values`` given): the feature is
+      ``right_values[j] - left_values[i]`` (for example W1 - G). It separates the
+      true counterpart of a blend from its neighbours. Both ``q`` and ``n`` are
+      learnt by EM from the candidate pairs: ``q`` weighted by the posteriors,
+      ``n`` by ``1 - posterior``.
+
+    ``edges`` holds one tensor of bin edges per dimension. Rows with a NaN or
+    out-of-range feature get ``rho = 1`` (marginalised). ``pseudocount`` (one
+    count per bin by default) regularises empty bins; it is the only smoothing
+    and is explicit.
     """
 
     right_values: Tensor
     edges: list[Tensor]
+    left_values: Tensor | None = None
     pseudocount: float = 1.0
     _bins: Tensor | None = field(default=None, init=False, repr=False)
     _n: Tensor | None = field(default=None, init=False, repr=False)
     _q: Tensor | None = field(default=None, init=False, repr=False)
+    _size: int = field(default=0, init=False, repr=False)
 
-    def setup(self, in_footprint: Tensor) -> None:
-        v = torch.as_tensor(self.right_values, dtype=_F64)
+    def _bin(self, v: Tensor) -> Tensor:
         v = v[:, None] if v.ndim == 1 else v
         if v.shape[1] != len(self.edges):
             raise ValueError("one edge tensor per value dimension")
@@ -196,29 +207,53 @@ class HistogramRatio:
             ok &= (idx >= 0) & (idx < sizes[d])
             flat = flat + idx.clamp(0, sizes[d] - 1) * stride
             stride *= sizes[d]
-        self._bins = torch.where(ok, flat, torch.full_like(flat, -1))
-        use = ok & in_footprint.cpu()
-        n = torch.bincount(flat[use], minlength=stride).to(_F64) + self.pseudocount
+        self._size = stride
+        return torch.where(ok, flat, torch.full_like(flat, -1))
+
+    def _pair_bins(self, li: Tensor, rj: Tensor) -> Tensor:
+        if self.left_values is None:
+            assert self._bins is not None
+            return self._bins.to(rj.device)[rj]
+        r = torch.as_tensor(self.right_values, dtype=_F64)
+        left = torch.as_tensor(self.left_values, dtype=_F64)
+        return self._bin(r[rj.cpu()] - left[li.cpu()]).to(rj.device)
+
+    def setup(self, in_footprint: Tensor, li: Tensor, rj: Tensor) -> None:
+        if self.left_values is None:
+            self._bins = self._bin(torch.as_tensor(self.right_values, dtype=_F64))
+            use = (self._bins >= 0) & in_footprint.cpu()
+            n = (
+                torch.bincount(self._bins[use], minlength=self._size).to(_F64)
+                + self.pseudocount
+            )
+        else:
+            b = self._pair_bins(li, rj).cpu()
+            n = (
+                torch.bincount(b[b >= 0], minlength=self._size).to(_F64)
+                + self.pseudocount
+            )
         self._n = n / n.sum()
         self._q = self._n.clone()
 
-    def log_rho(self, right_rows: Tensor) -> Tensor:
-        assert self._bins is not None and self._q is not None and self._n is not None
-        b = self._bins.to(right_rows.device)[right_rows]
-        lr = torch.log(self._q.to(right_rows.device)) - torch.log(
-            self._n.to(right_rows.device)
-        )
+    def log_rho(self, li: Tensor, rj: Tensor) -> Tensor:
+        assert self._q is not None and self._n is not None
+        b = self._pair_bins(li, rj)
+        lr = torch.log(self._q.to(rj.device)) - torch.log(self._n.to(rj.device))
         return torch.where(b >= 0, lr[b.clamp(min=0)], torch.zeros_like(b, dtype=_F64))
 
-    def update(self, right_rows: Tensor, weight: Tensor) -> None:
-        assert self._bins is not None and self._n is not None
-        b = self._bins.to(right_rows.device)[right_rows]
+    def update(self, li: Tensor, rj: Tensor, weight: Tensor) -> None:
+        assert self._n is not None
+        b = self._pair_bins(li, rj).cpu()
         ok = b >= 0
-        q = torch.zeros_like(self._n).index_add_(
-            0, b[ok].cpu(), weight.detach()[ok].cpu()
-        )
-        q = q + self.pseudocount
+        w = weight.detach().cpu()
+        q = torch.zeros_like(self._n).index_add_(0, b[ok], w[ok]) + self.pseudocount
         self._q = q / q.sum()
+        if self.left_values is not None:
+            n = (
+                torch.zeros_like(self._n).index_add_(0, b[ok], (1.0 - w)[ok])
+                + self.pseudocount
+            )
+            self._n = n / n.sum()
 
 
 # ------------------------------------------------------------------ results
@@ -409,8 +444,23 @@ def _fit_calibration(
         loss.backward()
         return loss
 
-    opt.step(closure)
+    try:
+        opt.step(closure)
+    except RuntimeError:  # line search failure: keep the previous estimate
+        return scale, floor
     with torch.no_grad():
+        p = params.detach()
+        # Physical bounds: scale within e^+-8, floor at most 100x the typical pair
+        # variance. Divergent fits (outside them) keep the previous estimate.
+        bound_floor = 0.5 * math.log(100.0 * typical)
+        ok = (
+            bool(torch.isfinite(p).all())
+            and abs(float(p[0])) <= 8.0
+            and max(float(p[1]), float(p[3])) <= bound_floor
+            and abs(float(p[2])) <= math.exp(bound_floor)
+        )
+        if not ok:
+            return scale, floor
         s_new = math.exp(float(params[0])) if fit_scale else scale
         lmat = torch.tensor(
             [
@@ -537,8 +587,6 @@ def associate(
     inside = rfoot.contains(llon, llat).to(_F64)
     n_left = int(llon.numel())
     lx, rx = unit_vectors(llon, llat), unit_vectors(rlon, rlat)
-    for term in terms:
-        term.setup(rfoot.contains(rlon, rlat))
     if calibrate_by is not None:
         if calibrate_edges is None:
             raise ValueError("calibrate_by needs calibrate_edges")
@@ -628,7 +676,7 @@ def associate(
         def posterior(pi_c: float) -> tuple[Tensor, Tensor, Tensor, Tensor]:
             log_lr = base_log_lr.clone()
             for term in terms:
-                log_lr = log_lr + term.log_rho(rj)
+                log_lr = log_lr + term.log_rho(li, rj)
             pi = (pi_c * (1.0 - gate_pvalue)) * inside
             # P_ij = pi LR / ((1 - pi) + pi sum LR), in log space per left segment.
             lse_max = torch.full(
@@ -648,27 +696,35 @@ def associate(
                 log_lr,
             )
 
-        if completeness == "em":
-            pi_c = 0.5
+        fit_pi = completeness == "em"
+        if not fit_pi and not 0.0 <= float(completeness) <= 1.0:  # type: ignore[arg-type]
+            raise ValueError("completeness must lie in [0, 1] or be 'em'")
+        pi_c = 0.5 if fit_pi else float(completeness)  # type: ignore[arg-type]
+        for term in terms:
+            term.setup(rfoot.contains(rlon, rlat), li, rj)
+        if fit_pi or terms:
+            # EM: completeness and photometric terms from posterior responsibilities.
+            prev = None
             for _ in range(max_iter):
                 post, p_none, _, _ = posterior(pi_c)
                 for term in terms:
-                    term.update(rj, post)
-                in_rows = inside > 0
-                new = (
-                    float((1.0 - p_none[in_rows]).mean()) / (1.0 - gate_pvalue)
-                    if bool(in_rows.any())
-                    else 0.0
+                    term.update(li, rj, post)
+                done = prev is not None and (
+                    post.numel() == 0 or float((post - prev).abs().max()) < tol
                 )
-                new = min(max(new, 1e-6), 1.0 - 1e-9)
-                done = abs(new - pi_c) < tol
-                pi_c = new
+                prev = post
+                if fit_pi:
+                    in_rows = inside > 0
+                    new = (
+                        float((1.0 - p_none[in_rows]).mean()) / (1.0 - gate_pvalue)
+                        if bool(in_rows.any())
+                        else 0.0
+                    )
+                    new = min(max(new, 1e-6), 1.0 - 1e-9)
+                    done = done and abs(new - pi_c) < tol
+                    pi_c = new
                 if done:
                     break
-        else:
-            pi_c = float(completeness)
-            if not 0.0 <= pi_c <= 1.0:
-                raise ValueError("completeness must lie in [0, 1] or be 'em'")
         post, p_none, pi, log_lr = posterior(pi_c)
         if calibrate == "none":
             break
