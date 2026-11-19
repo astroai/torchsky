@@ -622,27 +622,7 @@ def associate(
         li, rj = _sound_candidates(llon, llat, rlon, rlat, rl, rr)
         if pair_epoch:
             assert t_right is not None
-            sub = left.to_state()
-            gathered = type(sub)(
-                lon=sub.lon[li],
-                lat=sub.lat[li],
-                frame=sub.frame,
-                epoch=torch.broadcast_to(
-                    torch.as_tensor(sub.epoch, dtype=_F64), sub.lon.shape
-                )[li],
-                epoch_scale=sub.epoch_scale,
-                epoch_format=sub.epoch_format,
-                pm_lon_coslat_mas_yr=None
-                if sub.pm_lon_coslat_mas_yr is None
-                else sub.pm_lon_coslat_mas_yr[li],
-                pm_lat_mas_yr=None
-                if sub.pm_lat_mas_yr is None
-                else sub.pm_lat_mas_yr[li],
-                parallax_mas=None if sub.parallax_mas is None else sub.parallax_mas[li],
-                radial_velocity_km_s=None
-                if sub.radial_velocity_km_s is None
-                else sub.radial_velocity_km_s[li],
-            )
+            gathered = _gather_state(left.to_state(), li)
             moved, lc = propagate_astrometry(
                 gathered, left.astrometry.take(li), t_right[rj], motion_prior=priors[0]
             )
@@ -1048,6 +1028,41 @@ def _hypothesis_log_weight(
     )
 
 
+def _gather_state(sub, idx: Tensor):
+    """Rows ``idx`` of a CatalogState (per-row epochs kept)."""
+
+    def pick(v):
+        return None if v is None else v[idx]
+
+    return type(sub)(
+        lon=sub.lon[idx],
+        lat=sub.lat[idx],
+        frame=sub.frame,
+        epoch=torch.broadcast_to(torch.as_tensor(sub.epoch, dtype=_F64), sub.lon.shape)[
+            idx
+        ],
+        epoch_scale=sub.epoch_scale,
+        epoch_format=sub.epoch_format,
+        pm_lon_coslat_mas_yr=pick(sub.pm_lon_coslat_mas_yr),
+        pm_lat_mas_yr=pick(sub.pm_lat_mas_yr),
+        parallax_mas=pick(sub.parallax_mas),
+        radial_velocity_km_s=pick(sub.radial_velocity_km_s),
+    )
+
+
+def _psd_part(m: Tensor) -> Tensor:
+    """Positive semi-definite part of symmetric ``[..., 2, 2]`` matrices."""
+    w, v = torch.linalg.eigh(0.5 * (m + m.mT))
+    return v @ torch.diag_embed(w.clamp(min=0.0)) @ v.mT
+
+
+def _per_row_epochs(cat: Catalog) -> Tensor | None:
+    ep = torch.as_tensor(cat.epoch, dtype=_F64).reshape(-1)
+    if ep.numel() == 1 or bool((ep == ep[0]).all()):
+        return None
+    return torch.broadcast_to(ep, cat.lon.shape)
+
+
 def associate_many(
     catalogs: list[Catalog],
     *,
@@ -1114,6 +1129,7 @@ def associate_many(
     ]
     pi = [1.0]
     log_nu: list[Tensor] = [torch.zeros(n0, dtype=_F64, device=dev)]
+    pair_geometry: dict[int, tuple[Tensor, Tensor]] = {}
     for c in range(1, k):
         left = Catalog(
             lon=pos_lonlat[0][0],
@@ -1128,17 +1144,52 @@ def associate_many(
             astrometry=_cov_only(covs[c]),
         )
         comp = "em" if completeness == "em" else float(completeness[c - 1])
-        res = associate(
-            left,
-            right,
-            gate_pvalue=gate_pvalue,
-            max_radius_arcsec=max_radius_arcsec,
-            epoch=None,
-            right_footprint=feet[c],
-            footprint_order=footprint_order,
-            completeness=comp,
-            assign="none",
-        )
+        t_rows = _per_row_epochs(cats[c])
+        if t_rows is None:
+            res = associate(
+                left,
+                right,
+                gate_pvalue=gate_pvalue,
+                max_radius_arcsec=max_radius_arcsec,
+                epoch=None,
+                right_footprint=feet[c],
+                footprint_order=footprint_order,
+                completeness=comp,
+                assign="none",
+            )
+        else:
+            # Per-row epochs (e.g. 2MASS dates): gate at pair epochs, then express each
+            # candidate relative to the primary propagated to that candidate's epoch.
+            res = associate(
+                cats[0],
+                cats[c],
+                gate_pvalue=gate_pvalue,
+                max_radius_arcsec=max_radius_arcsec,
+                epoch="right",
+                motion_prior=motion_prior,
+                right_footprint=feet[c],
+                footprint_order=footprint_order,
+                completeness=comp,
+                assign="none",
+            )
+            li_c, rj_c = res.left_index, res.right_index
+            ast0 = cats[0].astrometry
+            ast_c = cats[c].astrometry
+            assert ast0 is not None and ast_c is not None
+            moved, cov0_t = propagate_astrometry(
+                _gather_state(cats[0].to_state(), li_c),
+                ast0.take(li_c),
+                t_rows.to(dev)[rj_c],
+                motion_prior=motion_prior,
+            )
+            delta_c, t_c = _to_left_frame(
+                unit_vectors(moved.lon, moved.lat),
+                unit_vectors(cats[c].lon.to(_F64)[rj_c], cats[c].lat.to(_F64)[rj_c]),
+            )
+            cc = t_c @ ast_c.position_cov().to(dev)[rj_c] @ t_c.mT + _psd_part(
+                cov0_t - covs[0][li_c]
+            )
+            pair_geometry[c] = (delta_c, cc)
         pairs.append((res.left_index, res.right_index))
         pi.append(res.completeness * (1.0 - gate_pvalue))
         rlon_c, rlat_c = pos_lonlat[c]
@@ -1165,8 +1216,11 @@ def associate_many(
     cand_ld: list[Tensor] = [empty]
     for c in range(1, k):
         li, rj = pairs[c]
-        delta, t = _to_left_frame(xyz[0][li], xyz[c][rj])
-        cc = t @ covs[c][rj] @ t.mT
+        if c in pair_geometry:
+            delta, cc = pair_geometry[c]
+        else:
+            delta, t = _to_left_frame(xyz[0][li], xyz[c][rj])
+            cc = t @ covs[c][rj] @ t.mT
         cand_pos.append(delta)
         cand_cinv.append(torch.linalg.inv(cc))
         cand_ld.append(torch.logdet(cc))

@@ -656,3 +656,55 @@ def test_pair_colour_term_resolves_blends() -> None:
 
     assert purity(colour) > purity(plain) + 0.1
     assert purity(colour) > 0.9
+
+
+def test_nway_per_row_epoch_catalogue_recovers_fast_mover() -> None:
+    from torchsky.catalogs import associate_many
+    from torchsky.wcs.catalog_state import CatalogState
+
+    g = _gen(41)
+    n = 400
+    lon = 150 + torch.rand(n, generator=g, dtype=D) * 0.05
+    lat = 2 + torch.rand(n, generator=g, dtype=D) * 0.05
+    pm_e = torch.randn(n, generator=g, dtype=D) * 30
+    pm_n = torch.randn(n, generator=g, dtype=D) * 30
+    pm_e[0], pm_n[0] = -798.6, 10328.1
+    cov = Astrometry.from_errors(
+        torch.full((n,), 0.1, dtype=D), torch.full((n,), 0.1, dtype=D)
+    ).cov
+    cov[:, 2, 2] = cov[:, 3, 3] = 0.05**2
+    cov[:, 2:4, :2] = cov[:, :2, 2:4] = 0.0
+    cov[:, 2, 3] = cov[:, 3, 2] = 0.0
+    primary = Catalog(
+        lon=lon,
+        lat=lat,
+        epoch=2016.0,
+        pm_lon_coslat_mas_yr=pm_e,
+        pm_lat_mas_yr=pm_n,
+        astrometry=Astrometry(cov),
+    )
+    state = CatalogState(
+        lon=lon, lat=lat, epoch=2016.0, pm_lon_coslat_mas_yr=pm_e, pm_lat_mas_yr=pm_n
+    )
+    cats = [primary]
+    for seed, (t_lo, t_hi) in ((43, (1997.0, 2001.0)), (44, (2010.0, 2011.0))):
+        gg = _gen(seed)
+        t = t_lo + (t_hi - t_lo) * torch.rand(n, generator=gg, dtype=D)
+        true_pos = state.propagate(t)
+        err = torch.randn(n, 2, generator=gg, dtype=D) * 80.0
+        rlon, rlat = _offset(true_pos.lon, true_pos.lat, err[:, 0], err[:, 1])
+        cats.append(
+            Catalog(
+                lon=rlon,
+                lat=rlat,
+                epoch=t,
+                astrometry=Astrometry.from_errors(
+                    torch.full((n,), 80.0, dtype=D), torch.full((n,), 80.0, dtype=D)
+                ),
+            )
+        )
+    res = associate_many(cats, completeness=[0.95, 0.95], max_radius_arcsec=120.0)
+    best = res.members[res.best]
+    assert best[0, 1] == 0 and best[0, 2] == 0  # Barnard-like star found in both
+    assert float((best[:, 1] == torch.arange(n)).float().mean()) > 0.97
+    assert float((best[:, 2] == torch.arange(n)).float().mean()) > 0.97
