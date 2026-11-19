@@ -388,9 +388,16 @@ lowest row index.
   are float32 (about 0.1 arcsec near RA 360°), so smaller radii are not
   meaningful there.
 - For catalogs larger than memory, read them in sky partitions (HEALPix or
-  HATS tiles) with torchfits, pyarrow or polars. Match each partition against
-  the right partition plus a margin at least as wide as the match radius, and
-  keep the pairs whose left row the partition owns.
+  HATS tiles) with torchfits, pyarrow or polars, and let
+  [`PartitionPlan`](../reference/catalogs.md#torchsky.catalogs.PartitionPlan)
+  decide what to read. `plan.owner(lon, lat)` assigns rows to cells (order-29
+  ranges, the HATS `_healpix_29` convention), and `margin_arcsec(radius, ...)`
+  bounds how far a counterpart can be: the radius, plus errors, plus motion
+  over the epoch gap. `left_plan.neighbors(margin, right_plan)` lists the
+  right cells that can hold counterparts, and `left_plan.in_margin(p, ...)` keeps
+  the right rows that can reach cell `p`. Match each cell's owned left rows
+  against those right rows; the union over cells equals the single-pass
+  result for `all`, `best` and `match_nearest`, with no de-duplication.
 - The [million-row example](../published-examples/crossmatch_million.py)
   matches \(10^6 \times 10^6\) rows in about 0.5 s per mode on a CPU.
 

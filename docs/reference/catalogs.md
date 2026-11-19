@@ -190,6 +190,19 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Partition
+
+::: torchsky.catalogs
+    options:
+      members:
+        - PartitionPlan
+        - healpix29
+        - margin_arcsec
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Photometry
 
 <a id="torchsky.catalogs.BlendFitDiagnostics"></a>

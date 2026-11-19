@@ -17,6 +17,7 @@ from .association import (
     associate_many,
 )
 from .catalog import Catalog
+from .partition import PartitionPlan, healpix29, margin_arcsec
 from .multi import (
     ManyMatchResult,
     SelfMatchResult,
@@ -179,6 +180,7 @@ __all__ = [
     "HealpixIndex",
     "KnownComponentFitError",
     "ManyMatchResult",
+    "PartitionPlan",
     "NearestResult",
     "MorphologySpectrumDeblendResult",
     "ParametricBlendDiagnostics",
@@ -199,7 +201,9 @@ __all__ = [
     "fit_forced_photometry",
     "fit_morphology_spectrum_deblending",
     "fit_parametric_deblending",
+    "healpix29",
     "join_rows",
+    "margin_arcsec",
     "match_nearest",
     "match_within",
     "nside_for_cap",

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `torchsky.catalogs.PartitionPlan`, `healpix29` and `margin_arcsec`:
+  partition primitives for survey-scale matching without I/O. Mixed-order
+  nested cells (order-29 ranges, HATS `_healpix_29`) come from explicit pixels,
+  a MOC or adaptive counts. Row ownership, plan-to-plan neighbour cells and
+  margin row selection are sound by construction (cap bounds with the analytic
+  maximum pixel radius, through the exact zone engine). Partitioned `all`,
+  `best` and `match_nearest` equal the single pass across seams and poles.
 - `torchsky.catalogs.associate_many` / `NWayAssociation`: N-way association
   (nway-style). For each primary, the hypotheses are every combination of a gated
   counterpart or none per catalogue, weighted by the exact Gaussian marginal
