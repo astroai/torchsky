@@ -932,3 +932,29 @@ def test_native_segment_lse_matches_torch_reference() -> None:
         ref = lse_excluding_self(x, seg, n_seg, sl)
         got = segs.lse_excl(x, sl)
         torch.testing.assert_close(got, ref, rtol=1e-13, atol=0.0, equal_nan=True)
+
+
+def test_fixed_calibration_transfers_from_a_fit() -> None:
+    g = _gen(45)
+    n = 3000
+    lon = 150 + torch.rand(n, generator=g, dtype=D) * 0.2
+    lat = 2 + torch.rand(n, generator=g, dtype=D) * 0.2
+    pub = 100.0 + 100.0 * torch.rand(n, generator=g, dtype=D)
+    z = torch.randn(n, 2, generator=g, dtype=D) * (2.0 * pub)[:, None]
+    rlon, rlat = _offset(lon, lat, z[:, 0], z[:, 1])
+    lerr = torch.full((n,), 20.0, dtype=D)
+    left = Catalog(
+        lon=lon, lat=lat, epoch=2016.0, astrometry=Astrometry.from_errors(lerr, lerr)
+    )
+    right = Catalog(
+        lon=rlon, lat=rlat, epoch=2016.0, astrometry=Astrometry.from_errors(pub, pub)
+    )
+    kw = dict(gate_pvalue=1e-4, max_radius_arcsec=30.0, completeness=1.0, assign="none")
+    fit = associate(left, right, calibrate="scale_floor", **kw)
+    fixed = associate(
+        left, right, right_scale=fit.right_scale, floor_mas2=fit.floor_mas2, **kw
+    )
+    assert fixed.right_scale == pytest.approx(fit.right_scale)
+    torch.testing.assert_close(fixed.posterior, fit.posterior, rtol=1e-6, atol=1e-8)
+    with pytest.raises(ValueError):
+        associate(left, right, right_scale=-1.0, **kw)

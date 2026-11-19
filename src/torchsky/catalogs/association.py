@@ -730,6 +730,8 @@ def associate(
     calibrate_by: Tensor | None = None,
     calibrate_edges: Tensor | None = None,
     calibrate_min_pairs: float = 50.0,
+    right_scale: float | Tensor | None = None,
+    floor_mas2: Tensor | None = None,
     exclusive: bool = True,
     max_iter: int = 50,
     tol: float = 1e-6,
@@ -763,6 +765,15 @@ def associate(
     floor below 100x the typical pair variance) is not applied. Scale and
     floor are separately identifiable only when the right errors vary within
     a bin.
+
+    ``right_scale`` (scalar or one per bin) and ``floor_mas2`` (``[2, 2]`` or
+    ``[n_bins, 2, 2]``) set the calibration: held fixed with
+    ``calibrate="none"``, starting values otherwise. This transfers a
+    calibration fitted where it is identifiable (an uncrowded field, per
+    magnitude bin) to a crowded field. There a single Gaussian error model
+    cannot separate larger errors from blending: Gaia stars cluster around
+    every blended CatWISE detection, and the fitted scale grows to absorb
+    them.
 
     **Crowding.** With ``exclusive=True`` (default) a right row is the
     counterpart of at most one left row. Posteriors are then the Bethe
@@ -872,6 +883,18 @@ def associate(
         rbin = torch.zeros(rlon.shape, dtype=torch.int64, device=dev)
     scale = torch.ones(n_bins, dtype=_F64, device=dev)
     floor = torch.zeros(n_bins, 2, 2, dtype=_F64, device=dev)
+    if right_scale is not None:
+        given = _as_tensor(right_scale, dtype=_F64, device=dev).reshape(-1)
+        if given.numel() not in (1, n_bins) or not bool((given > 0).all()):
+            raise ValueError("right_scale must be positive, scalar or one per bin")
+        scale = given.expand(n_bins).clone()
+    if floor_mas2 is not None:
+        given_f = _as_tensor(floor_mas2, dtype=_F64, device=dev)
+        if given_f.shape not in ((2, 2), (n_bins, 2, 2)):
+            raise ValueError("floor_mas2 must be [2, 2] or [n_bins, 2, 2]")
+        if bool((torch.linalg.eigvalsh(0.5 * (given_f + given_f.mT)) < 0).any()):
+            raise ValueError("floor_mas2 must be positive semi-definite")
+        floor = given_f.expand(n_bins, 2, 2).clone()
     rounds = 1 if calibrate == "none" else 8
     outside_log = torch.where(
         inside > 0, torch.zeros_like(inside), torch.full_like(inside, -math.inf)
