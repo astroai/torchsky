@@ -8,7 +8,14 @@ from .index import HealpixIndex
 from .index import cap_covering_pixels
 from .index import nside_for_cap
 from .astrometry import Astrometry, MotionPrior, propagate_astrometry
-from .association import Association, HistogramRatio, assign_one_to_one, associate
+from .association import (
+    Association,
+    HistogramRatio,
+    NWayAssociation,
+    assign_one_to_one,
+    associate,
+    associate_many,
+)
 from .catalog import Catalog
 from .multi import (
     ManyMatchResult,
@@ -155,6 +162,8 @@ __all__ = [
     "HistogramRatio",
     "assign_one_to_one",
     "associate",
+    "associate_many",
+    "NWayAssociation",
     "MotionPrior",
     "propagate_astrometry",
     "Catalog",

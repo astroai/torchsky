@@ -32,7 +32,7 @@ reference pages carry the contracts.
 | Namespace | Tier | Names | Reference |
 |---|---|---|---|
 | `torchsky` | core | 18 | [reference](torchsky.md) |
-| `torchsky.catalogs` | core | 44 | [reference](catalogs.md) |
+| `torchsky.catalogs` | core | 46 | [reference](catalogs.md) |
 | `torchsky.coords` | core | 16 | [reference](coords.md) |
 | `torchsky.cosmology` | core | 21 | [reference](cosmology.md) |
 | `torchsky.extinction` | core | 18 | [reference](extinction.md) |

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `torchsky.catalogs.associate_many` / `NWayAssociation`: N-way association
+  (nway-style). For each primary, the hypotheses are every combination of a gated
+  counterpart or none per catalogue, weighted by the exact Gaussian marginal
+  likelihood in the primary's tangent plane (Budavari-Szalay eq. 18 with full
+  covariances), completeness and density. Primaries over `budget` hypotheses are
+  enumerated best-first with a certified residual mass instead of a silent cut.
+  With two catalogues it reproduces `associate` exactly.
 - `torchsky.catalogs.associate`, `HistogramRatio` and `assign_one_to_one`:
   probabilistic counterparts. The pipeline is common-epoch propagation with
   covariances, then a Mahalanobis chi^2 gate with provably sound per-row search

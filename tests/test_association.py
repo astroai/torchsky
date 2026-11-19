@@ -294,3 +294,143 @@ def test_associate_requires_astrometry() -> None:
     cat = Catalog(lon=torch.tensor([1.0]), lat=torch.tensor([0.0]))
     with pytest.raises(ValueError, match="astrometry"):
         associate(cat, cat)
+
+
+# ------------------------------------------------------------------- N-way
+
+
+def _triple_scene(seed: int, n: int, n_bg: int, keep=(0.8, 0.6)):
+    g = _gen(seed)
+    lon = 150 + torch.rand(n, generator=g, dtype=D) * 0.1
+    lat = 2 + torch.rand(n, generator=g, dtype=D) * 0.1
+    cats, truth = [], []
+    for c, frac in enumerate((1.0,) + tuple(keep)):
+        cov = _random_cov(n + n_bg, g, 80.0, 500.0)
+        has = torch.rand(n, generator=g) < frac
+        src = torch.nonzero(has, as_tuple=True)[0]
+        bg_lon = 150 + torch.rand(n_bg if c else 0, generator=g, dtype=D) * 0.1
+        bg_lat = 2 + torch.rand(n_bg if c else 0, generator=g, dtype=D) * 0.1
+        lon0 = torch.cat((lon[src], bg_lon))
+        lat0 = torch.cat((lat[src], bg_lat))
+        cov = cov[: len(lon0)]
+        z = torch.randn(len(lon0), 2, generator=g, dtype=D)
+        off = (torch.linalg.cholesky(cov[:, :2, :2]) @ z[:, :, None])[:, :, 0]
+        olon, olat = _offset(lon0, lat0, off[:, 0], off[:, 1])
+        cats.append(
+            Catalog(lon=olon, lat=olat, epoch=2016.0, astrometry=Astrometry(cov))
+        )
+        t = torch.full((n,), -1, dtype=torch.int64)
+        t[src] = torch.arange(len(src))
+        truth.append(t)
+    box = MOC.from_polygon(
+        [150.0, 150.1, 150.1, 150.0], [2.0, 2.0, 2.1, 2.1], max_order=16
+    )
+    return cats, truth, box
+
+
+def test_nway_with_two_catalogues_equals_pairwise() -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, _, box = _triple_scene(21, 800, 2000, keep=(0.7,))
+    pair = associate(
+        cats[0],
+        cats[1],
+        completeness=0.7,
+        assign="none",
+        right_footprint=box,
+        max_radius_arcsec=30,
+    )
+    many = associate_many(
+        cats, completeness=[0.7], footprints=[box, box], max_radius_arcsec=30
+    )
+    present = many.members[:, 1] >= 0
+    key_many = many.members[present, 0] * 10**7 + many.members[present, 1]
+    key_pair = pair.left_index * 10**7 + pair.right_index
+    order_m, order_p = torch.argsort(key_many), torch.argsort(key_pair)
+    assert torch.equal(key_many[order_m], key_pair[order_p])
+    torch.testing.assert_close(
+        many.posterior[present][order_m], pair.posterior[order_p], rtol=1e-9, atol=1e-12
+    )
+    torch.testing.assert_close(1 - many.p_any, pair.p_none, rtol=1e-9, atol=1e-12)
+
+
+def test_nway_marginal_matches_numerical_integration() -> None:
+    from torchsky.catalogs.association import _hypothesis_log_weight
+
+    g = _gen(23)
+    covs = [_random_cov(1, g, 50.0, 200.0)[0, :2, :2] for _ in range(3)]
+    xs = [
+        torch.zeros(2, dtype=D),
+        torch.tensor([60.0, -40.0], dtype=D),
+        torch.tensor([-30.0, 90.0], dtype=D),
+    ]
+    members = torch.tensor([[0, 0, 0]])
+    lw = _hypothesis_log_weight(
+        members,
+        [x[None] for x in xs],
+        [torch.linalg.inv(c)[None] for c in covs],
+        [torch.logdet(c)[None] for c in covs],
+        torch.zeros(3, dtype=D),
+        torch.zeros(3, dtype=D),
+        [torch.zeros(1, dtype=D)] * 3,
+    )
+    # M = integral over y of prod_k N(x_k; y, C_k) dy / N(x_0; y, C_0) normalisation: the primary
+    # density integrates the flat prior, so M = int prod_k N(x_k; y, C_k) dy.
+    grid = torch.linspace(-600, 600, 1201, dtype=D)
+    yy = torch.stack(torch.meshgrid(grid, grid, indexing="ij"), -1).reshape(-1, 2)
+    dens = torch.ones(yy.shape[0], dtype=D)
+    for x, c in zip(xs, covs):
+        d = x - yy
+        ci = torch.linalg.inv(c)
+        dens = (
+            dens
+            * torch.exp(-0.5 * (d @ ci * d).sum(-1))
+            / (2 * math.pi * torch.sqrt(torch.det(c)))
+        )
+    integral = float(dens.sum()) * float(grid[1] - grid[0]) ** 2
+    assert abs(float(lw[0]) - math.log(integral)) < 1e-4
+
+
+def test_nway_best_first_matches_exact_within_certified_residual() -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, _, box = _triple_scene(25, 200, 4000)
+    exact = associate_many(
+        cats, completeness=[0.8, 0.6], footprints=[box] * 3, max_radius_arcsec=30
+    )
+    approx = associate_many(
+        cats,
+        completeness=[0.8, 0.6],
+        footprints=[box] * 3,
+        max_radius_arcsec=30,
+        budget=2,
+        mass_tol=1e-8,
+    )
+    assert float(exact.residual_mass.max()) == 0.0
+    assert float(approx.residual_mass.max()) <= 1e-6
+    # The MAP hypothesis is the same and its posterior agrees within the residual.
+    for i in range(200):
+        a = exact.members[exact.best[i]]
+        b = approx.members[approx.best[i]]
+        assert torch.equal(a, b)
+        diff = abs(
+            float(exact.posterior[exact.best[i]])
+            - float(approx.posterior[approx.best[i]])
+        )
+        assert diff <= float(approx.residual_mass[i]) + 1e-9
+
+
+def test_nway_recovers_injected_triples() -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, truth, box = _triple_scene(27, 1500, 3000)
+    res = associate_many(cats, footprints=[box] * 3, max_radius_arcsec=30)
+    assert (
+        abs(res.completeness[1] - 0.8) < 0.05 and abs(res.completeness[2] - 0.6) < 0.05
+    )
+    best = res.members[res.best]
+    correct = (best[:, 1] == truth[1]) & (best[:, 2] == truth[2])
+    assert float(correct.float().mean()) > 0.9
+    # p_any is calibrated: the mean p_any matches the true fraction with any counterpart.
+    has_any = (truth[1] >= 0) | (truth[2] >= 0)
+    assert abs(float(res.p_any.mean()) - float(has_any.float().mean())) < 0.03

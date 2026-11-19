@@ -310,6 +310,19 @@ assert res.left_index[res.match].tolist() == [0, 1] and res.right_index[res.matc
 assert torch.all(res.posterior[res.match] > 0.9)
 ```
 
+### Several catalogs at once
+
+[`associate_many`](../reference/catalogs.md#torchsky.catalogs.associate_many)
+scores, for each primary row, every combination of one gated counterpart (or
+none) per other catalog. Its weight is the exact Gaussian likelihood that all
+present positions come from one true position (Budavári & Szalay 2008, with
+full covariances), times each catalog's completeness and inverse density. The
+result lists the hypotheses per primary row with posteriors, `p_any` (any
+counterpart) and the MAP hypothesis. Primary rows with more than `budget`
+combinations are enumerated best-first by an upper bound, and the posterior
+mass left out is certified (`residual_mass` \(\le\) `mass_tol`). Nothing is
+truncated silently.
+
 ### Per-row radii, nearest neighbours and counts
 
 `radius_arcsec` may be a tensor with one radius per left row. Each row's window

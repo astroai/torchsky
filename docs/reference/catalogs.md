@@ -32,8 +32,10 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       members:
         - Association
         - HistogramRatio
+        - NWayAssociation
         - assign_one_to_one
         - associate
+        - associate_many
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false

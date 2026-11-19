@@ -54,7 +54,7 @@ from ._zones import (
     unit_vectors,
     zone_query,
 )
-from .astrometry import MotionPrior, propagate_astrometry
+from .astrometry import Astrometry, MotionPrior, propagate_astrometry
 from .catalog import Catalog
 
 _F64 = torch.float64
@@ -646,11 +646,473 @@ def _lsa(cost: Tensor) -> list[int]:
     return out
 
 
+# ------------------------------------------------------------------- N-way
+
+
+def _to_left_frame(left_xyz: Tensor, right_xyz: Tensor) -> tuple[Tensor, Tensor]:
+    """Offset of ``right`` in ``left``'s tangent basis (mas, arc length) and the
+    parallel transport ``T`` of ``right``'s basis to ``left``'s (``C_l = T C_r T^T``)."""
+    a = torch.linalg.cross(left_xyz, right_xyz, dim=-1)
+    cpsi = (left_xyz * right_xyz).sum(-1).clamp(-1.0, 1.0)
+    psi = torch.atan2(a.norm(dim=-1), cpsi)
+    el, nl = _basis(left_xyz)
+    chord_perp = (
+        right_xyz - left_xyz * cpsi[..., None]
+    )  # tangential part, |.| = sin psi
+    sinpsi = a.norm(dim=-1)
+    scale = torch.where(
+        sinpsi > 0, psi / sinpsi.clamp_min(1e-300), torch.ones_like(psi)
+    )
+    delta = (
+        torch.stack(((chord_perp * el).sum(-1), (chord_perp * nl).sum(-1)), -1)
+        * (scale * _MAS_PER_RAD)[..., None]
+    )
+    # Rotation taking right -> left: axis -a, angle psi. With k = -a / sin psi:
+    # k sin psi = -a and (1 - cos psi) k k^T = a a^T / (1 + cos psi).
+    s = -torch.ones_like(psi)
+    omc = 1.0 / (1.0 + cpsi)
+    er, nr = _basis(right_xyz)
+    re = _rotate(er, a, s, cpsi, omc)
+    rn = _rotate(nr, a, s, cpsi, omc)
+    t = torch.stack(
+        (
+            torch.stack(((re * el).sum(-1), (rn * el).sum(-1)), -1),
+            torch.stack(((re * nl).sum(-1), (rn * nl).sum(-1)), -1),
+        ),
+        -2,
+    )
+    return delta, t
+
+
+@dataclass
+class NWayAssociation:
+    """Hypotheses for each primary row, in CSR layout.
+
+    ``members[h, c]`` is the row of catalogue ``c`` in hypothesis ``h`` (``-1``
+    when absent; column 0 is the primary row). Hypotheses of primary ``i`` are
+    ``offsets[i]:offsets[i + 1]``. ``log_weight`` is the unnormalised log
+    weight and ``posterior`` its normalisation within the primary.
+    ``p_any[i]`` is the probability that primary ``i`` has at least one counterpart.
+    ``residual_mass[i]`` is a certified upper bound on the posterior mass of
+    hypotheses that were not enumerated (0 when all were). ``completeness[c]``
+    and ``best`` (the MAP hypothesis per primary) are also returned.
+    """
+
+    members: Tensor
+    offsets: Tensor
+    log_weight: Tensor
+    posterior: Tensor
+    p_any: Tensor
+    residual_mass: Tensor
+    completeness: list[float]
+    best: Tensor
+
+
+def _hypothesis_log_weight(
+    members: Tensor,
+    pos: list[Tensor],
+    cov_inv: list[Tensor],
+    logdet: list[Tensor],
+    log_prior_present: Tensor,
+    log_prior_absent: Tensor,
+    log_nu: list[Tensor],
+) -> Tensor:
+    """Exact log weight of hypotheses ``members [H, K]`` (information form)."""
+    h, k = members.shape
+    dev = members.device
+    w = torch.zeros(h, 2, 2, dtype=_F64, device=dev)
+    b = torch.zeros(h, 2, dtype=_F64, device=dev)
+    q = torch.zeros(h, dtype=_F64, device=dev)
+    log_w = torch.zeros(h, dtype=_F64, device=dev)
+    present = torch.zeros(h, dtype=_F64, device=dev)
+    for c in range(k):
+        rows = members[:, c]
+        on = rows >= 0
+        idx = rows.clamp(min=0)
+        ci = cov_inv[c][idx] * on[:, None, None]
+        x = pos[c][idx] * on[:, None]
+        w = w + ci
+        cx = (ci @ x[:, :, None])[:, :, 0]
+        b = b + cx
+        q = q + (x * cx).sum(-1)
+        log_w = log_w - 0.5 * logdet[c][idx] * on
+        if c > 0:
+            present = present + on
+            log_w = log_w + torch.where(
+                on, log_prior_present[c] - log_nu[c][idx], log_prior_absent[c].expand(h)
+            )
+    wa, wb, wd = w[:, 0, 0], w[:, 0, 1], w[:, 1, 1]
+    det_w = wa * wd - wb * wb
+    winv_b = (
+        torch.stack((wd * b[:, 0] - wb * b[:, 1], -wb * b[:, 0] + wa * b[:, 1]), -1)
+        / det_w[:, None]
+    )
+    chi2 = q - (b * winv_b).sum(-1)
+    return (
+        log_w - present * math.log(2.0 * math.pi) - 0.5 * torch.log(det_w) - 0.5 * chi2
+    )
+
+
+def associate_many(
+    catalogs: list[Catalog],
+    *,
+    primary: int = 0,
+    gate_pvalue: float = 1e-4,
+    max_radius_arcsec: float = 10.0,
+    epoch: float | Tensor | None = None,
+    motion_prior: MotionPrior | None = None,
+    footprints: list[MOC | None] | None = None,
+    footprint_order: int = 10,
+    completeness: list[float] | Literal["em"] = "em",
+    budget: int = 4096,
+    mass_tol: float = 1e-6,
+) -> NWayAssociation:
+    """N-way association (nway-style) of a primary catalogue with several others.
+
+    For each primary row, the hypotheses are every combination of, per secondary
+    catalogue, one counterpart that passes the pairwise gate against the primary,
+    or none. A hypothesis with present set ``S`` has weight
+
+    ``prod_{c in S} pi_c / nu_c * prod_{c not in S} (1 - pi_c) * M_S``
+
+    where ``M_S`` is the exact Gaussian marginal likelihood that all present
+    positions (primary included) come from one true position with a flat prior.
+    This is Budavari & Szalay (2008) eq. 18 for isotropic errors, here with full
+    covariances in the primary's tangent plane. ``pi_c`` is catalogue ``c``'s
+    completeness (pairwise EM when ``"em"``, also counting gate losses);
+    ``nu_c`` is its surface density at the primary over its footprint.
+
+    Primaries with at most ``budget`` hypotheses are enumerated exactly.
+    Larger ones are enumerated best-first by an upper bound (``M`` gains at most
+    ``1 / (2 pi sqrt(det C))`` per added member) until the unenumerated mass,
+    certified through that bound, is below ``mass_tol``. The certified residual
+    is reported per primary.
+    """
+    if len(catalogs) < 2:
+        raise ValueError("need a primary and at least one other catalogue")
+    order = [primary] + [i for i in range(len(catalogs)) if i != primary]
+    cats = [catalogs[i] for i in order]
+    feet: list[MOC | None] = (
+        [None] * len(cats) if footprints is None else [footprints[i] for i in order]
+    )
+    k = len(cats)
+    ref = cats[0]
+    if epoch is None:
+        ep = torch.as_tensor(ref.epoch)
+        if ep.numel() != 1:
+            raise ValueError("the primary has per-row epochs; pass a scalar epoch")
+        epoch = ep.reshape(())
+    pos_lonlat, covs = [], []
+    for cat in cats:
+        cat = cat if cat.frame == ref.frame else cat.to_frame(ref.frame)
+        lon, lat, cov = _epoch_positions(
+            cat, torch.as_tensor(epoch, dtype=_F64), motion_prior
+        )
+        pos_lonlat.append((lon, lat))
+        covs.append(cov)
+    n0 = int(pos_lonlat[0][0].numel())
+    dev = pos_lonlat[0][0].device
+    xyz = [unit_vectors(lon, lat) for lon, lat in pos_lonlat]
+    # Pairwise gated candidates and completeness against the primary.
+    pairs: list[tuple[Tensor, Tensor]] = [
+        (torch.arange(n0, device=dev), torch.arange(n0, device=dev))
+    ]
+    pi = [1.0]
+    log_nu: list[Tensor] = [torch.zeros(n0, dtype=_F64, device=dev)]
+    for c in range(1, k):
+        left = Catalog(
+            lon=pos_lonlat[0][0],
+            lat=pos_lonlat[0][1],
+            epoch=epoch,
+            astrometry=_cov_only(covs[0]),
+        )
+        right = Catalog(
+            lon=pos_lonlat[c][0],
+            lat=pos_lonlat[c][1],
+            epoch=epoch,
+            astrometry=_cov_only(covs[c]),
+        )
+        comp = "em" if completeness == "em" else float(completeness[c - 1])
+        res = associate(
+            left,
+            right,
+            gate_pvalue=gate_pvalue,
+            max_radius_arcsec=max_radius_arcsec,
+            epoch=None,
+            right_footprint=feet[c],
+            footprint_order=footprint_order,
+            completeness=comp,
+            assign="none",
+        )
+        pairs.append((res.left_index, res.right_index))
+        pi.append(res.completeness * (1.0 - gate_pvalue))
+        rlon_c, rlat_c = pos_lonlat[c]
+        llon0, llat0 = pos_lonlat[0]
+        given = feet[c]
+        rfoot: MOC = (
+            given
+            if given is not None
+            else MOC.from_lonlat(rlon_c, rlat_c, footprint_order)
+        )
+        nu = _density(rlon_c, rlat_c, llon0, llat0, rfoot, "global", None)
+        inside = rfoot.contains(llon0, llat0)
+        log_nu.append(
+            torch.where(
+                inside, torch.log(nu.clamp_min(1e-300)), torch.full_like(nu, math.inf)
+            )
+        )
+    # Per-candidate geometry in each primary's tangent frame.
+    cov_inv: list[Tensor] = [torch.linalg.inv(covs[0])]
+    logdet: list[Tensor] = [torch.logdet(covs[0])]
+    empty = torch.empty(0, dtype=_F64, device=dev)
+    cand_pos: list[Tensor] = [empty]
+    cand_cinv: list[Tensor] = [empty]
+    cand_ld: list[Tensor] = [empty]
+    for c in range(1, k):
+        li, rj = pairs[c]
+        delta, t = _to_left_frame(xyz[0][li], xyz[c][rj])
+        cc = t @ covs[c][rj] @ t.mT
+        cand_pos.append(delta)
+        cand_cinv.append(torch.linalg.inv(cc))
+        cand_ld.append(torch.logdet(cc))
+    # Hypothesis members refer to candidate slots; geometry is indexed by slot.
+    log_pp = torch.tensor([0.0] + [math.log(p) for p in pi[1:]], dtype=_F64, device=dev)
+    log_pa = torch.tensor(
+        [0.0] + [math.log1p(-p) for p in pi[1:]], dtype=_F64, device=dev
+    )
+    # Per primary, candidate slots per catalogue (CSR by primary, already sorted by left).
+    counts = [torch.bincount(pairs[c][0], minlength=n0) for c in range(1, k)]
+    starts = [torch.cumsum(cnt, 0) - cnt for cnt in counts]
+    n_hyp = torch.ones(n0, dtype=torch.int64, device=dev)
+    for cnt in counts:
+        n_hyp = n_hyp * (cnt + 1)
+    exact = n_hyp <= budget
+    members_out, prim_out, logw_out = [], [], []
+    residual = torch.zeros(n0, dtype=_F64, device=dev)
+
+    def slot_geometry(
+        c: int, slots: Tensor, prim: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        # The background density is evaluated at the primary's position.
+        return (
+            cand_pos[c][slots],
+            cand_cinv[c][slots],
+            cand_ld[c][slots],
+            log_nu[c][prim],
+        )
+
+    def weights(prim: Tensor, slots: Tensor) -> Tensor:
+        """``slots [H, K-1]`` candidate slot per catalogue (-1 absent)."""
+        h = int(prim.numel())
+        geo_pos = [torch.zeros(h, 2, dtype=_F64, device=dev)]
+        geo_ci = [cov_inv[0][prim]]
+        geo_ld = [logdet[0][prim]]
+        geo_nu = [torch.zeros(h, dtype=_F64, device=dev)]
+        mem = torch.zeros(h, k, dtype=torch.int64, device=dev)
+        mem[:, 0] = torch.arange(h, device=dev)  # geometry lists are per hypothesis
+        for c in range(1, k):
+            s = slots[:, c - 1]
+            on = s >= 0
+            p, ci, ld, nu = slot_geometry(c, s.clamp(min=0), prim)
+            geo_pos.append(p)
+            geo_ci.append(ci)
+            geo_ld.append(ld)
+            geo_nu.append(nu)
+            mem[:, c] = torch.where(
+                on, torch.arange(h, device=dev), torch.full_like(s, -1)
+            )
+        return _hypothesis_log_weight(
+            mem, geo_pos, geo_ci, geo_ld, log_pp, log_pa, geo_nu
+        )
+
+    # Exact enumeration, vectorised: mixed-radix decode of hypothesis ids.
+    prim_exact = torch.nonzero(exact, as_tuple=True)[0]
+    if prim_exact.numel():
+        nh = n_hyp[prim_exact]
+        prim = torch.repeat_interleave(prim_exact, nh)
+        local = torch.arange(int(nh.sum()), device=dev) - torch.repeat_interleave(
+            torch.cumsum(nh, 0) - nh, nh
+        )
+        slots = torch.empty(int(prim.numel()), k - 1, dtype=torch.int64, device=dev)
+        rem = local
+        for c in range(1, k):
+            base = counts[c - 1][prim] + 1
+            choice = rem % base
+            rem = rem // base
+            slots[:, c - 1] = torch.where(
+                choice == 0,
+                torch.full_like(choice, -1),
+                starts[c - 1][prim] + choice - 1,
+            )
+        members_out.append(slots)
+        prim_out.append(prim)
+        logw_out.append(weights(prim, slots))
+    # Best-first enumeration with a certified residual for oversized primaries.
+    for i in torch.nonzero(~exact, as_tuple=True)[0].tolist():
+        s, p, w, r = _best_first(
+            i,
+            k,
+            counts,
+            starts,
+            cand_ld,
+            log_nu,
+            pairs,
+            log_pp,
+            log_pa,
+            weights,
+            mass_tol,
+            budget,
+            dev,
+        )
+        members_out.append(s)
+        prim_out.append(p)
+        logw_out.append(w)
+        residual[i] = r
+    slots = torch.cat(members_out)
+    prim = torch.cat(prim_out)
+    logw = torch.cat(logw_out)
+    order_h = torch.argsort(prim, stable=True)
+    slots, prim, logw = slots[order_h], prim[order_h], logw[order_h]
+    members = torch.full((int(prim.numel()), k), -1, dtype=torch.int64, device=dev)
+    members[:, 0] = prim
+    for c in range(1, k):
+        s = slots[:, c - 1]
+        members[:, c] = torch.where(
+            s >= 0, pairs[c][1][s.clamp(min=0)], torch.full_like(s, -1)
+        )
+    mx = torch.full((n0,), -math.inf, dtype=_F64, device=dev).scatter_reduce(
+        0, prim, logw, "amax"
+    )
+    z = torch.zeros(n0, dtype=_F64, device=dev).index_add(
+        0, prim, torch.exp(logw - mx[prim])
+    )
+    post = torch.exp(logw - mx[prim]) / z[prim]
+    none = (members[:, 1:] < 0).all(-1)
+    p_none = torch.zeros(n0, dtype=_F64, device=dev).index_add(
+        0, prim[none], post[none]
+    )
+    offsets = torch.zeros(n0 + 1, dtype=torch.int64, device=dev)
+    offsets[1:] = torch.cumsum(torch.bincount(prim, minlength=n0), 0)
+    best_post = torch.full((n0,), -1.0, dtype=_F64, device=dev).scatter_reduce(
+        0, prim, post, "amax"
+    )
+    is_best = post == best_post[prim]
+    idx = torch.arange(int(prim.numel()), device=dev)
+    best = torch.full(
+        (n0,), int(prim.numel()), dtype=torch.int64, device=dev
+    ).scatter_reduce(0, prim[is_best], idx[is_best], "amin")
+    back = torch.tensor(order, device=dev)
+    inv = torch.argsort(back)
+    return NWayAssociation(
+        members=members[:, inv],
+        offsets=offsets,
+        log_weight=logw,
+        posterior=post,
+        p_any=1.0 - p_none,
+        residual_mass=residual,
+        completeness=[pi[c] / (1.0 - gate_pvalue) if c else 1.0 for c in range(k)],
+        best=best,
+    )
+
+
+def _cov_only(pos_cov: Tensor) -> Astrometry:
+    full = torch.full(
+        (pos_cov.shape[0], 6, 6), math.nan, dtype=_F64, device=pos_cov.device
+    )
+    full[:, :2, :2] = pos_cov
+    return Astrometry(full)
+
+
+def _best_first(
+    i,
+    k,
+    counts,
+    starts,
+    cand_ld,
+    log_nu,
+    pairs,
+    log_pp,
+    log_pa,
+    weights,
+    mass_tol,
+    budget,
+    dev,
+):
+    """Enumerate one primary's hypotheses by decreasing upper bound.
+
+    Bound per catalogue choice: absent -> (1 - pi_c); candidate j ->
+    pi_c / nu_j / (2 pi sqrt(det C_j)). The product of the chosen factors bounds
+    the exact weight relative to the primary-only hypothesis. The hypotheses
+    enumerated in bound order stop when the remaining bound mass (closed form
+    total minus enumerated bounds) is below ``mass_tol`` of the enumerated
+    exact mass.
+    """
+    import heapq
+
+    options: list[list[tuple[float, int]]] = []
+    for c in range(1, k):
+        lo = int(starts[c - 1][i])
+        cnt = int(counts[c - 1][i])
+        slots = torch.arange(lo, lo + cnt, device=dev)
+        lb = (
+            log_pp[c] - log_nu[c][i] - math.log(2.0 * math.pi) - 0.5 * cand_ld[c][slots]
+        ).tolist()
+        opts = [(float(log_pa[c]), -1)] + [
+            (b, int(s)) for b, s in zip(lb, slots.tolist())
+        ]
+        opts.sort(key=lambda t: -t[0])
+        options.append(opts)
+    log_total = sum(math.log(sum(math.exp(b) for b, _ in o)) for o in options)
+    start = tuple(0 for _ in options)
+    heap = [(-sum(o[0][0] for o in options), start)]
+    seen = {start}
+    chosen, bounds = [], []
+    exact_mass = 0.0
+    shift = None
+    while heap:
+        nb, combo = heapq.heappop(heap)
+        chosen.append([options[c][j][1] for c, j in enumerate(combo)])
+        bounds.append(-nb)
+        if len(chosen) % 64 == 0 or not heap:
+            sl = torch.tensor(chosen, dtype=torch.int64, device=dev)
+            w = weights(
+                torch.full((len(chosen),), i, dtype=torch.int64, device=dev), sl
+            )
+            shift = float(w.max())
+            exact_mass = float(torch.exp(w - shift).sum())
+            enumerated_bound = math.fsum(math.exp(b - shift) for b in bounds)
+            remaining = max(math.exp(log_total - shift) - enumerated_bound, 0.0)
+            if remaining <= mass_tol * exact_mass or len(chosen) >= 64 * budget:
+                break
+        for c in range(len(options)):
+            nxt = list(combo)
+            nxt[c] += 1
+            if nxt[c] < len(options[c]):
+                t = tuple(nxt)
+                if t not in seen:
+                    seen.add(t)
+                    heapq.heappush(
+                        heap, (-sum(options[cc][jj][0] for cc, jj in enumerate(t)), t)
+                    )
+    sl = torch.tensor(chosen, dtype=torch.int64, device=dev)
+    w = weights(torch.full((len(chosen),), i, dtype=torch.int64, device=dev), sl)
+    shift = float(w.max())
+    exact_mass = float(torch.exp(w - shift).sum())
+    remaining = max(
+        math.exp(log_total - shift) - math.fsum(math.exp(b - shift) for b in bounds),
+        0.0,
+    )
+    residual = remaining / (exact_mass + remaining)
+    return sl, torch.full((len(chosen),), i, dtype=torch.int64, device=dev), w, residual
+
+
 __all__ = [
     "Association",
     "HistogramRatio",
+    "NWayAssociation",
     "assign_one_to_one",
     "associate",
+    "associate_many",
     "gate_k2",
     "mahalanobis2",
     "pair_frame",
