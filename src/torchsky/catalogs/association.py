@@ -248,7 +248,7 @@ class Association:
     prior: Tensor
     completeness: float
     n_capped: int
-    right_scale: float = 1.0
+    right_scale: float | Tensor = 1.0
     floor_mas2: Tensor | None = None
 
 
@@ -441,6 +441,9 @@ def associate(
     terms: tuple[HistogramRatio, ...] = (),
     assign: Literal["none", "best", "greedy", "optimal"] = "optimal",
     calibrate: Literal["none", "floor", "scale_floor"] = "none",
+    calibrate_by: Tensor | None = None,
+    calibrate_edges: Tensor | None = None,
+    calibrate_min_pairs: float = 50.0,
     max_iter: int = 50,
     tol: float = 1e-6,
 ) -> Association:
@@ -464,6 +467,11 @@ def associate(
     catalogue's errors by ``s``. Both are posterior-weighted maximum likelihood,
     alternated with the association until stable, and reported on the
     result. Search radii include the fitted terms, so the gate stays sound.
+    ``calibrate_by`` (one value per right row, e.g. magnitude, or a blending
+    count from :func:`count_within`) with ``calibrate_edges`` fits the
+    terms per bin. Bins whose matched weight is below ``calibrate_min_pairs``
+    use the global fit. Scale and floor are separately identifiable only
+    when the right errors vary within a bin.
 
     ``right_footprint`` (MOC) defaults to the right catalogue's occupied cells at
     ``footprint_order``. Pass the survey MOC when you have it, so that density
@@ -531,13 +539,33 @@ def associate(
     lx, rx = unit_vectors(llon, llat), unit_vectors(rlon, rlat)
     for term in terms:
         term.setup(rfoot.contains(rlon, rlat))
-    scale, floor = 1.0, torch.zeros(2, 2, dtype=_F64, device=dev)
+    if calibrate_by is not None:
+        if calibrate_edges is None:
+            raise ValueError("calibrate_by needs calibrate_edges")
+        by = _as_tensor(calibrate_by, dtype=_F64, device=dev).reshape(-1)
+        edges = _as_tensor(calibrate_edges, dtype=_F64, device=dev).reshape(-1)
+        if by.numel() != rlon.numel() or edges.numel() < 2:
+            raise ValueError(
+                "calibrate_by needs one value per right row and >= 2 edges"
+            )
+        n_bins = int(edges.numel()) - 1
+        rbin = (
+            torch.bucketize(
+                by.nan_to_num(float(edges[0])).contiguous(), edges, right=True
+            )
+            - 1
+        ).clamp(0, n_bins - 1)
+    else:
+        n_bins = 1
+        rbin = torch.zeros(rlon.shape, dtype=torch.int64, device=dev)
+    scale = torch.ones(n_bins, dtype=_F64, device=dev)
+    floor = torch.zeros(n_bins, 2, 2, dtype=_F64, device=dev)
     rounds = 1 if calibrate == "none" else 8
     for _round in range(rounds):
-        lam_f = float(_lambda_max(floor[None])[0])
+        lam_f = float(_lambda_max(floor).max())
         # sqrt(lmax(A + s^2 B + F)) <= sqrt(lmax A) + s sqrt(lmax B) + sqrt(lmax F)
         rl_raw = (k * (torch.sqrt(lam_l) + math.sqrt(lam_f)) + drift_mas) / 1000.0
-        rr_raw = k * scale * torch.sqrt(lam_r) / 1000.0
+        rr_raw = k * scale[rbin] * torch.sqrt(lam_r) / 1000.0
         rl = rl_raw.clamp(max=max_radius_arcsec)
         rr = rr_raw.clamp(max=max_radius_arcsec)
         n_capped = int(
@@ -576,7 +604,10 @@ def associate(
         delta, tl, tr, psi = pair_frame(lxp, rx[rj])
         cl = tl @ lc @ tl.mT
         cr = tr @ rcov[rj] @ tr.mT
-        d2, logdet = mahalanobis2(delta, cl + scale * scale * cr + floor)
+        pb = rbin[rj]
+        d2, logdet = mahalanobis2(
+            delta, cl + (scale[pb] ** 2)[:, None, None] * cr + floor[pb]
+        )
         sep_arcsec = psi * _ARCSEC_PER_RAD
         keep = (d2 <= k2) & (sep_arcsec <= max_radius_arcsec)
         li, rj, d2, logdet, sep_arcsec = (
@@ -641,10 +672,29 @@ def associate(
         post, p_none, pi, log_lr = posterior(pi_c)
         if calibrate == "none":
             break
-        new_scale, new_floor = _fit_calibration(
-            delta, cl, cr, post, calibrate == "scale_floor", scale, floor
+        pb = rbin[rj]
+        fit_scale = calibrate == "scale_floor"
+        g_scale, g_floor = _fit_calibration(
+            delta, cl, cr, post, fit_scale, float(scale.mean()), floor.mean(0)
         )
-        moved_by = abs(new_scale - scale) + float(
+        new_scale = torch.full_like(scale, g_scale)
+        new_floor = g_floor.expand_as(floor).clone()
+        if n_bins > 1:
+            for b in range(n_bins):
+                sel = pb == b
+                if float(post[sel].sum()) < calibrate_min_pairs:
+                    continue  # too few matches: the global fit applies
+                sb, fb = _fit_calibration(
+                    delta[sel],
+                    cl[sel],
+                    cr[sel],
+                    post[sel],
+                    fit_scale,
+                    float(scale[b]),
+                    floor[b],
+                )
+                new_scale[b], new_floor[b] = sb, fb
+        moved_by = float((new_scale - scale).abs().max()) + float(
             (new_floor - floor).abs().max()
         ) / max(1.0, float(new_floor.abs().max()))
         scale, floor = new_scale, new_floor
@@ -663,8 +713,8 @@ def associate(
         prior=pi,
         completeness=pi_c,
         n_capped=n_capped,
-        right_scale=scale,
-        floor_mas2=floor,
+        right_scale=float(scale[0]) if n_bins == 1 else scale,
+        floor_mas2=floor[0] if n_bins == 1 else floor,
     )
 
 

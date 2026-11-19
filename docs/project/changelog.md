@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   likelihood, alternated with the association. Real Gaia x CatWISE matches
   showed CatWISE errors underestimated (mean d^2 2.6-5.0 instead of 2).
   `Association.right_scale` and `floor_mas2` report the fit.
+  `calibrate_by=` / `calibrate_edges=` fit the terms per bin of any per-row
+  variable (magnitude, or a blending count from `count_within`), because
+  blended sources in crowded fields have larger errors than isolated ones.
 - `torchsky.catalogs.associate`, `HistogramRatio` and `assign_one_to_one`:
   probabilistic counterparts. The pipeline is common-epoch propagation with
   covariances, then a Mahalanobis chi^2 gate with provably sound per-row search

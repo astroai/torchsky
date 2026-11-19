@@ -555,3 +555,43 @@ def test_calibration_recovers_error_scale_and_floor() -> None:
     true_cal = cal.left_index == cal.right_index
     assert int(true_cal.sum()) > int(true_raw.sum())  # the raw gate rejects true pairs
     assert abs(float(cal.d2[true_cal].mean()) - 2.0) < 0.15
+
+
+def test_binned_calibration_recovers_per_population_scales() -> None:
+    g = _gen(35)
+    n = 8000
+    lon = 150 + torch.rand(n, generator=g, dtype=D) * 0.3
+    lat = 2 + torch.rand(n, generator=g, dtype=D) * 0.3
+    pub = 100.0 + 100.0 * torch.rand(n, generator=g, dtype=D)
+    blended = torch.rand(n, generator=g) < 0.4
+    true_scale = torch.where(blended, 3.0, 1.0).to(D)
+    z = torch.randn(n, 2, generator=g, dtype=D)
+    off = z * torch.sqrt((true_scale * pub) ** 2 + 20.0**2)[:, None]
+    rlon, rlat = _offset(lon, lat, off[:, 0], off[:, 1])
+    left = Catalog(
+        lon=lon,
+        lat=lat,
+        epoch=2016.0,
+        astrometry=Astrometry.from_errors(
+            torch.full((n,), 20.0, dtype=D), torch.full((n,), 20.0, dtype=D)
+        ),
+    )
+    right = Catalog(
+        lon=rlon, lat=rlat, epoch=2016.0, astrometry=Astrometry.from_errors(pub, pub)
+    )
+    res = associate(
+        left,
+        right,
+        gate_pvalue=1e-4,
+        max_radius_arcsec=30.0,
+        completeness=1.0,
+        assign="none",
+        calibrate="scale_floor",
+        calibrate_by=blended.to(D),
+        calibrate_edges=torch.tensor([0.0, 0.5, 1.5]),
+    )
+    scale = res.right_scale
+    assert isinstance(scale, torch.Tensor)
+    assert abs(float(scale[0]) - 1.0) < 0.1 and abs(float(scale[1]) - 3.0) < 0.2
+    true = res.left_index == res.right_index
+    assert abs(float(res.d2[true].mean()) - 2.0) < 0.15
