@@ -60,7 +60,6 @@ struct Index {
 struct Queries {
     const double* ra;
     const double* dec;
-    const double* xyz;   // [N, 3]
     const double* rl;    // per-row radius (arcsec)
     const int64_t* perm; // visiting order (or nullptr)
     int64_t n;
@@ -186,13 +185,48 @@ Index make_index(In1<int64_t> key, In2<double> xyz, In1<int64_t> order, In1<doub
     return z;
 }
 
-Queries make_queries(In1<double> ra, In1<double> dec, In2<double> xyz, In1<double> rl, In1<int64_t> perm,
-                     int64_t row_offset) {
+Queries make_queries(In1<double> ra, In1<double> dec, In1<double> rl, In1<int64_t> perm, int64_t row_offset,
+                     bool rl_optional = false) {
     const int64_t n = static_cast<int64_t>(ra.shape(0));
-    if (dec.shape(0) != size_t(n) || xyz.shape(0) != size_t(n) || xyz.shape(1) != 3 || rl.shape(0) != size_t(n) ||
-        (perm.shape(0) && perm.shape(0) != size_t(n)))
+    if (dec.shape(0) != size_t(n) || (!rl_optional && rl.shape(0) != size_t(n)) ||
+        (rl_optional && rl.shape(0) && rl.shape(0) != size_t(n)) || (perm.shape(0) && perm.shape(0) != size_t(n)))
         throw std::invalid_argument("query arrays have inconsistent shapes");
-    return Queries{ra.data(), dec.data(), xyz.data(), rl.data(), perm.shape(0) ? perm.data() : nullptr, n, row_offset};
+    return Queries{ra.data(), dec.data(), rl.shape(0) ? rl.data() : nullptr, perm.shape(0) ? perm.data() : nullptr,
+                   n, row_offset};
+}
+
+// Unit vector of a query row (same arithmetic as torch unit_vectors).
+inline void unit_of(double ra_deg, double dec_deg, double* q) {
+    const double ra = ra_deg * kDeg2Rad, dec = dec_deg * kDeg2Rad;
+    const double cd = std::cos(dec);
+    q[0] = cd * std::cos(ra);
+    q[1] = cd * std::sin(ra);
+    q[2] = std::sin(dec);
+}
+
+// Right rows per square degree around a query: three zones, +-4h in RA on
+// the sky (cost heuristic for the kNN start radius, mirrors local_density).
+inline double local_density(const Index& z, double ra_in, double dec) {
+    const double h = z.h;
+    const int64_t zc = zone_of(dec, z);
+    const double cos_d = std::max(std::cos(dec * kDeg2Rad), 1e-6);
+    const double half = std::min(4.0 * h / cos_d, 180.0);
+    const bool whole = half >= 180.0;
+    const double ra = remainder360(ra_in);
+    int64_t klo = whole ? 0 : ra_key_of_piece(remainder360(ra - half));
+    int64_t khi = whole ? kRaTop : ra_key_of_piece(remainder360(ra + half));
+    if (klo > khi) std::swap(klo, khi);
+    int64_t count = 0;
+    for (int64_t dz = -1; dz <= 1; ++dz) {
+        const int64_t zz = zc + dz;
+        if (zz < 0 || zz >= z.n_zones) continue;
+        const int64_t base = zz << kRaBits;
+        const int64_t* b = std::lower_bound(z.key, z.key + z.m, base | klo);
+        const int64_t* e = std::upper_bound(b, z.key + z.m, base | khi);
+        count += e - b;
+    }
+    const double area = 3.0 * h * (whole ? 360.0 * cos_d : 8.0 * h);
+    return static_cast<double>(count) / area;
 }
 
 inline int64_t row_at(const Queries& q, int64_t t) { return q.perm ? q.perm[t] : t; }
@@ -200,19 +234,21 @@ inline int64_t row_at(const Queries& q, int64_t t) { return q.perm ? q.perm[t] :
 }  // namespace
 
 void count_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<double> rr, double h, int64_t n_zones,
-                 double rr_max, In1<double> ra, In1<double> dec, In2<double> qxyz, In1<double> rl, In1<int64_t> perm,
+                 double rr_max, In1<double> ra, In1<double> dec, In1<double> rl, In1<int64_t> perm,
                  int how, bool self_upper, int64_t row_offset, Out1<int64_t> counts, int threads) {
     const Index z = make_index(key, rxyz, order, rr, h, n_zones, rr_max);
-    const Queries q = make_queries(ra, dec, qxyz, rl, perm, row_offset);
+    const Queries q = make_queries(ra, dec, rl, perm, row_offset);
     int64_t* out = counts.data();
     nb::gil_scoped_release release;
     parallel_rows(q.n, threads, [&](int64_t b, int64_t e) {
         for (int64_t t = b; t < e; ++t) {
             const int64_t i = row_at(q, t);
             const double window = combine(q.rl[i], z.rr_max, how);
+            double qv[3];
+            unit_of(q.ra[i], q.dec[i], qv);
             int64_t c = 0;
             const int64_t gi = q.row_offset + i;
-            for_each_pair(z, q.ra[i], q.dec[i], q.xyz + 3 * i, q.rl[i], window, how,
+            for_each_pair(z, q.ra[i], q.dec[i], qv, q.rl[i], window, how,
                           [&](int64_t j, double) { c += (!self_upper || z.order[j] > gi); });
             out[i] = c;
         }
@@ -220,11 +256,11 @@ void count_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<dou
 }
 
 void fill_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<double> rr, double h, int64_t n_zones,
-                double rr_max, In1<double> ra, In1<double> dec, In2<double> qxyz, In1<double> rl, In1<int64_t> perm,
+                double rr_max, In1<double> ra, In1<double> dec, In1<double> rl, In1<int64_t> perm,
                 int how, bool self_upper, int64_t row_offset, In1<int64_t> offsets, Out1<int64_t> out_j,
                 Out1<double> out_sep, int threads) {
     const Index z = make_index(key, rxyz, order, rr, h, n_zones, rr_max);
-    const Queries q = make_queries(ra, dec, qxyz, rl, perm, row_offset);
+    const Queries q = make_queries(ra, dec, rl, perm, row_offset);
     const int64_t* off = offsets.data();
     int64_t* oj = out_j.data();
     double* os = out_sep.data();
@@ -236,8 +272,10 @@ void fill_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<doub
             const int64_t i = row_at(q, t);
             const double window = combine(q.rl[i], z.rr_max, how);
             const int64_t gi = q.row_offset + i;
+            double qv[3];
+            unit_of(q.ra[i], q.dec[i], qv);
             buf.clear();
-            for_each_pair(z, q.ra[i], q.dec[i], q.xyz + 3 * i, q.rl[i], window, how, [&](int64_t j, double sep) {
+            for_each_pair(z, q.ra[i], q.dec[i], qv, q.rl[i], window, how, [&](int64_t j, double sep) {
                 const int64_t jo = z.order[j];
                 if (!self_upper || jo > gi) buf.emplace_back(sep, jo);
             });
@@ -254,10 +292,10 @@ void fill_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<doub
 }
 
 void best_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<double> rr, double h, int64_t n_zones,
-                double rr_max, In1<double> ra, In1<double> dec, In2<double> qxyz, In1<double> rl, In1<int64_t> perm,
+                double rr_max, In1<double> ra, In1<double> dec, In1<double> rl, In1<int64_t> perm,
                 int how, Out1<int64_t> out_j, Out1<double> out_sep, int threads) {
     const Index z = make_index(key, rxyz, order, rr, h, n_zones, rr_max);
-    const Queries q = make_queries(ra, dec, qxyz, rl, perm, 0);
+    const Queries q = make_queries(ra, dec, rl, perm, 0);
     int64_t* oj = out_j.data();
     double* os = out_sep.data();
     nb::gil_scoped_release release;
@@ -265,9 +303,11 @@ void best_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<doub
         for (int64_t t = b; t < e; ++t) {
             const int64_t i = row_at(q, t);
             const double window = combine(q.rl[i], z.rr_max, how);
+            double qv[3];
+            unit_of(q.ra[i], q.dec[i], qv);
             double best = std::numeric_limits<double>::infinity();
             int64_t bj = -1;
-            for_each_pair(z, q.ra[i], q.dec[i], q.xyz + 3 * i, q.rl[i], window, how, [&](int64_t j, double sep) {
+            for_each_pair(z, q.ra[i], q.dec[i], qv, q.rl[i], window, how, [&](int64_t j, double sep) {
                 const int64_t jo = z.order[j];
                 if (sep < best || (sep == best && jo < bj)) {
                     best = sep;
@@ -281,10 +321,11 @@ void best_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, In1<doub
 }
 
 void knn_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, double h, int64_t n_zones, In1<double> ra,
-               In1<double> dec, In2<double> qxyz, In1<double> r0, In1<int64_t> perm, int64_t k, double cap,
-               Out1<int64_t> out_j, Out1<double> out_sep, int threads) {
+               In1<double> dec, In1<double> r0, In1<int64_t> perm, int64_t k, double cap, Out1<int64_t> out_j,
+               Out1<double> out_sep, int threads) {
     const Index z{key.data(), rxyz.data(), order.data(), nullptr, static_cast<int64_t>(key.shape(0)), h, n_zones, 0.0};
-    const Queries q = make_queries(ra, dec, qxyz, r0, perm, 0);
+    // r0 empty: start radius from the local density in kernel (expected k rows).
+    const Queries q = make_queries(ra, dec, r0, perm, 0, /*rl_optional=*/true);
     int64_t* oj = out_j.data();
     double* os = out_sep.data();
     if (out_j.shape(0) != size_t(q.n * k)) throw std::invalid_argument("knn output has the wrong size");
@@ -293,10 +334,19 @@ void knn_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, double h,
         std::vector<std::pair<double, int64_t>> buf;
         for (int64_t t = b; t < e; ++t) {
             const int64_t i = row_at(q, t);
-            double r = std::min(q.rl[i], cap);
+            double qv[3];
+            unit_of(q.ra[i], q.dec[i], qv);
+            double r;
+            if (q.rl) {
+                r = q.rl[i];
+            } else {
+                const double rho = local_density(z, q.ra[i], q.dec[i]);  // per deg^2
+                r = rho > 0.0 ? std::sqrt(static_cast<double>(k) / (kPi * rho)) * 3600.0 : 4.0 * z.h * 3600.0;
+            }
+            r = std::min(r, cap);
             for (;;) {
                 buf.clear();
-                for_each_pair(z, q.ra[i], q.dec[i], q.xyz + 3 * i, r, r, kSum,
+                for_each_pair(z, q.ra[i], q.dec[i], qv, r, r, kSum,
                               [&](int64_t j, double sep) { buf.emplace_back(sep, z.order[j]); });
                 if (static_cast<int64_t>(buf.size()) >= k || r >= cap) break;
                 r = std::min(2.0 * r, cap);

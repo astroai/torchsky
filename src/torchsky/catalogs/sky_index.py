@@ -262,19 +262,7 @@ class SkyIndex:
         )
         if not cap > 0.0:
             raise ValueError("max_radius_arcsec must be positive")
-        # Start each row where its local density predicts ~k neighbours, then
-        # double. Concentrated catalogues and sparse targets both resolve in a
-        # few rounds without materialising far more pairs than needed.
-        density = self._zones.local_density(lon, lat)  # per deg^2
-        # Aim for a Poisson mean of k: overshooting costs more pairs than an
-        # extra round for the rows still short of k (measured).
-        start_deg = torch.sqrt(k / (math.pi * density.clamp(min=1e-300)))
-        fallback = 4.0 * self._zones.zone_height
-        radius = torch.where(
-            density > 0, start_deg, torch.full_like(start_deg, fallback)
-        )
-        radius = (radius * 3600.0).clamp(max=cap)
-        native = native_knn(self._zones, lon, lat, radius, k, cap)
+        native = native_knn(self._zones, lon, lat, None, k, cap)
         if native is not None:
             nj, _ = native
             found = nj >= 0
@@ -284,8 +272,22 @@ class SkyIndex:
                 # the torch path).
                 rows = torch.nonzero(found, as_tuple=True)[0]
                 right = self._zones.xyz[self._zones.inverse_order()[nj[found]]]
-                sep[found] = separation_arcsec(unit_vectors(lon, lat)[rows], right)
+                sep[found] = separation_arcsec(
+                    unit_vectors(lon[rows], lat[rows]), right
+                )
             return NearestResult(nj, sep)
+        # Torch path: start each row where its local density predicts ~k
+        # neighbours, then double. Concentrated catalogues and sparse targets
+        # both resolve in a few rounds without materialising far more pairs than needed.
+        density = self._zones.local_density(lon, lat)  # per deg^2
+        # Aim for a Poisson mean of k: overshooting costs more pairs than an
+        # extra round for the rows still short of k (measured).
+        start_deg = torch.sqrt(k / (math.pi * density.clamp(min=1e-300)))
+        fallback = 4.0 * self._zones.zone_height
+        radius = torch.where(
+            density > 0, start_deg, torch.full_like(start_deg, fallback)
+        )
+        radius = (radius * 3600.0).clamp(max=cap)
         todo = torch.arange(n, device=dev)
         while todo.numel():
             last = radius >= cap

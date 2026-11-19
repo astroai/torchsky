@@ -301,7 +301,6 @@ def zone_query(
     torch path below. Both produce the same pairs.
     """
     dev = left_ra.device
-    left_xyz = unit_vectors(left_ra, left_dec)
     n_left = int(left_ra.numel())
     ext = _native_ext()
     if (
@@ -319,13 +318,13 @@ def zone_query(
             index,
             left_ra,
             left_dec,
-            left_xyz,
             radius_left,
             radius_right,
             combine,
             find,
             self_upper,
         )
+    left_xyz = unit_vectors(left_ra, left_dec)
     if self_upper:
         accept = _upper if accept is None else _both(accept, _upper)
     out_l: list[Tensor] = []
@@ -459,7 +458,6 @@ def _zone_query_native(
     index: ZoneIndex,
     left_ra: Tensor,
     left_dec: Tensor,
-    left_xyz: Tensor,
     radius_left: Tensor,
     radius_right: Tensor | None,
     combine: Combine,
@@ -472,7 +470,6 @@ def _zone_query_native(
     with torch.no_grad():
         ra = left_ra.detach().contiguous()
         dec = left_dec.detach().contiguous()
-        lx = left_xyz.detach().contiguous()
         rl = radius_left.detach().to(f64).contiguous()
         rr = (
             radius_right.detach().to(f64)[index.order].contiguous()
@@ -495,7 +492,6 @@ def _zone_query_native(
             rr_max,
             ra,
             dec,
-            lx,
             rl,
             perm,
             _COMBINE_CODE[combine],
@@ -521,18 +517,27 @@ def _zone_query_native(
             sep = torch.empty(total, dtype=f64)
             ext.xmatch_fill(*common, self_upper, 0, offsets, rj, sep, threads)
             li = torch.repeat_interleave(torch.arange(n), counts, output_size=total)
-    return li, rj, _pair_separation(index, left_xyz, li, rj)
+    # Separations of matched pairs only (differentiable through the inputs).
+    return (
+        li,
+        rj,
+        _pair_separation(index, unit_vectors(left_ra[li], left_dec[li]), None, rj),
+    )
 
 
 def native_knn(
     index: ZoneIndex,
     ra: Tensor,
     dec: Tensor,
-    start_radius_arcsec: Tensor,
+    start_radius_arcsec: Tensor | None,
     k: int,
     cap_arcsec: float,
 ) -> tuple[Tensor, Tensor] | None:
-    """Native exact k nearest neighbours (``None`` when the kernel does not apply)."""
+    """Native exact k nearest neighbours (``None`` when the kernel does not apply).
+
+    Without ``start_radius_arcsec`` the kernel picks each row's start radius from
+    the local density of the index (expected ``k`` rows), then doubles it.
+    """
     ext = _native_ext()
     if (
         ext is None
@@ -544,7 +549,6 @@ def native_knn(
     n = int(ra.numel())
     with torch.no_grad():
         ra_c, dec_c = ra.detach().contiguous(), dec.detach().contiguous()
-        lx = unit_vectors(ra_c, dec_c).contiguous()
         perm = torch.argsort(
             (index._zone_of(dec_c) << _RA_BITS) | _ra_key(ra_c)
         ).contiguous()
@@ -558,8 +562,9 @@ def native_knn(
             index.n_zones,
             ra_c,
             dec_c,
-            lx,
-            start_radius_arcsec.detach().to(torch.float64).contiguous(),
+            torch.empty(0, dtype=torch.float64)
+            if start_radius_arcsec is None
+            else start_radius_arcsec.detach().to(torch.float64).contiguous(),
             perm,
             int(k),
             float(cap_arcsec),
@@ -571,13 +576,15 @@ def native_knn(
 
 
 def _pair_separation(
-    index: ZoneIndex, left_xyz: Tensor, li: Tensor, rj_orig: Tensor
+    index: ZoneIndex, left_xyz: Tensor, li: Tensor | None, rj_orig: Tensor
 ) -> Tensor:
+    """Separations of pairs; ``li=None`` means ``left_xyz`` is already gathered."""
     right = index.xyz[index.inverse_order()[rj_orig]]
-    if left_xyz.requires_grad or index.xyz.requires_grad:
-        return separation_arcsec(left_xyz[li], right)
+    left = left_xyz if li is None else left_xyz[li]
+    if left.requires_grad or right.requires_grad:
+        return separation_arcsec(left, right)
     with torch.no_grad():
-        return separation_arcsec(left_xyz[li], right)
+        return separation_arcsec(left, right)
 
 
 def _empty(device: torch.device, dtype: torch.dtype) -> tuple[Tensor, Tensor, Tensor]:
