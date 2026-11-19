@@ -434,3 +434,124 @@ def test_nway_recovers_injected_triples() -> None:
     # p_any is calibrated: the mean p_any matches the true fraction with any counterpart.
     has_any = (truth[1] >= 0) | (truth[2] >= 0)
     assert abs(float(res.p_any.mean()) - float(has_any.float().mean())) < 0.03
+
+
+# ------------------------------------------------- pair epochs, calibration
+
+
+def test_pair_epochs_are_sound_and_recover_fast_movers() -> None:
+    from torchsky.catalogs import propagate_astrometry
+    from torchsky.wcs.catalog_state import CatalogState
+
+    g = _gen(31)
+    n = 300
+    lon = 150 + torch.rand(n, generator=g, dtype=D) * 0.05
+    lat = 2 + torch.rand(n, generator=g, dtype=D) * 0.05
+    pm_e = torch.randn(n, generator=g, dtype=D) * 50
+    pm_n = torch.randn(n, generator=g, dtype=D) * 50
+    pm_e[0], pm_n[0] = -798.6, 10328.1  # Barnard-like
+    cov = Astrometry.from_errors(
+        torch.full((n,), 0.1, dtype=D), torch.full((n,), 0.1, dtype=D)
+    ).cov
+    cov[:, 2, 2] = cov[:, 3, 3] = 0.05**2
+    cov[:, 2:4, :2] = cov[:, :2, 2:4] = 0.0
+    cov[:, 2, 3] = cov[:, 3, 2] = 0.0
+    left = Catalog(
+        lon=lon,
+        lat=lat,
+        epoch=2016.0,
+        pm_lon_coslat_mas_yr=pm_e,
+        pm_lat_mas_yr=pm_n,
+        astrometry=Astrometry(cov),
+    )
+    t_r = 1997.0 + 4.0 * torch.rand(n, generator=g, dtype=D)
+    state = CatalogState(
+        lon=lon, lat=lat, epoch=2016.0, pm_lon_coslat_mas_yr=pm_e, pm_lat_mas_yr=pm_n
+    )
+    true_pos = state.propagate(t_r)
+    err = torch.randn(n, 2, generator=g, dtype=D) * 70.0
+    rlon, rlat = _offset(true_pos.lon, true_pos.lat, err[:, 0], err[:, 1])
+    right = Catalog(
+        lon=rlon,
+        lat=rlat,
+        epoch=t_r,
+        astrometry=Astrometry.from_errors(
+            torch.full((n,), 80.0, dtype=D), torch.full((n,), 80.0, dtype=D)
+        ),
+    )
+    res = associate(
+        left,
+        right,
+        gate_pvalue=1e-3,
+        max_radius_arcsec=120.0,
+        completeness=0.9,
+        assign="optimal",
+    )
+    assert bool(res.match[(res.left_index == 0) & (res.right_index == 0)].any())
+    # Brute force at pair epochs: every left row propagated to every right epoch.
+    li = torch.arange(n).repeat_interleave(n)
+    rj = torch.arange(n).repeat(n)
+    gathered = CatalogState(
+        lon=lon[li],
+        lat=lat[li],
+        epoch=2016.0,
+        pm_lon_coslat_mas_yr=pm_e[li],
+        pm_lat_mas_yr=pm_n[li],
+    )
+    moved, lc = propagate_astrometry(gathered, Astrometry(cov[li]), t_r[rj])
+    delta, tl, tr, psi = pair_frame(
+        unit_vectors(moved.lon, moved.lat), unit_vectors(rlon[rj], rlat[rj])
+    )
+    d2, _ = mahalanobis2(
+        delta, tl @ lc @ tl.mT + tr @ right.astrometry.cov[rj, :2, :2] @ tr.mT
+    )  # type: ignore[union-attr]
+    inside = (d2 <= gate_k2(1e-3)) & (psi * 206264.80624709636 <= 120.0)
+    assert set(zip(li[inside].tolist(), rj[inside].tolist())) == set(
+        zip(res.left_index.tolist(), res.right_index.tolist())
+    )
+
+
+def test_calibration_recovers_error_scale_and_floor() -> None:
+    g = _gen(33)
+    n = 6000
+    lon = 150 + torch.rand(n, generator=g, dtype=D) * 0.2
+    lat = 2 + torch.rand(n, generator=g, dtype=D) * 0.2
+    left_cov = Astrometry.from_errors(
+        torch.full((n,), 20.0, dtype=D), torch.full((n,), 20.0, dtype=D)
+    )
+    pub = 100.0 + 100.0 * torch.rand(n, generator=g, dtype=D)  # published right errors
+    true_sigma = 2.0 * pub  # truth: errors underestimated 2x ...
+    floor = 40.0  # ... plus a 40 mas systematic floor
+    z = torch.randn(n, 2, generator=g, dtype=D)
+    off = z * torch.sqrt(true_sigma**2 + floor**2 + 20.0**2)[:, None]
+    rlon, rlat = _offset(lon, lat, off[:, 0], off[:, 1])
+    left = Catalog(lon=lon, lat=lat, epoch=2016.0, astrometry=left_cov)
+    right = Catalog(
+        lon=rlon, lat=rlat, epoch=2016.0, astrometry=Astrometry.from_errors(pub, pub)
+    )
+    raw = associate(
+        left,
+        right,
+        gate_pvalue=1e-4,
+        max_radius_arcsec=30.0,
+        completeness=1.0,
+        assign="none",
+    )
+    cal = associate(
+        left,
+        right,
+        gate_pvalue=1e-4,
+        max_radius_arcsec=30.0,
+        completeness=1.0,
+        assign="none",
+        calibrate="scale_floor",
+    )
+    assert abs(cal.right_scale - 2.0) < 0.1
+    assert (
+        cal.floor_mas2 is not None
+        and abs(float(cal.floor_mas2.diagonal().mean()) ** 0.5 - floor) < 15.0
+    )
+    true_raw = raw.left_index == raw.right_index
+    true_cal = cal.left_index == cal.right_index
+    assert int(true_cal.sum()) > int(true_raw.sum())  # the raw gate rejects true pairs
+    assert abs(float(cal.d2[true_cal].mean()) - 2.0) < 0.15

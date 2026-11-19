@@ -294,6 +294,13 @@ background density:
 5. **Assignment.** `assign="optimal"` gives the exact one-to-one assignment that
    maximises \(\sum \log(P_{ij}/P_{i0})\).
 
+When the right catalog has per-row epochs (for example 2MASS observation dates),
+each candidate pair is evaluated with the left row propagated to that right
+row's own epoch. Published errors are often miscalibrated.
+`calibrate="scale_floor"` fits a scale on the right catalog's errors and a
+systematic floor from the matches themselves, and reports both
+(`right_scale`, `floor_mas2`).
+
 <!-- docs: run -->
 ```python
 import torch

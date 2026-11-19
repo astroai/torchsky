@@ -337,6 +337,7 @@ def zone_query(
     rr_max = 0.0 if rr_sorted is None else float(rr_sorted.max())
     for c0 in range(0, n_left, left_chunk_size):
         c1 = min(c0 + left_chunk_size, n_left)
+        chunk_start = len(out_l)
         with torch.no_grad():
             rl = radius_left[c0:c1].detach()
             window_arcsec = combine_radii(rl, rr_max, combine)
@@ -406,6 +407,20 @@ def zone_query(
                     out_l.append(i + c0)
                     out_r.append(jo)
                     out_s.append(sep)
+        if find == "all" and len(out_l) > chunk_start:
+            # Order this chunk by (left, sep, right) now: chunks are contiguous in
+            # left index, so the concatenation is ordered with no global sort
+            # (and no global sort temporaries, which ran out of GPU memory).
+            cl_ = torch.cat(out_l[chunk_start:])
+            cr_ = torch.cat(out_r[chunk_start:])
+            cs_ = torch.cat(out_s[chunk_start:])
+            order = torch.argsort(cr_, stable=True)
+            order = order[torch.argsort(cs_[order], stable=True)]
+            order = order[torch.argsort(cl_[order], stable=True)]
+            del out_l[chunk_start:], out_r[chunk_start:], out_s[chunk_start:]
+            out_l.append(cl_[order])
+            out_r.append(cr_[order])
+            out_s.append(cs_[order])
         if find == "best":
             rows = torch.nonzero(best_j.ne(big), as_tuple=True)[0]
             out_l.append(rows + c0)
@@ -423,12 +438,9 @@ def zone_query(
     if find == "best":
         sep = _pair_separation(index, left_xyz, li, rj)
         return li, rj, sep
-    # "all": order by (left, sep, right). Separations are recomputed with autograd.
-    sep_d = torch.cat(out_s)
-    order = torch.argsort(rj, stable=True)
-    order = order[torch.argsort(sep_d[order], stable=True)]
-    order = order[torch.argsort(li[order], stable=True)]
-    li, rj = li[order], rj[order]
+    # "all": chunks are already ordered by (left, sep, right). Separations are
+    # recomputed with autograd.
+    del out_s
     return li, rj, _pair_separation(index, left_xyz, li, rj)
 
 

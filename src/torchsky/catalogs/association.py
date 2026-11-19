@@ -247,6 +247,8 @@ class Association:
     prior: Tensor
     completeness: float
     n_capped: int
+    right_scale: float = 1.0
+    floor_mas2: Tensor | None = None
 
 
 # ----------------------------------------------------------------- pipeline
@@ -336,6 +338,90 @@ def _density(
     )
 
 
+def _pm_speed(state, prior: MotionPrior | None) -> Tensor:
+    """|proper motion| (mas/yr) per row; prior mean speed for rows without motion."""
+    n = int(state.lon.numel())
+    speed = torch.zeros(n, dtype=_F64, device=state.lon.device)
+    if state.pm_lon_coslat_mas_yr is not None and state.pm_lat_mas_yr is not None:
+        speed = torch.hypot(state.pm_lon_coslat_mas_yr, state.pm_lat_mas_yr).nan_to_num(
+            0.0
+        )
+    if prior is not None:
+        mean, _ = prior.at(state.lon, state.lat)
+        no_pm = state.motion_level() == 2
+        speed = torch.where(no_pm, mean.norm(dim=-1), speed)
+    return speed
+
+
+def _fit_calibration(
+    delta: Tensor,
+    cl: Tensor,
+    cr: Tensor,
+    weight: Tensor,
+    fit_scale: bool,
+    scale: float,
+    floor: Tensor,
+) -> tuple[float, Tensor]:
+    """Posterior-weighted ML of ``Sigma = C_l + s^2 C_r + F`` over matched pairs.
+
+    ``F = L L^T`` (2x2, PSD) is a systematic floor in the local tangent frame,
+    ``s`` scales the right catalogue's published errors. L-BFGS on
+    ``(log s, log L11, L21, log L22)``.
+    """
+    w = weight.detach()
+    if float(w.sum()) <= 0:
+        return scale, floor
+    d, a, b = delta.detach(), cl.detach(), cr.detach()
+    # Start the floor at a tenth of the typical pair variance (a log-parametrised
+    # floor at ~0 has no gradient); a true zero floor is then driven down.
+    eye = torch.eye(2, dtype=_F64, device=d.device)
+    typical = float(torch.median(0.5 * (a + b).diagonal(dim1=-2, dim2=-1).sum(-1)))
+    start = floor if float(floor.abs().max()) > 1e-3 * typical else 0.1 * typical * eye
+    chol = torch.linalg.cholesky(start + 1e-9 * typical * eye)
+    params = torch.tensor(
+        [
+            math.log(scale),
+            math.log(float(chol[0, 0])),
+            float(chol[1, 0]),
+            math.log(float(chol[1, 1])),
+        ],
+        dtype=_F64,
+        device=d.device,
+        requires_grad=True,
+    )
+    opt = torch.optim.LBFGS(
+        [params], max_iter=200, line_search_fn="strong_wolfe", tolerance_grad=1e-10
+    )
+
+    def closure():
+        opt.zero_grad()
+        log_s = params[0] if fit_scale else params[0].detach() * 0.0 + math.log(scale)
+        lmat = torch.stack(
+            (
+                torch.stack((torch.exp(params[1]), params[1] * 0.0)),
+                torch.stack((params[2], torch.exp(params[3]))),
+            )
+        )
+        sig = a + torch.exp(2.0 * log_s) * b + lmat @ lmat.mT
+        d2, logdet = mahalanobis2(d, sig)
+        loss = (w * (0.5 * d2 + 0.5 * logdet)).sum() / w.sum()
+        loss.backward()
+        return loss
+
+    opt.step(closure)
+    with torch.no_grad():
+        s_new = math.exp(float(params[0])) if fit_scale else scale
+        lmat = torch.tensor(
+            [
+                [math.exp(float(params[1])), 0.0],
+                [float(params[2]), math.exp(float(params[3]))],
+            ],
+            dtype=_F64,
+            device=d.device,
+        )
+        return s_new, lmat @ lmat.T
+
+
 def associate(
     left: Catalog,
     right: Catalog,
@@ -353,19 +439,37 @@ def associate(
     completeness: float | Literal["em"] = "em",
     terms: tuple[HistogramRatio, ...] = (),
     assign: Literal["none", "best", "greedy", "optimal"] = "optimal",
+    calibrate: Literal["none", "floor", "scale_floor"] = "none",
     max_iter: int = 50,
     tol: float = 1e-6,
 ) -> Association:
     """Probabilistic counterparts of ``left`` rows in ``right`` (see module docs).
 
     Both catalogues need ``astrometry`` (position covariance at least).
-    ``epoch="right"`` propagates both catalogues to the right catalogue's scalar epoch. A
-    number propagates both to it; ``None`` uses the stored positions as they are.
-    ``motion_prior`` serves rows without proper motion (one prior, or one
-    per side). ``right_footprint`` (MOC) defaults to the right catalogue's occupied
-    cells at ``footprint_order``. Pass the survey MOC when you have it, so that density and
-    priors use the true coverage.
+
+    **Epochs.** ``epoch="right"`` matches at the right catalogue's epoch. When
+    the right catalogue has per-row epochs (e.g. 2MASS observation dates), each
+    candidate pair is evaluated with the left row propagated to *that right
+    row's* epoch, with its covariance (pair epochs). The search runs at the
+    median epoch, with each left row's radius widened by its motion over the
+    epoch span. Its covariance bound uses the span's end points (``lambda_max``
+    is convex in time). A number propagates both catalogues to it, and ``None``
+    uses stored positions. ``motion_prior`` serves rows without proper motion
+    (one prior, or one per side).
+
+    **Calibration.** Published errors are often off: CatWISE positions, for
+    instance, are underestimated. ``calibrate="floor"`` fits a 2x2 systematic
+    covariance ``F`` added to every pair; ``"scale_floor"`` also scales the right
+    catalogue's errors by ``s``. Both are posterior-weighted maximum likelihood,
+    alternated with the association until stable, and reported on the
+    result. Search radii include the fitted terms, so the gate stays sound.
+
+    ``right_footprint`` (MOC) defaults to the right catalogue's occupied cells at
+    ``footprint_order``. Pass the survey MOC when you have it, so that density
+    and priors use the true coverage.
     """
+    if left.astrometry is None or right.astrometry is None:
+        raise ValueError("associate needs Catalog.astrometry on both catalogues")
     if left.frame != right.frame:
         right = right.to_frame(left.frame)
     priors = (
@@ -373,97 +477,178 @@ def associate(
         if isinstance(motion_prior, tuple)
         else (motion_prior, motion_prior)
     )
+    pair_epoch = False
     if epoch == "right" or epoch == "left":
         ref = right if epoch == "right" else left
-        ep = torch.as_tensor(ref.epoch)
-        if ep.numel() != 1:
+        ep = torch.as_tensor(ref.epoch, dtype=_F64).reshape(-1)
+        if ep.numel() != 1 and epoch == "left":
             raise ValueError(
-                f"the {epoch} catalogue has per-row epochs; pass a scalar epoch"
+                "the left catalogue has per-row epochs; pass a scalar epoch"
             )
-        target: Tensor | None = ep.reshape(())
+        pair_epoch = ep.numel() != 1 and not bool((ep == ep[0]).all())
+        target: Tensor | None = ep.median() if pair_epoch else ep[0]
     else:
         target = None if epoch is None else torch.as_tensor(epoch, dtype=_F64)
     llon, llat, lcov = _epoch_positions(left, target, priors[0])
-    rlon, rlat, rcov = _epoch_positions(right, target, priors[1])
     dev = llon.device
+    lam_l = _lambda_max(lcov)
+    drift_mas = torch.zeros_like(lam_l)
+    if pair_epoch:
+        assert target is not None
+        rlon, rlat = right.lon.to(_F64), right.lat.to(_F64)
+        right_ast = right.astrometry
+        assert right_ast is not None
+        rcov = right_ast.position_cov().to(dev)
+        t_right = torch.broadcast_to(
+            torch.as_tensor(right.epoch, dtype=_F64, device=dev), rlon.shape
+        )
+        t_lo, t_hi = t_right.min(), t_right.max()
+        state = left.to_state()
+        span = float(torch.maximum((t_lo - target).abs(), (t_hi - target).abs()))
+        speeds = [_pm_speed(state, priors[0])]
+        for t_end in (t_lo, t_hi):
+            moved, cov_end = propagate_astrometry(
+                state, left.astrometry, t_end, motion_prior=priors[0]
+            )
+            lam_l = torch.maximum(lam_l, _lambda_max(cov_end))
+            speeds.append(_pm_speed(moved, priors[0]))
+        drift_mas = torch.stack(speeds).amax(0) * span
+    else:
+        rlon, rlat, rcov = _epoch_positions(right, target, priors[1])
+        t_right = None
+    lam_r = _lambda_max(rcov)
     k2 = gate_k2(gate_pvalue)
     k = math.sqrt(k2)
-    rl_raw = k * torch.sqrt(_lambda_max(lcov)) / 1000.0
-    rr_raw = k * torch.sqrt(_lambda_max(rcov)) / 1000.0
-    rl = rl_raw.clamp(max=max_radius_arcsec)
-    rr = rr_raw.clamp(max=max_radius_arcsec)
-    n_capped = int(
-        (rl_raw > max_radius_arcsec).sum() + (rr_raw > max_radius_arcsec).sum()
-    )
-    li, rj = _sound_candidates(llon, llat, rlon, rlat, rl, rr)
-
     rfoot = (
         right_footprint
         if right_footprint is not None
         else MOC.from_lonlat(rlon, rlat, footprint_order)
     )
-    lx, rx = unit_vectors(llon, llat), unit_vectors(rlon, rlat)
-    delta, tl, tr, psi = pair_frame(lx[li], rx[rj])
-    sigma = tl @ lcov[li] @ tl.mT + tr @ rcov[rj] @ tr.mT
-    d2, logdet = mahalanobis2(delta, sigma)
-    sep_arcsec = psi * _ARCSEC_PER_RAD
-    keep = (d2 <= k2) & (sep_arcsec <= max_radius_arcsec)
-    li, rj, d2, logdet, sep_arcsec = (
-        li[keep],
-        rj[keep],
-        d2[keep],
-        logdet[keep],
-        sep_arcsec[keep],
-    )
     nu = _density(rlon, rlat, llon, llat, rfoot, density, density_order)
-    log_gauss = -math.log(2.0 * math.pi) - 0.5 * logdet - 0.5 * d2
-    base_log_lr = log_gauss - torch.log(nu[li].clamp_min(1e-300))
     inside = rfoot.contains(llon, llat).to(_F64)
     n_left = int(llon.numel())
+    lx, rx = unit_vectors(llon, llat), unit_vectors(rlon, rlat)
     for term in terms:
         term.setup(rfoot.contains(rlon, rlat))
-
-    def posterior(pi_c: float) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        log_lr = base_log_lr.clone()
-        for term in terms:
-            log_lr = log_lr + term.log_rho(rj)
-        pi = (pi_c * (1.0 - gate_pvalue)) * inside
-        # P_ij = pi LR / ((1 - pi) + pi sum LR), in log space per left segment.
-        lse_max = torch.full(
-            (n_left,), -math.inf, dtype=_F64, device=dev
-        ).scatter_reduce(0, li, log_lr, "amax", include_self=True)
-        shift = torch.where(torch.isfinite(lse_max), lse_max, torch.zeros_like(lse_max))
-        s = torch.zeros(n_left, dtype=_F64, device=dev).index_add(
-            0, li, torch.exp(log_lr - shift[li])
+    scale, floor = 1.0, torch.zeros(2, 2, dtype=_F64, device=dev)
+    rounds = 1 if calibrate == "none" else 8
+    for _round in range(rounds):
+        lam_f = float(_lambda_max(floor[None])[0])
+        # sqrt(lmax(A + s^2 B + F)) <= sqrt(lmax A) + s sqrt(lmax B) + sqrt(lmax F)
+        rl_raw = (k * (torch.sqrt(lam_l) + math.sqrt(lam_f)) + drift_mas) / 1000.0
+        rr_raw = k * scale * torch.sqrt(lam_r) / 1000.0
+        rl = rl_raw.clamp(max=max_radius_arcsec)
+        rr = rr_raw.clamp(max=max_radius_arcsec)
+        n_capped = int(
+            (rl_raw > max_radius_arcsec).sum() + (rr_raw > max_radius_arcsec).sum()
         )
-        sum_lr = s * torch.exp(shift)
-        denom = (1.0 - pi) + pi * sum_lr
-        post = pi[li] * torch.exp(log_lr) / denom[li]
-        p_none = (1.0 - pi) / denom
-        return post, p_none, pi, log_lr
-
-    if completeness == "em":
-        pi_c = 0.5
-        for _ in range(max_iter):
-            post, p_none, _, _ = posterior(pi_c)
-            for term in terms:
-                term.update(rj, post)
-            in_rows = inside > 0
-            new = (
-                float((1.0 - p_none[in_rows]).mean()) / (1.0 - gate_pvalue)
-                if bool(in_rows.any())
-                else 0.0
+        li, rj = _sound_candidates(llon, llat, rlon, rlat, rl, rr)
+        if pair_epoch:
+            assert t_right is not None
+            sub = left.to_state()
+            gathered = type(sub)(
+                lon=sub.lon[li],
+                lat=sub.lat[li],
+                frame=sub.frame,
+                epoch=torch.broadcast_to(
+                    torch.as_tensor(sub.epoch, dtype=_F64), sub.lon.shape
+                )[li],
+                epoch_scale=sub.epoch_scale,
+                epoch_format=sub.epoch_format,
+                pm_lon_coslat_mas_yr=None
+                if sub.pm_lon_coslat_mas_yr is None
+                else sub.pm_lon_coslat_mas_yr[li],
+                pm_lat_mas_yr=None
+                if sub.pm_lat_mas_yr is None
+                else sub.pm_lat_mas_yr[li],
+                parallax_mas=None if sub.parallax_mas is None else sub.parallax_mas[li],
+                radial_velocity_km_s=None
+                if sub.radial_velocity_km_s is None
+                else sub.radial_velocity_km_s[li],
             )
-            new = min(max(new, 1e-6), 1.0 - 1e-9)
-            if abs(new - pi_c) < tol:
+            moved, lc = propagate_astrometry(
+                gathered, left.astrometry.take(li), t_right[rj], motion_prior=priors[0]
+            )
+            lxp = unit_vectors(moved.lon, moved.lat)
+        else:
+            lxp, lc = lx[li], lcov[li]
+        delta, tl, tr, psi = pair_frame(lxp, rx[rj])
+        cl = tl @ lc @ tl.mT
+        cr = tr @ rcov[rj] @ tr.mT
+        d2, logdet = mahalanobis2(delta, cl + scale * scale * cr + floor)
+        sep_arcsec = psi * _ARCSEC_PER_RAD
+        keep = (d2 <= k2) & (sep_arcsec <= max_radius_arcsec)
+        li, rj, d2, logdet, sep_arcsec = (
+            li[keep],
+            rj[keep],
+            d2[keep],
+            logdet[keep],
+            sep_arcsec[keep],
+        )
+        delta, cl, cr = delta[keep], cl[keep], cr[keep]
+        base_log_lr = (
+            -math.log(2.0 * math.pi)
+            - 0.5 * logdet
+            - 0.5 * d2
+            - torch.log(nu[li].clamp_min(1e-300))
+        )
+
+        def posterior(pi_c: float) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+            log_lr = base_log_lr.clone()
+            for term in terms:
+                log_lr = log_lr + term.log_rho(rj)
+            pi = (pi_c * (1.0 - gate_pvalue)) * inside
+            # P_ij = pi LR / ((1 - pi) + pi sum LR), in log space per left segment.
+            lse_max = torch.full(
+                (n_left,), -math.inf, dtype=_F64, device=dev
+            ).scatter_reduce(0, li, log_lr, "amax", include_self=True)
+            shift = torch.where(
+                torch.isfinite(lse_max), lse_max, torch.zeros_like(lse_max)
+            )
+            s_ = torch.zeros(n_left, dtype=_F64, device=dev).index_add(
+                0, li, torch.exp(log_lr - shift[li])
+            )
+            denom = (1.0 - pi) + pi * s_ * torch.exp(shift)
+            return (
+                pi[li] * torch.exp(log_lr) / denom[li],
+                (1.0 - pi) / denom,
+                pi,
+                log_lr,
+            )
+
+        if completeness == "em":
+            pi_c = 0.5
+            for _ in range(max_iter):
+                post, p_none, _, _ = posterior(pi_c)
+                for term in terms:
+                    term.update(rj, post)
+                in_rows = inside > 0
+                new = (
+                    float((1.0 - p_none[in_rows]).mean()) / (1.0 - gate_pvalue)
+                    if bool(in_rows.any())
+                    else 0.0
+                )
+                new = min(max(new, 1e-6), 1.0 - 1e-9)
+                done = abs(new - pi_c) < tol
                 pi_c = new
-                break
-            pi_c = new
-    else:
-        pi_c = float(completeness)
-        if not 0.0 <= pi_c <= 1.0:
-            raise ValueError("completeness must lie in [0, 1] or be 'em'")
-    post, p_none, pi, log_lr = posterior(pi_c)
+                if done:
+                    break
+        else:
+            pi_c = float(completeness)
+            if not 0.0 <= pi_c <= 1.0:
+                raise ValueError("completeness must lie in [0, 1] or be 'em'")
+        post, p_none, pi, log_lr = posterior(pi_c)
+        if calibrate == "none":
+            break
+        new_scale, new_floor = _fit_calibration(
+            delta, cl, cr, post, calibrate == "scale_floor", scale, floor
+        )
+        moved_by = abs(new_scale - scale) + float(
+            (new_floor - floor).abs().max()
+        ) / max(1.0, float(new_floor.abs().max()))
+        scale, floor = new_scale, new_floor
+        if moved_by < 1e-4:
+            break
     match = _assign(li, rj, post, p_none, n_left, int(rlon.numel()), assign)
     return Association(
         left_index=li,
@@ -477,6 +662,8 @@ def associate(
         prior=pi,
         completeness=pi_c,
         n_capped=n_capped,
+        right_scale=scale,
+        floor_mas2=floor,
     )
 
 

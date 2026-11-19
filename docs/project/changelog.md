@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covariances), completeness and density. Primaries over `budget` hypotheses are
   enumerated best-first with a certified residual mass instead of a silent cut.
   With two catalogues it reproduces `associate` exactly.
+- `associate` evaluates pairs at the right row's own epoch when the right
+  catalogue has per-row epochs (2MASS observation dates). The left row is
+  propagated with its covariance to each candidate's epoch, and the search
+  radius is widened by the left row's motion over the epoch span
+  (covariance bounded at the span's end points). A single median epoch lost
+  Barnard's star (10 arcsec/yr) on real Gaia x 2MASS data.
+- `associate(calibrate="floor" | "scale_floor")` fits a 2x2 systematic floor
+  and a scale on the right catalogue's errors by posterior-weighted maximum
+  likelihood, alternated with the association. Real Gaia x CatWISE matches
+  showed CatWISE errors underestimated (mean d^2 2.6-5.0 instead of 2).
+  `Association.right_scale` and `floor_mas2` report the fit.
 - `torchsky.catalogs.associate`, `HistogramRatio` and `assign_one_to_one`:
   probabilistic counterparts. The pipeline is common-epoch propagation with
   covariances, then a Mahalanobis chi^2 gate with provably sound per-row search
@@ -181,6 +192,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Motion Jacobians are pinned against astropy central finite differences:
   proper motion only, to 1e-6 relative; full space motion, to 5e-6 relative.
   Both hold at Dec ±89.98° for a Barnard's-star path that crosses the pole.
+- The torch crossmatch path (CUDA and builds without the native kernel) orders
+  `find="all"` pairs per left chunk instead of with three global sorts, so
+  output-sized temporaries no longer exhaust GPU memory (crowded 1e7 on a
+  10.75 GB GPU ran out of memory).
 - MPS crossmatching runs on the CPU in float64 and returns results on MPS. Before,
   positions were cast to float32 on MPS, and pairs within ~0.1 arcsec of the
   threshold could be wrong (about 6% of pairs in a 0.3 arcsec crowded-field match).
