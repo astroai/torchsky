@@ -67,7 +67,16 @@ def test_removed_symbols_are_not_exposed() -> None:
 
 def test_extension_exports_only_isa_diagnostics() -> None:
     exported = {name for name in dir(cpp._ext) if not name.startswith("__")}
-    assert exported == {"selected_cpu_isa"}
+    # Torch-ABI kernels are registered as torch.ops; the torch-free crossmatch
+    # kernels (cpp_src/crossmatch.cpp, raw buffers via nanobind ndarray) are the
+    # only plain exports besides the ISA diagnostic.
+    assert exported == {
+        "selected_cpu_isa",
+        "xmatch_best",
+        "xmatch_count",
+        "xmatch_fill",
+        "xmatch_knn",
+    }
     bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")
     assert bindings.count("m.def(") == 1
     assert all(f'"{name}"' not in bindings for name in LEGACY_SYMBOLS)
