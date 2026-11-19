@@ -196,10 +196,29 @@ def sky_pairs(
     ``mutual`` intersects the ``best1`` and ``best2`` pair sets, and
     ``symmetric`` resolves the (``K`` pair) candidate list greedily. ``zones``
     is a prebuilt index of the right catalogue.
+
+    MPS inputs are matched on the CPU in float64 (MPS has no float64; float32
+    positions are quantised at ~0.1 arcsec) and the result is returned on MPS.
     """
     from ._pairs import select_pairs
 
     device = left_ra.device
+    if device.type == "mps":
+        return _via_cpu(
+            device,
+            left_ra,
+            left_dec,
+            right_ra,
+            right_dec,
+            radius_left,
+            radius_right,
+            find,
+            accept,
+            left_chunk_size,
+            right_chunk_size,
+            combine,
+            self_upper,
+        )
     if left_ra.numel() == 0 or right_ra.numel() == 0:
         return _empty_crossmatch(device)
     if find == "mutual":
@@ -284,6 +303,56 @@ def sky_pairs(
     return res
 
 
+def _via_cpu(
+    out_device: torch.device,
+    left_ra: Tensor,
+    left_dec: Tensor,
+    right_ra: Tensor,
+    right_dec: Tensor,
+    radius_left: Tensor,
+    radius_right: Tensor | None,
+    find: str,
+    accept: Callable[[Tensor, Tensor], Tensor] | None,
+    left_chunk_size: int,
+    right_chunk_size: int,
+    combine: Combine,
+    self_upper: bool,
+) -> CrossmatchResult:
+    """Run :func:`sky_pairs` on the CPU in float64 and return the result on ``out_device``."""
+
+    def cpu(t: Tensor) -> Tensor:
+        return _to(t, device=torch.device("cpu"), dtype=torch.float64)
+
+    cpu_accept: Callable[[Tensor, Tensor], Tensor] | None = None
+    if accept is not None:
+        user_accept = accept
+
+        def _accept(li: Tensor, rj: Tensor) -> Tensor:
+            return user_accept(li.to(out_device), rj.to(out_device)).cpu()
+
+        cpu_accept = _accept
+
+    res = sky_pairs(
+        cpu(left_ra),
+        cpu(left_dec),
+        cpu(right_ra),
+        cpu(right_dec),
+        radius_left=cpu(radius_left),
+        radius_right=None if radius_right is None else cpu(radius_right),
+        find=find,
+        accept=cpu_accept,
+        left_chunk_size=left_chunk_size,
+        right_chunk_size=right_chunk_size,
+        combine=combine,
+        self_upper=self_upper,
+    )
+    return CrossmatchResult(
+        res.left_index.to(out_device),
+        res.right_index.to(out_device),
+        _to(res.separation_arcsec, device=out_device, dtype=_work_dtype(out_device)),
+    )
+
+
 def crossmatch_sky(
     left_ra_deg: Tensor,
     left_dec_deg: Tensor,
@@ -339,9 +408,8 @@ def crossmatch_sky(
     ``index`` to reuse a :class:`~torchsky.catalogs.SkyIndex` built on the
     right catalogue (any matcher and ``find``). Candidates come from an exact
     zone index; results never depend on chunk sizes, threads or device.
-    ``device`` moves inputs onto that device when given. On MPS the work dtype
-    is float32, so thresholds below the float32 position resolution are not
-    meaningful there.
+    ``device`` moves inputs onto that device when given. With MPS the matching
+    runs on the CPU in float64 and the result is returned on MPS.
 
     Args:
         left_ra_deg: Left-catalog right ascensions in degrees.
@@ -373,7 +441,9 @@ def crossmatch_sky(
     from ._pairs import normalize_find
 
     raw_left_ra = torch.as_tensor(left_ra_deg).reshape(-1)
-    work_device = torch.device(device) if device is not None else raw_left_ra.device
+    out_device = torch.device(device) if device is not None else raw_left_ra.device
+    # MPS has no float64: match on the CPU in float64, return results on MPS.
+    work_device = torch.device("cpu") if out_device.type == "mps" else out_device
     work_dtype = _work_dtype(work_device)
     left_ra = _to(raw_left_ra, device=work_device, dtype=work_dtype)
     left_dec = _as_tensor(left_dec_deg, dtype=work_dtype, device=work_device).reshape(
@@ -412,13 +482,13 @@ def crossmatch_sky(
         left_distance, right_distance, distance_tol, n_left, n_right, work_device
     )
     if right_ra.numel() == 0 or left_ra.numel() == 0:
-        return _empty_crossmatch(work_device)
+        return _empty_crossmatch(out_device)
 
     zones = None
     if index is not None:
         index._check_same(right_ra, right_dec)
         zones = index._zones
-    return sky_pairs(
+    res = sky_pairs(
         left_ra,
         left_dec,
         right_ra,
@@ -430,4 +500,11 @@ def crossmatch_sky(
         left_chunk_size=left_chunk_size,
         right_chunk_size=right_chunk_size,
         zones=zones,
+    )
+    if out_device == work_device:
+        return res
+    return CrossmatchResult(
+        res.left_index.to(out_device),
+        res.right_index.to(out_device),
+        _to(res.separation_arcsec, device=out_device, dtype=_work_dtype(out_device)),
     )

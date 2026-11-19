@@ -578,3 +578,26 @@ def test_native_and_torch_paths_agree_at_scale(monkeypatch) -> None:
     torch.testing.assert_close(
         native_knn.separation_arcsec, torch_knn.separation_arcsec, rtol=0, atol=0
     )
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+@pytest.mark.parametrize("case", CASES)
+def test_mps_results_are_exact_float64(case: str) -> None:
+    from torchsky.catalogs import match_nearest, match_within
+
+    la, lb, ra, rb, r = _case(case)
+    sep = oracle_separations(la, lb, ra, rb)
+    sure, band = oracle_all(
+        sep, _threshold(la.numel(), ra.numel(), r, None, None, "sum")
+    )
+    res = crossmatch_sky(la, lb, ra, rb, radius_arcsec=r, find="all", device="mps")
+    assert res.left_index.device.type == "mps"
+    _check_all(_pairs(res), sure, band)
+    within = match_within(la, lb, ra, rb, r, device="mps")
+    assert within.left_index.device.type == "mps"
+    _check_all(_pairs(within), sure, band)
+    near = match_nearest(la, lb, ra, rb, k=1, device="mps")
+    assert near.index.device.type == "mps"
+    torch.testing.assert_close(
+        near.index.cpu(), match_nearest(la, lb, ra, rb, k=1).index
+    )

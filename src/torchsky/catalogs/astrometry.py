@@ -28,6 +28,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from ..device import _as_tensor
+
 from ..sphere import healpix as _healpix
 from ..wcs.catalog_state import CatalogState
 from ..wcs.frames import (
@@ -40,7 +42,7 @@ _POS = slice(0, 2)
 
 
 def _rows(value: Tensor | float, n: int, device: torch.device, name: str) -> Tensor:
-    t = torch.as_tensor(value, dtype=_F64, device=device)
+    t = _as_tensor(value, dtype=_F64, device=device)
     t = t.reshape(1).expand(n) if t.ndim == 0 else t.reshape(-1)
     if int(t.numel()) != n:
         raise ValueError(f"{name} must be a scalar or have one entry per row")
@@ -65,7 +67,7 @@ class Astrometry:
             raise ValueError("cov must have shape (N, 6, 6)")
         object.__setattr__(self, "cov", cov)
         if self.floor_mas2 is not None:
-            floor = torch.as_tensor(self.floor_mas2, dtype=_F64, device=cov.device)
+            floor = _as_tensor(self.floor_mas2, dtype=_F64, device=cov.device)
             if floor.shape != (2, 2) or not bool(torch.isfinite(floor).all()):
                 raise ValueError("floor_mas2 must be a finite (2, 2) covariance")
             object.__setattr__(self, "floor_mas2", floor)
@@ -283,9 +285,7 @@ class MotionPrior:
 
     def __post_init__(self) -> None:
         mean = torch.as_tensor(self.mean, dtype=_F64).reshape(-1, 2)
-        cov = torch.as_tensor(self.cov, dtype=_F64, device=mean.device).reshape(
-            -1, 2, 2
-        )
+        cov = _as_tensor(self.cov, dtype=_F64, device=mean.device).reshape(-1, 2, 2)
         expected = 1 if self.order is None else 12 * 4**self.order
         if mean.shape[0] != expected or cov.shape[0] != expected:
             raise ValueError(f"prior needs {expected} cell(s) for order {self.order}")
@@ -328,9 +328,9 @@ class MotionPrior:
         as the prior for a catalogue without them.
         """
         lon = torch.as_tensor(lon_deg, dtype=_F64).reshape(-1)
-        lat = torch.as_tensor(lat_deg, dtype=_F64, device=lon.device).reshape(-1)
-        pe = torch.as_tensor(pm_east_mas_yr, dtype=_F64, device=lon.device).reshape(-1)
-        pn = torch.as_tensor(pm_north_mas_yr, dtype=_F64, device=lon.device).reshape(-1)
+        lat = _as_tensor(lat_deg, dtype=_F64, device=lon.device).reshape(-1)
+        pe = _as_tensor(pm_east_mas_yr, dtype=_F64, device=lon.device).reshape(-1)
+        pn = _as_tensor(pm_north_mas_yr, dtype=_F64, device=lon.device).reshape(-1)
         ok = (
             torch.isfinite(pe)
             & torch.isfinite(pn)
@@ -429,9 +429,9 @@ def propagate_astrometry(
     if len(astrometry) != n:
         raise ValueError("astrometry and state must have the same number of rows")
     dev = state.lon.device
-    target = torch.as_tensor(epoch, dtype=_F64, device=dev)
+    target = _as_tensor(epoch, dtype=_F64, device=dev)
     dt = torch.broadcast_to(
-        target - torch.as_tensor(state.epoch, dtype=_F64, device=dev), (n,)
+        target - _as_tensor(state.epoch, dtype=_F64, device=dev), (n,)
     )
     motion = state.motion_level()
     cov_level = astrometry.level.to(dev)
@@ -476,7 +476,7 @@ def propagate_astrometry(
             plx[rows6],
             rv[rows6],
             source_epoch_jyear=torch.broadcast_to(
-                torch.as_tensor(state.epoch, dtype=_F64, device=dev), (n,)
+                _as_tensor(state.epoch, dtype=_F64, device=dev), (n,)
             )[rows6],
             target_epoch_jyear=torch.broadcast_to(target, (n,))[rows6],
         )
@@ -490,7 +490,7 @@ def propagate_astrometry(
             pm_e[rows4],
             pm_n[rows4],
             source_epoch_jyear=torch.broadcast_to(
-                torch.as_tensor(state.epoch, dtype=_F64, device=dev), (n,)
+                _as_tensor(state.epoch, dtype=_F64, device=dev), (n,)
             )[rows4],
             target_epoch_jyear=torch.broadcast_to(target, (n,))[rows4],
         )

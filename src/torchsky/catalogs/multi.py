@@ -122,6 +122,68 @@ def crossmatch_exact(
     return CrossmatchResult(*select_pairs(left, right, sep, find))
 
 
+def _mps_via_cpu(fn):
+    """Run ``fn`` on the CPU in float64 when any input is on MPS; results go back to MPS.
+
+    MPS has no float64, and float32 positions are quantised at ~0.1 arcsec,
+    so match decisions there would differ from the CPU and CUDA paths.
+    """
+    import dataclasses
+    import functools
+
+    def has_mps(value: Any) -> bool:
+        if isinstance(value, Tensor):
+            return value.device.type == "mps"
+        if isinstance(value, (list, tuple)):
+            return any(has_mps(v) for v in value)
+        if hasattr(value, "lon") and isinstance(getattr(value, "lon"), Tensor):
+            return value.lon.device.type == "mps"
+        return False
+
+    def to_cpu(value: Any) -> Any:
+        if isinstance(value, Tensor):
+            return (
+                _to(value, device=torch.device("cpu"), dtype=torch.float64)
+                if value.is_floating_point()
+                else value.cpu()
+            )
+        if isinstance(value, list):
+            return [to_cpu(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(to_cpu(v) for v in value)
+        if hasattr(value, "lon") and hasattr(value, "to"):
+            return value.to("cpu")
+        return value
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        device = kwargs.get("device")
+        mps = (device is not None and torch.device(device).type == "mps") or any(
+            has_mps(a) for a in list(args) + list(kwargs.values())
+        )
+        if not mps:
+            return fn(*args, **kwargs)
+        out = torch.device("mps")
+        kwargs = {k: to_cpu(v) for k, v in kwargs.items()}
+        if "device" in kwargs:
+            kwargs["device"] = torch.device("cpu")
+        res = fn(*[to_cpu(a) for a in args], **kwargs)
+        moved = {}
+        for field in dataclasses.fields(res):
+            value = getattr(res, field.name)
+            if isinstance(value, Tensor):
+                value = (
+                    _to(value, device=out, dtype=torch.float32)
+                    if value.is_floating_point()
+                    else value.to(out)
+                )
+            moved[field.name] = value
+        return type(res)(**moved)
+
+    return wrapper
+
+
+@_mps_via_cpu
 def crossmatch_self(
     lon_deg: Tensor,
     lat_deg: Tensor,
@@ -219,6 +281,7 @@ def _as_lonlat(cat: Any, device: torch.device | None) -> tuple[Tensor, Tensor]:
     ).reshape(-1)
 
 
+@_mps_via_cpu
 def crossmatch_many(
     catalogs: Sequence[Any],
     radius_arcsec: float | None = None,

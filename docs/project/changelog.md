@@ -181,6 +181,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Motion Jacobians are pinned against astropy central finite differences:
   proper motion only, to 1e-6 relative; full space motion, to 5e-6 relative.
   Both hold at Dec ±89.98° for a Barnard's-star path that crosses the pole.
+- MPS crossmatching runs on the CPU in float64 and returns results on MPS. Before,
+  positions were cast to float32 on MPS, and pairs within ~0.1 arcsec of the
+  threshold could be wrong (about 6% of pairs in a 0.3 arcsec crowded-field match).
 - `crossmatch_self` with a per-row radius keeps a pair when
   `separation <= max(radius[i], radius[j])`; it used `radius[i]` only, so the
   result depended on row order.

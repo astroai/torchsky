@@ -91,9 +91,9 @@ refer to the rows as you passed them, before any propagation.
 
 - **Units.** Positions are degrees. Match radii and separations are
   arcseconds (`radius_arcsec`), while cone queries take `radius_deg`.
-- **Precision.** Keep positions in float64. On MPS they are float32, whose
-  resolution near RA 360° is about 0.1 arcsecond; radii close to that are not
-  meaningful there.
+- **Precision.** Keep positions in float64. MPS has no float64, so matching
+  for MPS inputs runs on the CPU in float64 and results come back on MPS. Positions
+  already stored as float32 on MPS are quantised to about 0.1 arcsecond.
 - **Best is not one-to-one.** The default `find="best"` returns the nearest
   right row for each left row; two left rows may pick the same right row. Use
   `find="symmetric"` for a one-to-one match.

@@ -384,9 +384,11 @@ lowest row index.
 - `left_chunk_size` and `right_chunk_size` bound the working set; they never
   change the result.
 - `device="cuda"` moves the inputs and returns results there. Indices agree
-  with the CPU; separations agree to floating-point tolerance. On MPS positions
-  are float32 (about 0.1 arcsec near RA 360°), so smaller radii are not
-  meaningful there.
+  with the CPU; separations agree to floating-point tolerance. With MPS inputs
+  or `device="mps"`, matching runs on the CPU in float64 (MPS has no float64),
+  and indices and float32 separations come back on MPS, so results equal the
+  CPU's. Pass float64 CPU positions: float32 positions are already quantised to
+  about 0.1 arcsec.
 - For catalogs larger than memory, read them in sky partitions (HEALPix or
   HATS tiles) with torchfits, pyarrow or polars, and let
   [`PartitionPlan`](../reference/catalogs.md#torchsky.catalogs.PartitionPlan)

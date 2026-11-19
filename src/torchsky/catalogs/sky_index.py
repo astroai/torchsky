@@ -59,6 +59,8 @@ def _coords(
 ) -> tuple[Tensor, Tensor]:
     raw = torch.as_tensor(lon).reshape(-1)
     dev = torch.device(device) if device is not None else raw.device
+    if dev.type == "mps":  # MPS has no float64: compute on the CPU (see _out)
+        dev = torch.device("cpu")
     dtype = _work_dtype(dev)
     lon_t = _to(raw, device=dev, dtype=dtype)
     lat_t = _as_tensor(lat, dtype=dtype, device=dev).reshape(-1)
@@ -87,6 +89,27 @@ def _radii(
                 f"{name} must be finite and {'non-negative' if allow_zero else 'positive'}"
             )
     return r
+
+
+def _requested(lon: Tensor | float, device: torch.device | str | None) -> torch.device:
+    return torch.device(device) if device is not None else torch.as_tensor(lon).device
+
+
+def _out(res, device: torch.device):
+    """Move a result to the caller's device (MPS results: float32 separations)."""
+    if device.type == "cpu" or device == res.__dict__[next(iter(res.__dict__))].device:
+        return res
+    moved = {}
+    for name, value in res.__dict__.items():
+        if isinstance(value, Tensor):
+            moved[name] = (
+                _to(value, device=device, dtype=_work_dtype(device))
+                if value.is_floating_point()
+                else value.to(device)
+            )
+        else:
+            moved[name] = value
+    return type(res)(**moved)
 
 
 class SkyIndex:
@@ -154,6 +177,7 @@ class SkyIndex:
         ``radius[i]``. ``find="all"`` orders pairs by left, separation, then right
         index. ``"best"`` keeps the nearest right row per left row.
         """
+        out_dev = _requested(lon_deg, None)
         lon, lat = _coords(lon_deg, lat_deg, self.device)
         rl = _radii(
             radius_arcsec,
@@ -183,7 +207,7 @@ class SkyIndex:
             find=find,
             max_pairs=max_pairs,
         )
-        return CrossmatchResult(li, rj, sep)
+        return _out(CrossmatchResult(li, rj, sep), out_dev)
 
     def count_within(
         self,
@@ -196,6 +220,7 @@ class SkyIndex:
         max_pairs: int = DEFAULT_MAX_PAIRS,
     ) -> Tensor:
         """Number of right rows within the threshold of each left row (int64 ``[N]``)."""
+        out_dev = _requested(lon_deg, None)
         lon, lat = _coords(lon_deg, lat_deg, self.device)
         n = int(lon.numel())
         rl = _radii(
@@ -228,7 +253,7 @@ class SkyIndex:
         )
         out = torch.zeros(n, dtype=torch.int64, device=lon.device)
         out[rows] = counts
-        return out
+        return out.to(out_dev)
 
     def query_nearest(
         self,
@@ -250,13 +275,14 @@ class SkyIndex:
         """
         if k < 1:
             raise ValueError("k must be >= 1")
+        out_dev = _requested(lon_deg, None)
         lon, lat = _coords(lon_deg, lat_deg, self.device)
         n = int(lon.numel())
         dev = lon.device
         index = torch.full((n, k), -1, dtype=torch.int64, device=dev)
         sep_out = torch.full((n, k), math.inf, dtype=lon.dtype, device=dev)
         if n == 0 or len(self) == 0:
-            return NearestResult(index, sep_out)
+            return _out(NearestResult(index, sep_out), out_dev)
         cap = (
             _FULL_SKY_ARCSEC if max_radius_arcsec is None else float(max_radius_arcsec)
         )
@@ -275,7 +301,7 @@ class SkyIndex:
                 sep[found] = separation_arcsec(
                     unit_vectors(lon[rows], lat[rows]), right
                 )
-            return NearestResult(nj, sep)
+            return _out(NearestResult(nj, sep), out_dev)
         # Torch path: start each row where its local density predicts ~k
         # neighbours, then double. Concentrated catalogues and sparse targets
         # both resolve in a few rounds without materialising far more pairs than needed.
@@ -309,7 +335,7 @@ class SkyIndex:
             sep_out[rows, rank[take]] = sep[take]
             todo = todo[~done]
             radius = (radius[~done] * 2.0).clamp(max=cap)
-        return NearestResult(index, sep_out)
+        return _out(NearestResult(index, sep_out), out_dev)
 
 
 def _index_for(
@@ -348,6 +374,7 @@ def match_within(
     See :meth:`SkyIndex.query_within`. Pass ``index`` to reuse a right-side
     :class:`SkyIndex`.
     """
+    out_dev = _requested(left_lon_deg, device)
     left = _coords(left_lon_deg, left_lat_deg, device)
     right = _coords(right_lon_deg, right_lat_deg, left[0].device)
     typical = float(
@@ -360,8 +387,14 @@ def match_within(
         )
     )
     idx = _index_for(*right, index, typical)
-    return idx.query_within(
-        *left, radius_arcsec, right_radius_arcsec=right_radius_arcsec, combine=combine
+    return _out(
+        idx.query_within(
+            *left,
+            radius_arcsec,
+            right_radius_arcsec=right_radius_arcsec,
+            combine=combine,
+        ),
+        out_dev,
     )
 
 
@@ -381,10 +414,13 @@ def match_nearest(
     ``nthneighbor=n`` in astropy is column ``n - 1`` here with ``k >= n``.
     See :meth:`SkyIndex.query_nearest`.
     """
+    out_dev = _requested(left_lon_deg, device)
     left = _coords(left_lon_deg, left_lat_deg, device)
     right = _coords(right_lon_deg, right_lat_deg, left[0].device)
     idx = _index_for(*right, index, None)
-    return idx.query_nearest(*left, k, max_radius_arcsec=max_radius_arcsec)
+    return _out(
+        idx.query_nearest(*left, k, max_radius_arcsec=max_radius_arcsec), out_dev
+    )
 
 
 def count_within(
@@ -400,12 +436,13 @@ def count_within(
     device: torch.device | str | None = None,
 ) -> Tensor:
     """Right rows within the threshold of each left row, as int64 ``[N]``."""
+    out_dev = _requested(left_lon_deg, device)
     left = _coords(left_lon_deg, left_lat_deg, device)
     right = _coords(right_lon_deg, right_lat_deg, left[0].device)
     idx = _index_for(*right, index, None)
     return idx.count_within(
         *left, radius_arcsec, right_radius_arcsec=right_radius_arcsec, combine=combine
-    )
+    ).to(out_dev)
 
 
 __all__ = [

@@ -30,6 +30,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from ..device import _as_tensor
+
 from ..sphere import healpix as _healpix
 from ..sphere.moc import MOC, uniq2nest
 from .sky_index import match_within
@@ -76,7 +78,7 @@ class PartitionPlan:
 
     def __post_init__(self) -> None:
         orders = torch.as_tensor(self.orders, dtype=torch.int64).reshape(-1)
-        pixels = torch.as_tensor(
+        pixels = _as_tensor(
             self.pixels, dtype=torch.int64, device=orders.device
         ).reshape(-1)
         if orders.shape != pixels.shape:
