@@ -601,3 +601,21 @@ def test_mps_results_are_exact_float64(case: str) -> None:
     torch.testing.assert_close(
         near.index.cpu(), match_nearest(la, lb, ra, rb, k=1).index
     )
+
+
+def test_read_only_numpy_inputs_do_not_warn() -> None:
+    import warnings
+
+    import numpy as np
+
+    from torchsky.catalogs import match_within
+
+    ra = np.array([10.0, 20.0])
+    dec = np.array([0.0, 0.0])
+    ra.flags.writeable = False
+    dec.flags.writeable = False
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        res = crossmatch_sky(ra, dec, ra, dec, radius_arcsec=1.0)
+        within = match_within(ra, dec, ra, dec, 1.0)
+    assert res.left_index.tolist() == [0, 1] and within.left_index.tolist() == [0, 1]

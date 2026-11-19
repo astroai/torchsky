@@ -45,6 +45,7 @@ from typing import Literal
 import torch
 from torch import Tensor
 
+from ..device import _as_tensor
 from ..sphere.moc import MOC
 from ..sphere import healpix as _healpix
 from ._zones import (
@@ -500,7 +501,7 @@ def associate(
         assert right_ast is not None
         rcov = right_ast.position_cov().to(dev)
         t_right = torch.broadcast_to(
-            torch.as_tensor(right.epoch, dtype=_F64, device=dev), rlon.shape
+            _as_tensor(right.epoch, dtype=_F64, device=dev), rlon.shape
         )
         t_lo, t_hi = t_right.min(), t_right.max()
         state = left.to_state()

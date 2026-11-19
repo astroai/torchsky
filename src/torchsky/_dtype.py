@@ -23,8 +23,20 @@ def work_complex_dtype(device: torch.device) -> torch.dtype:
     return torch.complex64 if device.type == "mps" else torch.complex128
 
 
+def writable(value: Any) -> Any:
+    """Copy read-only array-likes (Arrow/polars ``to_numpy`` views) before torch sees them.
+
+    ``torch.as_tensor`` of a non-writable NumPy array warns and shares a buffer
+    torch may write to; a copy is the documented fix.
+    """
+    flags = getattr(value, "flags", None)
+    if flags is not None and getattr(flags, "writeable", True) is False:
+        return value.copy()
+    return value
+
+
 def as_work_tensor(value: Any) -> Tensor:
     """Convert ``value`` to a tensor in the device's working dtype."""
     if isinstance(value, Tensor):
         return value.to(dtype=work_dtype(value.device))
-    return torch.as_tensor(value, dtype=torch.float64)
+    return torch.as_tensor(writable(value), dtype=torch.float64)

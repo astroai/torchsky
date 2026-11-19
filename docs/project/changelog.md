@@ -196,6 +196,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `find="all"` pairs per left chunk instead of with three global sorts, so
   output-sized temporaries no longer exhaust GPU memory (crowded 1e7 on a
   10.75 GB GPU ran out of memory).
+- Read-only NumPy inputs (Arrow / polars `to_numpy` views) are copied before
+  conversion instead of triggering torch's non-writable-array warning.
 - MPS crossmatching runs on the CPU in float64 and returns results on MPS. Before,
   positions were cast to float32 on MPS, and pairs within ~0.1 arcsec of the
   threshold could be wrong (about 6% of pairs in a 0.3 arcsec crowded-field match).

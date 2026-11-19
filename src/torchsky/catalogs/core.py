@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator
 import torch
 
 from .._dtype import work_dtype as _work_dtype
+from .._dtype import writable
 from torch import Tensor
 from torch.utils.data import IterableDataset, get_worker_info
 
@@ -440,7 +441,7 @@ def crossmatch_sky(
     """
     from ._pairs import normalize_find
 
-    raw_left_ra = torch.as_tensor(left_ra_deg).reshape(-1)
+    raw_left_ra = torch.as_tensor(writable(left_ra_deg)).reshape(-1)
     out_device = torch.device(device) if device is not None else raw_left_ra.device
     # MPS has no float64: match on the CPU in float64, return results on MPS.
     work_device = torch.device("cpu") if out_device.type == "mps" else out_device

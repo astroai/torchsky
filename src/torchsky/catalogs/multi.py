@@ -9,6 +9,7 @@ import torch
 from torch import Tensor
 
 from .._dtype import work_dtype as _work_dtype
+from .._dtype import writable
 from ._pairs import (
     connected_components,
     join_indices,
@@ -94,8 +95,8 @@ def crossmatch_exact(
     the lowest rows of each key first).
     """
     find = normalize_find(find)
-    kl = torch.as_tensor(left_key).reshape(-1)
-    kr = torch.as_tensor(right_key, device=kl.device).reshape(-1)
+    kl = torch.as_tensor(writable(left_key)).reshape(-1)
+    kr = torch.as_tensor(writable(right_key), device=kl.device).reshape(-1)
     device = kl.device
     dtype = _work_dtype(device)
     if kl.numel() == 0 or kr.numel() == 0:
@@ -205,7 +206,7 @@ def crossmatch_self(
     ``action=identify``). Candidates come from the zone index, so cost is
     ``O(N log N + K)``; components use scatter-min union-find.
     """
-    ra = torch.as_tensor(lon_deg).reshape(-1)
+    ra = torch.as_tensor(writable(lon_deg)).reshape(-1)
     device = ra.device
     dtype = _work_dtype(device)
     ra = ra.to(dtype)
@@ -273,7 +274,7 @@ def _as_lonlat(cat: Any, device: torch.device | None) -> tuple[Tensor, Tensor]:
         lon, lat = cat.lon, cat.lat
     else:
         lon, lat = cat
-    lon = torch.as_tensor(lon).reshape(-1)
+    lon = torch.as_tensor(writable(lon)).reshape(-1)
     dev = device if device is not None else lon.device
     dtype = _work_dtype(dev)
     return _to(lon, device=dev, dtype=dtype), _as_tensor(
@@ -324,7 +325,9 @@ def crossmatch_many(
         raise ValueError("err_arcsec needs one entry per catalogue")
     first = catalogs[0]
     device = (
-        first.lon.device if hasattr(first, "lon") else torch.as_tensor(first[0]).device
+        first.lon.device
+        if hasattr(first, "lon")
+        else (first[0].device if isinstance(first[0], Tensor) else torch.device("cpu"))
     )
     coords = [_as_lonlat(c, device) for c in catalogs]
     sizes = [int(lon.numel()) for lon, _ in coords]

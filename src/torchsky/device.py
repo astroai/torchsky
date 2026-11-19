@@ -203,7 +203,9 @@ def _as_tensor(
     """
     if isinstance(data, torch.Tensor):
         return _to(data, device=device, dtype=dtype)
-    return torch.as_tensor(data, dtype=dtype, device=device)
+    from ._dtype import writable
+
+    return torch.as_tensor(writable(data), dtype=dtype, device=device)
 
 
 _INT32_MIN = -(2**31)

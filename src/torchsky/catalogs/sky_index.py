@@ -23,6 +23,7 @@ import torch
 from torch import Tensor
 
 from .._dtype import work_dtype as _work_dtype
+from .._dtype import writable
 from ..device import _as_tensor, _to
 from ._zones import (
     DEFAULT_MAX_PAIRS,
@@ -57,7 +58,7 @@ class NearestResult:
 def _coords(
     lon: Tensor | float, lat: Tensor | float, device: torch.device | str | None
 ) -> tuple[Tensor, Tensor]:
-    raw = torch.as_tensor(lon).reshape(-1)
+    raw = torch.as_tensor(writable(lon)).reshape(-1)
     dev = torch.device(device) if device is not None else raw.device
     if dev.type == "mps":  # MPS has no float64: compute on the CPU (see _out)
         dev = torch.device("cpu")
@@ -92,7 +93,9 @@ def _radii(
 
 
 def _requested(lon: Tensor | float, device: torch.device | str | None) -> torch.device:
-    return torch.device(device) if device is not None else torch.as_tensor(lon).device
+    if device is not None:
+        return torch.device(device)
+    return lon.device if isinstance(lon, Tensor) else torch.device("cpu")
 
 
 def _out(res, device: torch.device):
@@ -379,10 +382,12 @@ def match_within(
     right = _coords(right_lon_deg, right_lat_deg, left[0].device)
     typical = float(
         combine_radii(
-            torch.as_tensor(radius_arcsec, dtype=torch.float64).reshape(-1).median(),
+            torch.as_tensor(writable(radius_arcsec), dtype=torch.float64)
+            .reshape(-1)
+            .median(),
             0.0
             if right_radius_arcsec is None
-            else float(torch.as_tensor(right_radius_arcsec).max()),
+            else float(torch.as_tensor(writable(right_radius_arcsec)).max()),
             combine,
         )
     )
