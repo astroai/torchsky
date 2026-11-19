@@ -161,6 +161,18 @@ class Astrometry:
         radial_velocity_error: Tensor | None = None,
         floor_mas2: Tensor | None = None,
     ) -> Astrometry:
+        """Validated :meth:`gaia_covariance` (see there for the columns)."""
+        return cls(
+            cls.gaia_covariance(columns, radial_velocity_error=radial_velocity_error),
+            floor_mas2,
+        )
+
+    @staticmethod
+    def gaia_covariance(
+        columns: Mapping[str, Tensor],
+        *,
+        radial_velocity_error: Tensor | None = None,
+    ) -> Tensor:
         """Gaia 5-parameter covariance from the archive's error/correlation columns.
 
         Needs ``ra_error, dec_error, parallax_error, pmra_error, pmdec_error`` and
@@ -200,37 +212,55 @@ class Astrometry:
             cov[ok, 5, 5] = rv[ok] * rv[ok]
             cov[ok, 5, :5] = 0.0
             cov[ok, :5, 5] = 0.0
-        return cls(cov, floor_mas2)
+        return cov
+
+    @staticmethod
+    def validity(cov: Tensor) -> Tensor:
+        """Per-row validity under the constructor's checks (``[N]`` bool).
+
+        A row is valid when its position block is finite and positive definite,
+        its matrix is symmetric, and every finite leading block is positive
+        definite. Use it to drop rows explicitly; the constructor raises instead.
+        """
+        return _row_validity(torch.as_tensor(cov, dtype=_F64))
+
+
+def _row_validity(cov: Tensor) -> Tensor:
+    n = int(cov.shape[0])
+    ok = torch.ones(n, dtype=torch.bool, device=cov.device)
+    if n == 0:
+        return ok
+    pos = cov[:, _POS, _POS]
+    ok &= torch.isfinite(pos).all(-1).all(-1)
+    finite = torch.isfinite(cov)
+    scale = cov.abs().nan_to_num(0.0).amax(dim=(-2, -1)).clamp(min=1e-300)
+    ok &= ~(
+        (cov - cov.mT).abs().nan_to_num(0.0).amax(dim=(-2, -1))
+        > 64 * torch.finfo(_F64).eps * scale
+    )
+    for size in (2, 4, 5, 6):
+        rows = finite[:, :size, :size].all(-1).all(-1)
+        if not bool(rows.any()):
+            continue
+        _, info = torch.linalg.cholesky_ex(cov[rows][:, :size, :size])
+        bad = torch.zeros_like(ok)
+        bad[torch.nonzero(rows, as_tuple=True)[0]] = info != 0
+        ok &= ~bad
+    return ok
 
 
 def _validate(cov: Tensor) -> None:
     """Fail closed: finite PD position block; symmetric PD measured blocks."""
-    n = int(cov.shape[0])
-    if n == 0:
-        return
-    pos = cov[:, _POS, _POS]
-    if not bool(torch.isfinite(pos).all()):
+    ok = _row_validity(cov)
+    if not bool(ok.all()):
+        bad = int((~ok).sum())
+        pos_bad = int((~torch.isfinite(cov[:, _POS, _POS]).all(-1).all(-1)).sum())
+        if pos_bad:
+            raise ValueError(f"{pos_bad} row(s) lack a finite position covariance")
         raise ValueError(
-            f"{int((~torch.isfinite(pos)).any(-1).any(-1).sum())} row(s) lack a finite position covariance"
+            f"{bad} row(s) have a non-symmetric covariance or a block that is not positive "
+            "definite; Astrometry.validity(cov) marks them"
         )
-    finite = torch.isfinite(cov)
-    sym_scale = cov.abs().nan_to_num(0.0).amax(dim=(-2, -1)).clamp(min=1e-300)
-    asym = (cov - cov.mT).abs().nan_to_num(0.0).amax(dim=(-2, -1)) > 64 * torch.finfo(
-        _F64
-    ).eps * sym_scale
-    if bool(asym.any()):
-        raise ValueError(f"{int(asym.sum())} row(s) have a non-symmetric covariance")
-    for size in (2, 4, 5, 6):
-        block = cov[:, :size, :size]
-        rows = finite[:, :size, :size].all(-1).all(-1)
-        if not bool(rows.any()):
-            continue
-        _, info = torch.linalg.cholesky_ex(block[rows])
-        if bool((info != 0).any()):
-            raise ValueError(
-                f"{int((info != 0).sum())} row(s) have a covariance block of size {size} "
-                "that is not positive definite"
-            )
 
 
 # -------------------------------------------------------------- motion prior

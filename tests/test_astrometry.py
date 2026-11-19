@@ -187,3 +187,14 @@ def test_catalog_carries_astrometry_through_take() -> None:
     assert sub.astrometry.cov[:, 0, 0].tolist() == [9.0, 1.0]
     with pytest.raises(ValueError, match="one covariance per row"):
         Catalog(lon=torch.tensor([1.0]), lat=torch.zeros(1), astrometry=ast)
+
+
+def test_validity_marks_rows_the_constructor_rejects() -> None:
+    cols = _gaia_columns(3)
+    cov = Astrometry.gaia_covariance(cols)
+    cov[1, 0, 1] = cov[1, 1, 0] = 10.0  # |rho| >> 1: not positive definite
+    ok = Astrometry.validity(cov)
+    assert ok.tolist() == [True, False, True]
+    with pytest.raises(ValueError, match="validity"):
+        Astrometry(cov)
+    assert len(Astrometry(cov[ok])) == 2
