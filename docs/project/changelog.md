@@ -15,9 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `torchfits` into `FieldObservation` objects; `fit_sky(observations,
   SkyFitConfig)` fits a sky of Gaussian items and an instrument response in
   each exposure's own pixels (no resampling); `SkyFit` (save and load) and
-  `predict_exposure` (cross-fitted held-out prediction). `SkyProduct`,
-  `ReferenceCatalogue` and `SkyFit.product` are placeholders that raise
-  `NotImplementedError`.
+  `predict_exposure` (cross-fitted prediction of held-out exposures and of
+  exposures that were not in the fit). `SkyFit.product(bands, ...,
+  observations=...)` returns a `SkyProduct`: the sky image of one or several
+  bands at a stated resolution with its standard deviation, from the
+  Gauss-Newton normal operator with the response held fixed (one solve for
+  all bands, a time budget, circulant or posterior-draw standard deviation);
+  `half_difference` compares two products from disjoint halves of the
+  exposures; `SkyFit.response.kernel`, `.throughput` and `.noise_terms` read
+  out the fitted response. The standard deviation is checked on synthetic
+  data only: on real JWST data the Gauss-Newton solve does not converge yet.
+  `ReferenceCatalogue` is a placeholder that raises `NotImplementedError`.
 - `torchsky.instrument.InstrumentDescription` and `instrument_description`
   ("NIRCAM", "WFC3_IR", "ACS_WFC"): detector names and channels, pixel scales,
   aperture, data-quality policy from the bit tables, conversion of the science

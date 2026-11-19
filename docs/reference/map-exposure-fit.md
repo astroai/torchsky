@@ -7,7 +7,7 @@
     objects may change between minor releases; pin a version if you depend
     on them in production.
 
-Item-sky fit to individual exposures of several instruments: load_exposures, fit_sky, SkyFit and predict_exposure (uncertainty products and catalogues are not available yet).
+Item-sky fit to individual exposures of several instruments: load_exposures, fit_sky, SkyFit, predict_exposure, the sky product with its standard deviation (SkyFit.product, SkyProduct, half_difference) and the response readers (catalogues are not available yet).
 
 **Guides:** [exposure fit](../models/exposure_fit.md)
 
@@ -45,7 +45,6 @@ namespace `torchsky.map.exposure_fit` unless the group text says otherwise.
     options:
       members:
         - ReferenceCatalogue
-        - SkyProduct
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false
@@ -58,6 +57,18 @@ namespace `torchsky.map.exposure_fit` unless the group text says otherwise.
       members:
         - ExposurePrediction
         - predict_exposure
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
+## Product
+
+::: torchsky.map.exposure_fit
+    options:
+      members:
+        - SkyProduct
+        - half_difference
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false

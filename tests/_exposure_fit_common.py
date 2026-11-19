@@ -140,3 +140,27 @@ def cached_fit(seed=0, steps=12):
     torch.set_num_threads(1)
     exps = tiny_field()
     return exps, tiny_fit(exps, steps, seed)
+
+
+@lru_cache(maxsize=None)
+def public_cached_fit(steps=40):
+    """(observations, SkyFit) from the public ``fit_sky`` with the small private settings patched in; cached for the whole test session."""
+    from types import MappingProxyType
+
+    import pytest
+
+    from torchsky.map.exposure_fit import _config as cfgmod
+    from torchsky.map.exposure_fit import _skyfit as skymod
+    from torchsky.map.exposure_fit import fit_sky
+
+    torch.set_num_threads(1)
+    mp = pytest.MonkeyPatch()
+    small = MappingProxyType({**cfgmod._INTERNAL_SETTINGS, **TINY_INTERNAL})
+    mp.setattr(cfgmod, "_INTERNAL_SETTINGS", small)
+    mp.setattr(skymod, "_INTERNAL_SETTINGS", small)
+    obs = tiny_observations()
+    try:
+        sf = fit_sky(obs, tiny_config(steps))
+    finally:
+        mp.undo()
+    return obs, sf

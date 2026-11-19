@@ -49,7 +49,9 @@ from ._spectral import spectral_setup
 
 if TYPE_CHECKING:
     from ..field.types import FieldObservation
-    from ._placeholders import ReferenceCatalogue, SkyProduct
+    from ._placeholders import ReferenceCatalogue
+    from ._product import SkyProduct
+    from ._readers import KernelStamp
 
 _FORMAT = "torchsky.map.exposure_fit/1"
 
@@ -275,10 +277,74 @@ class SkyFit(nn.Module):
     def _domain(self):
         return self._structure["spectral_domain"]
 
-    def product(self, *args, **kwargs) -> "SkyProduct":
-        """Sky image and standard deviation on a stated grid and beam. Not implemented yet (a later piece of the move): raises ``NotImplementedError``."""
-        raise NotImplementedError(
-            "SkyFit.product is not implemented yet (the uncertainty and product step is a later piece of the move)"
+    @property
+    def bands(self) -> tuple:
+        """Filter names of the fit, in the order of the fit's filter index (what ``product`` and the response readers take)."""
+        return tuple(self._operator.fset.names)
+
+    @property
+    def instruments(self) -> tuple:
+        """Instrument names of the fit, in the order of the fit's instrument index."""
+        return tuple(self._structure["instrument_names"])
+
+    def product(
+        self,
+        bands,
+        pitch_arcsec=None,
+        resolution="native",
+        region=None,
+        *,
+        observations,
+        method="circulant",
+        polish=True,
+        samples=8,
+        batch_pixels=16000,
+        max_minutes=None,
+        log=None,
+    ) -> "SkyProduct":
+        """The sky image of one or several bands with its standard deviation (a :class:`SkyProduct`).
+
+        One solve of the Gauss-Newton normal operator serves all bands. The normal operator is built from the training pixels, so the training
+        exposures must be given again (the fit does not keep them, which keeps it small and makes a loaded fit work the same way).
+
+        Args:
+            bands: a filter name (see :attr:`bands`), a filter index, ``"all"``, or a sequence of names and indices.
+            pitch_arcsec: spacing of the output grid [arcsec]; None takes the sky node pitch of the fit.
+            resolution: ``"native"`` (default), or the full width at half maximum [arcsec] of the Gaussian the sky is smoothed with, the same for all
+                bands. ``"native"`` is, per band, the median over covered nodes of the supported resolution: the smallest Gaussian width from which
+                the noise of a resolution element stops rising faster than twice as fast as the resolution is lost (alpha = 2). Finer than that, the
+                number depends on the weak prior, not on the data.
+            region: ``(x_min, x_max, y_min, y_max)`` [arcsec] from the box centre (X to the west, Y to the north); None takes the whole sky grid.
+            observations: the training observations the fit was made from, matched by card ``TSNAME`` (held-out ones are ignored). They must be the
+                same data: the median error and background reference of every exposure are checked.
+            method: ``"circulant"`` (cheap Fourier approximation of the standard deviation, about 13 passes over the training pixels) or ``"draws"``
+                (posterior draws, about 61 passes each).
+            polish: True (default) makes ``image`` the fit plus one Gauss-Newton step (about 61 passes), the estimator ``std`` describes. False
+                returns the optimiser's own sky, whose error is not ``std``.
+            samples: number of posterior draws (``method="draws"``).
+            batch_pixels: pixel budget of one batched render (memory only; 16000 suits an 11 GB GPU).
+            max_minutes: time budget from the start of the call; None for none. When the next pass would end after it, the solve stops cleanly and
+                ``SkyProduct.truncated`` is True (a cut step is its last iterate, a cut draw is dropped). The set-up (K + 2 passes) is not interrupted.
+            log: callable that receives one line of text at a time; None keeps the call silent.
+
+        Raises:
+            ValueError: an argument is wrong, a band is unknown, or ``observations`` do not match the fit.
+        """
+        from ._product import make_product
+
+        return make_product(
+            self,
+            observations,
+            bands,
+            pitch_arcsec,
+            resolution,
+            region,
+            method=method,
+            polish=polish,
+            samples=samples,
+            batch_pixels=batch_pixels,
+            max_minutes=max_minutes,
+            log=log,
         )
 
     # ------------------------------------------------------------------ saving and loading
@@ -390,8 +456,57 @@ class _Response:
         self.kernel_network = fit._operator.net
         self.codes = fit._operator.codes
 
+    def kernel(
+        self,
+        instrument: str,
+        band: str,
+        exposure: str | None = None,
+        *,
+        pitch_arcsec: float | None = None,
+        half_size_arcsec: float | None = None,
+    ) -> "KernelStamp":
+        """The fitted kernel (point-spread function) of an instrument and band, as a :class:`KernelStamp` (``stamp [n, n]``, ``pitch_arcsec``).
+
+        The kernel is the bandpass-weighted mean of the kernels at the filter's wavelength nodes, each normalised to unit integral inside the
+        normalisation radius ``config.kernel_norm_radius`` (a smooth window, 1 inside 0.85 of the radius and 0 beyond it; no window when the radius
+        is 0), on the model's own quadrature. So the stamp summed over that window times the pixel area is 1 to the quadrature accuracy. The unit is
+        1 / arcsec^2. It is in the detector-aligned frame (columns along X, rows along Y of the detector), with the blur-gauge dilation applied, as
+        the renderer uses it.
+
+        Args:
+            instrument: instrument name (see ``SkyFit.instruments``). band: filter name (``SkyFit.bands``).
+            exposure: name of an exposure of that instrument and band to include its kernel code (a training or held-out one); None gives the
+                mean kernel of the band (code at the pivot wavelength, no per-exposure term).
+            pitch_arcsec: grid spacing [arcsec]; None takes the render pitch of the instrument's channel.
+            half_size_arcsec: half side of the stamp [arcsec]; None takes the normalisation radius, or the kernel extent when that is smaller or the radius is 0.
+        """
+        from ._readers import kernel_stamp
+
+        return kernel_stamp(
+            self._fit,
+            instrument,
+            band,
+            exposure,
+            pitch_arcsec=pitch_arcsec,
+            half_size_arcsec=half_size_arcsec,
+        )
+
+    def throughput(self, instrument: str, band: str):
+        """Throughput of an instrument and band: ``(wavelengths, curve)``, both float32 tensors of shape ``[Q]`` (``Q`` nodes of the filter, in
+        micrometres).
+
+        ``curve`` is the published transmission at the node times ``exp(gamma)``, with ``gamma`` the learned log-throughput of an exposure with
+        zero gain random effect, after the gauge: the reference instrument's exposures have a transmission-weighted mean of the log-throughput
+        (including their gains) equal to zero at every node, so its curve equals the published one up to the small gains. Dimensionless.
+        """
+        from ._readers import throughput_curve
+
+        return throughput_curve(self._fit, instrument, band)
+
     def noise_terms(self) -> dict:
-        """Learned noise terms: ``{"floor": {channel: fractional floor}, "scale": {"detector/filter": factor on the pipeline error}}``."""
+        """Learned noise terms (dimensionless): ``{"floor": {channel: fractional floor}, "scale": {"detector/filter": factor on the pipeline error}}``.
+
+        The noise variance of a pixel is ``(pipeline error * scale)**2 + (floor * model value)**2``."""
         import torch.nn.functional as F
 
         op, st = self._fit._operator, self._fit._structure
@@ -420,6 +535,7 @@ def _fit_exposures(
     *,
     internal: Mapping | None = None,
     sky_half_extent: float | None = None,
+    box_centre: tuple[float, float] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> SkyFit:
     """Fit an item sky and the response to private exposure records (what ``fit_sky`` calls after converting its observations).
@@ -430,6 +546,7 @@ def _fit_exposures(
         config: the public configuration.
         internal: overrides of single entries of the private settings (``_config._INTERNAL_SETTINGS``); for tests and the bit-identity check.
         sky_half_extent: half side of the square sky domain [arcsec]; None derives it from the data.
+        box_centre: (RA, Dec) [deg] of the tangent point of the sky box, kept for the header of ``SkyFit.product``; None when unknown.
         log: receives one line of text at a time; None keeps the fit silent.
     """
     log = log or (lambda s: None)
@@ -512,6 +629,9 @@ def _fit_exposures(
             "channel_names": chans,
             "detector_names": list(meta["det_names"]),
             "internal": internal_used,
+            "box_centre_deg": None
+            if box_centre is None
+            else [float(v) for v in box_centre],
             "resolved_options": {
                 "spec_k": cfg.spec_k,
                 "gauge_ref_inst": cfg.gauge_ref_inst,
@@ -569,4 +689,12 @@ def fit_sky(
         - _INTERNAL_SETTINGS["data_margin"]
         + _INTERNAL_SETTINGS["sky_margin"]
     )
-    return _fit_exposures(exposures, config, sky_half_extent=half, log=log)
+    h0 = observations[0].header
+    centre = (
+        (float(h0["TSBOXRA"]), float(h0["TSBOXDE"]))
+        if "TSBOXRA" in h0 and "TSBOXDE" in h0
+        else None
+    )
+    return _fit_exposures(
+        exposures, config, sky_half_extent=half, box_centre=centre, log=log
+    )

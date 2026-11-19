@@ -229,7 +229,7 @@ name = "torchsky.map.exposure_fit"
 slug = "map-exposure-fit"
 tier = "experimental"
 related = ["models/exposure_fit.md"]
-intro = "Item-sky fit to individual exposures of several instruments: load_exposures, fit_sky, SkyFit and predict_exposure (uncertainty products and catalogues are not available yet)."
+intro = "Item-sky fit to individual exposures of several instruments: load_exposures, fit_sky, SkyFit, predict_exposure, the sky product with its standard deviation (SkyFit.product, SkyProduct, half_difference) and the response readers (catalogues are not available yet)."
 
 [[namespace]]
 name = "torchsky.scene"

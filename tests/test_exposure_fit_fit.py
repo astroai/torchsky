@@ -20,7 +20,6 @@ from torchsky.map.exposure_fit import (
     ExposurePrediction,
     ReferenceCatalogue,
     SkyFit,
-    SkyProduct,
     fit_sky,
     predict_exposure,
 )
@@ -89,10 +88,6 @@ def test_placeholders_raise():
     with pytest.raises(NotImplementedError):
         fit_sky(obs, tiny_config(1), init=sf)
     with pytest.raises(NotImplementedError):
-        sf.product(["F1"], 0.05)
-    with pytest.raises(NotImplementedError):
-        SkyProduct()
-    with pytest.raises(NotImplementedError):
         ReferenceCatalogue()
 
 
@@ -126,7 +121,8 @@ def test_predict_with_and_without_cross_fit(public_fit):
         predict_exposure(sf, train)
     stranger = tiny_observations()[0]
     stranger.header["TSNAME"] = "not_in_fit"
-    with pytest.raises(ValueError, match="not in the list"):
+    stranger.band_name = "no_such_band"
+    with pytest.raises(ValueError, match="not in the fit"):
         predict_exposure(sf, stranger)
 
 
