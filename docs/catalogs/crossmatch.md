@@ -271,6 +271,45 @@ sigma = cov[0].diagonal().sqrt()  # mas: 16 yr of 0.04 mas/yr pm error on 0.03 m
 assert torch.allclose(sigma, torch.full((2,), (0.03**2 + (16 * 0.04) ** 2) ** 0.5, dtype=torch.float64), rtol=1e-3)
 ```
 
+### Probabilistic counterparts
+
+[`associate`](../reference/catalogs.md#torchsky.catalogs.associate) goes beyond a
+fixed radius. It decides counterparts from each pair's uncertainties and the
+background density:
+
+1. **Common epoch.** Both catalogs move to one epoch with their covariances
+   (`propagate_astrometry`).
+2. **Candidates.** A pair is a candidate when its Mahalanobis distance passes a
+   \(\chi^2_2\) gate: \(d^2 = \Delta^T (C_l + C_r)^{-1} \Delta \le k^2\), where \(k^2\) is the
+   \(1-\alpha\) quantile for `gate_pvalue` \(=\alpha\). Search radii follow from the
+   covariances, so no pair inside the gate is ever missed. \(\Delta\) and both
+   covariances are expressed at the pair's midpoint (parallel transport), which
+   is exact at the poles.
+3. **Likelihood ratio.** For each candidate,
+   \(\mathrm{LR} = \mathcal N(\Delta; 0, \Sigma)/\nu\), where \(\nu\) is the right
+   catalog's surface density over its footprint (a `MOC`; pass the survey footprint).
+   Optional photometric terms (`HistogramRatio`) multiply it.
+4. **Posterior.** \(P_{ij} = \pi\,\mathrm{LR}_{ij} / ((1-\pi) + \pi \sum_k \mathrm{LR}_{ik})\).
+   `completeness="em"` fits \(\pi\).
+5. **Assignment.** `assign="optimal"` gives the exact one-to-one assignment that
+   maximises \(\sum \log(P_{ij}/P_{i0})\).
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import Astrometry, Catalog, associate
+
+opt = Catalog(lon=torch.tensor([10.0, 10.01]), lat=torch.tensor([0.0, 0.0]), epoch=2016.0,
+              astrometry=Astrometry.from_errors(torch.tensor([50.0, 50.0]), torch.tensor([50.0, 50.0])))
+ir = Catalog(lon=torch.tensor([10.00003, 10.01, 10.02]), lat=torch.tensor([0.0, 0.00002, 0.0]), epoch=2016.0,
+             astrometry=Astrometry.from_ellipse(torch.tensor([300.0] * 3), torch.tensor([100.0] * 3),
+                                                torch.tensor([90.0] * 3)))
+res = associate(opt, ir, completeness=0.9, max_radius_arcsec=5.0)
+assert res.left_index[res.match].tolist() == [0, 1] and res.right_index[res.match].tolist() == [0, 1]
+assert torch.all(res.posterior[res.match] > 0.9)
+```
+
 ### Per-row radii, nearest neighbours and counts
 
 `radius_arcsec` may be a tensor with one radius per left row. Each row's window

@@ -20,6 +20,7 @@
     "wcs"
   ],
   "torchsky.catalogs": [
+    "Association",
     "Astrometry",
     "BackgroundModel",
     "BlendFitDiagnostics",
@@ -32,6 +33,7 @@
     "FitAdequacyDiagnostics",
     "ForwardPhotometryResult",
     "HealpixIndex",
+    "HistogramRatio",
     "KnownComponentFitError",
     "ManyMatchResult",
     "MorphologySpectrumDeblendResult",
@@ -44,6 +46,8 @@
     "SelfMatchResult",
     "SkyIndex",
     "SourceGrouping",
+    "assign_one_to_one",
+    "associate",
     "build_source_groups",
     "cap_covering_pixels",
     "count_within",

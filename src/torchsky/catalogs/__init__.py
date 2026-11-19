@@ -8,6 +8,7 @@ from .index import HealpixIndex
 from .index import cap_covering_pixels
 from .index import nside_for_cap
 from .astrometry import Astrometry, MotionPrior, propagate_astrometry
+from .association import Association, HistogramRatio, assign_one_to_one, associate
 from .catalog import Catalog
 from .multi import (
     ManyMatchResult,
@@ -149,7 +150,11 @@ def crossmatch(
 
 
 __all__ = [
+    "Association",
     "Astrometry",
+    "HistogramRatio",
+    "assign_one_to_one",
+    "associate",
     "MotionPrior",
     "propagate_astrometry",
     "Catalog",

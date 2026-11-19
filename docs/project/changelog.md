@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `torchsky.catalogs.associate`, `HistogramRatio` and `assign_one_to_one`:
+  probabilistic counterparts. The pipeline is common-epoch propagation with
+  covariances, then a Mahalanobis chi^2 gate with provably sound per-row search
+  radii (right rows bucketed by radius class), then Sutherland-Saunders /
+  Budavari-Szalay likelihood ratios against the right catalogue's density over
+  its MOC footprint, then posteriors with EM completeness, and finally exact
+  one-to-one assignment (vectorised star components plus the Hungarian
+  algorithm). Pair offsets and covariances are parallel-transported to the pair
+  midpoint, so the metric is exact at the poles. Validated by brute-force gate
+  recall (field, pole, RA wrap), chi^2 calibration of true pairs, posterior
+  calibration (ECE < 0.03), completeness recovery and scipy
+  `linear_sum_assignment` parity.
 - `torchsky.map.exposure_fit` (experimental; moved from a research prototype
   with unchanged numerics, checked bit for bit against it): `load_exposures`
   reads JWST NIRCam and HST WFC3/IR and ACS/WFC exposure files through

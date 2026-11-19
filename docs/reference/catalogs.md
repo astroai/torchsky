@@ -25,6 +25,20 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Association
+
+::: torchsky.catalogs
+    options:
+      members:
+        - Association
+        - HistogramRatio
+        - assign_one_to_one
+        - associate
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Astrometric calibration
 
 ::: torchsky.catalogs
