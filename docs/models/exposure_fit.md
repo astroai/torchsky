@@ -278,3 +278,22 @@ with zero true sky: pull mean near 0, rms below 1.2 and above 0.4, with the reas
 positions of the loader agree with the prototype's own loader (JWST and WFC3/IR to float32 round-off). The tests here cover the fit, saving
 and loading, prediction, configuration validation, the converter, the loader on small synthetic files, the FFT correlation against direct
 convolution and its adjoint, the item rasteriser, and one small step of the loss and its gradient.
+
+## Status On Real Data
+
+Measured on JWST NIRCam exposures of SMACS 0723 on 19 November 2026 (two fits
+on disjoint halves of the exposures, product at 0.08 arcsec):
+
+- The conjugate-gradient solve of the Gauss-Newton step did not converge in 60
+  iterations (relative residual near 1). The product there equals the
+  optimiser's own sky, which the synthetic test shows to be the less
+  trustworthy of the two.
+- In source-free sky the stated standard deviation is within a factor of 2 of
+  the half-to-half scatter (ratio 0.5 at 0.9 and 2.0 micrometres, 1.1 to 1.4 at
+  4.4 micrometres).
+- On bright sources the two halves differ by 2 to 23 times the stated standard
+  deviation: the fit-to-fit scatter of the optimiser dominates there and is
+  not in the standard deviation.
+
+Until the solve converges on real data, treat the standard deviation as a
+noise estimate for faint sky only.
