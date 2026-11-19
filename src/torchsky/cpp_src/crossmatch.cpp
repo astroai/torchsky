@@ -95,9 +95,11 @@ inline int64_t ra_key_of_piece(double ra_piece) {
     return static_cast<int64_t>(v);
 }
 
-// Calls fn(j_sorted, sep_arcsec, thr_arcsec) for every right row within
-// combine(rl, rr[j]) of the query, scanning only zone/RA candidates.
-template <typename Fn>
+// Calls fn(j_sorted, sep_arcsec) for every right row within
+// combine(rl, rr[j]) of the query, scanning only zone/RA candidates. With
+// kChord the test is on the chord alone and fn receives chord^2 (monotone in
+// the angle, used to rank nearest neighbours without a trig call per candidate).
+template <bool kChord = false, typename Fn>
 inline void for_each_pair(const Index& z, double ra_in, double dec, const double* q, double rl,
                           double window_arcsec, int how, Fn&& fn) {
     const double window_deg = window_arcsec / 3600.0;
@@ -139,6 +141,10 @@ inline void for_each_pair(const Index& z, double ra_in, double dec, const double
                 const double s = 2.0 * std::sin(half);
                 const double dx = q[0] - r[0], dy = q[1] - r[1], dz = q[2] - r[2];
                 const double chord2 = dx * dx + dy * dy + dz * dz;
+                if constexpr (kChord) {
+                    if (chord2 <= s * s) fn(j, chord2);
+                    continue;
+                }
                 if (!(chord2 <= s * s * (1.0 + 64.0 * kEps) + 1e-300)) continue;
                 const double cx = q[1] * r[2] - q[2] * r[1];
                 const double cy = q[2] * r[0] - q[0] * r[2];
@@ -346,16 +352,18 @@ void knn_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, double h,
             r = std::min(r, cap);
             for (;;) {
                 buf.clear();
-                for_each_pair(z, q.ra[i], q.dec[i], qv, r, r, kSum,
-                              [&](int64_t j, double sep) { buf.emplace_back(sep, z.order[j]); });
+                for_each_pair<true>(z, q.ra[i], q.dec[i], qv, r, r, kSum,
+                                    [&](int64_t j, double c2) { buf.emplace_back(c2, j); });
                 if (static_cast<int64_t>(buf.size()) >= k || r >= cap) break;
                 r = std::min(2.0 * r, cap);
             }
+            // Rank by (chord^2, original index); atan2 only for the k kept.
+            for (auto& item : buf) item.second = z.order[item.second];
             const int64_t take = std::min<int64_t>(k, buf.size());
             std::partial_sort(buf.begin(), buf.begin() + take, buf.end());
             for (int64_t c = 0; c < k; ++c) {
                 oj[i * k + c] = c < take ? buf[c].second : -1;
-                os[i * k + c] = c < take ? buf[c].first : std::numeric_limits<double>::infinity();
+                os[i * k + c] = std::numeric_limits<double>::infinity();
             }
         }
     });
