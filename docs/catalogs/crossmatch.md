@@ -289,10 +289,23 @@ background density:
    \(\mathrm{LR} = \mathcal N(\Delta; 0, \Sigma)/\nu\), where \(\nu\) is the right
    catalog's surface density over its footprint (a `MOC`; pass the survey footprint).
    Optional photometric terms (`HistogramRatio`) multiply it.
-4. **Posterior.** \(P_{ij} = \pi\,\mathrm{LR}_{ij} / ((1-\pi) + \pi \sum_k \mathrm{LR}_{ik})\).
-   `completeness="em"` fits \(\pi\).
+4. **Posterior.** By default (`exclusive=True`) a right row is the counterpart
+   of at most one left row. Each likelihood ratio is discounted by the
+   probability \(\rho_{ij}\) that no competing left row takes the right row:
+   \(P_{ij} = \pi\,\mathrm{LR}_{ij}\rho_{ij} / ((1-\pi) + \pi \sum_k \mathrm{LR}_{ik}\rho_{ik})\).
+   \(\rho\) comes from belief propagation on the candidate graph (the Bethe
+   approximation of the one-to-one model). It is exact when the graph has no
+   cycles, and \(\rho = 1\) when no right row is shared, so isolated pairs keep
+   the classic Sutherland & Saunders posterior. `exclusive=False` gives the
+   independent posteriors of nway.
 5. **Assignment.** `assign="optimal"` gives the exact one-to-one assignment that
    maximises \(\sum \log(P_{ij}/P_{i0})\).
+
+`completeness="em"` fits \(\pi\). Fitted quantities are maximum marginal
+likelihood estimates, optimised directly (L-BFGS), which also matters in
+crowded fields where EM takes hundreds of steps. With `exclusive=True` the
+background density \(\nu\) is fitted too: it counts only right rows that are
+not counterparts.
 
 When the right catalog has per-row epochs (for example 2MASS observation dates),
 each candidate pair is evaluated with the left row propagated to that right
@@ -300,6 +313,16 @@ row's own epoch. Published errors are often miscalibrated.
 `calibrate="scale_floor"` fits a scale on the right catalog's errors and a
 systematic floor from the matches themselves, and reports both
 (`right_scale`, `floor_mas2`).
+
+**Crowded fields.** A shallow catalog matched against a deep one, such as
+CatWISE against Gaia in the bulge, puts each right row inside the gates of
+many left rows. The independent model then lets all of them claim it, so the
+completeness, the photometric terms and the error calibration learn from
+counterparts counted several times. The exclusive model counts each right row
+once. On an injected crowded field (0.6 Gaia-like sources per arcsec\(^2\),
+15 % with a counterpart whose published errors are half the true ones) it
+recovers the completeness (0.150 vs 0.151) and the error scale (1.92 vs 2),
+with 30 % more correct matches at higher purity than the independent model.
 
 <!-- docs: run -->
 ```python
@@ -328,7 +351,11 @@ result lists the hypotheses per primary row with posteriors, `p_any` (any
 counterpart) and the MAP hypothesis. Primary rows with more than `budget`
 combinations are enumerated best-first by an upper bound, and the posterior
 mass left out is certified (`residual_mass` \(\le\) `mass_tol`). Nothing is
-truncated silently.
+truncated silently. With `exclusive=True` the model counts each source of
+any catalog as part of at most one primary's counterpart set, and the
+posteriors account for that competition across primaries. The MAP
+hypothesis (`best`) is still chosen per primary, not by a joint one-to-one
+assignment.
 
 ### Per-row radii, nearest neighbours and counts
 

@@ -22,10 +22,16 @@ Pipeline of :func:`associate` (left = primary, right = candidate catalogue):
    against a background of density ``nu``). ``nu`` is the right catalogue's
    surface density, global or per HEALPix cell, over its footprint (:class:`MOC`).
 5. **Posterior.** With prior ``pi_i = completeness * [x_i in right footprint]
-   * (1 - gate_pvalue)``: ``P_ij = pi LR_ij / ((1 - pi) + pi sum_k LR_ik)``,
-   ``P_i0 = 1 - sum_j P_ij``. ``completeness="em"`` maximises the marginal
-   likelihood. :class:`HistogramRatio` terms ``rho = q(m) / n(m)`` use explicit
-   bin edges, with ``q`` learnt by EM responsibilities.
+   * (1 - gate_pvalue)``. Independent model (``exclusive=False``, nway):
+   ``P_ij = pi LR_ij / ((1 - pi) + pi sum_k LR_ik)``, ``P_i0 = 1 - sum_j P_ij``.
+   Exclusive model (default): a right row is the counterpart of at most one
+   left row, and ``LR_ij`` is discounted by ``rho_ij``, the probability that no
+   competing left row takes ``j``, from belief propagation (Bethe marginals,
+   :mod:`._exclusive`); ``rho = 1`` where ``j`` is not shared.
+   ``completeness="em"``, ``calibrate`` and (exclusive) the background density
+   maximise the marginal likelihood directly (L-BFGS on the exact or Bethe
+   log partition function). :class:`HistogramRatio` terms ``rho = q(m) / n(m)``
+   use explicit bin edges, with ``q`` learnt by EM responsibilities.
 6. **Assignment.** ``assign="none"`` keeps all posteriors. ``"greedy"`` and
    ``"optimal"`` give one-to-one matches maximising ``sum log(P_ij / P_i0)``.
    ``"optimal"`` is exact: star-shaped components in one vectorised step, the
@@ -55,6 +61,7 @@ from ._zones import (
     unit_vectors,
     zone_query,
 )
+from ._exclusive import exclusive_log_rho, pairwise_exclusive
 from .astrometry import Astrometry, MotionPrior, propagate_astrometry
 from .catalog import Catalog
 
@@ -267,9 +274,13 @@ class Association:
     ``left_index``, ``right_index``, ``separation_arcsec``, ``d2`` (Mahalanobis),
     ``log_lr`` (natural log likelihood ratio), ``posterior`` (P that the pair is the
     counterpart), and ``match`` (bool, the selected one-to-one or best pairs; all
-    False when ``assign="none"``). Per left row: ``p_none`` (no counterpart)
-    and ``prior`` (``pi_i``). ``completeness`` is the fitted or given value;
-    ``n_capped`` counts rows whose search radius hit ``max_radius_arcsec``.
+    False when ``assign="none"``). Per left row: ``p_none`` (no counterpart),
+    ``prior`` (``pi_i``) and ``density_mas2`` (the right background density
+    in the left row's cell, per mas^2; with ``exclusive=True`` and
+    ``density="healpix"`` the likelihood ratio uses the right row's cell,
+    usually the same). ``completeness`` is the fitted or
+    given value; ``n_capped`` counts rows whose search radius hit
+    ``max_radius_arcsec``.
     """
 
     left_index: Tensor
@@ -285,6 +296,7 @@ class Association:
     n_capped: int
     right_scale: float | Tensor = 1.0
     floor_mas2: Tensor | None = None
+    density_mas2: Tensor | None = None
 
 
 # ----------------------------------------------------------------- pipeline
@@ -338,40 +350,96 @@ def _sound_candidates(
     return li[order], rj[order]
 
 
-def _density(
-    rlon: Tensor,
-    rlat: Tensor,
-    llon: Tensor,
-    llat: Tensor,
-    footprint: MOC,
-    mode: str,
-    order: int | None,
-) -> Tensor:
-    """Right-catalogue surface density at each left row, per mas^2."""
-    mas2_per_sr = _MAS_PER_RAD**2
-    inside = footprint.contains(rlon, rlat)
-    if mode == "global":
-        area = footprint.area
-        if area <= 0.0:
-            raise ValueError("right footprint has zero area")
-        nu = float(inside.sum()) / (area * mas2_per_sr)
-        return torch.full_like(llon, nu, dtype=_F64)
-    if mode != "healpix" or order is None:
-        raise ValueError("density must be 'global' or 'healpix' with density_order")
-    nside = 2**order
-    pix_r = _healpix.ang2pix(
-        nside, rlon[inside], rlat[inside], nest=True, lonlat=True
-    ).to(torch.int64)
-    counts = torch.bincount(pix_r, minlength=12 * nside * nside).to(_F64)
-    pix_l = _healpix.ang2pix(nside, llon, llat, nest=True, lonlat=True).to(torch.int64)
-    # Footprint-clipped cell area: fraction of each cell inside the right footprint.
-    from ..sphere.moc import nest2uniq
+class _Density:
+    """Right-catalogue background density, piecewise constant on cells.
 
-    frac = footprint.overlap_fraction(nest2uniq(nside, pix_l)).to(_F64)
-    area = frac * (4.0 * math.pi / (12.0 * nside * nside)) * mas2_per_sr
-    return torch.where(
-        area > 0, counts[pix_l] / area.clamp_min(1e-300), torch.zeros_like(area)
-    )
+    ``mode="global"``: one cell, the footprint. ``"healpix"``: HEALPix cells
+    at ``order``, clipped to the footprint. Cells holding right rows carry a
+    free density ``nu_c`` (per mas^2); empty cells have ``nu = 0``.
+    :meth:`nu` gives the density at each left row; :meth:`log_lik` is the
+    inhomogeneous Poisson log likelihood of the background
+    ``sum_j (1 - m_j) log nu(x_j) - sum_c nu_c A_c`` (``m_j`` counterpart mass)
+    plus a Gamma(3/2) prior on each cell's background count. The maximiser is
+    ``(right rows - expected counterparts + 1/2) / area`` per cell: the half
+    count keeps the density positive when every right row is a counterpart,
+    where the likelihood alone sends it to zero and the likelihood ratios to
+    infinity.
+    """
+
+    def __init__(self, rlon, rlat, llon, llat, footprint: MOC, mode: str, order):
+        mas2_per_sr = _MAS_PER_RAD**2
+        dev = llon.device
+        inside = footprint.contains(rlon, rlat)
+        self.w_in = inside.to(_F64)
+        if mode == "global":
+            area = footprint.area
+            if area <= 0.0:
+                raise ValueError("right footprint has zero area")
+            self.area = torch.tensor([area * mas2_per_sr], dtype=_F64, device=dev)
+            self.left_cell = torch.zeros(llon.shape, dtype=torch.int64, device=dev)
+            self.right_cell = torch.zeros(rlon.shape, dtype=torch.int64, device=dev)
+        elif mode == "healpix" and order is not None:
+            from ..sphere.moc import nest2uniq
+
+            nside = 2**order
+            pix_r = _healpix.ang2pix(nside, rlon, rlat, nest=True, lonlat=True).to(
+                torch.int64
+            )
+            pix_l = _healpix.ang2pix(nside, llon, llat, nest=True, lonlat=True).to(
+                torch.int64
+            )
+            cells, inv = torch.unique(torch.cat((pix_l, pix_r)), return_inverse=True)
+            frac = footprint.overlap_fraction(nest2uniq(nside, cells)).to(_F64)
+            self.area = frac * (4.0 * math.pi / (12.0 * nside * nside)) * mas2_per_sr
+            self.left_cell = inv[: llon.numel()]
+            self.right_cell = inv[llon.numel() :]
+        else:
+            raise ValueError("density must be 'global' or 'healpix' with density_order")
+        self.n_cells = int(self.area.numel())
+        self.count = torch.zeros(self.n_cells, dtype=_F64, device=dev).index_add(
+            0, self.right_cell, self.w_in
+        )
+        # Free cells: some right rows and a positive area.
+        self.free = (self.count > 0) & (self.area > 0)
+
+    def cell_nu(self, matched: Tensor | None = None) -> Tensor:
+        """Closed-form MAP density per cell given counterpart masses ``matched``
+        (``matched=None``: the total density, every right row as background)."""
+        w = self.w_in if matched is None else self.w_in * (1.0 - matched)
+        c = torch.zeros(self.n_cells, dtype=_F64, device=w.device).index_add(
+            0, self.right_cell, w
+        )
+        if matched is not None:
+            c = c + 0.5
+        return torch.where(
+            self.free, c / self.area.clamp_min(1e-300), torch.zeros_like(c)
+        )
+
+    def nu(self, matched: Tensor | None = None) -> Tensor:
+        return self.cell_nu(matched)[self.left_cell]
+
+    def log_left(self, log_nu_cell: Tensor) -> Tensor:
+        """Per-left log density from per-cell log densities (``-690`` when empty)."""
+        lc = torch.where(
+            self.free, log_nu_cell, torch.full_like(log_nu_cell, math.log(1e-300))
+        )
+        return lc[self.left_cell]
+
+    def log_right(self, log_nu_cell: Tensor) -> Tensor:
+        """Per-right-row log density (``-690`` in empty cells)."""
+        lc = torch.where(
+            self.free, log_nu_cell, torch.full_like(log_nu_cell, math.log(1e-300))
+        )
+        return lc[self.right_cell]
+
+    def log_lik(self, log_nu_cell: Tensor) -> Tensor:
+        """Background Poisson log likelihood (all right rows in the footprint;
+        the counterpart share is removed by the matching term)."""
+        free = self.free
+        lc = torch.where(free, log_nu_cell, torch.zeros_like(log_nu_cell))
+        return ((self.count + 0.5) * lc).sum() - (
+            torch.where(free, torch.exp(lc), torch.zeros_like(lc)) * self.area
+        ).sum()
 
 
 def _pm_speed(state, prior: MotionPrior | None) -> Tensor:
@@ -389,88 +457,256 @@ def _pm_speed(state, prior: MotionPrior | None) -> Tensor:
     return speed
 
 
-def _fit_calibration(
-    delta: Tensor,
-    cl: Tensor,
-    cr: Tensor,
-    weight: Tensor,
-    fit_scale: bool,
-    scale: float,
-    floor: Tensor,
-) -> tuple[float, Tensor]:
-    """Posterior-weighted ML of ``Sigma = C_l + s^2 C_r + F`` over matched pairs.
-
-    ``F = L L^T`` (2x2, PSD) is a systematic floor in the local tangent frame,
-    ``s`` scales the right catalogue's published errors. L-BFGS on
-    ``(log s, log L11, L21, log L22)``.
-    """
-    w = weight.detach()
-    if float(w.sum()) <= 0:
-        return scale, floor
-    d, a, b = delta.detach(), cl.detach(), cr.detach()
-    # Start the floor at a tenth of the typical pair variance (a log-parametrised
-    # floor at ~0 has no gradient); a true zero floor is then driven down.
-    eye = torch.eye(2, dtype=_F64, device=d.device)
-    typical = float(torch.median(0.5 * (a + b).diagonal(dim1=-2, dim2=-1).sum(-1)))
-    start = floor if float(floor.abs().max()) > 1e-3 * typical else 0.1 * typical * eye
-    chol = torch.linalg.cholesky(start + 1e-9 * typical * eye)
-    params = torch.tensor(
-        [
-            math.log(scale),
-            math.log(float(chol[0, 0])),
-            float(chol[1, 0]),
-            math.log(float(chol[1, 1])),
-        ],
-        dtype=_F64,
-        device=d.device,
-        requires_grad=True,
+def _segment_logaddexp(x: Tensor, seg: Tensor, n_seg: int, slack: Tensor) -> Tensor:
+    """``log(exp(slack) + sum_{e in seg} exp(x_e))`` per segment."""
+    m = torch.full((n_seg,), -math.inf, dtype=_F64, device=x.device).scatter_reduce(
+        0, seg, x.detach(), "amax", include_self=True
     )
+    m = torch.maximum(m, slack.detach())
+    m = torch.where(torch.isfinite(m), m, torch.zeros_like(m))
+    s_ = torch.exp(slack - m).index_add(0, seg, torch.exp(x - m[seg]))
+    return m + torch.log(s_)
+
+
+def _log_partition(
+    li: Tensor,
+    rj: Tensor,
+    log_w: Tensor,
+    log_a: Tensor,
+    n_left: int,
+    exclusive: bool,
+    state: dict,
+) -> Tensor:
+    """Marginal log likelihood ``log Z`` of the association model (up to constants).
+
+    Independent model: ``sum_i log(a_i + sum_j w_ij)`` (exact). Exclusive model:
+    the Bethe approximation of the matching partition function from the
+    belief-propagation messages,
+    ``sum_i log(a_i + sum_j w rho) + sum_j log(1 + sum_i w lambda)
+    - sum_ij log(1 + w lambda rho)``. Messages are held fixed: at the BP fixed
+    point the Bethe free energy is stationary in them, so the gradient in the
+    weights is exact (the posterior-weighted one).
+    """
+    if not exclusive:
+        return _segment_logaddexp(log_w, li, n_left, log_a).sum()
+    _, _, rho = pairwise_exclusive(
+        li,
+        rj,
+        log_w.detach(),
+        log_a.detach(),
+        init=state.get("rho"),
+        cache=state.setdefault("graph", {}),  # type: ignore[arg-type]
+        # Line-search trial points need not converge; the final posterior
+        # solve is strict.
+        strict=False,
+    )
+    state["rho"] = rho
+    from ._exclusive import lse_excluding_self
+
+    log_lam = -lse_excluding_self((log_w + rho).detach(), li, n_left, log_a.detach())
+    n_right = int(rj.max()) + 1 if rj.numel() else 0
+    left_term = _segment_logaddexp(log_w + rho, li, n_left, log_a).sum()
+    right_term = _segment_logaddexp(
+        log_w + log_lam,
+        rj,
+        n_right,
+        torch.zeros(n_right, dtype=_F64, device=log_w.device),
+    ).sum()
+    edge_term = torch.nn.functional.softplus(log_w + log_lam + rho).sum()
+    return left_term + right_term - edge_term
+
+
+def _fit_marginal(
+    log_weights,
+    li: Tensor,
+    rj: Tensor,
+    n_left: int,
+    exclusive: bool,
+    state: dict[str, Tensor],
+    pi_c: float,
+    scale: Tensor,
+    floor: Tensor,
+    log_nu_cell: Tensor,
+    dens: "_Density | None",
+    *,
+    fit_pi: bool,
+    calibrate: str,
+    group: Tensor | None,
+    typical: float,
+) -> tuple[float, Tensor, Tensor, Tensor, Tensor]:
+    """One maximum marginal likelihood fit (see :func:`_fit_all`).
+
+    Parameters: ``logit(completeness)`` (``fit_pi``); per calibration group
+    ``log s`` (the right error scale, ``"scale_floor"`` only) and the
+    Cholesky factor of the 2x2 floor ``F`` (log diagonal), where
+    ``group[b]`` is the group of bin ``b`` (``-1``: held at the given
+    ``scale``/``floor``; ``group=None``: no calibration parameters); with
+    ``dens`` (exclusive model) the log background density per free cell, with
+    the background Poisson term in the likelihood. ``Sigma = C_l + s^2 C_r + F``
+    per pair. L-BFGS on the exact (independent) or Bethe (exclusive) log
+    likelihood, whose gradient is the posterior-weighted one, so stationary
+    points are those of EM; EM itself crawls in crowded fields, where most
+    of the information about the errors is missing.
+
+    Returns ``(completeness, scale, floor, log_nu_cell, bad)``. ``bad[g]``
+    flags groups outside physical bounds (scale within ``e^+-8``, floor below
+    100x the typical pair variance) or non-finite; their bins keep the given
+    values. A failed line search returns the inputs with every group bad.
+    """
+    dev = scale.device
+    fit_cal = group is not None and bool((group >= 0).any())
+    fit_scale = calibrate == "scale_floor"
+    n_groups = int(group.max()) + 1 if fit_cal and group is not None else 0
+    eye = torch.eye(2, dtype=_F64, device=dev)
+    if fit_cal:
+        assert group is not None
+        first = [int((group == g).nonzero()[0, 0]) for g in range(n_groups)]
+        rep = floor[first]
+        rep_scale = scale[first]
+        # Start the floor at a tenth of the typical pair variance when it is ~0
+        # (a log-parametrised floor at 0 has no gradient).
+        small = rep.diagonal(dim1=-2, dim2=-1).amax(-1) <= 1e-3 * typical
+        start = torch.where(small[:, None, None], 0.1 * typical * eye, rep)
+        chol = torch.linalg.cholesky(start + 1e-9 * typical * eye)
+        cal0 = torch.stack(
+            (
+                torch.log(rep_scale),
+                torch.log(chol[:, 0, 0]),
+                chol[:, 1, 0],
+                torch.log(chol[:, 1, 1]),
+            ),
+            -1,
+        ).reshape(-1)
+    else:
+        cal0 = torch.empty(0, dtype=_F64, device=dev)
+    pi0 = min(max(pi_c, 1e-6), 1.0 - 1e-9)
+    eta0 = torch.tensor(
+        [math.log(pi0) - math.log1p(-pi0)] if fit_pi else [], dtype=_F64, device=dev
+    )
+    nu0 = (
+        log_nu_cell[dens.free]
+        if dens is not None
+        else torch.empty(0, dtype=_F64, device=dev)
+    )
+    params = torch.cat((eta0, cal0, nu0)).clone().requires_grad_(True)
+    n_pi = int(eta0.numel())
+    n_cal = int(cal0.numel())
+    all_bad = torch.ones(n_groups, dtype=torch.bool, device=dev)
+
+    def unpack_nu(p: Tensor) -> Tensor:
+        if dens is None:
+            return log_nu_cell
+        return log_nu_cell.masked_scatter(dens.free, p[n_pi + n_cal :])
+
+    def unpack(p: Tensor) -> tuple[Tensor | float, Tensor, Tensor]:
+        pi = torch.sigmoid(p[0]) if fit_pi else pi_c
+        if not fit_cal:
+            return pi, scale, floor
+        assert group is not None
+        q = p[n_pi : n_pi + n_cal].reshape(n_groups, 4)
+        sc = (
+            torch.exp(q[:, 0])
+            if fit_scale
+            else torch.ones(n_groups, dtype=_F64, device=dev)
+        )
+        zero = torch.zeros(n_groups, dtype=_F64, device=dev)
+        lmat = torch.stack(
+            (
+                torch.stack((torch.exp(q[:, 1]), zero), -1),
+                torch.stack((q[:, 2], torch.exp(q[:, 3])), -1),
+            ),
+            -2,
+        )
+        on = group >= 0
+        g = group.clamp(min=0)
+        sc_b = torch.where(on, sc[g], scale)
+        fl_b = torch.where(on[:, None, None], (lmat @ lmat.mT)[g], floor)
+        return pi, sc_b, fl_b
+
     opt = torch.optim.LBFGS(
-        [params], max_iter=200, line_search_fn="strong_wolfe", tolerance_grad=1e-10
+        [params], max_iter=100, line_search_fn="strong_wolfe", tolerance_grad=1e-9
     )
 
     def closure():
         opt.zero_grad()
-        log_s = params[0] if fit_scale else params[0].detach() * 0.0 + math.log(scale)
-        lmat = torch.stack(
-            (
-                torch.stack((torch.exp(params[1]), params[1] * 0.0)),
-                torch.stack((params[2], torch.exp(params[3]))),
-            )
-        )
-        sig = a + torch.exp(2.0 * log_s) * b + lmat @ lmat.mT
-        d2, logdet = mahalanobis2(d, sig)
-        loss = (w * (0.5 * d2 + 0.5 * logdet)).sum() / w.sum()
+        pi, sc, fl = unpack(params)
+        lnu = unpack_nu(params)
+        log_w, log_a, _ = log_weights(pi, sc, fl, lnu)
+        ll = _log_partition(li, rj, log_w, log_a, n_left, exclusive, state)
+        if dens is not None:
+            ll = ll + dens.log_lik(lnu)
+        loss = -ll / n_left
         loss.backward()
         return loss
 
     try:
         opt.step(closure)
-    except RuntimeError:  # line search failure: keep the previous estimate
-        return scale, floor
+    except RuntimeError as exc:  # line-search failure: keep the given values
+        if "did not converge" in str(exc):
+            raise
+        return pi_c, scale, floor, log_nu_cell, all_bad
     with torch.no_grad():
         p = params.detach()
-        # Physical bounds: scale within e^+-8, floor at most 100x the typical pair
-        # variance. Divergent fits (outside them) keep the previous estimate.
+        if not bool(torch.isfinite(p).all()):
+            return pi_c, scale, floor, log_nu_cell, all_bad
+        pi, sc, fl = unpack(p)
+        lnu = unpack_nu(p).detach().clone()
+        new_pi = min(max(float(pi), 1e-6), 1.0 - 1e-9) if fit_pi else pi_c
+        if not fit_cal:
+            return new_pi, scale, floor, lnu, all_bad[:0]
+        assert group is not None
+        q = p[n_pi : n_pi + n_cal].reshape(n_groups, 4)
         bound_floor = 0.5 * math.log(100.0 * typical)
-        ok = (
-            bool(torch.isfinite(p).all())
-            and abs(float(p[0])) <= 8.0
-            and max(float(p[1]), float(p[3])) <= bound_floor
-            and abs(float(p[2])) <= math.exp(bound_floor)
+        bad = (q[:, [1, 3]].amax(-1) > bound_floor) | (
+            q[:, 2].abs() > math.exp(bound_floor)
         )
-        if not ok:
-            return scale, floor
-        s_new = math.exp(float(params[0])) if fit_scale else scale
-        lmat = torch.tensor(
-            [
-                [math.exp(float(params[1])), 0.0],
-                [float(params[2]), math.exp(float(params[3]))],
-            ],
-            dtype=_F64,
-            device=d.device,
+        if fit_scale:
+            bad |= q[:, 0].abs() > 8.0
+        keep = (group >= 0) & ~bad[group.clamp(min=0)]
+        sc_out = torch.where(keep, sc, scale).clone()
+        fl_out = torch.where(keep[:, None, None], fl, floor).clone()
+        return new_pi, sc_out, fl_out, lnu, bad
+
+
+def _fit_all(
+    fit,
+    pi_c: float,
+    scale: Tensor,
+    floor: Tensor,
+    log_nu_cell: Tensor,
+    *,
+    calibrate: str,
+    own: Tensor | None,
+) -> tuple[float, Tensor, Tensor, Tensor, bool]:
+    """Completeness, calibration and density by maximum marginal likelihood.
+
+    Calibration is fitted in two stages: one shared group over every pair,
+    then, holding the other bins at the shared values, one group per bin with
+    enough matched weight (``own``). A group outside physical bounds keeps
+    its starting values, and completeness and density are then refitted with
+    the calibration held. Returns ``(..., rejected)``: ``True`` when the shared
+    fit was rejected (no calibration progress is possible).
+    """
+    n_bins = int(scale.numel())
+    if calibrate == "none":
+        pi_c, scale, floor, log_nu_cell, _ = fit(
+            pi_c, scale, floor, log_nu_cell, group=None
         )
-        return s_new, lmat @ lmat.T
+        return pi_c, scale, floor, log_nu_cell, False
+    dev = scale.device
+    shared = torch.zeros(n_bins, dtype=torch.int64, device=dev)
+    p1, s1, f1, n1, bad = fit(pi_c, scale, floor, log_nu_cell, group=shared)
+    if bool(bad.any()):
+        p0, _, _, n0, _ = fit(pi_c, scale, floor, log_nu_cell, group=None)
+        return p0, scale, floor, n0, True
+    if own is None or n_bins == 1 or not bool(own.any()):
+        return p1, s1, f1, n1, False
+    per_bin = torch.full((n_bins,), -1, dtype=torch.int64, device=dev)
+    per_bin[own] = torch.arange(int(own.sum()), device=dev)
+    p2, s2, f2, n2, bad2 = fit(p1, s1, f1, n1, group=per_bin)
+    if bool(bad2.any()):
+        p2, _, _, n2, _ = fit(p1, s2, f2, n2, group=None)
+    return p2, s2, f2, n2, False
 
 
 def associate(
@@ -494,6 +730,7 @@ def associate(
     calibrate_by: Tensor | None = None,
     calibrate_edges: Tensor | None = None,
     calibrate_min_pairs: float = 50.0,
+    exclusive: bool = True,
     max_iter: int = 50,
     tol: float = 1e-6,
 ) -> Association:
@@ -514,18 +751,43 @@ def associate(
     **Calibration.** Published errors are often off: CatWISE positions, for
     instance, are underestimated. ``calibrate="floor"`` fits a 2x2 systematic
     covariance ``F`` added to every pair; ``"scale_floor"`` also scales the right
-    catalogue's errors by ``s``. Both are posterior-weighted maximum likelihood,
-    alternated with the association until stable, and reported on the
-    result. Search radii include the fitted terms, so the gate stays sound.
+    catalogue's errors by ``s``. Both maximise the marginal likelihood jointly
+    with completeness (and the background density), and are reported on the
+    result. Search radii include the fitted terms and candidates are
+    regenerated until the calibration is stable, so the gate stays sound.
     ``calibrate_by`` (one value per right row, e.g. magnitude, or a blending
     count from :func:`count_within`) with ``calibrate_edges`` fits the
-    terms per bin. Bins whose matched weight is below ``calibrate_min_pairs``
-    use the global fit. Scale and floor are separately identifiable only
-    when the right errors vary within a bin.
+    terms per bin: first one shared fit over every pair, then one per bin
+    whose matched weight reaches ``calibrate_min_pairs``; the other bins keep
+    the shared fit. A fit outside physical bounds (scale within ``e^+-8``,
+    floor below 100x the typical pair variance) is not applied. Scale and
+    floor are separately identifiable only when the right errors vary within
+    a bin.
+
+    **Crowding.** With ``exclusive=True`` (default) a right row is the
+    counterpart of at most one left row. Posteriors are then the Bethe
+    (belief-propagation) marginals of that one-to-one model: each pair's
+    likelihood ratio is discounted by the probability that its right row is
+    not taken by a competing left row. They are exact when the candidate graph
+    has no cycles and equal to the independent posteriors (``exclusive=False``,
+    as nway and Sutherland & Saunders) when no right row is shared. In crowded
+    fields, where one right source lies in the gates of many left rows, the
+    independent model hands it to all of them; completeness, photometric terms
+    and error calibration then learn from that multiple counting.
+
+    The background density ``nu`` is the total right density for
+    ``exclusive=False`` (nway's convention). For ``exclusive=True`` it is a
+    parameter: the density of right rows that are not counterparts, fitted
+    with the rest (a Gamma(3/2) prior on each cell's background count keeps it
+    positive when every right row is matched). Completeness, calibration and
+    background density are fitted by maximum marginal likelihood (L-BFGS on
+    the exact or Bethe log likelihood), with :class:`HistogramRatio` terms
+    updated by EM in between.
 
     ``right_footprint`` (MOC) defaults to the right catalogue's occupied cells at
     ``footprint_order``. Pass the survey MOC when you have it, so that density
-    and priors use the true coverage.
+    and priors use the true coverage. With ``exclusive=True``, right rows
+    outside it take no part.
     """
     if left.astrometry is None or right.astrometry is None:
         raise ValueError("associate needs Catalog.astrometry on both catalogues")
@@ -583,7 +845,9 @@ def associate(
         if right_footprint is not None
         else MOC.from_lonlat(rlon, rlat, footprint_order)
     )
-    nu = _density(rlon, rlat, llon, llat, rfoot, density, density_order)
+    dens = _Density(rlon, rlat, llon, llat, rfoot, density, density_order)
+    right_inside = dens.w_in > 0
+    log_nu_cell = torch.log(dens.cell_nu().clamp_min(1e-300))
     inside = rfoot.contains(llon, llat).to(_F64)
     n_left = int(llon.numel())
     lx, rx = unit_vectors(llon, llat), unit_vectors(rlon, rlat)
@@ -609,6 +873,10 @@ def associate(
     scale = torch.ones(n_bins, dtype=_F64, device=dev)
     floor = torch.zeros(n_bins, 2, 2, dtype=_F64, device=dev)
     rounds = 1 if calibrate == "none" else 8
+    outside_log = torch.where(
+        inside > 0, torch.zeros_like(inside), torch.full_like(inside, -math.inf)
+    )
+    pi_c = 0.5
     for _round in range(rounds):
         lam_f = float(_lambda_max(floor).max())
         # sqrt(lmax(A + s^2 B + F)) <= sqrt(lmax A) + s sqrt(lmax B) + sqrt(lmax F)
@@ -638,6 +906,8 @@ def associate(
         )
         sep_arcsec = psi * _ARCSEC_PER_RAD
         keep = (d2 <= k2) & (sep_arcsec <= max_radius_arcsec)
+        if exclusive:
+            keep &= right_inside[rj]
         li, rj, d2, logdet, sep_arcsec = (
             li[keep],
             rj[keep],
@@ -646,95 +916,130 @@ def associate(
             sep_arcsec[keep],
         )
         delta, cl, cr = delta[keep], cl[keep], cr[keep]
-        base_log_lr = (
-            -math.log(2.0 * math.pi)
-            - 0.5 * logdet
-            - 0.5 * d2
-            - torch.log(nu[li].clamp_min(1e-300))
-        )
+        pb = rbin[rj]
+        # Background density: the total right density, or (exclusive model) the
+        # density of right rows that are not counterparts (closed-form ML).
+        bp_state: dict = {}
+        fixed = (scale.clone(), floor.clone())
 
-        def posterior(pi_c: float) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-            log_lr = base_log_lr.clone()
+        def log_n_of(sc: Tensor, fl: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+            sig = cl + (sc[pb] ** 2)[:, None, None] * cr + fl[pb]
+            d2_, logdet_ = mahalanobis2(delta, sig)
+            return -math.log(2.0 * math.pi) - 0.5 * logdet_ - 0.5 * d2_, d2_, logdet_
+
+        def log_weights(pi_c: Tensor | float, sc: Tensor, fl: Tensor, lnu: Tensor):
+            log_n, _, _ = log_n_of(sc, fl)
+            # Exclusive model: background density at the right row (its cell's
+            # expected matches never exceed its count); independent model: at
+            # the left row, as nway.
+            log_lr = log_n - (
+                dens.log_right(lnu)[rj] if exclusive else dens.log_left(lnu)[li]
+            )
             for term in terms:
                 log_lr = log_lr + term.log_rho(li, rj)
+            pi_eff = torch.as_tensor(pi_c, dtype=_F64, device=dev) * (1.0 - gate_pvalue)
+            log_pi = torch.log(pi_eff) + outside_log
+            return log_pi[li] + log_lr, torch.log1p(-pi_eff * inside), log_lr
+
+        def posterior(
+            pi_c: float,
+        ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+            log_w, log_a, log_lr = log_weights(pi_c, scale, floor, log_nu_cell)
             pi = (pi_c * (1.0 - gate_pvalue)) * inside
-            # P_ij = pi LR / ((1 - pi) + pi sum LR), in log space per left segment.
-            lse_max = torch.full(
-                (n_left,), -math.inf, dtype=_F64, device=dev
-            ).scatter_reduce(0, li, log_lr, "amax", include_self=True)
-            shift = torch.where(
-                torch.isfinite(lse_max), lse_max, torch.zeros_like(lse_max)
-            )
-            s_ = torch.zeros(n_left, dtype=_F64, device=dev).index_add(
-                0, li, torch.exp(log_lr - shift[li])
-            )
-            denom = (1.0 - pi) + pi * s_ * torch.exp(shift)
-            return (
-                pi[li] * torch.exp(log_lr) / denom[li],
-                (1.0 - pi) / denom,
-                pi,
-                log_lr,
-            )
+            if exclusive:
+                post_x, p_none_x, rho = pairwise_exclusive(
+                    li,
+                    rj,
+                    log_w,
+                    log_a,
+                    init=bp_state.get("rho"),
+                    cache=bp_state.setdefault("graph", {}),  # type: ignore[arg-type]
+                )
+                bp_state["rho"] = rho.detach()
+                return post_x, p_none_x, pi, log_lr
+            z = _segment_logaddexp(log_w, li, n_left, log_a)
+            return torch.exp(log_w - z[li]), torch.exp(log_a - z), pi, log_lr
 
         fit_pi = completeness == "em"
         if not fit_pi and not 0.0 <= float(completeness) <= 1.0:  # type: ignore[arg-type]
             raise ValueError("completeness must lie in [0, 1] or be 'em'")
-        pi_c = 0.5 if fit_pi else float(completeness)  # type: ignore[arg-type]
+        if _round == 0:
+            pi_c = 0.5 if fit_pi else float(completeness)  # type: ignore[arg-type]
         for term in terms:
             term.setup(rfoot.contains(rlon, rlat), li, rj)
-        if fit_pi or terms:
-            # EM: completeness and photometric terms from posterior responsibilities.
-            prev = None
-            for _ in range(max_iter):
-                post, p_none, _, _ = posterior(pi_c)
-                for term in terms:
-                    term.update(li, rj, post)
-                done = prev is not None and (
-                    post.numel() == 0 or float((post - prev).abs().max()) < tol
-                )
-                prev = post
-                if fit_pi:
-                    in_rows = inside > 0
-                    new = (
-                        float((1.0 - p_none[in_rows]).mean()) / (1.0 - gate_pvalue)
-                        if bool(in_rows.any())
-                        else 0.0
-                    )
-                    new = min(max(new, 1e-6), 1.0 - 1e-9)
-                    done = done and abs(new - pi_c) < tol
-                    pi_c = new
-                if done:
-                    break
-        post, p_none, pi, log_lr = posterior(pi_c)
-        if calibrate == "none":
-            break
-        pb = rbin[rj]
-        fit_scale = calibrate == "scale_floor"
-        g_scale, g_floor = _fit_calibration(
-            delta, cl, cr, post, fit_scale, float(scale.mean()), floor.mean(0)
+        fit_cal = calibrate != "none"
+        rejected = False
+        if fit_cal:
+            post0, _, _, _ = posterior(pi_c)
+            mass = torch.zeros(n_bins, dtype=_F64, device=dev).index_add(
+                0, pb, post0.detach()
+            )
+            own = (
+                (mass >= calibrate_min_pairs)
+                if n_bins > 1
+                else torch.zeros(1, dtype=torch.bool, device=dev)
+            )
+        typical = (
+            float(torch.median(0.5 * (cl + cr).diagonal(dim1=-2, dim2=-1).sum(-1)))
+            if li.numel()
+            else 1.0
         )
-        new_scale = torch.full_like(scale, g_scale)
-        new_floor = g_floor.expand_as(floor).clone()
-        if n_bins > 1:
-            for b in range(n_bins):
-                sel = pb == b
-                if float(post[sel].sum()) < calibrate_min_pairs:
-                    continue  # too few matches: the global fit applies
-                sb, fb = _fit_calibration(
-                    delta[sel],
-                    cl[sel],
-                    cr[sel],
-                    post[sel],
-                    fit_scale,
-                    float(scale[b]),
-                    floor[b],
+        prev = None
+        for _ in range(max_iter):
+            # Maximum marginal likelihood in completeness, calibration and (exclusive
+            # model) background density; then EM updates of photometric terms.
+            if fit_pi or fit_cal or exclusive:
+
+                def fit(pi0, sc0, fl0, nu0, group):
+                    return _fit_marginal(
+                        log_weights,
+                        li,
+                        rj,
+                        n_left,
+                        exclusive,
+                        bp_state,
+                        pi0,
+                        sc0,
+                        fl0,
+                        nu0,
+                        dens if exclusive else None,
+                        fit_pi=fit_pi,
+                        calibrate=calibrate,
+                        group=group,
+                        typical=typical,
+                    )
+
+                pi_c, scale, floor, log_nu_cell, rejected = _fit_all(
+                    fit,
+                    pi_c,
+                    scale,
+                    floor,
+                    log_nu_cell,
+                    calibrate=calibrate,
+                    own=own if fit_cal else None,
                 )
-                new_scale[b], new_floor[b] = sb, fb
-        moved_by = float((new_scale - scale).abs().max()) + float(
-            (new_floor - floor).abs().max()
-        ) / max(1.0, float(new_floor.abs().max()))
-        scale, floor = new_scale, new_floor
-        if moved_by < 1e-4:
+            if not terms:
+                break
+            post, _, _, _ = posterior(pi_c)
+            for term in terms:
+                term.update(li, rj, post)
+            done = prev is not None and (
+                post.numel() == 0 or float((post - prev).abs().max()) < tol
+            )
+            prev = post.detach()
+            if done:
+                break
+        post, p_none, pi, log_lr = posterior(pi_c)
+        _, d2, logdet = log_n_of(scale, floor)
+        d2 = d2.detach()
+        if not fit_cal:
+            break
+        moved_by = float((scale - fixed[0]).abs().max()) + float(
+            (floor - fixed[1]).abs().max()
+        ) / max(1.0, float(floor.abs().max()))
+        # The gate grew or shrank with the calibration: regenerate candidates
+        # until the calibration is stable (or the shared fit is out of bounds).
+        if moved_by < 1e-4 or rejected:
             break
     match = _assign(li, rj, post, p_none, n_left, int(rlon.numel()), assign)
     return Association(
@@ -751,6 +1056,7 @@ def associate(
         n_capped=n_capped,
         right_scale=float(scale[0]) if n_bins == 1 else scale,
         floor_mas2=floor[0] if n_bins == 1 else floor,
+        density_mas2=dens.log_left(log_nu_cell).exp(),
     )
 
 
@@ -1076,6 +1382,7 @@ def associate_many(
     completeness: list[float] | Literal["em"] = "em",
     budget: int = 4096,
     mass_tol: float = 1e-6,
+    exclusive: bool = True,
 ) -> NWayAssociation:
     """N-way association (nway-style) of a primary catalogue with several others.
 
@@ -1097,6 +1404,14 @@ def associate_many(
     ``1 / (2 pi sqrt(det C))`` per added member) until the unenumerated mass,
     certified through that bound, is below ``mass_tol``. The certified residual
     is reported per primary.
+
+    With ``exclusive=True`` (default) each secondary source is the counterpart
+    of at most one primary. Hypothesis posteriors are then the Bethe
+    (belief-propagation) marginals of that constraint across all primaries and
+    catalogues (see :func:`associate`); ``log_weight`` stays the unconstrained
+    weight, and the background densities ``nu_c`` are the EM-fitted ones of the
+    pairwise associations. ``exclusive=False`` gives nway's independent
+    per-primary posteriors.
     """
     if len(catalogs) < 2:
         raise ValueError("need a primary and at least one other catalogue")
@@ -1168,6 +1483,7 @@ def associate_many(
                 footprint_order=footprint_order,
                 completeness=comp,
                 assign="none",
+                exclusive=exclusive,
             )
         else:
             # Per-row epochs (e.g. 2MASS dates): gate at pair epochs, then express each
@@ -1183,6 +1499,7 @@ def associate_many(
                 footprint_order=footprint_order,
                 completeness=comp,
                 assign="none",
+                exclusive=exclusive,
             )
             li_c, rj_c = res.left_index, res.right_index
             ast0 = cats[0].astrometry
@@ -1212,7 +1529,8 @@ def associate_many(
             if given is not None
             else MOC.from_lonlat(rlon_c, rlat_c, footprint_order)
         )
-        nu = _density(rlon_c, rlat_c, llon0, llat0, rfoot, "global", None)
+        assert res.density_mas2 is not None
+        nu = res.density_mas2.to(dev)
         inside = rfoot.contains(llon0, llat0)
         log_nu.append(
             torch.where(
@@ -1250,6 +1568,7 @@ def associate_many(
     exact = n_hyp <= budget
     members_out, prim_out, logw_out = [], [], []
     residual = torch.zeros(n0, dtype=_F64, device=dev)
+    log_remaining = torch.full((n0,), -math.inf, dtype=_F64, device=dev)
 
     def slot_geometry(
         c: int, slots: Tensor, prim: Tensor
@@ -1310,7 +1629,7 @@ def associate_many(
         logw_out.append(weights(prim, slots))
     # Best-first enumeration with a certified residual for oversized primaries.
     for i in torch.nonzero(~exact, as_tuple=True)[0].tolist():
-        s, p, w, r = _best_first(
+        s, p, w, r, lr_ = _best_first(
             i,
             k,
             counts,
@@ -1329,6 +1648,7 @@ def associate_many(
         prim_out.append(p)
         logw_out.append(w)
         residual[i] = r
+        log_remaining[i] = lr_
     slots = torch.cat(members_out)
     prim = torch.cat(prim_out)
     logw = torch.cat(logw_out)
@@ -1341,13 +1661,23 @@ def associate_many(
         members[:, c] = torch.where(
             s >= 0, pairs[c][1][s.clamp(min=0)], torch.full_like(s, -1)
         )
+    u = logw
+    if exclusive and k > 1:
+        u = logw + _nway_exclusive_rho(prim, logw, slots, pairs, cats, n0, k)
     mx = torch.full((n0,), -math.inf, dtype=_F64, device=dev).scatter_reduce(
-        0, prim, logw, "amax"
+        0, prim, u, "amax"
     )
     z = torch.zeros(n0, dtype=_F64, device=dev).index_add(
-        0, prim, torch.exp(logw - mx[prim])
+        0, prim, torch.exp(u - mx[prim])
     )
-    post = torch.exp(logw - mx[prim]) / z[prim]
+    post = torch.exp(u - mx[prim]) / z[prim]
+    if exclusive and bool(torch.isfinite(log_remaining).any()):
+        # Certified residual against the exclusive weights (rho <= 1 only lowers
+        # the unenumerated mass, so the bound still holds).
+        rem = torch.exp(log_remaining - mx)
+        residual = torch.where(
+            torch.isfinite(log_remaining), rem / (z + rem), torch.zeros_like(rem)
+        )
     none = (members[:, 1:] < 0).all(-1)
     p_none = torch.zeros(n0, dtype=_F64, device=dev).index_add(
         0, prim[none], post[none]
@@ -1374,6 +1704,57 @@ def associate_many(
         completeness=[pi[c] / (1.0 - gate_pvalue) if c else 1.0 for c in range(k)],
         best=best,
     )
+
+
+def _nway_exclusive_rho(
+    prim: Tensor,
+    logw: Tensor,
+    slots: Tensor,
+    pairs: list[tuple[Tensor, Tensor]],
+    cats,
+    n0: int,
+    k: int,
+) -> Tensor:
+    """Sum of exclusivity log messages over each hypothesis' members."""
+    dev = prim.device
+    n_pairs = [int(pairs[c][0].numel()) for c in range(1, k)]
+    pair_off = [0]
+    for n in n_pairs:
+        pair_off.append(pair_off[-1] + n)
+    src_off = [0]
+    for c in range(1, k):
+        src_off.append(src_off[-1] + int(cats[c].lon.numel()))
+    n_present = pair_off[-1]
+    cat_ids = torch.arange(k - 1, device=dev)
+    # Present slots (catalogue c, pair p), then one absent slot per (primary, c).
+    slot_owner = torch.cat(
+        [pairs[c][0] for c in range(1, k)]
+        + [torch.arange(n0, device=dev).repeat_interleave(k - 1)]
+    )
+    slot_cat = torch.cat(
+        [
+            torch.full((n_pairs[c - 1],), c - 1, dtype=torch.int64, device=dev)
+            for c in range(1, k)
+        ]
+        + [cat_ids.repeat(n0)]
+    )
+    slot_group = slot_owner * (k - 1) + slot_cat
+    slot_source = torch.cat(
+        [pairs[c][1] + src_off[c - 1] for c in range(1, k)]
+        + [torch.full((n0 * (k - 1),), -1, dtype=torch.int64, device=dev)]
+    )
+    off = torch.tensor(pair_off[:-1], dtype=torch.int64, device=dev)
+    absent = n_present + prim[:, None] * (k - 1) + cat_ids[None, :]
+    hyp_slot = torch.where(slots >= 0, slots + off[None, :], absent)
+    rho = exclusive_log_rho(
+        prim,
+        logw,
+        hyp_slot,
+        slot_owner,
+        slot_group,
+        slot_source,
+    )
+    return rho[hyp_slot].sum(-1)
 
 
 def _cov_only(pos_cov: Tensor) -> Astrometry:
@@ -1464,7 +1845,14 @@ def _best_first(
         0.0,
     )
     residual = remaining / (exact_mass + remaining)
-    return sl, torch.full((len(chosen),), i, dtype=torch.int64, device=dev), w, residual
+    log_rem = math.log(remaining) + shift if remaining > 0 else -math.inf
+    return (
+        sl,
+        torch.full((len(chosen),), i, dtype=torch.int64, device=dev),
+        w,
+        residual,
+        log_rem,
+    )
 
 
 __all__ = [

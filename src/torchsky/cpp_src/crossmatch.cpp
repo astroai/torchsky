@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -374,11 +375,58 @@ void knn_pairs(In1<int64_t> key, In2<double> rxyz, In1<int64_t> order, double h,
     });
 }
 
+// Segmented log-sum-exp excluding self, for belief propagation in
+// catalogs/_exclusive.py: out[e] = log(exp(slack[s]) + sum_{f in s, f != e}
+// exp(x[f])) for e in segment s = [offsets[s], offsets[s + 1]). The sum without
+// the element is taken directly for the segment's first largest element and as
+// total - own for the others (never a cancellation: the total then also holds
+// the largest term). Same arithmetic as the torch reference
+// (lse_excluding_self); an empty slack means no slack term.
+void segment_lse_excluding_self(In1<int64_t> offsets, In1<double> x, In1<double> slack, Out1<double> out,
+                                int threads) {
+    const int64_t n_seg = static_cast<int64_t>(offsets.shape(0)) - 1;
+    if (n_seg < 0 || out.shape(0) != x.shape(0) || (slack.shape(0) && slack.shape(0) != size_t(n_seg)))
+        throw std::invalid_argument("segment_lse_excluding_self: shape mismatch");
+    const int64_t* off = offsets.data();
+    const double* xv = x.data();
+    const double* sv = slack.shape(0) ? slack.data() : nullptr;
+    double* ov = out.data();
+    if (n_seg > 0 && (off[0] != 0 || off[n_seg] != int64_t(x.shape(0))))
+        throw std::invalid_argument("segment_lse_excluding_self: offsets do not cover x");
+    const double ninf = -std::numeric_limits<double>::infinity();
+    parallel_rows(n_seg, threads, [&](int64_t s0, int64_t s1) {
+        for (int64_t s = s0; s < s1; ++s) {
+            const int64_t a = off[s], b = off[s + 1];
+            double m = ninf;
+            int64_t arg = -1;
+            for (int64_t e = a; e < b; ++e)
+                if (xv[e] > m || (arg < 0 && xv[e] == m)) {
+                    m = xv[e];
+                    arg = e;
+                }
+            double big = sv ? std::max(m, sv[s]) : m;
+            if (!std::isfinite(big)) big = 0.0;
+            const double base = sv ? std::exp(sv[s] - big) : 0.0;
+            double total = base, wo_arg = base;
+            for (int64_t e = a; e < b; ++e) {
+                const double ex = std::exp(xv[e] - big);
+                total += ex;
+                if (e != arg) wo_arg += ex;
+            }
+            for (int64_t e = a; e < b; ++e) {
+                const double rest = e == arg ? wo_arg : total - std::exp(xv[e] - big);
+                ov[e] = big + std::log(rest);
+            }
+        }
+    });
+}
+
 void register_crossmatch(nb::module_& m) {
     m.def("xmatch_count", &count_pairs);
     m.def("xmatch_fill", &fill_pairs);
     m.def("xmatch_best", &best_pairs);
     m.def("xmatch_knn", &knn_pairs);
+    m.def("xmatch_segment_lse_excl", &segment_lse_excluding_self);
 }
 
 }  // namespace torchsky::xmatch

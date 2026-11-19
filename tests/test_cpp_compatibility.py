@@ -76,6 +76,7 @@ def test_extension_exports_only_isa_diagnostics() -> None:
         "xmatch_count",
         "xmatch_fill",
         "xmatch_knn",
+        "xmatch_segment_lse_excl",
     }
     bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")
     assert bindings.count("m.def(") == 1

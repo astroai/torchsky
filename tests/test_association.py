@@ -521,7 +521,10 @@ def test_calibration_recovers_error_scale_and_floor() -> None:
     )
     pub = 100.0 + 100.0 * torch.rand(n, generator=g, dtype=D)  # published right errors
     true_sigma = 2.0 * pub  # truth: errors underestimated 2x ...
-    floor = 40.0  # ... plus a 40 mas systematic floor
+    # ... plus a systematic floor. It must be large enough to be identifiable
+    # next to 200-400 mas errors: the statistical error on floor^2 from 6000
+    # pairs is about 2e3 mas^2.
+    floor = 150.0
     z = torch.randn(n, 2, generator=g, dtype=D)
     off = z * torch.sqrt(true_sigma**2 + floor**2 + 20.0**2)[:, None]
     rlon, rlat = _offset(lon, lat, off[:, 0], off[:, 1])
@@ -549,7 +552,7 @@ def test_calibration_recovers_error_scale_and_floor() -> None:
     assert abs(cal.right_scale - 2.0) < 0.1
     assert (
         cal.floor_mas2 is not None
-        and abs(float(cal.floor_mas2.diagonal().mean()) ** 0.5 - floor) < 15.0
+        and abs(float(cal.floor_mas2.diagonal().mean()) ** 0.5 - floor) < 25.0
     )
     true_raw = raw.left_index == raw.right_index
     true_cal = cal.left_index == cal.right_index
@@ -708,3 +711,224 @@ def test_nway_per_row_epoch_catalogue_recovers_fast_mover() -> None:
     assert best[0, 1] == 0 and best[0, 2] == 0  # Barnard-like star found in both
     assert float((best[:, 1] == torch.arange(n)).float().mean()) > 0.97
     assert float((best[:, 2] == torch.arange(n)).float().mean()) > 0.97
+
+
+# ------------------------------------------------------------ exclusivity
+
+
+def _exact_matching_marginals(li, rj, log_w, log_a):
+    """Brute-force marginals of the partial one-to-one matching model."""
+    import itertools
+
+    n = int(log_a.numel())
+    edges = list(zip(li.tolist(), rj.tolist()))
+    options = [
+        [None] + [e for e, (i, _) in enumerate(edges) if i == r] for r in range(n)
+    ]
+    z = 0.0
+    marg = [0.0] * len(edges)
+    none = [0.0] * n
+    for combo in itertools.product(*options):
+        used = [edges[e][1] for e in combo if e is not None]
+        if len(used) != len(set(used)):
+            continue
+        w = math.exp(
+            sum(
+                float(log_w[e]) if e is not None else float(log_a[i])
+                for i, e in enumerate(combo)
+            )
+        )
+        z += w
+        for i, e in enumerate(combo):
+            if e is None:
+                none[i] += w
+            else:
+                marg[e] += w
+    return torch.tensor(marg, dtype=D) / z, torch.tensor(none, dtype=D) / z
+
+
+def _random_graph(g: torch.Generator, n_left: int, n_right: int, tree: bool):
+    if tree:  # forest: each left joins at most one existing right
+        li, rj, r = [], [], 0
+        for i in range(n_left):
+            if r and float(torch.rand(1, generator=g)) < 0.7:
+                li.append(i)
+                rj.append(int(torch.randint(0, r, (1,), generator=g)))
+            for _ in range(int(torch.randint(0, 3, (1,), generator=g))):
+                li.append(i)
+                rj.append(r)
+                r += 1
+    else:
+        m = torch.rand(n_left, n_right, generator=g) < 0.5
+        li, rj = (x.tolist() for x in torch.nonzero(m, as_tuple=True))
+    li_t, rj_t = (
+        torch.tensor(li, dtype=torch.int64),
+        torch.tensor(rj, dtype=torch.int64),
+    )
+    order = torch.argsort(li_t * 1000 + rj_t)
+    return li_t[order], rj_t[order]
+
+
+def test_exclusive_marginals_exact_on_trees_and_bounded_on_loops() -> None:
+    from torchsky.catalogs._exclusive import pairwise_exclusive
+
+    g = _gen(41)
+    worst_loop = 0.0
+    for trial in range(120):
+        tree = trial % 2 == 0
+        li, rj = _random_graph(g, 5, 4, tree)
+        if li.numel() == 0:
+            continue
+        log_w = torch.randn(li.numel(), generator=g, dtype=D) * 2.0
+        log_a = torch.log(torch.rand(5, generator=g, dtype=D))
+        post, p_none, _ = pairwise_exclusive(li, rj, log_w, log_a)
+        ref, ref_none = _exact_matching_marginals(li, rj, log_w, log_a)
+        err = max(
+            float((post - ref).abs().max()), float((p_none - ref_none).abs().max())
+        )
+        if tree:
+            assert err < 1e-12  # Bethe is exact on cycle-free graphs
+        else:
+            worst_loop = max(worst_loop, err)
+        # Both sides are normalised: rows sum to one, columns to at most one.
+        rows = torch.zeros(5, dtype=D).index_add(0, li, post) + p_none
+        torch.testing.assert_close(rows, torch.ones(5, dtype=D))
+        cols = torch.zeros(int(rj.max()) + 1, dtype=D).index_add(0, rj, post)
+        assert float(cols.max()) <= 1.0 + 1e-12
+    # Dense 5x4 random graphs are the hard case for the Bethe approximation.
+    assert worst_loop < 0.15
+
+
+def test_exclusive_without_shared_rows_is_the_independent_posterior() -> None:
+    from torchsky.catalogs._exclusive import pairwise_exclusive
+
+    g = _gen(42)
+    li = torch.tensor([0, 0, 1, 2, 2, 2], dtype=torch.int64)
+    rj = torch.tensor([0, 1, 2, 3, 4, 5], dtype=torch.int64)
+    log_w = torch.randn(6, generator=g, dtype=D)
+    log_a = torch.log(torch.rand(3, generator=g, dtype=D))
+    post, p_none, rho = pairwise_exclusive(li, rj, log_w, log_a)
+    z = torch.exp(log_a).index_add(0, li, torch.exp(log_w))
+    torch.testing.assert_close(post, torch.exp(log_w) / z[li])
+    torch.testing.assert_close(p_none, torch.exp(log_a) / z)
+    assert float(rho.abs().max()) == 0.0
+
+
+def test_exclusive_gradient_matches_finite_differences() -> None:
+    from torchsky.catalogs._exclusive import pairwise_exclusive
+
+    g = _gen(43)
+    li, rj = _random_graph(g, 5, 4, tree=False)
+    log_a = torch.log(torch.rand(5, generator=g, dtype=D))
+
+    def f(log_w):
+        post, p_none, _ = pairwise_exclusive(li, rj, log_w, log_a)
+        return torch.cat((post, p_none))
+
+    log_w = (torch.randn(li.numel(), generator=g, dtype=D) * 2.0).requires_grad_(True)
+    assert torch.autograd.gradcheck(f, (log_w,), eps=1e-6, atol=1e-6, rtol=1e-4)
+
+
+def _crowded_scene(seed: int, n_left: int, frac: float, side: float = 0.05):
+    """Dense precise left catalogue; shallow right one whose published errors
+    are 2x too small (CatWISE-like in a bulge field)."""
+    g = _gen(seed)
+    lon = 150 + torch.rand(n_left, generator=g, dtype=D) * side
+    lat = 2 + torch.rand(n_left, generator=g, dtype=D) * side
+    src = torch.nonzero(torch.rand(n_left, generator=g) < frac, as_tuple=True)[0]
+    n_bg = 300
+    pub = 150.0 + 250.0 * torch.rand(len(src) + n_bg, generator=g, dtype=D)
+    lon0 = torch.cat((lon[src], 150 + torch.rand(n_bg, generator=g, dtype=D) * side))
+    lat0 = torch.cat((lat[src], 2 + torch.rand(n_bg, generator=g, dtype=D) * side))
+    z = torch.randn(len(lon0), 2, generator=g, dtype=D) * (2.0 * pub)[:, None]
+    rlon, rlat = _offset(lon0, lat0, z[:, 0], z[:, 1])
+    truth = torch.full((len(lon0),), -1, dtype=torch.int64)
+    truth[: len(src)] = src
+    lerr = torch.full((n_left,), 3.0, dtype=D)
+    left = Catalog(
+        lon=lon, lat=lat, epoch=2016.0, astrometry=Astrometry.from_errors(lerr, lerr)
+    )
+    right = Catalog(
+        lon=rlon, lat=rlat, epoch=2016.0, astrometry=Astrometry.from_errors(pub, pub)
+    )
+    box = MOC.from_polygon(
+        [150, 150 + side, 150 + side, 150], [2, 2, 2 + side, 2 + side], max_order=18
+    )
+    return left, right, truth, box, len(src) / n_left
+
+
+def test_exclusive_model_beats_independent_in_a_crowded_field() -> None:
+    left, right, truth, box, frac = _crowded_scene(4, 5000, 0.3)
+    out = {}
+    for exclusive in (False, True):
+        res = associate(
+            left,
+            right,
+            gate_pvalue=1e-4,
+            max_radius_arcsec=15.0,
+            right_footprint=box,
+            completeness="em",
+            assign="none",
+            calibrate="scale_floor",
+            exclusive=exclusive,
+        )
+        ok = truth[res.right_index] == res.left_index
+        p = res.posterior
+        bins = torch.clamp((p * 10).long(), max=9)
+        ece = sum(
+            float((bins == b).double().mean())
+            * abs(float(p[bins == b].mean()) - float(ok[bins == b].double().mean()))
+            for b in range(10)
+            if bool((bins == b).any())
+        )
+        out[exclusive] = (res.completeness, res.right_scale, ece, float(p[ok].sum()))
+    comp, scale, ece, true_mass = out[True]
+    assert abs(comp - frac) < 0.02
+    assert abs(scale - 2.0) < 0.15
+    assert ece < 0.015
+    # Independent posteriors hand shared right rows to several left rows:
+    # calibration is worse and less mass goes to the true pairs.
+    assert abs(out[False][1] - 2.0) < 0.15  # both fit the error scale
+    assert ece < out[False][2]
+    assert true_mass > out[False][3]
+
+
+def test_nway_exclusive_shares_no_source_mass() -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, _, box = _triple_scene(27, 1500, 3000)
+    res = associate_many(
+        cats, footprints=[box] * 3, max_radius_arcsec=30, completeness=[0.8, 0.6]
+    )
+    for c in (1, 2):
+        rows = res.members[:, c]
+        on = rows >= 0
+        mass = torch.zeros(len(cats[c]), dtype=D).index_add(
+            0, rows[on], res.posterior[on]
+        )
+        assert float(mass.max()) <= 1.0 + 1e-9
+    prim = torch.repeat_interleave(
+        torch.arange(len(cats[0])), res.offsets[1:] - res.offsets[:-1]
+    )
+    total = torch.zeros(len(cats[0]), dtype=D).index_add(0, prim, res.posterior)
+    torch.testing.assert_close(total, torch.ones(len(cats[0]), dtype=D))
+
+
+def test_native_segment_lse_matches_torch_reference() -> None:
+    from torchsky.catalogs._exclusive import _Segments, lse_excluding_self
+
+    seg_obj = _Segments(torch.zeros(1, dtype=torch.int64), 1)
+    if seg_obj.ext is None:
+        pytest.skip("native extension not built")
+    g = _gen(44)
+    n_seg = 500
+    seg = torch.randint(0, n_seg, (5000,), generator=g)
+    x = torch.randn(5000, generator=g, dtype=D) * 30.0
+    x[::17] = -math.inf  # absent weights
+    x[1::23] = x[0]  # ties
+    slack = torch.randn(n_seg, generator=g, dtype=D)
+    segs = _Segments(seg, n_seg)
+    for sl in (None, slack):
+        ref = lse_excluding_self(x, seg, n_seg, sl)
+        got = segs.lse_excl(x, sl)
+        torch.testing.assert_close(got, ref, rtol=1e-13, atol=0.0, equal_nan=True)

@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `associate(exclusive=True)` and `associate_many(exclusive=True)` (the new
+  default): one-to-one association. A right (secondary) row is the
+  counterpart of at most one primary. Posteriors are the Bethe marginals of
+  that model, from belief propagation on the candidate graph with
+  Anderson-accelerated message updates and implicit-function gradients. They
+  are exact on cycle-free candidate graphs and reduce to the independent
+  posteriors where no right row is shared. In crowded fields the independent
+  model (`exclusive=False`, nway's) counts a shared right row once per left row
+  that sees it, which biased completeness and error calibration. The exclusive
+  model also fits the right background density (rows that are not
+  counterparts, with a Gamma(3/2) prior per cell), evaluated at the right
+  row. `Association.density_mas2` reports it. On CPU the message sweeps use
+  a torch-free native kernel (`xmatch_segment_lse_excl`, segmented
+  log-sum-exp excluding self) with the torch path as reference for other
+  devices and gradients.
+
 - `torchsky.catalogs.PartitionPlan`, `healpix29` and `margin_arcsec`:
   partition primitives for survey-scale matching without I/O. Mixed-order
   nested cells (order-29 ranges, HATS `_healpix_29`) come from explicit pixels,
@@ -154,6 +170,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `associate` fits completeness, error calibration and (exclusive) background
+  density by maximum marginal likelihood (L-BFGS on the exact or Bethe log
+  likelihood) instead of alternating EM. In crowded fields EM moved the error
+  scale by about 5 % per round and stopped after 8 rounds at 1.45 for a true 2.0
+  on an injected bulge-like field; the direct fit recovers 1.92.
+  `HistogramRatio` terms are still updated by EM between fits.
 - `FieldObservation(value_semantics=...)` now raises `ValueError` for a string outside
   `VALUE_SEMANTICS` instead of accepting any non-empty string.
 - `DQPolicy` reads signed `int8` / `int16` / `int32` data-quality planes as unsigned bit fields,
