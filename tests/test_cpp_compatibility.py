@@ -65,12 +65,15 @@ def test_removed_symbols_are_not_exposed() -> None:
     assert not LEGACY_SYMBOLS.intersection(dir(cpp))
 
 
-def test_extension_exports_only_isa_diagnostics() -> None:
+def test_extension_exports_only_registered_kernels() -> None:
+    from torchsky import _native_ops
+
     exported = {name for name in dir(cpp._ext) if not name.startswith("__")}
-    # Torch-ABI kernels are registered as torch.ops; the torch-free crossmatch
-    # kernels (cpp_src/crossmatch.cpp, raw buffers via nanobind ndarray) are the
-    # only plain exports besides the ISA diagnostic.
-    assert exported == {
+    # The torch-free core exports one raw-buffer kernel per torch.ops schema
+    # registered from Python, the torch-free crossmatch kernels, the ISA
+    # diagnostic and the native ABI marker; nothing else.
+    expected = set(_native_ops._SCHEMAS) | {
+        "NATIVE_ABI",
         "selected_cpu_isa",
         "xmatch_best",
         "xmatch_count",
@@ -78,9 +81,34 @@ def test_extension_exports_only_isa_diagnostics() -> None:
         "xmatch_knn",
         "xmatch_segment_lse_excl",
     }
+    assert exported == expected
     bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")
-    assert bindings.count("m.def(") == 1
     assert all(f'"{name}"' not in bindings for name in LEGACY_SYMBOLS)
+
+
+def test_native_core_does_not_use_libtorch() -> None:
+    # One build serves every PyTorch version: no libtorch headers or symbols.
+    sources = [
+        p
+        for p in (PACKAGE_ROOT / "cpp_src").rglob("*")
+        if p.suffix in {".cpp", ".h"} and "third_party" not in p.parts
+    ]
+    offenders = [
+        str(p.relative_to(PACKAGE_ROOT))
+        for p in sources
+        if any(
+            token in p.read_text(encoding="utf-8")
+            for token in (
+                "#include <torch/",
+                "#include <ATen/",
+                "#include <c10/",
+                "TORCH_LIBRARY",
+            )
+        )
+    ]
+    assert offenders == []
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert "find_package(Torch" not in cmake
 
 
 def test_loader_reload_and_disable_cpp_subprocess_contract() -> None:
@@ -94,7 +122,6 @@ assert 'torchsky._cpp_ext' not in sys.modules
 from torchsky import _ops
 assert not _ops.has_fixed_dispatcher()
 assert not _ops.has_spectral_dispatcher()
-assert not _ops.has_wcs_dispatcher()
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

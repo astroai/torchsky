@@ -37,18 +37,6 @@ def _header(
     return header
 
 
-def _force_path(wcs: WCS, path: str) -> None:
-    wcs._cpp_center_pixel_to_world = None
-    wcs._cpp_center_world_to_pixel = None
-    wcs._disable_cpp_pixel_to_world = True
-    wcs._disable_cpp_world_to_pixel = True
-    wcs._disable_fused_pixel_to_world = path != "fused"
-    wcs._disable_fused_world_to_pixel = path != "fused"
-    if path == "fused":
-        assert wcs._can_use_fused_p2w_static
-        assert wcs._can_use_fused_w2p_static
-
-
 def _finite_rows(values: np.ndarray | torch.Tensor) -> np.ndarray:
     array = (
         values.detach().cpu().numpy() if isinstance(values, torch.Tensor) else values
@@ -56,7 +44,6 @@ def _finite_rows(values: np.ndarray | torch.Tensor) -> np.ndarray:
     return np.isfinite(array).all(axis=-1)
 
 
-@pytest.mark.parametrize("path", ["fused", "nonfused"])
 @pytest.mark.parametrize(
     "projection,pixels,expected",
     [
@@ -97,7 +84,6 @@ def _finite_rows(values: np.ndarray | torch.Tensor) -> np.ndarray:
     ],
 )
 def test_plane_domain_masks_match_wcslib(
-    path: str,
     projection: str,
     pixels: np.ndarray,
     expected: np.ndarray,
@@ -107,7 +93,6 @@ def test_plane_domain_masks_match_wcslib(
     assert np.array_equal(_finite_rows(oracle), expected)
 
     wcs = WCS(header)
-    _force_path(wcs, path)
     actual = wcs.pixel_to_world(torch.from_numpy(pixels), origin=1)
     assert np.array_equal(_finite_rows(actual), expected)
     np.testing.assert_allclose(
@@ -128,9 +113,6 @@ def test_tan_horizon_and_back_hemisphere_masks() -> None:
     )
 
     wcs = WCS(header)
-    wcs._disable_fused_world_to_pixel = True
-    wcs._disable_cpp_world_to_pixel = True
-    wcs._cpp_tan_intermediate_from_radec = None
     actual = wcs.world_to_pixel(torch.from_numpy(world), origin=1)
     expected = np.array([True, False, False, False, False])
     assert np.array_equal(_finite_rows(actual), expected)
@@ -138,65 +120,28 @@ def test_tan_horizon_and_back_hemisphere_masks() -> None:
         actual.detach().cpu().numpy()[0], oracle[0], atol=2e-4, rtol=1e-12
     )
 
+    # The two-argument public path must give the same masks as the stacked one.
     ra = torch.from_numpy(angles)
     dec = torch.zeros_like(ra)
-    empty_idx = torch.empty((0, 3), dtype=torch.int64)
-    empty_coeff = torch.empty(0, dtype=torch.float64)
-    x, y = torch.ops.torchsky.wcs_world_to_pixel(
-        ra,
-        dec,
-        1.0,
-        1.0,
-        1.0,
-        0.0,
-        0.0,
-        1.0,
-        "TAN",
-        1.0,
-        4.0,
-        3.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        1.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        math.pi,
-        "pole",
-        0.0,
-        0.0,
-        False,
-        empty_idx,
-        empty_coeff,
-        empty_idx,
-        empty_coeff,
-    )
+    x, y = wcs.world_to_pixel(ra, dec, origin=1)
     assert np.array_equal(_finite_rows(torch.stack((x, y), dim=-1)), expected)
 
 
 @pytest.mark.parametrize("projection", ["TAN", "ARC"])
-@pytest.mark.parametrize("path", ["fused", "nonfused"])
-def test_zenithal_handedness_matches_wcslib(projection: str, path: str) -> None:
+def test_zenithal_handedness_matches_wcslib(projection: str) -> None:
     header = _header(projection, crval1=17.0, crval2=23.0)
     pixels = np.array([[1.0, 1.0], [2.0, 1.0], [1.0, 2.0], [-2.0, 3.0]])
     oracle = AstropyWCS(header).all_pix2world(pixels, 1)
     wcs = WCS(header)
-    _force_path(wcs, path)
     actual = wcs.pixel_to_world(torch.from_numpy(pixels), origin=1)
     np.testing.assert_allclose(actual.detach().cpu().numpy(), oracle, atol=2e-11)
 
 
-@pytest.mark.parametrize("path", ["fused", "nonfused"])
-def test_mollweide_polar_forward_matches_wcslib(path: str) -> None:
+def test_mollweide_polar_forward_matches_wcslib() -> None:
     header = _header("MOL")
     world = np.array([[0.0, 90.0], [45.0, 89.999], [120.0, -90.0], [179.0, 0.0]])
     oracle = AstropyWCS(header).all_world2pix(world, 1)
     wcs = WCS(header)
-    _force_path(wcs, path)
     actual = wcs.world_to_pixel(torch.from_numpy(world), origin=1)
     assert _finite_rows(actual).all()
     np.testing.assert_allclose(

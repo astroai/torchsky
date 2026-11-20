@@ -98,7 +98,7 @@ def test_projection_forward_stack_matches_separate_args(
     torch.testing.assert_close(world[..., 1], dec_a, atol=1e-9, rtol=1e-12)  # type: ignore
 
 
-def test_off_equator_cea_fused_matches_python_fallback() -> None:
+def test_off_equator_cea_two_arg_matches_stacked() -> None:
     header = _make_header(  # type: ignore
         "CEA",
         crval1=12.0,
@@ -112,16 +112,13 @@ def test_off_equator_cea_fused_matches_python_fallback() -> None:
     y = torch.tensor([320.5, 400.0, 320.5, 500.0], dtype=torch.float64)
 
     ra_default, dec_default = twcs.pixel_to_world(x, y, origin=1)
-
-    twcs._disable_fused_pixel_to_world = True
-    twcs._disable_cpp_pixel_to_world = True
-    ra_python, dec_python = twcs.pixel_to_world(x, y, origin=1)
+    world = twcs.pixel_to_world(torch.stack([x, y], dim=-1), origin=1)
 
     np.testing.assert_allclose(
-        ra_default.cpu().numpy(), ra_python.cpu().numpy(), atol=5e-9
+        ra_default.cpu().numpy(), world[..., 0].cpu().numpy(), atol=5e-9
     )
     np.testing.assert_allclose(
-        dec_default.cpu().numpy(), dec_python.cpu().numpy(), atol=5e-9
+        dec_default.cpu().numpy(), world[..., 1].cpu().numpy(), atol=5e-9
     )
 
 

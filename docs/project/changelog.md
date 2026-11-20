@@ -170,6 +170,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **No more per-PyTorch-minor lock.** The native extension no longer includes
+  or links libtorch:
+  - tensors enter its kernels through DLPack without a copy, and results come
+    back the same way;
+  - the `torch.ops.torchsky` operators are registered with `torch.library` from
+    Python, with the same schemas, fake kernels and autograd as before;
+  - the extension is built against the CPython stable ABI.
+
+  One `cp312-abi3` wheel per platform therefore serves CPython 3.12 and newer
+  and every PyTorch from 2.14 up. The requirement is now `torch>=2.14` with no
+  upper bound, and building from source no longer needs PyTorch. The release
+  tooling (`scripts/torch_support.json`, `scripts/release_lane.py`) tracks a
+  tested floor and a tested maximum instead of one torch lane per release.
+- `import torchsky` (and `torchsky.sphere`, `torchsky.wcs`, `torchsky.catalogs`)
+  no longer loads torchfits: the FITS readers and writers in `sphere.compat`,
+  `sphere.stmoc`, the spectral weight loader and `wcs.astrometry_net` import it
+  when called.
+- TPV world→pixel inversion runs its Newton sweeps on the points still moving
+  only, and stops when every point has converged (about 2.5× faster for large
+  inputs; results unchanged).
 - `associate` fits completeness, error calibration and (exclusive) background
   density by maximum marginal likelihood (L-BFGS on the exact or Bethe log
   likelihood) instead of alternating EM. In crowded fields EM moved the error
@@ -242,6 +262,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The native WCS operators (`torch.ops.torchsky.wcs_*`), the fused WCS fast
+  paths and `torchsky.wcs.functional`: the pure-torch WCS paths were already
+  the ones in use, so results and performance are unchanged. Also removed: the
+  `TORCHSKY_WCS_FUSED` / `TORCHSKY_CPP_DISPATCHER` environment variables,
+  `_ops.has_wcs_dispatcher` and `TPV.set_cpp_invert_max_points`.
 - `crossmatch_sky_from_arrow`, `crossmatch_sky_streamed`, and the Arrow /
   `streamed=` branches of `catalogs.crossmatch`: read tables with torchfits,
   pyarrow or polars and pass tensors; match batches against a prebuilt

@@ -12,7 +12,6 @@ from typing import (
 )
 import math
 
-from torchsky import _ops
 from . import _celprm
 
 from .tpv import PV1_KEYS, PV2_KEYS
@@ -352,7 +351,6 @@ class _SetupTensorsMixin:
         # Precompute Tensors
         self._ra_p_rad = self.alpha_p * d2r
         self._dec_p_rad = self.delta_p * d2r
-        self._phi_p_rad = self._phi_p_native * d2r
         dec_p_tensor = _as_tensor(
             self._dec_p_rad,
             dtype=self._wcs_coord_dtype(self.device),
@@ -461,30 +459,6 @@ class _SetupTensorsMixin:
         self._hpx_polar_denom = self._hpx_facet_half_width
         self._hpx_inv_polar_denom = 1.0 / self._hpx_polar_denom
 
-        # Precompute fused arguments to avoid overhead
-        self._fused_proj_code = "TAN" if self._is_tpv else self._proj_code
-        self._fused_pv2_1 = self._projection_params.get("PV2_1", 1.0)
-        self._fused_tpv_idx1 = (
-            self._require_tpv().idx1
-            if self._is_tpv
-            else torch.empty((0, 3), dtype=torch.long, device="cpu")
-        )
-        self._fused_tpv_c1 = (
-            self._require_tpv().c1
-            if self._is_tpv
-            else torch.empty(0, dtype=torch.float64, device="cpu")
-        )
-        self._fused_tpv_idx2 = (
-            self._require_tpv().idx2
-            if self._is_tpv
-            else torch.empty((0, 3), dtype=torch.long, device="cpu")
-        )
-        self._fused_tpv_c2 = (
-            self._require_tpv().c2
-            if self._is_tpv
-            else torch.empty(0, dtype=torch.float64, device="cpu")
-        )
-
         # Apply projection-specific PV defaults before tensorization.
         # The pre-tensorized PV arrays fill missing keys with 0.0, but some
         # projections have non-zero defaults (e.g. SZP theta_c = 90°).
@@ -516,7 +490,6 @@ class _SetupTensorsMixin:
             if "PV2_2" not in self._projection_params:
                 self._projection_params["PV2_2"] = cos_d0 / sin_d0
             self._proj_code = "SIN"
-            self._fused_proj_code = "SIN"
 
         # Pre-tensorize PV parameters to avoid dict lookups in compiled hot paths.
         pv1_data = [self._projection_params.get(k, 0.0) for k in PV1_KEYS]
@@ -531,14 +504,12 @@ class _SetupTensorsMixin:
         zpn_valid = torch.nonzero(zpn_all.abs() > 1e-15, as_tuple=False)
         if zpn_valid.numel() > 0:
             zpn_last = int(zpn_valid[-1].item())
-            self._zpn_coeffs_cpu = zpn_all[: zpn_last + 1].contiguous()
-        else:
+            zpn_coeffs = zpn_all[: zpn_last + 1]
+        elif self._proj_code == "ZPN":
             # Default ZPN behavior (no explicit polynomial terms): r = w.
-            # Keep a linear coefficient vector so C++ direct ZPN path remains enabled.
-            if self._proj_code == "ZPN":
-                self._zpn_coeffs_cpu = torch.tensor([0.0, 1.0], dtype=torch.float64)
-            else:
-                self._zpn_coeffs_cpu = torch.empty((0,), dtype=torch.float64)
+            zpn_coeffs = torch.tensor([0.0, 1.0], dtype=torch.float64)
+        else:
+            zpn_coeffs = torch.empty((0,), dtype=torch.float64)
 
         # Precompute projection flags for compile-friendly dispatch.
         self._is_tan = self._proj_code == "TAN"
@@ -553,11 +524,11 @@ class _SetupTensorsMixin:
         )
         self._is_zpn_linear = False
         if self._is_zpn:
-            if self._zpn_coeffs_cpu.numel() == 0:
+            if zpn_coeffs.numel() == 0:
                 self._is_zpn_linear = True
-            elif self._zpn_coeffs_cpu.numel() == 2:
-                c0 = float(self._zpn_coeffs_cpu[0].item())
-                c1 = float(self._zpn_coeffs_cpu[1].item())
+            elif zpn_coeffs.numel() == 2:
+                c0 = float(zpn_coeffs[0].item())
+                c1 = float(zpn_coeffs[1].item())
                 self._is_zpn_linear = abs(c0) <= 1e-15 and abs(c1 - 1.0) <= 1e-15
         self._is_ait = self._proj_code == "AIT"
         self._is_mol = self._proj_code == "MOL"
@@ -608,158 +579,6 @@ class _SetupTensorsMixin:
             and abs((self._phi_p_native % 360.0)) < 1e-12
             and self._celestial_postrot is None
         )
-        self._cpp_zenithal_project: Callable[..., Any] | None = None
-        self._cpp_zpn_project: Callable[..., Any] | None = None
-        self._cpp_zenithal_deproject: Callable[..., Any] | None = None
-        self._cpp_cylindrical_project: Callable[..., Any] | None = None
-        self._cpp_cylindrical_deproject: Callable[..., Any] | None = None
-        self._cpp_center_pixel_to_world: Callable[..., Any] | None = None
-        self._cpp_center_world_to_pixel: Callable[..., Any] | None = None
-        self._cpp_ait_project: Callable[..., Any] | None = None
-        self._cpp_ait_deproject: Callable[..., Any] | None = None
-        self._cpp_mol_project: Callable[..., Any] | None = None
-        self._cpp_mol_deproject: Callable[..., Any] | None = None
-        self._cpp_hpx_project: Callable[..., Any] | None = None
-        self._cpp_hpx_deproject: Callable[..., Any] | None = None
-        self._cpp_inverse_spherical_rotation_pole: Callable[..., Any] | None = None
-        self._cpp_spherical_rotation_pole: Callable[..., Any] | None = None
-        self._cpp_tan_intermediate_from_radec: Callable[..., Any] | None = None
-        self._cpp_direct_static_ok = (
-            self._celestial_postrot is None
-            and self.sip is None
-            and not self._tpv_uses_pixel_intermediate
-            and not self._is_tpv
-            and not self._is_tnx
-            and not self._is_zpx
-            and not self._is_gls
-            and not self._has_paper4_lut()
-        )
-        self._cpp_p2w_direct_kind = ""
-        if self._cpp_direct_static_ok:
-            if self._is_ait and self._cpp_ait_project is not None:
-                self._cpp_p2w_direct_kind = "ait"
-            elif self._is_mol and self._cpp_mol_project is not None:
-                self._cpp_p2w_direct_kind = "mol"
-            elif self._is_hpx and self._cpp_hpx_project is not None:
-                self._cpp_p2w_direct_kind = "hpx"
-            elif (
-                self._cpp_zenithal_project is not None
-                and not self._is_tpv
-                and not self._is_sin_slant
-                and (
-                    self._is_tan
-                    or self._is_sin
-                    or self._is_arc
-                    or self._is_zea
-                    or self._is_stg
-                )
-            ):
-                self._cpp_p2w_direct_kind = "zenithal"
-            elif (
-                self._is_zpn
-                and not self._is_zpn_linear
-                and self._cpp_zpn_project is not None
-                and self._zpn_coeffs_cpu.numel() > 0
-            ):
-                self._cpp_p2w_direct_kind = "zpn"
-        self._cpp_w2p_direct_kind = ""
-        if self._cpp_direct_static_ok:
-            if self._is_ait and self._cpp_ait_deproject is not None:
-                self._cpp_w2p_direct_kind = "ait"
-            elif self._is_hpx and self._cpp_hpx_deproject is not None:
-                self._cpp_w2p_direct_kind = "hpx"
-            elif (
-                self._cpp_zenithal_deproject is not None
-                and not self._is_tpv
-                and not self._is_sin_slant
-                and (
-                    self._is_tan
-                    or self._is_sin
-                    or self._is_arc
-                    or self._is_zea
-                    or self._is_stg
-                )
-            ):
-                self._cpp_w2p_direct_kind = "zenithal"
-        self._has_cpp_direct_p2w = bool(self._cpp_p2w_direct_kind)
-        self._has_cpp_direct_w2p = bool(self._cpp_w2p_direct_kind)
-        self._can_use_fused_p2w_static = (
-            self._celestial_postrot is None
-            and self._enable_fused_wcs
-            and self._enable_cpp_dispatcher
-            and _ops.has_wcs_dispatcher()
-            and self.sip is None
-            and not self._tpv_uses_pixel_intermediate
-            and not self._is_tnx
-            and not self._is_zpx
-            and not self._is_gls
-            and not self._has_paper4_lut()
-            and not self._is_sin_slant
-            and (
-                self._proj_code
-                in (
-                    "TAN",
-                    "SIN",
-                    "ARC",
-                    "CEA",
-                    "AIT",
-                    "HPX",
-                    "CAR",
-                    "SFL",
-                    "MOL",
-                    "PCO",
-                    "XPH",
-                    "TSC",
-                    "CSC",
-                    "QSC",
-                    "TPV",
-                )
-                or (self._is_tpv and self._proj_code == "TAN")
-            )
-        )
-        self._can_use_fused_w2p_static = (
-            self._celestial_postrot is None
-            and self._enable_fused_wcs
-            and self._enable_cpp_dispatcher
-            and _ops.has_wcs_dispatcher()
-            and self.sip is None
-            and not self._tpv_uses_pixel_intermediate
-            and not self._is_tnx
-            and not self._is_zpx
-            and not self._is_gls
-            and not self._has_paper4_lut()
-            and not self._is_sin_slant
-            and (not self._is_tpv or not self._require_tpv()._invert_trace_enabled)
-            and (
-                self._proj_code
-                in (
-                    "TAN",
-                    "SIN",
-                    "ARC",
-                    "CEA",
-                    "AIT",
-                    "HPX",
-                    "CAR",
-                    "SFL",
-                    "MOL",
-                    "PCO",
-                    "XPH",
-                    "TSC",
-                    "CSC",
-                    "QSC",
-                    "TPV",
-                )
-                or (self._is_tpv and self._proj_code == "TAN")
-            )
-        )
-        self._disable_cpp_pixel_to_world = False
-        self._disable_cpp_world_to_pixel = False
-        self._disable_fused_pixel_to_world = False
-        self._disable_fused_world_to_pixel = False
-        self._cpp_direct_p2w_verified = False
-        self._cpp_direct_w2p_verified = False
-        self._fused_p2w_verified = False
-        self._fused_w2p_verified = False
         self._setup_projection_dispatch()
 
     def _setup_projection_dispatch(self) -> None:

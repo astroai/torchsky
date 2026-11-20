@@ -1,4 +1,4 @@
-#include <torch/library.h>
+#include "torchsky/native_nb.h"
 
 #include "torchsky/healpix.h"
 
@@ -60,17 +60,6 @@ std::tuple<torch::Tensor, torch::Tensor> spectral_spin_integrate_concat_cpu(
     return std::make_tuple(std::move(out.first), std::move(out.second));
 }
 
-std::tuple<torch::Tensor, torch::Tensor> spectral_spin_map2alm_from_basis_cpu(
-    const torch::Tensor& q,
-    const torch::Tensor& u,
-    const torch::Tensor& ycp_t,
-    const torch::Tensor& ycm_t,
-    double pixel_weight
-) {
-    auto out = healpix_spin_map2alm_from_basis_cpu(q, u, ycp_t, ycm_t, pixel_weight);
-    return std::make_tuple(std::move(out.first), std::move(out.second));
-}
-
 torch::Tensor spectral_spin_interpolate_recurrence_cpu(
     const torch::Tensor& alms,
     const torch::Tensor& theta,
@@ -126,29 +115,22 @@ torch::Tensor spectral_spin_alm2map_ring_recurrence_cpu(
     return out;
 }
 
+void register_spectral(nanobind::module_& m) {
+    using native::def;
+    def(m, "spectral_scalar_alm2map_direct", &healpix_scalar_alm2map_direct_cpu);
+    def(m, "spectral_ring_fourier_modes", &healpix_ring_fourier_modes_cpu);
+    def(m, "spectral_ring_fourier_modes_spin_conj", &spectral_ring_fourier_modes_spin_conj_cpu);
+    def(m, "spectral_ring_fourier_synthesis", &spectral_ring_fourier_synthesis_cpu);
+    def(m, "spectral_spin_ring_finalize", &spectral_spin_ring_finalize_cpu);
+    def(m, "spectral_spin_map2alm_ring_concat", &spectral_spin_map2alm_ring_concat_cpu);
+    def(m, "spectral_spin_interpolate_concat", &spectral_spin_interpolate_concat_cpu);
+    def(m, "spectral_spin_integrate_concat", &spectral_spin_integrate_concat_cpu);
+    def(m, "spectral_spin_integrate_recurrence", &healpix_spin_integrate_recurrence_cpu);
+    def(m, "spectral_spin_interpolate_recurrence", &spectral_spin_interpolate_recurrence_cpu);
+    def(m, "spectral_spin_map2alm_ring_recurrence", &healpix_spin_map2alm_ring_recurrence_cpu);
+    def(m, "spectral_spin_alm2map_ring_recurrence", &spectral_spin_alm2map_ring_recurrence_cpu);
+    def(m, "spectral_scalar_integrate_recurrence", &healpix_scalar_integrate_recurrence_cpu);
+    def(m, "spectral_scalar_interpolate_recurrence", &healpix_scalar_interpolate_recurrence_cpu);
 }
 
-TORCH_LIBRARY_IMPL(torchsky, CPU, m) {
-    m.impl("spectral_scalar_alm2map_direct", TORCH_FN(torchsky::healpix_scalar_alm2map_direct_cpu));
-    m.impl("spectral_ring_fourier_modes", TORCH_FN(torchsky::healpix_ring_fourier_modes_cpu));
-    m.impl("spectral_ring_fourier_modes_spin_conj", TORCH_FN(torchsky::spectral_ring_fourier_modes_spin_conj_cpu));
-    m.impl("spectral_ring_fourier_synthesis", TORCH_FN(torchsky::spectral_ring_fourier_synthesis_cpu));
-    m.impl("spectral_spin_ring_finalize", TORCH_FN(torchsky::spectral_spin_ring_finalize_cpu));
-    m.impl("spectral_spin_map2alm_ring_concat", TORCH_FN(torchsky::spectral_spin_map2alm_ring_concat_cpu));
-    m.impl("spectral_spin_interpolate_concat", TORCH_FN(torchsky::spectral_spin_interpolate_concat_cpu));
-    m.impl("spectral_spin_integrate_concat", TORCH_FN(torchsky::spectral_spin_integrate_concat_cpu));
-    m.impl("spectral_spin_integrate_recurrence", TORCH_FN(torchsky::healpix_spin_integrate_recurrence_cpu));
-    m.impl("spectral_spin_interpolate_recurrence", TORCH_FN(torchsky::spectral_spin_interpolate_recurrence_cpu));
-    m.impl("spectral_spin_map2alm_ring_recurrence", TORCH_FN(torchsky::healpix_spin_map2alm_ring_recurrence_cpu));
-    m.impl("spectral_spin_alm2map_ring_recurrence", TORCH_FN(torchsky::spectral_spin_alm2map_ring_recurrence_cpu));
-    m.impl("spectral_scalar_integrate_recurrence", TORCH_FN(torchsky::healpix_scalar_integrate_recurrence_cpu));
-    m.impl("spectral_scalar_interpolate_recurrence", TORCH_FN(torchsky::healpix_scalar_interpolate_recurrence_cpu));
-    m.impl("_spectral_spin_map2alm_from_basis", TORCH_FN(torchsky::spectral_spin_map2alm_from_basis_cpu));
-    m.impl("_spectral_spin_alm2map_from_basis", TORCH_FN(torchsky::healpix_spin_alm2map_from_basis_cpu));
-}
-
-namespace torchsky {
-
-void ensure_spectral_cpu_operators_linked() {}
-
-}
+}  // namespace torchsky

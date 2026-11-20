@@ -480,15 +480,7 @@ def _csc_inverse_poly(xf: Tensor, yf: Tensor) -> Tensor:
     return _madd(xf_f, xf_f * one_minus_xx, chi)
 
 
-def _csc_cpp_pair(fn_name: str, a: Tensor, b: Tensor) -> Tuple[Tensor, Tensor] | None:
-    del fn_name, a, b
-    return None
-
-
 def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
-    cpp_out = _csc_cpp_pair("wcs_csc_s2x", phi, theta)
-    if cpp_out is not None:
-        return cpp_out
     lx, m, n = _direction_cosines(phi, theta)
     face, chi, psi, _ = _face_from_lmn(lx, m, n)
     xf = torch.clamp(_csc_forward_poly(chi, psi), -1.0, 1.0)
@@ -499,9 +491,6 @@ def _csc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
 
 
 def _csc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
-    cpp_out = _csc_cpp_pair("wcs_csc_x2s", xi, eta)
-    if cpp_out is not None:
-        return cpp_out
     face, xf, yf, valid = _xy_to_face_f32(xi, eta)
     chi = _csc_inverse_poly(xf, yf)
     psi = _csc_inverse_poly(yf, xf)

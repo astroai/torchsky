@@ -6,8 +6,6 @@ from pathlib import Path
 import torch
 from torch import Tensor
 
-from torchfits import read_tensor as read_image
-from torchfits.table import read_torch as read_table
 
 from . import healpix as _healpix
 from ._spectral_cache import SpectralCacheNamespace
@@ -109,6 +107,9 @@ def _healpix_full_weight_path(nside: int, datapath: Path) -> Path:
 
 def _read_healpix_full_weight_vector(path: str, nside: int) -> Tensor:
     """Load HEALPix full-pixel weight *corrections* (applied as ``1 + w``)."""
+    from torchfits import read_tensor as read_image
+    from torchfits.table import read_torch as read_table
+
     npix = _healpix.nside2npix(nside)
     candidates: list[Tensor] = []
     for hdu in (1, 0):

@@ -45,9 +45,6 @@
 #define POCKETFFT_CACHE_SIZE 128
 #include "third_party/pocketfft_hdronly.h"
 
-#include <ATen/Parallel.h>
-#include <ATen/ops/fft_fft.h>
-#include <ATen/ops/fft_ifft.h>
 #include "torchsky_torch.h"
 #include "torchsky/healpix.h"
 #include "torchsky/ishioka_kernels.h"
@@ -1253,8 +1250,12 @@ static torch::Tensor healpix_neighbors_cpu_impl(
 
     const int64_t* in = pix.data_ptr<int64_t>();
     int64_t* dst = out.data_ptr<int64_t>();
-    const int64_t min_pix = pix.min().item<int64_t>();
-    const int64_t max_pix = pix.max().item<int64_t>();
+    int64_t min_pix = 0;
+    int64_t max_pix = -1;
+    if (pix.numel() > 0) {
+        min_pix = *std::min_element(in, in + pix.numel());
+        max_pix = *std::max_element(in, in + pix.numel());
+    }
     if (min_pix < 0 || max_pix >= npix) {
         throw std::runtime_error("pixel index out of range for nside");
     }
@@ -1702,6 +1703,22 @@ static void fft_outofplace(
     );
 }
 
+// Forward FFT of each row of a complex [rows, n] block (torch.fft.fft along
+// the last dimension), with the file's pocketfft/Accelerate kernel.
+static torch::Tensor fft_rows(const torch::Tensor& block) {
+    TORCH_CHECK(block.dim() == 2 && block.scalar_type() == torch::kComplexDouble,
+                "fft_rows expects a complex128 [rows, n] block");
+    const int64_t rows = block.size(0);
+    const int64_t n = block.size(1);
+    auto out = torch::empty({rows, n}, torch::TensorOptions().dtype(torch::kComplexDouble));
+    const auto* in = block.data_ptr<c10::complex<double>>();
+    auto* dst = out.data_ptr<c10::complex<double>>();
+    for (int64_t r = 0; r < rows; ++r) {
+        fft_outofplace(in + r * n, static_cast<int>(n), 1, dst + r * n, -1);
+    }
+    return out;
+}
+
 torch::Tensor healpix_ring_fourier_modes_cpu(
     const torch::Tensor& rows,
     const torch::Tensor& starts,
@@ -1884,7 +1901,7 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
         torch::Tensor fft_block;
         if (row_ptr != nullptr) {
             auto block = row_c.narrow(0, run_pix_start, run_ring_count * nph).view({run_ring_count, nph});
-            fft_block = at::fft_fft(block, std::nullopt, -1, std::nullopt).contiguous();
+            fft_block = fft_rows(block);
         } else {
             auto block = torch::empty({run_ring_count, nph}, cplx_opts);
             auto* bp = reinterpret_cast<std::complex<double>*>(block.data_ptr<c10::complex<double>>());
@@ -1893,7 +1910,7 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
                 const int64_t p = run_pix_start + j;
                 bp[static_cast<size_t>(j)] = {q_ptr[p], u_ptr[p]};
             }
-            fft_block = at::fft_fft(block, std::nullopt, -1, std::nullopt).contiguous();
+            fft_block = fft_rows(block);
         }
         const auto* fptr = fft_block.data_ptr<c10::complex<double>>();
         for (int64_t ir = 0; ir < run_ring_count; ++ir) {
@@ -2346,117 +2363,6 @@ torch::Tensor healpix_spin_ring_finalize_cpu(
     return spin_qu_from_ifft_cpu(p_pm_pos, sp, sm, layout.starts, layout.lengths);
 }
 
-std::pair<torch::Tensor, torch::Tensor> healpix_spin_map2alm_from_basis_cpu(
-    const torch::Tensor& q,
-    const torch::Tensor& u,
-    const torch::Tensor& ycp_t,
-    const torch::Tensor& ycm_t,
-    double pix_w
-) {
-    constexpr const char* function_name = "healpix_spin_map2alm_from_basis_cpu";
-    validate_finite_scalar(pix_w, function_name, "pix_w");
-    auto qv = validate_spectral_tensor(
-        q, torch::kDouble, {1}, function_name, "q", "float64"
-    );
-    auto uv = validate_spectral_tensor(
-        u, torch::kDouble, {1}, function_name, "u", "float64"
-    );
-    auto ycp = validate_spectral_tensor(
-        ycp_t, torch::kComplexDouble, {2}, function_name, "ycp_t", "complex128"
-    );
-    auto ycm = validate_spectral_tensor(
-        ycm_t, torch::kComplexDouble, {2}, function_name, "ycm_t", "complex128"
-    );
-
-    if (qv.numel() != uv.numel()) {
-        throw std::runtime_error("q/u length mismatch");
-    }
-    if (ycp.sizes() != ycm.sizes()) {
-        throw std::runtime_error("basis tensors shape mismatch");
-    }
-
-    const int64_t npix = qv.numel();
-    if (ycp.size(0) != npix) {
-        throw std::runtime_error("basis first dimension must match q/u length");
-    }
-    auto p_plus = torch::complex(qv, uv);
-    auto p_minus = torch::conj(p_plus);
-    auto c_plus = torch::matmul(p_plus, ycp) * pix_w;
-    auto c_minus = torch::matmul(p_minus, ycm) * pix_w;
-    return {c_plus, c_minus};
-}
-
-torch::Tensor healpix_spin_alm2map_from_basis_cpu(
-    const torch::Tensor& coeff_plus,
-    const torch::Tensor& coeff_minus,
-    const torch::Tensor& y_plus,
-    const torch::Tensor& y_minus,
-    const torch::Tensor& y_plus_m0,
-    const torch::Tensor& y_minus_m0
-) {
-    constexpr const char* function_name = "healpix_spin_alm2map_from_basis_cpu";
-    auto cp = validate_spectral_tensor(
-        coeff_plus, torch::kComplexDouble, {1}, function_name, "coeff_plus", "complex128"
-    );
-    auto cm = validate_spectral_tensor(
-        coeff_minus, torch::kComplexDouble, {1}, function_name, "coeff_minus", "complex128"
-    );
-    auto yp = validate_spectral_tensor(
-        y_plus, torch::kComplexDouble, {2}, function_name, "y_plus", "complex128"
-    );
-    auto ym = validate_spectral_tensor(
-        y_minus, torch::kComplexDouble, {2}, function_name, "y_minus", "complex128"
-    );
-    auto yp0 = validate_spectral_tensor(
-        y_plus_m0, torch::kComplexDouble, {2}, function_name, "y_plus_m0", "complex128"
-    );
-    auto ym0 = validate_spectral_tensor(
-        y_minus_m0, torch::kComplexDouble, {2}, function_name, "y_minus_m0", "complex128"
-    );
-
-    if (cp.numel() != cm.numel()) {
-        throw std::runtime_error("coeff_plus/coeff_minus length mismatch");
-    }
-    if (yp.sizes() != ym.sizes()) {
-        throw std::runtime_error("y_plus/y_minus shape mismatch");
-    }
-    if (yp0.sizes() != ym0.sizes()) {
-        throw std::runtime_error("y_plus_m0/y_minus_m0 shape mismatch");
-    }
-    const int64_t nalm = cp.numel();
-    if (yp.size(0) != nalm) {
-        throw std::runtime_error("basis row count must match coefficient length");
-    }
-    const int64_t npix = yp.size(1);
-    if (ym.size(1) != npix || yp0.size(1) != npix || ym0.size(1) != npix) {
-        throw std::runtime_error("basis tensors must have the same pixel dimension");
-    }
-    const int64_t l0 = yp0.size(0);
-    if (l0 > nalm) {
-        throw std::runtime_error("m0 basis row count cannot exceed coefficient length");
-    }
-
-    auto p_plus_pos = torch::matmul(cp, yp);
-    auto p_minus_pos = torch::matmul(cm, ym);
-    torch::Tensor p_plus;
-    torch::Tensor p_minus;
-    if (l0 == nalm) {
-        p_plus = p_plus_pos;
-        p_minus = p_minus_pos;
-    } else {
-        auto cp0 = cp.narrow(0, 0, l0);
-        auto cm0 = cm.narrow(0, 0, l0);
-        auto p_plus_m0 = torch::matmul(cp0, yp0);
-        auto p_minus_m0 = torch::matmul(cm0, ym0);
-        p_plus = p_plus_pos + torch::conj(p_minus_pos - p_minus_m0).resolve_conj();
-        p_minus = p_minus_pos + torch::conj(p_plus_pos - p_plus_m0).resolve_conj();
-    }
-
-    auto q = -0.5 * torch::real(p_plus + p_minus);
-    auto u = -0.5 * torch::imag(p_plus - p_minus);
-    return torch::stack({q.to(torch::kFloat64), u.to(torch::kFloat64)}, 0);
-}
-
 std::pair<torch::Tensor, torch::Tensor> healpix_spin_interpolate_concat_cpu(
     const torch::Tensor& coeff_plus,
     const torch::Tensor& coeff_minus,
@@ -2588,13 +2494,21 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_integrate_concat_cpu(
             const int64_t base = m * (lmax + 1) - (m * (m - 1)) / 2;
             const int64_t l_count = lmax - m + 1;
 
-            auto yp_block = yp.narrow(0, base, l_count);
-            auto ym_block = ym.narrow(0, base, l_count);
-            auto sp_vec = sp.select(0, m);
-            auto sm_vec = sm.select(0, m);
-
-            out_plus.narrow(0, base, l_count).copy_(at::mv(yp_block, sp_vec) * pix_w);
-            out_minus.narrow(0, base, l_count).copy_(at::mv(ym_block, sm_vec) * pix_w);
+            // out[base + l] = pix_w * sum_r y[base + l, r] * s[m, r]
+            const auto* sp_row = sp_ptr + m * nrings;
+            const auto* sm_row = sm_ptr + m * nrings;
+            for (int64_t l = 0; l < l_count; ++l) {
+                const auto* yp_row = yp_ptr + (base + l) * nrings;
+                const auto* ym_row = ym_ptr + (base + l) * nrings;
+                c10::complex<double> acc_p(0.0, 0.0);
+                c10::complex<double> acc_m(0.0, 0.0);
+                for (int64_t r = 0; r < nrings; ++r) {
+                    acc_p += yp_row[r] * sp_row[r];
+                    acc_m += ym_row[r] * sm_row[r];
+                }
+                op_ptr[base + l] = acc_p * pix_w;
+                om_ptr[base + l] = acc_m * pix_w;
+            }
         }
     });
 
@@ -2643,10 +2557,20 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_map2alm_ring_concat_cpu(
     auto s_stacked = healpix_ring_fourier_modes_spin_conj_cpu(
         p_plus_c, layout.starts, layout.lengths, mmax
     );
-    auto s_plus = s_stacked.select(0, 0);
-    auto s_minus = s_stacked.select(0, 1);
-    s_plus = s_plus * phase;
-    s_minus = s_minus * phase;
+    // s_pm * phase0_neg, elementwise over [m, ring].
+    auto s_plus = s_stacked.select(0, 0).clone();
+    auto s_minus = s_stacked.select(0, 1).clone();
+    {
+        auto* spp = s_plus.data_ptr<c10::complex<double>>();
+        auto* smp = s_minus.data_ptr<c10::complex<double>>();
+        const auto* ph = phase.data_ptr<c10::complex<double>>();
+        const int64_t count = s_plus.numel();
+        TORCH_CHECK(phase.numel() == count, "phase0_neg does not match the spin modes");
+        for (int64_t i = 0; i < count; ++i) {
+            spp[i] *= ph[i];
+            smp[i] *= ph[i];
+        }
+    }
     return healpix_spin_integrate_concat_cpu(s_plus, s_minus, yp, ym, lmax, mmax, pix_w);
 }
 
@@ -2808,7 +2732,7 @@ std::pair<torch::Tensor, torch::Tensor> healpix_get_interp_weights_nested_cpu(
     const torch::Tensor& lat_deg
 ) {
     auto out = healpix_get_interp_weights_ring_cpu(nside, lon_deg, lat_deg);
-    auto pix_n = healpix_ring2nest_cpu(nside, out.first.reshape({-1})).reshape_as(out.first);
+    auto pix_n = healpix_ring2nest_cpu(nside, out.first.reshape({-1})).reshape(out.first.sizes().vec());
     return {pix_n, out.second};
 }
 
@@ -2817,11 +2741,41 @@ static torch::Tensor healpix_interp_val_from_weights_cpu(
     const torch::Tensor& pix4n,
     const torch::Tensor& wgt4n
 ) {
-    auto pix_flat = pix4n.contiguous().reshape({-1});
+    // out[b, q] = sum_k maps[b, pix[k, q]] * w[k, q], accumulated in the maps' dtype.
+    TORCH_CHECK(pix4n.dim() == 2 && pix4n.size(0) == 4 && wgt4n.sizes() == pix4n.sizes(),
+                "interpolation pixels/weights must be [4, n]");
     const int64_t nq = pix4n.size(1);
-    auto gathered = maps_2d.index_select(1, pix_flat).reshape({maps_2d.size(0), 4, nq});
-    auto w = wgt4n.to(maps_2d.scalar_type()).unsqueeze(0);
-    return (gathered * w).sum(1);
+    const int64_t nb = maps_2d.size(0);
+    const int64_t npix = maps_2d.size(1);
+    const auto* pix = pix4n.data_ptr<int64_t>();
+    auto w = wgt4n.to(torch::kDouble);
+    const auto* wp = w.data_ptr<double>();
+    auto out = torch::empty({nb, nq}, torch::TensorOptions().dtype(maps_2d.scalar_type()));
+    auto gather = [&](auto* maps, auto* dst) {
+        using T = std::remove_cv_t<std::remove_pointer_t<decltype(dst)>>;
+        at::parallel_for(0, nq, 4096, [&](int64_t q0, int64_t q1) {
+            for (int64_t b = 0; b < nb; ++b) {
+                const auto* row = maps + b * npix;
+                for (int64_t q = q0; q < q1; ++q) {
+                    T acc = T(0);
+                    for (int64_t k = 0; k < 4; ++k) {
+                        const int64_t p = pix[k * nq + q];
+                        TORCH_CHECK(p >= 0 && p < npix, "interpolation pixel out of range");
+                        acc += row[p] * static_cast<T>(wp[k * nq + q]);
+                    }
+                    dst[b * nq + q] = acc;
+                }
+            }
+        });
+    };
+    if (maps_2d.scalar_type() == torch::kDouble) {
+        gather(maps_2d.data_ptr<double>(), out.data_ptr<double>());
+    } else if (maps_2d.scalar_type() == torch::kFloat) {
+        gather(maps_2d.data_ptr<float>(), out.data_ptr<float>());
+    } else {
+        TORCH_CHECK(false, "interpolated maps must be float32 or float64");
+    }
+    return out;
 }
 
 torch::Tensor healpix_get_interp_val_ring_cpu(
@@ -6718,10 +6672,8 @@ torch::Tensor sparse_get_values_blocks_cpu(
         || !fill.defined()) {
         throw std::runtime_error("sparse_get_values_blocks_cpu expects defined tensors");
     }
-    if (query.device().type() != torch::kCPU
-        || block_index.device().type() != torch::kCPU
-        || block_values.device().type() != torch::kCPU
-        || fill.device().type() != torch::kCPU) {
+    if (!query.device().is_cpu() || !block_index.device().is_cpu()
+        || !block_values.device().is_cpu() || !fill.device().is_cpu()) {
         throw std::runtime_error("sparse_get_values_blocks_cpu expects CPU tensors");
     }
     if (query.scalar_type() != torch::kLong || block_index.scalar_type() != torch::kLong) {

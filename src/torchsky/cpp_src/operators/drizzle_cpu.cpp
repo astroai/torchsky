@@ -12,8 +12,7 @@
 // thread owning the box row, quads in ascending index order, so each target pixel receives its
 // contributions in the same order for any thread count (deterministic, no atomics).
 
-#include <ATen/Parallel.h>
-#include <torch/library.h>
+#include "torchsky/native_nb.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -22,20 +21,11 @@
 #include <limits>
 #include <vector>
 
-#include "torchsky/drizzle_operators.h"
 #include "torchsky_torch.h"
 
-TORCH_LIBRARY_FRAGMENT(torchsky, m) {
-    m.def(
-        "drizzle_square_accumulate(Tensor quad_x, Tensor quad_y, Tensor numer, Tensor weight, "
-        "int width, int height, Tensor(a!) out_numer, Tensor(b!) out_weight, "
-        "Tensor(c!) out_variance_weight, bool with_variance) -> int"
-    );
-}
 
 namespace torchsky {
 
-void ensure_drizzle_operators_linked() {}
 
 namespace {
 
@@ -327,8 +317,8 @@ int64_t drizzle_square_accumulate_cpu(
     return 0;
 }
 
-}  // namespace torchsky
-
-TORCH_LIBRARY_IMPL(torchsky, CPU, m) {
-    m.impl("drizzle_square_accumulate", TORCH_FN(torchsky::drizzle_square_accumulate_cpu));
+void register_drizzle(nanobind::module_& m) {
+    native::def(m, "drizzle_square_accumulate", &drizzle_square_accumulate_cpu);
 }
+
+}  // namespace torchsky

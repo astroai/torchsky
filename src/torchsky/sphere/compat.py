@@ -39,8 +39,6 @@ import os
 import torch
 from torch import Tensor
 
-from torchfits import read_tensor as _read_image
-from torchfits import write as _write
 from . import healpix as _healpix
 from .core import fit_monopole_dipole as _fit_monopole_dipole
 from .geom import query_ellipse as _query_ellipse
@@ -151,6 +149,8 @@ def pix2ang(
 
 def read_map(filename: str | os.PathLike[str]) -> Tensor:
     """Read the first image HDU as a flat HEALPix map tensor."""
+    from torchfits import read_tensor as _read_image
+
     data = torch.as_tensor(_read_image(str(filename), hdu=0, mmap=False))
     values = data.reshape(-1)
     _healpix.npix2nside(int(values.numel()))
@@ -168,6 +168,8 @@ def write_map(
     if values.ndim != 1:
         raise ValueError("m must be a 1D HEALPix map")
     nside = _healpix.npix2nside(int(values.numel()))
+    from torchfits import write as _write
+
     _write(
         str(filename),
         values.detach().cpu(),

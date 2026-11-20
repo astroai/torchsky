@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import json
 import re
 import subprocess
 import sys
@@ -46,37 +47,56 @@ assert LowRankChromaticPSF(grid_side=2, spectral_degree=1,
     subprocess.run([sys.executable, "-c", script], cwd=REPO_ROOT, check=True)
 
 
-def test_native_torch_abi_contract_is_consistent() -> None:
+def test_native_core_is_torch_free_and_abi3() -> None:
     pyproject = tomllib.loads(
         (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )
     pixi = tomllib.loads((REPO_ROOT / "pixi.toml").read_text(encoding="utf-8"))
+    support = json.loads(
+        (REPO_ROOT / "scripts" / "torch_support.json").read_text(encoding="utf-8")
+    )
+    floor = f">={support['torch_min']}"
 
-    assert "scikit-build-core>=1.0.0" in pyproject["build-system"]["requires"]
+    # Build: no torch at all; one cp312-abi3 wheel per platform.
+    assert pyproject["build-system"]["requires"] == [
+        "scikit-build-core>=1.0.0",
+        "nanobind>=2.10.2",
+    ]
+    assert pyproject["tool"]["scikit-build"]["wheel"]["py-api"] == "cp312"
     assert pyproject["project"]["requires-python"] == ">=3.12"
-    assert "torch>=2.14,<2.15" in pyproject["build-system"]["requires"]
-    assert "torch>=2.14,<2.15" in pyproject["project"]["dependencies"]
-    assert "torchfits>=1.3.1" in pyproject["project"]["dependencies"]
-    for section in ("build-dependencies", "host-dependencies", "run-dependencies"):
-        assert pixi["package"][section]["pytorch"] == ">=2.14,<2.15"
-    assert pixi["package"]["run-dependencies"]["numpy"] == ">=1.20"
-    assert pixi["dependencies"]["pytorch"] == "2.14.*"
-    assert pixi["feature"]["prod"]["pypi-dependencies"]["torchfits"] == "==1.3.1"
-    assert pixi["feature"]["py312"]["dependencies"]["python"] == "3.12.*"
-    assert pixi["feature"]["py313"]["dependencies"]["python"] == "3.13.*"
+    # Runtime: a floor, no upper cap.
+    assert f"torch{floor}" in pyproject["project"]["dependencies"]
+    assert f"torchfits{support['torchfits']}" in pyproject["project"]["dependencies"]
+    for section in ("build-dependencies", "host-dependencies"):
+        assert "pytorch" not in pixi["package"][section]
+    assert pixi["package"]["run-dependencies"]["pytorch"] == floor
+    assert pixi["dependencies"]["pytorch"] == floor
+    assert pixi["feature"]["torch-min"]["dependencies"]["pytorch"] == (
+        f"{support['torch_min']}.*"
+    )
     install_docs = (REPO_ROOT / "docs" / "introduction" / "install.md").read_text(
         encoding="utf-8"
     )
-    assert '"torch>=2.14,<2.15"' in install_docs
+    assert f'"torch{floor}"' in install_docs
 
-    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
-    bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")
-    assert "TORCHSKY_BUILD_TORCH_VERSION" in cmake
-    assert 'TORCHSKY_TORCH_ABI="${TORCHSKY_BUILD_TORCH_ABI}"' in cmake
+    cpp_root = PACKAGE_ROOT / "cpp_src"
+    cmake = (cpp_root / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert "nanobind_add_module(_cpp_ext STABLE_ABI NB_STATIC" in cmake
+    assert "${SKBUILD_SABI_COMPONENT}" in cmake
     assert "cxx_std_20" in cmake
-    assert "TORCHSKY_RUNTIME_PREFIX" in cmake
-    assert "Prioritizing libtorch headers" in cmake
-    assert "matching_abi" in bindings
+    assert "find_package(Torch" not in cmake
+    assert "TORCH_LIBRARIES" not in cmake
+    sources = [
+        path
+        for path in cpp_root.rglob("*")
+        if path.suffix in {".cpp", ".h", ".hpp", ".cu"}
+        and "third_party" not in path.parts
+    ]
+    assert sources
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        assert not re.search(r"#include\s*[<\"](?:torch|ATen|c10)/", text), path
+        assert "TORCH_LIBRARY" not in text, path
 
 
 def test_native_extension_uses_separate_translation_units() -> None:
@@ -84,26 +104,21 @@ def test_native_extension_uses_separate_translation_units() -> None:
     cmake = (cpp_root / "CMakeLists.txt").read_text(encoding="utf-8")
     bindings = (cpp_root / "bindings.cpp").read_text(encoding="utf-8")
 
-    for source in ("bindings.cpp", "geom.cpp", "healpix.cpp", "wcs.cpp"):
+    for source in ("bindings.cpp", "geom.cpp", "healpix.cpp", "crossmatch.cpp"):
         assert cmake.count(source) == 1
+        assert f'#include "{source}"' not in bindings
     assert "OBJECT_DEPENDS" not in cmake
-    assert '#include "geom.cpp"' not in bindings
-    assert '#include "healpix.cpp"' not in bindings
-    assert '#include "wcs.cpp"' not in bindings
-    for name in ("geom", "healpix", "wcs"):
+    for name in ("geom", "healpix"):
         header = cpp_root / "include" / "torchsky" / f"{name}.h"
         implementation = (cpp_root / f"{name}.cpp").read_text(encoding="utf-8")
         assert header.is_file()
         assert f'#include "torchsky/{name}.h"' in implementation
-    assert '#include "torchsky/healpix.h"' in bindings
-    assert '#include "torchsky/fixed_operators.h"' in bindings
-    assert '#include "torchsky/wcs_operators.h"' in bindings
+    for register in ("fixed", "spectral", "sphere_ranges", "drizzle"):
+        assert f"torchsky::register_{register}(m);" in bindings
 
 
 def test_native_extension_keeps_optimized_isa_out_of_baseline_sources() -> None:
-    cpp_root = PACKAGE_ROOT / "cpp_src"
-    cmake = (cpp_root / "CMakeLists.txt").read_text(encoding="utf-8")
-    bindings = (cpp_root / "bindings.cpp").read_text(encoding="utf-8")
+    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
 
     assert "list(APPEND TORCHSKY_COMPILE_OPTIONS -mavx2 -mfma)" not in cmake
     assert "torchsky_ishioka_avx2" in cmake
@@ -114,35 +129,6 @@ def test_native_extension_keeps_optimized_isa_out_of_baseline_sources() -> None:
     assert "$<TARGET_OBJECTS:torchsky_ishioka_avx2>" in cmake
     assert "torchsky_ishioka_neon" in cmake
     assert "TORCHSKY_ENABLE_IPO" in cmake
-    assert "ensure_spectral_operator_schemas_linked" in bindings
-    assert "ensure_spectral_cpu_operators_linked" in bindings
-
-
-def test_native_extension_uses_supported_torch_linkage() -> None:
-    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
-
-    assert "if(TARGET torch)" in cmake
-    assert "target_link_libraries(_cpp_ext PRIVATE torch)" in cmake
-    assert "elseif(TORCH_LIBRARIES)" in cmake
-    assert "${TORCH_LIBRARIES}" in cmake
-
-
-def test_cuda_source_build_requires_a_real_toolkit() -> None:
-    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
-
-    assert "CUDAToolkit_FOUND" in cmake
-    assert "CUDAToolkit_NVCC_EXECUTABLE" in cmake
-    assert "TARGET CUDA::nvrtc" in cmake
-    assert "Runtime-only CUDA libraries are" in cmake
-    assert "add_library(CUDA::" not in cmake
-
-
-def test_conda_torch_include_root_is_normalized() -> None:
-    cmake = (PACKAGE_ROOT / "cpp_src" / "CMakeLists.txt").read_text(encoding="utf-8")
-
-    assert 'DIR MATCHES "^(.+)/torch/csrc/api/include/?$"' in cmake
-    assert "torch/csrc/autograd/autograd.h" in cmake
-    assert "list(REMOVE_DUPLICATES TORCH_INCLUDE_DIRS_FILTERED)" in cmake
 
 
 def test_pep517_build_does_not_search_outer_conda_prefix() -> None:
@@ -169,17 +155,17 @@ def test_macos_source_wheels_target_the_portable_arm64_baseline() -> None:
     assert macos["cmake"]["define"]["CMAKE_OSX_DEPLOYMENT_TARGET"] == "14.0"
 
 
-def test_native_extension_rejects_mismatched_torch_runtime() -> None:
+def test_native_extension_loads_under_any_torch_version_string() -> None:
+    # The core carries no libtorch ABI, so the torch version is irrelevant to it.
     script = """
 import torch
-torch.__version__ = "2.15.0"
-import torchsky._cpp
+torch.__version__ = "9.99.0"
+import torchsky._cpp as native
+from torchsky import _cpp_ext
+assert native.selected_cpu_isa()
+assert _cpp_ext.NATIVE_ABI == 2
 """
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, check=False
-    )
-    assert result.returncode != 0
-    assert "built for PyTorch 2.14.x but found PyTorch 2.15.0" in result.stderr
+    subprocess.run([sys.executable, "-c", script], cwd=REPO_ROOT, check=True)
 
 
 def test_native_extension_constructs_and_uses_wcs_in_subprocess() -> None:
@@ -251,7 +237,6 @@ from torchsky.wcs import WCS
 
 assert native.cpp is None
 assert "torchsky._cpp" not in sys.modules
-assert not _ops.has_wcs_dispatcher()
 wcs = WCS({
     "NAXIS": 2,
     "CTYPE1": "RA---TAN",

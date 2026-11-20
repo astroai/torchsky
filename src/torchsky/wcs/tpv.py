@@ -16,7 +16,6 @@ class TPV:
     Tangent PV (TPV) distortion correction.
     """
 
-    _CPP_INVERT_MAX_POINTS = 65536
     _CONDITION_EPS = 64.0 * torch.finfo(torch.float64).eps
 
     def __init__(self, header: Dict[str, Any]):
@@ -59,9 +58,6 @@ class TPV:
 
     def get_last_invert_trace(self) -> Dict[str, Any] | None:
         return self._last_invert_trace
-
-    def set_cpp_invert_max_points(self, n: int):
-        self._CPP_INVERT_MAX_POINTS = n
 
     def _distort_and_jacobian(self, u: Tensor, v: Tensor):
         return self._distort_and_jacobian_impl(u, v)
@@ -338,32 +334,46 @@ class TPV:
             & torch.isfinite(v)
         )
         active = viable
+        # Newton sweeps on the points still moving: after two or three sweeps
+        # almost every point has converged, so later sweeps touch only the
+        # stragglers (gathered by index; out-of-place, so autograd still flows).
+        rows = torch.arange(u.numel(), device=u.device)
         for _ in range(max_iter):
+            if rows.numel() == 0:
+                break
+            u_a, v_a = u[rows], v[rows]
             xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
-                u, v
+                u_a, v_a
             )
-            fx0 = xi - xi_f
-            fx1 = eta - eta_f
+            fx0 = xi - xi_f[rows]
+            fx1 = eta - eta_f[rows]
             res_norm = torch.hypot(fx0, fx1)
             det = dxi_du * deta_dv - dxi_dv * deta_du
             conditioned = self._well_conditioned(dxi_du, dxi_dv, deta_du, deta_dv)
             good = (
                 torch.isfinite(res_norm)
-                & torch.isfinite(u)
-                & torch.isfinite(v)
+                & torch.isfinite(u_a)
+                & torch.isfinite(v_a)
                 & conditioned
             )
-            viable = viable & (~active | good)
-            update = active & good & (res_norm > tol)
+            act = active[rows]
+            viable = viable.index_put((rows,), viable[rows] & (~act | good))
+            update = act & good & (res_norm > tol)
+            if not bool(update.any()):
+                break
             if self._invert_trace_enabled:
                 active_counts.append(int(update.sum().item()))
             det_safe = torch.where(update, det, torch.ones_like(det))
             du = (deta_dv * fx0 - dxi_dv * fx1) / det_safe
             dv = (-deta_du * fx0 + dxi_du * fx1) / det_safe
-            u = torch.where(update, u - du.clamp(-1.0, 1.0), u)
-            v = torch.where(update, v - dv.clamp(-1.0, 1.0), v)
-            active = update & torch.isfinite(u) & torch.isfinite(v)
-            viable = viable & (~update | active)
+            u_new = torch.where(update, u_a - du.clamp(-1.0, 1.0), u_a)
+            v_new = torch.where(update, v_a - dv.clamp(-1.0, 1.0), v_a)
+            u = u.index_put((rows,), u_new)
+            v = v.index_put((rows,), v_new)
+            still = update & torch.isfinite(u_new) & torch.isfinite(v_new)
+            viable = viable.index_put((rows,), viable[rows] & (~update | still))
+            active = torch.zeros_like(active).index_put((rows,), still)
+            rows = rows[still]
 
         xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
             u, v

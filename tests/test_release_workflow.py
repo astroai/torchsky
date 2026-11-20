@@ -52,6 +52,11 @@ def test_wheel_workflow_matches_supported_artifact_matrix() -> None:
     assert "arch: arm64" in workflow
     assert "CIBW_ARCHS: ${{ matrix.arch }}" in workflow
     assert "CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=14.0" in workflow
+    # The torch-free native core builds without torch and bundles nothing of it.
+    assert "CIBW_BEFORE_BUILD:" in workflow
+    assert "torch" not in workflow.split("CIBW_BEFORE_BUILD:", 1)[1].splitlines()[0]
+    assert "--exclude libtorch" not in workflow
+    assert "pixi-environment: test-torch-min" in workflow
     assert "PYPI_API_TOKEN" not in workflow
     assert "Build and smoke-test from source distribution" in workflow
     assert "pixi-version: v0.82.0" in workflow

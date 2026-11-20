@@ -4,8 +4,6 @@
 requires = [
     "scikit-build-core>=1.0.0",
     "nanobind>=2.10.2",
-    "torch>=2.14,<2.15",
-    "numpy>=1.20.0"
 ]
 build-backend = "scikit_build_core.build"
 
@@ -38,7 +36,7 @@ requires-python = ">=3.12"
 # These are automatically managed by pixi for conda packages
 # but needed here for PyPI compatibility
 dependencies = [
-    "torch>=2.14,<2.15",
+    "torch>=2.14",
     "numpy>=1.20.0",  # Core numerical operations
     "torchfits>=1.3.1",
 ]
@@ -129,6 +127,10 @@ cmake.build-type = "Release"
 # Place the compiled `_cpp` extension inside the torchsky package.
 install.strip = false
 wheel.packages = ["src/torchsky"]
+
+# The native core does not use libtorch (DLPack boundary), so one abi3 wheel
+# per platform serves CPython >= 3.12 and every supported PyTorch.
+wheel.py-api = "cp312"
 
 # This setting enables CMake's incremental build feature. When you re-run the build,
 # CMake and Ninja will automatically detect which C++ files have changed and only

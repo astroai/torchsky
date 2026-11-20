@@ -63,16 +63,14 @@ class _DifferentiableMixin:
             t = torch.zeros(2, dtype=dt, device=dev, requires_grad=True)
             theta = 90.0 - t
             xi, eta = self._native_to_intermediate(phi, theta)
-            lon, lat = self._spherical_rotation_optimized(
-                phi, theta, "pole", allow_cpp_sphere=False
-            )
+            lon, lat = self._spherical_rotation_optimized(phi, theta, "pole")
             kmat = torch.stack([self._row_grad(v, t) for v in (xi, eta)])
             wmat = torch.stack([self._row_grad(v, t) for v in (lon, lat)])
             return wmat @ torch.linalg.inv(kmat) @ cd
         if code == "PCO":
             nat = torch.zeros(2, dtype=dt, device=dev, requires_grad=True)
             lon, lat = self._spherical_rotation_optimized(
-                nat[0:1], nat[1:2], self._native_type, allow_cpp_sphere=False
+                nat[0:1], nat[1:2], self._native_type
             )
             wmat = (
                 torch.stack(
@@ -91,9 +89,7 @@ class _DifferentiableMixin:
                 [1.0, 0.371], dtype=dt, device=dev
             )
         pix = pix.detach().clone().requires_grad_(True)
-        world = self._stacked_pixels_to_world_flat(
-            pix[None], origin, allow_cpp_sphere=False
-        )
+        world = self._stacked_pixels_to_world_flat(pix[None], origin)
         lonlat = (
             world[0, self._celestial_lon_axis],
             world[0, self._celestial_lat_axis],
@@ -113,7 +109,7 @@ class _DifferentiableMixin:
 
     def _grad_safe_pixels_to_world(self, pixels_flat: Tensor, origin: float) -> Tensor:
         def fn(p):
-            return self._stacked_pixels_to_world_flat(p, origin, allow_cpp_sphere=False)
+            return self._stacked_pixels_to_world_flat(p, origin)
 
         if not (torch.is_grad_enabled() and pixels_flat.requires_grad):
             return fn(pixels_flat)
@@ -141,9 +137,7 @@ class _DifferentiableMixin:
 
     def _grad_safe_world_to_pixel(self, world_flat: Tensor, origin: float) -> Tensor:
         def fn(w):
-            return self._stacked_world_to_pixel_flat(
-                w, origin, allow_cpp_inverse_sphere=False
-            )
+            return self._stacked_world_to_pixel_flat(w, origin)
 
         if not (torch.is_grad_enabled() and world_flat.requires_grad):
             return fn(world_flat)
@@ -154,9 +148,7 @@ class _DifferentiableMixin:
                 dtype=world_flat.dtype,
                 device=world_flat.device,
             )
-            world_ref = self._stacked_pixels_to_world_flat(
-                pix_ref[None], origin, allow_cpp_sphere=False
-            )[0]
+            world_ref = self._stacked_pixels_to_world_flat(pix_ref[None], origin)[0]
         w = world_flat.detach()
         dlon = torch.remainder(w[:, lon] - world_ref[lon] + 180.0, 360.0) - 180.0
         at_ref = (dlon.abs() < self._REF_TOL) & (
@@ -171,9 +163,8 @@ class _DifferentiableMixin:
     def pixel_to_world_differentiable(self, pixels: Any, *, origin: int = 0) -> Tensor:
         """Pure-Torch pixel-to-world transform intended for optimization loops.
 
-        This path deliberately bypasses C++ spherical-rotation shortcuts so gradients
-        can flow through WCS evaluation when fitting fields, INRs, or observation
-        geometry. For now the guaranteed nonlinear spatial path is 2D celestial WCS;
+        Gradients flow through WCS evaluation when fitting fields, INRs, or
+        observation geometry, including at the projection reference point. For now the guaranteed nonlinear spatial path is 2D celestial WCS;
         higher-dimensional non-spatial axes use the existing linear FITS terms.
         """
         pixels_t = self._coerce_stacked_coord(pixels, "pixels")
@@ -183,7 +174,7 @@ class _DifferentiableMixin:
             world_flat = self._grad_safe_pixels_to_world(pixels_flat, float(origin))
         else:
             rel_flat = pixels_flat + (1.0 - float(origin)) - self.crpix
-            world_flat = self._transform_optimized(rel_flat, allow_cpp_sphere=False)
+            world_flat = self._transform_optimized(rel_flat)
         return world_flat.view(original_shape)
 
     def world_to_pixel_differentiable(self, world: Any, *, origin: int = 0) -> Tensor:

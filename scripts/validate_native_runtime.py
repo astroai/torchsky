@@ -20,15 +20,12 @@ def _dispatcher_payload() -> dict[str, Any]:
 
     from torchsky import _cpp, _cpp_ext, _ops
 
-    if not _ops.has_wcs_dispatcher():
-        raise AssertionError("WCS dispatcher operators are unavailable")
     if not _ops.has_fixed_dispatcher():
         raise AssertionError("fixed-shape dispatcher operators are unavailable")
     if not _ops.has_spectral_dispatcher():
         raise AssertionError("spectral dispatcher operators are unavailable")
 
     registrations = {
-        "torchsky::wcs_pixel_to_world": ("CPU", "Meta", "Autograd"),
         "torchsky::healpix_ring2nest": ("CPU",),
         "torchsky::spectral_spin_interpolate_recurrence": ("CPU",),
     }
@@ -54,46 +51,7 @@ def _dispatcher_payload() -> dict[str, Any]:
         alms, theta, lmax, lmax, 2
     )
 
-    first = torch.tensor([-2.0, 0.5, 3.0], dtype=torch.float64)
-    second = torch.tensor([1.0, -1.5, 4.0], dtype=torch.float64)
-    idx = torch.empty((0, 3), dtype=torch.int64)
-    coeff = torch.empty(0, dtype=torch.float64)
-    world = torch.ops.torchsky.wcs_pixel_to_world(
-        first,
-        second,
-        crpix0=0.0,
-        crpix1=0.0,
-        cd00=1.0,
-        cd01=0.0,
-        cd10=0.0,
-        cd11=1.0,
-        proj_code="CAR",
-        lambda_param=1.0,
-        hpx_H=4.0,
-        hpx_K=3.0,
-        east_x=0.0,
-        east_y=1.0,
-        north_x=0.0,
-        north_y=0.0,
-        north_z=1.0,
-        radial_x=1.0,
-        radial_y=0.0,
-        radial_z=0.0,
-        ra_p_rad=0.0,
-        dec_p_rad=0.0,
-        phi_p_rad=0.0,
-        native_type="center",
-        alpha0=0.0,
-        delta0=0.0,
-        is_tpv=False,
-        tpv_idx1=idx,
-        tpv_c1=coeff,
-        tpv_idx2=idx.clone(),
-        tpv_c2=coeff.clone(),
-    )
-    if not torch.isfinite(spectral).all() or not all(
-        torch.isfinite(value).all() for value in world
-    ):
+    if not torch.isfinite(spectral).all():
         raise AssertionError("native dispatcher invocation produced non-finite values")
 
     return {
@@ -104,8 +62,6 @@ def _dispatcher_payload() -> dict[str, Any]:
         "fixed": converted.tolist(),
         "spectral_real": spectral.real.reshape(-1).tolist(),
         "spectral_imag": spectral.imag.reshape(-1).tolist(),
-        "wcs_first": world[0].tolist(),
-        "wcs_second": world[1].tolist(),
     }
 
 
@@ -178,7 +134,7 @@ def _compare(candidate_isa: str, expected_candidate_isa: str | None) -> None:
             f"forced {candidate_isa} selected {candidate['isa']!r}, "
             f"expected {expected_candidate_isa!r}"
         )
-    for key in ("fixed", "spectral_real", "spectral_imag", "wcs_first", "wcs_second"):
+    for key in ("fixed", "spectral_real", "spectral_imag"):
         _assert_close(scalar[key], candidate[key], key)
     print(
         "scalar/native parity passed:",

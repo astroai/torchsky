@@ -4,13 +4,11 @@ Validates torch-native WCS transforms against Astropy/WCSLIB fixture behavior
 for forward (pixel->world) and inverse (world->pixel) directions.
 """
 
-import os
 import platform
 import numpy as np
 import pytest
 import torch
 from astropy.wcs import Prjprm
-from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
 from torchsky.wcs import quadcube
@@ -122,37 +120,6 @@ def test_air_antipode_and_near_antipode_match_wcslib() -> None:
 
 
 # --- Quad-cube (TSC, CSC, QSC) ---
-
-
-@pytest.mark.skipif(
-    os.environ.get("TORCHSKY_DISABLE_CPP") == "1", reason="Requires fused C++ backend"
-)
-def test_csc_python_matches_fused_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ATen and fused CSC must independently match WCSLIB float32 semantics."""
-    header = _make_header("CSC", cd_scale=0.3)
-    awcs = AstropyWCS(header)
-    x, y = _sample_pixels(header, n_side=15)
-    xt = torch.from_numpy(x)
-    yt = torch.from_numpy(y)
-    monkeypatch.setenv("TORCHSKY_WCS_FUSED", "1")
-    fused = TorchWCS(dict(header))
-    monkeypatch.setenv("TORCHSKY_WCS_FUSED", "0")
-    python = TorchWCS(dict(header))
-    assert fused._can_use_fused_p2w_static
-    assert not python._can_use_fused_p2w_static
-    ra_f, dec_f = fused.pixel_to_world(xt, yt, origin=0)
-    ra_p, dec_p = python.pixel_to_world(xt, yt, origin=0)
-    dra = _ra_wrap_delta(ra_p.numpy(), ra_f.numpy())
-    ddec = dec_p.numpy() - dec_f.numpy()
-    np.testing.assert_allclose(dra, 0.0, atol=1e-6)
-    np.testing.assert_allclose(ddec, 0.0, atol=1e-6)
-    ra_a, dec_a = awcs.all_pix2world(x, y, 0)
-    dra_a = _ra_wrap_delta(ra_p.numpy(), ra_a)
-    ddec_a = dec_p.numpy() - dec_a
-    np.testing.assert_allclose(dra_a, 0.0, atol=1e-6)
-    np.testing.assert_allclose(ddec_a, 0.0, atol=1e-6)
-    np.testing.assert_allclose(_ra_wrap_delta(ra_f.numpy(), ra_a), 0.0, atol=1e-6)
-    np.testing.assert_allclose(dec_f.numpy() - dec_a, 0.0, atol=1e-6)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")

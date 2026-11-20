@@ -12,8 +12,6 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
-from torchfits import read_header as get_header, write
-from torchfits.table import read_torch as read_table
 from . import healpix as _healpix
 from .moc import MOC, _moc_table_hdu, nest2uniq
 
@@ -421,11 +419,16 @@ class STMOC:
             if pairs
             else torch.empty((0,), dtype=torch.int64)
         )
+        from torchfits import write
+
         write(filename, {"RANGE": data}, header=header, overwrite=overwrite)
 
     @classmethod
     def read_fits(cls, filename: str) -> "STMOC":
         hdu = _moc_table_hdu(filename)
+        from torchfits import read_header as get_header
+        from torchfits.table import read_torch as read_table
+
         hdr = dict(get_header(filename, hdu=hdu))
         table = read_table(filename, hdu=hdu)
         if "RANGE" not in table and "range" not in table:

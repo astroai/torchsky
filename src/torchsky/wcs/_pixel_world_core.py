@@ -28,12 +28,6 @@ from .legacy import (
 if TYPE_CHECKING:
     pass
 
-from ._core_support import (
-    _CENTER_CPP_P2W_THRESHOLDS,
-    _CENTER_CPP_W2P_THRESHOLDS,
-    _bound_cpp,
-)
-
 
 class _PixelWorldCoreMixin:
     if TYPE_CHECKING:
@@ -185,72 +179,6 @@ class _PixelWorldCoreMixin:
         """Avoid unnecessary contiguous copies on already contiguous benchmark inputs."""
         return t if t.is_contiguous() else t.contiguous()
 
-    def _use_cpp_center_pixel_to_world_small_n(
-        self, x: Tensor, y: Tensor, *, device_ok: bool, dtype_ok: bool
-    ) -> bool:
-        """Use the center-equator C++ helper only where it is a measured win."""
-        if (
-            not self._use_center_equator_fast
-            or self.sip is not None
-            or self._cpp_center_pixel_to_world is None
-            or not device_ok
-            or not dtype_ok
-            or x.requires_grad
-            or y.requires_grad
-        ):
-            return False
-        limit = _CENTER_CPP_P2W_THRESHOLDS.get(self._proj_code)
-        return limit is not None and x.numel() <= limit
-
-    def _use_cpp_center_world_to_pixel_small_n(
-        self, ra: Tensor, dec: Tensor, *, device_ok: bool, dtype_ok: bool
-    ) -> bool:
-        """Use the center-equator C++ helper only where it is a measured win."""
-        if (
-            not self._use_center_equator_fast
-            or self.sip is not None
-            or self._cpp_center_world_to_pixel is None
-            or not device_ok
-            or not dtype_ok
-            or ra.requires_grad
-            or dec.requires_grad
-        ):
-            return False
-        limit = _CENTER_CPP_W2P_THRESHOLDS.get(self._proj_code)
-        return limit is not None and ra.numel() <= limit
-
-    def _cpp_project_direct_p2w(
-        self, xi: Tensor, eta: Tensor, cpp_kind: str
-    ) -> Tuple[Tensor, Tensor]:
-        """Direct C++ projection dispatch used by pixel->world fast path."""
-        if cpp_kind == "ait":
-            return _bound_cpp(self._cpp_ait_project)(xi, eta)
-        if cpp_kind == "mol":
-            return _bound_cpp(self._cpp_mol_project)(xi, eta)
-        if cpp_kind == "hpx":
-            return _bound_cpp(self._cpp_hpx_project)(xi, eta, self._hpx_h, self._hpx_k)
-        if cpp_kind == "zenithal":
-            return _bound_cpp(self._cpp_zenithal_project)(xi, eta, self._proj_code)
-        if cpp_kind == "zpn":
-            return _bound_cpp(self._cpp_zpn_project)(xi, eta, self._zpn_coeffs_cpu)
-        raise RuntimeError("unsupported_cpp_direct_projection")
-
-    def _cpp_deproject_direct_w2p(
-        self, phi_w: Tensor, theta: Tensor, cpp_kind: str
-    ) -> Tuple[Tensor, Tensor]:
-        """Direct C++ deprojection dispatch used by world->pixel fast path."""
-        if cpp_kind == "ait":
-            return _bound_cpp(self._cpp_ait_deproject)(phi_w, theta)
-        if cpp_kind == "hpx":
-            return _bound_cpp(self._cpp_hpx_deproject)(
-                phi_w, theta, self._hpx_h, self._hpx_k
-            )
-        if cpp_kind == "zenithal":
-            return _bound_cpp(self._cpp_zenithal_deproject)(
-                phi_w, theta, self._proj_code
-            )
-        raise RuntimeError("unsupported_cpp_direct_projection")
-
     def _local_uvw_from_radec(
         self, ra: Tensor, dec: Tensor
     ) -> Tuple[Tensor, Tensor, Tensor]:
@@ -273,29 +201,6 @@ class _PixelWorldCoreMixin:
         self, ra: Tensor, dec: Tensor
     ) -> Tuple[Tensor, Tensor]:
         """Exact TAN intermediate coordinates (xi, eta) from RA/Dec via cached local basis."""
-        if (
-            self._cpp_tan_intermediate_from_radec is not None
-            and not ra.requires_grad
-            and not dec.requires_grad
-            and ra.device.type == "cpu"
-            and dec.device.type == "cpu"
-            and ra.dtype == torch.float64
-            and dec.dtype == torch.float64
-        ):
-            ra_cpp = self._contiguous_if_needed(ra)
-            dec_cpp = self._contiguous_if_needed(dec)
-            return self._cpp_tan_intermediate_from_radec(
-                ra_cpp,
-                dec_cpp,
-                self._east_x,
-                self._east_y,
-                self._north_x,
-                self._north_y,
-                self._north_z,
-                self._radial_x,
-                self._radial_y,
-                self._radial_z,
-            )
         u, v, w = self._local_uvw_from_radec(ra, dec)
         valid = torch.isfinite(w) & (w > 64.0 * torch.finfo(w.dtype).eps)
         w_safe = torch.where(valid, w, torch.ones_like(w))
@@ -648,7 +553,6 @@ class _PixelWorldCoreMixin:
         dec: Tensor,
         origin: float,
         *,
-        allow_cpp_inverse_sphere: bool = True,
         intermediate_only: bool = False,
     ) -> Tuple[Tensor, Tensor]:
         """
@@ -681,10 +585,7 @@ class _PixelWorldCoreMixin:
                 phi, theta = _wrap_lon180(ra - self.alpha0), dec
             else:
                 phi, theta = self._inverse_spherical_rotation(
-                    ra,
-                    dec,
-                    self._native_type,
-                    allow_cpp_inverse_sphere=allow_cpp_inverse_sphere,
+                    ra, dec, self._native_type
                 )
 
             # 2. Inverse Projection (Native -> Intermediate)
@@ -709,17 +610,9 @@ class _PixelWorldCoreMixin:
             return xi, eta
         return self._pixels_from_intermediate(xi, eta, origin)
 
-    def _stacked_world_to_pixel_flat(
-        self,
-        world_flat: Tensor,
-        origin: float,
-        *,
-        allow_cpp_inverse_sphere: bool = True,
-    ) -> Tensor:
-        """Fused ``world -> (px, py)`` for stacked 2D spatial + ``torch.compile``."""
+    def _stacked_world_to_pixel_flat(self, world_flat: Tensor, origin: float) -> Tensor:
+        """Single-graph ``world -> (px, py)`` for stacked 2D spatial + ``torch.compile``."""
         ra = world_flat[:, self._celestial_lon_axis]
         dec = world_flat[:, self._celestial_lat_axis]
-        px, py = self._world_to_pixel_2d_core(
-            ra, dec, origin, allow_cpp_inverse_sphere=allow_cpp_inverse_sphere
-        )
+        px, py = self._world_to_pixel_2d_core(ra, dec, origin)
         return torch.stack((px, py), dim=-1)

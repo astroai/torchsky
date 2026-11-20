@@ -1,4 +1,4 @@
-"""Release-lane contract: version sources, torch pins, workflows, rc gating."""
+"""Release contract: version sources, the torch support range, workflows, rc gating."""
 
 from __future__ import annotations
 
@@ -26,30 +26,35 @@ import validate_release_wheels as release_wheels  # noqa: E402
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
-def test_committed_tree_matches_the_lane_map() -> None:
+def test_committed_tree_matches_the_support_map() -> None:
     assert lane.check() == 0
-    assert lane.current_lane() == "2.14"
-    assert lane.torch_spec("2.14") == ">=2.14,<2.15"
+    support = lane.load_support()
+    floor = support["torch_min"]
+    pyproject = lane.PYPROJECT.read_text(encoding="utf-8")
+    # A floor and no upper cap: the native core does not link libtorch.
+    assert f'"torch>={floor}",' in pyproject
+    assert "torch<" not in pyproject.replace(" ", "")
+    build_system = pyproject.split("[build-system]", 1)[1].split("\n[", 1)[0]
+    assert "torch" not in build_system
+    assert 'wheel.py-api = "cp312"' in pyproject
 
 
-def test_every_version_source_agrees_with_the_lane_base() -> None:
-    base = lane.load_lanes()["2.14"]["torchsky_version"]
+def test_every_version_source_agrees_with_the_support_base() -> None:
+    base = lane.load_support()["torchsky_version"]
     assert lane.strip_prerelease(lane.committed_version()) == base
     for path in (lane.PYPROJECT, lane.PIXI, lane.INIT, lane.CITATION):
         assert lane.committed_version() in path.read_text(encoding="utf-8")
 
 
 def test_render_prerelease_and_finalize() -> None:
-    base = lane.load_lanes()["2.14"]["torchsky_version"]
-    rc = lane.render("2.14", None, prerelease="rc3")
+    base = lane.load_support()["torchsky_version"]
+    rc = lane.render(None, prerelease="rc3")
     assert f'version = "{base}rc3"' in rc[lane.PYPROJECT]
     assert f'__version__ = "{base}rc3"' in rc[lane.INIT]
     assert f"version: {base}rc3" in rc[lane.CITATION]
-    assert f'version = "{base}"' in lane.render("2.14", None)[lane.PYPROJECT]
+    assert f'version = "{base}"' in lane.render(None)[lane.PYPROJECT]
     with pytest.raises(SystemExit):
-        lane.render("2.14", "9.9.9")
-    with pytest.raises(SystemExit):
-        lane.render("2.99", None)
+        lane.render("9.9.9")
 
 
 def test_workflows_do_not_hard_code_torch_pins() -> None:
@@ -57,7 +62,8 @@ def test_workflows_do_not_hard_code_torch_pins() -> None:
     for name in ("build_wheels.yml", "native-portability.yml"):
         text = (WORKFLOWS / name).read_text(encoding="utf-8")
         assert "release_lane.py --print-pins" in text
-        assert "${TORCH_PIN}" in text
+    assert "${TORCH_MIN_PIN}" in (WORKFLOWS / "build_wheels.yml").read_text()
+    assert "${TORCH_PIN}" in (WORKFLOWS / "native-portability.yml").read_text()
 
 
 def test_release_tag_kinds() -> None:
@@ -122,17 +128,24 @@ def test_committed_changelog_has_the_rc_section_and_no_duplicate_headings() -> N
     assert "## [0.4.0]" not in text
 
 
-def _wheel(directory: Path, python: str, platform: str, version: str) -> Path:
-    path = directory / f"torchsky-{version}-{python}-{python}-{platform}.whl"
+def _wheel(
+    directory: Path,
+    python: str,
+    platform: str,
+    version: str,
+    abi: str = "abi3",
+    torch: str = ">=2.14",
+) -> Path:
+    path = directory / f"torchsky-{version}-{python}-{abi}-{platform}.whl"
     dist_info = f"torchsky-{version}.dist-info"
     metadata = (
         "Metadata-Version: 2.4\nName: torchsky\n"
         f"Version: {version}\nRequires-Python: >=3.12\n"
-        "Requires-Dist: torch<2.15,>=2.14\n"
+        f"Requires-Dist: torch{torch}\n"
         "Requires-Dist: numpy>=1.20.0\n"
         "Requires-Dist: torchfits>=1.3.1\n"
     )
-    tags = "".join(f"Tag: {python}-{python}-{tag}\n" for tag in platform.split("."))
+    tags = "".join(f"Tag: {python}-{abi}-{tag}\n" for tag in platform.split("."))
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(f"{dist_info}/METADATA", metadata)
         archive.writestr(f"{dist_info}/WHEEL", f"Wheel-Version: 1.0\n{tags}")
@@ -140,17 +153,16 @@ def _wheel(directory: Path, python: str, platform: str, version: str) -> Path:
 
 
 def _matrix(directory: Path, version: str) -> list[Path]:
-    out = []
-    for python in ("cp312", "cp313", "cp314"):
-        out.append(_wheel(directory, python, "manylinux_2_28_x86_64", version))
-        out.append(_wheel(directory, python, "macosx_14_0_arm64", version))
-    return out
+    return [
+        _wheel(directory, "cp312", "manylinux_2_28_x86_64", version),
+        _wheel(directory, "cp312", "macosx_14_0_arm64", version),
+    ]
 
 
 def test_wheel_matrix_is_exact_and_manifest_detects_tampering(tmp_path: Path) -> None:
     wheels = _matrix(tmp_path, "0.5.0rc1")
     found, problems = release_wheels.validate(tmp_path, "0.5.0rc1")
-    assert problems == [] and len(found) == 6
+    assert problems == [] and len(found) == 2
     manifest = tmp_path / "MANIFEST.sha256"
     release_wheels.write_manifest(found, manifest)
     assert release_wheels.verify_manifest(found, manifest) == []
@@ -159,19 +171,19 @@ def test_wheel_matrix_is_exact_and_manifest_detects_tampering(tmp_path: Path) ->
 
 
 @pytest.mark.parametrize(
-    "drop", ["cp314-cp314-macosx_14_0_arm64", "cp312-cp312-manylinux_2_28_x86_64"]
+    "drop", ["cp312-abi3-macosx_14_0_arm64", "cp312-abi3-manylinux_2_28_x86_64"]
 )
 def test_wheel_matrix_rejects_missing_cells(tmp_path: Path, drop: str) -> None:
     for wheel in _matrix(tmp_path, "0.5.0rc1"):
         if drop in wheel.name:
             wheel.unlink()
     _, problems = release_wheels.validate(tmp_path, "0.5.0rc1")
-    assert any("expected exactly 6" in p or "mismatch" in p for p in problems)
+    assert any("expected exactly 2" in p or "mismatch" in p for p in problems)
 
 
 def test_wheel_rejects_old_macos_tag_and_wrong_metadata(tmp_path: Path) -> None:
     _matrix(tmp_path, "0.5.0rc1")
-    _wheel(tmp_path, "cp313", "macosx_11_0_arm64", "0.5.0rc1")
+    _wheel(tmp_path, "cp312", "macosx_11_0_arm64", "0.5.0rc1")
     _, problems = release_wheels.validate(tmp_path, "0.5.0rc1")
     assert any("unexpected platform tag macosx_11_0_arm64" in p for p in problems)
     _, problems = release_wheels.validate(tmp_path, "0.5.0")
@@ -183,9 +195,17 @@ def test_wheel_requirements_are_checked(tmp_path: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         meta = archive.read("torchsky-0.5.0rc1.dist-info/METADATA").decode()
     message = Parser().parsestr(meta)
-    assert release_wheels._requirement(message, "torch") == "<2.15,>=2.14"
+    assert release_wheels._requirement(message, "torch") == ">=2.14"
     assert release_wheels._requirement(message, "torchfits") == ">=1.3.1"
     assert release_wheels._requirement(message, "torchvision") is None
+
+
+def test_wheels_must_be_abi3_without_a_torch_cap(tmp_path: Path) -> None:
+    _wheel(tmp_path, "cp312", "manylinux_2_28_x86_64", "0.5.0rc1", abi="cp312")
+    _wheel(tmp_path, "cp312", "macosx_14_0_arm64", "0.5.0rc1", torch=">=2.14,<2.15")
+    _, problems = release_wheels.validate(tmp_path, "0.5.0rc1")
+    assert any("are not cp312-abi3" in p for p in problems)
+    assert any("torch requirement" in p for p in problems)
 
 
 def _sdist(path: Path, version: str, extra: dict[str, bytes]) -> None:

@@ -16,12 +16,10 @@ from typing import (
     Union,
 )
 import math
-import os
 import warnings
 
-from torchsky import _ops
 from ._geometry import _GeometryMixin, _HeaderIOMixin
-from ._math import _wrap_lon180, _wrap_lon360
+from ._math import _wrap_lon180, _wrap_lon360  # noqa: F401
 from ._rotation import _RotationMixin
 
 from .tpv import TPV
@@ -31,7 +29,6 @@ from .tabular import (
     CoupledTabularLookupWCS,
     TabularAxis,
 )
-from .functional import _pixel_to_world_fused, _world_to_pixel_fused
 from ..device import _as_tensor, _to
 
 if TYPE_CHECKING:
@@ -40,12 +37,8 @@ if TYPE_CHECKING:
 from ._core_support import (  # noqa: F401
     _CELESTIAL_LATITUDE_PREFIXES,
     _CELESTIAL_LONGITUDE_PREFIXES,
-    _CENTER_CPP_P2W_THRESHOLDS,
-    _CENTER_CPP_W2P_THRESHOLDS,
     _HAS_TORCH_SINCOS,
     _MPS_PIXEL_IDENTIFICATION_LIMIT_PX,
-    _ZENITHAL_FUSED_P2W_MAX,
-    _bound_cpp,
     _celestial_axis_role,
     _ctype_projection_code,
     _ctype_without_projection,
@@ -339,13 +332,6 @@ class WCS(
         # Default device
         self.device = torch.device("cpu")
 
-        # Environment-controlled fused C++ path. Default is ON ("1").
-        # Vectorized PyTorch can win at some sizes; set TORCHSKY_WCS_FUSED=0 to compare.
-        self._enable_fused_wcs = os.environ.get("TORCHSKY_WCS_FUSED", "1") == "1"
-        self._enable_cpp_dispatcher = (
-            os.environ.get("TORCHSKY_CPP_DISPATCHER", "1") == "1"
-        )
-
         # Move parameters to appropriate buffers/tensors
         self._setup_tensors()
 
@@ -448,13 +434,6 @@ class WCS(
         if name in ("cpdis1", "cpdis2", "det2im1", "det2im2") and value is not None:
             object.__setattr__(self, "_use_fast_tan", False)
             object.__setattr__(self, "_use_center_equator_fast", False)
-            object.__setattr__(self, "_cpp_direct_static_ok", False)
-            object.__setattr__(self, "_cpp_p2w_direct_kind", "")
-            object.__setattr__(self, "_cpp_w2p_direct_kind", "")
-            object.__setattr__(self, "_has_cpp_direct_p2w", False)
-            object.__setattr__(self, "_has_cpp_direct_w2p", False)
-            object.__setattr__(self, "_can_use_fused_p2w_static", False)
-            object.__setattr__(self, "_can_use_fused_w2p_static", False)
             object.__setattr__(self, "_compiled_pixel_to_world_2d_fn", None)
 
     def _pixel_to_world_2d_fast(
@@ -470,158 +449,10 @@ class WCS(
         ):
             return self._pixel_to_world_2d_core(x, y, float(origin))
 
-        device_ok = x.device.type == "cpu" and y.device.type == "cpu"
-        dtype_ok = x.dtype == torch.float64 and y.dtype == torch.float64
-
-        finite_center_input = bool(torch.isfinite(x).all() and torch.isfinite(y).all())
-        if finite_center_input and self._use_cpp_center_pixel_to_world_small_n(
-            x, y, device_ok=device_ok, dtype_ok=dtype_ok
-        ):
-            return _bound_cpp(self._cpp_center_pixel_to_world)(
-                x,
-                y,
-                float(origin),
-                self._crpix0,
-                self._crpix1,
-                self._cd00,
-                self._cd01,
-                self._cd10,
-                self._cd11,
-                self._proj_code,
-                self.alpha0,
-                self._cea_eta_scale,
-                self._hpx_h,
-                self._hpx_k,
-            )
-
         if self._is_center_cylindrical_shortcut():
             rel_x, rel_y = self._detector_relative_pixels(x, y, float(origin))
             xi, eta = self._apply_cd_2d(rel_x, rel_y)
             return self._center_equator_project(xi, eta)
-
-        cpp_kind = self._cpp_p2w_direct_kind
-        prefer_small_zenithal_fused = (
-            self._can_use_fused_p2w_static
-            and not self._disable_fused_pixel_to_world
-            and device_ok
-            and dtype_ok
-            and not x.requires_grad
-            and not y.requires_grad
-            and self._native_type == "pole"
-            and self._proj_code in {"TAN", "SIN", "ARC"}
-            and not self._is_sin_slant
-            and x.numel() <= _ZENITHAL_FUSED_P2W_MAX
-        )
-        use_cpp_direct = (
-            self._has_cpp_direct_p2w
-            and not self._disable_cpp_pixel_to_world
-            and device_ok
-            and dtype_ok
-            and not x.requires_grad
-            and not y.requires_grad
-            and not prefer_small_zenithal_fused
-        )
-        if use_cpp_direct:
-            rel_x = x + (1.0 - origin) - self._crpix0
-            rel_y = y + (1.0 - origin) - self._crpix1
-            xi, eta = self._apply_cd_2d(rel_x, rel_y)
-            phi, theta = xi, eta  # rebound by the direct projection below
-            if self._cpp_direct_p2w_verified:
-                phi, theta = self._cpp_project_direct_p2w(xi, eta, cpp_kind)
-            else:
-                try:
-                    phi, theta = self._cpp_project_direct_p2w(xi, eta, cpp_kind)
-                    self._cpp_direct_p2w_verified = True
-                except (TypeError, RuntimeError):
-                    self._disable_cpp_pixel_to_world = True
-                else:
-                    pass
-            if not self._disable_cpp_pixel_to_world:
-                if self._use_center_equator_fast:
-                    return _wrap_lon360(phi + self.alpha0), theta
-                if (
-                    self._native_type == "pole"
-                    and self._cpp_spherical_rotation_pole is not None
-                ):
-                    return self._cpp_spherical_rotation_pole(
-                        phi,
-                        theta,
-                        self._phi_p_rad,
-                        self._pole_east_x,
-                        self._pole_east_y,
-                        self._pole_north_x,
-                        self._pole_north_y,
-                        self._pole_north_z,
-                        self._pole_radial_x,
-                        self._pole_radial_y,
-                        self._pole_radial_z,
-                    )
-                return self._spherical_rotation_optimized(phi, theta, self._native_type)
-
-        # Fused C++ pixel->world when semantics allow (TORCHSKY_WCS_FUSED). Runs after
-        # cpp_direct so vectorized projection paths stay primary when available.
-        use_fused = (
-            self._can_use_fused_p2w_static
-            and not self._disable_fused_pixel_to_world
-            and device_ok
-            and dtype_ok
-            and (
-                (not x.requires_grad and not y.requires_grad)
-                or (self._enable_cpp_dispatcher and _ops.has_wcs_dispatcher())
-            )
-        )
-        if use_fused:
-            x_flat = x.reshape(-1)
-            y_flat = y.reshape(-1)
-            if self._native_type == "pole":
-                ex, ey = self._pole_east_x, self._pole_east_y
-                nx, ny, nz = self._pole_north_x, self._pole_north_y, self._pole_north_z
-                rx, ry, rz = (
-                    self._pole_radial_x,
-                    self._pole_radial_y,
-                    self._pole_radial_z,
-                )
-            else:
-                ex, ey = self._east_x, self._east_y
-                nx, ny, nz = self._north_x, self._north_y, self._north_z
-                rx, ry, rz = self._radial_x, self._radial_y, self._radial_z
-
-            x_native = (x_flat + (1.0 - origin)).contiguous()
-            y_native = (y_flat + (1.0 - origin)).contiguous()
-            ra, dec = _pixel_to_world_fused(
-                x_native,
-                y_native,
-                crpix0=self._crpix0,
-                crpix1=self._crpix1,
-                cd00=self._cd00,
-                cd01=self._cd01,
-                cd10=self._cd10,
-                cd11=self._cd11,
-                proj_code=self._fused_proj_code,
-                lambda_param=self._fused_pv2_1,
-                hpx_H=self._hpx_h,
-                hpx_K=self._hpx_k,
-                east_x=ex,
-                east_y=ey,
-                north_x=nx,
-                north_y=ny,
-                north_z=nz,
-                radial_x=rx,
-                radial_y=ry,
-                radial_z=rz,
-                ra_p_rad=self._ra_p_rad,
-                dec_p_rad=self._dec_p_rad,
-                phi_p_rad=self._phi_p_rad,
-                native_type=self._native_type,
-                alpha0=self.alpha0,
-                delta0=self.delta0,
-                is_tpv=self._is_tpv,
-                tpv_idx1=self._fused_tpv_idx1,
-                tpv_c1=self._fused_tpv_c1,
-                tpv_idx2=self._fused_tpv_idx2,
-                tpv_c2=self._fused_tpv_c2,
-            )
-            return ra.reshape(x.shape), dec.reshape(x.shape)
 
         core_fn = self._compiled_pixel_to_world_2d_fn or self._pixel_to_world_2d_core
         return core_fn(x, y, float(origin))
@@ -638,10 +469,6 @@ class WCS(
             or self._is_gls
         ):
             return self._world_to_pixel_2d_core(ra, dec, float(origin))
-        shape = ra.shape
-
-        device_ok = ra.device.type == "cpu" and dec.device.type == "cpu"
-        dtype_ok = ra.dtype == torch.float64 and dec.dtype == torch.float64
 
         # Exact TAN analytic inverse: use direct intermediate coordinates instead of
         # inverse-rotation + zenithal deprojection chain.
@@ -667,158 +494,9 @@ class WCS(
             off = float(origin - 1)
             return px.add(off), py.add(off)
 
-        valid_center_input = bool(
-            torch.isfinite(ra).all() and torch.isfinite(dec).all()
-        )
-        if self._is_mer:
-            valid_center_input = valid_center_input and bool((dec.abs() < 90.0).all())
-        if valid_center_input and self._use_cpp_center_world_to_pixel_small_n(
-            ra, dec, device_ok=device_ok, dtype_ok=dtype_ok
-        ):
-            # Gated by _use_cpp_center_world_to_pixel_small_n (binding present,
-            # supported projection, CPU float64, no autograd); errors propagate.
-            return _bound_cpp(self._cpp_center_world_to_pixel)(
-                ra,
-                dec,
-                self._crpix0,
-                self._crpix1,
-                self._cdi00,
-                self._cdi01,
-                self._cdi10,
-                self._cdi11,
-                self._proj_code,
-                self.alpha0,
-                self._cea_eta_scale,
-                float(origin),
-                self._hpx_h,
-                self._hpx_k,
-            )
-
         if self._is_center_cylindrical_shortcut():
             xi, eta = self._center_equator_deproject(ra, dec)
             return self._pixels_from_intermediate(xi, eta, float(origin))
-
-        cpp_kind = self._cpp_w2p_direct_kind
-        use_cpp_direct = (
-            self._has_cpp_direct_w2p
-            and not self._disable_cpp_world_to_pixel
-            and device_ok
-            and dtype_ok
-            and not ra.requires_grad
-            and not dec.requires_grad
-        )
-        if use_cpp_direct:
-            if self._use_center_equator_fast:
-                phi_w = _wrap_lon180(ra - self.alpha0)
-                theta = dec
-            elif (
-                self._native_type == "pole"
-                and self._cpp_inverse_spherical_rotation_pole is not None
-            ):
-                phi, theta = self._cpp_inverse_spherical_rotation_pole(
-                    ra,
-                    dec,
-                    self._phi_p_rad,
-                    self._pole_east_x,
-                    self._pole_east_y,
-                    self._pole_north_x,
-                    self._pole_north_y,
-                    self._pole_north_z,
-                    self._pole_radial_x,
-                    self._pole_radial_y,
-                    self._pole_radial_z,
-                )
-                phi_w = _wrap_lon180(phi)
-            else:
-                phi, theta = self._inverse_spherical_rotation(
-                    ra, dec, self._native_type
-                )
-                phi_w = _wrap_lon180(phi)
-            if self._cpp_direct_w2p_verified:
-                xi, eta = self._cpp_deproject_direct_w2p(phi_w, theta, cpp_kind)
-            else:
-                try:
-                    xi, eta = self._cpp_deproject_direct_w2p(phi_w, theta, cpp_kind)
-                    self._cpp_direct_w2p_verified = True
-                except (TypeError, RuntimeError):
-                    self._disable_cpp_world_to_pixel = True
-            if not self._disable_cpp_world_to_pixel:
-                rel_x, rel_y = self._apply_cd_inv_rel_2d(xi, eta)
-                px = rel_x + self._crpix0 - (1.0 - origin)
-                py = rel_y + self._crpix1 - (1.0 - origin)
-                return px, py
-
-        use_fused = (
-            self._can_use_fused_w2p_static
-            and not self._disable_fused_world_to_pixel
-            and device_ok
-            and dtype_ok
-            and (
-                (not ra.requires_grad and not dec.requires_grad)
-                or (self._enable_cpp_dispatcher and _ops.has_wcs_dispatcher())
-            )
-            and (not self._is_tpv or not self._require_tpv()._invert_trace_enabled)
-        )
-        if use_fused:
-            ra_flat = ra.reshape(-1)
-            dec_flat = dec.reshape(-1)
-
-            if self._native_type == "pole":
-                ex, ey = self._pole_east_x, self._pole_east_y
-                nx, ny, nz = self._pole_north_x, self._pole_north_y, self._pole_north_z
-                rx, ry, rz = (
-                    self._pole_radial_x,
-                    self._pole_radial_y,
-                    self._pole_radial_z,
-                )
-            else:
-                ex, ey = self._east_x, self._east_y
-                nx, ny, nz = self._north_x, self._north_y, self._north_z
-                rx, ry, rz = self._radial_x, self._radial_y, self._radial_z
-
-            ra_native = ra_flat.contiguous()
-            dec_native = dec_flat.contiguous()
-            px, py = _world_to_pixel_fused(
-                ra_native,
-                dec_native,
-                crpix0=self._crpix0,
-                crpix1=self._crpix1,
-                cdi00=self._cdi00,
-                cdi01=self._cdi01,
-                cdi10=self._cdi10,
-                cdi11=self._cdi11,
-                proj_code=self._fused_proj_code,
-                lambda_param=self._fused_pv2_1,
-                hpx_H=self._hpx_h,
-                hpx_K=self._hpx_k,
-                east_x=ex,
-                east_y=ey,
-                north_x=nx,
-                north_y=ny,
-                north_z=nz,
-                radial_x=rx,
-                radial_y=ry,
-                radial_z=rz,
-                ra_p_rad=self._ra_p_rad,
-                dec_p_rad=self._dec_p_rad,
-                phi_p_rad=self._phi_p_rad,
-                native_type=self._native_type,
-                alpha0=self.alpha0,
-                delta0=self.delta0,
-                is_tpv=self._is_tpv,
-                tpv_idx1=self._fused_tpv_idx1,
-                tpv_c1=self._fused_tpv_c1,
-                tpv_idx2=self._fused_tpv_idx2,
-                tpv_c2=self._fused_tpv_c2,
-            )
-            px = px.reshape(shape)
-            py = py.reshape(shape)
-            if origin == 1:
-                return px, py
-            if origin == 0:
-                return px.sub_(1.0), py.sub_(1.0)
-            off = float(origin - 1)
-            return px.add_(off), py.add_(off)
 
         # Fallback to core (optionally per-instance compiled).
         core_fn = self._compiled_world_to_pixel_2d_fn or self._world_to_pixel_2d_core
@@ -831,16 +509,14 @@ class WCS(
         After ``compile()``, use a **stacked pixel tensor** ``pixel_to_world(pixels)``
         with ``pixels.shape == (..., 2)`` for 2D spatial WCS. That path prefers a
         dedicated compiled graph that fuses ``pixels + (1-origin) - CRPIX`` with the
-        transform and uses **pure Torch** pole rotation (no C++ sphere op inside the
-        graph) so ``torch.compile`` can optimize end-to-end. The inverse
-        ``world_to_pixel(world)`` with ``world.shape == (..., 2)`` uses an analogous
-        fused graph with **pure Torch** inverse pole rotation for ``origin`` in
-        ``{0, 1}``. Other ``origin`` values and ``naxis > 2`` still use
-        ``_compiled_transform_fn`` / the general inverse path on intermediate coords.
+        transform and pole rotation so ``torch.compile`` can optimize end-to-end.
+        The inverse ``world_to_pixel(world)`` with ``world.shape == (..., 2)`` uses
+        an analogous graph for ``origin`` in ``{0, 1}``. Other ``origin`` values and
+        ``naxis > 2`` still use ``_compiled_transform_fn`` / the general inverse
+        path on intermediate coords.
 
-        The two-argument ``pixel_to_world(x, y)`` shortcut may still use native C++
-        fast paths. Run ``benchmarks/bench_wcs_small_n_paths.py`` from the
-        torchsky-harness checkout for timings against Astropy.
+        Run ``benchmarks/bench_wcs_small_n_paths.py`` from the torchsky-harness
+        checkout for timings against Astropy.
 
         Args:
             **kwargs: Arguments passed to torch.compile (e.g., mode, options).
@@ -865,9 +541,7 @@ class WCS(
 
             def _make_stack_fn(o: float) -> Callable[[Tensor], Tensor]:
                 def _fn(pixels_flat: Tensor) -> Tensor:
-                    return self._stacked_pixels_to_world_flat(
-                        pixels_flat, o, allow_cpp_sphere=False
-                    )
+                    return self._stacked_pixels_to_world_flat(pixels_flat, o)
 
                 return _fn
 
@@ -883,9 +557,7 @@ class WCS(
 
             def _make_w2p_stack_fn(o: float) -> Callable[[Tensor], Tensor]:
                 def _fn(world_flat: Tensor) -> Tensor:
-                    return self._stacked_world_to_pixel_flat(
-                        world_flat, o, allow_cpp_inverse_sphere=False
-                    )
+                    return self._stacked_world_to_pixel_flat(world_flat, o)
 
                 return _fn
 
@@ -943,15 +615,11 @@ class WCS(
 
         CUDA and CPU keep float64 cached parameters. MPS is float32-only, so
         cached tensors are cast to float32 there (arcsecond-class error vs
-        float64 is expected). C++ fused kernels stay CPU.
+        float64 is expected).
         """
         self.device = torch.device(device)
         target_dtype = torch.float32 if self.device.type == "mps" else None
-        # C++ ZPN reads a host coefficient vector; keep it on CPU.
-        skip = {"_zpn_coeffs_cpu"}
         for name, value in vars(self).items():
-            if name in skip:
-                continue
             if isinstance(value, torch.Tensor):
                 setattr(
                     self,
@@ -1786,16 +1454,11 @@ class WCS(
             return tuple(world[..., i] for i in range(self.naxis))
         return world
 
-    def _transform_optimized(
-        self, rel: Tensor, *, allow_cpp_sphere: bool = True
-    ) -> Tensor:
+    def _transform_optimized(self, rel: Tensor) -> Tensor:
         """
         The hot path for coordinate transformation.
         Input: (N, NAXIS) relative pixels (pix - crpix [internal])
         Output: (N, NAXIS) world
-
-        When ``allow_cpp_sphere`` is False, pole spherical rotation stays in Torch so
-        ``torch.compile`` can fuse the full forward graph (stacked pixel API).
         """
         # Pixel-space distortions operate on FITS pixel axes 1/2. Celestial
         # projection rows are gathered independently below.
@@ -1875,7 +1538,7 @@ class WCS(
             else:
                 phi, theta = self._project_native_coords(xi, eta)
                 lon, lat = self._spherical_rotation_optimized(
-                    phi, theta, self._native_type, allow_cpp_sphere=allow_cpp_sphere
+                    phi, theta, self._native_type
                 )
 
             linear_world = self.crval + intermediate
@@ -1896,13 +1559,9 @@ class WCS(
         return torch.stack(results, dim=-1)
 
     def _stacked_pixels_to_world_flat(
-        self,
-        pixels_flat: Tensor,
-        origin: float,
-        *,
-        allow_cpp_sphere: bool = True,
+        self, pixels_flat: Tensor, origin: float
     ) -> Tensor:
-        """Fused ``pixels (internal) -> rel -> world`` for ``torch.compile`` (2D spatial)."""
+        """Single-graph ``pixels (internal) -> rel -> world`` for ``torch.compile`` (2D spatial)."""
         rel = pixels_flat + (1.0 - origin) - self.crpix
         if (
             self.naxis == 2
@@ -1917,7 +1576,7 @@ class WCS(
             xi, eta = self._apply_cd_2d(rel[:, 0], rel[:, 1])
             ra, dec = self._project_tan(xi, eta)
             return self._world_from_celestial_pair(ra, dec)
-        return self._transform_optimized(rel, allow_cpp_sphere=allow_cpp_sphere)
+        return self._transform_optimized(rel)
 
     def world_to_pixel(self, *args, **kwargs) -> Union[Tensor, Tuple[Tensor, ...]]:
         """

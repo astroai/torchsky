@@ -22,26 +22,29 @@ dependency for FITS file and table I/O and installs together with torchsky.
 pip install "torchsky @ file:///path/to/torchsky-0.5.0-*.whl"   # a wheel you built
 ```
 
-### Supported lanes (0.5)
+### Supported versions (0.6)
 
 | | Supported and tested |
 |---|---|
 | Python | 3.12, 3.13, 3.14 (CI runs the full suite on each) |
-| PyTorch | 2.14 (`>=2.14,<2.15`) |
-| GPU | CUDA 13 and newer (PyTorch `cu130` builds; NVIDIA driver supporting CUDA 13), Apple MPS (float64-only paths raise) |
+| PyTorch | 2.14 or newer (`>=2.14`, no upper bound) |
+| GPU | Any CUDA build of a supported PyTorch, Apple MPS (float64-only paths raise) |
 | OS / architecture | Linux x86_64 (manylinux_2_28), macOS 14+ arm64 |
 | torchfits | 1.3.1 or newer |
 
-The extension is CPU-only C++; GPU work runs through PyTorch, so one Linux wheel
-serves CPU and every CUDA build of PyTorch 2.14. Other platforms build from the
-sdist.
+The native extension is CPU-only C++ that neither includes nor links libtorch:
+tensors cross into it through DLPack without a copy, and its operators are
+registered with `torch.library` from Python. It also uses the CPython stable ABI.
+So one `cp312-abi3` wheel per platform serves CPython 3.12 and newer, CPU and
+every CUDA build, and every PyTorch from the floor up. GPU work runs through
+PyTorch. Other platforms build from the sdist.
 
-Release wheels target Linux x86_64 (manylinux_2_28) and macOS arm64 (macOS 14.0 or newer) on CPython 3.12, 3.13, and 3.14;
-building from source works on the platforms in `pyproject.toml`. Package metadata
-requires Python >=3.12 and [PyTorch](https://pytorch.org/) >=2.14,<2.15 (PyTorch
-2.14 is the supported lane), plus torchfits 1.3.1 or newer. The reproducible
-contributor lane pins Python 3.13, PyTorch 2.14.0, and torchfits 1.3.1. Native
-extensions enforce their compiled PyTorch ABI at import.
+Release wheels target Linux x86_64 (manylinux_2_28) and macOS arm64 (macOS 14.0
+or newer); building from source works on the platforms in `pyproject.toml`.
+Package metadata requires Python >=3.12, [PyTorch](https://pytorch.org/) >=2.14
+and torchfits 1.3.1 or newer. CI tests the floor (pixi environment
+`test-torch-min`) and the newest PyTorch available; `scripts/torch_support.json`
+records both.
 
 Optional extras: `torchsky[viz]` (browser sky viewer) and `torchsky[map]` (SVO
 filter profiles for `torchsky map --method field`).
@@ -56,7 +59,7 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 - C++20 compatible compiler (GCC or Clang on the supported release platforms)
 - CMake 3.15+ for the native project, with 3.21+ recommended for the packaged build environment and current PyTorch/CUDA toolchains
 - Ninja (recommended)
-- **Python build backend** (see below): `scikit-build-core`, `nanobind`, plus runtime deps `torch` and `numpy` (versions in `pyproject.toml`)
+- **Python build backend** (see below): `scikit-build-core` and `nanobind`; the build needs no PyTorch
 
 #### Build-backend packages (pip without pixi)
 
@@ -65,7 +68,8 @@ The package uses **scikit-build-core** as the build backend. With default `pip i
 If you install **without** build isolation (`--no-build-isolation`), you must have the backend and build-time deps available in the **same** environment as the interpreter:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.14,<2.15" "numpy>=1.20.0"
+python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2"
+python -m pip install "torch>=2.14" "numpy>=1.20.0"   # runtime
 ```
 
 Exact pins match `[build-system].requires` in `pyproject.toml`.

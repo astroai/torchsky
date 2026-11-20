@@ -46,7 +46,7 @@ jobs:
         run: |
           # libstdc++ must load with libasan so its __cxa_throw interceptor has a target.
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so) $(gcc -print-file-name=libstdc++.so)"
-          python -m pytest -v -rA -s -p no:cacheprovider tests/test_cpp_dispatcher.py tests/test_cpp_fixed_dispatcher.py tests/test_cpp_spectral_dispatcher.py tests/test_cpp_wcs_safety.py
+          python -m pytest -v -rA -s -p no:cacheprovider tests/test_cpp_compatibility.py tests/test_cpp_fixed_dispatcher.py tests/test_cpp_spectral_dispatcher.py
 
   linux-x86-native:
     name: Linux x86-64 baseline and AVX2/FMA
