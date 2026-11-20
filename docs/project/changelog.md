@@ -249,6 +249,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `candidate_coarse_pixels_for_left_pixel` and `HealpixIndex.expand`
   (crossmatch-only helpers) are removed.
 
+### Fixed
+
+- `resample_healpix` on a sparse `HealpixResult` now gives the same map and
+  weight as on the dense result: it interpolates `weight * data` and `weight`
+  with the plain HEALPix weights. It used to average the data over neighbours
+  without their weights, and treated a cell whose value is exactly 0 as
+  uncovered.
+
 ## [0.5.0] - 2026-11-03
 
 First stable release. Identical to 0.5.0rc2 apart from the version number;
