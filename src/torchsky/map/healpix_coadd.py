@@ -507,6 +507,46 @@ def coadd_healpix(
     )
 
 
+def _sample_sparse_weighted(
+    data: Any,
+    weight: Any,
+    lon_deg: Tensor,
+    lat_deg: Tensor,
+    *,
+    method: Literal["bilinear", "nearest"],
+) -> tuple[Tensor, Tensor]:
+    """Interpolate ``weight * data`` and ``weight`` from sparse HEALPix maps.
+
+    Uses the plain (unrenormalised) bilinear or nearest HEALPix weights, so it
+    is the sparse twin of ``sample_healpix_map`` applied to the dense weighted
+    maps. Cells without positive finite weight contribute nothing.
+    """
+    from ..sphere import healpix as _hp
+
+    nside, nest = int(data.nside), bool(data.nest)
+    device = data.pixels.device
+    work = torch.float32 if device.type == "mps" else torch.float64
+    lon = _to(lon_deg, device=device, dtype=work).reshape(-1)
+    lat = _to(lat_deg, device=device, dtype=work).reshape(-1)
+    if method == "nearest":
+        pixels = _hp.ang2pix(nside, lon, lat, nest=nest, lonlat=True).reshape(1, -1)
+        taps = torch.ones(pixels.shape, dtype=work, device=device)
+    else:
+        pixels, taps = _hp.get_interp_weights(nside, lon, lat, nest=nest, lonlat=True)
+        pixels = pixels.reshape(4, -1)
+        taps = _to(taps, device=device, dtype=work).reshape(4, -1)
+    pixels = _to(pixels, device=device, dtype=torch.int64)
+    values = _to(data.get_values(pixels), device=device, dtype=work)
+    weights = _to(weight.get_values(pixels), device=device, dtype=work)
+    good = torch.isfinite(values) & torch.isfinite(weights) & (weights > 0.0)
+    good = good & ~_hp.mask_bad(values)
+    safe_w = torch.where(good, weights, torch.zeros_like(weights))
+    safe_v = torch.where(good, values, torch.zeros_like(values))
+    numerator = (taps * safe_w * safe_v).sum(dim=0)
+    denominator = (taps * safe_w).sum(dim=0)
+    return numerator.reshape(lon_deg.shape), denominator.reshape(lon_deg.shape)
+
+
 def resample_healpix(
     healpix_map: Tensor | HealpixResult | Any,
     target: Target | Mapping[str, Any] | WCS,
@@ -547,6 +587,21 @@ def resample_healpix(
         interp_mode: Literal["bilinear", "nearest"] = (
             "nearest" if method == "nearest" else "bilinear"
         )
+        if weight_smap is not None:
+            # Same estimator as the dense branch: interpolate weight * data and
+            # weight with the plain HEALPix weights. Coverage is the weight,
+            # not the 0.0 value sentinel (a covered cell may hold exactly 0).
+            num_2d, w_2d = _sample_sparse_weighted(
+                healpix_map, weight_smap, ra_g, dec_g, method=interp_mode
+            )
+            num_2d = _to(num_2d, device=map_device, dtype=torch.float32)
+            w_2d = _to(w_2d, device=map_device, dtype=torch.float32)
+            valid = torch.isfinite(num_2d) & torch.isfinite(w_2d) & (w_2d > 0.0)
+            data_2d = torch.where(
+                valid, num_2d / w_2d.clamp_min(1e-12), torch.zeros_like(num_2d)
+            )
+            w_2d = torch.where(valid, w_2d, torch.zeros_like(w_2d))
+            return MapResult(data=data_2d, weight=w_2d, header=header_dict)
         sampled = _to(
             healpix_map.interpolate(ra_g, dec_g, method=interp_mode),
             device=map_device,
@@ -554,15 +609,7 @@ def resample_healpix(
         )
         valid = torch.isfinite(sampled) & (sampled != float(healpix_map.fill_value))
         data_2d = torch.where(valid, sampled, torch.zeros_like(sampled))
-        if weight_smap is not None:
-            w_2d = _to(
-                weight_smap.interpolate(ra_g, dec_g, method=interp_mode),
-                device=map_device,
-                dtype=torch.float32,
-            )
-            w_2d = torch.where(valid & (w_2d > 0.0), w_2d, torch.zeros_like(data_2d))
-        else:
-            w_2d = valid.to(dtype=torch.float32)
+        w_2d = valid.to(dtype=torch.float32)
         return MapResult(data=data_2d, weight=w_2d, header=header_dict)
 
     map_t = _as_tensor(healpix_map, device=map_device, dtype=torch.float32)

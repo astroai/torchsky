@@ -19,7 +19,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
-from typing import Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import numpy as np
 import torch
@@ -27,6 +27,9 @@ import torch
 from . import _uncertainty as U
 from ._observations import observation_to_record
 from ._skyfit import _module_state
+
+if TYPE_CHECKING:
+    from ..field.types import FieldObservation
 
 FWHM_PER_SIGMA = 2.0 * math.sqrt(2.0 * math.log(2.0))
 _CLOCK = time.perf_counter  # tests replace it to cut a solve at a chosen moment
@@ -203,7 +206,7 @@ def training_records(fit, observations) -> tuple[list, str]:
     names = fit.exposure_names
     op = fit.operator
     meta = op.meta
-    by_name: dict[str, object] = {}
+    by_name: dict[str, FieldObservation] = {}
     for o in observations:
         n = str(o.header.get("TSNAME", ""))
         if n not in names:
@@ -347,7 +350,7 @@ def compute(
     t0 = _CLOCK() if t_start is None else t_start
     sky = op.sky
     pitch, N = sky.pitch, sky.N
-    plan = dict(
+    plan: dict[str, Any] = dict(
         method=method,
         polish=bool(polish),
         n_samples=samples,
@@ -421,6 +424,8 @@ def compute(
             Ix = U.tent_gauss_1d(x_out, x_nodes, pitch, 0.0)
             Iy = U.tent_gauss_1d(y_out, x_nodes, pitch, 0.0)
             stds.append(Iy @ node_std.double() @ Ix.T)
+    # bands is non-empty (resolve_bands refuses an empty list)
+    assert valid_node is not None
     if x_out is None:
         valid = valid_node.clone()
     else:

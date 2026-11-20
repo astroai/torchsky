@@ -314,6 +314,8 @@ def render_fft_batch(
             if (
                 dfr
             ):  # node (a, b) of the detector-aligned grid sits at sky position R (a, b)
+                # a det_frame level needs Rs (already read by the einsum above)
+                assert Rs is not None
                 XX, YY = (
                     Rs[:, 0, 0, None, None] * XX + Rs[:, 0, 1, None, None] * YY,
                     Rs[:, 1, 0, None, None] * XX + Rs[:, 1, 1, None, None] * YY,
@@ -350,4 +352,5 @@ def render_fft_batch(
         P2 = (posd if dfr else pos).reshape(B * Q, Np, 2)
         rd = bspline_read(bspline_prefilter(Ci), org, p, P2[..., 0], P2[..., 1])
         out = out + (rd.view(B, Q, n, Np) * node_w[:, None]).sum(2)
+    assert isinstance(out, torch.Tensor)  # levels.L >= 0: level 0 always contributes
     return out

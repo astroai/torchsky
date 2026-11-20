@@ -12,11 +12,13 @@ the learned geometry acts on top of them.  Exposures are never resampled or pre-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 import torch
 
 from ...instrument import instrument_description as _description
+from ._bandpass import Filter
 
 # telescope diameter [m] by instrument name (from torchsky.instrument); a name that is not a known instrument gets 6.5 m in `build_meta`
 INST_DIAM = {n: _description(n).diameter_m for n in ("NIRCAM", "WFC3_IR", "ACS_WFC")}
@@ -51,10 +53,12 @@ class Exposure:
         0.0,
     )  # tangent-plane offset of the tile centre from the field reference [arcsec] (X west, Y north; 0 for one tile)
     cid: int = -1  # index of this cut in the list of cuts (== eid with one tile)
-    host: dict = None  # multi-tile: CPU copies of the pixel tensors; the attributes point to them unless the tile is resident
+    # multi-tile: CPU copies of the pixel tensors; the attributes point to them unless the tile is resident
+    host: dict | None = None
     # Added in the move (not in the prototype): the filter curve and the names behind the integer indices, so that a list of exposures is
     # self-contained for fit_sky. None of them enters the arithmetic; the names only label logs and reports.
-    bandpass: object = None  # _bandpass.Filter of this exposure's filter (every exposure with the same `filt` must carry the same curve)
+    # bandpass: the Filter of this exposure's filter (every exposure with the same `filt` must carry the same curve)
+    bandpass: Filter | None = None
     inst_name: str = ""
     det_name: str = ""
     chan_name: str = ""
@@ -63,7 +67,11 @@ class Exposure:
 
     @property
     def shape(self):
-        return tuple((self.d if self.d is not None else self.host["d"]).shape)
+        if self.d is not None:
+            return tuple(self.d.shape)
+        # d is None only while the pixels live in host storage (release / to_dev)
+        assert self.host is not None
+        return tuple(self.host["d"].shape)
 
     def nbytes(self):
         src = (
@@ -103,7 +111,7 @@ class Exposure:
         cols = torch.arange(x0, x1, device=dev) + self.cut0[1]
         RR, CC = torch.meshgrid(rows, cols, indexing="ij")
         ny, nx = self.det_shape
-        out = {
+        out: dict[str, Any] = {
             "X": self.X[y0:y1, x0:x1].reshape(-1),
             "Y": self.Y[y0:y1, x0:x1].reshape(-1),
             "row": RR.reshape(-1),

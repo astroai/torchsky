@@ -39,6 +39,7 @@ from __future__ import annotations
 import contextlib
 import math
 import time
+from typing import Literal, overload
 
 import numpy as np
 import torch
@@ -580,6 +581,16 @@ class SkyNormalOperator:
             xb[g, cols] -= xb[g, cols].mean(0)
         return xb.reshape(-1)
 
+    @overload
+    def _render_sum(
+        self, xA, rfun, want_gb: Literal[False] = False
+    ) -> tuple[torch.Tensor, None]: ...
+
+    @overload
+    def _render_sum(
+        self, xA, rfun, want_gb: Literal[True]
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+
     def _render_sum(self, xA, rfun, want_gb=False):
         """One application: forward render of every tile with sky coefficients xA (requires grad), batch by batch, and backward of
         sum_i r_i S_i with r = rfun(tile, S detached, Lb). Each batch's graph is freed by its own backward and its tensors are deleted before the
@@ -600,7 +611,7 @@ class SkyNormalOperator:
                     r = rfun(t, o["S"].detach(), Lb)
                     Ss.append(o["S"])
                     Rs.append(r)
-                    if want_gb:
+                    if gb is not None:  # == want_gb
                         gb[t.row] += Lb.T @ r
                 torch.autograd.backward(Ss, Rs)
                 del outs, Ss, Rs, pixs
@@ -1007,7 +1018,7 @@ def band_readout(
     op,
     shared,
     band,
-    resolution="auto",
+    resolution: str | float = "auto",
     alpha_max=2.0,
     scales_pitch=SCALES_DEFAULT,
     seed=0,

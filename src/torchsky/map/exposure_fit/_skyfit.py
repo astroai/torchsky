@@ -23,7 +23,7 @@ import math
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 import numpy as np
 import torch
@@ -183,7 +183,8 @@ def _sky_half_extent(exps: Sequence[Exposure], internal: dict) -> float:
     return h - internal["data_margin"] + internal["sky_margin"]
 
 
-def _json_safe(x):
+def _json_safe(x: Any) -> Any:
+    """JSON-safe copy of x (nested dicts / lists of None, bool, int, finite float, str); a dict stays a dict, a list or tuple becomes a list."""
     if x is None or isinstance(x, (bool, int, str)):
         return x
     if isinstance(x, float):

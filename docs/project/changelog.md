@@ -298,6 +298,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `magnify_flux`, `scale_source_sizes`, `magnification_bias` and
   `ConvergenceMagnification` reject `1 + 2 kappa <= 0` under the unbounded
   linear law instead of returning negative flux or NaN.
+- `resample_healpix` on a sparse `HealpixResult` now gives the same map and
+  weight as on the dense result: it interpolates `weight * data` and `weight`
+  with the plain HEALPix weights. It used to average the data over neighbours
+  without their weights, and treated a cell whose value is exactly 0 as
+  uncovered.
+- On MPS, `blot` and the `coadd_image_plane` projections that need a world
+  grid (non-TAN targets, SIP sources) map pixels to source pixels in float64
+  on the host and move only the pixel coordinates, as the other projections
+  already did. With a float32 world grid the samples were off by up to 1.4
+  pixels at 0.04 arcsec, and the SIP round-trip check dropped covered pixels.
+- `build_ifu_cube` (and `coadd_cube` with `IFUObservation`s) reports in
+  `band_metadata.observation_count` the number of exposures that reach each
+  spectral plane, as the other cube paths do. It was at most 1.
+- `torchsky.map.product.estimate_map_inverse_variance` in its default
+  `native_inverse_variance` mode returns the propagated inverse variance of a
+  product that carries one. It returned the coadd weight instead, which differs
+  after resampling, for relative weights and for flux products.
 
 ## [0.5.0] - 2026-11-03
 

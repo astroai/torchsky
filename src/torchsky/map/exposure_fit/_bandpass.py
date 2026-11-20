@@ -29,10 +29,11 @@ class Filter:
     instrument: str
     lam_um: np.ndarray  # curve wavelengths (sorted)
     T: np.ndarray  # transmission (>= 0)
-    nodes: np.ndarray = field(default=None)  # (Q,) quadrature nodes [um]
-    weights: np.ndarray = field(default=None)  # (Q,)
+    # nodes / weights / curve_vec are None until finish_filter fills them
+    nodes: np.ndarray | None = field(default=None)  # (Q,) quadrature nodes [um]
+    weights: np.ndarray | None = field(default=None)  # (Q,)
     pivot: float = 0.0  # photon-weighted mean of ln lambda, exponentiated
-    curve_vec: np.ndarray = field(
+    curve_vec: np.ndarray | None = field(
         default=None
     )  # (CURVE_N,) T on the fixed grid, max-normalised
 
