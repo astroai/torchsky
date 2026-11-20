@@ -180,6 +180,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Faster exclusive association. On CPU the pairwise belief-propagation
+  solve (Anderson-accelerated message sweeps) is one torch-free native call,
+  `xmatch_bp_pairwise_solve`, with its own thread pool and results
+  independent of the thread count. `xmatch_bp_pairwise_sweep` is one sweep.
+  The torch path stays the reference for other devices, for gradients and
+  for `associate_many`, and agrees with the native sweep to 1e-12. With
+  calibration, the calibration and gate rounds first run with the
+  independent model until stable; the exclusive rounds then start from that
+  calibration (and the closed-form background density), carry the messages
+  of kept pairs from round to round, and stop by the same rule. The
+  per-bin posterior solve is skipped when there is one calibration bin. On a
+  crowded synthetic field (`calibrate="scale_floor"`, 8-core CPU), 50k
+  primaries went from 13.4 s to 3.9 s (independent: 2.1 s) and 200k
+  primaries from 199 s to 10.5 s (independent: 4.1 s), with 17
+  belief-propagation solves instead of 238. The fixed-point iteration also
+  empties its difference history on restart (it reused older differences).
 - `associate` fits completeness, error calibration and (exclusive) background
   density by maximum marginal likelihood (L-BFGS on the exact or Bethe log
   likelihood) instead of alternating EM. In crowded fields EM moved the error

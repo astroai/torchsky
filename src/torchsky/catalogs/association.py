@@ -468,6 +468,21 @@ def _segment_logaddexp(x: Tensor, seg: Tensor, n_seg: int, slack: Tensor) -> Ten
     return m + torch.log(s_)
 
 
+def _carry_messages(
+    li_old: Tensor, rj_old: Tensor, rho_old: Tensor, li: Tensor, rj: Tensor, m: int
+) -> Tensor:
+    """Messages of pairs ``(li, rj)`` that were in the old candidate set (else 0)."""
+    key_old = li_old * m + rj_old
+    order = torch.argsort(key_old)
+    key_old, rho_old = key_old[order], rho_old[order]
+    key = li * m + rj
+    if key_old.numel() == 0:
+        return torch.zeros(key.shape, dtype=_F64, device=key.device)
+    pos = torch.searchsorted(key_old, key).clamp(max=key_old.numel() - 1)
+    hit = key_old[pos] == key
+    return torch.where(hit, rho_old[pos], torch.zeros_like(rho_old[pos]))
+
+
 def _log_partition(
     li: Tensor,
     rj: Tensor,
@@ -793,7 +808,10 @@ def associate(
     positive when every right row is matched). Completeness, calibration and
     background density are fitted by maximum marginal likelihood (L-BFGS on
     the exact or Bethe log likelihood), with :class:`HistogramRatio` terms
-    updated by EM in between.
+    updated by EM in between. With ``exclusive=True`` and calibration, the
+    calibration and gate rounds first run with the independent model (no
+    belief propagation) until stable; the exclusive rounds start from that
+    calibration and stop by the same rule.
 
     ``right_footprint`` (MOC) defaults to the right catalogue's occupied cells at
     ``footprint_order``. Pass the survey MOC when you have it, so that density
@@ -900,7 +918,15 @@ def associate(
         inside > 0, torch.zeros_like(inside), torch.full_like(inside, -math.inf)
     )
     pi_c = 0.5
-    for _round in range(rounds):
+    prev_bp: tuple[Tensor, Tensor, Tensor] | None = None
+    # Exclusive model with calibration: the calibration and gate rounds first
+    # run with the independent model (cheap, no belief propagation) until
+    # stable. That only sets the starting calibration and gate; the exclusive
+    # rounds then run to the same stopping rule, so their result is the same
+    # self-consistent exclusive fit.
+    pre_left = 8 if exclusive and calibrate != "none" else 0
+    use_excl = exclusive and pre_left == 0
+    for _round in range(rounds + pre_left):
         lam_f = float(_lambda_max(floor).max())
         # sqrt(lmax(A + s^2 B + F)) <= sqrt(lmax A) + s sqrt(lmax B) + sqrt(lmax F)
         rl_raw = (k * (torch.sqrt(lam_l) + math.sqrt(lam_f)) + drift_mas) / 1000.0
@@ -929,7 +955,7 @@ def associate(
         )
         sep_arcsec = psi * _ARCSEC_PER_RAD
         keep = (d2 <= k2) & (sep_arcsec <= max_radius_arcsec)
-        if exclusive:
+        if use_excl:
             keep &= right_inside[rj]
         li, rj, d2, logdet, sep_arcsec = (
             li[keep],
@@ -943,6 +969,10 @@ def associate(
         # Background density: the total right density, or (exclusive model) the
         # density of right rows that are not counterparts (closed-form ML).
         bp_state: dict = {}
+        if prev_bp is not None:
+            # Warm-start the messages of pairs kept from the previous round (the
+            # fixed point is unique, so this changes only the sweeps needed).
+            bp_state["rho"] = _carry_messages(*prev_bp, li, rj, int(rlon.numel()))
         fixed = (scale.clone(), floor.clone())
 
         def log_n_of(sc: Tensor, fl: Tensor) -> tuple[Tensor, Tensor, Tensor]:
@@ -956,7 +986,7 @@ def associate(
             # expected matches never exceed its count); independent model: at
             # the left row, as nway.
             log_lr = log_n - (
-                dens.log_right(lnu)[rj] if exclusive else dens.log_left(lnu)[li]
+                dens.log_right(lnu)[rj] if use_excl else dens.log_left(lnu)[li]
             )
             for term in terms:
                 log_lr = log_lr + term.log_rho(li, rj)
@@ -969,7 +999,7 @@ def associate(
         ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
             log_w, log_a, log_lr = log_weights(pi_c, scale, floor, log_nu_cell)
             pi = (pi_c * (1.0 - gate_pvalue)) * inside
-            if exclusive:
+            if use_excl:
                 post_x, p_none_x, rho = pairwise_exclusive(
                     li,
                     rj,
@@ -993,15 +1023,13 @@ def associate(
         fit_cal = calibrate != "none"
         rejected = False
         if fit_cal:
-            post0, _, _, _ = posterior(pi_c)
-            mass = torch.zeros(n_bins, dtype=_F64, device=dev).index_add(
-                0, pb, post0.detach()
-            )
-            own = (
-                (mass >= calibrate_min_pairs)
-                if n_bins > 1
-                else torch.zeros(1, dtype=torch.bool, device=dev)
-            )
+            own = torch.zeros(1, dtype=torch.bool, device=dev)
+            if n_bins > 1:  # per-bin fits need the matched weight per bin
+                post0, _, _, _ = posterior(pi_c)
+                mass = torch.zeros(n_bins, dtype=_F64, device=dev).index_add(
+                    0, pb, post0.detach()
+                )
+                own = mass >= calibrate_min_pairs
         typical = (
             float(torch.median(0.5 * (cl + cr).diagonal(dim1=-2, dim2=-1).sum(-1)))
             if li.numel()
@@ -1011,7 +1039,7 @@ def associate(
         for _ in range(max_iter):
             # Maximum marginal likelihood in completeness, calibration and (exclusive
             # model) background density; then EM updates of photometric terms.
-            if fit_pi or fit_cal or exclusive:
+            if fit_pi or fit_cal or use_excl:
 
                 def fit(pi0, sc0, fl0, nu0, group):
                     return _fit_marginal(
@@ -1019,13 +1047,13 @@ def associate(
                         li,
                         rj,
                         n_left,
-                        exclusive,
+                        use_excl,
                         bp_state,
                         pi0,
                         sc0,
                         fl0,
                         nu0,
-                        dens if exclusive else None,
+                        dens if use_excl else None,
                         fit_pi=fit_pi,
                         calibrate=calibrate,
                         group=group,
@@ -1057,11 +1085,27 @@ def associate(
         d2 = d2.detach()
         if not fit_cal:
             break
+        if use_excl and "rho" in bp_state:
+            prev_bp = (li, rj, bp_state["rho"])
         moved_by = float((scale - fixed[0]).abs().max()) + float(
             (floor - fixed[1]).abs().max()
         ) / max(1.0, float(floor.abs().max()))
         # The gate grew or shrank with the calibration: regenerate candidates
         # until the calibration is stable (or the shared fit is out of bounds).
+        if pre_left and not use_excl:
+            pre_left -= 1
+            if moved_by < 1e-4 or rejected or pre_left == 0:
+                # The exclusive rounds start here. Their background density
+                # (non-counterparts) starts at its closed-form maximum given
+                # the independent counterpart masses (at most 1 per right row).
+                use_excl = True
+                matched = (
+                    torch.zeros(int(rlon.numel()), dtype=_F64, device=dev)
+                    .index_add(0, rj, post.detach())
+                    .clamp(max=1.0)
+                )
+                log_nu_cell = torch.log(dens.cell_nu(matched).clamp_min(1e-300))
+            continue
         if moved_by < 1e-4 or rejected:
             break
     match = _assign(li, rj, post, p_none, n_left, int(rlon.numel()), assign)

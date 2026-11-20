@@ -323,6 +323,10 @@ once. On an injected crowded field (0.6 Gaia-like sources per arcsec\(^2\),
 15 % with a counterpart whose published errors are half the true ones) it
 recovers the completeness (0.150 vs 0.151) and the error scale (1.92 vs 2),
 with 30 % more correct matches at higher purity than the independent model.
+On CPU the belief-propagation solve is one native call. With calibration,
+the calibration rounds first settle with the independent model and the
+exclusive fit starts from there, so on a crowded synthetic field it costs
+about 2.5 times the independent one.
 
 <!-- docs: run -->
 ```python

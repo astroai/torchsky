@@ -1087,6 +1087,66 @@ def test_native_segment_lse_matches_torch_reference() -> None:
         torch.testing.assert_close(got, ref, rtol=1e-13, atol=0.0, equal_nan=True)
 
 
+def _crowded_pairwise_graph(seed: int, n_left: int, n_right: int, per_left: int):
+    """Random pairwise candidate graph with shared right rows, sorted by left."""
+    g = _gen(seed)
+    li = torch.arange(n_left).repeat_interleave(per_left)
+    rj = torch.randint(0, n_right, (li.numel(),), generator=g)
+    key = torch.unique(li * n_right + rj)
+    li, rj = key // n_right, key % n_right
+    log_w = torch.randn(li.numel(), generator=g, dtype=D) * 3.0
+    log_w[::29] = -math.inf  # zero-weight candidates
+    log_a = torch.log(torch.rand(n_left, generator=g, dtype=D))
+    return li, rj, log_w, log_a
+
+
+def test_native_bp_sweep_matches_torch_reference() -> None:
+    from torchsky.catalogs._exclusive import _prepare
+
+    li, rj, log_w, log_a = _crowded_pairwise_graph(46, 3000, 2500, 4)
+    n_left, k = 3000, int(li.numel())
+    owner = torch.cat((li, torch.arange(n_left)))
+    source = torch.cat((rj, torch.full((n_left,), -1, dtype=torch.int64)))
+    graph = _prepare(owner, torch.arange(k + n_left)[:, None], owner, owner, source)
+    if graph.native is None:
+        pytest.skip("native extension not built")
+    g = _gen(47)
+    logw = torch.cat((log_w, log_a))[graph.hyp]
+    n_msg = int(graph.msg_idx.numel())
+    xs = (
+        torch.zeros(n_msg, dtype=D),
+        -torch.rand(n_msg, generator=g, dtype=D) * 5.0,
+        -torch.rand(n_msg, generator=g, dtype=D) * 1e-3,
+    )
+    got = [graph.sweep(x, logw) for x in xs]
+    # Results do not depend on the thread count (sweep and whole solve).
+    solved = []
+    for threads in (1, 3, 8):
+        graph.threads = threads
+        assert torch.equal(graph.sweep(xs[1], logw), got[1])
+        solved.append(graph.solve(xs[0], logw, 1e-9, 2000, True))
+    assert all(torch.equal(s, solved[0]) for s in solved)
+    # Pure torch reference (without the native segment helper either).
+    graph.groups.ext = graph.sources.ext = None
+    for x, out in zip(xs, got):
+        assert bool(torch.isfinite(out).all())
+        ref = graph.sweep(x, logw, native=False)
+        torch.testing.assert_close(out, ref, rtol=1e-12, atol=1e-12)
+    ref_solve = graph.solve(xs[0], logw, 1e-9, 2000, True, native=False)
+    torch.testing.assert_close(solved[0], ref_solve, rtol=0.0, atol=1e-8)
+    # The full fixed-point solve agrees too, within its tolerance.
+    from torchsky.catalogs._exclusive import pairwise_exclusive
+
+    post_n, none_n, rho_n = pairwise_exclusive(li, rj, log_w, log_a)
+    cache: dict = {}
+    pairwise_exclusive(li, rj, log_w, log_a, cache=cache)
+    cache["prep"].native = None
+    post_t, none_t, rho_t = pairwise_exclusive(li, rj, log_w, log_a, cache=cache)
+    torch.testing.assert_close(rho_n, rho_t, rtol=0.0, atol=1e-8)
+    torch.testing.assert_close(post_n, post_t, rtol=0.0, atol=1e-9)
+    torch.testing.assert_close(none_n, none_t, rtol=0.0, atol=1e-9)
+
+
 def test_fixed_calibration_transfers_from_a_fit() -> None:
     g = _gen(45)
     n = 3000

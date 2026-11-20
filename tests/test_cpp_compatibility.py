@@ -73,6 +73,8 @@ def test_extension_exports_only_isa_diagnostics() -> None:
     assert exported == {
         "selected_cpu_isa",
         "xmatch_best",
+        "xmatch_bp_pairwise_solve",
+        "xmatch_bp_pairwise_sweep",
         "xmatch_count",
         "xmatch_fill",
         "xmatch_knn",
