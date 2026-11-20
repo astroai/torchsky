@@ -583,17 +583,19 @@ def test_residual_tile_basis_field_initializes_local_capacity_from_tiles() -> No
         wavelength_scale=900.0,
         coord_mode="local_tangent",
     )
+    image = torch.zeros((4, 4), dtype=torch.float32)
+    image[:2, :2] = 1.0
+    image[2:, 2:] = 3.0
     observation = FieldObservation(
-        image=torch.zeros((4, 4), dtype=torch.float32),
+        image=image,
         header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=0.01),
         wavelength=5600.0,
         band_name="r",
     )
-    prediction = torch.zeros((4, 4), dtype=torch.float32)
-    prediction[:2, :2] = 1.0
-    prediction[2:, 2:] = 3.0
+    # The base field renders zero everywhere; the residual product is
+    # prediction - data, and the new atoms must move the field toward the data.
     product = field_image_residual_product(
-        prediction,
+        torch.zeros((4, 4), dtype=torch.float32),
         observation.image,
         band_name="r",
     )
@@ -630,6 +632,55 @@ def test_residual_tile_basis_field_initializes_local_capacity_from_tiles() -> No
     torch.testing.assert_close(model.tile_amplitudes[0], torch.tensor(3.0))
     assert float(center_value.item()) > 2.9
     assert float(far_value.item()) < float(center_value.item())
+
+
+def test_residual_tile_basis_spec_uses_native_detector_geometry() -> None:
+    from torchsky.map.field.adaptive import residual_tile_basis_spec_from_observation
+
+    domain = FieldDomain(
+        center_ra_deg=150.0,
+        center_dec_deg=2.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=900.0,
+    )
+
+    class Native:
+        """Detector model whose sky position differs from the header WCS."""
+
+        def pixel_to_world(self, x: torch.Tensor, y: torch.Tensor):
+            return 150.02 + 0.001 * x, 2.01 + 0.001 * y
+
+    header = _tan_header(8, crval1=150.0, crval2=2.0, scale_deg=0.01)
+    observation = FieldObservation(
+        image=torch.zeros((8, 8), dtype=torch.float32),
+        header=header,
+        wavelength=5600.0,
+        detector_to_sky=Native(),
+        detector_x0_pix=10.0,
+        detector_y0_pix=20.0,
+    )
+    product = field_image_residual_product(
+        torch.zeros((8, 8)), torch.ones((8, 8)), band_name="r"
+    )
+    tile = select_field_residual_tiles(product, tile_hw=(4, 4), max_tiles=1)[0]
+    base = _ZeroField(domain)
+    spec = residual_tile_basis_spec_from_observation(base, observation, [tile])
+    # Native full-detector coordinates of the tile centre, in float64.
+    x_center = 0.5 * (tile.x0 + tile.x1 - 1) + 10.0
+    y_center = 0.5 * (tile.y0 + tile.y1 - 1) + 20.0
+    expected = base._encoded_coords(
+        torch.tensor([150.02 + 0.001 * x_center], dtype=torch.float64),
+        torch.tensor([2.01 + 0.001 * y_center], dtype=torch.float64),
+        5600.0,
+    )[0].to(torch.float32)
+    torch.testing.assert_close(spec.centers[0], expected)
+    torch.testing.assert_close(
+        spec.scales[0, :2],
+        torch.full((2,), 0.0015 / 0.05, dtype=torch.float32),
+        rtol=1.0e-3,
+        atol=0.0,
+    )
 
 
 def test_observation_weight_sum_uses_same_finite_support_mask() -> None:
