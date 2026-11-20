@@ -323,6 +323,10 @@ once. On an injected crowded field (0.6 Gaia-like sources per arcsec\(^2\),
 15 % with a counterpart whose published errors are half the true ones) it
 recovers the completeness (0.150 vs 0.151) and the error scale (1.92 vs 2),
 with 30 % more correct matches at higher purity than the independent model.
+On CPU the belief-propagation solve is one native call. With calibration,
+the calibration rounds first settle with the independent model and the
+exclusive fit starts from there, so on a crowded synthetic field it costs
+about 2.5 times the independent one.
 
 <!-- docs: run -->
 ```python
@@ -356,6 +360,49 @@ any catalog as part of at most one primary's counterpart set, and the
 posteriors account for that competition across primaries. The MAP
 hypothesis (`best`) is still chosen per primary, not by a joint one-to-one
 assignment.
+
+`terms` adds photometry: one tuple of `HistogramRatio` per secondary catalog
+(in catalog order, the primary skipped), as in `associate`. A right
+magnitude uses that catalog's values; a pair colour (`left_values`) is
+relative to the primary, for example W1 − G. Each present member's factor is
+multiplied by its ratio. The ratios are learnt first by each pairwise fit,
+then by EM from the hypothesis posteriors (a candidate's weight is the mass
+of the hypotheses that hold it). The best-first bound includes each
+candidate's ratio, so `residual_mass` stays certified. With two catalogs
+the result equals `associate` with the same terms. On an injected
+three-catalog field with about one background source per gate, position
+alone gets 87 % of the MAP triples right; right magnitudes or a colour
+against the primary raise that to 98 %. The ratios are learnt
+from the population, so they need many primaries; the given `HistogramRatio`
+objects hold the learnt ratios afterwards.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import Astrometry, Catalog, HistogramRatio, associate_many
+
+err = lambda n, s: Astrometry.from_errors(torch.full((n,), s), torch.full((n,), s))
+opt = Catalog(lon=torch.tensor([10.0, 10.01]), lat=torch.tensor([0.0, 0.0]),
+              epoch=2016.0, astrometry=err(2, 50.0))
+ir = Catalog(lon=torch.tensor([10.0003, 9.9997, 10.01]), lat=torch.tensor([0.0, 0.0, 0.0]),
+             epoch=2016.0, astrometry=err(3, 400.0))
+uv = Catalog(lon=torch.tensor([10.00001]), lat=torch.tensor([0.0]), epoch=2016.0,
+             astrometry=err(1, 100.0))
+g_mag = torch.tensor([15.0, 16.0])
+w1 = torch.tensor([14.0, 19.5, 15.1])
+uv_mag = torch.tensor([17.0])
+terms = [
+    (HistogramRatio(w1, [torch.linspace(-6.0, 8.0, 15)], left_values=g_mag),),  # W1 - G
+    (HistogramRatio(uv_mag, [torch.linspace(12.0, 24.0, 13)]),),  # UV magnitude
+]
+res = associate_many([opt, ir, uv], completeness=[0.9, 0.9], terms=terms,
+                     max_radius_arcsec=5.0)
+per_primary = torch.zeros(2, dtype=torch.float64).index_add(
+    0, res.members[:, 0], res.posterior)
+assert torch.allclose(per_primary, torch.ones(2, dtype=torch.float64))
+assert float(res.residual_mass.max()) == 0.0
+```
 
 ### Per-row radii, nearest neighbours and counts
 

@@ -468,6 +468,21 @@ def _segment_logaddexp(x: Tensor, seg: Tensor, n_seg: int, slack: Tensor) -> Ten
     return m + torch.log(s_)
 
 
+def _carry_messages(
+    li_old: Tensor, rj_old: Tensor, rho_old: Tensor, li: Tensor, rj: Tensor, m: int
+) -> Tensor:
+    """Messages of pairs ``(li, rj)`` that were in the old candidate set (else 0)."""
+    key_old = li_old * m + rj_old
+    order = torch.argsort(key_old)
+    key_old, rho_old = key_old[order], rho_old[order]
+    key = li * m + rj
+    if key_old.numel() == 0:
+        return torch.zeros(key.shape, dtype=_F64, device=key.device)
+    pos = torch.searchsorted(key_old, key).clamp(max=key_old.numel() - 1)
+    hit = key_old[pos] == key
+    return torch.where(hit, rho_old[pos], torch.zeros_like(rho_old[pos]))
+
+
 def _log_partition(
     li: Tensor,
     rj: Tensor,
@@ -793,7 +808,10 @@ def associate(
     positive when every right row is matched). Completeness, calibration and
     background density are fitted by maximum marginal likelihood (L-BFGS on
     the exact or Bethe log likelihood), with :class:`HistogramRatio` terms
-    updated by EM in between.
+    updated by EM in between. With ``exclusive=True`` and calibration, the
+    calibration and gate rounds first run with the independent model (no
+    belief propagation) until stable; the exclusive rounds start from that
+    calibration and stop by the same rule.
 
     ``right_footprint`` (MOC) defaults to the right catalogue's occupied cells at
     ``footprint_order``. Pass the survey MOC when you have it, so that density
@@ -900,7 +918,15 @@ def associate(
         inside > 0, torch.zeros_like(inside), torch.full_like(inside, -math.inf)
     )
     pi_c = 0.5
-    for _round in range(rounds):
+    prev_bp: tuple[Tensor, Tensor, Tensor] | None = None
+    # Exclusive model with calibration: the calibration and gate rounds first
+    # run with the independent model (cheap, no belief propagation) until
+    # stable. That only sets the starting calibration and gate; the exclusive
+    # rounds then run to the same stopping rule, so their result is the same
+    # self-consistent exclusive fit.
+    pre_left = 8 if exclusive and calibrate != "none" else 0
+    use_excl = exclusive and pre_left == 0
+    for _round in range(rounds + pre_left):
         lam_f = float(_lambda_max(floor).max())
         # sqrt(lmax(A + s^2 B + F)) <= sqrt(lmax A) + s sqrt(lmax B) + sqrt(lmax F)
         rl_raw = (k * (torch.sqrt(lam_l) + math.sqrt(lam_f)) + drift_mas) / 1000.0
@@ -929,7 +955,7 @@ def associate(
         )
         sep_arcsec = psi * _ARCSEC_PER_RAD
         keep = (d2 <= k2) & (sep_arcsec <= max_radius_arcsec)
-        if exclusive:
+        if use_excl:
             keep &= right_inside[rj]
         li, rj, d2, logdet, sep_arcsec = (
             li[keep],
@@ -943,6 +969,10 @@ def associate(
         # Background density: the total right density, or (exclusive model) the
         # density of right rows that are not counterparts (closed-form ML).
         bp_state: dict = {}
+        if prev_bp is not None:
+            # Warm-start the messages of pairs kept from the previous round (the
+            # fixed point is unique, so this changes only the sweeps needed).
+            bp_state["rho"] = _carry_messages(*prev_bp, li, rj, int(rlon.numel()))
         fixed = (scale.clone(), floor.clone())
 
         def log_n_of(sc: Tensor, fl: Tensor) -> tuple[Tensor, Tensor, Tensor]:
@@ -956,7 +986,7 @@ def associate(
             # expected matches never exceed its count); independent model: at
             # the left row, as nway.
             log_lr = log_n - (
-                dens.log_right(lnu)[rj] if exclusive else dens.log_left(lnu)[li]
+                dens.log_right(lnu)[rj] if use_excl else dens.log_left(lnu)[li]
             )
             for term in terms:
                 log_lr = log_lr + term.log_rho(li, rj)
@@ -969,7 +999,7 @@ def associate(
         ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
             log_w, log_a, log_lr = log_weights(pi_c, scale, floor, log_nu_cell)
             pi = (pi_c * (1.0 - gate_pvalue)) * inside
-            if exclusive:
+            if use_excl:
                 post_x, p_none_x, rho = pairwise_exclusive(
                     li,
                     rj,
@@ -993,15 +1023,13 @@ def associate(
         fit_cal = calibrate != "none"
         rejected = False
         if fit_cal:
-            post0, _, _, _ = posterior(pi_c)
-            mass = torch.zeros(n_bins, dtype=_F64, device=dev).index_add(
-                0, pb, post0.detach()
-            )
-            own = (
-                (mass >= calibrate_min_pairs)
-                if n_bins > 1
-                else torch.zeros(1, dtype=torch.bool, device=dev)
-            )
+            own = torch.zeros(1, dtype=torch.bool, device=dev)
+            if n_bins > 1:  # per-bin fits need the matched weight per bin
+                post0, _, _, _ = posterior(pi_c)
+                mass = torch.zeros(n_bins, dtype=_F64, device=dev).index_add(
+                    0, pb, post0.detach()
+                )
+                own = mass >= calibrate_min_pairs
         typical = (
             float(torch.median(0.5 * (cl + cr).diagonal(dim1=-2, dim2=-1).sum(-1)))
             if li.numel()
@@ -1011,7 +1039,7 @@ def associate(
         for _ in range(max_iter):
             # Maximum marginal likelihood in completeness, calibration and (exclusive
             # model) background density; then EM updates of photometric terms.
-            if fit_pi or fit_cal or exclusive:
+            if fit_pi or fit_cal or use_excl:
 
                 def fit(pi0, sc0, fl0, nu0, group):
                     return _fit_marginal(
@@ -1019,13 +1047,13 @@ def associate(
                         li,
                         rj,
                         n_left,
-                        exclusive,
+                        use_excl,
                         bp_state,
                         pi0,
                         sc0,
                         fl0,
                         nu0,
-                        dens if exclusive else None,
+                        dens if use_excl else None,
                         fit_pi=fit_pi,
                         calibrate=calibrate,
                         group=group,
@@ -1057,11 +1085,27 @@ def associate(
         d2 = d2.detach()
         if not fit_cal:
             break
+        if use_excl and "rho" in bp_state:
+            prev_bp = (li, rj, bp_state["rho"])
         moved_by = float((scale - fixed[0]).abs().max()) + float(
             (floor - fixed[1]).abs().max()
         ) / max(1.0, float(floor.abs().max()))
         # The gate grew or shrank with the calibration: regenerate candidates
         # until the calibration is stable (or the shared fit is out of bounds).
+        if pre_left and not use_excl:
+            pre_left -= 1
+            if moved_by < 1e-4 or rejected or pre_left == 0:
+                # The exclusive rounds start here. Their background density
+                # (non-counterparts) starts at its closed-form maximum given
+                # the independent counterpart masses (at most 1 per right row).
+                use_excl = True
+                matched = (
+                    torch.zeros(int(rlon.numel()), dtype=_F64, device=dev)
+                    .index_add(0, rj, post.detach())
+                    .clamp(max=1.0)
+                )
+                log_nu_cell = torch.log(dens.cell_nu(matched).clamp_min(1e-300))
+            continue
         if moved_by < 1e-4 or rejected:
             break
     match = _assign(li, rj, post, p_none, n_left, int(rlon.numel()), assign)
@@ -1403,9 +1447,12 @@ def associate_many(
     footprints: list[MOC | None] | None = None,
     footprint_order: int = 10,
     completeness: list[float] | Literal["em"] = "em",
+    terms: list[tuple[HistogramRatio, ...]] | None = None,
     budget: int = 4096,
     mass_tol: float = 1e-6,
     exclusive: bool = True,
+    max_iter: int = 50,
+    tol: float = 1e-6,
 ) -> NWayAssociation:
     """N-way association (nway-style) of a primary catalogue with several others.
 
@@ -1413,20 +1460,36 @@ def associate_many(
     catalogue, one counterpart that passes the pairwise gate against the primary,
     or none. A hypothesis with present set ``S`` has weight
 
-    ``prod_{c in S} pi_c / nu_c * prod_{c not in S} (1 - pi_c) * M_S``
+    ``prod_{c in S} pi_c rho_c / nu_c * prod_{c not in S} (1 - pi_c) * M_S``
 
     where ``M_S`` is the exact Gaussian marginal likelihood that all present
     positions (primary included) come from one true position with a flat prior.
     This is Budavari & Szalay (2008) eq. 18 for isotropic errors, here with full
     covariances in the primary's tangent plane. ``pi_c`` is catalogue ``c``'s
     completeness (pairwise EM when ``"em"``, also counting gate losses);
-    ``nu_c`` is its surface density at the primary over its footprint.
+    ``nu_c`` is its surface density at the primary over its footprint;
+    ``rho_c`` is the product of the member's photometric ratios (1 without
+    ``terms``).
 
     Primaries with at most ``budget`` hypotheses are enumerated exactly.
     Larger ones are enumerated best-first by an upper bound (``M`` gains at most
     ``1 / (2 pi sqrt(det C))`` per added member) until the unenumerated mass,
     certified through that bound, is below ``mass_tol``. The certified residual
     is reported per primary.
+
+    ``terms`` adds photometric likelihood ratios: one tuple of
+    :class:`HistogramRatio` per secondary catalogue (in ``catalogs`` order,
+    the primary skipped), with the semantics of :func:`associate`. Right
+    magnitudes are that catalogue's values; pair colours
+    (``left_values``) are relative to the primary. Each present member's
+    factor is multiplied by its ``rho = q / n``. The terms are first learnt
+    by each pairwise association (which also fits ``pi_c`` and ``nu_c`` with
+    them), then by EM from the hypothesis posteriors: a candidate's
+    counterpart weight is the posterior mass of the hypotheses holding it.
+    ``max_iter`` and ``tol`` bound that EM (and the pairwise ones), as in
+    :func:`associate`. The best-first bound includes each candidate's
+    ``rho``, so the residual stays certified. The given
+    :class:`HistogramRatio` objects hold the learnt ``q`` afterwards.
 
     With ``exclusive=True`` (default) each secondary source is the counterpart
     of at most one primary. Hypothesis posteriors are then the Bethe
@@ -1444,6 +1507,11 @@ def associate_many(
         [None] * len(cats) if footprints is None else [footprints[i] for i in order]
     )
     k = len(cats)
+    term_sets: list[tuple[HistogramRatio, ...]] = [()] * k
+    if terms is not None:
+        if len(terms) != k - 1:
+            raise ValueError("terms needs one tuple per secondary catalogue")
+        term_sets = [()] + [tuple(t) for t in terms]
     ref = cats[0]
     if epoch is None:
         ep = torch.as_tensor(ref.epoch)
@@ -1505,8 +1573,11 @@ def associate_many(
                 right_footprint=feet[c],
                 footprint_order=footprint_order,
                 completeness=comp,
+                terms=term_sets[c],
                 assign="none",
                 exclusive=exclusive,
+                max_iter=max_iter,
+                tol=tol,
             )
         else:
             # Per-row epochs (e.g. 2MASS dates): gate at pair epochs, then express each
@@ -1521,8 +1592,11 @@ def associate_many(
                 right_footprint=feet[c],
                 footprint_order=footprint_order,
                 completeness=comp,
+                terms=term_sets[c],
                 assign="none",
                 exclusive=exclusive,
+                max_iter=max_iter,
+                tol=tol,
             )
             li_c, rj_c = res.left_index, res.right_index
             ast0 = cats[0].astrometry
@@ -1589,7 +1663,6 @@ def associate_many(
     for cnt in counts:
         n_hyp = n_hyp * (cnt + 1)
     exact = n_hyp <= budget
-    members_out, prim_out, logw_out = [], [], []
     residual = torch.zeros(n0, dtype=_F64, device=dev)
     log_remaining = torch.full((n0,), -math.inf, dtype=_F64, device=dev)
 
@@ -1604,8 +1677,8 @@ def associate_many(
             log_nu[c][prim],
         )
 
-    def weights(prim: Tensor, slots: Tensor) -> Tensor:
-        """``slots [H, K-1]`` candidate slot per catalogue (-1 absent)."""
+    def geo_weights(prim: Tensor, slots: Tensor) -> Tensor:
+        """Positional log weight; ``slots [H, K-1]`` candidate slot per catalogue (-1 absent)."""
         h = int(prim.numel())
         geo_pos = [torch.zeros(h, 2, dtype=_F64, device=dev)]
         geo_ci = [cov_inv[0][prim]]
@@ -1628,55 +1701,133 @@ def associate_many(
             mem, geo_pos, geo_ci, geo_ld, log_pp, log_pa, geo_nu
         )
 
+    # Photometric terms: one log ratio per candidate slot (sum over the
+    # catalogue's terms), multiplying each present member's factor.
+    def slot_log_rho(c: int) -> Tensor:
+        li_c, rj_c = pairs[c]
+        out = torch.zeros(int(li_c.numel()), dtype=_F64, device=dev)
+        for term in term_sets[c]:
+            out = out + term.log_rho(li_c, rj_c)
+        return out
+
+    cand_lrho: list[Tensor] = [empty] + [slot_log_rho(c) for c in range(1, k)]
+
+    def term_weights(slots: Tensor) -> Tensor:
+        out = torch.zeros(int(slots.shape[0]), dtype=_F64, device=dev)
+        for c in range(1, k):
+            if not term_sets[c] or cand_lrho[c].numel() == 0:
+                continue
+            s = slots[:, c - 1]
+            out = out + torch.where(
+                s >= 0, cand_lrho[c][s.clamp(min=0)], torch.zeros_like(out)
+            )
+        return out
+
+    def weights(prim: Tensor, slots: Tensor) -> Tensor:
+        return geo_weights(prim, slots) + term_weights(slots)
+
     # Exact enumeration, vectorised: mixed-radix decode of hypothesis ids.
     prim_exact = torch.nonzero(exact, as_tuple=True)[0]
+    slots_exact = torch.empty(0, k - 1, dtype=torch.int64, device=dev)
+    prim_e = torch.empty(0, dtype=torch.int64, device=dev)
     if prim_exact.numel():
         nh = n_hyp[prim_exact]
-        prim = torch.repeat_interleave(prim_exact, nh)
+        prim_e = torch.repeat_interleave(prim_exact, nh)
         local = torch.arange(int(nh.sum()), device=dev) - torch.repeat_interleave(
             torch.cumsum(nh, 0) - nh, nh
         )
-        slots = torch.empty(int(prim.numel()), k - 1, dtype=torch.int64, device=dev)
+        slots_exact = torch.empty(
+            int(prim_e.numel()), k - 1, dtype=torch.int64, device=dev
+        )
         rem = local
         for c in range(1, k):
-            base = counts[c - 1][prim] + 1
+            base = counts[c - 1][prim_e] + 1
             choice = rem % base
             rem = rem // base
-            slots[:, c - 1] = torch.where(
+            slots_exact[:, c - 1] = torch.where(
                 choice == 0,
                 torch.full_like(choice, -1),
-                starts[c - 1][prim] + choice - 1,
+                starts[c - 1][prim_e] + choice - 1,
             )
-        members_out.append(slots)
-        prim_out.append(prim)
-        logw_out.append(weights(prim, slots))
-    # Best-first enumeration with a certified residual for oversized primaries.
-    for i in torch.nonzero(~exact, as_tuple=True)[0].tolist():
-        s, p, w, r, lr_ = _best_first(
-            i,
-            k,
-            counts,
-            starts,
-            cand_ld,
-            log_nu,
-            pairs,
-            log_pp,
-            log_pa,
-            weights,
-            mass_tol,
-            budget,
-            dev,
+    geo_exact = geo_weights(prim_e, slots_exact)
+    big = torch.nonzero(~exact, as_tuple=True)[0].tolist()
+
+    def best_first_all() -> list[tuple]:
+        """Best-first enumeration with a certified residual for oversized primaries."""
+        return [
+            _best_first(
+                i,
+                k,
+                counts,
+                starts,
+                cand_ld,
+                cand_lrho,
+                log_nu,
+                log_pp,
+                log_pa,
+                weights,
+                mass_tol,
+                budget,
+                dev,
+            )
+            for i in big
+        ]
+
+    def gather(bf: list[tuple]) -> tuple[Tensor, Tensor, Tensor]:
+        """Hypothesis slots, primaries and positional log weights, by primary."""
+        sl = torch.cat([slots_exact] + [b[0] for b in bf])
+        pr = torch.cat([prim_e] + [b[1] for b in bf])
+        geo = torch.cat([geo_exact] + [geo_weights(b[1], b[0]) for b in bf])
+        order_h = torch.argsort(pr, stable=True)
+        return sl[order_h], pr[order_h], geo[order_h]
+
+    def posterior_of(pr: Tensor, sl: Tensor, lw: Tensor):
+        u = lw
+        if exclusive and k > 1:
+            u = lw + _nway_exclusive_rho(pr, lw, sl, pairs, cats, n0, k)
+        mx_ = torch.full((n0,), -math.inf, dtype=_F64, device=dev).scatter_reduce(
+            0, pr, u, "amax"
         )
-        members_out.append(s)
-        prim_out.append(p)
-        logw_out.append(w)
-        residual[i] = r
-        log_remaining[i] = lr_
-    slots = torch.cat(members_out)
-    prim = torch.cat(prim_out)
-    logw = torch.cat(logw_out)
-    order_h = torch.argsort(prim, stable=True)
-    slots, prim, logw = slots[order_h], prim[order_h], logw[order_h]
+        z_ = torch.zeros(n0, dtype=_F64, device=dev).index_add(
+            0, pr, torch.exp(u - mx_[pr])
+        )
+        return torch.exp(u - mx_[pr]) / z_[pr], mx_, z_
+
+    bf = best_first_all()
+    slots, prim, geo = gather(bf)
+    if any(term_sets[1:]):
+        # EM for the photometric terms from the hypothesis posteriors: each
+        # candidate's counterpart weight is the posterior mass of the
+        # hypotheses holding it. Completeness and densities stay at the
+        # pairwise fits, which learnt the terms pairwise.
+        prev = None
+        for _ in range(max_iter):
+            post, _, _ = posterior_of(prim, slots, geo + term_weights(slots))
+            if prev is not None and (
+                post.numel() == 0 or float((post - prev).abs().max()) < tol
+            ):
+                break
+            for c in range(1, k):
+                if not term_sets[c]:
+                    continue
+                s = slots[:, c - 1]
+                on = s >= 0
+                mass = torch.zeros(
+                    int(pairs[c][0].numel()), dtype=_F64, device=dev
+                ).index_add(0, s[on], post[on])
+                for term in term_sets[c]:
+                    term.update(pairs[c][0], pairs[c][1], mass)
+                cand_lrho[c] = slot_log_rho(c)
+            prev = post.detach()
+        if big:
+            # Re-enumerate with the final terms so the residual is certified
+            # against the weights actually reported.
+            bf = best_first_all()
+            slots, prim, geo = gather(bf)
+    for i, b in zip(big, bf):
+        residual[i] = b[3]
+        log_remaining[i] = b[4]
+    logw = geo + term_weights(slots)
     members = torch.full((int(prim.numel()), k), -1, dtype=torch.int64, device=dev)
     members[:, 0] = prim
     for c in range(1, k):
@@ -1684,16 +1835,7 @@ def associate_many(
         members[:, c] = torch.where(
             s >= 0, pairs[c][1][s.clamp(min=0)], torch.full_like(s, -1)
         )
-    u = logw
-    if exclusive and k > 1:
-        u = logw + _nway_exclusive_rho(prim, logw, slots, pairs, cats, n0, k)
-    mx = torch.full((n0,), -math.inf, dtype=_F64, device=dev).scatter_reduce(
-        0, prim, u, "amax"
-    )
-    z = torch.zeros(n0, dtype=_F64, device=dev).index_add(
-        0, prim, torch.exp(u - mx[prim])
-    )
-    post = torch.exp(u - mx[prim]) / z[prim]
+    post, mx, z = posterior_of(prim, slots, logw)
     if exclusive and bool(torch.isfinite(log_remaining).any()):
         # Certified residual against the exclusive weights (rho <= 1 only lowers
         # the unenumerated mass, so the bound still holds).
@@ -1794,8 +1936,8 @@ def _best_first(
     counts,
     starts,
     cand_ld,
+    cand_lrho,
     log_nu,
-    pairs,
     log_pp,
     log_pa,
     weights,
@@ -1806,7 +1948,10 @@ def _best_first(
     """Enumerate one primary's hypotheses by decreasing upper bound.
 
     Bound per catalogue choice: absent -> (1 - pi_c); candidate j ->
-    pi_c / nu_j / (2 pi sqrt(det C_j)). The product of the chosen factors bounds
+    pi_c rho_j / nu_j / (2 pi sqrt(det C_j)), with ``rho_j`` the candidate's
+    photometric factor (exact: a term multiplies its member's factor alone,
+    so its histogram ratio at ``j`` is its own bound). The product of the
+    chosen factors bounds
     the exact weight relative to the primary-only hypothesis. The hypotheses
     enumerated in bound order stop when the remaining bound mass (closed form
     total minus enumerated bounds) is below ``mass_tol`` of the enumerated
@@ -1819,9 +1964,12 @@ def _best_first(
         lo = int(starts[c - 1][i])
         cnt = int(counts[c - 1][i])
         slots = torch.arange(lo, lo + cnt, device=dev)
-        lb = (
+        lb_t = (
             log_pp[c] - log_nu[c][i] - math.log(2.0 * math.pi) - 0.5 * cand_ld[c][slots]
-        ).tolist()
+        )
+        if cand_lrho[c].numel():
+            lb_t = lb_t + cand_lrho[c][slots]
+        lb = lb_t.tolist()
         opts = [(float(log_pa[c]), -1)] + [
             (b, int(s)) for b, s in zip(lb, slots.tolist())
         ]

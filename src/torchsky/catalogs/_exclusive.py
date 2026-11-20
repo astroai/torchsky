@@ -29,12 +29,17 @@ Anderson-accelerated fixed-point iteration.
 
 All steps are segment operations, so one iteration is ``O(H * C)``. Only
 primaries connected to a shared source take part: elsewhere ``rho = 1``
-exactly and the result is the independent posterior.
+exactly and the result is the independent posterior. For one secondary
+catalogue on CPU, the whole accelerated solve is one torch-free native call
+(``xmatch_bp_pairwise_solve``, same sweep arithmetic and iteration); the
+torch path is the reference for other devices, for gradients (implicit
+function theorem at the fixed point) and for several catalogues.
 """
 
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 from torch import Tensor
@@ -178,42 +183,151 @@ def exclusive_log_rho(
             cache["prep"] = prep
     if prep is None:
         return torch.zeros_like(log_rho)
-    (
-        hyp,
-        slots,
-        a_hslot,
-        msg_idx,
-        n_active,
-        n_cat,
-        flat_a,
-        inv_slot,
-        groups,
-        sources,
-        zero_src,
-        base,
-    ) = prep
-    a_logw = log_weight[hyp]
+    a_logw = log_weight[prep.hyp]
+    x0 = log_rho[prep.slots][prep.msg_idx]
+    x = _FixedPoint.apply(prep, a_logw, x0, tol, max_iter, strict)
+    out = torch.zeros_like(log_rho)
+    out[prep.slots[prep.msg_idx]] = x
+    return out
 
-    def update(x: Tensor, logw: Tensor) -> Tensor:
-        rho = base.index_copy(0, msg_idx, x)
-        u = logw + rho[a_hslot].sum(-1)
-        if inv_slot is not None:
-            slot_mass = u[inv_slot]
+
+_MEMORY = 10  # Anderson history length (torch and native solves)
+
+
+class _Graph:
+    """Active (contested) subgraph of the exclusive model and its message sweep.
+
+    Active hypotheses and slots are in primary order, messages in source
+    order. For the pairwise model on CPU (one hypothesis per slot) the whole
+    fixed-point solve is one call of the torch-free kernel
+    ``xmatch_bp_pairwise_solve`` (``xmatch_bp_pairwise_sweep`` is one sweep).
+    The torch sweep with :func:`_anderson` is the reference, used on other
+    devices, for autograd, and for several secondary catalogues.
+    """
+
+    def __init__(
+        self,
+        *,
+        hyp: Tensor,
+        slots: Tensor,
+        a_hslot: Tensor,
+        msg_idx: Tensor,
+        n_active: int,
+        n_cat: int,
+        flat_a: Tensor,
+        inv_slot: Tensor | None,
+        groups: _Segments,
+        sources: _Segments,
+        zero_src: Tensor,
+        base: Tensor,
+    ) -> None:
+        self.hyp, self.slots, self.a_hslot, self.msg_idx = hyp, slots, a_hslot, msg_idx
+        self.n_active, self.n_cat, self.flat_a = n_active, n_cat, flat_a
+        self.inv_slot, self.groups, self.sources = inv_slot, groups, sources
+        self.zero_src, self.base = zero_src, base
+        self.native: tuple[Any, Tensor, Tensor, Tensor] | None = None
+        self.last_sweeps = 0
+        if (
+            self.inv_slot is not None
+            and self.base.device.type == "cpu"
+            and bool(torch.equal(self.inv_slot, torch.arange(self.n_active)))
+        ):
+            from ._zones import _native_ext as zones_ext
+
+            ext = zones_ext()
+            if ext is not None and hasattr(ext, "xmatch_bp_pairwise_solve"):
+                group = self.groups.seg
+                if bool((group[1:] >= group[:-1]).all()):
+                    n_msg = int(self.msg_idx.numel())
+                    goff = torch.zeros(self.groups.n_seg + 1, dtype=torch.int64)
+                    goff[1:] = torch.cumsum(
+                        torch.bincount(group, minlength=self.groups.n_seg), 0
+                    )
+                    soff = torch.zeros(self.sources.n_seg + 1, dtype=torch.int64)
+                    soff[1:] = torch.cumsum(
+                        torch.bincount(self.sources.seg, minlength=self.sources.n_seg),
+                        0,
+                    )
+                    slot_msg = torch.full((self.n_active,), -1, dtype=torch.int64)
+                    slot_msg[self.msg_idx] = torch.arange(n_msg)
+                    self.native = (ext, goff, slot_msg, soff)
+        self.threads = max(1, torch.get_num_threads())
+
+    def sweep(self, x: Tensor, logw: Tensor, *, native: bool | None = None) -> Tensor:
+        """One message update ``x -> g(x)`` at hypothesis log weights ``logw``."""
+        grad = torch.is_grad_enabled() and (x.requires_grad or logw.requires_grad)
+        nat = self.native
+        if nat is not None and not grad and native is not False:
+            ext, goff, slot_msg, soff = nat
+            out = torch.empty(int(x.numel()), dtype=_F64)
+            ext.xmatch_bp_pairwise_sweep(
+                goff,
+                logw.to(_F64).contiguous(),
+                slot_msg,
+                soff,
+                x.to(_F64).contiguous(),
+                out,
+                self.threads,
+            )
+            return out
+        return self.torch_sweep(x, logw)
+
+    def solve(
+        self,
+        x0: Tensor,
+        logw: Tensor,
+        tol: float,
+        max_iter: int,
+        strict: bool,
+        *,
+        native: bool | None = None,
+    ) -> Tensor:
+        """Fixed point ``x = sweep(x, logw)`` from ``x0`` (no autograd)."""
+        nat = self.native
+        if nat is None or native is False:
+            counted = [0]
+
+            def g(v: Tensor) -> Tensor:
+                counted[0] += 1
+                return self.sweep(v, logw, native=native)
+
+            x = _anderson(g, x0, tol, max_iter, strict, memory=_MEMORY)
+            self.last_sweeps = counted[0]
+            return x
+        ext, goff, slot_msg, soff = nat
+        x = x0.to(_F64).contiguous().clone()
+        sweeps, res = ext.xmatch_bp_pairwise_solve(
+            goff,
+            logw.to(_F64).contiguous(),
+            slot_msg,
+            soff,
+            x,
+            tol,
+            max_iter,
+            _MEMORY,
+            self.threads,
+        )
+        self.last_sweeps = int(sweeps)
+        if strict and not res <= tol:
+            raise _not_converged(res, max_iter)
+        return x
+
+    def torch_sweep(self, x: Tensor, logw: Tensor) -> Tensor:
+        rho = self.base.index_copy(0, self.msg_idx, x)
+        u = logw + rho[self.a_hslot].sum(-1)
+        if self.inv_slot is not None:
+            slot_mass = u[self.inv_slot]
         else:
-            slot_mass = _segment_lse(u.repeat_interleave(n_cat), flat_a, n_active)
+            slot_mass = _segment_lse(
+                u.repeat_interleave(self.n_cat), self.flat_a, self.n_active
+            )
         uses = slot_mass - rho
-        others = groups.lse_excl(slot_mass, None)
-        log_r = (uses - others)[msg_idx]
+        others = self.groups.lse_excl(slot_mass, None)
+        log_r = (uses - others)[self.msg_idx]
         log_r = torch.where(
             torch.isnan(log_r), torch.full_like(log_r, -math.inf), log_r
         )
-        return -sources.lse_excl(log_r, zero_src)
-
-    x0 = log_rho[slots][msg_idx]
-    x = _FixedPoint.apply(update, a_logw, x0, tol, max_iter, strict)
-    out = torch.zeros_like(log_rho)
-    out[slots[msg_idx]] = x
-    return out
+        return -self.sources.lse_excl(log_r, self.zero_src)
 
 
 def _prepare(owner, hyp_slot, slot_owner, slot_group, slot_source):
@@ -235,8 +349,12 @@ def _prepare(owner, hyp_slot, slot_owner, slot_group, slot_source):
     n_owner = int(max(int(owner.max()), int(slot_owner.max()))) + 1
     active_owner = torch.zeros(n_owner, dtype=torch.bool, device=dev)
     active_owner[slot_owner[contested]] = True
+    # Hypotheses and slots in primary order, so each primary's slots are
+    # contiguous (pairwise: hypothesis h is slot h, and both orders agree).
     hyp = torch.nonzero(active_owner[owner], as_tuple=True)[0]
+    hyp = hyp[torch.argsort(owner[hyp], stable=True)]
     slots = torch.nonzero(active_owner[slot_owner], as_tuple=True)[0]
+    slots = slots[torch.argsort(slot_owner[slots], stable=True)]
     remap = torch.full((n_slots,), -1, dtype=torch.int64, device=dev)
     remap[slots] = torch.arange(slots.numel(), device=dev)
     a_hslot = remap[hyp_slot[hyp]]  # [Ha, C] active slot ids
@@ -246,6 +364,8 @@ def _prepare(owner, hyp_slot, slot_owner, slot_group, slot_source):
     # Only contested slots carry messages; the others stay at rho = 1.
     msg = contested[slots]
     msg_idx = torch.nonzero(msg, as_tuple=True)[0]
+    # Messages in source order: each source's messages are contiguous.
+    msg_idx = msg_idx[torch.argsort(a_src_raw[msg_idx], stable=True)]
     msg_src = torch.unique(a_src_raw[msg_idx], return_inverse=True)[1]
     n_msg_src = int(msg_src.max()) + 1
     n_active = int(slots.numel())
@@ -260,19 +380,27 @@ def _prepare(owner, hyp_slot, slot_owner, slot_group, slot_source):
     groups = _Segments(a_group, n_group)
     sources = _Segments(msg_src, n_msg_src)
 
-    return (
-        hyp,
-        slots,
-        a_hslot,
-        msg_idx,
-        n_active,
-        n_cat,
-        flat_a,
-        inv_slot,
-        groups,
-        sources,
-        zero_src,
-        base,
+    return _Graph(
+        hyp=hyp,
+        slots=slots,
+        a_hslot=a_hslot,
+        msg_idx=msg_idx,
+        n_active=n_active,
+        n_cat=n_cat,
+        flat_a=flat_a,
+        inv_slot=inv_slot,
+        groups=groups,
+        sources=sources,
+        zero_src=zero_src,
+        base=base,
+    )
+
+
+def _not_converged(res: float, max_iter: int) -> RuntimeError:
+    return RuntimeError(
+        "exclusive association did not converge "
+        f"(max message change {res:.3g} after {max_iter} "
+        "iterations); pass exclusive=False for independent posteriors"
     )
 
 
@@ -282,9 +410,12 @@ def _anderson(
     """Fixed point ``x = g(x)`` by Anderson acceleration (Walker & Ni 2011).
 
     Type-II Anderson mixing over the last ``memory`` iterates (differences
-    kept in a ring buffer), restarted whenever the residual grows past twice
-    the best one or stops improving for ``memory`` steps. Raises when ``max |g(x) - x|`` is not below
-    ``tol`` within ``max_iter`` evaluations, unless ``strict=False``.
+    kept in a ring buffer, emptied on restart), restarted whenever the
+    residual grows past twice the best one or stops improving for ``memory``
+    steps. Extrapolated messages are clamped at 0 (``log rho <= 0``). Raises
+    when ``max |g(x) - x|`` is not below ``tol`` within ``max_iter`` steps,
+    unless ``strict=False``. The native ``xmatch_bp_pairwise_solve`` runs the
+    same iteration.
     """
     n = int(x.numel())
     dev = x.device
@@ -293,14 +424,15 @@ def _anderson(
     gx = g(x)
     f = gx - x
     used, slot, stale = 0, 0, 0
-    best = float(f.abs().max()) if n else 0.0
+    res = float(f.abs().max()) if n else 0.0
+    best = res
     for _ in range(max_iter):
-        res = float(f.abs().max()) if n else 0.0
         if res <= tol:
             return gx
         stale = 0 if res < 0.99 * best else stale + 1
         if res > 2.0 * best or stale > memory:
-            used, stale = 0, 0  # restart a diverging or stagnating history
+            # Restart a diverging or stagnating history (rows 0.. refill).
+            used, slot, stale = 0, 0, 0
         best = min(best, res)
         if used:
             a_f, a_g = df[:used], dg[:used]
@@ -318,24 +450,21 @@ def _anderson(
         slot = (slot + 1) % memory
         used = min(used + 1, memory)
         gx, f = gx_new, f_new
-    if not strict:
+        res = float(f.abs().max()) if n else 0.0
+    if res <= tol or not strict:
         return gx
-    raise RuntimeError(
-        "exclusive association did not converge "
-        f"(max message change {float(f.abs().max()):.3g} after {max_iter} "
-        "iterations); pass exclusive=False for independent posteriors"
-    )
+    raise _not_converged(res, max_iter)
 
 
 class _FixedPoint(torch.autograd.Function):
-    """``x* = update(x*, logw)`` with implicit-function gradients in ``logw``."""
+    """``x* = sweep(x*, logw)`` with implicit-function gradients in ``logw``."""
 
     @staticmethod
-    def forward(ctx, update, logw, x0, tol, max_iter, strict):  # type: ignore[override]
+    def forward(ctx, graph, logw, x0, tol, max_iter, strict):  # type: ignore[override]
         w = logw.detach()
         with torch.no_grad():
-            x = _anderson(lambda v: update(v, w), x0.detach(), tol, max_iter, strict)
-        ctx.update = update
+            x = graph.solve(x0.detach(), w, tol, max_iter, strict)
+        ctx.update = graph.sweep
         ctx.tol, ctx.max_iter = tol, max_iter
         ctx.save_for_backward(w, x)
         return x
