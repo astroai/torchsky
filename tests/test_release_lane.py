@@ -46,6 +46,21 @@ def test_every_version_source_agrees_with_the_support_base() -> None:
         assert lane.committed_version() in path.read_text(encoding="utf-8")
 
 
+def test_print_pins_values_are_full_specifiers(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["release_lane.py", "--print-pins"])
+    assert lane.main() == 0
+    pins = dict(
+        line.split("=", 1) for line in capsys.readouterr().out.strip().splitlines()
+    )
+    floor = lane.load_support()["torch_min"]
+    assert pins["TORCH_PIN"] == f">={floor}"
+    assert pins["TORCH_MIN_PIN"] == f"=={floor}.*"
+    assert pins["TORCH_TESTED_PIN"].startswith("==")
+    assert pins["TORCHFITS_PIN"].startswith(">=")
+
+
 def test_render_prerelease_and_finalize() -> None:
     base = lane.load_support()["torchsky_version"]
     rc = lane.render(None, prerelease="rc3")

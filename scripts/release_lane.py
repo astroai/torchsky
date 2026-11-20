@@ -203,9 +203,11 @@ def main() -> int:
             return 1
         spec = load_support()
         print(f"VERSION={committed_version()}")
+        # KEY=VALUE lines for $GITHUB_ENV: each value is a full specifier, so
+        # the equality pins print as "KEY===X.Y.*" (value "==X.Y.*").
         print(f"TORCH_PIN=>={spec['torch_min']}")
-        print(f"TORCH_MIN_PIN=={spec['torch_min']}.*")
-        print(f"TORCH_TESTED_PIN=={spec['torch_tested']}.*")
+        print(f"TORCH_MIN_PIN==={spec['torch_min']}.*")
+        print(f"TORCH_TESTED_PIN==={spec['torch_tested']}.*")
         print(f"TORCHFITS_PIN={spec['torchfits']}")
         return 0
     if not args.apply:
