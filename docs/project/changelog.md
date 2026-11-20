@@ -197,6 +197,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer loads torchfits: the FITS readers and writers in `sphere.compat`,
   `sphere.stmoc`, the spectral weight loader and `wcs.astrometry_net` import it
   when called.
+- **Scalar spherical harmonic transforms off the CPU are 100–500× faster.**
+  This is the pure-torch path that CUDA, MPS and builds without the native
+  extension use. On an M2 with MPS (float32), end to end:
+
+  | nside | map2alm, before → after | alm2map, before → after |
+  |---|---|---|
+  | 256 | 5.0 s → 9 ms | 2.8 s → 12 ms |
+  | 512 | ~25 s → 46 ms | ~23 s → 52 ms |
+
+  At nside 512 that is on par with ducc0 on four CPU threads. How:
+  - The Legendre step uses a cached Legendre table built once in float64,
+    so each transform is a few batched matmuls (`sphere._sht_blocks`). The
+    table goes on the GPU or MPS when it fits a memory budget: a third of
+    GPU memory, a quarter of MPS's recommended maximum, or
+    `TORCHSKY_SHT_TABLE_BYTES`.
+  - Above the budget it uses a blocked, north/south-folded recurrence that
+    advances 16 steps per call and can be compiled; on MPS the native float64
+    CPU kernel is used instead.
+  - The polar rings, one FFT per distinct length before, share a single
+    batched Bluestein (chirp-z) FFT off the CPU (`sphere._ring_bluestein`).
+  - float32 results are now accurate to ~1e-7 relative, against ~1e-4 to
+    1e-3 from the old float32 recurrence.
+  - CPU transforms with the native extension are unchanged.
 - `sphere.spherical_fourier_features` (and so `SkyCoordinateEncoder`)
   evaluates all frequencies in one broadcast `sin`/`cos`. Results are bitwise
   identical, and a forward plus backward pass is about 13% faster.
