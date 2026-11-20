@@ -256,6 +256,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the plain HEALPix weights. It used to average the data over neighbours
   without their weights, and treated a cell whose value is exactly 0 as
   uncovered.
+- On MPS, `blot` and the `coadd_image_plane` projections that need a world
+  grid (non-TAN targets, SIP sources) map pixels to source pixels in float64
+  on the host and move only the pixel coordinates, as the other projections
+  already did. With a float32 world grid the samples were off by up to 1.4
+  pixels at 0.04 arcsec, and the SIP round-trip check dropped covered pixels.
 
 ## [0.5.0] - 2026-11-03
 

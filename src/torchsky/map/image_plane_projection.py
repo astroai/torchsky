@@ -1075,9 +1075,49 @@ def _resample_weighted_to_target(
             zeros if coefficient_variance_supported else None,
         )
 
+    def _sample_on_host_mapped_grid() -> (
+        tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]
+    ):
+        host = torch.device("cpu")
+        h_tgt, w_tgt = int(target.shape[0]), int(target.shape[1])
+        ra_host, dec_host = _build_target_world_grid(
+            target.wcs, h_tgt, w_tgt, device=host
+        )
+        ra_conv, dec_conv = _convert_world_between_wcs(
+            ra_host, dec_host, target.wcs, source_wcs
+        )
+        if _tpv_disjoint_from_target():
+            return _zero_result((h_tgt, w_tgt))
+        flat_ra = ra_conv.reshape(-1)
+        flat_dec = dec_conv.reshape(-1)
+        x_host, y_host = source_wcs.world_to_pixel(flat_ra, flat_dec)
+        x_host = x_host.reshape(h_tgt, w_tgt)
+        y_host = y_host.reshape(h_tgt, w_tgt)
+        valid = None
+        if _requires_roundtrip_validity_check(source_wcs):
+            valid = _roundtrip_validity_mask(
+                source_wcs,
+                x_src=x_host,
+                y_src=y_host,
+                flat_ra=flat_ra,
+                flat_dec=flat_dec,
+                image_shape=(h_src, w_src),
+            ).to(device=image.device)
+        return _sample_on_source_grid(
+            _to(x_host, device=image.device, dtype=torch.float32),
+            _to(y_host, device=image.device, dtype=torch.float32),
+            valid_mask=valid,
+        )
+
     def _sample_on_world_grid(
         ra_deg: Tensor, dec_deg: Tensor
     ) -> tuple[Tensor, Tensor] | tuple[Tensor, Tensor, Tensor | None]:
+        if image.device.type == "mps" and tuple(ra_deg.shape) == tuple(target.shape):
+            # MPS has no float64 and a float32 world grid is off by tens of
+            # milliarcseconds. Map target pixels to source pixels (and run the
+            # SIP round-trip gate) in float64 on the host, as the interpolated
+            # mapping does, and move only the pixel coordinates.
+            return _sample_on_host_mapped_grid()
         ra_conv, dec_conv = _convert_world_between_wcs(
             ra_deg, dec_deg, target.wcs, source_wcs
         )

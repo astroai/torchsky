@@ -288,3 +288,117 @@ def test_stacked_wcs_forms_report_device_mismatch_clearly() -> None:
     torch.testing.assert_close(stacked[:, 1], dec)
     assert wcs.world_to_pixel(stacked).device.type == accel
     assert wcs.to(accel).pixel_to_world(pix).device.type == accel
+
+
+@needs_mps
+def test_blot_on_mps_samples_at_the_cpu_coordinates() -> None:
+    """MPS blot maps destination pixels to coadd pixels in float64, like coadd does.
+
+    The coadd is the coadd x pixel coordinate, so blot returns, per destination
+    pixel, the coadd x position it sampled. At 0.04 arcsec pixels a float32
+    world grid moved blot samples by more than a pixel.
+    """
+    from torchsky.map import blot
+
+    def header(n: int, crval1: float, crval2: float, rot_deg: float) -> dict:
+        import math
+
+        cd = 0.04 / 3600.0
+        c, s = math.cos(math.radians(rot_deg)), math.sin(math.radians(rot_deg))
+        return {
+            "NAXIS": 2,
+            "NAXIS1": n,
+            "NAXIS2": n,
+            "CTYPE1": "RA---TAN",
+            "CTYPE2": "DEC--TAN",
+            "CRPIX1": n / 2 + 0.5,
+            "CRPIX2": n / 2 + 0.5,
+            "CRVAL1": crval1,
+            "CRVAL2": crval2,
+            "CD1_1": -cd * c,
+            "CD1_2": cd * s,
+            "CD2_1": cd * s,
+            "CD2_2": cd * c,
+        }
+
+    coadd_header = header(64, 150.1, 2.2, 0.0)
+    dest_header = header(40, 150.1 + 3e-5, 2.2 - 2e-5, 13.0)
+    ramp = torch.arange(64.0).expand(64, 64).clone()
+
+    on_cpu = blot(ramp, coadd_header, target=dest_header)
+    on_mps = blot(ramp.to("mps"), coadd_header, target=dest_header, device="mps")
+
+    assert isinstance(on_cpu, torch.Tensor) and isinstance(on_mps, torch.Tensor)
+    assert on_mps.device.type == "mps"
+    covered = on_cpu != 0
+    assert bool(covered.any())
+    error_pixels = (on_mps.cpu() - on_cpu)[covered].abs().max()
+    assert float(error_pixels) < 1e-3
+
+
+def _fine_header(
+    n: int,
+    crval: tuple[float, float],
+    *,
+    rot_deg: float = 0.0,
+    projection: str = "TAN",
+    sip: bool = False,
+) -> dict:
+    import math
+
+    cd = 0.04 / 3600.0
+    c, s = math.cos(math.radians(rot_deg)), math.sin(math.radians(rot_deg))
+    suffix = "-SIP" if sip else ""
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": n,
+        "NAXIS2": n,
+        "CTYPE1": f"RA---{projection}{suffix}",
+        "CTYPE2": f"DEC--{projection}{suffix}",
+        "CRPIX1": n / 2 + 0.5,
+        "CRPIX2": n / 2 + 0.5,
+        "CRVAL1": crval[0],
+        "CRVAL2": crval[1],
+        "CD1_1": -cd * c,
+        "CD1_2": cd * s,
+        "CD2_1": cd * s,
+        "CD2_2": cd * c,
+    }
+    if sip:
+        header.update(
+            {"A_ORDER": 2, "B_ORDER": 2, "A_2_0": 1e-5, "B_0_2": -1e-5, "A_1_1": 2e-6}
+        )
+    return header
+
+
+@needs_mps
+@pytest.mark.parametrize(
+    ("source_kw", "target_kw"),
+    [({}, {"projection": "SIN"}), ({"sip": True}, {})],
+    ids=["tan-to-sin", "sip-to-tan"],
+)
+def test_coadd_on_mps_samples_world_grid_targets_at_cpu_coordinates(
+    source_kw: dict, target_kw: dict
+) -> None:
+    """Targets that need a world grid map pixels in float64 on MPS too.
+
+    A non-TAN target (no homography) or a SIP source (round-trip gate) took the
+    float32 world grid on MPS: samples moved by more than a pixel at 0.04 arcsec
+    and the SIP round-trip gate dropped covered pixels.
+    """
+    source = _fine_header(64, (150.1, 2.2), **source_kw)
+    target = _fine_header(40, (150.1 + 3e-5, 2.2 - 2e-5), rot_deg=13.0, **target_kw)
+    ramp = torch.arange(64.0).expand(64, 64).clone()  # value == source x pixel
+    observations = [ImageObservation(data=ramp, header=source)]
+
+    on_cpu = coadd_image_plane(observations, target_header=target, auto_tile=False)
+    on_mps = coadd_image_plane(
+        observations, target_header=target, auto_tile=False, device="mps"
+    )
+
+    assert on_mps.data.device.type == "mps"
+    covered = on_cpu.weight > 0
+    assert bool(covered.any())
+    assert torch.equal(on_mps.weight.cpu() > 0, covered)
+    error_pixels = (on_mps.data.cpu() - on_cpu.data)[covered].abs().max()
+    assert float(error_pixels) < 1e-3

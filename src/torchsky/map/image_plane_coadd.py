@@ -2070,8 +2070,14 @@ def blot(
             include_quadrature=False,
             include_world_grid=False,
         )
+        # MPS has no float64: map destination pixels to coadd pixels in float64
+        # on the host (as the coadd projection does) and move only the pixel
+        # coordinates. A float32 world grid is off by tens of milliarcseconds.
+        coordinate_device = (
+            torch.device("cpu") if map_device.type == "mps" else map_device
+        )
         ra_grid, dec_grid = _build_target_world_grid(
-            dest_wcs, dest_shape[0], dest_shape[1], device=map_device
+            dest_wcs, dest_shape[0], dest_shape[1], device=coordinate_device
         )
         flat_ra = ra_grid.reshape(-1)
         flat_dec = dec_grid.reshape(-1)
@@ -2081,6 +2087,9 @@ def blot(
         src_x_flat, src_y_flat = coadd_wcs.world_to_pixel(flat_ra, flat_dec)
         src_x = src_x_flat.reshape(dest_shape)
         src_y = src_y_flat.reshape(dest_shape)
+        if coordinate_device != map_device:
+            src_x = _to(src_x, device=map_device, dtype=torch.float32)
+            src_y = _to(src_y, device=map_device, dtype=torch.float32)
         in_bounds = (
             (src_x >= 0.0)
             & (src_x <= float(w_c - 1))
