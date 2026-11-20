@@ -43,7 +43,7 @@ from typing import Any
 
 import torch
 from torch import Tensor
-from ..device import _to
+from ..device import _scatter_reduce_int, _to
 
 _F64 = torch.float64
 
@@ -73,8 +73,12 @@ def lse_excluding_self(
     total = base.index_add(0, seg, ex)
     idx = torch.arange(x.numel(), device=dev)
     first = torch.where(x == m[seg], idx, torch.full_like(idx, x.numel()))
-    arg = torch.full((n_seg,), x.numel(), dtype=torch.int64, device=dev).scatter_reduce(
-        0, seg, first, "amin", include_self=True
+    arg = _scatter_reduce_int(
+        torch.full((n_seg,), x.numel(), dtype=torch.int64, device=dev),
+        0,
+        seg,
+        first,
+        "amin",
     )
     is_arg = idx == arg[seg]
     total_wo_arg = base.index_add(0, seg, torch.where(is_arg, torch.zeros_like(ex), ex))

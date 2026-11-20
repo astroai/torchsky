@@ -51,7 +51,7 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from ..device import _as_tensor
+from ..device import _as_tensor, _scatter_reduce_int
 from ..sphere.moc import MOC
 from ..sphere import healpix as _healpix
 from ._zones import (
@@ -1212,9 +1212,13 @@ def assign_one_to_one(
         cand = in_star & (w == best[comp_id])
         # Exact ties: keep the lowest pair position per component.
         idx = torch.arange(int(w.numel()), device=dev)
-        first = torch.full(
-            (n_comp,), int(w.numel()), dtype=torch.int64, device=dev
-        ).scatter_reduce(0, comp_id[cand], idx[cand], "amin")
+        first = _scatter_reduce_int(
+            torch.full((n_comp,), int(w.numel()), dtype=torch.int64, device=dev),
+            0,
+            comp_id[cand],
+            idx[cand],
+            "amin",
+        )
         chosen = first[(first < int(w.numel()))]
         sel[pos[chosen]] = True
     hard = torch.nonzero(~star, as_tuple=True)[0]
@@ -1854,9 +1858,13 @@ def associate_many(
     )
     is_best = post == best_post[prim]
     idx = torch.arange(int(prim.numel()), device=dev)
-    best = torch.full(
-        (n0,), int(prim.numel()), dtype=torch.int64, device=dev
-    ).scatter_reduce(0, prim[is_best], idx[is_best], "amin")
+    best = _scatter_reduce_int(
+        torch.full((n0,), int(prim.numel()), dtype=torch.int64, device=dev),
+        0,
+        prim[is_best],
+        idx[is_best],
+        "amin",
+    )
     back = torch.tensor(order, device=dev)
     inv = torch.argsort(back)
     return NWayAssociation(

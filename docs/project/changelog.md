@@ -321,6 +321,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Exclusive association and `associate_many` tie-breaking take their int64
+  minimum scatters through `device._scatter_reduce_int`, so they run on MPS
+  under macOS 14. The direct int64 `scatter_reduce("amin")` raised there.
 - Gradients that were NaN on PyTorch < 2.14 are finite on every version:
   - the SZP pixel→world Jacobian next to the reference point;
   - the IFU angular distance at coincident points.
