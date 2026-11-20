@@ -46,6 +46,11 @@ and torchfits 1.3.1 or newer. CI tests the floor (pixi environment
 `test-torch-min`) and the newest PyTorch available; `scripts/torch_support.json`
 records both.
 
+Known issue: with PyTorch 2.15 on macOS 14, MPS matrix products on
+transposed inputs abort the process inside PyTorch (`-[MPSNDArray
+arrayViewWithShape:strides:]: unrecognized selector`). On that macOS, use
+PyTorch 2.14 for MPS work, or run on the CPU.
+
 Optional extras: `torchsky[viz]` (browser sky viewer) and `torchsky[map]` (SVO
 filter profiles for `torchsky map --method field`).
 

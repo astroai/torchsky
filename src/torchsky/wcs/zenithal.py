@@ -270,14 +270,20 @@ def project_zenithal(
         sinth2 = (-b_coef - sqrt_disc) / a_coef
         sinthe = torch.maximum(sinth1, sinth2)
         sinthe = torch.clamp(sinthe, -1.0, 1.0)
-        theta_val = torch.asin(sinthe) * R2D
+        small = r2 < 1e-10
+        # The general branch is discarded near the pole, but autograd still
+        # differentiates it: asin at sin(theta) = 1 has an infinite derivative,
+        # and 0 * inf is NaN on PyTorch < 2.14. Feed it a regular point there.
+        theta_val = (
+            torch.asin(torch.where(small, torch.zeros_like(sinthe), sinthe)) * R2D
+        )
         z = 1.0 - sinthe
         phi_val = torch.atan2(xr - x1 * z, -(yr - y1 * z)) * R2D
         # Small-angle formula for r2 < 1e-10
         theta_small = 90.0 - R2D * torch.sqrt(torch.clamp(r2 / (1.0 + xy), min=0.0))
         phi_small = torch.atan2(xr, -yr) * R2D
-        theta = torch.where(r2 < 1e-10, theta_small, theta_val)
-        phi_out = torch.where(r2 < 1e-10, phi_small, phi_val)
+        theta = torch.where(small, theta_small, theta_val)
+        phi_out = torch.where(small, phi_small, phi_val)
         theta = torch.where(
             valid | (r2 < 1e-10), theta, torch.full_like(theta, float("nan"))
         )

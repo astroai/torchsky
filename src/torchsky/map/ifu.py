@@ -333,10 +333,16 @@ def _angular_distance_arcsec(
         + torch.cos(dec) * torch.cos(reference_dec) * torch.sin(delta_ra / 2).square()
     )
     # atan2 form: finite gradients at coincident points (asin(sqrt(.)) is not).
+    # sqrt(h) has an infinite derivative at h = 0, and 0 * inf is NaN on
+    # PyTorch < 2.14, so coincident points take the (sub)gradient 0 explicitly.
     haversine = haversine.clamp(0.0, 1.0)
-    angle = 2.0 * torch.atan2(
-        torch.sqrt(haversine), torch.sqrt((1.0 - haversine).clamp_min(0.0))
+    positive = haversine > 0.0
+    root = torch.where(
+        positive,
+        torch.sqrt(torch.where(positive, haversine, torch.ones_like(haversine))),
+        torch.zeros_like(haversine),
     )
+    angle = 2.0 * torch.atan2(root, torch.sqrt((1.0 - haversine).clamp_min(0.0)))
     return angle * (180.0 / math.pi) * 3600.0
 
 

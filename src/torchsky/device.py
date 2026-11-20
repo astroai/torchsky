@@ -243,7 +243,8 @@ def _scatter_reduce_int(
     GitHub's macOS runners) lack: pipeline creation fails with
     ``CompilerError``. On MPS, int64 operands are reduced in int32 when every
     value fits, which only needs 32-bit atomics and gives identical results;
-    otherwise the reduction runs on the CPU and the result is moved back. Every
+    otherwise (or when MPS has no int32 scatter, as on PyTorch < 2.14 under
+    macOS < 15) the reduction runs on the CPU and the result is moved back. Every
     other device and dtype calls ``scatter_reduce`` unchanged.
     """
     if target.device.type != "mps" or target.dtype != torch.int64:
@@ -255,10 +256,15 @@ def _scatter_reduce_int(
             lo, hi = torch.aminmax(values)
             fits = fits and int(lo) >= _INT32_MIN and int(hi) <= _INT32_MAX
     if fits:
-        reduced = target.to(torch.int32).scatter_reduce(
-            dim, index, src.to(torch.int32), reduce, include_self=include_self
-        )
-        return reduced.to(torch.int64)
+        try:
+            reduced = target.to(torch.int32).scatter_reduce(
+                dim, index, src.to(torch.int32), reduce, include_self=include_self
+            )
+            return reduced.to(torch.int64)
+        except RuntimeError:
+            # PyTorch < 2.14 on macOS < 15 has no int32 MPS scatter either
+            # ("torch.int32 is only supported on MacOS15+"): reduce on the CPU.
+            pass
     reduced = target.cpu().scatter_reduce(
         dim, index.cpu(), src.cpu(), reduce, include_self=include_self
     )

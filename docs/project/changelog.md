@@ -321,6 +321,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Gradients that were NaN on PyTorch < 2.14 are finite on every version:
+  - the SZP pixel→world Jacobian next to the reference point;
+  - the IFU angular distance at coincident points.
+
+  In both, a discarded branch evaluated an infinite derivative (`asin` at 1,
+  `sqrt` at 0).
+- `device._scatter_reduce_int` falls back to the CPU on MPS backends that
+  have no int32 scatter (PyTorch < 2.14 on macOS < 15). It used to raise.
 - Spherical pixel areas (`map.operators.pixel_area`) form the triangle triple product from
   edge vectors. The old corner-vector form lost about 1e-4 relative accuracy
   on 0.03″ pixels; the new one is accurate to 6e-9 against the exact TAN area.
