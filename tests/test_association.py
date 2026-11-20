@@ -436,6 +436,136 @@ def test_nway_recovers_injected_triples() -> None:
     assert abs(float(res.p_any.mean()) - float(has_any.float().mean())) < 0.03
 
 
+def _scene_magnitudes(seed: int, cats, truth):
+    """Primary G; per secondary a right magnitude (true ~16, background ~20)
+    and the true counterparts' colour against the primary (~ -1 +- 0.2)."""
+    g = _gen(seed)
+    n = len(cats[0])
+    gmag = 14 + 4 * torch.rand(n, generator=g, dtype=D)
+    mags = [gmag]
+    for c in range(1, len(cats)):
+        m = 18 + 4 * torch.rand(len(cats[c]), generator=g, dtype=D)
+        has = truth[c] >= 0
+        m[truth[c][has]] = (
+            gmag[has] - 1.0 + 0.2 * torch.randn(int(has.sum()), generator=g, dtype=D)
+        )
+        mags.append(m)
+    return mags
+
+
+def _terms_for(mags, colour: bool):
+    edges = [torch.linspace(10, 24, 29, dtype=D)]
+    cedges = [torch.linspace(-6, 10, 33, dtype=D)]
+    out = []
+    for c in range(1, len(mags)):
+        if colour and c == 2:
+            out.append((HistogramRatio(mags[c], cedges, left_values=mags[0]),))
+        else:
+            out.append((HistogramRatio(mags[c], edges),))
+    return out
+
+
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_nway_terms_with_two_catalogues_equal_pairwise(exclusive: bool) -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, truth, box = _triple_scene(21, 800, 2000, keep=(0.7,))
+    mags = _scene_magnitudes(22, cats, truth)
+    kw = dict(max_radius_arcsec=30, exclusive=exclusive, max_iter=500, tol=1e-12)
+    pair = associate(
+        cats[0],
+        cats[1],
+        completeness=0.7,
+        assign="none",
+        right_footprint=box,
+        terms=_terms_for(mags, False)[0],
+        **kw,
+    )
+    many = associate_many(
+        cats,
+        completeness=[0.7],
+        footprints=[box, box],
+        terms=_terms_for(mags, False),
+        **kw,
+    )
+    present = many.members[:, 1] >= 0
+    key_many = many.members[present, 0] * 10**7 + many.members[present, 1]
+    key_pair = pair.left_index * 10**7 + pair.right_index
+    order_m, order_p = torch.argsort(key_many), torch.argsort(key_pair)
+    assert torch.equal(key_many[order_m], key_pair[order_p])
+    torch.testing.assert_close(
+        many.posterior[present][order_m], pair.posterior[order_p], rtol=1e-9, atol=1e-10
+    )
+    torch.testing.assert_close(1 - many.p_any, pair.p_none, rtol=1e-9, atol=1e-10)
+
+
+@pytest.mark.parametrize("exclusive", [False, True])
+def test_nway_terms_best_first_matches_exact_enumeration(exclusive: bool) -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, truth, box = _triple_scene(25, 200, 4000)
+    mags = _scene_magnitudes(26, cats, truth)
+    kw = dict(
+        completeness=[0.8, 0.6],
+        footprints=[box] * 3,
+        max_radius_arcsec=30,
+        exclusive=exclusive,
+    )
+    exact_terms = _terms_for(mags, True)
+    exact = associate_many(cats, terms=exact_terms, **kw)
+    approx = associate_many(
+        cats, terms=_terms_for(mags, True), budget=2, mass_tol=1e-8, **kw
+    )
+    assert float(exact.residual_mass.max()) == 0.0
+    assert float(approx.residual_mass.max()) <= 1e-6
+    for i in range(200):
+        a = exact.members[exact.best[i]]
+        b = approx.members[approx.best[i]]
+        assert torch.equal(a, b)
+        diff = abs(
+            float(exact.posterior[exact.best[i]])
+            - float(approx.posterior[approx.best[i]])
+        )
+        assert diff <= float(approx.residual_mass[i]) + 1e-6
+    if exclusive:
+        return
+    # Independent model, fixed completeness: the total density does not depend on
+    # the terms, so every enumerated hypothesis weight is the positional one
+    # times the learnt ratios of its present members.
+    plain = associate_many(cats, **kw)
+    assert torch.equal(plain.members, exact.members)
+    want = plain.log_weight.clone()
+    mem = plain.members
+    for c in (1, 2):
+        on = mem[:, c] >= 0
+        (term,) = exact_terms[c - 1]
+        want[on] += term.log_rho(mem[on, 0], mem[on, c])
+    torch.testing.assert_close(exact.log_weight, want, rtol=0.0, atol=1e-10)
+
+
+def test_nway_photometric_terms_raise_map_accuracy() -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, truth, box = _triple_scene(29, 1500, 12000)
+    mags = _scene_magnitudes(30, cats, truth)
+    kw = dict(footprints=[box] * 3, max_radius_arcsec=30)
+    acc = {}
+    for name, terms in (
+        ("plain", None),
+        ("mag", _terms_for(mags, False)),
+        ("colour", _terms_for(mags, True)),
+    ):
+        res = associate_many(cats, terms=terms, **kw)
+        best = res.members[res.best]
+        acc[name] = float(
+            ((best[:, 1] == truth[1]) & (best[:, 2] == truth[2])).double().mean()
+        )
+    # Position alone: ~0.87 of the MAP triples are right; with terms ~0.98.
+    assert acc["mag"] > acc["plain"] + 0.08
+    assert acc["colour"] > acc["plain"] + 0.08
+    assert min(acc["mag"], acc["colour"]) > 0.95
+
+
 # ------------------------------------------------- pair epochs, calibration
 
 
@@ -661,7 +791,8 @@ def test_pair_colour_term_resolves_blends() -> None:
     assert purity(colour) > 0.9
 
 
-def test_nway_per_row_epoch_catalogue_recovers_fast_mover() -> None:
+@pytest.mark.parametrize("with_terms", [False, True])
+def test_nway_per_row_epoch_catalogue_recovers_fast_mover(with_terms: bool) -> None:
     from torchsky.catalogs import associate_many
     from torchsky.wcs.catalog_state import CatalogState
 
@@ -706,7 +837,29 @@ def test_nway_per_row_epoch_catalogue_recovers_fast_mover() -> None:
                 ),
             )
         )
-    res = associate_many(cats, completeness=[0.95, 0.95], max_radius_arcsec=120.0)
+    terms = None
+    if with_terms:
+        # Colours against the primary: ~ -1 for the true pairs.
+        gmag = 14 + 4 * torch.rand(n, generator=g, dtype=D)
+        edges = [torch.linspace(-6, 6, 25, dtype=D)]
+        terms = [
+            (
+                HistogramRatio(
+                    gmag - 1 + 0.2 * torch.randn(n, generator=g, dtype=D),
+                    edges,
+                    left_values=gmag,
+                ),
+            )
+            for _ in range(2)
+        ]
+    res = associate_many(
+        cats, completeness=[0.95, 0.95], max_radius_arcsec=120.0, terms=terms
+    )
+    if terms is not None:
+        # The learnt colour ratio favours the true colour.
+        for (term,) in terms:
+            lr = term.log_rho(torch.arange(n), torch.arange(n))
+            assert float(lr.mean()) > 0.5
     best = res.members[res.best]
     assert best[0, 1] == 0 and best[0, 2] == 0  # Barnard-like star found in both
     assert float((best[:, 1] == torch.arange(n)).float().mean()) > 0.97

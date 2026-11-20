@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `associate_many(terms=...)`: photometric likelihood-ratio terms in N-way
+  association, one tuple of `HistogramRatio` per secondary catalogue with
+  the semantics of `associate` (right magnitudes, or pair colours relative
+  to the primary). Each present member's factor is multiplied by its ratio.
+  The ratios are learnt by the pairwise fits, then by EM from the hypothesis
+  posteriors, with `exclusive=True` and `False` and with per-row-epoch
+  catalogues. The best-first bound includes each candidate's ratio, so the
+  residual mass stays certified. With two catalogues the result equals
+  `associate` with the same terms. `max_iter` and `tol` bound the EM.
+
 - `associate(exclusive=True)` and `associate_many(exclusive=True)` (the new
   default): one-to-one association. A right (secondary) row is the
   counterpart of at most one primary. Posteriors are the Bethe marginals of
