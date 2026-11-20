@@ -264,6 +264,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `build_ifu_cube` (and `coadd_cube` with `IFUObservation`s) reports in
   `band_metadata.observation_count` the number of exposures that reach each
   spectral plane, as the other cube paths do. It was at most 1.
+- `torchsky.map.product.estimate_map_inverse_variance` in its default
+  `native_inverse_variance` mode returns the propagated inverse variance of a
+  product that carries one. It returned the coadd weight instead, which differs
+  after resampling, for relative weights and for flux products.
 
 ## [0.5.0] - 2026-11-03
 

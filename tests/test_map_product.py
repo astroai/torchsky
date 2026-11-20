@@ -815,3 +815,41 @@ def test_estimate_map_inverse_variance_never_invents_field_weights() -> None:
         estimate_map_inverse_variance(result),
         torch.full_like(result.data, 0.25),
     )
+
+
+def test_estimate_map_inverse_variance_prefers_propagated_uncertainty() -> None:
+    """A coadd weight is not an inverse variance; the propagated one is used.
+
+    Resampling makes them differ even for inverse-variance weights: the weight
+    is ``sum a w`` and the inverse variance ``(sum a w)^2 / sum a^2 w``. The
+    native mode used to return the weight whenever one was present.
+    """
+    header = _simple_header()
+    observation = torchsky.map.Observation(
+        data=torch.ones((6, 6)),
+        header=header,
+        weight_map=torch.full((6, 6), 4.0),
+        weight_is_inverse_variance=True,
+    )
+    shifted = dict(header)
+    shifted["CRPIX1"] = float(shifted["CRPIX1"]) + 0.37
+    shifted["CRPIX2"] = float(shifted["CRPIX2"]) - 0.21
+    coadd = torchsky.map.coadd_image_plane(
+        [observation], target_header=shifted, auto_tile=False
+    )
+    assert coadd.inverse_variance is not None
+    covered = coadd.weight > 0
+    assert not torch.allclose(coadd.inverse_variance[covered], coadd.weight[covered])
+    product = torchsky.map.ProductSpec(
+        target_header=shifted,
+        bands=(BandpassSpec(label="single"),),
+    )
+    from torchsky.map.product import _wrap_map_result
+
+    estimated = estimate_map_inverse_variance(
+        _wrap_map_result(coadd, product), min_inverse_variance=1.0e-12
+    )
+
+    torch.testing.assert_close(
+        estimated[0][covered], coadd.inverse_variance[covered], rtol=1e-5, atol=0.0
+    )
