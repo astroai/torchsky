@@ -168,6 +168,8 @@ class Tau(nn.Module):
 class Codes(nn.Module):
     """Conditioning code h of the kernel field."""
 
+    curves: torch.Tensor  # buffer (nf, CURVE_N): filter-curve input vectors
+
     def __init__(
         self,
         n_filters,

@@ -61,6 +61,32 @@ def resolve_instrument_options(cfg, n_inst, log=None):
 
 
 class FieldOperator(nn.Module):
+    # registered buffers (declared for the type checker; nn.Module.__getattr__ is typed Tensor | Module)
+    e_filt: torch.Tensor
+    e_inst: torch.Tensor
+    e_chan: torch.Tensor
+    e_det: torch.Tensor
+    e_R: torch.Tensor
+    e_sigbar: torch.Tensor
+    e_shape: torch.Tensor
+    shift0: torch.Tensor
+    lam: torch.Tensor
+    wq: torch.Tensor
+    piv: torch.Tensor
+    Phi: torch.Tensor
+    Phi_band: torch.Tensor
+    aff_scale: torch.Tensor
+    e_stripes: torch.Tensor
+    gref: torch.Tensor
+    T_ref: torch.Tensor
+    bkg0: torch.Tensor
+    row_mask: torch.Tensor
+    col_mask: torch.Tensor
+    blur_u: torch.Tensor
+    blur_r2: torch.Tensor
+    blur_logw: torch.Tensor
+    kc_off: torch.Tensor  # only with the kernel-centroid gauge
+
     def __init__(self, cfg, fset, meta, sky, dev):
         """meta: dict of per-exposure lists/arrays: filt, inst, chan, det, train(bool), R (E,2,2), sigbar, det_shape (E,2), shift0 (E,2),
         stripes (bool), plus inst_info [{name, diameter_m}], chan_pixel_arcsec, n_det, n_inst, n_chan, det_names."""
@@ -248,7 +274,7 @@ class FieldOperator(nn.Module):
             if f not in self.unseen
         }
         self.blur_sig2 = sig2
-        self.blur_ref = min(sig2, key=sig2.get)
+        self.blur_ref = min(sig2, key=sig2.__getitem__)
         self.blur_floor = (
             float(cfg.blur_floor) * sky.pitch**2 / 3.0
         )  # m2 of one sky tent (2 x pitch^2 / 6)
@@ -494,8 +520,9 @@ class FieldOperator(nn.Module):
             f[:, None].expand(-1, nL),
             ins[:, None].expand(-1, nL),
         )
-        if self.tau("g_exp") is not None:
-            g = g + self.tau("g_exp") * self.u[e][:, None]
+        tg = self.tau("g_exp")
+        if tg is not None:
+            g = g + tg * self.u[e][:, None]
         return g
 
     def gauge_mean(self, P):
@@ -539,8 +566,9 @@ class FieldOperator(nn.Module):
         iq = ins.expand(Q)
         h = self.codes.hbar_at(self.piv[f].expand(Q), fq, iq)  # (Q, dh) pivot code
         h = h[:, None].expand(Q, M, -1)
-        if self.tau("k_exp") is not None:
-            h = h + self.tau("k_exp") * self.codes.z[e][None, None]
+        tk = self.tau("k_exp")
+        if tk is not None:
+            h = h + tk * self.codes.z[e][None, None]
         return h
 
     def gamma_at(self, e, xi, P):
@@ -551,8 +579,9 @@ class FieldOperator(nn.Module):
         if self.amp != "structured":
             return torch.zeros(Q, M, device=xi.device)
         g = self.gbar_at(lam, f.expand(Q), ins.expand(Q))[:, None].expand(Q, M)
-        if self.tau("g_exp") is not None:
-            g = g + self.tau("g_exp") * self.u[e]
+        tg = self.tau("g_exp")
+        if tg is not None:
+            g = g + tg * self.u[e]
         return g - P["m"][f][:, None]
 
     def positions(self, e, X, Y, xi, P, c0=None):
@@ -568,7 +597,7 @@ class FieldOperator(nn.Module):
             xm = x + torch.tensor(
                 [float(c0[0]), float(c0[1])], device=x.device, dtype=x.dtype
             )
-        if self.has_aff_ref:
+        if self.aff_ref is not None:  # set exactly when has_aff_ref
             xm = xm - self.aff_ref[e]
         Mx = torch.stack(
             [
@@ -643,7 +672,7 @@ class FieldOperator(nn.Module):
         if detach_sky:
             A = A.detach()
         region = region_px or self.cfg.region_px
-        outs = [None] * len(items)
+        outs: list[dict[str, torch.Tensor] | None] = [None] * len(items)
         groups = {}
         for k, (e, pix) in enumerate(items):
             groups.setdefault(self.l_chan[e], []).append(k)

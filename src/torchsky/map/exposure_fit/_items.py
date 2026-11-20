@@ -39,6 +39,8 @@ def lam_unit(lam_um):
 class RBFBasis(nn.Module):
     """phi_k(lambda): K normalised Gaussian bumps uniform in log lambda (partition of unity). Equal to v40 RBFSpectralBasis(k, learned=False)."""
 
+    c: torch.Tensor  # buffer (K,): bump centres in lam_unit
+
     def __init__(self, k=12):
         super().__init__()
         self.k = k
@@ -189,7 +191,7 @@ class _LevelGrid:
     """One coarse level (l >= 1) of the pyramid rasteriser: square grid of n nodes at pitch p_l, node 0 at x0 (both axes). Items are
     point-sampled with covariance T - S_l^2 I = Sigma + (p^2/12 - S_l^2) I, i.e. the effective variance offset is qoff = p^2/12 - S_l^2
     (negative), on patches of +-PYR_R larger remaining widths, normalised so that p_l^2 sum_patch = 1. The scatter and its recompute-in-chunks
-    backward pass are ItemSky's own (_raster_forward / _raster_vjp), reused through _ItemRaster."""
+    backward pass (_ShearGrid._raster_forward / _raster_vjp) run through _ItemRaster."""
 
     def __init__(self, x0, pitch, n, K, qoff):
         self.x0, self.pitch, self.N, self.K, self.qoff = (
@@ -318,6 +320,34 @@ class _ShearGrid(_LevelGrid):
         flat = torch.where(ok, jy[:, :, None] * N + jx, torch.full_like(jx, N * N))
         return g.reshape(g.shape[0], -1), flat.reshape(g.shape[0], -1)
 
+    # The scatter and its backward pass, run by _ItemRaster on the level grids. In the prototype these were ItemSky methods assigned onto
+    # _LevelGrid after the class definitions (they only ever ran with a level grid as self); defined here so that self has _buckets.
+    def _raster_forward(self, pos, wid, ang, c):
+        """(N*N + 1, K) scatter of every item (last row: sink for nodes outside the grid). No graph is kept by the caller."""
+        out = torch.zeros(
+            self.N * self.N + 1, self.K, device=pos.device, dtype=pos.dtype
+        )
+        for h, i in self._buckets(wid, ang):
+            g, flat = self._patch(pos[i], wid[i], ang[i], h)
+            out.index_add_(
+                0, flat.reshape(-1), (g[:, :, None] * c[i, None, :]).reshape(-1, self.K)
+            )
+        return out
+
+    def _raster_vjp(self, pos, wid, ang, c, gout):
+        """Gradient of sum(gout * raster) with respect to (pos, wid, ang, c), chunk by chunk: each chunk's patches are recomputed with a
+        graph, differentiated and freed, so the memory held is one chunk (ITEM_CHUNK elements), not items x patch nodes x K."""
+        gs = [torch.zeros_like(t) for t in (pos, wid, ang, c)]
+        for h, i in self._buckets(wid, ang):
+            with torch.enable_grad():
+                leaf = [t[i].detach().requires_grad_(True) for t in (pos, wid, ang, c)]
+                g, flat = self._patch(leaf[0], leaf[1], leaf[2], h)
+                val = (g[:, :, None] * leaf[3][:, None, :] * gout[flat]).sum()
+                d = torch.autograd.grad(val, leaf)
+            for G, di in zip(gs, d):
+                G[i] = di
+        return tuple(gs)
+
 
 class PyramidPlan:
     """Geometry of the Gaussian-semigroup pyramid for a fine grid of N nodes at pitch p, node 0 at x0 (F40).
@@ -417,6 +447,8 @@ class ItemSky(nn.Module):
     (PyramidPlan), so the cost per item does not grow with its size; each item's patch is sheared (a box in its decorrelated coordinates), so
     the cost grows with the item's area rather than its larger width squared (F40). The renderer reads coeffs() through a tent grid at the sky
     pitch: what the items change is the parametrisation, not the renderer."""
+
+    level: torch.Tensor  # buffer (n_items,): seeding lattice level of each item
 
     def __init__(
         self,
@@ -565,32 +597,6 @@ class ItemSky(nn.Module):
             + sums
         )
 
-    def _raster_forward(self, pos, wid, ang, c):
-        """(N*N + 1, K) scatter of every item (last row: sink for nodes outside the grid). No graph is kept by the caller."""
-        out = torch.zeros(
-            self.N * self.N + 1, self.K, device=pos.device, dtype=pos.dtype
-        )
-        for h, i in self._buckets(wid, ang):
-            g, flat = self._patch(pos[i], wid[i], ang[i], h)
-            out.index_add_(
-                0, flat.reshape(-1), (g[:, :, None] * c[i, None, :]).reshape(-1, self.K)
-            )
-        return out
-
-    def _raster_vjp(self, pos, wid, ang, c, gout):
-        """Gradient of sum(gout * raster) with respect to (pos, wid, ang, c), chunk by chunk: each chunk's patches are recomputed with a
-        graph, differentiated and freed, so the memory held is one chunk (ITEM_CHUNK elements), not items x patch nodes x K."""
-        gs = [torch.zeros_like(t) for t in (pos, wid, ang, c)]
-        for h, i in self._buckets(wid, ang):
-            with torch.enable_grad():
-                leaf = [t[i].detach().requires_grad_(True) for t in (pos, wid, ang, c)]
-                g, flat = self._patch(leaf[0], leaf[1], leaf[2], h)
-                val = (g[:, :, None] * leaf[3][:, None, :] * gout[flat]).sum()
-                d = torch.autograd.grad(val, leaf)
-            for G, di in zip(gs, d):
-                G[i] = di
-        return tuple(gs)
-
     def plan(self):
         """Pyramid geometry (F40), built once: the number of levels follows from the largest possible item variance
         floor^2 + max_width^2 + p^2/12."""
@@ -670,7 +676,3 @@ class ItemSky(nn.Module):
         super()._load_from_state_dict(state_dict, prefix, *a, **k)
         self._mut += 1
         self._cache = None
-
-
-_LevelGrid._raster_forward = ItemSky._raster_forward
-_LevelGrid._raster_vjp = ItemSky._raster_vjp

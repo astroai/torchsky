@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import math
 import time
+from typing import Any
 
 import numpy as np
 import torch
@@ -214,6 +215,8 @@ def batch_loss(
         tot = tot + items[k][2] * lvl
         n += kk
         chi += c
+    # every caller passes a drawn batch of --batch-patches >= 1 patches, so tot is a tensor (pix_loss returns tensor sums)
+    assert isinstance(tot, torch.Tensor)
     return tot / (len(items) * pool_mean_valid), n, chi
 
 
@@ -270,6 +273,8 @@ def warm_kernel(model, cfg, filt_info, log=print):
             h = model.codes.hbar_at(model.piv[f].expand(lam.numel()), fq, iq)
             lg = model.net(feats, h)
             loss = loss + ((lg - tgt) ** 2).mean()
+        # filt_info has one entry per filter of a non-empty exposure list, so the sum above has at least one tensor term
+        assert isinstance(loss, torch.Tensor)
         opt.zero_grad()
         loss.backward()
         opt.step()
@@ -556,7 +561,7 @@ def fit(model, exps, cfg, log=print, history=None, ts=None):
             else ""
         )
     )
-    rec = {"steps": [], "tau": []}
+    rec: dict[str, Any] = {"steps": [], "tau": []}
     tr_by_f = {f: v.to(dev) for f, v in ts.pedestal_groups.items()}
     set_prior_pixels(cfg, exps, log)
     t0 = time.perf_counter()
@@ -1142,7 +1147,7 @@ def nuisance_sizes(model, exps, P=None, radii=(0.5, 1.0, 2.5)):
             else {"rms": float(x.pow(2).mean().sqrt()), "max_abs": float(x.abs().max())}
         )
 
-    out = {"noise_floor_fraction": noise_floor_values(model)}
+    out: dict[str, Any] = {"noise_floor_fraction": noise_floor_values(model)}
     h = 3 * torch.tanh(model.hs / 3)
     used = sorted({(int(model.e_det[i]), int(model.e_filt[i])) for i in range(model.E)})
     out["noise_scale_exp_h"] = {
@@ -1161,7 +1166,7 @@ def nuisance_sizes(model, exps, P=None, radii=(0.5, 1.0, 2.5)):
         if not ids:
             continue
         i = torch.as_tensor(ids, device=model.dev)
-        r = {
+        r: dict[str, Any] = {
             "n": len(ids),
             "bkg_const_minus_median_over_sigma": st(
                 (model.bkg[i, 0] - model.bkg0[i]).double() / sb[i]
@@ -1193,7 +1198,7 @@ def nuisance_sizes(model, exps, P=None, radii=(0.5, 1.0, 2.5)):
         out[s] = r
     # far wings of the kernel: fraction of its integral beyond each radius, at the detector centre of one training exposure per filter (a flat
     # far pedestal is degenerate with the background terms, F41)
-    wings = {}
+    wings: dict[str, dict[str, float]] = {}
     for f in range(len(model.fset)):
         es = [int(x) for x in model.ref_eids.tolist() if int(model.e_filt[x]) == f]
         if not es:

@@ -146,7 +146,7 @@ def load_exposures(
         raise ValueError("load_exposures needs at least one instrument")
     ra, dec, half = (float(v) for v in sky_box)
     out: list[FieldObservation] = []
-    for path in map(os.fspath, paths):
+    for path in (os.fspath(p) for p in paths):
         if not os.path.isfile(path):
             raise FileNotFoundError(f"exposure file not found: {path}")
         primary = {
@@ -205,6 +205,12 @@ def load_exposures(
                 factor != 1.0
             ):  # float32 arithmetic with a float32 factor, as the prototype did
                 f32 = torch.tensor(factor, dtype=torch.float32)
+                # field_observation_from_exposure_file always sets err, mask and weight (error_hdu is required)
+                assert (
+                    obs.err is not None
+                    and obs.mask is not None
+                    and obs.weight is not None
+                )
                 obs.image = obs.image * f32
                 obs.err = obs.err * f32
                 obs.weight = torch.where(
