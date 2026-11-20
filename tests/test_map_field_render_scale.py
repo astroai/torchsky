@@ -346,3 +346,47 @@ def test_render_field_observation_tile_matches_full_with_psf() -> None:
     tiled.sum().backward()
     for parameter, expected in zip(model.parameters(), full_grads, strict=True):
         torch.testing.assert_close(parameter.grad, expected, rtol=1.0e-5, atol=1.0e-6)
+
+
+def test_cube_and_healpix_renders_keep_float64_model_precision() -> None:
+    from torchsky import WCS
+    from torchsky.map.field.models_implicit import FourierMLPField
+    from torchsky.sphere import healpix
+
+    torch.manual_seed(0)
+    domain = FieldDomain(
+        center_ra_deg=10.0,
+        center_dec_deg=0.0,
+        spatial_scale_deg=0.5,
+        wavelength_center=5000.0,
+        wavelength_scale=100.0,
+    )
+    model = FourierMLPField(domain, max_frequency=64.0).double()
+    # Not representable in float32: a float32 render rounds the wavelength.
+    wavelengths = torch.tensor([4987.123456789, 5012.987654321], dtype=torch.float64)
+    axis = SpectralAxis(values=wavelengths, unit="Angstrom", type="WAVE")
+    header = _tan_header(6, crval1=10.0, crval2=0.0, scale_deg=0.05)
+
+    cube = render_field_cube(model, target_header=header, spectral_axis=axis)
+    y, x = torch.meshgrid(
+        torch.arange(6, dtype=torch.float64),
+        torch.arange(6, dtype=torch.float64),
+        indexing="ij",
+    )
+    ra, dec = WCS(header).pixel_to_world(x, y)
+    with torch.no_grad():
+        expected = torch.stack([model(ra, dec, wl) for wl in wavelengths])
+    assert cube.dtype == torch.float64
+    torch.testing.assert_close(cube.detach(), expected, rtol=1e-12, atol=1e-14)
+
+    nside = 2
+    hp = render_field_healpix(model, nside=nside, spectral_axis=axis)
+    ra_hp, dec_hp = healpix.pix2ang(
+        nside, torch.arange(12 * nside * nside), lonlat=True
+    )
+    with torch.no_grad():
+        expected_hp = torch.stack(
+            [model(ra_hp.double(), dec_hp.double(), wl) for wl in wavelengths]
+        )
+    assert hp.dtype == torch.float64
+    torch.testing.assert_close(hp.detach(), expected_hp, rtol=1e-12, atol=1e-14)
