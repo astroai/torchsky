@@ -111,3 +111,23 @@ def test_residual_rejects_even_kernel():
         MagnificationResidual(kernel_size=4)
     with pytest.raises(ValueError, match="channels"):
         MagnificationResidual(channels=0)
+
+
+@pytest.mark.parametrize(
+    "fn",
+    [
+        lambda kappa: magnify_flux(torch.ones(2), kappa),
+        lambda kappa: scale_source_sizes(torch.ones(2), kappa),
+        lambda kappa: magnification_bias(torch.ones(2), kappa, 0.5),
+        lambda kappa: ConvergenceMagnification(max_magnification=None)(kappa),
+    ],
+)
+def test_unbounded_linear_law_rejects_nonpositive_magnification(fn):
+    # mu = 1 + 2 kappa <= 0 for kappa <= -1/2 lies outside the weak-lensing law;
+    # it used to give negative flux and NaN sizes/densities silently.
+    with pytest.raises(ValueError, match="positive"):
+        fn(torch.tensor([0.0, -0.6]))
+    with pytest.raises(ValueError, match="positive"):
+        fn(torch.tensor([0.0, -0.5]))
+    out = fn(torch.tensor([0.0, -0.2]))
+    assert bool(torch.isfinite(out).all())
