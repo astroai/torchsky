@@ -321,6 +321,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- TPV world→pixel in float32 (MPS) returned NaN for points whose residual
+  could not reach the fixed 1e-11 deg tolerance. Convergence is now judged
+  against a per-point floor set by the dtype's rounding error. On a
+  1M-point MPS run there are no NaNs, and the error is at most 0.1 px.
+  float64 is unchanged.
 - Exclusive association and `associate_many` tie-breaking take their int64
   minimum scatters through `device._scatter_reduce_int`, so they run on MPS
   under macOS 14. The direct int64 `scatter_reduce("amin")` raised there.

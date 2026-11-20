@@ -404,3 +404,19 @@ def test_native_tpv_inverse_is_not_used_when_gradients_are_needed() -> None:
     assert u.requires_grad
     (u.sum() + v.sum()).backward()
     assert xi.grad is not None and torch.isfinite(xi.grad).all()
+
+
+def test_float32_tpv_inverse_converges_instead_of_returning_nan() -> None:
+    # A fixed 1e-11 deg tolerance is below float32 resolution; converged
+    # float32 (e.g. MPS) points used to come back NaN.
+    tpv = WCS(_well_conditioned_tpv_header()).tpv
+    assert tpv is not None
+    g = torch.Generator().manual_seed(3)
+    u = (torch.rand(20000, generator=g, dtype=torch.float64) - 0.5) * 0.2
+    v = (torch.rand(20000, generator=g, dtype=torch.float64) - 0.5) * 0.2
+    xi, eta = tpv.distort(u, v)
+    u32, v32 = tpv.invert(xi.to(torch.float32), eta.to(torch.float32))
+    assert not torch.isnan(u32).any() and not torch.isnan(v32).any()
+    # float32 degrees: a few ulp of a 0.1 deg coordinate.
+    assert float((u32.double() - u).abs().max()) < 1e-6
+    assert float((v32.double() - v).abs().max()) < 1e-6

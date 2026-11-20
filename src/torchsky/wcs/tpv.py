@@ -353,6 +353,19 @@ class TPV:
         eta_f = eta_t.reshape(-1)
 
         u_curr, v_curr = self._initial_guess_affine(xi_f, eta_f)
+        # Per-point convergence tolerance: ``tol``, but never below what the
+        # working dtype can resolve. Evaluating the polynomial (n terms) at a
+        # target of size |xi| + |eta| carries ~n * eps * max(1, |xi| + |eta|)
+        # rounding, so in float32 (MPS) a 1e-11 deg residual is unreachable and
+        # converged points were reported as NaN. In float64 the floor is
+        # ~1e-14 deg and ``tol`` (1e-11) is unchanged.
+        n_terms = max(len(self.terms1), len(self.terms2), 1) + 2
+        floor = (
+            n_terms
+            * torch.finfo(xi_f.dtype).eps
+            * torch.clamp(xi_f.abs() + eta_f.abs(), min=1.0)
+        )
+        tol_pt = torch.clamp(floor.nan_to_num(nan=tol), min=tol)
         active_counts = []
         u, v = u_curr, v_curr
         viable = (
@@ -386,7 +399,7 @@ class TPV:
             )
             act = active[rows]
             viable = viable.index_put((rows,), viable[rows] & (~act | good))
-            update = act & good & (res_norm > tol)
+            update = act & good & (res_norm > tol_pt[rows])
             if not bool(update.any()):
                 break
             if self._invert_trace_enabled:
@@ -410,7 +423,7 @@ class TPV:
         valid = (
             viable
             & torch.isfinite(final_residual)
-            & (final_residual <= tol)
+            & (final_residual <= tol_pt)
             & self._well_conditioned(dxi_du, dxi_dv, deta_du, deta_dv)
         )
         nan = torch.full_like(u, torch.nan)
