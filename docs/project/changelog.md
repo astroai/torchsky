@@ -249,6 +249,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `candidate_coarse_pixels_for_left_pixel` and `HealpixIndex.expand`
   (crossmatch-only helpers) are removed.
 
+### Fixed
+
+- `encoders.SkyCoordinateEncoder` wraps RA by whole turns around a new
+  `lon_center_deg` (default 180, so in-range RA is unchanged) before its
+  longitude features. Non-integer frequencies, which domain-scaled field
+  encoders use, made RA and RA ± 360° encode differently and put an O(1)
+  feature jump at RA = 0 inside patches that cross it; field encoders now
+  centre the seam opposite the domain. `spectral_frequencies=0` works
+  (`log_spectral_encoding(num_frequencies=0)` returns the log coordinate).
+- `map.field.make_residual_tile_basis_field` initialised atoms with
+  `prediction - data` and added them, doubling the residual; atoms now correct
+  it. Tile centres honour `detector_to_sky` and are encoded in float64.
+- `OperatorConstrainedFeatureField.spectral_observability_penalty` reused
+  cached weights for bands with the same name and bounds but a different
+  transmission table, passband or wavelength, and raised `TypeError` when
+  named and unnamed bands were mixed.
+- `render_field_cube` and `render_field_healpix` render float64 models in
+  float64 (float32 on MPS) instead of rounding wavelengths and outputs to
+  float32.
+- `SpectralSkyField.penalty` is zero, not NaN, with fewer than three basis
+  terms; `ChromaticPSFField.basis` keeps float64 wavelengths.
+- `magnify_flux`, `scale_source_sizes`, `magnification_bias` and
+  `ConvergenceMagnification` reject `1 + 2 kappa <= 0` under the unbounded
+  linear law instead of returning negative flux or NaN.
+
 ## [0.5.0] - 2026-11-03
 
 First stable release. Identical to 0.5.0rc2 apart from the version number;
