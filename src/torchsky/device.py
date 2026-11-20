@@ -112,6 +112,21 @@ def resolve_device(
     return first
 
 
+def resolve_module_device(module: object, *fallback: object) -> torch.device:
+    """Device of ``module``'s parameters and buffers, else of ``fallback``.
+
+    A model with no tensors (an analytic or fixed field) carries no placement,
+    so the device follows the other inputs (for example the observation) under
+    :func:`resolve_device`; only when those carry no tensor either does
+    :func:`default_compute_device` apply.
+    """
+    found: list[torch.device] = []
+    _collect_devices(module, found)
+    if found:
+        return resolve_device(None, module)
+    return resolve_device(None, *fallback)
+
+
 def require_float64(device: torch.device | str | None, *, what: str) -> None:
     """Raise early when a float64-only path is asked to run on MPS.
 

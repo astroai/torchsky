@@ -25,6 +25,8 @@ from collections import OrderedDict
 import numpy as np
 import torch
 
+from ...device import _as_tensor
+
 
 class _UF:
     def __init__(self):
@@ -103,7 +105,7 @@ class TileSet:
         )
         tr = [e for e in exps if e.split == "train"]
         self.shift_groups = [
-            torch.as_tensor(v, device=self.dev, dtype=torch.long)
+            _as_tensor(v, device=self.dev, dtype=torch.long)
             for v in components(tr).values()
         ]
         self.pedestal_groups = {

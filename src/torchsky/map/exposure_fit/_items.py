@@ -16,6 +16,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ...device import _to
+
 LAM_LO, LAM_HI = (
     0.70,
     5.30,
@@ -68,7 +70,7 @@ def spectral_init(S_band, Phi_band, mu=1e-5, bands=None):
             D[i, i : i + 3] = torch.tensor([1.0, -2.0, 1.0], dtype=torch.float64)
         P64 = Phi_band.double().cpu()
         M = P64.T @ P64 + mu * D.T @ D + 1e-6 * torch.eye(k, dtype=torch.float64)
-        P = torch.linalg.solve(M, P64.T).to(S_band.device, S_band.dtype)  # K nb
+        P = _to(torch.linalg.solve(M, P64.T), S_band.device, S_band.dtype)  # K nb
         return torch.einsum("kb,bhw->khw", P, S_band)
 
 
@@ -414,7 +416,7 @@ class PyramidPlan:
         r = self.rad[lvl]
         t = torch.arange(-r, r + 1, dtype=torch.float64) * (self.pl[lvl] / 2)
         g = torch.exp(-0.5 * (t / self.s[lvl]) ** 2)
-        return (2.0 * g / g.sum()).to(device=device, dtype=dtype)
+        return _to(2.0 * g / g.sum(), device=device, dtype=dtype)
 
     def up(self, G, lvl):
         """Level-l grid (K, n_l, n_l) -> its deposit on level l-1 (K, n_{l-1}, n_{l-1}). Ordinary autograd."""
@@ -527,20 +529,20 @@ class ItemSky(nn.Module):
                 continue
             wl = float(w[sel][0])
             As = _gauss_smooth(A0, wl / self.pitch)
-            X, Y = x[sel].to(dev, dt), y[sel].to(dev, dt)
+            X, Y = _to(x[sel], dev, dt), _to(y[sel], dev, dt)
             vals = self.sample_coeffs(As, X, Y).T  # (n_l, K)
             frac = float(sel.sum()) / self.n_items
             c[sel.to(dev)] = (
-                frac * area[sel].to(dev, dt)[:, None] * vals.clamp(min=cmin)
+                frac * _to(area[sel], dev, dt)[:, None] * vals.clamp(min=cmin)
             )
         rng = torch.Generator().manual_seed(1234 + self.seed)
         ang = torch.rand(self.n_items, generator=rng, dtype=torch.float64) * math.pi
         lw0 = 0.5 * torch.log(
             (w**2 - self.floor**2).clamp(min=(0.05 * self.floor) ** 2)
         )
-        self.pos.data[:] = torch.stack([x, y], -1).to(dev, dt)[None]
-        self.lw.data[:] = lw0[:, None].repeat(1, 2).to(dev, dt)[None]
-        self.ang.data[:] = ang.to(dev, dt)[None]
+        self.pos.data[:] = _to(torch.stack([x, y], -1), dev, dt)[None]
+        self.lw.data[:] = _to(lw0[:, None].repeat(1, 2), dev, dt)[None]
+        self.ang.data[:] = _to(ang, dev, dt)[None]
         self.lc.data[:] = torch.log(c.clamp(min=1e-30))[None]
         self.level.copy_(lv.to(dev))
         self._mut += 1

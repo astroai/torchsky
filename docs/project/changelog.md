@@ -187,6 +187,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer loads torchfits: the FITS readers and writers in `sphere.compat`,
   `sphere.stmoc`, the spectral weight loader and `wcs.astrometry_net` import it
   when called.
+- `sphere.spherical_fourier_features` (and so `SkyCoordinateEncoder`)
+  evaluates all frequencies in one broadcast `sin`/`cos`. Results are bitwise
+  identical, and a forward plus backward pass is about 13% faster.
 - TPV world→pixel inversion runs its Newton sweeps on the points still moving
   only, and stops when every point has converged (about 2.5× faster for large
   inputs; results unchanged).
@@ -276,6 +279,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Field rendering (`render_field_observation`, its distribution and tiled
+  variants, `predict_observation_mean`) follows the observation's device when
+  the model has no parameters or buffers. It used to fall back to the default
+  compute device, so a CPU observation rendered on CUDA.
+- Combined device-and-dtype conversions in `catalogs` and
+  `map.exposure_fit` go through `torchsky.device._to` / `_as_tensor`, avoiding
+  the MPS float64 copy that returns zeros.
 - `encoders.SkyCoordinateEncoder` wraps RA by whole turns around a new
   `lon_center_deg` (default 180, so in-range RA is unchanged) before its
   longitude features. Non-integer frequencies, which domain-scaled field

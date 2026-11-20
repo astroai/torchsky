@@ -2055,38 +2055,22 @@ def spherical_fourier_features(
     lat = torch.deg2rad(dec_t)
     x, y, z = lonlat_to_xyz(ra_t, dec_t)
 
+    if not (include_xyz or include_lonlat):
+        raise ValueError("at least one of include_xyz/include_lonlat must be True")
     exponents = torch.arange(num_frequencies, dtype=ra_t.dtype, device=ra_t.device)
     freqs = min_frequency * (base**exponents)
 
-    feats = []
+    # One broadcast sin/cos over (frequency, coordinate) instead of ten small
+    # kernels per frequency. Channel order per frequency: sin, cos of x, y, z
+    # (include_xyz), then of lon, lat (include_lonlat).
+    coords = ([x, y, z] if include_xyz else []) + ([lon, lat] if include_lonlat else [])
+    scaled = torch.stack(coords, dim=-1).unsqueeze(-2) * freqs.unsqueeze(-1)
+    periodic = torch.stack([torch.sin(scaled), torch.cos(scaled)], dim=-1).flatten(
+        start_dim=-3
+    )
     if include_xyz:
-        feats.extend([x, y, z])
-
-    for f in freqs:
-        if include_xyz:
-            feats.extend(
-                [
-                    torch.sin(f * x),
-                    torch.cos(f * x),
-                    torch.sin(f * y),
-                    torch.cos(f * y),
-                    torch.sin(f * z),
-                    torch.cos(f * z),
-                ]
-            )
-        if include_lonlat:
-            feats.extend(
-                [
-                    torch.sin(f * lon),
-                    torch.cos(f * lon),
-                    torch.sin(f * lat),
-                    torch.cos(f * lat),
-                ]
-            )
-
-    if not feats:
-        raise ValueError("at least one of include_xyz/include_lonlat must be True")
-    return torch.stack(feats, dim=-1)
+        return torch.cat([torch.stack([x, y, z], dim=-1), periodic], dim=-1)
+    return periodic
 
 
 def nest_parent(pix_nest: Tensor, levels: int = 1) -> Tensor:

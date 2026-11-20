@@ -299,17 +299,9 @@ def test_lonlat_conversions_reject_latitude_outside_domain(latitude: float) -> N
 
 
 def test_cpp_torch_bindings_core_healpix_match_python() -> None:
-    cpp = pytest.importorskip("torchsky._cpp")
-    required = [
-        "healpix_ring2nest_torch_cpu",
-        "healpix_nest2ring_torch_cpu",
-        "healpix_ang2pix_ring_torch_cpu",
-        "healpix_ang2pix_nested_torch_cpu",
-        "healpix_pix2ang_ring_torch_cpu",
-        "healpix_pix2ang_nested_torch_cpu",
-    ]
-    if not all(hasattr(cpp, name) for name in required):
-        pytest.skip("torch-native HEALPix C++ bindings unavailable")
+    if not healpix_mod._ops.has_fixed_dispatcher():
+        pytest.skip("native HEALPix operators unavailable")
+    ops = torch.ops.torchsky
 
     nside = 64
     rng = np.random.default_rng(321)
@@ -318,43 +310,39 @@ def test_cpp_torch_bindings_core_healpix_match_python() -> None:
         torch.float64
     )
 
-    pix_ring_cpp = cpp.healpix_ang2pix_ring_torch_cpu(nside, ra, dec)
+    pix_ring_cpp = ops.healpix_ang2pix_ring(nside, ra, dec)
     pix_ring_py = ang2pix_ring(nside, ra, dec)
     torch.testing.assert_close(pix_ring_cpp, pix_ring_py)
 
-    pix_nest_cpp = cpp.healpix_ang2pix_nested_torch_cpu(nside, ra, dec)
+    pix_nest_cpp = ops.healpix_ang2pix_nested(nside, ra, dec)
     pix_nest_py = ang2pix(
         nside, torch.deg2rad(90.0 - dec), torch.deg2rad(ra), nest=True, lonlat=False
     )
     torch.testing.assert_close(pix_nest_cpp, pix_nest_py)
 
-    pix_nest_from_ring_cpp = cpp.healpix_ring2nest_torch_cpu(nside, pix_ring_cpp)
+    pix_nest_from_ring_cpp = ops.healpix_ring2nest(nside, pix_ring_cpp)
     pix_nest_from_ring_py = ring2nest(nside, pix_ring_cpp)
     torch.testing.assert_close(pix_nest_from_ring_cpp, pix_nest_from_ring_py)
     torch.testing.assert_close(
-        cpp.healpix_nest2ring_torch_cpu(nside, pix_nest_cpp),
+        ops.healpix_nest2ring(nside, pix_nest_cpp),
         nest2ring(nside, pix_nest_cpp),
     )
 
-    ra_r_cpp, dec_r_cpp = cpp.healpix_pix2ang_ring_torch_cpu(nside, pix_ring_cpp)
+    ra_r_cpp, dec_r_cpp = ops.healpix_pix2ang_ring(nside, pix_ring_cpp)
     ra_r_py, dec_r_py = pix2ang_ring(nside, pix_ring_cpp)
     torch.testing.assert_close(ra_r_cpp, ra_r_py, atol=1e-12, rtol=0.0)
     torch.testing.assert_close(dec_r_cpp, dec_r_py, atol=1e-12, rtol=0.0)
 
-    ra_n_cpp, dec_n_cpp = cpp.healpix_pix2ang_nested_torch_cpu(nside, pix_nest_cpp)
+    ra_n_cpp, dec_n_cpp = ops.healpix_pix2ang_nested(nside, pix_nest_cpp)
     ra_n_py, dec_n_py = pix2ang(nside, pix_nest_cpp, nest=True, lonlat=True)
     torch.testing.assert_close(ra_n_cpp, ra_n_py, atol=1e-12, rtol=0.0)
     torch.testing.assert_close(dec_n_cpp, dec_n_py, atol=1e-12, rtol=0.0)
 
 
 def test_cpp_torch_bindings_interp_val_match_python() -> None:
-    cpp = pytest.importorskip("torchsky._cpp")
-    required = [
-        "healpix_get_interp_val_ring_torch_cpu",
-        "healpix_get_interp_val_nested_torch_cpu",
-    ]
-    if not all(hasattr(cpp, name) for name in required):
-        pytest.skip("torch-native HEALPix interp C++ bindings unavailable")
+    if not healpix_mod._ops.has_fixed_dispatcher():
+        pytest.skip("native HEALPix operators unavailable")
+    ops = torch.ops.torchsky
 
     nside = 32
     npix = nside2npix(nside)
@@ -366,16 +354,16 @@ def test_cpp_torch_bindings_interp_val_match_python() -> None:
     m_ring = torch.from_numpy(rng.normal(size=npix)).to(torch.float64)
     m_nest = m_ring[ring2nest(nside, torch.arange(npix, dtype=torch.int64))]
 
-    got_r = cpp.healpix_get_interp_val_ring_torch_cpu(nside, m_ring, lon, lat)
+    got_r = ops.healpix_get_interp_val_ring(nside, m_ring, lon, lat)
     exp_r = get_interp_val(m_ring, lon, lat, nest=False, lonlat=True)
     torch.testing.assert_close(got_r, exp_r, atol=1e-12, rtol=1e-12)
 
-    got_n = cpp.healpix_get_interp_val_nested_torch_cpu(nside, m_nest, lon, lat)
+    got_n = ops.healpix_get_interp_val_nested(nside, m_nest, lon, lat)
     exp_n = get_interp_val(m_nest, lon, lat, nest=True, lonlat=True)
     torch.testing.assert_close(got_n, exp_n, atol=1e-12, rtol=1e-12)
 
     m_stack = torch.stack([m_ring, m_ring * 0.5 + 0.2], dim=0)
-    got_stack = cpp.healpix_get_interp_val_ring_torch_cpu(nside, m_stack, lon, lat)
+    got_stack = ops.healpix_get_interp_val_ring(nside, m_stack, lon, lat)
     exp_stack = get_interp_val(m_stack, lon, lat, nest=False, lonlat=True)
     torch.testing.assert_close(got_stack, exp_stack, atol=1e-12, rtol=1e-12)
 
@@ -503,9 +491,8 @@ def test_query_vec_helpers_self_consistent() -> None:
 def test_query_disc_cpp_matches_python_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cpp = pytest.importorskip("torchsky._cpp")
-    if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
-        pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
+    if not healpix_mod._ops.has_fixed_dispatcher():
+        pytest.skip("native HEALPix query_disc operator unavailable")
 
     nside = 64
     lon = 13.7
@@ -570,35 +557,28 @@ def test_query_disc_rejects_invalid_vector(vec: list[float]) -> None:
 
 
 def test_native_healpix_contracts_reject_invalid_domains() -> None:
-    cpp = pytest.importorskip("torchsky._cpp")
-    required = [
-        "healpix_ang2pix_ring_torch_cpu",
-        "healpix_ring2nest_torch_cpu",
-        "healpix_query_disc_torch_cpu",
-    ]
-    if not all(hasattr(cpp, name) for name in required):
-        pytest.skip("torch-native HEALPix bindings unavailable")
+    if not healpix_mod._ops.has_fixed_dispatcher():
+        pytest.skip("native HEALPix operators unavailable")
+    ops = torch.ops.torchsky
 
     empty = torch.empty(0, dtype=torch.int64)
     with pytest.raises(RuntimeError, match=r"2\*\*29"):
-        cpp.healpix_ring2nest_torch_cpu(1 << 30, empty)
+        ops.healpix_ring2nest(1 << 30, empty)
 
     finite = torch.tensor([0.0], dtype=torch.float64)
     with pytest.raises(RuntimeError, match="finite"):
-        cpp.healpix_ang2pix_ring_torch_cpu(
+        ops.healpix_ang2pix_ring(
             1, torch.tensor([math.nan], dtype=torch.float64), finite
         )
     with pytest.raises(RuntimeError, match=r"\[-90, 90\]"):
-        cpp.healpix_ang2pix_ring_torch_cpu(
-            1, finite, torch.tensor([91.0], dtype=torch.float64)
-        )
+        ops.healpix_ang2pix_ring(1, finite, torch.tensor([91.0], dtype=torch.float64))
 
     good_vec = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64)
     for cos_lim in (math.nan, math.inf, -1.0001, 1.0001):
         with pytest.raises(RuntimeError, match="cos_lim"):
-            cpp.healpix_query_disc_torch_cpu(1, good_vec, cos_lim, False)
+            ops.healpix_query_disc(1, good_vec, cos_lim, False)
     with pytest.raises(RuntimeError, match="allocation size overflow"):
-        cpp.healpix_query_disc_torch_cpu(1 << 29, good_vec, -1.0, False)
+        ops.healpix_query_disc(1 << 29, good_vec, -1.0, False)
     for vec in (
         torch.tensor([math.nan, 0.0, 1.0], dtype=torch.float64),
         torch.tensor([math.inf, 0.0, 1.0], dtype=torch.float64),
@@ -606,7 +586,7 @@ def test_native_healpix_contracts_reject_invalid_domains() -> None:
         torch.ones(2, dtype=torch.float64),
     ):
         with pytest.raises(RuntimeError):
-            cpp.healpix_query_disc_torch_cpu(1, vec, 0.5, False)
+            ops.healpix_query_disc(1, vec, 0.5, False)
 
 
 def test_query_disc_fact_inclusive_false_is_noop() -> None:
@@ -680,9 +660,8 @@ def test_query_polygon_accepts_convex_quad() -> None:
 def test_query_disc_cuda_vec_matches_cpu() -> None:
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available")
-    cpp = pytest.importorskip("torchsky._cpp")
-    if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
-        pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
+    if not healpix_mod._ops.has_fixed_dispatcher():
+        pytest.skip("native HEALPix query_disc operator unavailable")
 
     nside = 32
     vec = torch.tensor([0.1, -0.2, 0.97], dtype=torch.float64)
@@ -698,9 +677,8 @@ def test_query_disc_cuda_vec_matches_cpu() -> None:
 def test_query_disc_mps_vec_matches_cpu() -> None:
     if not torch.backends.mps.is_available():
         pytest.skip("MPS not available")
-    cpp = pytest.importorskip("torchsky._cpp")
-    if not hasattr(cpp, "healpix_query_disc_torch_cpu"):
-        pytest.skip("torch-native HEALPix query_disc C++ binding unavailable")
+    if not healpix_mod._ops.has_fixed_dispatcher():
+        pytest.skip("native HEALPix query_disc operator unavailable")
 
     nside = 32
     vec = torch.tensor([0.1, -0.2, 0.97], dtype=torch.float32)

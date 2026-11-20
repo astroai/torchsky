@@ -87,7 +87,7 @@ def _tile_encoded_center_and_scale(
     with torch.no_grad():
         ra, dec = observation_pixel_to_world(observation, x_samples, y_samples)
         ra = torch.as_tensor(ra, dtype=torch.float64)
-        dec = torch.as_tensor(dec, dtype=torch.float64, device=ra.device)
+        dec = _as_tensor(dec, dtype=torch.float64, device=ra.device)
         lam = torch.full_like(ra, float(wavelength))
         encoded = model._encoded_coords(ra, dec, lam).detach()
     center = encoded[0]

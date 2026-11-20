@@ -44,6 +44,8 @@ from typing import Literal, overload
 import numpy as np
 import torch
 
+from ...device import _to
+
 from ._response import legendre6
 
 
@@ -112,8 +114,8 @@ class Smoother:
             x_nodes if x_out is None else torch.as_tensor(x_out, dtype=torch.float64)
         )
         self.s, self.pitch = float(s), float(pitch)
-        self.M = tent_gauss_1d(self.x_out, x_nodes, pitch, s).to(
-            dtype=dtype, device=device
+        self.M = _to(
+            tent_gauss_1d(self.x_out, x_nodes, pitch, s), device=device, dtype=dtype
         )  # (n_out, N)
 
     def __call__(self, img):
@@ -547,7 +549,7 @@ class SkyNormalOperator:
                 ev, V = torch.linalg.eigh(b)
                 lam = ev.clamp(min=0) + self.mu
                 proj = (
-                    V.conj().transpose(-1, -2) @ ph.to(device=V.device, dtype=V.dtype)
+                    V.conj().transpose(-1, -2) @ _to(ph, device=V.device, dtype=V.dtype)
                 ).abs() ** 2
                 return (proj / lam).sum(-1)
 

@@ -960,7 +960,7 @@ def associate(
             )
             for term in terms:
                 log_lr = log_lr + term.log_rho(li, rj)
-            pi_eff = torch.as_tensor(pi_c, dtype=_F64, device=dev) * (1.0 - gate_pvalue)
+            pi_eff = _as_tensor(pi_c, dtype=_F64, device=dev) * (1.0 - gate_pvalue)
             log_pi = torch.log(pi_eff) + outside_log
             return log_pi[li] + log_lr, torch.log1p(-pi_eff * inside), log_lr
 

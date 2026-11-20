@@ -38,6 +38,7 @@ import math
 
 import torch
 from torch import Tensor
+from ..device import _to
 
 _F64 = torch.float64
 
@@ -167,7 +168,7 @@ def exclusive_log_rho(
     log_rho = (
         torch.zeros(n_slots, dtype=_F64, device=dev)
         if init is None
-        else init.to(dtype=_F64, device=dev).clone()
+        else _to(init, device=dev, dtype=_F64).clone()
     )
     if cache is not None and "prep" in cache:
         prep = cache["prep"]

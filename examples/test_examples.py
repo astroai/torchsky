@@ -37,7 +37,12 @@ ROOT = SCRIPT_DIR.parent
 DEFAULT_TIMEOUT = 120
 SKIP = 77
 # The TAP cones of the catalogue example can take minutes on the first, uncached run.
-TIMEOUTS: dict[str, int] = {"crossmatch_gaia_2mass_allwise.py": 600}
+# legacy_field_fit.py fits one network to six images for 240 steps (fewer
+# steps miss its own loss check): measured 116 s on an M2 CPU under load.
+TIMEOUTS: dict[str, int] = {
+    "crossmatch_gaia_2mass_allwise.py": 600,
+    "legacy_field_fit.py": 360,
+}
 
 EXCLUDE = {
     "test_examples.py",

@@ -18,6 +18,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ...device import _as_tensor
+
 from ._kernel import (
     Codes,
     KernelNet,
@@ -96,7 +98,7 @@ class FieldOperator(nn.Module):
         self.E = E
 
         def t(x, dt=torch.long):
-            return torch.as_tensor(np.asarray(x), dtype=dt, device=dev)
+            return _as_tensor(np.asarray(x), dtype=dt, device=dev)
 
         self.register_buffer("e_filt", t(meta["filt"]))
         self.register_buffer("e_inst", t(meta["inst"]))
@@ -203,7 +205,7 @@ class FieldOperator(nn.Module):
         # ---- detector
         self.bkg = nn.Parameter(torch.zeros(E, 6, device=dev))
         with torch.no_grad():
-            self.bkg[:, 0] = torch.as_tensor(
+            self.bkg[:, 0] = _as_tensor(
                 np.asarray(meta["bkg0"]), dtype=torch.float32, device=dev
             )
         self.stripe_rows = nn.Parameter(torch.zeros(E, 2048, device=dev))
@@ -224,7 +226,7 @@ class FieldOperator(nn.Module):
         self.tau = Tau(self.tau_spec(cfg))
         # ---- reference sets (training exposures)
         tr = np.nonzero(self.train_mask)[0]
-        self.ref_eids = torch.as_tensor(tr, device=dev, dtype=torch.long)
+        self.ref_eids = _as_tensor(tr, device=dev, dtype=torch.long)
         # filters of the filter set with no training exposure (--train-exclude-filters, unseen-band test): plain host list, [] in every ordinary field
         self.unseen = sorted(set(range(len(fset))) - {int(meta["filt"][i]) for i in tr})
         gref = (
@@ -232,13 +234,9 @@ class FieldOperator(nn.Module):
             if cfg.gauge_ref_inst < 0
             else np.array([i for i in tr if int(meta["inst"][i]) == cfg.gauge_ref_inst])
         )
-        self.register_buffer(
-            "gref", torch.as_tensor(gref, device=dev, dtype=torch.long)
-        )
+        self.register_buffer("gref", _as_tensor(gref, device=dev, dtype=torch.long))
         Tt = fset.T_table(lam.flatten().cpu().numpy())  # (nf, nf*Q)
-        self.register_buffer(
-            "T_ref", torch.as_tensor(Tt, dtype=torch.float32, device=dev)
-        )
+        self.register_buffer("T_ref", _as_tensor(Tt, dtype=torch.float32, device=dev))
         self.amp = cfg.amplitude
         # ---- pedestal / stripe gauges (F18): per-exposure reference levels and the detector rows / columns each exposure uses
         self.register_buffer("bkg0", t(meta["bkg0"], torch.float32))
@@ -356,9 +354,7 @@ class FieldOperator(nn.Module):
         self.kc_class_host = [
             cls[(int(f), int(i))] for f, i in zip(meta["filt"], meta["inst"])
         ]
-        self.kc_class = torch.as_tensor(
-            self.kc_class_host, dtype=torch.long, device=dev
-        )
+        self.kc_class = _as_tensor(self.kc_class_host, dtype=torch.long, device=dev)
         self.register_buffer("kc_off", torch.zeros(len(pairs), 2, device=dev))
         sw = []
         for f, _ in pairs:
@@ -835,7 +831,7 @@ class FieldOperator(nn.Module):
                 ]
                 if not ids:
                     continue
-                self.gref = torch.as_tensor(ids, device=self.dev, dtype=torch.long)
+                self.gref = _as_tensor(ids, device=self.dev, dtype=torch.long)
                 g = self.gamma_raw_ref(P) - P["m"].flatten()[None]
                 Tw = self.T_ref[self.e_filt[self.gref]]
                 out[names[i] if names and i < len(names) else str(i)] = {

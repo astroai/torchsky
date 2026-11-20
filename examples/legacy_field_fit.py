@@ -20,8 +20,8 @@ of model to data and the fraction of the image variance the model explains,
 and it shows data, model and residual. The ring, the nucleus and the colour
 change between them are recovered. The residuals keep the knots of the ring
 and the field stars: this compact network is smoother than the data, and
-``field`` is experimental. Runtime about 60 s on CPU once the 1 MB of cutouts
-and filter curves are cached.
+``field`` is experimental. Runtime one to two minutes on CPU once the 1 MB of
+cutouts and filter curves are cached.
 
 Data: Legacy Surveys DR10 (Dey et al. 2019, AJ 157, 168), public; DECam
 filter curves from the SVO Filter Profile Service (Rodrigo & Solano 2020).

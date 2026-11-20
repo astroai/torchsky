@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...device import _as_tensor, resolve_device, _to
+from ...device import _as_tensor, resolve_device, resolve_module_device, _to
 from ...spectral import SpectralAxis
 from ...sphere import healpix as _healpix_wcs
 
@@ -223,7 +223,7 @@ def iter_field_observation_tiles(
                 "tiled learned_lowrank PSF requires globally indexed cell geometry"
             )
         halo_y, halo_x = psf_support_radius(observation.psf_spec)
-    device = resolve_device(None, model)
+    device = resolve_module_device(model, observation)
     if (
         render_kwargs.get("override_wavelengths") is None
         and render_kwargs.get("override_weights") is None
@@ -667,7 +667,7 @@ def render_field_observation_distribution(
         raise ValueError(
             "field model does not provide an explicit predictive distribution"
         )
-    device = resolve_device(None, model)
+    device = resolve_module_device(model, observation)
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -951,7 +951,7 @@ def render_field_observation(
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
-    device = resolve_device(None, model)
+    device = resolve_module_device(model, observation)
     spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
     center_coordinates: tuple[Tensor, Tensor] | None = None
     if spatial_sampling == "center":
@@ -1197,7 +1197,7 @@ def render_spectral_power_foam_observation_exact(
         Callable[..., Tensor], normalized_spatial_coordinates
     )
     render_exact = cast(Callable[..., Tensor], render_exact)
-    device = resolve_device(None, model)
+    device = resolve_module_device(model, observation)
 
     height, width = _header_shape(
         observation.header,

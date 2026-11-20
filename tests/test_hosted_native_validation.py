@@ -1,11 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
-import json
-import os
 from pathlib import Path
-import subprocess
-import sys
 
 import pytest
 
@@ -13,7 +9,6 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "native-portability.yml"
 RUNTIME_SCRIPT = REPO_ROOT / "scripts" / "validate_native_runtime.py"
-CUDA_DIAGNOSTIC = REPO_ROOT / "scripts" / "diagnose_cuda_build.py"
 
 
 def _runtime_module():
@@ -69,14 +64,10 @@ def test_cuda_hosted_job_provisions_toolkit_and_reports_runner_scope() -> None:
 
     assert "linux-cuda-torch-native:" in workflow
     assert "pixi install --frozen -e cuda-bench" in workflow
-    assert "CUDA_HOME:" in workflow
-    assert "CUDAToolkit_ROOT:" in workflow
-    assert "diagnose_cuda_build.py --require-cuda-torch" in workflow
+    assert "diagnose_cuda_build" not in workflow
     assert "pip install -e . --no-build-isolation -v" in workflow
     assert "Standard GitHub-hosted runners have no NVIDIA GPU" in workflow
-    assert 'cuda-nvcc = "13.0.*"' in pixi
-    assert 'cuda-nvrtc-dev = "13.0.*"' in pixi
-    assert 'torch = "==2.14.0"' in pixi
+    assert 'torch = ">=2.14"' in pixi
 
 
 def test_runtime_parity_comparison_rejects_numerical_drift() -> None:
@@ -85,24 +76,3 @@ def test_runtime_parity_comparison_rejects_numerical_drift() -> None:
     module._assert_close([1.0, 2.0], [1.0, 2.0 + 1e-15])
     with pytest.raises(AssertionError, match=r"payload\[1\] differs"):
         module._assert_close([1.0, 2.0], [1.0, 2.1])
-
-
-def test_cuda_diagnostic_explains_cpu_only_upstream_torch() -> None:
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in {"CUDA_HOME", "CUDAToolkit_ROOT"}
-    }
-    result = subprocess.run(
-        [sys.executable, str(CUDA_DIAGNOSTIC), "--require-cuda-torch"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "installed upstream PyTorch wheel is CPU-only" in result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["torch_cuda"] is None
-    assert payload["cuda_available"] is False

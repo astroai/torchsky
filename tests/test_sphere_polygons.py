@@ -18,13 +18,9 @@ from torchsky.sphere import healpix as hp
 
 
 def _has_cpp_geom() -> bool:
-    try:
-        from torchsky._native import cpp as _cpp_mod  # type: ignore
-    except Exception:
-        return False
-    return hasattr(_cpp_mod, "_sphere_planar_point_in_polygon_cpu") and hasattr(
-        _cpp_mod, "_sphere_arc_intersections_matrix_cpu"
-    )
+    from torchsky import _ops
+
+    return _ops.has_fixed_dispatcher()
 
 
 def _concave_polygon() -> tuple[torch.Tensor, torch.Tensor]:
@@ -499,7 +495,7 @@ def test_python_geometry_predicates_return_non_differentiable_bools(
     not _has_cpp_geom(), reason="C++ sphere geometry kernels unavailable"
 )
 def test_cpp_geometry_predicates_reject_invalid_tolerances() -> None:
-    from torchsky._native import cpp as cpp
+    ops = torch.ops.torchsky
 
     points = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
     polygon = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64)
@@ -507,6 +503,6 @@ def test_cpp_geometry_predicates_reject_invalid_tolerances() -> None:
     arc1 = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64)
 
     with pytest.raises(RuntimeError, match="finite and nonnegative"):
-        cpp._sphere_planar_point_in_polygon_cpu(points, polygon, -1.0)
+        ops.sphere_planar_point_in_polygon(points, polygon, -1.0)
     with pytest.raises(RuntimeError, match="finite and nonnegative"):
-        cpp._sphere_arc_intersections_matrix_cpu(arc0, arc1, arc0, arc1, math.inf)
+        ops.sphere_arc_intersections_matrix(arc0, arc1, arc0, arc1, math.inf)
