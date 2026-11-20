@@ -82,11 +82,14 @@ def log_spectral_encoding(
     num_frequencies: int = 4,
     base: float = 2.0,
 ) -> Tensor:
-    """Multi-scale Fourier features for log wavelength or log frequency."""
+    """Multi-scale Fourier features for log wavelength or log frequency.
+
+    ``num_frequencies=0`` returns the log coordinate alone.
+    """
     if (wavelength is None) == (frequency is None):
         raise ValueError("Provide exactly one of wavelength or frequency")
-    if num_frequencies <= 0:
-        raise ValueError("num_frequencies must be positive")
+    if num_frequencies < 0:
+        raise ValueError("num_frequencies must be non-negative")
 
     raw = torch.as_tensor(wavelength if wavelength is not None else frequency)
     if not raw.is_floating_point():
@@ -147,7 +150,15 @@ class SirenImplicitField(nn.Module):
 
 
 class SkyCoordinateEncoder(nn.Module):
-    """Spherical polynomial + Fourier features, optionally with log-spectral ones."""
+    """Spherical polynomial + Fourier features, optionally with log-spectral ones.
+
+    Longitude features ``sin(f * ra)`` are periodic in RA only for integer
+    ``f``. Right ascension is therefore first wrapped into
+    ``[lon_center_deg - 180, lon_center_deg + 180)``, so the encoding is a
+    function of sky position and its seam lies opposite ``lon_center_deg``.
+    The default ``180`` keeps RA in ``[0, 360)``; field models pass their
+    domain center so a patch crossing RA = 0 is encoded continuously.
+    """
 
     def __init__(
         self,
@@ -156,6 +167,7 @@ class SkyCoordinateEncoder(nn.Module):
         spectral_frequencies: int = 4,
         include_degree2: bool = True,
         min_frequency: float = 1.0,
+        lon_center_deg: float = 180.0,
     ) -> None:
         super().__init__()
         if num_fourier_frequencies <= 0:
@@ -168,6 +180,9 @@ class SkyCoordinateEncoder(nn.Module):
         if float(min_frequency) <= 0.0:
             raise ValueError("min_frequency must be positive")
         self.min_frequency = float(min_frequency)
+        if not math.isfinite(float(lon_center_deg)):
+            raise ValueError("lon_center_deg must be finite")
+        self.lon_center_deg = float(lon_center_deg)
 
     def forward(
         self,
@@ -177,6 +192,11 @@ class SkyCoordinateEncoder(nn.Module):
         wavelength: Optional[Tensor] = None,
         frequency: Optional[Tensor] = None,
     ) -> Tensor:
+        if not ra_deg.is_floating_point():
+            ra_deg = ra_deg.to(work_dtype(ra_deg.device))
+        # Subtract whole turns only, so in-range RA is passed through exactly.
+        turns = torch.floor((ra_deg - self.lon_center_deg + 180.0) / 360.0)
+        ra_deg = ra_deg - 360.0 * turns
         sky = harmonic_sky_encoding(
             ra_deg,
             dec_deg,
