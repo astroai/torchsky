@@ -421,7 +421,10 @@ def _table_budget(device: torch.device) -> int:
     if env is not None and env.strip():
         return int(float(env))
     if device.type == "cuda":
-        return int(torch.cuda.get_device_properties(device).total_memory // 3)
+        # Half the device: nside 512 / lmax 1024 in float64 (4.5 GB) fits a
+        # 10.75 GiB H100 MIG slice, where the recurrence fallback measured
+        # ~5x slower per transform and ~10 s cold.
+        return int(torch.cuda.get_device_properties(device).total_memory // 2)
     if device.type == "mps":
         recommended = getattr(torch.mps, "recommended_max_memory", None)
         if recommended is not None:
@@ -485,6 +488,7 @@ class _LegendreTable:
         inv = 2.0 ** (-_SCALE_BITS[torch.float64])
         base = _alm_base(lmax, mmax)
         rows = _table_rows(mmax)
+        values_step = _stepper(_values_steps, build_dev, "values")
         self.blocks: list[tuple[int, int, Tensor, Tensor, Tensor, Tensor]] = []
         for m0 in range(0, mmax + 1, rows):
             hi = min(m0 + rows, mmax + 1)
@@ -512,7 +516,7 @@ class _LegendreTable:
                 ell0 = torch.tensor(
                     float(m0 + t0), dtype=torch.float64, device=build_dev
                 )
-                lam1, lam2, ex, chunk = _values_steps(
+                lam1, lam2, ex, chunk = values_step(
                     ell0,
                     m_rows,
                     build_pairs.ct,

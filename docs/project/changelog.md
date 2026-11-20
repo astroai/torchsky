@@ -209,7 +209,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   At nside 512 that is on par with ducc0 on four CPU threads. How:
   - The Legendre step uses a cached Legendre table built once in float64,
     so each transform is a few batched matmuls (`sphere._sht_blocks`). The
-    table goes on the GPU or MPS when it fits a memory budget: a third of
+    table goes on the GPU or MPS when it fits a memory budget: half of
     GPU memory, a quarter of MPS's recommended maximum, or
     `TORCHSKY_SHT_TABLE_BYTES`.
   - Above the budget it uses a blocked, north/south-folded recurrence that
