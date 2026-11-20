@@ -356,3 +356,51 @@ def test_tpv_inverse_gradcheck_away_from_singularities() -> None:
         return torch.stack((u, v), dim=-1)
 
     assert torch.autograd.gradcheck(inverse, (target,), atol=1e-6, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "header_fn", [_tpv_header, _well_conditioned_tpv_header, _tpv_affine_linear_header]
+)
+def test_native_tpv_inverse_matches_torch_sweeps(
+    header_fn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from torchsky import _cpp_ext
+    from torchsky._native import cpp
+
+    if cpp is None or not hasattr(_cpp_ext, "wcs_tpv_invert"):
+        pytest.skip("native TPV inverse not built")
+    tpv = WCS(header_fn()).tpv
+    assert tpv is not None
+    g = torch.Generator().manual_seed(7)
+    u = (torch.rand(4000, generator=g, dtype=torch.float64) - 0.5) * 0.6
+    v = (torch.rand(4000, generator=g, dtype=torch.float64) - 0.5) * 0.6
+    xi, eta = tpv.distort(u, v)
+    xi = torch.cat([xi, torch.tensor([torch.nan, 0.0, 1.0e3], dtype=torch.float64)])
+    eta = torch.cat([eta, torch.tensor([0.0, torch.inf, -1.0e3], dtype=torch.float64)])
+    xi, eta = xi.reshape(-1, 1), eta.reshape(-1, 1)
+
+    native_u, native_v = tpv.invert(xi, eta)
+    monkeypatch.setattr(TPV, "_USE_NATIVE_INVERT", False)
+    torch_u, torch_v = tpv.invert(xi, eta)
+
+    assert native_u.shape == xi.shape
+    assert torch.equal(torch.isnan(native_u), torch.isnan(torch_u))
+    assert torch.equal(torch.isnan(native_v), torch.isnan(torch_v))
+    ok = ~torch.isnan(torch_u)
+    assert int(ok.sum()) > 3000
+    torch.testing.assert_close(native_u[ok], torch_u[ok], rtol=0.0, atol=1e-10)
+    torch.testing.assert_close(native_v[ok], torch_v[ok], rtol=0.0, atol=1e-10)
+    # Converged points reproduce the targets to the Newton tolerance.
+    rxi, reta = tpv.distort(native_u[ok], native_v[ok])
+    assert float(torch.hypot(rxi - xi[ok], reta - eta[ok]).max()) <= 1e-11
+
+
+def test_native_tpv_inverse_is_not_used_when_gradients_are_needed() -> None:
+    tpv = WCS(_well_conditioned_tpv_header()).tpv
+    assert tpv is not None
+    xi = torch.tensor([1.0e-3, -2.0e-3], dtype=torch.float64, requires_grad=True)
+    eta = torch.tensor([2.0e-3, 1.0e-3], dtype=torch.float64)
+    u, v = tpv.invert(xi, eta)
+    assert u.requires_grad
+    (u.sum() + v.sum()).backward()
+    assert xi.grad is not None and torch.isfinite(xi.grad).all()

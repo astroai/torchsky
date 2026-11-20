@@ -159,3 +159,34 @@ def test_windowed_flux_area_matches_full_area_map(monkeypatch, kernel, mapping) 
     for a, b in zip(full, windowed):
         assert a is not None and b is not None
         torch.testing.assert_close(b, a, rtol=1e-6, atol=0.0)
+
+
+@pytest.mark.parametrize("scale_arcsec", [0.03, 0.2, 1.0])
+def test_spherical_pixel_area_is_accurate_for_small_pixels(scale_arcsec: float) -> None:
+    # Exact oracle: the undistorted TAN Jacobian. At these scales the polygon
+    # and the local Jacobian agree to well below 1e-7.
+    scale = scale_arcsec / 3600.0
+    header = {
+        "NAXIS": 2,
+        "NAXIS1": 32,
+        "NAXIS2": 32,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": 16.5,
+        "CRPIX2": 16.5,
+        "CRVAL1": 150.0,
+        "CRVAL2": 2.0,
+        "CD1_1": -scale,
+        "CD1_2": 0.0,
+        "CD2_1": 0.0,
+        "CD2_2": scale,
+    }
+    wcs = torchsky.WCS(header)
+    y, x = torch.meshgrid(
+        torch.arange(32.0, dtype=torch.float64),
+        torch.arange(32.0, dtype=torch.float64),
+        indexing="ij",
+    )
+    exact = pixel_area_mod._tan_pixel_area_sr(wcs, x, y)
+    polygon = pixel_area_mod._spherical_pixel_area_sr(wcs, x, y)
+    torch.testing.assert_close(polygon, exact, rtol=1e-7, atol=0.0)

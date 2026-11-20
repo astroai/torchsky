@@ -70,7 +70,7 @@ def test_extension_exports_only_registered_kernels() -> None:
 
     exported = {name for name in dir(cpp._ext) if not name.startswith("__")}
     # The torch-free core exports one raw-buffer kernel per torch.ops schema
-    # registered from Python, the torch-free crossmatch kernels, the ISA
+    # registered from Python, the torch-free crossmatch and TPV-inverse kernels, the ISA
     # diagnostic and the native ABI marker; nothing else.
     expected = set(_native_ops._SCHEMAS) | {
         "NATIVE_ABI",
@@ -82,6 +82,7 @@ def test_extension_exports_only_registered_kernels() -> None:
         "xmatch_fill",
         "xmatch_knn",
         "xmatch_segment_lse_excl",
+        "wcs_tpv_invert",
     }
     assert exported == expected
     bindings = (PACKAGE_ROOT / "cpp_src" / "bindings.cpp").read_text(encoding="utf-8")

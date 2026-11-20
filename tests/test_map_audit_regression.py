@@ -299,8 +299,13 @@ def test_native_drizzle_accumulate_rejects_bad_shapes_and_layouts():
         op(qx, qy, torch.ones(1), ones, 3, 3, *out(9), False)
     with pytest.raises(RuntimeError, match="width \\* height"):
         op(qx, qy, ones, ones, 3, 3, *out(4), False)
+    # Read-only inputs cross the DLPack boundary as contiguous copies, so a
+    # strided view gives the same result; the in-place outputs must be dense.
+    sn, sw, sv = out(9)
+    op(qx.t().contiguous().t(), qy, ones, ones, 3, 3, sn, sw, sv, False)
+    torch.testing.assert_close((sn, sw), (on, ow))
     with pytest.raises(RuntimeError, match="contiguous"):
-        op(qx.t().contiguous().t(), qy, ones, ones, 3, 3, *out(9), False)
+        op(qx, qy, ones, ones, 3, 3, torch.zeros(18)[::2], *out(9)[1:], False)
     with pytest.raises(RuntimeError, match="float64"):
         op(qx.float(), qy, ones, ones, 3, 3, *out(9), False)
 

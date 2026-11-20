@@ -102,6 +102,7 @@ set(SOURCES
     operators/drizzle_cpu.cpp
     operators/fixed_cpu.cpp
     operators/spectral_cpu.cpp
+    operators/wcs_tpv_cpu.cpp
 )
 
 # Python module. The core does not include or link libtorch (tensors cross the

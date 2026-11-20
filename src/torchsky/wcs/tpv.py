@@ -52,6 +52,7 @@ class TPV:
 
         self._invert_trace_enabled = False
         self._last_invert_trace = None
+        self._plans: Dict[Any, Any] = {}
 
     def set_invert_trace(self, enabled: bool):
         self._invert_trace_enabled = enabled
@@ -216,23 +217,85 @@ class TPV:
         nan = torch.full_like(xi, torch.nan)
         return torch.where(valid, xi, nan), torch.where(valid, eta, nan)
 
-    def _distort_impl(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
-        r = torch.hypot(u, v)
-        xp = [torch.ones_like(u), u]
-        yp = [torch.ones_like(v), v]
-        rp = [torch.ones_like(r), r]
-        for _ in range(2, 8):
-            xp.append(xp[-1] * u)
-            yp.append(yp[-1] * v)
-            rp.append(rp[-1] * r)
+    # Both polynomials and their Jacobians are evaluated as one product of
+    # monomials: M[k] = u**a_k * v**b_k * r**c_k over the distinct monomials k,
+    # then a single (rows, K) @ (K, N) matmul. This replaces a few hundred
+    # per-term kernels per call (the TPV inverse calls it once per Newton sweep)
+    # with about twenty, whatever the number of PV terms.
+    _MONOMIAL_BUDGET = 1 << 22  # elements of M per chunk (32 MiB in float64)
 
-        xi = torch.zeros_like(u)
+    def _monomial_plan(self, jacobian: bool, device: torch.device, dtype: torch.dtype):
+        key = (jacobian, device, dtype)
+        plan = self._plans.get(key)
+        if plan is not None:
+            return plan
+        # (row, u power, v power, r power, coefficient); poly 2 has the roles
+        # of its x and y exponents swapped (it is evaluated in (v, u)).
+        entries: list[tuple[int, int, int, int, float]] = []
         for px, py, pr, c in self.terms1:
-            xi.add_(xp[px] * yp[py] * rp[pr], alpha=c)
-        eta = torch.zeros_like(v)
+            entries.append((0, px, py, pr, c))
         for px, py, pr, c in self.terms2:
-            eta.add_(yp[px] * xp[py] * rp[pr], alpha=c)
-        return xi, eta
+            entries.append((4 if jacobian else 1, py, px, pr, c))
+        if jacobian:
+            for px, py, pr, c in self.terms1_dx_poly:
+                entries.append((1, px, py, pr, c))  # d xi / du
+            for px, py, pr, c in self.terms1_dy_poly:
+                entries.append((2, px, py, pr, c))  # d xi / dv
+            for px, py, pr, c in self.terms1_rad:
+                entries.append((3, px, py, pr, c))  # d xi / dr
+            for px, py, pr, c in self.terms2_dx_poly:
+                entries.append((5, py, px, pr, c))  # d eta / dv
+            for px, py, pr, c in self.terms2_dy_poly:
+                entries.append((6, py, px, pr, c))  # d eta / du
+            for px, py, pr, c in self.terms2_rad:
+                entries.append((7, py, px, pr, c))  # d eta / dr
+        monomials: dict[tuple[int, int, int], int] = {}
+        for _, a, b, c, _ in entries:
+            monomials.setdefault((a, b, c), len(monomials))
+        rows = 8 if jacobian else 2
+        coeff = torch.zeros(rows, max(len(monomials), 1), dtype=torch.float64)
+        for row, a, b, c, value in entries:
+            coeff[row, monomials[(a, b, c)]] += value
+        powers = torch.tensor(
+            list(monomials) or [(0, 0, 0)], dtype=torch.long
+        ).T.contiguous()
+        plan = (
+            _to(powers, device=device),
+            _to(coeff, device=device, dtype=dtype),
+            any(c > 0 for (_, _, c) in monomials),
+        )
+        self._plans[key] = plan
+        return plan
+
+    def _evaluate(self, u: Tensor, v: Tensor, jacobian: bool) -> Tensor:
+        """Rows of ``coeff @ monomials`` for flattened ``u, v``: ``(rows, N)``."""
+        powers, coeff, uses_r = self._monomial_plan(jacobian, u.device, u.dtype)
+        n = u.numel()
+        k = powers.shape[1]
+        chunk = max(1, self._MONOMIAL_BUDGET // k)
+        out = []
+        for start in range(0, n, chunk):
+            uc = u[start : start + chunk]
+            vc = v[start : start + chunk]
+            up = [torch.ones_like(uc), uc]
+            vp = [torch.ones_like(vc), vc]
+            for _ in range(2, 8):
+                up.append(up[-1] * uc)
+                vp.append(vp[-1] * vc)
+            mono = torch.stack(up)[powers[0]] * torch.stack(vp)[powers[1]]
+            if uses_r:
+                rc = torch.hypot(uc, vc)
+                rp = [torch.ones_like(rc), rc]
+                for _ in range(2, 8):
+                    rp.append(rp[-1] * rc)
+                mono = mono * torch.stack(rp)[powers[2]]
+            out.append(coeff @ mono)
+        return out[0] if len(out) == 1 else torch.cat(out, dim=1)
+
+    def _distort_impl(self, u: Tensor, v: Tensor) -> Tuple[Tensor, Tensor]:
+        shape = u.shape
+        rows = self._evaluate(u.reshape(-1), v.reshape(-1), jacobian=False)
+        return rows[0].reshape(shape), rows[1].reshape(shape)
 
     def _distort_and_jacobian_impl(
         self, u: Tensor, v: Tensor
@@ -246,60 +309,22 @@ class TPV:
                 torch.zeros_like(u),
                 torch.ones_like(u),
             )
-        r = torch.hypot(u, v)
-        xp, yp, rp = (
-            [torch.ones_like(u), u],
-            [torch.ones_like(v), v],
-            [torch.ones_like(r), r],
-        )
-        for _ in range(2, 8):
-            xp.append(xp[-1] * u)
-            yp.append(yp[-1] * v)
-            rp.append(rp[-1] * r)
-
+        shape = u.shape
+        uf, vf = u.reshape(-1), v.reshape(-1)
+        rows = self._evaluate(uf, vf, jacobian=True)
+        r = torch.hypot(uf, vf)
         r_safe = torch.where(r > 0, r, torch.ones_like(r))
-        dr_du = torch.where(r > 0, u / r_safe, torch.zeros_like(u))
-        dr_dv = torch.where(r > 0, v / r_safe, torch.zeros_like(v))
-
-        def eval_poly_jac(terms, dx_p, dy_p, dr_p, xc, yc, dr_da, dr_db):
-            out = torch.zeros_like(u)
-            for px, py, pr, c in terms:
-                out.add_(xc[px] * yc[py] * rp[pr], alpha=c)
-            da = torch.zeros_like(u)
-            for px, py, pr, c in dx_p:
-                da.add_(xc[px] * yc[py] * rp[pr], alpha=c)
-            db = torch.zeros_like(u)
-            for px, py, pr, c in dy_p:
-                db.add_(xc[px] * yc[py] * rp[pr], alpha=c)
-            if dr_p:
-                pref = torch.zeros_like(u)
-                for px, py, pr, c in dr_p:
-                    pref.add_(xc[px] * yc[py] * rp[pr], alpha=c)
-                da.add_(pref * dr_da)
-                db.add_(pref * dr_db)
-            return out, da, db
-
-        xi, dxi_du, dxi_dv = eval_poly_jac(
-            self.terms1,
-            self.terms1_dx_poly,
-            self.terms1_dy_poly,
-            self.terms1_rad,
-            xp,
-            yp,
-            dr_du,
-            dr_dv,
-        )
-        eta, deta_dv, deta_du = eval_poly_jac(
-            self.terms2,
-            self.terms2_dx_poly,
-            self.terms2_dy_poly,
-            self.terms2_rad,
-            yp,
-            xp,
-            dr_dv,
-            dr_du,
-        )
-        return xi, eta, dxi_du, dxi_dv, deta_du, deta_dv
+        dr_du = torch.where(r > 0, uf / r_safe, torch.zeros_like(uf))
+        dr_dv = torch.where(r > 0, vf / r_safe, torch.zeros_like(vf))
+        xi = rows[0]
+        dxi_du = rows[1] + rows[3] * dr_du
+        dxi_dv = rows[2] + rows[3] * dr_dv
+        eta = rows[4]
+        deta_dv = rows[5] + rows[7] * dr_dv
+        deta_du = rows[6] + rows[7] * dr_du
+        return tuple(
+            t.reshape(shape) for t in (xi, eta, dxi_du, dxi_dv, deta_du, deta_dv)
+        )  # type: ignore[return-value]
 
     def invert(
         self, xi_t: Tensor, eta_t: Tensor, max_iter: int = 20, tol: float = 1e-11
@@ -320,6 +345,9 @@ class TPV:
             return torch.where(finite_target, xi_t, nan), torch.where(
                 finite_target, eta_t, nan
             )
+        native = self._native_invert(xi_t, eta_t, max_iter, tol)
+        if native is not None:
+            return native
 
         xi_f = xi_t.reshape(-1)
         eta_f = eta_t.reshape(-1)
@@ -407,6 +435,65 @@ class TPV:
             }
 
         return u_out.reshape(shape), v_out.reshape(shape)
+
+    # Per-point Newton in the native core (same seed, step clamp, conditioning
+    # and tolerance contract) for CPU float64 inputs that need no gradient. Set
+    # to False to force the torch sweeps (tests compare the two).
+    _USE_NATIVE_INVERT = True
+
+    def _native_invert(
+        self, xi_t: Tensor, eta_t: Tensor, max_iter: int, tol: float
+    ) -> Tuple[Tensor, Tensor] | None:
+        if (
+            not self._USE_NATIVE_INVERT
+            or self._invert_trace_enabled
+            or xi_t.device.type != "cpu"
+            or eta_t.device.type != "cpu"
+            or xi_t.dtype != torch.float64
+            or eta_t.dtype != torch.float64
+            or (torch.is_grad_enabled() and (xi_t.requires_grad or eta_t.requires_grad))
+        ):
+            return None
+        from .._native import cpp
+
+        if cpp is None:
+            return None
+        from .. import _cpp_ext
+
+        kernel = getattr(_cpp_ext, "wcs_tpv_invert", None)
+        if kernel is None:
+            return None
+        plan = self._plans.get("native_invert")
+        if plan is None:
+            terms1 = torch.tensor(
+                [list(term) for term in self.terms1] or [], dtype=torch.float64
+            ).reshape(-1, 4)
+            terms2 = torch.tensor(
+                [list(term) for term in self.terms2] or [], dtype=torch.float64
+            ).reshape(-1, 4)
+            seed = torch.tensor(
+                [
+                    self._affine_seed_b1,
+                    self._affine_seed_b2,
+                    self._affine_seed_inv00,
+                    self._affine_seed_inv01,
+                    self._affine_seed_inv10,
+                    self._affine_seed_inv11,
+                    1.0 if self._has_affine_seed_inverse else 0.0,
+                ],
+                dtype=torch.float64,
+            )
+            plan = (terms1, terms2, seed)
+            self._plans["native_invert"] = plan
+        u, v = kernel(
+            torch.get_num_threads(),
+            xi_t.detach().contiguous(),
+            eta_t.detach().contiguous(),
+            *plan,
+            int(max_iter),
+            float(tol),
+        )
+        return u, v
 
     @classmethod
     def _well_conditioned(

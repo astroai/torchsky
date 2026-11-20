@@ -216,7 +216,7 @@ Multi-band DECam images: a continuous field fit and catalogue forced photometry.
 
 ![One continuous field fitted to g/r/i/z images of the Cartwheel](../assets/gallery/examples/legacy_field_fit.png)
 
-Fit one continuous field to Legacy Surveys g/r/i/z images of the Cartwheel galaxy. *Runtime: about 60 s on CPU once the 1 MB of cutouts and filter curves are cached.*
+Fit one continuous field to Legacy Surveys g/r/i/z images of the Cartwheel galaxy. *Runtime: one to two minutes on CPU once the 1 MB of cutouts and filter curves are cached.*
 
 Script: [`examples/legacy_field_fit.py`](https://github.com/astroai/torchsky/blob/main/examples/legacy_field_fit.py) · [site copy](../published-examples/legacy_field_fit.py)
 

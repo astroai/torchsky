@@ -200,9 +200,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sphere.spherical_fourier_features` (and so `SkyCoordinateEncoder`)
   evaluates all frequencies in one broadcast `sin`/`cos`. Results are bitwise
   identical, and a forward plus backward pass is about 13% faster.
-- TPV world→pixel inversion runs its Newton sweeps on the points still moving
-  only, and stops when every point has converged (about 2.5× faster for large
-  inputs; results unchanged).
+- TPV world→pixel inversion:
+  - On CPU float64 inputs that need no gradient, it solves each point by
+    Newton's method in the native core (`wcs_tpv_invert`), under the same
+    seed, step, conditioning and tolerance contract as the torch path.
+  - The torch path, still used for gradients and other devices, sweeps only
+    the points still moving and evaluates the polynomial and its Jacobian as
+    a single matmul over the monomials.
+  - Measured against the fused C++ path removed below (4 threads): 0.39× its
+    time at 10k points and 0.33× at 1M.
 - Faster exclusive association. On CPU the pairwise belief-propagation
   solve (Anderson-accelerated message sweeps) is one torch-free native call,
   `xmatch_bp_pairwise_solve`, with its own thread pool and results
@@ -291,11 +297,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
-- The native WCS operators (`torch.ops.torchsky.wcs_*`), the fused WCS fast
-  paths and `torchsky.wcs.functional`: the pure-torch WCS paths were already
-  the ones in use, so results and performance are unchanged. Also removed: the
-  `TORCHSKY_WCS_FUSED` / `TORCHSKY_CPP_DISPATCHER` environment variables,
-  `_ops.has_wcs_dispatcher` and `TPV.set_cpp_invert_max_points`.
+- The fused C++ WCS path (`torch.ops.torchsky.wcs_*`, on by default for CPU
+  float64 inputs without gradients), the other native WCS shortcuts and
+  `torchsky.wcs.functional`. Every projection now runs the pure-torch path
+  (TPV inversion excepted, see Changed). Results agree to rounding.
+  Measured against the fused path on 4 threads:
+  - 10k and 1M points: within 0.33–1.02× of its time, apart from AIT
+    world→pixel at 10k (1.19×). TAN, SIN and AIT pixel→world at 1M take
+    0.35–0.37× of its time.
+  - 100 points: the fixed per-call cost of tensor ops adds 20–70 µs. For
+    example SIN takes 0.08 ms instead of 0.05 ms, and TPV pixel→world 0.13 ms
+    instead of 0.06 ms.
+
+  Also removed: the `TORCHSKY_WCS_FUSED` / `TORCHSKY_CPP_DISPATCHER`
+  environment variables, `_ops.has_wcs_dispatcher` and
+  `TPV.set_cpp_invert_max_points`.
 - `crossmatch_sky_from_arrow`, `crossmatch_sky_streamed`, and the Arrow /
   `streamed=` branches of `catalogs.crossmatch`: read tables with torchfits,
   pyarrow or polars and pass tensors; match batches against a prebuilt
@@ -305,6 +321,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Spherical pixel areas (`map.operators.pixel_area`) form the triangle triple product from
+  edge vectors. The old corner-vector form lost about 1e-4 relative accuracy
+  on 0.03″ pixels; the new one is accurate to 6e-9 against the exact TAN area.
 - Field rendering (`render_field_observation`, its distribution and tiled
   variants, `predict_observation_mean`) follows the observation's device when
   the model has no parameters or buffers. It used to fall back to the default
