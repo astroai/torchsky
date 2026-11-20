@@ -359,3 +359,40 @@ def test_legacy_ifu_coadd_accepts_cpu_ifu_wcs_on_device(compute_device) -> None:
     )
     assert result.data.device.type == compute_device.type
     assert result.data.shape == (3, 3, 2)
+
+
+def test_ifu_band_observation_count_counts_contributing_exposures() -> None:
+    """``band_metadata.observation_count`` is the number of exposures per plane.
+
+    Two exposures cover the cube; a third only reaches the first two planes.
+    The count used to be ``nexp.any()``, so at most one per plane.
+    """
+    target = CubeTarget(
+        _wcs((3, 2)),
+        torch.tensor([4995.0, 5005.0, 5015.0, 5025.0], dtype=torch.float64),
+        shape=(3, 2),
+    )
+    full = [
+        IFUObservation(torch.ones((3, 2), dtype=torch.float64), _transform((3, 2)))
+        for _ in range(2)
+    ]
+    partial = IFUObservation(
+        torch.ones((2, 2), dtype=torch.float64), _transform((2, 2))
+    )
+
+    result = coadd_cube(full + [partial], target, spectral_kernel="drizzle")
+
+    planes = result.overlap_count.shape[0]
+    assert result.context is not None
+    expected = torch.tensor(
+        [
+            sum(
+                bool(((result.context[0, plane] >> index) & 1).any())
+                for index in range(3)
+            )
+            for plane in range(planes)
+        ],
+        dtype=torch.int64,
+    )
+    assert expected.tolist() == [3, 3, 2]
+    torch.testing.assert_close(result.band_metadata.observation_count, expected)

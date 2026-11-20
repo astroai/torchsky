@@ -261,6 +261,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the host and move only the pixel coordinates, as the other projections
   already did. With a float32 world grid the samples were off by up to 1.4
   pixels at 0.04 arcsec, and the SIP round-trip check dropped covered pixels.
+- `build_ifu_cube` (and `coadd_cube` with `IFUObservation`s) reports in
+  `band_metadata.observation_count` the number of exposures that reach each
+  spectral plane, as the other cube paths do. It was at most 1.
 
 ## [0.5.0] - 2026-11-03
 

@@ -1142,6 +1142,22 @@ def plan_ifu_cube_response(
     )
 
 
+def _plane_contributor_counts(plan: IndexedResponsePlan) -> Tensor:
+    """Number of distinct exposures with a response entry in each spectral plane."""
+    depth = int(plan.target.shape[0])
+    plane_size = max(int(plan.target.numel) // max(depth, 1), 1)
+    counts = torch.zeros(depth, dtype=torch.int64)
+    contributors = plan.contributor_ids
+    if contributors is None or contributors.numel() == 0:
+        return counts
+    planes = (plan.target_indices // plane_size).to(device="cpu")
+    exposures = contributors.to(device="cpu")
+    stride = int(exposures.max()) + 1
+    pairs = torch.unique(planes * stride + exposures)
+    counts.index_add_(0, pairs // stride, torch.ones_like(pairs))
+    return counts
+
+
 def build_ifu_cube(
     observations: Sequence[IFUObservation],
     target: CubeTarget,
@@ -1171,8 +1187,7 @@ def build_ifu_cube(
             torch.zeros_like(total_variance),
         )
     band_metadata = target.band_metadata
-    observation_count = products.nexp.any(dim=(-2, -1)).to(torch.int64)
-    band_metadata.observation_count.copy_(observation_count.cpu())
+    band_metadata.observation_count.copy_(_plane_contributor_counts(response.plan))
     band_metadata.spectral_weight_sum.copy_(
         response.weight.sum(dim=(-2, -1)).cpu().to(torch.float64)
     )
