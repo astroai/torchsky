@@ -27,6 +27,7 @@ def make_sky_coordinate_encoder(
         spectral_frequencies=spectral_frequencies,
         include_degree2=include_degree2,
         min_frequency=min_freq,
+        lon_center_deg=float(domain.center_ra_deg),
     )
 
 

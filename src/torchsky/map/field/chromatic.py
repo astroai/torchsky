@@ -135,7 +135,7 @@ class ChromaticPSFField(nn.Module):
     def basis(self, lam_um: Tensor, channel: Tensor) -> Tensor:
         """Kernels at wavelengths ``lam_um`` (M,) and channels (M,): ``(M, num_kernels, size, size)``."""
         lam_um = _as_tensor(
-            lam_um, dtype=torch.float32, device=self._offsets.device
+            lam_um, dtype=self._offsets.dtype, device=self._offsets.device
         ).flatten()
         channel = torch.as_tensor(channel, device=self._offsets.device).flatten()
         if lam_um.shape != channel.shape:
@@ -311,6 +311,9 @@ class SpectralSkyField(nn.Module):
         if self.spectral_smoothness <= 0.0:
             return torch.zeros((), device=self.nodes_um.device)
         a = self.coefficients()
+        if a.shape[0] < 3:
+            # No second difference exists across fewer than three basis terms.
+            return a.new_zeros(())
         d2 = a[2:] - 2.0 * a[1:-1] + a[:-2]
         if self.smoothness_mode == "relative":
             level = (a.abs().mean(0, keepdim=True) + self.floor * self.scale).detach()

@@ -76,7 +76,15 @@ def _magnification_from_kappa(
     if mode not in _MAGNIFICATION_MODES:
         raise ValueError(f"mode must be one of {_MAGNIFICATION_MODES}, got {mode!r}")
     mu = 1.0 + 2.0 * kappa if mode == "linear" else torch.exp(2.0 * kappa)
-    if max_magnification is not None:
+    if max_magnification is None:
+        # The linear weak-lensing law is undefined for kappa <= -1/2; without a
+        # bound it would give negative flux and NaN sizes or densities.
+        if mode == "linear" and bool((mu <= 0.0).any()):
+            raise ValueError(
+                "linear magnification 1 + 2 kappa must be positive; "
+                "set max_magnification or use mode='exponential'"
+            )
+    else:
         if not math.isfinite(max_magnification) or max_magnification <= 1.0:
             raise ValueError("max_magnification must be finite and greater than 1")
         mu = torch.clamp(mu, min=1.0 / max_magnification, max=max_magnification)

@@ -65,6 +65,34 @@ def _sample_triplane(
     return sampled
 
 
+def _table_signature(values: Tensor | None) -> tuple[float, ...] | None:
+    if values is None:
+        return None
+    return tuple(float(v) for v in values.detach().reshape(-1).cpu().tolist())
+
+
+def _bandpass_response_signature(observation: FieldObservation) -> tuple[object, ...]:
+    """Every observation field that ``bandpass_response`` reads, by value."""
+    passband = observation.passband
+    return (
+        observation.wavelength,
+        observation.spectral_min,
+        observation.spectral_max,
+        observation.transmission_center,
+        observation.transmission_sigma,
+        _table_signature(
+            observation.transmission_wavelength
+            if passband is None
+            else passband.wavelength
+        ),
+        _table_signature(
+            observation.transmission_throughput
+            if passband is None
+            else passband.throughput
+        ),
+    )
+
+
 class SkyLambdaPlanesField(_BaseFieldModel):
     def __init__(
         self,
@@ -911,7 +939,7 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
             else self.scale_hidden_dim
         )
         self._spectral_observability_cache: dict[
-            tuple[tuple[object, ...], ...], Tensor
+            frozenset[tuple[object, ...]], Tensor
         ] = {}
         spatial_plane_names = ["xy"] if self.spatial_dim == 2 else ["xy", "xz", "yz"]
         self._spatial_plane_names = tuple(spatial_plane_names)
@@ -1411,19 +1439,9 @@ class OperatorConstrainedFeatureField(_BaseFieldModel):
         dtype: torch.dtype,
         grid_size: int = 65,
     ) -> Tensor:
-        cache_key = tuple(
-            sorted(
-                {
-                    (
-                        observation.band_name,
-                        observation.spectral_min,
-                        observation.spectral_max,
-                        observation.transmission_center,
-                        observation.transmission_sigma,
-                    )
-                    for observation in observations
-                }
-            )
+        cache_key = frozenset(
+            (*_bandpass_response_signature(observation), int(grid_size))
+            for observation in observations
         )
         cached = self._spectral_observability_cache.get(cache_key)
         if cached is not None:
