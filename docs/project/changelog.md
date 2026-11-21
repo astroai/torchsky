@@ -390,6 +390,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   HPX/XPH facet-edge tests also allow for float32 rounding of the plane
   coordinate. float64 results change by no more than rounding.
+- `WCS` rejects ZPN headers that WCSLIB `zpnset` rejects, raising
+  `ValueError` at construction. These are polynomials with no non-zero
+  `PV2_m`, and polynomials of order ≥ 2 with `PV2_1 <= 0`. Before, a header
+  without ZPN terms silently became `r = w`, and a zero or negative slope at
+  the pole was accepted.
 - TPV world→pixel in float32 (MPS) returned NaN for points whose residual
   could not reach the fixed 1e-11 deg tolerance. Convergence is now judged
   against a per-point floor set by the dtype's rounding error. On a

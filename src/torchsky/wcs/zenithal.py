@@ -43,8 +43,8 @@ def _zpn_colatitude_limit(coeffs: tuple[float, ...]) -> float:
 
     zd1, d1 = 0.0, coeffs[1]
     if d1 <= 0.0:
-        # WCSLIB rejects such headers (zpnset); torchsky keeps accepting them
-        # (e.g. r = w**2) and imposes no fold limit.
+        # WCSLIB zpnset rejects these; WCS() does too. Direct callers of the
+        # projection kernels (e.g. IRAF ZPX) get no fold limit.
         return math.pi
     zd2, d2 = 0.0, d1
     for j in range(180):

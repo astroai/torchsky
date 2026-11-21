@@ -290,3 +290,28 @@ def test_cea_rejects_invalid_lambda_like_wcslib(value: float) -> None:
         AstropyWCS(header)
     with pytest.raises(ValueError, match="finite and non-zero"):
         WCS(header)
+
+
+@pytest.mark.parametrize(
+    "pv,accepted",
+    [
+        ({"PV2_1": 0.0, "PV2_2": 1.0}, False),  # zero slope at the pole, order 2
+        ({"PV2_1": -0.5, "PV2_3": 0.1}, False),  # negative slope, order 3
+        ({}, False),  # no non-zero coefficient
+        ({"PV2_1": 1.0, "PV2_2": 0.0, "PV2_3": -0.05}, True),
+        ({"PV2_0": 0.01, "PV2_1": -1.0}, True),  # order 1: WCSLIB does not check
+    ],
+)
+def test_zpn_parameter_validation_matches_wcslib(
+    pv: dict[str, float], accepted: bool
+) -> None:
+    header = _domain_header("ZPN", (150.0, 30.0), 0.05, pv=False)
+    header.update(pv)
+    if accepted:
+        AstropyWCS(header)
+        WCS(header)
+        return
+    with pytest.raises(ValueError):
+        AstropyWCS(header)
+    with pytest.raises(ValueError, match="ZPN"):
+        WCS(header)
