@@ -232,6 +232,31 @@ def test_spherical_triangle_area_above_pi_steradians(
     np.testing.assert_allclose(float(poly), expected_sr, rtol=1e-12)
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_spherical_polygon_contains_beyond_one_hemisphere(reverse: bool) -> None:
+    # A 300-degree equatorial band: its vertices are not in one hemisphere, so
+    # the gnomonic path does not apply. A point whose antipode is also inside
+    # the band used to be reported outside (and vice versa).
+    lon = [0.0, 100.0, 200.0, 300.0, 300.0, 200.0, 100.0, 0.0]
+    lat = [-10.0, -10.0, -10.0, -10.0, 10.0, 10.0, 10.0, 10.0]
+    if reverse:
+        lon, lat = lon[::-1], lat[::-1]
+    q_lon = torch.tensor([150.0, 50.0, 250.0, 330.0, 0.0, 0.0, 100.0, 100.0])
+    q_lat = torch.tensor([0.0, 0.0, 0.0, 0.0, 80.0, -80.0, 9.9, 10.5])
+    # spherical_geometry 1.4.0 from_radec(..., center=(150, 0)).contains_lonlat
+    expected = [True, True, True, False, False, False, True, False]
+    got = spherical_polygon_contains(q_lon, q_lat, lon, lat, inclusive=False)
+    assert got.tolist() == expected
+    flipped = spherical_polygon_contains(
+        q_lon, q_lat, lon, lat, inclusive=False, inside_lon_deg=0.0, inside_lat_deg=80.0
+    )
+    assert flipped.tolist() == [not e for e in expected]
+    # spherical_geometry 1.4.0 area of the same band (steradians).
+    np.testing.assert_allclose(
+        float(spherical_polygon_area(lon, lat)), 2.4487829252326954, rtol=1e-12
+    )
+
+
 def test_spherical_polygons_intersect_basic_cases() -> None:
     lon1 = torch.tensor([-10.0, 10.0, 10.0, -10.0], dtype=torch.float64)
     lat1 = torch.tensor([30.0, 30.0, 0.0, 0.0], dtype=torch.float64)

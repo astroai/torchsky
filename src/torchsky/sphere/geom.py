@@ -177,28 +177,31 @@ def _points_near_any_vertex(
     return out
 
 
-def _winding_fallback_chunked(
+def _antipodal_fan_area_chunked(
     points: Tensor, vertices: Tensor, *, chunk: int | None = None
 ) -> Tensor:
-    """Tangent-plane winding magnitude per point; same math as the former dense einsum path."""
+    """Signed fan area ``sum_i Omega(-p, v_i, v_{i+1})`` per point ``p``.
+
+    With ``A`` the area left of the loop, the fan sum from an apex ``r`` is
+    ``A`` when ``-r`` is right of the loop and ``A - 4 pi`` when it is left
+    (it jumps by 4 pi only where ``-r`` crosses the boundary). With ``r = -p``
+    the magnitude exceeds 2 pi exactly when ``p`` lies in the smaller of the
+    two regions, whatever the vertex order.
+    """
     if chunk is None:
         chunk = _GEOM_PAIRWISE_CHUNK
     m = int(points.shape[0])
-    device, dtype = points.device, points.dtype
-    winding = torch.empty(m, dtype=dtype, device=device)
+    v_next = torch.roll(vertices, shifts=-1, dims=0)
+    edge_cross = torch.cross(vertices, v_next, dim=-1)
+    edge_dot = (vertices * v_next).sum(dim=-1)
+    area = torch.empty(m, dtype=points.dtype, device=points.device)
     for m0 in range(0, m, chunk):
         m1 = min(m0 + chunk, m)
-        pc = points[m0:m1]
-        pv = pc @ vertices.T
-        proj = vertices.unsqueeze(0) - pc.unsqueeze(1) * pv.unsqueeze(-1)
-        proj_norm = torch.linalg.norm(proj, dim=-1, keepdim=True)
-        proj = proj / proj_norm.clamp_min(1e-14)
-        proj_next = torch.roll(proj, shifts=-1, dims=1)
-        cross = torch.cross(proj, proj_next, dim=-1)
-        num = (pc.unsqueeze(1) * cross).sum(dim=-1)
-        den = torch.clamp((proj * proj_next).sum(dim=-1), -1.0, 1.0)
-        winding[m0:m1] = torch.atan2(num, den).sum(dim=-1)
-    return winding
+        apex = -points[m0:m1]
+        det = apex @ edge_cross.T
+        den = 1.0 + apex @ vertices.T + edge_dot + apex @ v_next.T
+        area[m0:m1] = 2.0 * torch.atan2(det, den).sum(dim=-1)
+    return area
 
 
 def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tensor:
@@ -617,7 +620,9 @@ def spherical_polygon_contains(
     """
     Point-in-polygon for simple (possibly non-convex) spherical polygons.
 
-    Uses tangent-plane winding number around each query point.
+    Without an inside reference point the interior is the smaller of the two
+    regions the boundary separates (gnomonic crossing test when the vertices
+    lie in one open hemisphere, signed solid-angle sum otherwise).
     """
     atol_deg = _validate_nonnegative_finite(atol_deg, "atol_deg")
     lon_t = _as_geom_tensor(lon_deg)
@@ -655,9 +660,10 @@ def spherical_polygon_contains(
             )
             inside[valid] = inside_valid
     else:
-        # Fallback path for polygons not entirely in one hemisphere.
-        winding = _winding_fallback_chunked(points, vertices)
-        inside = torch.abs(winding) > math.pi
+        # Polygons not in one hemisphere: the interior is the smaller region,
+        # as on the gnomonic path (whose region is inside a hemisphere).
+        fan = _antipodal_fan_area_chunked(points, vertices)
+        inside = torch.abs(fan) > 2.0 * math.pi
 
     if inclusive:
         atol_rad = math.radians(atol_deg)
