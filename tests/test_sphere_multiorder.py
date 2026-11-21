@@ -255,3 +255,23 @@ def test_from_mhealpy_reads_density_method_not_its_truthiness() -> None:
     for flag in (False, True):
         back = MultiOrderHealpixMap.from_mhealpy(_MhealpyLike(flag))
         assert back.values_are_densities is flag
+
+
+def test_get_values_pos_python_float_longitude_keeps_float64() -> None:
+    # A Python-float longitude used to pass through float32 (~2e-6 deg),
+    # missing an order-29 cell that the float64 position lies in.
+    lon, lat = 123.456789, -45.678901
+    nside = 1 << 29
+    pix = healpix.ang2pix(
+        nside,
+        torch.tensor(lon, dtype=torch.float64),
+        torch.tensor(lat, dtype=torch.float64),
+        nest=True,
+        lonlat=True,
+    )
+    mmap = MultiOrderHealpixMap(
+        nest2uniq(nside, pix.reshape(1)), torch.tensor([7.0], dtype=torch.float64)
+    )
+    values, valid = mmap.get_values_pos(lon, lat, return_valid=True)
+    assert bool(valid)
+    assert float(values) == 7.0
