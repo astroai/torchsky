@@ -286,7 +286,11 @@ class TPV:
         """
         rows = 8 if jacobian else 2
         entries = self._host_terms[jacobian]
-        max_power = max((max(a, b, c) for _, a, b, c, _ in entries), default=0)
+        # A plain loop: torch 2.13 Dynamo cannot trace ``max(genexpr,
+        # default=...)`` under ``fullgraph=True``.
+        max_power = 0
+        for _, a, b, c, _ in entries:
+            max_power = max(max_power, a, b, c)
         up = [torch.ones_like(u), u]
         vp = [torch.ones_like(v), v]
         for _ in range(2, max_power + 1):

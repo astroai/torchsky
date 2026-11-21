@@ -5,7 +5,11 @@ All notable changes to torchsky are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0rc1] - Unreleased
+## [0.6.0rc2] - Unreleased
+
+`v0.6.0rc1` was tagged, but its release build failed on the oldest supported
+PyTorch (2.13), so nothing was published. This candidate carries the same
+changes plus the torch 2.13 `torch.compile` fix listed first under Fixed.
 
 ### Added
 
@@ -445,6 +449,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `torch.compile(fullgraph=True)` of `pixel_to_world` with ZPN or TPV failed
+  on PyTorch 2.13 (the supported floor): Dynamo there cannot trace
+  `max(<generator>, default=...)`. The coefficient scans are plain loops,
+  and pull-request CI now runs the torch-2.13 lane that gates a release tag.
 - `associate_many` raised `IndexError` when a secondary catalogue had no
   candidate within the gate. Such a catalogue is now absent from every
   hypothesis (`-1`), and the posteriors are those of the association without

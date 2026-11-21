@@ -16,7 +16,11 @@ def _zpn_coefficients(pv2: PVParams) -> tuple[float, ...] | None:
     if pv2 is None:
         return None
     values = [_pv_value(pv2, m, 0.0) for m in range(31)]
-    last = max((m for m, c in enumerate(values) if abs(c) > 1e-15), default=-1)
+    # A plain reverse scan: torch 2.13 Dynamo cannot trace ``max(genexpr,
+    # default=...)`` under ``fullgraph=True``.
+    last = len(values) - 1
+    while last >= 0 and abs(values[last]) <= 1e-15:
+        last -= 1
     if last < 0:
         return None
     return tuple(values[: last + 1])
