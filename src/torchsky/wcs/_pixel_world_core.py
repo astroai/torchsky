@@ -11,7 +11,7 @@ from typing import (
 )
 import math
 
-from ._math import _native_bounds, _sincos, _wrap_lon180, _wrap_lon360
+from ._math import _hypot, _native_bounds, _sincos, _wrap_lon180, _wrap_lon360
 
 from .zenithal import project_zenithal, deproject_zenithal
 from .cylindrical import project_cylindrical, deproject_cylindrical
@@ -264,7 +264,7 @@ class _PixelWorldCoreMixin:
             or self._is_zea
             or self._is_stg
         ):
-            r = torch.hypot(xi, eta)
+            r = _hypot(xi, eta)
             phi = torch.atan2(-xi, -eta) * self._r2d
             if self._is_tan or self._is_tpv or self._is_tnx:
                 theta = torch.atan2(torch.ones_like(r), r * self._d2r) * self._r2d
@@ -362,7 +362,7 @@ class _PixelWorldCoreMixin:
             phi = xi / torch.clamp(torch.cos(theta * self._d2r), min=1e-12)
         elif self._is_zpn:
             if self._is_zpn_linear:
-                r = torch.hypot(xi, eta)
+                r = _hypot(xi, eta)
                 phi = torch.atan2(-xi, -eta) * self._r2d
                 theta = 90.0 - r
             else:

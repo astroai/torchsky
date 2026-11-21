@@ -27,6 +27,30 @@ def _wrap_lon180(angle: Tensor) -> Tensor:
     return torch.remainder(angle + 180.0, 360.0) - 180.0
 
 
+def _traced_on_mps(x: Tensor) -> bool:
+    return torch.compiler.is_compiling() and x.device.type == "mps"
+
+
+def _hypot(a: Tensor, b: Tensor) -> Tensor:
+    """``torch.hypot``; ``sqrt(a*a + b*b)`` when compiling for MPS.
+
+    Inductor's Metal code generator has no ``hypot`` (PyTorch 2.14), so a
+    traced MPS graph would fail to compile. WCS operands are angles and
+    plane coordinates far from float32 overflow, so the two agree to an ulp.
+    """
+    if _traced_on_mps(a):
+        return torch.sqrt(a * a + b * b)
+    return torch.hypot(a, b)
+
+
+def _copysign(a: Tensor, b: Tensor) -> Tensor:
+    """``torch.copysign``; a ``where`` on ``b < 0`` when compiling for MPS
+    (no Metal codegen for ``copysign``; differs only for ``b = -0.0``)."""
+    if _traced_on_mps(a):
+        return torch.where(b < 0.0, -a.abs(), a.abs())
+    return torch.copysign(a, b)
+
+
 PVParams = Union[Tensor, Sequence[float], None]
 
 

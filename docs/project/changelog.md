@@ -189,6 +189,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - AIT, GLS, HPX and PCO no longer branch on `valid.all()` / `.any()`;
   - projection PV constants are host floats.
 
+  Inductor's Metal backend (PyTorch 2.14) has no `hypot`/`copysign`
+  codegen, so traced MPS graphs use `sqrt(a*a + b*b)` and a sign `where`
+  instead. The SIP and TPV inverses still exceed Metal's 31 kernel buffers
+  under Inductor on MPS; they trace and run with `backend="eager"` there.
+
   While tracing, the SIP and TPV inverses run a fixed number of masked Newton
   steps that reproduce the eager stopping rules. Eager calls keep their
   early-exit loops and the native CPU TPV kernel. Eager TPV world→pixel no

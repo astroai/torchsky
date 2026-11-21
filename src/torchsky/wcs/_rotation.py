@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Tuple
 import torch
 from torch import Tensor
 
-from ._math import _sincos, _wrap_lon180, _wrap_lon360
+from ._math import _hypot, _sincos, _wrap_lon180, _wrap_lon360
 from ..device import _as_tensor
 
 
@@ -313,7 +313,7 @@ class _RotationMixin:
             v = -(
                 x_cel * self._radial_x + y_cel * self._radial_y + z_cel * self._radial_z
             )
-            theta = torch.atan2(w, torch.hypot(u, v)) * r2d
+            theta = torch.atan2(w, _hypot(u, v)) * r2d
             phi = torch.remainder(torch.atan2(u, -v) * r2d, 360.0)
             return phi, theta
 
@@ -344,7 +344,7 @@ class _RotationMixin:
             + z_cel * self._pole_radial_z
         )
 
-        theta = torch.atan2(w, torch.hypot(u, v)) * r2d
+        theta = torch.atan2(w, _hypot(u, v)) * r2d
         phi = torch.remainder(torch.atan2(u, v) * r2d + self._phi_p_native, 360.0)
 
         return phi, theta
@@ -368,7 +368,7 @@ class _RotationMixin:
         y = c[1][0] * v[0] + c[1][1] * v[1] + c[1][2] * v[2]
         z = c[2][0] * v[0] + c[2][1] * v[1] + c[2][2] * v[2]
         lon = torch.remainder(torch.atan2(y, x) * r2d, 360.0)
-        lat = torch.atan2(z, torch.hypot(x, y)) * r2d
+        lat = torch.atan2(z, _hypot(x, y)) * r2d
         return lon, lat
 
     def _spherical_rotation_optimized(

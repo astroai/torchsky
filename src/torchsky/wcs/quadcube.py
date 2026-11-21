@@ -15,6 +15,8 @@ import torch
 from torch import Tensor
 from typing import Tuple
 
+from ._math import _hypot
+
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 _INV_SQRT2 = 0.7071067811865476
@@ -301,7 +303,7 @@ def _xy_to_face(x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
 def _lmn_to_native(lx: Tensor, m: Tensor, n: Tensor) -> Tuple[Tensor, Tensor]:
     # atan2 keeps theta accurate next to the poles (|n| -> 1), where asin(n)
     # loses half the digits (2e-3 deg in float32).
-    theta = torch.atan2(n, torch.hypot(lx, m)) * R2D
+    theta = torch.atan2(n, _hypot(lx, m)) * R2D
     pole = (lx == 0.0) & (m == 0.0)
     phi = torch.where(pole, torch.zeros_like(lx), torch.atan2(m, lx) * R2D)
     return phi, theta

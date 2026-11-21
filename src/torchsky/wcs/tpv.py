@@ -4,6 +4,7 @@ from typing import Any, Dict, Tuple
 import torch
 from torch import Tensor
 from ..device import _to
+from ._math import _hypot
 
 PV1_KEYS = tuple(f"PV1_{i}" for i in range(40))
 PV2_KEYS = tuple(f"PV2_{i}" for i in range(40))
@@ -293,7 +294,7 @@ class TPV:
             vp.append(vp[-1] * v)
         rp: list[Tensor] = []
         if any(c > 0 for _, _, _, c, _ in entries):
-            r = torch.hypot(u, v)
+            r = _hypot(u, v)
             rp = [torch.ones_like(r), r]
             for _ in range(2, max_power + 1):
                 rp.append(rp[-1] * r)
@@ -324,7 +325,7 @@ class TPV:
                 vp.append(vp[-1] * vc)
             mono = torch.stack(up)[powers[0]] * torch.stack(vp)[powers[1]]
             if uses_r:
-                rc = torch.hypot(uc, vc)
+                rc = _hypot(uc, vc)
                 rp = [torch.ones_like(rc), rc]
                 for _ in range(2, 8):
                     rp.append(rp[-1] * rc)
@@ -352,7 +353,7 @@ class TPV:
         shape = u.shape
         uf, vf = u.reshape(-1), v.reshape(-1)
         rows = self._evaluate(uf, vf, jacobian=True)
-        r = torch.hypot(uf, vf)
+        r = _hypot(uf, vf)
         r_safe = torch.where(r > 0, r, torch.ones_like(r))
         dr_du = torch.where(r > 0, uf / r_safe, torch.zeros_like(uf))
         dr_dv = torch.where(r > 0, vf / r_safe, torch.zeros_like(vf))
@@ -418,7 +419,7 @@ class TPV:
             )
             fx0 = xi - xi_f[rows]
             fx1 = eta - eta_f[rows]
-            res_norm = torch.hypot(fx0, fx1)
+            res_norm = _hypot(fx0, fx1)
             det = dxi_du * deta_dv - dxi_dv * deta_du
             conditioned = self._well_conditioned(dxi_du, dxi_dv, deta_du, deta_dv)
             good = (
@@ -449,7 +450,7 @@ class TPV:
         xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
             u, v
         )
-        final_residual = torch.hypot(xi - xi_f, eta - eta_f)
+        final_residual = _hypot(xi - xi_f, eta - eta_f)
         valid = (
             viable
             & torch.isfinite(final_residual)
@@ -524,7 +525,7 @@ class TPV:
             )
             fx0 = xi - xi_f
             fx1 = eta - eta_f
-            res_norm = torch.hypot(fx0, fx1)
+            res_norm = _hypot(fx0, fx1)
             det = dxi_du * deta_dv - dxi_dv * deta_du
             conditioned = self._well_conditioned(dxi_du, dxi_dv, deta_du, deta_dv)
             good = (
@@ -548,7 +549,7 @@ class TPV:
         xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
             u, v
         )
-        final_residual = torch.hypot(xi - xi_f, eta - eta_f)
+        final_residual = _hypot(xi - xi_f, eta - eta_f)
         valid = (
             viable
             & torch.isfinite(final_residual)
@@ -663,7 +664,7 @@ class TPV:
                 finite
                 & torch.isfinite(u)
                 & torch.isfinite(v)
-                & (torch.hypot(xi - xi_t, eta - eta_t) <= 1e-11)
+                & (_hypot(xi - xi_t, eta - eta_t) <= 1e-11)
             )
         nan = torch.full_like(u, torch.nan)
         u, v = torch.where(valid, u, nan), torch.where(valid, v, nan)

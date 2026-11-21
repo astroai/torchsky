@@ -3,7 +3,7 @@ from torch import Tensor
 from typing import Tuple
 import math
 
-from ._math import PVParams, _pv_value, _sincos, _wrap_lon180
+from ._math import PVParams, _copysign, _pv_value, _sincos, _wrap_lon180
 
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
@@ -261,7 +261,7 @@ def deproject_allsky(
             gamma = torch.where(use_newton, newton, 0.5 * (lo + hi))
         gamma = torch.where(
             pole,
-            torch.copysign(torch.full_like(gamma, 0.5 * math.pi), theta_clamped),
+            _copysign(torch.full_like(gamma, 0.5 * math.pi), theta_clamped),
             gamma,
         )
         residual = 2.0 * gamma + torch.sin(2.0 * gamma) - target

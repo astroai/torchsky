@@ -5,7 +5,7 @@ import torch
 from torch import Tensor
 from typing import Tuple
 
-from ._math import PVParams, _pv_value, _sincos
+from ._math import PVParams, _hypot, _pv_value, _sincos
 
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
@@ -80,7 +80,7 @@ def project_zenithal(
     for Zenithal projections.
     """
     # 1. R and Phi
-    r = torch.hypot(xi, eta)
+    r = _hypot(xi, eta)
 
     # Handle R=0 case to avoid division/singularities
     # If R=0, phi is undefined (usually 0), theta = 90.
@@ -140,7 +140,7 @@ def project_zenithal(
             x_comp = x - a * omz
             y_comp = y - b * omz
             phi = torch.atan2(-x_comp, -y_comp) * R2D
-            theta = torch.atan2(z, torch.hypot(x_comp, y_comp)) * R2D
+            theta = torch.atan2(z, _hypot(x_comp, y_comp)) * R2D
             theta = theta.masked_fill(~valid, float("nan"))
             phi = phi.masked_fill(~valid, float("nan"))
         else:
@@ -248,7 +248,7 @@ def project_zenithal(
         w0 = r0 * (mu + 1.0)
         yc = eta * cos_g
         q = w0 + eta * sin_g
-        r = torch.hypot(xi, yc)
+        r = _hypot(xi, yc)
         # Torchsky zenithal convention: phi = atan2(-xi, -yc) (not atan2(xi, -yc))
         phi = torch.where(r == 0.0, torch.zeros_like(r), torch.atan2(-xi, -yc) * R2D)
         s = r / q
@@ -336,7 +336,7 @@ def project_zenithal(
             w2 = 0.5 - w1
         w5 = w2 * 1e-4  # tolerance-scaled small-r threshold
         w6 = R2D / w2
-        r = torch.hypot(xi, eta) / w0
+        r = _hypot(xi, eta) / w0
         # Torchsky zenithal convention: phi = atan2(-xi, -eta)
         phi = torch.where(r == 0.0, torch.zeros_like(r), torch.atan2(-xi, -eta) * R2D)
         # Small-r linear approximation: r ≈ xi when xi is small,

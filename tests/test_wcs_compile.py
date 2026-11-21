@@ -215,7 +215,9 @@ def test_fullgraph_trace_matches_eager_mps(name: str) -> None:
         warnings.simplefilter("ignore")
         wcs = WCS(HEADERS[name]).to("mps")
     x, y = _pixels("mps", torch.float32)
-    _check_fullgraph(wcs, x, y, backend="eager", atol=2e-3)
+    # Traced MPS graphs use sqrt(a*a + b*b) for hypot (see _math._hypot) and a
+    # different TPV evaluation order: float32 rounding, up to ~0.01 px.
+    _check_fullgraph(wcs, x, y, backend="eager", atol=0.05)
 
 
 @requires_mps
@@ -236,3 +238,20 @@ def test_mps_precision_estimate_is_cached() -> None:
     for _ in range(3):
         wcs.pixel_to_world(x, y)
     assert calls == 0  # estimated once by ``to("mps")``
+
+
+@requires_mps
+@pytest.mark.parametrize("name", ["TAN", "MOL"])
+def test_fullgraph_inductor_matches_eager_mps(name: str) -> None:
+    # Inductor's Metal backend has no hypot/copysign codegen; the WCS kernels
+    # substitute them while tracing for MPS. Metal's float32 transcendental
+    # functions differ from the eager MPS kernels by a few ulps of the
+    # intermediate angles (~0.03 px here). The SIP and TPV inverses trace as
+    # one graph on MPS too, but Inductor fuses each into a kernel with more
+    # than Metal's 31 buffer arguments (PyTorch 2.14), so they are covered by
+    # the eager-backend test above.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        wcs = WCS(HEADERS[name]).to("mps")
+    x, y = _pixels("mps", torch.float32)
+    _check_fullgraph(wcs, x, y, backend="inductor", atol=0.1)
