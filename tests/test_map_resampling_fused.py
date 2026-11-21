@@ -334,3 +334,91 @@ def test_coadd_variance_matches_unfused_two_pass_path(tmp_path, monkeypatch, ker
     torch.testing.assert_close(
         fused.correlation_factor, unfused.correlation_factor, atol=2e-5, rtol=2e-5
     )
+
+
+_COMPILE_DEVICES = [
+    "cpu",
+    pytest.param(
+        "mps",
+        marks=pytest.mark.skipif(
+            not torch.backends.mps.is_available(), reason="MPS unavailable"
+        ),
+    ),
+]
+
+
+@pytest.fixture
+def fresh_dynamo():
+    import torch._dynamo
+
+    torch._dynamo.reset()
+    yield
+    torch._dynamo.reset()
+
+
+@pytest.mark.parametrize("device", _COMPILE_DEVICES)
+def test_separable_tile_traces_fullgraph(device, data, fresh_dynamo):
+    image, variance, x, y = data
+    table = torch.cat([image.reshape(3, -1), variance.reshape(1, -1)]).t()
+    table = table.contiguous().to(device)
+
+    def tile(table, xc, yc):
+        return rs._separable_sample_tile(
+            table,
+            xc,
+            yc,
+            width=WIDTH,
+            height=HEIGHT,
+            kernel="lanczos3",
+            channels=3,
+            with_variance=True,
+        )
+
+    compiled = torch.compile(tile, backend="aot_eager", fullgraph=True)
+    xc, yc = x[:512].to(device), y[:512].to(device)
+    torch.testing.assert_close(compiled(table, xc, yc), tile(table, xc, yc))
+
+
+@pytest.mark.parametrize("device", _COMPILE_DEVICES)
+def test_compiled_sampler_reuses_one_tile_graph(device, data, fresh_dynamo):
+    """The chunk loop is not unrolled: one tile graph serves any number of chunks."""
+    from torch._dynamo.testing import CompileCounterWithBackend
+
+    image, variance, x, y = data
+    image, variance = image.to(device), variance.to(device)
+    x2, y2 = x.reshape(1, -1).to(device), y.reshape(1, -1).to(device)
+    frames = []
+    # One chunk (traced inline), then 5 and 11 chunks (one reused tile graph).
+    for chunk in (10**9, 700, 300):
+        torch._dynamo.reset()
+        counter = CompileCounterWithBackend("aot_eager")
+
+        def sample(image, x, y):
+            return rs.custom_separable_sample(
+                image, x_src=x, y_src=y, kernel="lanczos3"
+            )
+
+        def fused(image, x, y, chunk=chunk):
+            return rs.sample_separable_with_variance(
+                image,
+                x_src=x,
+                y_src=y,
+                kernel="catmull_rom",
+                source_variance=variance,
+                chunk_size=chunk,
+            )
+
+        for fn in (sample, fused):
+            got = torch.compile(fn, backend=counter)(image, x2, y2)
+            want = fn(image, x2, y2)
+            for g, w in zip(got, want):
+                if w is not None:
+                    # Padding the last tile moves samples within the vector loop:
+                    # float32 rounding only.
+                    _assert_close_to_std(g.cpu(), w.cpu(), tol=1e-6)
+        frames.append(counter.frame_count)
+        with pytest.raises(ValueError, match="finite"):
+            bad = x2.clone()
+            bad[0, 5] = float("nan")
+            torch.compile(sample, backend=counter)(image, bad, y2)
+    assert frames[1] == frames[2]

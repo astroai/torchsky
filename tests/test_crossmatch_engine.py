@@ -621,3 +621,78 @@ def test_read_only_numpy_inputs_do_not_warn() -> None:
         res = crossmatch_sky(ra, dec, ra, dec, radius_arcsec=1.0)
         within = match_within(ra, dec, ra, dec, 1.0)
     assert res.left_index.tolist() == [0, 1] and within.left_index.tolist() == [0, 1]
+
+
+def test_candidate_tile_traces_fullgraph() -> None:
+    import torch._dynamo
+
+    la, lb, ra, rb, r = _case("ra_wrap")
+    index = _zones.ZoneIndex(ra, rb, zone_height_deg=0.001)
+    rl = torch.full_like(la, r)
+    seg_row, seg_start, seg_count = index.segments(la, lb, rl / 3600.0)
+    incl = torch.cumsum(seg_count, 0)
+    excl = incl - seg_count
+    lx = _zones.unit_vectors(la, lb)
+    k = torch.arange(int(incl[-1]) + 50)  # padded past the candidate count
+
+    def tile(k):
+        return _zones._candidate_tile(
+            k, incl, excl, seg_row, seg_start, lx, index.xyz, rl, None, "sum"
+        )
+
+    torch._dynamo.reset()
+    got = torch.compile(tile, backend="aot_eager", fullgraph=True)(k)
+    want = tile(k)
+    for g, w in zip(got, want):
+        torch.testing.assert_close(g, w, rtol=0.0, atol=0.0)
+    assert not bool(want[3][-50:].any())
+    torch._dynamo.reset()
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason="MPS unavailable"
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize("find", ["all", "best", "count"])
+def test_compiled_torch_zone_query_matches_eager(device, find, monkeypatch) -> None:
+    """Compiled torch path == eager; one candidate-tile graph serves every batch."""
+    import torch._dynamo
+
+    monkeypatch.setattr(_zones, "_native_ext", lambda: None)
+    dtype = D if device == "cpu" else torch.float32
+    la, lb, ra, rb, r = (
+        t.to(device=device, dtype=dtype) if isinstance(t, torch.Tensor) else t
+        for t in _case("ra_wrap")
+    )
+    rl = torch.full_like(la, r)
+    index = _zones.ZoneIndex(ra, rb, zone_height_deg=0.001)
+    for max_pairs in (1 << 22, 997):  # one candidate batch, then several
+        want = _zones.zone_query(index, la, lb, rl, find=find, max_pairs=max_pairs)
+        tile_graphs = []
+
+        def backend(gm, example_inputs):
+            targets = {n.target for n in gm.graph.nodes}
+            if torch.atan2 in targets and torch.searchsorted in targets:
+                tile_graphs.append(gm)
+            return gm.forward
+
+        torch._dynamo.reset()
+        query = torch.compile(
+            lambda a, b, c: _zones.zone_query(
+                index, a, b, c, find=find, max_pairs=max_pairs
+            ),
+            backend=backend,
+        )
+        got = query(la, lb, rl)
+        assert len(tile_graphs) == 1
+        for g, w in zip(got, want):
+            torch.testing.assert_close(g, w, rtol=0.0, atol=0.0)
+    torch._dynamo.reset()
