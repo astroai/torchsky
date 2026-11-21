@@ -1,6 +1,6 @@
 """Regression tests for the data-quality bit contract, instrument bit tables,
 ``FieldObservation.value_semantics`` validation, ``FieldObservation.to`` precision and
-shared-sky cropping of far-away exposures."""
+shared-sky cropping of far-away and partially shared exposures."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import pytest
 import torch
 from torch import nn
 
+from torchsky import WCS
 from torchsky.instrument import (
     ACSWFCDataQuality,
     JWSTDataQuality,
@@ -320,3 +321,120 @@ def test_crop_still_works_when_world_to_pixel_has_no_fail_closed_keyword() -> No
         psf_halo=(0, 0),
     )
     assert cropped is not None and cropped.image.shape[0] >= 8
+
+
+def test_crop_straddling_the_detector_edge_keeps_every_shared_pixel() -> None:
+    reference = _flat_observation(10.0)
+    # Twenty pixels to the left of the reference: reference x maps to x - 20 here, so the
+    # patch (reference x 14..21) covers only columns 0 and 1 of this detector, and its
+    # left corners and centre have no pixel position (NaN) on it.
+    shifted = _flat_observation(10.0 + 0.02)
+    cropped = crop_field_observation_to_shared_sky_patch(
+        shifted,
+        reference_observation=reference,
+        x0=14,
+        y0=4,
+        patch_size=8,
+        psf_halo=(0, 0),
+    )
+    assert cropped is not None
+    # Column 0 is shared; only the landing corners (column 1) used to bound the crop.
+    assert cropped.detector_x0_pix == 0.0 and cropped.detector_y0_pix == 4.0
+    assert cropped.image.shape[0] == 8 and 2 <= cropped.image.shape[1] <= 3
+
+
+def _strong_sip_header(size: int) -> dict:
+    # Same distortion as tests/test_map_interpolated_mapping.py: the SIP inverse has no
+    # pre-image about 400 px from the reference pixel.
+    return {
+        "NAXIS": 2,
+        "NAXIS1": size,
+        "NAXIS2": size,
+        "CTYPE1": "RA---TAN-SIP",
+        "CTYPE2": "DEC--TAN-SIP",
+        "CRPIX1": size / 2 + 0.5,
+        "CRPIX2": size / 2 + 0.5,
+        "CRVAL1": 50.0,
+        "CRVAL2": -20.0,
+        "CD1_1": -2.0e-5,
+        "CD1_2": 3.0e-6,
+        "CD2_1": 3.0e-6,
+        "CD2_2": 2.0e-5,
+        "A_ORDER": 5,
+        "B_ORDER": 5,
+        "A_2_0": 3.0e-5,
+        "A_1_1": -2.0e-5,
+        "A_3_0": -2.0e-6,
+        "A_1_2": 1.0e-6,
+        "A_5_0": -2.0e-11,
+        "B_0_2": -2.5e-5,
+        "B_1_1": 1.5e-5,
+        "B_0_3": -2.0e-6,
+        "B_2_1": 1.0e-6,
+        "B_0_5": 1.0e-11,
+    }
+
+
+def _tan_header(size: int, scale_deg: float) -> dict:
+    return {
+        "NAXIS": 2,
+        "NAXIS1": size,
+        "NAXIS2": size,
+        "CTYPE1": "RA---TAN",
+        "CTYPE2": "DEC--TAN",
+        "CRPIX1": size / 2 + 0.5,
+        "CRPIX2": size / 2 + 0.5,
+        "CRVAL1": 50.0,
+        "CRVAL2": -20.0,
+        "CDELT1": -scale_deg,
+        "CDELT2": scale_deg,
+    }
+
+
+@pytest.mark.parametrize(
+    ("x0", "y0", "patch"),
+    [(0, 0, 1000), (0, 0, 500), (480, 0, 520), (590, 400, 410), (0, 0, 300)],
+)
+def test_crop_of_a_strong_sip_detector_bounds_every_shared_pixel(
+    x0: int, y0: int, patch: int
+) -> None:
+    reference = FieldObservation(
+        image=torch.ones(1000, 1000), header=_tan_header(1000, 2.0e-5)
+    )
+    sip = FieldObservation(image=torch.ones(200, 200), header=_strong_sip_header(200))
+    cropped = crop_field_observation_to_shared_sky_patch(
+        sip,
+        reference_observation=reference,
+        x0=x0,
+        y0=y0,
+        patch_size=patch,
+        psf_halo=(0, 0),
+    )
+    # Truth: the SIP pixels whose sky position (forward SIP, always defined) falls
+    # inside the reference patch.
+    yy, xx = torch.meshgrid(
+        torch.arange(200, dtype=torch.float64),
+        torch.arange(200, dtype=torch.float64),
+        indexing="ij",
+    )
+    ra, dec = WCS(sip.header).pixel_to_world(xx.reshape(-1), yy.reshape(-1))
+    rx, ry = WCS(reference.header).world_to_pixel(ra, dec)
+    shared = (
+        (rx >= x0 - 0.5)
+        & (rx < x0 + patch - 0.5)
+        & (ry >= y0 - 0.5)
+        & (ry < y0 + patch - 0.5)
+    )
+    if not bool(shared.any()):
+        assert cropped is None
+        return
+    assert cropped is not None
+    cx0, cy0 = int(cropped.detector_x0_pix), int(cropped.detector_y0_pix)
+    height, width = cropped.image.shape
+    sx, sy = xx.reshape(-1)[shared], yy.reshape(-1)[shared]
+    assert cx0 <= int(sx.min()) and cx0 + width >= int(sx.max()) + 1
+    assert cy0 <= int(sy.min()) and cy0 + height >= int(sy.max()) + 1
+    if patch == 1000:
+        # The whole detector lies inside the patch although the patch corners have no
+        # SIP pre-image; this used to collapse to a 2x2 crop around the patch centre.
+        assert (cx0, cy0, height, width) == (0, 0, 200, 200)

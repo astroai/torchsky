@@ -395,6 +395,48 @@ def _accepts_keyword(function: Callable[..., object], name: str) -> bool:
     )
 
 
+def _observation_world_to_pixel(
+    observation: FieldObservation,
+    ra_deg: Tensor,
+    dec_deg: Tensor,
+) -> tuple[Tensor, Tensor]:
+    """Map sky to local observation pixels; NaN where a point has no pixel position."""
+    if observation.detector_to_sky is None:
+        return cast(
+            tuple[Tensor, Tensor],
+            WCS(observation.header).world_to_pixel(ra_deg, dec_deg),
+        )
+    inverse = getattr(observation.detector_to_sky, "world_to_pixel", None)
+    if not callable(inverse):
+        raise ValueError(
+            "shared-sky cropping requires detector_to_sky.world_to_pixel for "
+            "native observations"
+        )
+    inverse_call = cast(Callable[..., tuple[Tensor, Tensor]], inverse)
+    # A sky point far from this detector is "not on this detector", not an error:
+    # transforms that can fail closed (such as TelescopeFrameDetectorToSky) are asked
+    # for NaN there, which the crop drops.
+    if _accepts_keyword(inverse_call, "fail_closed"):
+        px, py = inverse_call(ra_deg, dec_deg, fail_closed=False)
+    else:
+        px, py = inverse_call(ra_deg, dec_deg)
+    return (
+        px - float(observation.detector_x0_pix),
+        py - float(observation.detector_y0_pix),
+    )
+
+
+def _detector_edge_pixels(height: int, width: int) -> tuple[Tensor, Tensor]:
+    """Centres of every edge pixel of a ``height x width`` image (float64)."""
+    xs = torch.arange(width, dtype=torch.float64)
+    ys = torch.arange(height, dtype=torch.float64)
+    x = torch.cat((xs, xs, torch.zeros_like(ys), torch.full_like(ys, float(width - 1))))
+    y = torch.cat(
+        (torch.zeros_like(xs), torch.full_like(xs, float(height - 1)), ys, ys)
+    )
+    return x, y
+
+
 def crop_field_observation_to_shared_sky_patch(
     observation: FieldObservation,
     *,
@@ -429,35 +471,34 @@ def crop_field_observation_to_shared_sky_patch(
         dtype=torch.float64,
     )
     ra_deg, dec_deg = observation_pixel_to_world(reference_observation, ref_x, ref_y)
-    if observation.detector_to_sky is None:
-        px, py = WCS(observation.header).world_to_pixel(ra_deg, dec_deg)
-    else:
-        inverse = getattr(observation.detector_to_sky, "world_to_pixel", None)
-        if not callable(inverse):
-            raise ValueError(
-                "shared-sky cropping requires detector_to_sky.world_to_pixel for "
-                "non-reference native observations"
-            )
-        inverse_call = cast(Callable[..., tuple[Tensor, Tensor]], inverse)
-        # A sky point far from this detector is "not on this detector", not an error:
-        # transforms that can fail closed (such as TelescopeFrameDetectorToSky) are asked
-        # for NaN there, which the crop below drops.
-        if _accepts_keyword(inverse_call, "fail_closed"):
-            px, py = inverse_call(ra_deg, dec_deg, fail_closed=False)
-        else:
-            px, py = inverse_call(ra_deg, dec_deg)
-
-        px = px - float(observation.detector_x0_pix)
-        py = py - float(observation.detector_y0_pix)
-    if not (torch.isfinite(px).any() and torch.isfinite(py).any()):
-        return None
-    valid = torch.isfinite(px) & torch.isfinite(py)
-    if not torch.any(valid):
-        return None
-    px = px[valid]
-    py = py[valid]
+    px, py = _observation_world_to_pixel(observation, ra_deg, dec_deg)
     height = int(observation.image.shape[-2])
     width = int(observation.image.shape[-1])
+    valid = torch.isfinite(px) & torch.isfinite(py)
+    px = px[valid]
+    py = py[valid]
+    if not bool(valid.all()):
+        # Some patch points have no pixel position here: they are off this detector, or
+        # beyond the convergence region of its inverse distortion (SIP, TPV, native
+        # transforms). The points that do land then do not bound the shared pixels, so add
+        # the detector edge pixels whose sky position falls inside the reference patch:
+        # the shared region's bounding box is reached on its boundary, which lies on the
+        # detector edge or on the patch edge.
+        edge_x, edge_y = _detector_edge_pixels(height, width)
+        edge_ra, edge_dec = observation_pixel_to_world(observation, edge_x, edge_y)
+        ref_px, ref_py = _observation_world_to_pixel(
+            reference_observation, edge_ra, edge_dec
+        )
+        in_patch = (
+            (ref_px >= x0 - 0.5)
+            & (ref_px < x1 - 0.5)
+            & (ref_py >= y0 - 0.5)
+            & (ref_py < y1 - 0.5)
+        ).to(device=edge_x.device)
+        px = torch.cat((px, edge_x[in_patch].to(px)))
+        py = torch.cat((py, edge_y[in_patch].to(py)))
+    if px.numel() == 0:
+        return None
     crop_x0 = max(int(torch.floor(px.min()).item()), 0)
     crop_y0 = max(int(torch.floor(py.min()).item()), 0)
     crop_x1 = min(int(torch.ceil(px.max()).item()) + 1, width)

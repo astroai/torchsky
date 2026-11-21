@@ -412,6 +412,78 @@ def test_field_component_centroid_anchor_loss_matches_world_target() -> None:
     assert float(shifted_loss.item()) > float(matched_loss.item()) + 1.0
 
 
+def test_field_component_centroid_anchor_rejects_target_without_pixel_position() -> (
+    None
+):
+    domain = FieldDomain(
+        center_ra_deg=50.0,
+        center_dec_deg=-20.0,
+        spatial_scale_deg=0.05,
+        wavelength_center=5600.0,
+        wavelength_scale=1000.0,
+    )
+    # Strongly distorted SIP detector: its inverse has no pre-image ~400 px away.
+    header = {
+        **_tan_header(200, crval1=50.0, crval2=-20.0, scale_deg=2.0e-5),
+        "CTYPE1": "RA---TAN-SIP",
+        "CTYPE2": "DEC--TAN-SIP",
+        "CD1_2": 3.0e-6,
+        "CD2_1": 3.0e-6,
+        "A_ORDER": 5,
+        "B_ORDER": 5,
+        "A_2_0": 3.0e-5,
+        "A_1_1": -2.0e-5,
+        "A_3_0": -2.0e-6,
+        "A_1_2": 1.0e-6,
+        "A_5_0": -2.0e-11,
+        "B_0_2": -2.5e-5,
+        "B_1_1": 1.5e-5,
+        "B_0_3": -2.0e-6,
+        "B_2_1": 1.0e-6,
+        "B_0_5": 1.0e-11,
+    }
+    observation = FieldObservation(
+        image=torch.zeros((200, 200), dtype=torch.float32),
+        header=header,
+        spectral_min=5600.0,
+        spectral_max=5600.0,
+        transmission_center=5600.0,
+        transmission_sigma=None,
+    )
+    # About 300 px beyond the detector edge along the diagonal.
+    target_ra, target_dec = WCS(
+        _tan_header(1000, crval1=50.0, crval2=-20.0, scale_deg=2.0e-5)
+    ).pixel_to_world(
+        torch.tensor(800.0, dtype=torch.float64),
+        torch.tensor(800.0, dtype=torch.float64),
+    )
+    assert not bool(
+        torch.isfinite(WCS(header).world_to_pixel(target_ra, target_dec)[0])
+    )
+    model = FieldComponentDecomposition(
+        [
+            _GaussianSpotField(
+                domain,
+                amplitude=3.0,
+                center_ra_deg=50.0,
+                center_dec_deg=-20.0,
+                sigma_deg=2.0e-4,
+            )
+        ],
+        component_roles=("shared",),
+    )
+    term = FieldCentroidAnchorTerm(
+        observation=observation,
+        target_ra_deg=float(target_ra),
+        target_dec_deg=float(target_dec),
+        roles="shared",
+        window_sigma_pix=1.5,
+    )
+
+    with pytest.raises(ValueError, match="no pixel position"):
+        field_component_centroid_anchor_loss(model, [term], num_spectral_samples=1)
+
+
 def test_field_component_decomposition_diagnostics_measure_exact_leakage() -> None:
     domain = FieldDomain(
         center_ra_deg=150.0,

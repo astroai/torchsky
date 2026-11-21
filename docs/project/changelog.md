@@ -496,6 +496,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   target-edge samples that fall inside the source, so a source that encloses
   the target gives the whole target, not `None`. `None` now means the source
   misses the target at every sample.
+- Consumers of a world→pixel that has no pre-image (NaN under SIP or TPV, or
+  off a native detector):
+  - Shared-sky patch cropping in field training (`shared_sky_patch_sampling`)
+    also bounds the crop by the detector edge pixels that fall inside the
+    reference patch when a patch corner or the centre has no pixel position.
+    It used to size the crop from the landing points only, so a patch
+    enclosing a strongly distorted detector cropped it to 2×2.
+  - `match_sky(mode="planar")` wrote NaN into observation data beyond the
+    convergence region of a distorted target. An observation with such pixels
+    now has its plane evaluated in the target's undistorted frame (CD and
+    projection, without SIP or TPV), which has a position for every pixel.
+    Other observations, and undistorted targets, are unchanged. A pixel with
+    no position even in the projection raises `ValueError`.
+  - `field_component_centroid_anchor_loss` raises `ValueError` for a sky
+    target that has no pixel position on the observation, instead of
+    returning a NaN loss and NaN gradients.
 - `WCS` rejects ZPN headers that WCSLIB `zpnset` rejects, raising
   `ValueError` at construction. These are polynomials with no non-zero
   `PV2_m`, and polynomials of order ≥ 2 with `PV2_1 <= 0`. Before, a header
