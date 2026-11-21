@@ -51,8 +51,9 @@ transposed inputs abort the process inside PyTorch (`-[MPSNDArray
 arrayViewWithShape:strides:]: unrecognized selector`). On that macOS, use
 PyTorch 2.14 for MPS work, or run on the CPU.
 
-Optional extras: `torchsky[viz]` (browser sky viewer) and `torchsky[map]` (SVO
-filter profiles for `torchsky map --method field`).
+Optional extras: `torchsky[viz]` (browser sky viewer and matplotlib figures;
+`import torchsky` never needs it) and `torchsky[map]` (SVO filter profiles for
+`torchsky map --method field`).
 
 ## Source Build
 
@@ -127,9 +128,10 @@ is only useful to reuse the backend already installed in your environment.
 
 If an otherwise supported environment crashes while loading the optional native
 accelerator, set `TORCHSKY_DISABLE_CPP=1` before importing Torchsky. This keeps
-the Torch-native WCS and sphere implementations available while disabling only
-the C++ fast paths. Treat this as a safe diagnostic/fallback, and do not publish
-native performance claims from such a run.
+the torch implementations available and disables only the C++ fast paths
+(HEALPix, spherical geometry and harmonics, crossmatch, drizzle; WCS has
+none). Treat this as a safe diagnostic/fallback, and do not publish native
+performance claims from such a run.
 
 ### Troubleshooting
 

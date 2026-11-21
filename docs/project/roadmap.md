@@ -105,9 +105,14 @@ Release 0.5:
 - Review `torchsky.viz` (FastAPI server, routers, frontend, cache, renderer) for
   obsolete endpoints and untested branches; decide whether it stays an optional
   extra or is split out.
-- Clarify or rename the experimental field surfaces (`native_physical`,
-  `joint_native`, `neural_inverse`, lensing/magnification operators) so public
-  names state what they do; drop any without a demonstrated consumer.
+- Experimental field surface names (done in 0.6): `native_response`,
+  `native_integrated_read` and `joint_native_likelihood` are now
+  `source_quadrature`, `source_quadrature_read` and
+  `shared_nuisance_likelihood`, and the lensing/magnification operators moved
+  to the opt-in `torchsky.map.operators.lensing`. No public `native_physical`
+  or `neural_inverse` surface exists: the only remnant is the private
+  Gauss-Newton/PCG step in `torchsky.map.field._gauss_newton`, kept private
+  for a harness benchmark.
 - Keep a single canonical trusted-publishing workflow for `v*` tags, merging the
   useful verification steps of any overlapping workflow.
 

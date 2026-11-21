@@ -138,8 +138,9 @@ is not a tutorial.
   caveats → related guides.
 - Title Case section headings; sentence case prose; no duplicated introduction
   and no second H1.
-- State the stability tier for experimental surfaces (`scene`, `field`, native
-  likelihood/operator modules, `viz` server paths).
+- State the stability tier for experimental surfaces (`scene`, `field`,
+  source-quadrature likelihood/operator modules, `map.operators.lensing`, `viz`
+  server paths).
 
 ## Checks
 

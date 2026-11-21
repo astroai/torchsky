@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import subprocess
+import sys
 
 import pytest
 
@@ -62,3 +64,20 @@ def test_root_namespaces_are_lazy_and_declared() -> None:
     }
     for name in torchsky._NAMESPACES:
         assert name in torchsky.__all__
+
+
+def test_viz_dependencies_stay_optional() -> None:
+    # The docs promise `import torchsky` never needs the `viz` extra, and that
+    # `torchsky.viz` defers its server and plotting packages until used.
+    code = (
+        "import sys, torchsky\n"
+        "assert 'torchsky.viz' not in sys.modules\n"
+        "import torchsky.viz\n"
+        "heavy = ('fastapi', 'uvicorn', 'PIL', 'matplotlib')\n"
+        "print(sorted(m for m in heavy if m in sys.modules))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"
