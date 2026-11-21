@@ -16,7 +16,6 @@ from ..device import _as_tensor, _to
 
 _MAX_NSIDE = 65536
 _TARGET_POINTS_PER_PIXEL = 64
-_BATCHED_RING_HOPS_MAX = 4
 
 
 def nside_for_cap(radius_rad: float, *, max_nside: int = _MAX_NSIDE) -> int:
@@ -133,67 +132,6 @@ def cap_covering_pixels(
     if nest:
         return nest_pix
     return _healpix.nest2ring(nside, nest_pix)
-
-
-def candidate_coarse_pixels_for_left_pixel(
-    coarse_nside: int,
-    coarse_pixel: int,
-    *,
-    radius_rad: float,
-    device: torch.device,
-) -> Tensor:
-    """NESTED pixels whose centers lie within ``radius_rad`` of ``coarse_pixel``."""
-    center_pix = torch.tensor([coarse_pixel], dtype=torch.int64, device=device)
-    lon_c, lat_c = _healpix.pix2ang(coarse_nside, center_pix, nest=True, lonlat=True)
-    return cap_covering_pixels(
-        coarse_nside,
-        lon_c,
-        lat_c,
-        radius_rad,
-        nest=True,
-    )
-
-
-def _unique_ring_slots(rings: Tensor) -> Tensor:
-    """Per-query unique pixel ids, compacting rows that are empty for every query."""
-    if rings.shape[0] <= 1:
-        return rings
-    sentinel = torch.iinfo(torch.int64).max
-    filled = rings.masked_fill(rings < 0, sentinel)
-    ordered, _ = filled.sort(dim=0)
-    dup = torch.zeros_like(ordered, dtype=torch.bool)
-    dup[1:] = ordered[1:] == ordered[:-1]
-    ordered = ordered.masked_fill(dup | (ordered == sentinel), -1)
-    keep = (ordered >= 0).any(dim=1)
-    if not bool(keep.any()):
-        return torch.full(
-            (1, rings.shape[1]), -1, dtype=rings.dtype, device=rings.device
-        )
-    return ordered[keep]
-
-
-def nested_neighbor_rings(nside: int, pix: Tensor, hops: int) -> Tensor:
-    """Self plus successive nested neighbour layers. Shape ``[K, N]``, ``-1`` empty."""
-    pix_t = torch.as_tensor(pix, dtype=torch.int64).reshape(-1)
-    n_pix = int(pix_t.numel())
-    if n_pix == 0 or hops < 1:
-        return pix_t.reshape(1, n_pix)
-    visited = pix_t.reshape(1, n_pix)
-    frontier = visited
-    for _ in range(int(hops)):
-        width = int(frontier.shape[0])
-        flat = frontier.reshape(width * n_pix)
-        invalid = flat < 0
-        safe = flat.clamp(min=0)
-        neigh = _healpix.get_all_neighbours(nside, safe, nest=True, lonlat=False)
-        neigh = _as_tensor(neigh, dtype=torch.int64, device=pix_t.device)
-        if neigh.ndim == 1:
-            neigh = neigh.reshape(8, -1)
-        neigh = neigh.masked_fill(invalid.unsqueeze(0), -1)
-        layer = neigh.reshape(8, width, n_pix).reshape(8 * width, n_pix)
-        visited = _unique_ring_slots(torch.cat((visited, layer), dim=0))
-        frontier = _unique_ring_slots(layer)
-    return visited
 
 
 def _bucket_offsets(lengths: Tensor) -> tuple[Tensor, Tensor]:
@@ -336,34 +274,6 @@ class HealpixIndex:
             return self.order[:0]
         return self.order[starts[bucket] + intra]
 
-    def expand(self, pixels: Tensor) -> tuple[Tensor, Tensor]:
-        """Map per-query pixels ``[N]`` to ``(query_index, row_index)`` pairs."""
-        pix = _as_tensor(
-            pixels,
-            dtype=torch.int64,
-            device=self.unique_pixels.device,
-        ).reshape(-1)
-        n_query = int(pix.numel())
-        empty_q = torch.empty(0, dtype=torch.int64, device=pix.device)
-        if n_query == 0 or self.unique_pixels.numel() == 0:
-            return empty_q, empty_q
-        idx = torch.searchsorted(self.unique_pixels, pix)
-        n_uniq = int(self.unique_pixels.numel())
-        idx_safe = idx.clamp(max=max(n_uniq - 1, 0))
-        match = (idx < n_uniq) & (self.unique_pixels[idx_safe] == pix) & (pix >= 0)
-        if not bool(match.any()):
-            return empty_q, empty_q
-        query = torch.nonzero(match, as_tuple=False).squeeze(1)
-        starts = self.bucket_starts[idx_safe[match]]
-        stops = self.bucket_stops[idx_safe[match]]
-        lengths = (stops - starts).to(torch.int64)
-        bucket, intra = _bucket_offsets(lengths)
-        if intra.numel() == 0:
-            return empty_q, empty_q
-        return torch.repeat_interleave(query, lengths), self.order[
-            starts[bucket] + intra
-        ]
-
     def occupied_moc(self) -> MOC:
         """Coverage of occupied catalog buckets as canonical NUNIQ cells."""
         pixels = self.unique_pixels
@@ -407,11 +317,11 @@ class HealpixIndex:
         candidate_radius_rad = math.radians(radius) + (
             2.0 * _healpix.max_pixel_radius(self.nside, degrees=False)
         )
-        cand_nest = candidate_coarse_pixels_for_left_pixel(
-            self.nside,
-            int(center_nest.reshape(-1)[0].item()),
-            radius_rad=candidate_radius_rad,
-            device=device,
+        lon_c, lat_c = _healpix.pix2ang(
+            self.nside, center_nest.reshape(-1), nest=True, lonlat=True
+        )
+        cand_nest = cap_covering_pixels(
+            self.nside, lon_c, lat_c, candidate_radius_rad, nest=True
         )
         cand = cand_nest if self.nest else _healpix.nest2ring(self.nside, cand_nest)
         idx = self.lookup(cand)
@@ -426,8 +336,6 @@ class HealpixIndex:
 __all__ = [
     "HealpixIndex",
     "cap_covering_pixels",
-    "candidate_coarse_pixels_for_left_pixel",
     "default_nside",
-    "nested_neighbor_rings",
     "nside_for_cap",
 ]

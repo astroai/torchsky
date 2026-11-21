@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 import torch
 from torch import Tensor
 
-from ..quality import QualityBit
 from ..device import _as_tensor
+from ..quality import QualityBit
 
 
 def _validate_bit_mask(value: int | None, name: str) -> int | None:
@@ -24,7 +25,24 @@ def _validate_bit_mask(value: int | None, name: str) -> int | None:
 
 @dataclass(frozen=True)
 class DQPolicy:
-    """Declare detector DQ rejection, propagation, and cosmic-ray semantics."""
+    """Declare detector DQ rejection, propagation, and cosmic-ray semantics.
+
+    ``reject_bits`` has three distinct meanings, none of them ambiguous:
+
+    * ``None`` (the default): **strict**. A pixel is usable only when its whole DQ
+      value is zero, so any set bit rejects it. ``None`` does *not* mean "no bits
+      reject"; it means "every bit rejects".
+    * a positive integer: a pixel is rejected when it has any of those bits set;
+      other bits are ignored (subject to ``unknown_bit_policy`` when
+      ``propagate_bits`` is given).
+    * ``0``: an empty bit mask, so **no** bit rejects and every pixel passes the
+      reject test. :meth:`accept_all` spells this intent and :meth:`strict` spells
+      the default.
+
+    Bits are read as an unsigned bit field whatever the integer dtype of the DQ
+    plane (see :meth:`_coerce`). Instrument bit tables live in
+    :mod:`torchsky.instrument`.
+    """
 
     reject_bits: int | None = None
     propagate_bits: int | None = None
@@ -44,7 +62,18 @@ class DQPolicy:
         object.__setattr__(self, "propagate_bits", propagate)
         object.__setattr__(self, "cosmic_ray_bit", cosmic)
 
+    @classmethod
+    def strict(cls, **kwargs: Any) -> DQPolicy:
+        """Policy that rejects any non-zero DQ value (the same as ``DQPolicy()``)."""
+        return cls(reject_bits=None, **kwargs)
+
+    @classmethod
+    def accept_all(cls, **kwargs: Any) -> DQPolicy:
+        """Policy whose reject mask is empty (``reject_bits=0``): no bit rejects a pixel."""
+        return cls(reject_bits=0, **kwargs)
+
     def usability_mask(self, dq: Tensor) -> Tensor:
+        """Boolean plane, ``True`` where the pixel is usable (see the class docstring)."""
         value = self._coerce(dq)
         if self.reject_bits is None:
             usable = value == 0
@@ -70,6 +99,15 @@ class DQPolicy:
 
     @staticmethod
     def _coerce(dq: Tensor) -> Tensor:
+        """Return the DQ plane as ``int64`` holding the unsigned bit pattern.
+
+        Signed ``int8`` / ``int16`` / ``int32`` planes (for example BITPIX 32 without
+        ``BZERO``) are negative where their top bit is set; a plain ``.to(int64)`` would
+        sign-extend and set every higher bit. They are masked back to their own width, so
+        bit 31 of an ``int32`` plane is ``1 << 31`` and not ``-(1 << 31)``. Unsigned
+        dtypes already convert exactly. ``int64`` is returned as is: masks are limited to
+        63 bits, so a negative ``int64`` (bit 63 set) is outside the supported range.
+        """
         value = torch.as_tensor(dq)
         if (
             value.dtype.is_floating_point
@@ -77,7 +115,11 @@ class DQPolicy:
             or value.dtype == torch.bool
         ):
             raise TypeError("DQ planes must use a non-boolean integer dtype")
-        return value.to(dtype=torch.int64)
+        wide = value.to(dtype=torch.int64)
+        width = {torch.int8: 8, torch.int16: 16, torch.int32: 32}.get(value.dtype)
+        if width is not None:
+            wide = wide & ((1 << width) - 1)
+        return wide
 
 
 @dataclass(frozen=True)

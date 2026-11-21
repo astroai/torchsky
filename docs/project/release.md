@@ -6,33 +6,60 @@ parity campaigns, large/real-data validation, and scorecards are maintained in
 correctness and throughput belong to
 [`torchfits`](https://github.com/astroai/torchfits).
 
-## 1. Release lane
+## 1. Supported PyTorch range
 
-Each torchsky release targets **one PyTorch minor** (the wheel "lane"): the
-compiled extension refuses to import under another torch minor because PyTorch
-has no stable C++ ABI across minors. `scripts/torch_lanes.json` is the single
-source of truth:
+The native core neither includes nor links libtorch: tensors cross through
+DLPack and operators are registered from Python with `torch.library`. It is
+built against the CPython stable ABI. A release is therefore **one
+`cp312-abi3` wheel per platform**. Metadata gives a PyTorch floor and no upper
+bound. `scripts/torch_support.json` is the single source of truth:
 
-| PyTorch lane | torchsky release | torchfits |
-|---|---|---|
-| **2.14.x** | **0.5.0** | `>=1.3.1` |
+| Key | Meaning |
+|---|---|
+| `torchsky_version` | the release being prepared |
+| `torch_min` | oldest PyTorch minor CI tests; the runtime floor (`torch>=…`) |
+| `torch_tested` | newest PyTorch minor CI tests |
+| `torchfits` | the torchfits requirement |
 
-0.5.0 is the first supported release.
+Raise `torch_min` only when torchsky starts to need a newer PyTorch API.
+Record each newly tested PyTorch minor in `torch_tested`.
 
-Apply the lane to every version source in one step and verify it:
+Apply the version to every source in one step and verify it:
 
 ```bash
-pixi run -e default -- python scripts/release_lane.py --apply --prerelease rc1   # 0.5.0rc1
-pixi run -e default -- python scripts/release_lane.py --apply                    # finalize: 0.5.0
+pixi run -e default -- python scripts/release_lane.py --apply --prerelease rc1   # 0.6.0rc1
+pixi run -e default -- python scripts/release_lane.py --apply                    # finalize: 0.6.0
 pixi run release-lane-check
 ```
 
-`--apply` rewrites `pyproject.toml` (version, build and runtime `torch` and
-`torchfits` requirements), `pixi.toml` (package version, `pytorch` and `torch`
-pins), `src/torchsky/__init__.py`, and `CITATION.cff`. `release-lane-check`
-also fails when a workflow hard-codes a torch pin: workflows read the pins from
-`scripts/release_lane.py --print-pins` (`LANE`, `VERSION`, `TORCH_PIN`,
-`TORCHFITS_PIN`).
+`--apply` rewrites these files:
+
+- `pyproject.toml`: the version, `torch>=<min>` and the `torchfits` requirement;
+- `pixi.toml`: the package version, the `pytorch >=<min>` pins and the
+  `torch-min` feature;
+- `src/torchsky/__init__.py` and `CITATION.cff`: the version.
+
+`release-lane-check` also fails when a workflow hard-codes a torch pin.
+Workflows read the pins from `scripts/release_lane.py --print-pins`
+(`VERSION`, `TORCH_PIN`, `TORCH_MIN_PIN`, `TORCH_TESTED_PIN`, `TORCHFITS_PIN`).
+
+### Current range
+
+torchsky 0.6.0 requires `torch >= 2.13` (no upper bound) and
+`torchfits >= 1.3.3`. torchfits 1.3.3 is the first torch-free torchfits
+release, and it supports `torch >= 2.12`. Pixi's `test-torch-min` environment
+resolves `pytorch 2.13.*`; the default environments use the newest conda-forge
+build.
+
+Evidence (2026-11-20, macOS 14.8 arm64, PyPI torch, abi3 wheels of torchsky
+and the torch-free torchfits, full suite plus map tests):
+
+- **2.13.0, 2.14.1 and 2.15.0 (CPU):** no version-specific failures.
+- **2.15.0, MPS on macOS 14:** aborts in PyTorch's MPS matmul (`-[MPSNDArray
+  arrayViewWithShape:strides:]: unrecognized selector`), so MPS tests fail
+  there. This is a PyTorch bug, not a torchsky one.
+- **2.12.1:** CPU passes, but its MPS backend lacks `_cdist_backward` and
+  `grid_sampler_2d_backward`, so 2.13 is the floor.
 
 ## 2. Package validation
 
@@ -77,17 +104,19 @@ Pushing a tag runs `.github/workflows/build_wheels.yml`:
    same commit (`scripts/check_release_run.py`).
 2. `tests` and `map_tests` run the retained suites in the locked Pixi
    environments (Python 3.12 and 3.13).
-3. `build_wheels` builds CPython 3.12, 3.13, and 3.14 wheels: manylinux_2_28
-   x86_64 and macOS arm64 with deployment target 14.0, the floor of the torch
-   2.14 and torchfits wheels. Each wheel passes
+3. `build_wheels` builds one `cp312-abi3` wheel each for manylinux_2_28 x86_64
+   and for macOS arm64, with deployment target 14.0 (the floor of the PyTorch
+   and torchfits wheels). The build installs no PyTorch. cibuildwheel then tests
+   each wheel on CPython 3.12, 3.13 and 3.14. Each wheel passes
    `scripts/check_distribution.py` and the install smoke test; macOS wheels
    also pass `scripts/check_macos_wheel_floor.py` (filename tag and Mach-O
    `minos`). `build_sdist` builds the sdist, validates it
    (`scripts/validate_release_sdist.py`), builds a wheel from it and smoke-tests
    that wheel.
-4. `validate_release` checks the exact six-wheel matrix, metadata version,
-   `Requires-Python`, and the `torch<2.15,>=2.14` and `torchfits>=1.3.1`
-   requirements (`scripts/validate_release_wheels.py`), and writes
+4. `validate_release` checks:
+   - the exact two-wheel `cp312-abi3` matrix;
+   - the metadata version and `Requires-Python`;
+   - the `torch>=<torch_min>` (uncapped) and torchfits requirements (`scripts/validate_release_wheels.py`), and writes
    `RELEASE-MANIFEST.sha256` next to the artifacts.
 5. `github_release` publishes a GitHub **prerelease** with the artifacts and the
    changelog section. A release-candidate tag never uploads to PyPI.

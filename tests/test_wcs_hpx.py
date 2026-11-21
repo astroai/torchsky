@@ -36,35 +36,15 @@ def _header(h: float, k: float) -> dict[str, float | str | int]:
     }
 
 
-def _force_path(wcs: WCS, path: str) -> None:
-    wcs._disable_fused_pixel_to_world = path != "fused"
-    wcs._disable_fused_world_to_pixel = path != "fused"
-    wcs._disable_cpp_pixel_to_world = path == "python"
-    wcs._disable_cpp_world_to_pixel = path == "python"
-    if path != "center":
-        wcs._cpp_center_pixel_to_world = None
-        wcs._cpp_center_world_to_pixel = None
-    if path == "standalone":
-        assert wcs._cpp_hpx_project is None
-        assert wcs._cpp_hpx_deproject is None
-    if path == "fused":
-        assert wcs._can_use_fused_p2w_static
-        assert wcs._can_use_fused_w2p_static
-
-
 def _wrapped_delta(actual: np.ndarray, expected: np.ndarray) -> np.ndarray:
     return np.remainder(actual - expected + 180.0, 360.0) - 180.0
 
 
-@pytest.mark.parametrize("path", ["standalone", "center", "fused", "python"])
 @pytest.mark.parametrize("h,k", [(4.0, 3.0), (6.0, 4.0), (3.0, 2.0)])
-def test_hpx_forced_paths_match_astropy_both_directions(
-    path: str, h: float, k: float
-) -> None:
+def test_hpx_matches_astropy_both_directions(h: float, k: float) -> None:
     header = _header(h, k)
     oracle = AstropyWCS(header)
     wcs = WCS(header).to("cpu")
-    _force_path(wcs, path)
     transition = math.degrees(math.asin((k - 1.0) / k))
     world = np.array(
         [

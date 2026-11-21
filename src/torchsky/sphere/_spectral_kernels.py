@@ -42,6 +42,10 @@ from ._spectral_ring_fourier import (
     _ring_fourier_synthesis,
 )
 from ..device import _to
+from ._sht_blocks import (  # noqa: F401 - re-exported for spectral.py
+    _scalar_ring_legendre_integrate,
+    _scalar_ring_legendre_synthesize,
+)
 
 
 _M_PER_ALM_CACHE: SpectralCacheNamespace[Tensor] = _SPECTRAL_CACHE.namespace(
@@ -150,52 +154,6 @@ def _scalar_legendre_scan(
         k = min(ell, m1 - 1) - m0 + 1
         yield ell, k, new[:k] * torch.exp2(scale_bits * ex[:k])
         lam2, lam1 = lam1, new
-
-
-def _scalar_ring_legendre_integrate(
-    s_all: Tensor, theta_ring: Tensor, *, lmax: int, mmax: int, pix_w: float
-) -> Tensor:
-    """alm[b, (l,m)] = pix_w * sum_r s_all[b, m, r] lambda_lm(theta_r); chunked scan."""
-    nmaps = int(s_all.shape[0])
-    device = s_all.device
-    real_dtype = s_all.real.dtype
-    s_ri = torch.view_as_real(s_all.contiguous())
-    out = torch.zeros(
-        (nmaps, _core_mod.alm_size(lmax, mmax), 2), dtype=real_dtype, device=device
-    )
-    marr = torch.arange(int(mmax) + 1, dtype=torch.int64)
-    base = (marr * (lmax + 1) - marr * (marr - 1) // 2 - marr).to(device)
-    for m0, m1 in _scalar_legendre_chunks(theta_ring, mmax):
-        s_c = s_ri[:, m0:m1]
-        for ell, k, lam in _scalar_legendre_scan(
-            theta_ring, m0=m0, m1=m1, lmax=lmax, device=_scan_device(device)
-        ):
-            lam = _to(lam, device=device, dtype=real_dtype)
-            coef = torch.einsum("bmrc,mr->bmc", s_c[:, :k], lam)
-            out[:, base[m0 : m0 + k] + ell] = coef * pix_w
-    return torch.view_as_complex(out.contiguous())
-
-
-def _scalar_ring_legendre_synthesize(
-    alm: Tensor, theta_ring: Tensor, *, lmax: int, mmax: int
-) -> Tensor:
-    """f[b, m, r] = sum_l alm[b, (l,m)] lambda_lm(theta_r); chunked scan."""
-    nmaps = int(alm.shape[0])
-    device = alm.device
-    real_dtype = alm.real.dtype
-    nrings = int(theta_ring.numel())
-    a_ri = torch.view_as_real(alm.contiguous())
-    f = torch.zeros((nmaps, mmax + 1, nrings, 2), dtype=real_dtype, device=device)
-    marr = torch.arange(int(mmax) + 1, dtype=torch.int64)
-    base = (marr * (lmax + 1) - marr * (marr - 1) // 2 - marr).to(device)
-    for m0, m1 in _scalar_legendre_chunks(theta_ring, mmax):
-        for ell, k, lam in _scalar_legendre_scan(
-            theta_ring, m0=m0, m1=m1, lmax=lmax, device=_scan_device(device)
-        ):
-            lam = _to(lam, device=device, dtype=real_dtype)
-            coef = a_ri[:, base[m0 : m0 + k] + ell]
-            f[:, m0 : m0 + k] += coef[:, :, None, :] * lam[None, :, :, None]
-    return torch.view_as_complex(f.contiguous())
 
 
 def _scalar_alm2map_ring_torch(

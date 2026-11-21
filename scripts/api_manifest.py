@@ -29,6 +29,7 @@ NAMESPACES = (
     "torchsky.cosmology",
     "torchsky.transforms",
     "torchsky.quality",
+    "torchsky.instrument",
     "torchsky.viz",
     "torchsky.map",
     "torchsky.scene",
@@ -46,11 +47,13 @@ NAMESPACES = (
     "torchsky.map.operators.detector_response",
     "torchsky.map.operators.pixel_calibration",
     "torchsky.map.operators.epsf",
-    "torchsky.map.field.native_response",
-    "torchsky.map.field.native_integrated_read",
+    "torchsky.map.operators.lensing",
+    "torchsky.map.field.source_quadrature",
+    "torchsky.map.field.source_quadrature_read",
     "torchsky.map.field.gaussian",
     "torchsky.map.field.chromatic",
-    "torchsky.map.field.joint_native_likelihood",
+    "torchsky.map.field.shared_nuisance_likelihood",
+    "torchsky.map.exposure_fit",
 )
 
 

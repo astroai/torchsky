@@ -1774,45 +1774,83 @@ def source_bbox_on_target(
     margin: int,
     edge_samples: int,
 ) -> tuple[int, int, int, int] | None:
-    """Estimate the clipped target-pixel box covered by a source image boundary."""
+    """Estimate the clipped target-pixel box covered by a source image boundary.
+
+    ``edge_samples`` points per side of the source boundary are mapped to target
+    pixels; the box is their clipped extent, padded by ``margin`` and returned as
+    ``(y0, y1, x0, x1)`` with exclusive upper bounds.
+
+    A distorted target (SIP/TPV) has no pixel position where its inverse does
+    not converge, which is outside its image. When some boundary samples land
+    there, the boundary alone no longer bounds the overlap: the covered region
+    can reach the target edges (for example, a source that encloses the
+    target). The box is then the union of the finite boundary samples and the
+    target-edge samples that fall inside the source image, which together
+    contain the edge of the covered region. ``None`` means the source misses
+    the target at every sample.
+    """
+    height, width = int(target_shape[0]), int(target_shape[1])
     h_src, w_src = int(source_shape[0]), int(source_shape[1])
     edge_samples = max(int(edge_samples), 2)
-    xs = torch.linspace(
-        0.0,
-        float(w_src - 1),
-        steps=edge_samples,
-        dtype=torch.float64,
-        device=source_wcs.device,
+    x_src, y_src = _image_boundary_samples(
+        h_src, w_src, edge_samples, device=source_wcs.device
     )
-    ys = torch.linspace(
-        0.0,
-        float(h_src - 1),
-        steps=edge_samples,
-        dtype=torch.float64,
-        device=source_wcs.device,
-    )
-    top_x = xs
-    top_y = torch.zeros_like(xs)
-    bottom_x = xs
-    bottom_y = torch.full_like(xs, float(h_src - 1))
-    left_x = torch.zeros_like(ys)
-    left_y = ys
-    right_x = torch.full_like(ys, float(w_src - 1))
-    right_y = ys
-    x_src = torch.cat([top_x, bottom_x, left_x, right_x], dim=0)
-    y_src = torch.cat([top_y, bottom_y, left_y, right_y], dim=0)
     ra_deg, dec_deg = source_wcs.pixel_to_world(x_src, y_src)
     x_tgt, y_tgt = target_wcs.world_to_pixel(ra_deg, dec_deg)
     finite = torch.isfinite(x_tgt) & torch.isfinite(y_tgt)
-    if not bool(finite.any()):
+    if bool(finite.all()):
+        return _clipped_pixel_box(x_tgt, y_tgt, height, width, margin)
+    x_cover = [x_tgt[finite]]
+    y_cover = [y_tgt[finite]]
+    # Target-edge samples inside the source bound the overlap where the source
+    # boundary has no target pixel position.
+    x_edge, y_edge = _image_boundary_samples(
+        height, width, edge_samples, device=target_wcs.device
+    )
+    ra_edge, dec_edge = target_wcs.pixel_to_world(x_edge, y_edge)
+    xs_edge, ys_edge = source_wcs.world_to_pixel(ra_edge, dec_edge)
+    inside_source = (
+        torch.isfinite(xs_edge)
+        & torch.isfinite(ys_edge)
+        & (xs_edge >= -0.5)
+        & (xs_edge <= w_src - 0.5)
+        & (ys_edge >= -0.5)
+        & (ys_edge <= h_src - 0.5)
+    )
+    x_cover.append(_to(x_edge[inside_source], device=x_tgt.device, dtype=x_tgt.dtype))
+    y_cover.append(_to(y_edge[inside_source], device=y_tgt.device, dtype=y_tgt.dtype))
+    x_all = torch.cat(x_cover)
+    y_all = torch.cat(y_cover)
+    if x_all.numel() == 0:
         return None
-    x_good = x_tgt[finite]
-    y_good = y_tgt[finite]
-    height, width = int(target_shape[0]), int(target_shape[1])
-    x0 = max(int(torch.floor(x_good.min()).item()) - margin, 0)
-    x1 = min(int(torch.ceil(x_good.max()).item()) + margin + 1, width)
-    y0 = max(int(torch.floor(y_good.min()).item()) - margin, 0)
-    y1 = min(int(torch.ceil(y_good.max()).item()) + margin + 1, height)
+    return _clipped_pixel_box(x_all, y_all, height, width, margin)
+
+
+def _image_boundary_samples(
+    height: int, width: int, samples: int, *, device
+) -> tuple[Tensor, Tensor]:
+    """Return ``samples`` pixel-centre points per side of an image boundary."""
+    xs = torch.linspace(
+        0.0, float(width - 1), steps=samples, dtype=torch.float64, device=device
+    )
+    ys = torch.linspace(
+        0.0, float(height - 1), steps=samples, dtype=torch.float64, device=device
+    )
+    x = torch.cat([xs, xs, torch.zeros_like(ys), torch.full_like(ys, float(width - 1))])
+    y = torch.cat(
+        [torch.zeros_like(xs), torch.full_like(xs, float(height - 1)), ys, ys]
+    )
+    return x, y
+
+
+def _clipped_pixel_box(
+    x: Tensor, y: Tensor, height: int, width: int, margin: int
+) -> tuple[int, int, int, int] | None:
+    """Return the ``(y0, y1, x0, x1)`` extent of points, padded and clipped."""
+    x0 = max(int(torch.floor(x.min()).item()) - margin, 0)
+    x1 = min(int(torch.ceil(x.max()).item()) + margin + 1, width)
+    y0 = max(int(torch.floor(y.min()).item()) - margin, 0)
+    y1 = min(int(torch.ceil(y.max()).item()) + margin + 1, height)
     if x0 >= x1 or y0 >= y1:
         return None
     return y0, y1, x0, x1

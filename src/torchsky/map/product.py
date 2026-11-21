@@ -1098,12 +1098,15 @@ def estimate_map_inverse_variance(
     if min_inverse_variance <= 0.0:
         raise ValueError("min_inverse_variance must be positive")
     if isinstance(result, ProductResult):
-        if result.weight is not None:
-            weight = _as_cube(result.weight).to(dtype=torch.float32)
-        elif mode == "native_inverse_variance" and result.uncertainty is not None:
+        # A coadd weight is not an inverse variance (relative weights, flux
+        # area factors, and resampling make them differ), so the propagated
+        # uncertainty wins whenever the product carries one.
+        if mode == "native_inverse_variance" and result.uncertainty is not None:
             weight = _as_cube(result.uncertainty.inverse_variance).to(
                 dtype=torch.float32
             )
+        elif result.weight is not None:
+            weight = _as_cube(result.weight).to(dtype=torch.float32)
         elif mode == "support_density_proxy" and support_weight is not None:
             weight = _as_cube(support_weight).to(dtype=torch.float32)
         else:

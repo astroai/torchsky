@@ -25,6 +25,46 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Blends
+
+::: torchsky.catalogs
+    options:
+      members:
+        - BlendAssociation
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
+## Association
+
+::: torchsky.catalogs
+    options:
+      members:
+        - Association
+        - HistogramRatio
+        - NWayAssociation
+        - assign_one_to_one
+        - associate
+        - associate_many
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
+## Astrometric calibration
+
+::: torchsky.catalogs
+    options:
+      members:
+        - Astrometry
+        - MotionPrior
+        - propagate_astrometry
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Catalog
 
 ::: torchsky.catalogs
@@ -44,8 +84,6 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
         - CatalogStreamDataset
         - CrossmatchResult
         - crossmatch_sky
-        - crossmatch_sky_from_arrow
-        - crossmatch_sky_streamed
       heading_level: 3
       show_root_heading: false
       show_root_toc_entry: false
@@ -163,6 +201,19 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Partition
+
+::: torchsky.catalogs
+    options:
+      members:
+        - PartitionPlan
+        - healpix29
+        - margin_arcsec
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Photometry
 
 <a id="torchsky.catalogs.BlendFitDiagnostics"></a>
@@ -217,6 +268,21 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       heading_level: 3
       show_root_heading: true
       show_root_toc_entry: true
+      filters: []
+
+## Sky index
+
+::: torchsky.catalogs
+    options:
+      members:
+        - NearestResult
+        - SkyIndex
+        - count_within
+        - match_nearest
+        - match_within
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
       filters: []
 
 ## Typing

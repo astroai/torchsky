@@ -1,6 +1,5 @@
 """Regression tests for the WCS/geometry audit (parity against astropy.wcs / WCSLIB)."""
 
-import platform
 import warnings
 
 import numpy as np
@@ -207,11 +206,11 @@ def test_quadcube_negative_x_wraps(proj):
     for r, d in ((r1, d1), (wd[:, 0], wd[:, 1])):
         assert np.array_equal(np.isfinite(r), ok)
         # CSC reproduces WCSLIB's float32 evaluation (incl. the float32 plane
-        # coordinate), so it agrees with WCSLIB to double precision like TSC/QSC.
-        # arm64 WCSLIB builds fuse a*b+c in CSC (one float32 ulp); torchsky never does.
-        exact = proj != "CSC" or platform.machine().lower() in ("x86_64", "amd64")
+        # coordinate), to one float32 ulp: WCSLIB's float32 rounding differs per
+        # build (arm64 fuses a*b+c; linux-64 differed by 1.3e-6 deg in CI).
+        # TSC/QSC are double precision and agree to 1e-9 deg.
         assert np.max(_angsep(r[ok], d[ok], ra[ok], dec[ok])) < (
-            1e-9 if exact else 3e-5
+            3e-5 if proj == "CSC" else 1e-9
         )
 
 

@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...device import _as_tensor, resolve_device, _to
+from ...device import _as_tensor, resolve_device, resolve_module_device, _to
 from ...spectral import SpectralAxis
 from ...sphere import healpix as _healpix_wcs
 
@@ -223,7 +223,7 @@ def iter_field_observation_tiles(
                 "tiled learned_lowrank PSF requires globally indexed cell geometry"
             )
         halo_y, halo_x = psf_support_radius(observation.psf_spec)
-    device = resolve_device(None, model)
+    device = resolve_module_device(model, observation)
     if (
         render_kwargs.get("override_wavelengths") is None
         and render_kwargs.get("override_weights") is None
@@ -667,7 +667,7 @@ def render_field_observation_distribution(
         raise ValueError(
             "field model does not provide an explicit predictive distribution"
         )
-    device = resolve_device(None, model)
+    device = resolve_module_device(model, observation)
     if override_wavelengths is not None or override_weights is not None:
         if override_wavelengths is None or override_weights is None:
             raise ValueError(
@@ -951,7 +951,7 @@ def render_field_observation(
     if image.ndim != 2:
         raise ValueError("FieldObservation.image must be 2D")
     operator_bundle = _resolve_operator_bundle(observation, operator_bundle)
-    device = resolve_device(None, model)
+    device = resolve_module_device(model, observation)
     spatial_nodes = _spatial_quadrature_nodes(spatial_sampling)
     center_coordinates: tuple[Tensor, Tensor] | None = None
     if spatial_sampling == "center":
@@ -1197,7 +1197,7 @@ def render_spectral_power_foam_observation_exact(
         Callable[..., Tensor], normalized_spatial_coordinates
     )
     render_exact = cast(Callable[..., Tensor], render_exact)
-    device = resolve_device(None, model)
+    device = resolve_module_device(model, observation)
 
     height, width = _header_shape(
         observation.header,
@@ -1511,7 +1511,11 @@ def _evaluate_field_plane_func_vmap(
     dec_f = dec_grid.reshape(-1)
     n = int(ra_f.shape[0])
     dev = ra_f.device
-    wl0 = _as_tensor(wavelength, dtype=torch.float32, device=dev)
+    wl0 = _as_tensor(
+        wavelength,
+        dtype=wavelength.dtype if isinstance(wavelength, Tensor) else torch.float32,
+        device=dev,
+    )
     cc = max(int(chunk), 1)
     if n == 0:
         return evaluate_field_coordinates_vmapped(model, ra_f, dec_f, wl0).reshape(
@@ -1629,15 +1633,14 @@ def render_field_cube(
         else shape
     )
     device = resolve_device(None, model)
+    dtype = _render_accumulation_dtype(model, torch.float32, device)
     ra_deg, dec_deg = _coordinate_grid(target_header, shape=fallback, device=device)
-    wavelengths = _to(spectral_axis.to_wavelength(), device=device, dtype=torch.float32)
+    wavelengths = _to(spectral_axis.to_wavelength(), device=device, dtype=dtype)
     if wavelengths.ndim != 1:
         raise ValueError("spectral_axis must yield a 1D wavelength tensor")
     nw = int(wavelengths.shape[0])
     if nw == 0:
-        return torch.empty(
-            (0, *tuple(ra_deg.shape)), device=device, dtype=torch.float32
-        )
+        return torch.empty((0, *tuple(ra_deg.shape)), device=device, dtype=dtype)
     ra_f = ra_deg
     dec_f = dec_deg
     H, W = int(ra_f.shape[0]), int(ra_f.shape[1])
@@ -1647,7 +1650,7 @@ def render_field_cube(
     else:
         th, tw = _validate_spatial_tile_hw(spatial_tile_hw)
         tiles = list(_iter_spatial_tiles(H, W, th, tw))
-    out = torch.empty((nw, H, W), device=device, dtype=torch.float32)
+    out = torch.empty((nw, H, W), device=device, dtype=dtype)
     for y0, y1, x0, x1 in tiles:
         sub = _field_hypercube_spectral_stack(
             model,
@@ -1684,14 +1687,15 @@ def render_field_healpix(
     nside_i = int(nside)
     npix = _healpix_wcs.nside2npix(nside_i)
     dev = device if device is not None else resolve_device(None, model)
-    wavelengths = _to(spectral_axis.to_wavelength(), device=dev, dtype=torch.float32)
+    dtype = _render_accumulation_dtype(model, torch.float32, dev)
+    wavelengths = _to(spectral_axis.to_wavelength(), device=dev, dtype=dtype)
     nw = int(wavelengths.shape[0])
     if nw == 0:
-        return torch.empty((0, npix), device=dev, dtype=torch.float32)
+        return torch.empty((0, npix), device=dev, dtype=dtype)
     chunk_sp = spatial_chunk_pixels or min(1_048_576, max(npix, 1))
     chunk_sp = max(int(chunk_sp), 1)
     ipix_full = torch.arange(npix, device=dev, dtype=torch.int64)
-    out = torch.empty((nw, npix), device=dev, dtype=torch.float32)
+    out = torch.empty((nw, npix), device=dev, dtype=dtype)
     for i0 in range(0, npix, chunk_sp):
         i1 = min(i0 + chunk_sp, npix)
         ipix = ipix_full[i0:i1]
@@ -1766,7 +1770,7 @@ def render_field_cube_via_healpix(
     hdr["NAXIS2"] = int(h)
     nw = int(hp_cube.shape[0])
     if nw == 0:
-        return torch.empty((0, h, w), device=dev, dtype=torch.float32)
+        return torch.empty((0, h, w), device=dev, dtype=hp_cube.dtype)
     out = torch.empty((nw, h, w), device=dev, dtype=hp_cube.dtype)
     for i in range(nw):
         out[i] = sample_healpix_map_on_image_header(

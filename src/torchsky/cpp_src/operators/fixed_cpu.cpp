@@ -1,8 +1,7 @@
-#include <torch/library.h>
+#include "torchsky/native_nb.h"
 
 #include <tuple>
 
-#include "torchsky/fixed_operators.h"
 #include "torchsky/geom.h"
 #include "torchsky/healpix.h"
 
@@ -75,29 +74,24 @@ std::tuple<torch::Tensor, torch::Tensor> healpix_get_interp_weights_nested_dispa
     );
 }
 
+void register_fixed(nanobind::module_& m) {
+    using native::def;
+    def(m, "sphere_planar_point_in_polygon", &sphere_planar_point_in_polygon_dispatch_cpu);
+    def(m, "sphere_arc_intersections_matrix", &sphere_arc_intersections_matrix_dispatch_cpu);
+    def(m, "healpix_ring2nest", &healpix_ring2nest_cpu);
+    def(m, "healpix_nest2ring", &healpix_nest2ring_cpu);
+    def(m, "healpix_ang2pix_ring", &healpix_ang2pix_ring_cpu);
+    def(m, "healpix_ang2pix_nested", &healpix_ang2pix_nested_cpu);
+    def(m, "healpix_pix2ang_ring", &healpix_pix2ang_ring_dispatch_cpu);
+    def(m, "healpix_pix2ang_nested", &healpix_pix2ang_nested_dispatch_cpu);
+    def(m, "healpix_neighbors_ring", &healpix_neighbors_ring_cpu);
+    def(m, "healpix_neighbors_nested", &healpix_neighbors_nested_cpu);
+    def(m, "healpix_get_interp_weights_ring", &healpix_get_interp_weights_ring_dispatch_cpu);
+    def(m, "healpix_get_interp_weights_nested", &healpix_get_interp_weights_nested_dispatch_cpu);
+    def(m, "healpix_get_interp_val_ring", &healpix_get_interp_val_ring_cpu);
+    def(m, "healpix_get_interp_val_nested", &healpix_get_interp_val_nested_cpu);
+    def(m, "healpix_query_disc", &healpix_query_disc_cpu);
+    def(m, "sparse_get_values_blocks", &sparse_get_values_blocks_cpu);
 }
 
-TORCH_LIBRARY_IMPL(torchsky, CPU, m) {
-    m.impl("sphere_planar_point_in_polygon", TORCH_FN(torchsky::sphere_planar_point_in_polygon_dispatch_cpu));
-    m.impl("sphere_arc_intersections_matrix", TORCH_FN(torchsky::sphere_arc_intersections_matrix_dispatch_cpu));
-    m.impl("healpix_ring2nest", TORCH_FN(torchsky::healpix_ring2nest_cpu));
-    m.impl("healpix_nest2ring", TORCH_FN(torchsky::healpix_nest2ring_cpu));
-    m.impl("healpix_ang2pix_ring", TORCH_FN(torchsky::healpix_ang2pix_ring_cpu));
-    m.impl("healpix_ang2pix_nested", TORCH_FN(torchsky::healpix_ang2pix_nested_cpu));
-    m.impl("healpix_pix2ang_ring", TORCH_FN(torchsky::healpix_pix2ang_ring_dispatch_cpu));
-    m.impl("healpix_pix2ang_nested", TORCH_FN(torchsky::healpix_pix2ang_nested_dispatch_cpu));
-    m.impl("healpix_neighbors_ring", TORCH_FN(torchsky::healpix_neighbors_ring_cpu));
-    m.impl("healpix_neighbors_nested", TORCH_FN(torchsky::healpix_neighbors_nested_cpu));
-    m.impl("healpix_get_interp_weights_ring", TORCH_FN(torchsky::healpix_get_interp_weights_ring_dispatch_cpu));
-    m.impl("healpix_get_interp_weights_nested", TORCH_FN(torchsky::healpix_get_interp_weights_nested_dispatch_cpu));
-    m.impl("healpix_get_interp_val_ring", TORCH_FN(torchsky::healpix_get_interp_val_ring_cpu));
-    m.impl("healpix_get_interp_val_nested", TORCH_FN(torchsky::healpix_get_interp_val_nested_cpu));
-    m.impl("healpix_query_disc", TORCH_FN(torchsky::healpix_query_disc_cpu));
-    m.impl("sparse_get_values_blocks", TORCH_FN(torchsky::sparse_get_values_blocks_cpu));
-}
-
-namespace torchsky {
-
-void ensure_fixed_cpu_operators_linked() {}
-
-}
+}  // namespace torchsky

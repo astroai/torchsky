@@ -46,7 +46,7 @@ jobs:
         run: |
           # libstdc++ must load with libasan so its __cxa_throw interceptor has a target.
           export LD_PRELOAD="$(gcc -print-file-name=libasan.so) $(gcc -print-file-name=libstdc++.so)"
-          python -m pytest -v -rA -s -p no:cacheprovider tests/test_cpp_dispatcher.py tests/test_cpp_fixed_dispatcher.py tests/test_cpp_spectral_dispatcher.py tests/test_cpp_wcs_safety.py
+          python -m pytest -v -rA -s -p no:cacheprovider tests/test_cpp_compatibility.py tests/test_cpp_fixed_dispatcher.py tests/test_cpp_spectral_dispatcher.py
 
   linux-x86-native:
     name: Linux x86-64 baseline and AVX2/FMA
@@ -136,22 +136,17 @@ jobs:
     name: Linux CUDA-enabled PyTorch native build
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    env:
-      CUDA_HOME: ${{ github.workspace }}/.pixi/envs/cuda-bench
-      CUDAToolkit_ROOT: ${{ github.workspace }}/.pixi/envs/cuda-bench
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e
         with:
           pixi-version: v0.82.0
           run-install: false
-      - name: Provision locked CUDA-enabled PyTorch and full toolkit
+      - name: Provision locked CUDA-enabled PyTorch
         run: pixi install --frozen -e cuda-bench
-      - name: Diagnose CUDA-enabled TorchConfig inputs
-        run: pixi run -e cuda-bench -- python scripts/diagnose_cuda_build.py --require-cuda-torch
       - name: Configure and build native extension against CUDA-enabled PyTorch
         run: pixi run -e cuda-bench -- python -m pip install -e . --no-build-isolation -v
-      - name: Invoke CPU native dispatchers linked to CUDA-enabled PyTorch
+      - name: Invoke CPU native kernels under CUDA-enabled PyTorch
         run: pixi run -e cuda-bench -- python scripts/validate_native_runtime.py compare --candidate-isa native
       - name: Record hosted CUDA execution limitation
-        run: echo '::notice::Standard GitHub-hosted runners have no NVIDIA GPU; this job validates full-toolkit TorchConfig configure/link and invokes torchsky CPU native dispatchers against CUDA-enabled PyTorch.'
+        run: echo '::notice::Standard GitHub-hosted runners have no NVIDIA GPU; this job builds the torch-free extension next to CUDA-enabled PyTorch and invokes its CPU kernels through torch.ops.'

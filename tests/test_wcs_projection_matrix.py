@@ -45,7 +45,7 @@ def _header(code: str, *, crval2: float, size: int = 64, cdelt: float = 1.0) -> 
         "CDELT2": cdelt,
     }
     if code == "ZPN":
-        header.update({"PV2_1": 0.0, "PV2_2": 1.0, "PV2_3": 0.0, "PV2_4": 0.0})
+        header.update({"PV2_1": 1.0, "PV2_2": 0.0, "PV2_3": 0.05, "PV2_4": 0.0})
     elif code == "SZP":
         header.update({"PV2_1": 0.0, "PV2_2": 0.0, "PV2_3": 1.0})
     elif code == "AZP":

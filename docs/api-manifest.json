@@ -20,7 +20,10 @@
     "wcs"
   ],
   "torchsky.catalogs": [
+    "Association",
+    "Astrometry",
     "BackgroundModel",
+    "BlendAssociation",
     "BlendFitDiagnostics",
     "BlockSparseCovariance",
     "Catalog",
@@ -31,29 +34,42 @@
     "FitAdequacyDiagnostics",
     "ForwardPhotometryResult",
     "HealpixIndex",
+    "HistogramRatio",
     "KnownComponentFitError",
     "ManyMatchResult",
     "MorphologySpectrumDeblendResult",
+    "MotionPrior",
+    "NWayAssociation",
+    "NearestResult",
     "ParametricBlendDiagnostics",
     "ParametricBounds",
     "ParametricDeblendResult",
+    "PartitionPlan",
     "PhotometrySolver",
     "SelfMatchResult",
+    "SkyIndex",
     "SourceGrouping",
+    "assign_one_to_one",
+    "associate",
+    "associate_many",
     "build_source_groups",
     "cap_covering_pixels",
+    "count_within",
     "crossmatch",
     "crossmatch_exact",
     "crossmatch_many",
     "crossmatch_self",
     "crossmatch_sky",
-    "crossmatch_sky_from_arrow",
-    "crossmatch_sky_streamed",
     "fit_forced_photometry",
     "fit_morphology_spectrum_deblending",
     "fit_parametric_deblending",
+    "healpix29",
     "join_rows",
-    "nside_for_cap"
+    "margin_arcsec",
+    "match_nearest",
+    "match_within",
+    "nside_for_cap",
+    "propagate_astrometry"
   ],
   "torchsky.coords": [
     "CatalogState",
@@ -152,6 +168,7 @@
     "component_decomposition",
     "distribution",
     "estimate_domain",
+    "field_observation_from_exposure_file",
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
@@ -187,6 +204,19 @@
     "field_observation_spectral_kwargs",
     "photon_quadrature",
     "resolve_field_bandpass"
+  ],
+  "torchsky.instrument": [
+    "ACSWFCDataQuality",
+    "InstrumentDescription",
+    "JWSTDataQuality",
+    "JWSTExposureTiming",
+    "NIRCAM_METADATA_SOURCES",
+    "NIRCAM_UPDEC_BANDS",
+    "NIRCamImagingBand",
+    "WFC3IRDataQuality",
+    "instrument_description",
+    "jwst_exposure_timing",
+    "nircam_imaging_band"
   ],
   "torchsky.log_lambda": [
     "C_KM_S",
@@ -239,6 +269,17 @@
   "torchsky.map.evidence": [
     "EvidenceSnapshot"
   ],
+  "torchsky.map.exposure_fit": [
+    "ExposurePrediction",
+    "ReferenceCatalogue",
+    "SkyFit",
+    "SkyFitConfig",
+    "SkyProduct",
+    "fit_sky",
+    "half_difference",
+    "load_exposures",
+    "predict_exposure"
+  ],
   "torchsky.map.field.chromatic": [
     "ChromaticPSFField",
     "LogLambdaRBFBasis",
@@ -248,17 +289,17 @@
   "torchsky.map.field.gaussian": [
     "bind_linear_band_grid_likelihood"
   ],
-  "torchsky.map.field.joint_native_likelihood": [
-    "bind_joint_native_likelihood"
+  "torchsky.map.field.shared_nuisance_likelihood": [
+    "bind_shared_nuisance_likelihood"
   ],
-  "torchsky.map.field.native_integrated_read": [
-    "NativeIntegratedReadLikelihood",
-    "bind_native_integrated_read_likelihood"
+  "torchsky.map.field.source_quadrature": [
+    "SourceQuadratureResponse",
+    "bind_source_quadrature_likelihood",
+    "render_source_quadrature_observation"
   ],
-  "torchsky.map.field.native_response": [
-    "NativeFieldResponse",
-    "bind_native_field_likelihood",
-    "render_native_field_observation"
+  "torchsky.map.field.source_quadrature_read": [
+    "SourceQuadratureReadLikelihood",
+    "bind_source_quadrature_read_likelihood"
   ],
   "torchsky.map.likelihood": [
     "FunctionalSamplingUncertainty",
@@ -284,6 +325,13 @@
     "PixelIntegratedResponse",
     "native_pixel_stamp",
     "profile_native_star"
+  ],
+  "torchsky.map.operators.lensing": [
+    "ConvergenceMagnification",
+    "LearnedConvergenceCorrection",
+    "magnification_bias",
+    "magnify_flux",
+    "scale_source_sizes"
   ],
   "torchsky.map.operators.nuisance": [
     "CalibratedNuisancePrecision",
@@ -365,6 +413,7 @@
     "FieldObservation",
     "ForwardContext",
     "GAUSSIAN_MORPHOLOGY",
+    "GaussianItemScene",
     "HarmonicAlmScene",
     "HealpixMapScene",
     "ImageObservation",
@@ -392,6 +441,7 @@
     "predict",
     "product_spec",
     "render",
+    "render_gaussian_items",
     "target_from_header",
     "target_from_product",
     "target_to_field_observation"
@@ -654,6 +704,7 @@
     "PhotometricCalibrationSolution",
     "PhotometricMeasurementBlock",
     "PhotometricReference",
+    "PolynomialDetectorDistortion",
     "PortRoute",
     "PortRoutingMapping",
     "PrecisionWarning",
@@ -675,6 +726,8 @@
     "TangentPlaneAffine",
     "TangentPlaneFrame",
     "TangentPlaneGauge",
+    "TelescopeAttitude",
+    "TelescopeFrameDetectorToSky",
     "TemporalWCS",
     "TimeSpec",
     "TransformEdge",

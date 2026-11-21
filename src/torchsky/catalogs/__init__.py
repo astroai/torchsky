@@ -7,7 +7,18 @@ from typing import TYPE_CHECKING
 from .index import HealpixIndex
 from .index import cap_covering_pixels
 from .index import nside_for_cap
+from .astrometry import Astrometry, MotionPrior, propagate_astrometry
+from ._blends import BlendAssociation
+from .association import (
+    Association,
+    HistogramRatio,
+    NWayAssociation,
+    assign_one_to_one,
+    associate,
+    associate_many,
+)
 from .catalog import Catalog
+from .partition import PartitionPlan, healpix29, margin_arcsec
 from .multi import (
     ManyMatchResult,
     SelfMatchResult,
@@ -20,8 +31,13 @@ from .core import (
     CatalogStreamDataset,
     CrossmatchResult,
     crossmatch_sky,
-    crossmatch_sky_from_arrow,
-    crossmatch_sky_streamed,
+)
+from .sky_index import (
+    NearestResult,
+    SkyIndex,
+    count_within,
+    match_nearest,
+    match_within,
 )
 
 if TYPE_CHECKING:
@@ -78,7 +94,6 @@ def crossmatch(
     radius_arcsec: float | Tensor | None = None,
     *,
     find: str = "best",
-    streamed: bool = False,
     **kwargs: Any,
 ) -> CrossmatchResult:
     """Unified sky crossmatch entry point.
@@ -87,7 +102,9 @@ def crossmatch(
     - ``crossmatch(cat_left, cat_right, radius_arcsec, ...)`` for :class:`Catalog` objects
     - ``crossmatch(left_lon, left_lat, right_lon, right_lat, radius_arcsec=..., ...)`` for coordinate tensors
     - ``crossmatch((left_lon, left_lat), (right_lon, right_lat), radius_arcsec, ...)``
-    - ``crossmatch(left_arrow, right_arrow, radius_arcsec, streamed=False, ...)`` for Arrow tables/paths
+
+    Tables and files are read by the caller (torchfits, pyarrow, polars) and
+    passed in as tensors.
     """
     if isinstance(left, Catalog) and isinstance(right, Catalog):
         rad = radius_arcsec if radius_arcsec is not None else radius_arcsec_or_right_lon
@@ -136,23 +153,22 @@ def crossmatch(
             **kwargs,
         )
 
-    rad = radius_arcsec if radius_arcsec is not None else radius_arcsec_or_right_lon
-    if rad is None:
-        raise ValueError("radius_arcsec is required")
-    if streamed:
-        if find != "best":
-            raise ValueError("streamed crossmatch supports find='best' only")
-        left_batches: Any = left
-        right_ra, right_dec = right
-        return crossmatch_sky_streamed(
-            left_batches, right_ra, right_dec, radius_arcsec=float(rad), **kwargs
-        )
-    return crossmatch_sky_from_arrow(
-        left, right, radius_arcsec=float(rad), find=find, **kwargs
+    raise TypeError(
+        "crossmatch takes two Catalogs, two (lon, lat) tuples, or four coordinate arrays"
     )
 
 
 __all__ = [
+    "Association",
+    "BlendAssociation",
+    "Astrometry",
+    "HistogramRatio",
+    "assign_one_to_one",
+    "associate",
+    "associate_many",
+    "NWayAssociation",
+    "MotionPrior",
+    "propagate_astrometry",
     "Catalog",
     "CatalogStreamDataset",
     "BackgroundModel",
@@ -166,25 +182,31 @@ __all__ = [
     "HealpixIndex",
     "KnownComponentFitError",
     "ManyMatchResult",
+    "PartitionPlan",
+    "NearestResult",
     "MorphologySpectrumDeblendResult",
     "ParametricBlendDiagnostics",
     "ParametricBounds",
     "ParametricDeblendResult",
     "PhotometrySolver",
     "SelfMatchResult",
+    "SkyIndex",
     "SourceGrouping",
     "build_source_groups",
     "cap_covering_pixels",
+    "count_within",
     "crossmatch",
     "crossmatch_exact",
     "crossmatch_many",
     "crossmatch_self",
     "crossmatch_sky",
-    "crossmatch_sky_from_arrow",
-    "crossmatch_sky_streamed",
     "fit_forced_photometry",
     "fit_morphology_spectrum_deblending",
     "fit_parametric_deblending",
+    "healpix29",
     "join_rows",
+    "margin_arcsec",
+    "match_nearest",
+    "match_within",
     "nside_for_cap",
 ]

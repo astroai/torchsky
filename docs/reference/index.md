@@ -24,7 +24,7 @@ reference pages carry the contracts.
 | FLRW distances and AP scaling | [`torchsky.cosmology.comoving_distance`](cosmology.md#torchsky.cosmology.comoving_distance) | [cosmology](../spectra/cosmology.md) |
 | Display and training transforms | [`torchsky.transforms.Compose`](transforms.md#torchsky.transforms.Compose) | [encoders](../models/encoders.md) |
 | Quality and inverse-variance contracts | [`torchsky.quality.build_weight_product`](quality.md#torchsky.quality.build_weight_product) | [coadds](../maps/coadds.md) |
-| Native likelihood and forced photometry | [`torchsky.map.likelihood.GaussianLikelihoodFactor`](map-likelihood.md#torchsky.map.likelihood.GaussianLikelihoodFactor) | [likelihoods](../models/likelihoods.md) |
+| Pixel likelihood and forced photometry | [`torchsky.map.likelihood.GaussianLikelihoodFactor`](map-likelihood.md#torchsky.map.likelihood.GaussianLikelihoodFactor) | [likelihoods](../models/likelihoods.md) |
 | Browser viewer | [`torchsky.viz.serve`](viz.md#torchsky.viz.serve) | [viz](../introduction/viz.md) |
 
 ## Namespaces
@@ -32,7 +32,7 @@ reference pages carry the contracts.
 | Namespace | Tier | Names | Reference |
 |---|---|---|---|
 | `torchsky` | core | 18 | [reference](torchsky.md) |
-| `torchsky.catalogs` | core | 34 | [reference](catalogs.md) |
+| `torchsky.catalogs` | core | 50 | [reference](catalogs.md) |
 | `torchsky.coords` | core | 16 | [reference](coords.md) |
 | `torchsky.cosmology` | core | 21 | [reference](cosmology.md) |
 | `torchsky.extinction` | core | 18 | [reference](extinction.md) |
@@ -44,25 +44,28 @@ reference pages carry the contracts.
 | `torchsky.spectrophotometry` | core | 13 | [reference](spectrophotometry.md) |
 | `torchsky.sphere` | core | 134 | [reference](sphere.md) |
 | `torchsky.transforms` | core | 20 | [reference](transforms.md) |
-| `torchsky.wcs` | core | 141 | [reference](wcs.md) |
+| `torchsky.wcs` | core | 144 | [reference](wcs.md) |
 | `torchsky.encoders` | experimental | 8 | [reference](encoders.md) |
-| `torchsky.field` | experimental | 52 | [reference](field.md) |
+| `torchsky.field` | experimental | 53 | [reference](field.md) |
 | `torchsky.filter_profiles` | experimental | 6 | [reference](filter-profiles.md) |
+| `torchsky.instrument` | experimental | 11 | [reference](instrument.md) |
 | `torchsky.map.evidence` | experimental | 1 | [reference](map-evidence.md) |
+| `torchsky.map.exposure_fit` | experimental | 9 | [reference](map-exposure-fit.md) |
 | `torchsky.map.field.chromatic` | experimental | 4 | [reference](map-field-chromatic.md) |
 | `torchsky.map.field.gaussian` | experimental | 1 | [reference](map-field-gaussian.md) |
-| `torchsky.map.field.joint_native_likelihood` | experimental | 1 | [reference](map-field-joint-native-likelihood.md) |
-| `torchsky.map.field.native_integrated_read` | experimental | 2 | [reference](map-field-native-integrated-read.md) |
-| `torchsky.map.field.native_response` | experimental | 3 | [reference](map-field-native-response.md) |
+| `torchsky.map.field.shared_nuisance_likelihood` | experimental | 1 | [reference](map-field-shared-nuisance-likelihood.md) |
+| `torchsky.map.field.source_quadrature` | experimental | 3 | [reference](map-field-source-quadrature.md) |
+| `torchsky.map.field.source_quadrature_read` | experimental | 2 | [reference](map-field-source-quadrature-read.md) |
 | `torchsky.map.likelihood` | experimental | 4 | [reference](map-likelihood.md) |
 | `torchsky.map.operators.continuous_response` | experimental | 3 | [reference](map-operators-continuous-response.md) |
 | `torchsky.map.operators.detector_response` | experimental | 4 | [reference](map-operators-detector-response.md) |
 | `torchsky.map.operators.epsf` | experimental | 6 | [reference](map-operators-epsf.md) |
+| `torchsky.map.operators.lensing` | experimental | 5 | [reference](map-operators-lensing.md) |
 | `torchsky.map.operators.nuisance` | experimental | 2 | [reference](map-operators-nuisance.md) |
 | `torchsky.map.operators.pixel_calibration` | experimental | 1 | [reference](map-operators-pixel-calibration.md) |
 | `torchsky.map.query` | experimental | 2 | [reference](map-query.md) |
 | `torchsky.map.solvers` | experimental | 18 | [reference](map-solvers.md) |
-| `torchsky.scene` | experimental | 36 | [reference](scene.md) |
+| `torchsky.scene` | experimental | 38 | [reference](scene.md) |
 | `torchsky.viz` | experimental | 10 | [reference](viz.md) |
 
 ## Public modules

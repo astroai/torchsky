@@ -143,16 +143,24 @@ def _inspect_linux_dependencies(native: Path) -> None:
         raise AssertionError(
             f"native extension has an absolute build RPATH:\n{readelf.stdout}"
         )
+    # The native core is torch-free (DLPack boundary): it must not link libtorch.
+    linked_torch = [
+        name
+        for name in re.findall(r"\(NEEDED\).*\[([^\]]+)\]", readelf.stdout)
+        if TORCH_LIBRARY_RE.match(name)
+    ]
+    if linked_torch:
+        raise AssertionError(
+            f"native extension links libtorch: {', '.join(sorted(linked_torch))}"
+        )
     ldd = subprocess.run(["ldd", native], capture_output=True, text=True, check=False)
     if ldd.returncode != 0:
         return
-    unresolved = []
-    for line in ldd.stdout.splitlines():
-        if "=> not found" not in line:
-            continue
-        library = line.strip().split()[0]
-        if not TORCH_LIBRARY_RE.match(library):
-            unresolved.append(library)
+    unresolved = [
+        line.strip().split()[0]
+        for line in ldd.stdout.splitlines()
+        if "=> not found" in line
+    ]
     if unresolved:
         raise AssertionError(
             f"unexpected unresolved native libraries: {', '.join(sorted(unresolved))}"
@@ -171,8 +179,8 @@ def _inspect_macos_dependencies(native: Path) -> None:
         basename = PurePosixPath(dependency).name
         if dependency.startswith(("/System/Library/", "/usr/lib/")):
             continue
-        if dependency.startswith("@rpath/") and TORCH_LIBRARY_RE.match(basename):
-            continue
+        if TORCH_LIBRARY_RE.match(basename):
+            raise AssertionError(f"native extension links libtorch: {dependency}")
         if dependency.startswith(("@loader_path/", "@executable_path/")):
             continue
         unexpected.append(dependency)

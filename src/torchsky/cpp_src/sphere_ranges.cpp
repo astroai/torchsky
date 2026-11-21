@@ -5,7 +5,7 @@
 // per-pixel work; the torch implementations in torchsky.sphere.moc stay as the
 // device-generic fallback and the parity oracle.
 
-#include <torch/library.h>
+#include "torchsky/native_nb.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -285,22 +285,14 @@ torch::Tensor sphere_query_disc_nest_ranges_dispatch_cpu(
 }
 
 }  // namespace
+void register_sphere_ranges(nanobind::module_& m) {
+    using native::def;
+    def(m, "moc_uniq_to_ranges", &moc_uniq_to_ranges_cpu);
+    def(m, "moc_ranges_to_uniq", &moc_ranges_to_uniq_cpu);
+    def(m, "moc_combine_ranges", &moc_combine_ranges_cpu);
+    def(m, "moc_complement_ranges", &moc_complement_ranges_cpu);
+    def(m, "moc_degrade_uniq", &moc_degrade_uniq_cpu);
+    def(m, "sphere_query_disc_nest_ranges", &sphere_query_disc_nest_ranges_dispatch_cpu);
+}
+
 }  // namespace torchsky
-
-TORCH_LIBRARY_FRAGMENT(torchsky, m) {
-    m.def("moc_uniq_to_ranges(Tensor uniq, int max_order) -> (Tensor, Tensor)");
-    m.def("moc_ranges_to_uniq(Tensor starts, Tensor ends, int max_order) -> Tensor");
-    m.def("moc_combine_ranges(Tensor a_starts, Tensor a_ends, Tensor b_starts, Tensor b_ends, int op) -> (Tensor, Tensor)");
-    m.def("moc_complement_ranges(Tensor starts, Tensor ends, int total) -> (Tensor, Tensor)");
-    m.def("moc_degrade_uniq(Tensor uniq, int order) -> Tensor");
-    m.def("sphere_query_disc_nest_ranges(int nside, Tensor vec, float cos_lim) -> Tensor");
-}
-
-TORCH_LIBRARY_IMPL(torchsky, CPU, m) {
-    m.impl("moc_uniq_to_ranges", TORCH_FN(torchsky::moc_uniq_to_ranges_cpu));
-    m.impl("moc_ranges_to_uniq", TORCH_FN(torchsky::moc_ranges_to_uniq_cpu));
-    m.impl("moc_combine_ranges", TORCH_FN(torchsky::moc_combine_ranges_cpu));
-    m.impl("moc_complement_ranges", TORCH_FN(torchsky::moc_complement_ranges_cpu));
-    m.impl("moc_degrade_uniq", TORCH_FN(torchsky::moc_degrade_uniq_cpu));
-    m.impl("sphere_query_disc_nest_ranges", TORCH_FN(torchsky::sphere_query_disc_nest_ranges_dispatch_cpu));
-}

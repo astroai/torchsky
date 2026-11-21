@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import torch
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-)
+from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
@@ -15,34 +11,6 @@ if TYPE_CHECKING:
 
 
 _HAS_TORCH_SINCOS = hasattr(torch, "sincos")
-
-
-# Benchmark-backed small-batch CPU crossover points for the center-equator C++
-# helpers. Above these sizes, the vectorized Torch path is typically as fast or
-# faster, so we keep the native path for throughput-oriented workloads.
-_CENTER_CPP_P2W_THRESHOLDS = {
-    "AIT": 4096,
-    "CAR": 1024,
-    "CEA": 512,
-    "HPX": 1024,
-    "MER": 512,
-    "SFL": 1024,
-}
-
-
-_CENTER_CPP_W2P_THRESHOLDS = {
-    "AIT": 1024,
-    "CAR": 512,
-    "CEA": 2048,
-    "HPX": 1024,
-    "MER": 1024,
-    "SFL": 2048,
-}
-
-
-# Fused-first only for zenithal pole two-arg p2w below this N. Vectorized
-# cpp_direct stays primary above it so CEA/CAR and N>=10K are not regressable.
-_ZENITHAL_FUSED_P2W_MAX = 1536
 
 
 def _ctype_without_projection(ctype: str) -> str:
@@ -77,12 +45,6 @@ def _ctype_projection_code(ctype: str) -> str:
     if upper.endswith("-SIP"):
         upper = upper[:-4]
     return upper[-3:] if len(upper) >= 3 else ""
-
-
-def _bound_cpp(fn: Callable[..., Any] | None) -> Callable[..., Any]:
-    # Direct-dispatch kinds are only selected when the matching binding exists.
-    assert fn is not None
-    return fn
 
 
 # Half a pixel is where rounding a coordinate to the nearest pixel centre starts to

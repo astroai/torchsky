@@ -103,8 +103,9 @@ def test_gate_wcs_tan_world_to_pixel_bulk() -> None:
 
 def test_gate_crossmatch_sky_scales_with_candidates_not_pairs() -> None:
     """Uniform all-sky crossmatch prunes to ~O(N) candidates and stays fast."""
-    from torchsky.catalogs import core as catalogs_core
     from torchsky.catalogs import crossmatch_sky
+    from torchsky.catalogs._zones import EngineStats
+    from torchsky.catalogs.core import sky_pairs
 
     n = 200_000
     g = torch.Generator().manual_seed(5)
@@ -118,20 +119,12 @@ def test_gate_crossmatch_sky_scales_with_candidates_not_pairs() -> None:
     )
     radius = torch.full((n,), 1.0, dtype=torch.float64)
 
-    _, stats = catalogs_core._crossmatch_sky_strips(
-        ra_l,
-        dec_l,
-        ra_r,
-        dec_r,
-        radius_arcsec=radius,
-        left_chunk_size=65536,
-        right_chunk_size=65536,
-        find="all",
-        return_stats=True,
-    )
-    # The candidate area per left row is ~6 r^2, so a few candidates per row at
-    # most; an O(N*M) or per-pixel ring path would be orders of magnitude above.
-    assert stats.pairs_evaluated < 20 * n
+    stats = EngineStats()
+    sky_pairs(ra_l, dec_l, ra_r, dec_r, radius_left=radius, find="all", stats=stats)
+    # Zones of height ~r give ~density * 2r * 4r candidates per row beyond the
+    # true partner; an O(N*M) or per-pixel ring path would be orders above.
+    assert stats.candidates < 3 * n
+    assert stats.pairs > 0.95 * n  # jitter pushes ~1% of partners past 1 arcsec
 
     def run() -> None:
         crossmatch_sky(ra_l, dec_l, ra_r, dec_r, radius_arcsec=1.0, find="best")
@@ -201,3 +194,25 @@ def test_gate_sht_scalable_at_two_and_three_nside() -> None:
             os.environ.get("TORCHSKY_PERF_GATE_SHT_S", "5.0")
         )
         assert alm is not None and bool(torch.isfinite(alm).all())
+
+
+def test_gate_match_nearest_on_concentrated_catalogue() -> None:
+    """kNN start radii follow local density, not the all-sky mean.
+
+    A 100 deg^2 field holds every point; an all-sky starting radius (~0.4 deg)
+    materialised hundreds of pairs per row (35 s and 8 GB at 1e5 rows).
+    """
+    from torchsky.catalogs import match_nearest
+
+    n = 200_000
+    g = torch.Generator().manual_seed(9)
+    ra = 150.0 + 10.0 * torch.rand(n, generator=g, dtype=torch.float64)
+    dec = 2.0 + 10.0 * torch.rand(n, generator=g, dtype=torch.float64)
+    ra_r = ra + torch.randn(n, generator=g, dtype=torch.float64) * 1e-4
+    dec_r = dec + torch.randn(n, generator=g, dtype=torch.float64) * 1e-4
+
+    def run() -> None:
+        match_nearest(ra, dec, ra_r, dec_r, k=2)
+
+    max_s = float(os.environ.get("TORCHSKY_PERF_GATE_KNN_S", "5.0"))
+    assert _median_seconds(run, iters=1) < max_s

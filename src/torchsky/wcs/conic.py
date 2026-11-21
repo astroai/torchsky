@@ -19,23 +19,23 @@ import math
 
 import torch
 from torch import Tensor
-from typing import Tuple, Optional
+from typing import Tuple
+
+from ._math import PVParams, _pv_value
 
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
 
 
 def _pv_param(
-    params: Tensor | None,
+    params: PVParams,
     idx: int,
     default: float,
     *,
     like: Tensor,
 ) -> float:
     """Return PV parameter *idx* as a Python float with a default."""
-    if params is None or idx >= int(params.numel()):
-        return default
-    return float(params[idx].item())
+    return _pv_value(params, idx, default)
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ def _pv_param(
 
 
 def _cop_constants(
-    pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
+    pv1: PVParams, pv2: PVParams, like: Tensor
 ) -> tuple[float, float, float, float, float, float]:
     """Compute COP constants w[0..5] from PV parameters.
 
@@ -75,8 +75,8 @@ def project_conic(
     xi: Tensor,
     eta: Tensor,
     projection_code: str,
-    pv1: Optional[Tensor] = None,
-    pv2: Optional[Tensor] = None,
+    pv1: PVParams = None,
+    pv2: PVParams = None,
 ) -> Tuple[Tensor, Tensor]:
     """Inverse conic projection: plane (x, y) -> native (phi, theta)."""
     if projection_code == "BON":
@@ -194,8 +194,8 @@ def deproject_conic(
     phi: Tensor,
     theta: Tensor,
     projection_code: str,
-    pv1: Optional[Tensor] = None,
-    pv2: Optional[Tensor] = None,
+    pv1: PVParams = None,
+    pv2: PVParams = None,
 ) -> Tuple[Tensor, Tensor]:
     """Forward conic projection: native (phi, theta) -> plane (x, y).
 
@@ -226,9 +226,12 @@ def deproject_conic(
         y0 = -w2  # y0 offset (prj->y0 - prj->w[2] with prj->y0 = 0)
         xi = r * sin_a
         eta = -r * cos_a - y0
-        xi = torch.where(s == 0.0, torch.full_like(xi, float("nan")), xi)
-        eta = torch.where(s == 0.0, torch.full_like(eta, float("nan")), eta)
-        return xi, eta
+        # WCSLIB cops2x bounds: points on the far side of the cone apex
+        # (r * sin(sigma) < 0, or the pole opposite to sigma) have no image.
+        invalid = (s == 0.0) | (r * w0 < 0.0)
+        invalid = invalid | ((theta.abs() == 90.0) & ((theta < 0.0) != (theta1 < 0.0)))
+        nan = torch.full_like(xi, float("nan"))
+        return torch.where(invalid, nan, xi), torch.where(invalid, nan, eta)
 
     elif projection_code == "COE":
         w0, w1, w2, w3, w4, w5, w6, w7, w8 = _coe_constants(pv1, pv2, like=phi)
@@ -283,9 +286,7 @@ def deproject_conic(
 # ---------------------------------------------------------------------------
 
 
-def _coe_constants(
-    pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
-) -> tuple[float, ...]:
+def _coe_constants(pv1: PVParams, pv2: PVParams, like: Tensor) -> tuple[float, ...]:
     theta1_ref = _pv_param(pv2, 1, 0.0, like=like)
     delta = _pv_param(pv2, 2, 0.0, like=like)
     theta1 = theta1_ref - delta
@@ -311,7 +312,7 @@ def _coe_constants(
 
 
 def _cod_constants(
-    pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
+    pv1: PVParams, pv2: PVParams, like: Tensor
 ) -> tuple[float, float, float, float]:
     """Compute COD constants w[0..3] from PV parameters.
 
@@ -346,7 +347,7 @@ def _cod_constants(
 
 
 def _coo_constants(
-    pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
+    pv1: PVParams, pv2: PVParams, like: Tensor
 ) -> tuple[float, float, float, float, float]:
     theta1_ref = _pv_param(pv2, 1, 0.0, like=like)
     delta = _pv_param(pv2, 2, 0.0, like=like)
@@ -378,7 +379,7 @@ def _coo_constants(
 
 
 def _bon_constants(
-    pv1: Optional[Tensor], pv2: Optional[Tensor], like: Tensor
+    pv1: PVParams, pv2: PVParams, like: Tensor
 ) -> tuple[float, float, float]:
     theta1 = _pv_param(pv2, 1, 0.0, like=like)
     if theta1 == 0.0:
@@ -391,7 +392,7 @@ def _bon_constants(
 
 
 def _bon_x2s(
-    xi: Tensor, eta: Tensor, pv1: Optional[Tensor], pv2: Optional[Tensor]
+    xi: Tensor, eta: Tensor, pv1: PVParams, pv2: PVParams
 ) -> Tuple[Tensor, Tensor]:
     """Inverse Bonne: plane (x, y) -> native (phi, theta)."""
     theta1, w1, w2 = _bon_constants(pv1, pv2, like=xi)
@@ -423,7 +424,7 @@ def _bon_x2s(
 
 
 def _bon_s2x(
-    phi: Tensor, theta: Tensor, pv1: Optional[Tensor], pv2: Optional[Tensor]
+    phi: Tensor, theta: Tensor, pv1: PVParams, pv2: PVParams
 ) -> Tuple[Tensor, Tensor]:
     """Forward Bonne: native (phi, theta) -> plane (x, y).
 
@@ -506,7 +507,9 @@ def _pco_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         dt = g / safe_gp
         theta = theta - dt
         theta = torch.clamp(theta, -half_pi + 1e-9, half_pi - 1e-9)
-        if bool(dt.abs().max() < 1e-13):
+        # Converged rows are Newton fixed points, so the early exit (a host
+        # sync) only saves work; traced graphs run the fixed iteration count.
+        if not torch.compiler.is_compiling() and bool(dt.abs().max() < 1e-13):
             break
 
     theta_deg = theta * R2D

@@ -186,3 +186,49 @@ def test_blot_of_constant_coadd_is_constant_to_the_edge() -> None:
     valid = blotted != 0
     assert int(valid.sum()) > 80
     torch.testing.assert_close(blotted[valid], torch.ones_like(blotted[valid]))
+
+
+@pytest.mark.parametrize("semantics", ["surface_brightness", "flux"])
+@pytest.mark.parametrize("kernel", ["bilinear", "bicubic", "lanczos3", "nearest"])
+def test_blot_into_frame_beyond_sip_inverse_is_zero_there(
+    kernel: str, semantics: str
+) -> None:
+    from test_map_interpolated_mapping import _strong_sip_header, _target_header
+
+    from torchsky import WCS
+
+    # The outer part of the 1000 px TAN frame has no pre-image on the strongly
+    # distorted 200 px coadd (the SIP inverse does not converge: NaN). Those
+    # pixels are outside the coadd: zero, not an error or NaN.
+    image = torch.rand(200, 200, generator=torch.Generator().manual_seed(0)) + 1.0
+    coadd_header = _strong_sip_header(200)
+    yy, xx = torch.meshgrid(
+        torch.arange(1000, dtype=torch.float64),
+        torch.arange(1000, dtype=torch.float64),
+        indexing="ij",
+    )
+    ra, dec = WCS(_target_header(1000, 2.0e-5)).pixel_to_world(xx, yy)
+    x_src, _ = WCS(coadd_header).world_to_pixel(ra, dec)
+    no_pre_image = ~torch.isfinite(x_src)
+    assert bool(no_pre_image.any()), "fixture needs unconverged pixels"
+
+    wide = blot(
+        image,
+        coadd_header,
+        target=_target_header(1000, 2.0e-5),
+        kernel=kernel,
+        semantics=semantics,
+    )
+    assert bool(torch.isfinite(wide).all())
+    assert bool((wide[no_pre_image] == 0).all())
+    # A 300 px frame on the same tangent plane converges everywhere; it is the
+    # central crop of the wide frame and must match it.
+    narrow = blot(
+        image,
+        coadd_header,
+        target=_target_header(300, 2.0e-5),
+        kernel=kernel,
+        semantics=semantics,
+    )
+    assert int((narrow != 0).sum()) > 30_000
+    torch.testing.assert_close(wide[350:650, 350:650], narrow, rtol=0.0, atol=0.0)

@@ -10,12 +10,9 @@ from torchsky import _cpp
 from torchsky._ops import (
     has_fixed_dispatcher,
     has_spectral_dispatcher,
-    has_wcs_dispatcher,
 )
 
 
-if not has_wcs_dispatcher():
-    raise AssertionError("installed wheel did not register WCS dispatcher operators")
 if not has_fixed_dispatcher():
     raise AssertionError(
         "installed wheel did not register fixed-shape dispatcher operators"
@@ -23,12 +20,6 @@ if not has_fixed_dispatcher():
 if not has_spectral_dispatcher():
     raise AssertionError(
         "installed wheel did not register spectral dispatcher operators"
-    )
-if not torch._C._dispatch_has_kernel_for_dispatch_key(
-    "torchsky::wcs_pixel_to_world", "CPU"
-):
-    raise AssertionError(
-        "installed wheel did not register the CPU WCS dispatcher kernel"
     )
 if _cpp.selected_cpu_isa() not in {"scalar", "avx2+fma", "neon"}:
     raise AssertionError("installed wheel reported an invalid CPU ISA")
@@ -62,7 +53,7 @@ disabled = subprocess.run(
     [
         sys.executable,
         "-c",
-        "import sys; import torchsky._native as n; from torchsky._ops import has_wcs_dispatcher; assert n.cpp is None; assert not has_wcs_dispatcher(); assert 'torchsky._cpp_ext' not in sys.modules",
+        "import sys; import torchsky._native as n; from torchsky._ops import has_fixed_dispatcher; assert n.cpp is None; assert not has_fixed_dispatcher(); assert 'torchsky._cpp_ext' not in sys.modules",
     ],
     env={**os.environ, "TORCHSKY_DISABLE_CPP": "1"},
     capture_output=True,

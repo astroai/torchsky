@@ -37,11 +37,9 @@ healpix_image_plane = "HEALPix and image-plane sampling"
 healpix_spectral = "HEALPix spectral sampling"
 image_plane = "Image plane"
 integrated_read = "Integrated-read likelihood"
-joint_native_likelihood = "Joint native likelihood"
+lensing = "Weak-lensing magnification"
 likelihood = "Gaussian likelihood"
 moc = "Multi-order coverage"
-native_integrated_read = "Integrated-read native likelihood"
-native_response = "Native field response"
 observation = "Observations and targets"
 operators = "Observation operators"
 pixel_calibration = "Pixel calibration"
@@ -49,9 +47,12 @@ product = "Products and stacking"
 query = "Linear queries"
 regions = "Spherical regions"
 residual = "Residual models"
+shared_nuisance_likelihood = "Shared-nuisance likelihood"
 sht = "Spherical harmonics"
 sky = "Sky models"
 solvers = "Solvers"
+source_quadrature = "Source-quadrature response"
+source_quadrature_read = "Source-quadrature integrated-read likelihood"
 sparse = "Sparse maps"
 spectral = "Spectral axes"
 splat = "Splatting"
@@ -74,7 +75,7 @@ rows = [
   { goal = "FLRW distances and AP scaling", entry = "torchsky.cosmology.comoving_distance", page = "cosmology", guide = "spectra/cosmology.md" },
   { goal = "Display and training transforms", entry = "torchsky.transforms.Compose", page = "transforms", guide = "models/encoders.md" },
   { goal = "Quality and inverse-variance contracts", entry = "torchsky.quality.build_weight_product", page = "quality", guide = "maps/coadds.md" },
-  { goal = "Native likelihood and forced photometry", entry = "torchsky.map.likelihood.GaussianLikelihoodFactor", page = "map-likelihood", guide = "models/likelihoods.md" },
+  { goal = "Pixel likelihood and forced photometry", entry = "torchsky.map.likelihood.GaussianLikelihoodFactor", page = "map-likelihood", guide = "models/likelihoods.md" },
   { goal = "Browser viewer", entry = "torchsky.viz.serve", page = "viz", guide = "introduction/viz.md" },
 ]
 
@@ -174,6 +175,13 @@ tier = "experimental"
 related = ["models/psf-conventions.md"]
 
 [[namespace]]
+name = "torchsky.map.operators.lensing"
+slug = "map-operators-lensing"
+tier = "experimental"
+related = ["models/scenes.md"]
+intro = "Opt-in weak-lensing magnification operators: convergence to magnification under an explicit linear or exponential law, flux magnification, size dilation, and magnification bias. Import from this module; they are no longer re-exported by `torchsky.map.operators` (the old names warn and are removed in 0.7)."
+
+[[namespace]]
 name = "torchsky.map.operators.nuisance"
 slug = "map-operators-nuisance"
 tier = "experimental"
@@ -207,22 +215,32 @@ related = ["models/fields.md", "maps/coadds.md"]
 intro = "Chromatic PSF fields and continuous-wavelength sky fields integrated over band transmission curves."
 
 [[namespace]]
-name = "torchsky.map.field.joint_native_likelihood"
-slug = "map-field-joint-native-likelihood"
+name = "torchsky.map.field.shared_nuisance_likelihood"
+slug = "map-field-shared-nuisance-likelihood"
 tier = "experimental"
 related = ["models/likelihoods.md"]
+intro = "One Gaussian factor for several source-quadrature observations whose additive nuisance modes (a common background or calibration term) are eliminated once, jointly, instead of once per exposure. Renamed from `torchsky.map.field.joint_native_likelihood.bind_joint_native_likelihood` in 0.6; the old path warns and is removed in 0.7."
 
 [[namespace]]
-name = "torchsky.map.field.native_integrated_read"
-slug = "map-field-native-integrated-read"
+name = "torchsky.map.field.source_quadrature_read"
+slug = "map-field-source-quadrature-read"
 tier = "experimental"
 related = ["models/likelihoods.md"]
+intro = "Poisson-Gaussian likelihood of one raw integrated read per detector pixel, fed by a source-quadrature photon response. Renamed from `torchsky.map.field.native_integrated_read` in 0.6; the old names warn and are removed in 0.7."
 
 [[namespace]]
-name = "torchsky.map.field.native_response"
-slug = "map-field-native-response"
+name = "torchsky.map.field.source_quadrature"
+slug = "map-field-source-quadrature"
 tier = "experimental"
 related = ["models/likelihoods.md"]
+intro = "A continuous sky sampled at caller-supplied source nodes and transported by an explicit quadrature and calibration into detector pixels, with fixed Gaussian evidence. Renamed from `torchsky.map.field.native_response` in 0.6; the old names warn and are removed in 0.7."
+
+[[namespace]]
+name = "torchsky.map.exposure_fit"
+slug = "map-exposure-fit"
+tier = "experimental"
+related = ["models/exposure_fit.md"]
+intro = "Item-sky fit to individual exposures of several instruments: load_exposures, fit_sky, SkyFit, predict_exposure, the sky product with its standard deviation (SkyFit.product, SkyProduct, half_difference) and the response readers (catalogues are not available yet)."
 
 [[namespace]]
 name = "torchsky.scene"
@@ -293,6 +311,13 @@ tier = "core"
 related = ["models/encoders.md"]
 
 [[namespace]]
+name = "torchsky.instrument"
+slug = "instrument"
+tier = "experimental"
+related = ["models/exposure_fit.md"]
+intro = "Instrument facts: data-quality bit tables, NIRCam band metadata, and the descriptions used to load and fit exposures."
+
+[[namespace]]
 name = "torchsky.quality"
 slug = "quality"
 tier = "core"
@@ -303,3 +328,4 @@ name = "torchsky.viz"
 slug = "viz"
 tier = "experimental"
 related = ["introduction/viz.md", "introduction/cli.md"]
+intro = "Optional: install `torchsky[viz]`. The browser server needs `fastapi`, `uvicorn` and `pillow`; the figures need `matplotlib`. `import torchsky` never imports this namespace, and importing it loads none of those packages until a figure is drawn or the server starts."

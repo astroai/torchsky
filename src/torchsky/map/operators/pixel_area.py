@@ -50,7 +50,11 @@ def _unit_vectors(ra_deg: Tensor, dec_deg: Tensor) -> Tensor:
 
 
 def _spherical_triangle_area(a: Tensor, b: Tensor, c: Tensor) -> Tensor:
-    numerator = torch.abs(torch.sum(a * torch.linalg.cross(b, c), dim=-1))
+    # Van Oosterom-Strackee. The triple product uses edge vectors, the exact
+    # identity a.(b x c) = a.((b - a) x (c - a)): for a sub-arcsecond pixel
+    # a.(b x c) is ~1e-13 formed from O(1) products, so rounding in the corner
+    # vectors alone gave ~1e-4 relative error; the edges keep it near 1e-9.
+    numerator = torch.abs(torch.sum(a * torch.linalg.cross(b - a, c - a), dim=-1))
     denominator = 1.0 + torch.sum(a * b, dim=-1)
     denominator = denominator + torch.sum(b * c, dim=-1) + torch.sum(c * a, dim=-1)
     return 2.0 * torch.atan2(numerator, denominator)

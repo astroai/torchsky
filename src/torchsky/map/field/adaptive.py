@@ -9,8 +9,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from ...wcs import WCS
 from .core import _BaseFieldModel
+from .observation_ops import observation_pixel_to_world
 from .quality import (
     FieldResidualProduct,
     FieldResidualTile,
@@ -44,6 +44,7 @@ def _tile_weighted_mean_residual(
     product: FieldResidualProduct | None,
     tile: FieldResidualTile,
 ) -> float:
+    """Weighted mean of ``prediction - data`` over one tile's support."""
     if product is None:
         return 0.0
     residual = torch.as_tensor(product.residual)[tile.y0 : tile.y1, tile.x0 : tile.x1]
@@ -72,7 +73,6 @@ def _tile_encoded_center_and_scale(
     wavelength: float,
     spectral_scale_encoded: float,
 ) -> tuple[Tensor, Tensor]:
-    wcs = WCS(observation.header)
     x_center = 0.5 * (float(tile.x0) + float(tile.x1 - 1))
     y_center = 0.5 * (float(tile.y0) + float(tile.y1 - 1))
     x_samples = torch.tensor(
@@ -83,13 +83,13 @@ def _tile_encoded_center_and_scale(
         [y_center, y_center, y_center, float(tile.y0), float(tile.y1 - 1)],
         dtype=torch.float64,
     )
-    ra, dec = wcs.pixel_to_world(x_samples, y_samples)
-    lam = torch.full_like(ra.to(dtype=torch.float32), float(wavelength))
-    encoded = model._encoded_coords(
-        ra.to(dtype=torch.float32),
-        dec.to(dtype=torch.float32),
-        lam,
-    ).detach()
+    # Honour a native detector model, as rendering does; encode in float64.
+    with torch.no_grad():
+        ra, dec = observation_pixel_to_world(observation, x_samples, y_samples)
+        ra = torch.as_tensor(ra, dtype=torch.float64)
+        dec = _as_tensor(dec, dtype=torch.float64, device=ra.device)
+        lam = torch.full_like(ra, float(wavelength))
+        encoded = model._encoded_coords(ra, dec, lam).detach()
     center = encoded[0]
     spatial_delta = torch.abs(encoded[1:, :-1] - center[:-1]).amax(dim=0)
     scale = torch.empty_like(center)
@@ -121,9 +121,11 @@ def residual_tile_basis_spec_from_observation(
             wavelength=wavelength,
             spectral_scale_encoded=spectral_scale_encoded,
         )
-        centers.append(center)
-        scales.append(scale)
-        amplitudes.append(_tile_weighted_mean_residual(residual_product, tile))
+        centers.append(center.cpu())
+        scales.append(scale.cpu())
+        # The product residual is prediction - data; an atom added to the
+        # base field corrects it with the opposite sign.
+        amplitudes.append(-_tile_weighted_mean_residual(residual_product, tile))
     return ResidualTileBasisSpec(
         centers=torch.stack(centers, dim=0).to(dtype=torch.float32),
         scales=torch.stack(scales, dim=0).to(dtype=torch.float32),

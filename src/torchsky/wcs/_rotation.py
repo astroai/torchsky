@@ -7,13 +7,12 @@ native-type flag) and are shared by every projection path.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Tuple
 
 import torch
 from torch import Tensor
 
-from ._math import _sincos, _wrap_lon180, _wrap_lon360
+from ._math import _hypot, _sincos, _wrap_lon180, _wrap_lon360
 from ..device import _as_tensor
 
 
@@ -24,7 +23,6 @@ class _RotationMixin:
         delta0: float
         crval: Tensor
         _phi_p_native: float
-        _phi_p_rad: float
         _use_center_equator_fast: bool
         _celestial_postrot: list[list[float]] | None
         _east_x: float
@@ -43,8 +41,6 @@ class _RotationMixin:
         _pole_radial_x: float
         _pole_radial_y: float
         _pole_radial_z: float
-        _cpp_spherical_rotation_pole: Callable[..., Any] | None
-        _cpp_inverse_spherical_rotation_pole: Callable[..., Any] | None
 
     def _project_tan(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         """
@@ -150,8 +146,6 @@ class _RotationMixin:
         phi: Tensor,
         theta: Tensor,
         native_type: str = "pole",
-        *,
-        allow_cpp_sphere: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         """
         Optimized rotation using vector rotation matrix.
@@ -161,30 +155,6 @@ class _RotationMixin:
                 ra = _wrap_lon360(phi + self.alpha0)
                 return ra, theta
             return self._spherical_rotation(phi, theta, native_type)
-
-        if (
-            allow_cpp_sphere
-            and self._cpp_spherical_rotation_pole is not None
-            and phi.device.type == "cpu"
-            and theta.device.type == "cpu"
-            and phi.dtype == torch.float64
-            and theta.dtype == torch.float64
-            and not phi.requires_grad
-            and not theta.requires_grad
-        ):
-            return self._cpp_spherical_rotation_pole(
-                phi,
-                theta,
-                self._phi_p_rad,
-                self._pole_east_x,
-                self._pole_east_y,
-                self._pole_north_x,
-                self._pole_north_y,
-                self._pole_north_z,
-                self._pole_radial_x,
-                self._pole_radial_y,
-                self._pole_radial_z,
-            )
 
         d2r = 0.017453292519943295
         r2d = 57.29577951308232
@@ -315,8 +285,6 @@ class _RotationMixin:
         ra: Tensor,
         dec: Tensor,
         native_type: str = "pole",
-        *,
-        allow_cpp_inverse_sphere: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         """
         Inverse spherical rotation: celestial (ra, dec) -> native (phi, theta).
@@ -345,33 +313,9 @@ class _RotationMixin:
             v = -(
                 x_cel * self._radial_x + y_cel * self._radial_y + z_cel * self._radial_z
             )
-            theta = torch.atan2(w, torch.hypot(u, v)) * r2d
+            theta = torch.atan2(w, _hypot(u, v)) * r2d
             phi = torch.remainder(torch.atan2(u, -v) * r2d, 360.0)
             return phi, theta
-
-        if (
-            allow_cpp_inverse_sphere
-            and self._cpp_inverse_spherical_rotation_pole is not None
-            and ra.device.type == "cpu"
-            and dec.device.type == "cpu"
-            and ra.dtype == torch.float64
-            and dec.dtype == torch.float64
-            and not ra.requires_grad
-            and not dec.requires_grad
-        ):
-            return self._cpp_inverse_spherical_rotation_pole(
-                ra,
-                dec,
-                self._phi_p_rad,
-                self._pole_east_x,
-                self._pole_east_y,
-                self._pole_north_x,
-                self._pole_north_y,
-                self._pole_north_z,
-                self._pole_radial_x,
-                self._pole_radial_y,
-                self._pole_radial_z,
-            )
 
         d2r = 0.017453292519943295
         r2d = 57.29577951308232
@@ -400,7 +344,7 @@ class _RotationMixin:
             + z_cel * self._pole_radial_z
         )
 
-        theta = torch.atan2(w, torch.hypot(u, v)) * r2d
+        theta = torch.atan2(w, _hypot(u, v)) * r2d
         phi = torch.remainder(torch.atan2(u, v) * r2d + self._phi_p_native, 360.0)
 
         return phi, theta
@@ -424,7 +368,7 @@ class _RotationMixin:
         y = c[1][0] * v[0] + c[1][1] * v[1] + c[1][2] * v[2]
         z = c[2][0] * v[0] + c[2][1] * v[1] + c[2][2] * v[2]
         lon = torch.remainder(torch.atan2(y, x) * r2d, 360.0)
-        lat = torch.atan2(z, torch.hypot(x, y)) * r2d
+        lat = torch.atan2(z, _hypot(x, y)) * r2d
         return lon, lat
 
     def _spherical_rotation_optimized(
@@ -432,17 +376,11 @@ class _RotationMixin:
         phi: Tensor,
         theta: Tensor,
         native_type: str = "pole",
-        *,
-        allow_cpp_sphere: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         """Native -> celestial, honouring LONPOLE/LATPOLE exactly."""
         if self._celestial_postrot is None:
-            return self._spherical_rotation_optimized_base(
-                phi, theta, native_type, allow_cpp_sphere=allow_cpp_sphere
-            )
-        ra, dec = self._spherical_rotation_optimized_base(
-            phi, theta, native_type, allow_cpp_sphere=allow_cpp_sphere
-        )
+            return self._spherical_rotation_optimized_base(phi, theta, native_type)
+        ra, dec = self._spherical_rotation_optimized_base(phi, theta, native_type)
         return self._apply_celestial_postrot(ra, dec)
 
     def _inverse_spherical_rotation(
@@ -450,15 +388,8 @@ class _RotationMixin:
         ra: Tensor,
         dec: Tensor,
         native_type: str = "pole",
-        *,
-        allow_cpp_inverse_sphere: bool = True,
     ) -> Tuple[Tensor, Tensor]:
         """Celestial -> native, honouring LONPOLE/LATPOLE exactly."""
         if self._celestial_postrot is not None:
             ra, dec = self._apply_celestial_postrot(ra, dec, inverse=True)
-        return self._inverse_spherical_rotation_base(
-            ra,
-            dec,
-            native_type,
-            allow_cpp_inverse_sphere=allow_cpp_inverse_sphere,
-        )
+        return self._inverse_spherical_rotation_base(ra, dec, native_type)

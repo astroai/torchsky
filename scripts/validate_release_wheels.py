@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import zipfile
 from email.parser import Parser
@@ -11,17 +12,24 @@ from pathlib import Path
 
 from archive_safety import zip_safety_problems
 
-PYTHON_TAGS = ("cp312", "cp313", "cp314")
+# The native core uses the CPython stable ABI and no libtorch, so one cp312-abi3
+# wheel per platform serves every CPython >= 3.12 and every supported PyTorch.
+PYTHON_TAG = "cp312"
+ABI_TAG = "abi3"
 EXPECTED_CELLS = {
-    *((python, "manylinux", "x86_64") for python in PYTHON_TAGS),
-    *((python, "macosx_14_0", "arm64") for python in PYTHON_TAGS),
+    (PYTHON_TAG, "manylinux", "x86_64"),
+    (PYTHON_TAG, "macosx_14_0", "arm64"),
 }
-TORCH_REQUIREMENT = {">=2.14", "<2.15"}
-TORCHFITS_REQUIREMENT = {">=1.3.1"}
+SUPPORT_FILE = Path(__file__).resolve().parent / "torch_support.json"
 WHEEL_RE = re.compile(
-    r"^torchsky-(?P<version>[^-]+)-(?P<python>cp\d+)-(?P<abi>cp\d+)-"
+    r"^torchsky-(?P<version>[^-]+)-(?P<python>cp\d+)-(?P<abi>[a-z0-9]+)-"
     r"(?P<platform>[^-]+)\.whl$"
 )
+
+
+def _expected_requirements() -> tuple[set[str], set[str]]:
+    support = json.loads(SUPPORT_FILE.read_text(encoding="utf-8"))
+    return {f">={support['torch_min']}"}, {support["torchfits"]}
 
 
 def _field(message, name: str) -> str | None:
@@ -63,6 +71,9 @@ def validate(wheel_dir: Path, version: str) -> tuple[list[Path], list[str]]:
     wheels = sorted(wheel_dir.glob("*.whl"))
     problems: list[str] = []
     cells: list[tuple[str, str, str]] = []
+    torch_requirement_expected, torchfits_requirement_expected = (
+        _expected_requirements()
+    )
     if len(wheels) != len(EXPECTED_CELLS):
         problems.append(
             f"expected exactly {len(EXPECTED_CELLS)} wheels, found {len(wheels)}"
@@ -77,8 +88,10 @@ def validate(wheel_dir: Path, version: str) -> tuple[list[Path], list[str]]:
         platform = match.group("platform")
         if match.group("version") != version:
             problems.append(f"{wheel.name}: filename version is not {version}")
-        if abi != python:
-            problems.append(f"{wheel.name}: ABI tag {abi} does not match {python}")
+        if (python, abi) != (PYTHON_TAG, ABI_TAG):
+            problems.append(
+                f"{wheel.name}: tags {python}-{abi} are not {PYTHON_TAG}-{ABI_TAG}"
+            )
         cell = _cell(python, platform)
         if cell is None:
             problems.append(f"{wheel.name}: unexpected platform tag {platform}")
@@ -115,14 +128,20 @@ def validate(wheel_dir: Path, version: str) -> tuple[list[Path], list[str]]:
             problems.append(f"{wheel.name}: Requires-Python is not >=3.12")
         torch_requirement = _requirement(metadata, "torch")
         if torch_requirement is None or set(torch_requirement.split(",")) != (
-            TORCH_REQUIREMENT
+            torch_requirement_expected
         ):
-            problems.append(f"{wheel.name}: torch requirement is not >=2.14,<2.15")
+            problems.append(
+                f"{wheel.name}: torch requirement {torch_requirement!r} is not "
+                f"{','.join(sorted(torch_requirement_expected))}"
+            )
         fits_requirement = _requirement(metadata, "torchfits")
         if fits_requirement is None or set(fits_requirement.split(",")) != (
-            TORCHFITS_REQUIREMENT
+            torchfits_requirement_expected
         ):
-            problems.append(f"{wheel.name}: torchfits requirement is not >=1.3.1")
+            problems.append(
+                f"{wheel.name}: torchfits requirement {fits_requirement!r} is not "
+                f"{','.join(sorted(torchfits_requirement_expected))}"
+            )
         expected_tags = {
             f"{python}-{abi}-{platform_tag}" for platform_tag in platform.split(".")
         }

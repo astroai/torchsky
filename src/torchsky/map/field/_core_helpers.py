@@ -391,6 +391,14 @@ def _resolve_centroid_target_pixel_coordinates(
         torch.tensor(float(term.target_ra_deg), dtype=torch.float64),
         torch.tensor(float(term.target_dec_deg), dtype=torch.float64),
     )
+    if not bool(torch.isfinite(x_pix) & torch.isfinite(y_pix)):
+        raise ValueError(
+            "centroid anchor target "
+            f"(ra={float(term.target_ra_deg)!r}, dec={float(term.target_dec_deg)!r}) "
+            "has no pixel position in the observation WCS (for example beyond the "
+            "convergence region of a SIP or TPV inverse); use a target on or near "
+            "the detector, or provide target_x_pix and target_y_pix"
+        )
     return (
         _to(x_pix, device=device, dtype=dtype),
         _to(y_pix, device=device, dtype=dtype),

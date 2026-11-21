@@ -179,14 +179,8 @@ from .learned_kernel import (
     gaussian_kernel2d,
     gaussian_kernels_from_params,
 )
-from .magnification import (
-    ConvergenceMagnification,
-    MagnificationResidual,
-    magnification_bias,
-    magnify_flux,
-    scale_source_sizes,
-)
 from .mask_weight import load_image_observation_weight_map
+from .nested_kernel import NestedKernelPSF
 from .noise import (
     ExplicitNoiseOp,
     LearnedNoiseOp,
@@ -285,7 +279,23 @@ _LAZY_EXPORTS = {
 }
 
 
+# Lensing operators moved to the opt-in ``lensing`` module after 0.5.0; these
+# aliases are removed in 0.7. Never cached, so every access warns.
+_LENSING = "torchsky.map.operators.lensing"
+_DEPRECATED = {
+    "ConvergenceMagnification": (_LENSING, "ConvergenceMagnification"),
+    "MagnificationResidual": (_LENSING, "LearnedConvergenceCorrection"),
+    "magnification_bias": (_LENSING, "magnification_bias"),
+    "magnify_flux": (_LENSING, "magnify_flux"),
+    "scale_source_sizes": (_LENSING, "scale_source_sizes"),
+}
+
+
 def __getattr__(name: str) -> Any:
+    if name in _DEPRECATED:
+        from ..._deprecation import deprecated_attribute
+
+        return deprecated_attribute(__name__, name, _DEPRECATED[name])
     if name not in _LAZY_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attr_name = _LAZY_EXPORTS[name]
@@ -343,7 +353,6 @@ __all__ = [
     "ConditionedBackgroundField",
     "ConditionedKernelPSF",
     "ConstrainedKernelPSF",
-    "ConvergenceMagnification",
     "ExtendedResidualKernelPSF",
     "DEFAULT_LEARNED_OPERATOR_CONDITIONING",
     "LEARNED_OPERATOR_FAMILIES",
@@ -372,7 +381,6 @@ __all__ = [
     "LearnedGeometryOp",
     "LearnedInstrumentOperator",
     "LowRankChromaticPSF",
-    "MagnificationResidual",
     "LearnedNoiseOp",
     "LearnedOperatorManifest",
     "LearnedOperatorScaffold",
@@ -387,6 +395,7 @@ __all__ = [
     "MapResamplingKernel",
     "MapStackingMethod",
     "MapValueSemantics",
+    "NestedKernelPSF",
     "NoiseOp",
     "NuisanceCovariance",
     "NuisancePrecisionAdapter",
@@ -458,9 +467,6 @@ __all__ = [
     "gaussian_blur_variance",
     "gaussian_kernels_from_params",
     "gaussian_kernel2d",
-    "magnification_bias",
-    "magnify_flux",
-    "scale_source_sizes",
     "gaussian_kernel1d",
     "gaussian_student_t_mixture_nll",
     "gaussian_student_t_mixture_responsibilities",

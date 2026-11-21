@@ -7,8 +7,8 @@ import os
 if os.environ.get("TORCHSKY_DISABLE_CPP", "0") == "1":
     cpp = None
 else:
-    # Preload libtorch before the extension: PyPI torch wheels rely on the
-    # already-loaded libtorch symbols rather than an RPATH for the extension.
+    # The extension itself is torch-free; torch is imported first because
+    # loading it registers the torch.ops.torchsky operators.
     import torch  # noqa: F401
 
     try:

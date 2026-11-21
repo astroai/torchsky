@@ -1,38 +1,19 @@
 #pragma once
 
-#if defined(__has_include)
-#if __has_include(<torch/torch.h>)
-#include <torch/torch.h>
-#else
-#include <ATen/ATen.h>
+// Kernels written against libtorch's spelling (torch::Tensor, at::parallel_for,
+// c10::complex, TORCH_CHECK) compile against the torch-free core instead: inside
+// namespace torchsky these names resolve to torchsky::native. Nothing here
+// includes or links libtorch, so the extension works with any PyTorch version.
 
-namespace torch {
-using Tensor = at::Tensor;
-using TensorOptions = at::TensorOptions;
-using ScalarType = at::ScalarType;
+#include "torchsky/native.h"
 
-using at::empty;
-using at::empty_like;
-using at::from_blob;
+namespace torchsky {
+namespace torch = ::torchsky::native;
+namespace at = ::torchsky::native;
+namespace c10 {
+template <typename T>
+using complex = std::complex<T>;
+}  // namespace c10
+}  // namespace torchsky
 
-using at::kBool;
-using at::kByte;
-using at::kShort;
-using at::kInt;
-using at::kLong;
-using at::kHalf;
-using at::kFloat;
-using at::kDouble;
-using at::kBFloat16;
-
-constexpr auto kUInt8 = at::kByte;
-constexpr auto kInt16 = at::kShort;
-constexpr auto kInt32 = at::kInt;
-constexpr auto kInt64 = at::kLong;
-constexpr auto kFloat32 = at::kFloat;
-constexpr auto kFloat64 = at::kDouble;
-} // namespace torch
-#endif
-#else
-#include <torch/torch.h>
-#endif
+#define TORCH_CHECK(cond, ...) TS_CHECK(cond, __VA_ARGS__)

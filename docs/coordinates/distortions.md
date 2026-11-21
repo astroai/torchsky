@@ -241,6 +241,57 @@ When both lists are sky positions, use
 in a local gnomonic plane. A full astrometric solution across many exposures
 is [`solve_astrometry`](../reference/wcs.md#torchsky.wcs.solve_astrometry).
 
+### Add the Distortion a Count-Rate File Lacks
+
+JWST count-rate (`_rate`) files carry only a plain tangent-plane WCS and the pointing
+keywords `V2_REF`, `V3_REF`, `RA_REF`, `DEC_REF`, `ROLL_REF`, `VPARITY` and `V3I_YANG`;
+the pipeline adds the detector distortion later from reference files. Supply the
+distortion yourself with the standard SIAF construction. A polynomial maps zero-based
+science pixels to the ideal frame (arcsec), a rotation by `V3IdlYAngle` and the parity
+maps that to the telescope frame (V2, V3), and an exact spherical attitude maps it to the
+sky. Coefficients are plain tensors in SIAF order (`Sci2IdlX{i}{j}`, flattened as
+`a00, a10, a11, a20, ...`), and `x_sci_ref`/`y_sci_ref` are the one-based SIAF
+`XSciRef`/`YSciRef`. torchsky ships no calibration data, so read the coefficients from
+`pysiaf` or the SIAF files. The result has `pixel_to_world` and `world_to_pixel`, so it can be
+passed as `FieldObservation.detector_to_sky`. Coefficients and a pointing and roll
+correction can be made learnable with `learnable=True`.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.wcs import TelescopeFrameDetectorToSky
+
+# Pointing keywords of a JWST NIRCam NRCB1 count-rate SCI header; the header itself
+# carries no distortion.
+header = {
+    "NAXIS1": 2048, "NAXIS2": 2048,
+    "V2_REF": -122.427986, "V3_REF": -457.706754,
+    "RA_REF": 110.8745219187291, "DEC_REF": -73.45405756551722,
+    "ROLL_REF": 144.93904872291884, "VPARITY": -1, "V3I_YANG": 0.34481904,
+}
+# SIAF science-to-ideal coefficients (arcsec), truncated to degree 2, in SIAF order
+# a00, a10, a11, a20, a21, a22; x_sci_ref and y_sci_ref are SIAF one-based pixels.
+sci2idl_x = [0.0, 0.030698752454, 0.0, 3.7396187387e-09, -1.6280585258e-07, 3.5716671727e-08]
+sci2idl_y = [0.0, 4.0713505991e-05, 0.030793495171, 8.6111644609e-08, -3.6689711148e-08, -7.7637950438e-08]
+to_sky = TelescopeFrameDetectorToSky.from_header(
+    header, sci2idl_x, sci2idl_y, x_sci_ref=1024.5, y_sci_ref=1024.5
+)
+
+x = torch.tensor([0.0, 1023.5, 2047.0], dtype=torch.float64)
+y = torch.tensor([0.0, 1023.5, 2047.0], dtype=torch.float64)
+ra, dec = to_sky.pixel_to_world(x, y)  # zero-based pixels -> degrees
+back_x, back_y = to_sky.world_to_pixel(ra, dec)
+
+# The aperture reference pixel lands on RA_REF, DEC_REF; the inverse recovers the pixels.
+assert abs(float(ra[1]) - header["RA_REF"]) < 1e-9
+assert abs(float(dec[1]) - header["DEC_REF"]) < 1e-9
+assert torch.allclose(back_x, x, atol=1e-6) and torch.allclose(back_y, y, atol=1e-6)
+```
+
+Use `float64` pixels for astrometry: a `float32` result at RA 110 degrees is only good to
+about 30 mas.
+
 ## When Headers Lie
 
 `CTYPE` is authoritative, as the FITS standard and the SIP convention

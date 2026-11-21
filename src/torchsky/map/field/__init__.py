@@ -11,6 +11,8 @@ Submodules
     :data:`FIELD_MODEL_KINDS` tuple derived from :class:`FieldModelKind`.
 ``observation_builders``
     :class:`FieldObservation` factories for binned spectra, IFU cubes, and energy channels.
+``exposure_io``
+    :func:`field_observation_from_exposure_file`: one exposure file to one :class:`FieldObservation`.
 ``implicit_forward``
     Forward-model shell (context ``c``, kinematics ``ζ``, modular survey losses); see ``docs/models/fields.md``."""
 
@@ -218,6 +220,10 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
         "field_observations_from_ifu_cube",
     ),
     "make_tangent_plane_header": (".observation_builders", "make_tangent_plane_header"),
+    "field_observation_from_exposure_file": (
+        ".exposure_io",
+        "field_observation_from_exposure_file",
+    ),
     "FIELD_MODEL_PRESET_NAMES": (".presets", "FIELD_MODEL_PRESET_NAMES"),
     "FIELD_MODEL_PRESETS": (".presets", "FIELD_MODEL_PRESETS"),
     "FieldModelPreset": (".presets", "FieldModelPreset"),
@@ -298,19 +304,19 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "solve_joint_multiband_grid_cg": (".inverse", "solve_joint_multiband_grid_cg"),
     "solve_linear_band_grid_cg": (".inverse", "solve_linear_band_grid_cg"),
     "solve_linear_band_grid_lsqr": (".inverse", "solve_linear_band_grid_lsqr"),
-    "NativeIntegratedReadLikelihood": (
-        ".native_integrated_read",
-        "NativeIntegratedReadLikelihood",
+    "SourceQuadratureReadLikelihood": (
+        ".source_quadrature_read",
+        "SourceQuadratureReadLikelihood",
     ),
-    "bind_native_integrated_read_likelihood": (
-        ".native_integrated_read",
-        "bind_native_integrated_read_likelihood",
+    "bind_source_quadrature_read_likelihood": (
+        ".source_quadrature_read",
+        "bind_source_quadrature_read_likelihood",
     ),
 }
 
 __all__ = [
-    "NativeIntegratedReadLikelihood",
-    "bind_native_integrated_read_likelihood",
+    "SourceQuadratureReadLikelihood",
+    "bind_source_quadrature_read_likelihood",
     "FIELD_MODEL_KINDS",
     "FIELD_MODEL_PRESET_NAMES",
     "FIELD_MODEL_PRESETS",
@@ -371,6 +377,7 @@ __all__ = [
     "field_observations_from_bin_centers",
     "field_observations_from_bin_edges",
     "field_observations_from_ifu_cube",
+    "field_observation_from_exposure_file",
     "field_image_quality_metrics",
     "field_image_residual_product",
     "field_quality_scorecard",
@@ -490,7 +497,24 @@ __all__ = [
 ]
 
 
+# Renamed after 0.5.0; removed in 0.7. Never cached, so every access warns.
+_DEPRECATED: dict[str, tuple[str, str]] = {
+    "NativeIntegratedReadLikelihood": (
+        "torchsky.map.field.source_quadrature_read",
+        "SourceQuadratureReadLikelihood",
+    ),
+    "bind_native_integrated_read_likelihood": (
+        "torchsky.map.field.source_quadrature_read",
+        "bind_source_quadrature_read_likelihood",
+    ),
+}
+
+
 def __getattr__(name: str) -> Any:
+    if name in _DEPRECATED:
+        from ..._deprecation import deprecated_attribute
+
+        return deprecated_attribute(__name__, name, _DEPRECATED[name])
     try:
         module_name, attribute = _EXPORTS[name]
     except KeyError as exc:

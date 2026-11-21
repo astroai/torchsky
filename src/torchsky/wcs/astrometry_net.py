@@ -14,8 +14,6 @@ from typing import Any, Literal, Mapping, Sequence
 
 import torch
 from torch import Tensor
-from torchfits import read_header
-from torchfits.table import read_torch, write as write_table
 
 from .astrometry import (
     AstrometricMatchGraph,
@@ -326,6 +324,8 @@ def _run(
 
 
 def _read_columns(path: Path) -> dict[str, Tensor]:
+    from torchfits.table import read_torch
+
     table = read_torch(str(path), hdu=1)
     if not isinstance(table, Mapping):
         raise AstrometryNetExecutionError(
@@ -353,6 +353,8 @@ def _scalar(columns: Mapping[str, Tensor], name: str, path: Path) -> float:
 
 
 def _parse_hypothesis(wcs_path: Path, match_path: Path) -> AstrometryNetHypothesis:
+    from torchfits import read_header
+
     header = dict(read_header(str(wcs_path), hdu=0))
     required = (
         "CRVAL1",
@@ -498,6 +500,8 @@ def _write_xyls(
     }
     if flux is not None:
         columns["FLUX"] = flux.index_select(0, ordered)
+    from torchfits.table import write as write_table
+
     write_table(str(path), columns, overwrite=True, extname="XYLS")
     return ordered
 
@@ -735,6 +739,8 @@ def solve_with_astrometry_net(
             purpose="held-out verification",
         )
         _solved(verify_solved, "held-out verification")
+        from torchfits import read_header
+
         verification_header = dict(read_header(str(verify_wcs), hdu=0))
         if not _same_hypothesis(hypothesis.header, verification_header):
             raise AstrometryNetHypothesisRejected(

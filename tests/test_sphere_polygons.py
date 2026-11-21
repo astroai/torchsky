@@ -4,27 +4,27 @@ import numpy as np
 import torch
 import pytest
 
+from torchsky.sphere.core import lonlat_to_unit_xyz
 from torchsky.sphere.geom import (
     PixelizedRegion,
     SphericalMultiPolygon,
     SphericalPolygon,
+    _signed_area_triangle,
+    convex_polygon_contains,
     query_polygon_general,
     spherical_polygon_area,
     spherical_polygon_contains,
     spherical_polygons_intersect,
     spherical_polygon_signed_area,
+    spherical_triangle_area,
 )
 from torchsky.sphere import healpix as hp
 
 
 def _has_cpp_geom() -> bool:
-    try:
-        from torchsky._native import cpp as _cpp_mod  # type: ignore
-    except Exception:
-        return False
-    return hasattr(_cpp_mod, "_sphere_planar_point_in_polygon_cpu") and hasattr(
-        _cpp_mod, "_sphere_arc_intersections_matrix_cpu"
-    )
+    from torchsky import _ops
+
+    return _ops.has_fixed_dispatcher()
 
 
 def _concave_polygon() -> tuple[torch.Tensor, torch.Tensor]:
@@ -135,6 +135,59 @@ def test_spherical_polygons_intersect_cuda_or_mps_matches_cpu() -> None:
     )
 
 
+def _arcsec_square(half_arcsec: float) -> tuple[list[float], list[float]]:
+    a = half_arcsec / 3600.0
+    c_lon, c_lat = 123.4, 45.6
+    return (
+        [c_lon - a, c_lon + a, c_lon + a, c_lon - a],
+        [c_lat - a, c_lat - a, c_lat + a, c_lat + a],
+    )
+
+
+def test_float32_small_polygon_edge_normals_and_areas() -> None:
+    # Cross products of nearly parallel float32 unit vectors lose the edge
+    # plane (relative error ~eps / angle); difference forms keep it.
+    lon, lat = _arcsec_square(10.0)
+    a, c_lat = 10.0 / 3600.0, 45.6
+    e = 2.0 / 3600.0
+    q_lon = torch.tensor(
+        [123.4, 123.4, 123.4 + (a + e) / math.cos(math.radians(c_lat)), 123.4],
+        dtype=torch.float32,
+    )
+    q_lat = torch.tensor([c_lat, c_lat + a + e, c_lat, c_lat - a - e])
+    got = convex_polygon_contains(
+        q_lon,
+        q_lat,
+        torch.tensor(lon, dtype=torch.float32),
+        torch.tensor(lat, dtype=torch.float32),
+    )
+    assert got.tolist() == [True, False, False, False]
+
+    v64 = lonlat_to_unit_xyz(
+        torch.tensor(lon[:3], dtype=torch.float64),
+        torch.tensor(lat[:3], dtype=torch.float64),
+    )
+    ref = float(_signed_area_triangle(v64[0], v64[1], v64[2]))
+    v32 = v64.to(torch.float32)
+    tri32 = float(_signed_area_triangle(v32[0], v32[1], v32[2]))
+    np.testing.assert_allclose(tri32, ref, rtol=1e-2)
+
+
+def test_float32_small_polygon_area_and_intersect_on_accelerator() -> None:
+    device = _geom_accel_device()
+    if device is None or device.type != "mps":
+        pytest.skip("no MPS device (float32-only geometry)")
+    lon, lat = _arcsec_square(10.0)
+    ref = float(spherical_polygon_area(lon, lat))
+    lon_t = torch.tensor(lon, dtype=torch.float32, device=device)
+    lat_t = torch.tensor(lat, dtype=torch.float32, device=device)
+    np.testing.assert_allclose(
+        float(spherical_polygon_area(lon_t, lat_t)), ref, rtol=1e-2
+    )
+    shifted = lon_t + 3.0 * (10.0 / 3600.0) / math.cos(math.radians(45.6))
+    assert not spherical_polygons_intersect(lon_t, lat_t, shifted, lat_t)
+
+
 def test_spherical_polygon_pixel_boolean_ops() -> None:
     nside = 32
     lon1 = torch.tensor([0.0, 25.0, 25.0, 0.0], dtype=torch.float64)
@@ -212,6 +265,51 @@ def test_spherical_polygon_area_units() -> None:
     deg2 = spherical_polygon_area(lon, lat, degrees=True)
     np.testing.assert_allclose(
         float(deg2), float(sr) * (180.0 / math.pi) ** 2, atol=1e-10, rtol=0.0
+    )
+
+
+@pytest.mark.parametrize(
+    ("lat", "expected_sr"),
+    [
+        # spherical_geometry 1.4.0 SphericalPolygon.from_radec(...).area()
+        (10.0, 4.530220847705046),
+        (30.0, 2.000839033510993),
+        (60.0, 0.38642296769561213),
+    ],
+)
+def test_spherical_triangle_area_above_pi_steradians(
+    lat: float, expected_sr: float
+) -> None:
+    # Triangles larger than pi sr have a negative Van Oosterom-Strackee
+    # denominator; clamping it capped the area at pi.
+    tri = spherical_triangle_area(0.0, lat, 120.0, lat, 240.0, lat)
+    poly = spherical_polygon_area([0.0, 120.0, 240.0], [lat] * 3)
+    np.testing.assert_allclose(float(tri), expected_sr, rtol=1e-12)
+    np.testing.assert_allclose(float(poly), expected_sr, rtol=1e-12)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_spherical_polygon_contains_beyond_one_hemisphere(reverse: bool) -> None:
+    # A 300-degree equatorial band: its vertices are not in one hemisphere, so
+    # the gnomonic path does not apply. A point whose antipode is also inside
+    # the band used to be reported outside (and vice versa).
+    lon = [0.0, 100.0, 200.0, 300.0, 300.0, 200.0, 100.0, 0.0]
+    lat = [-10.0, -10.0, -10.0, -10.0, 10.0, 10.0, 10.0, 10.0]
+    if reverse:
+        lon, lat = lon[::-1], lat[::-1]
+    q_lon = torch.tensor([150.0, 50.0, 250.0, 330.0, 0.0, 0.0, 100.0, 100.0])
+    q_lat = torch.tensor([0.0, 0.0, 0.0, 0.0, 80.0, -80.0, 9.9, 10.5])
+    # spherical_geometry 1.4.0 from_radec(..., center=(150, 0)).contains_lonlat
+    expected = [True, True, True, False, False, False, True, False]
+    got = spherical_polygon_contains(q_lon, q_lat, lon, lat, inclusive=False)
+    assert got.tolist() == expected
+    flipped = spherical_polygon_contains(
+        q_lon, q_lat, lon, lat, inclusive=False, inside_lon_deg=0.0, inside_lat_deg=80.0
+    )
+    assert flipped.tolist() == [not e for e in expected]
+    # spherical_geometry 1.4.0 area of the same band (steradians).
+    np.testing.assert_allclose(
+        float(spherical_polygon_area(lon, lat)), 2.4487829252326954, rtol=1e-12
     )
 
 
@@ -499,7 +597,7 @@ def test_python_geometry_predicates_return_non_differentiable_bools(
     not _has_cpp_geom(), reason="C++ sphere geometry kernels unavailable"
 )
 def test_cpp_geometry_predicates_reject_invalid_tolerances() -> None:
-    from torchsky._native import cpp as cpp
+    ops = torch.ops.torchsky
 
     points = torch.tensor([[0.0, 0.0]], dtype=torch.float64)
     polygon = torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=torch.float64)
@@ -507,6 +605,48 @@ def test_cpp_geometry_predicates_reject_invalid_tolerances() -> None:
     arc1 = torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float64)
 
     with pytest.raises(RuntimeError, match="finite and nonnegative"):
-        cpp._sphere_planar_point_in_polygon_cpu(points, polygon, -1.0)
+        ops.sphere_planar_point_in_polygon(points, polygon, -1.0)
     with pytest.raises(RuntimeError, match="finite and nonnegative"):
-        cpp._sphere_arc_intersections_matrix_cpu(arc0, arc1, arc0, arc1, math.inf)
+        ops.sphere_arc_intersections_matrix(arc0, arc1, arc0, arc1, math.inf)
+
+
+def test_python_float_and_list_geometry_inputs_stay_float64() -> None:
+    from torchsky.sphere.geom import _as_geom_tensor
+
+    assert float(_as_geom_tensor(123.4)) == 123.4
+    assert _as_geom_tensor([123.4, -45.6]).tolist() == [123.4, -45.6]
+    # A point 1 mas inside the edge of a list-defined polygon.
+    edge = 10.0 + 1.0 / 3.6e6
+    assert bool(
+        spherical_polygon_contains(
+            edge, 5.0, [10.0, 20.0, 20.0, 10.0], [0.0, 0.0, 10.0, 10.0], inclusive=False
+        )
+    )
+
+
+def test_convex_polygon_contains_list_inputs_keep_float64() -> None:
+    # List vertices and Python-float points used to be rounded to float32
+    # (~14 mas at lon 123), misclassifying points a few mas from an edge.
+    west = 123.456789
+    lon = [west, west + 1.0, west + 1.0, west]
+    lat = [-45.6, -45.6, -44.6, -44.6]
+    mas = 1.0 / 3.6e6
+    inside = convex_polygon_contains(west + 3 * mas, -45.1, lon, lat, atol=0.0)
+    outside = convex_polygon_contains(west - 3 * mas, -45.1, lon, lat, atol=0.0)
+    assert bool(inside) and not bool(outside)
+
+
+def test_spherical_ellipse_python_float_centre_keeps_float64() -> None:
+    from torchsky.sphere.geom import SphericalEllipse
+
+    # The focal points were built from float32 copies of the Python-float
+    # centre (~7 mas error), misclassifying points mas from the boundary.
+    lon0, lat0 = 123.456789, -45.678901
+    mas = 1.0 / 3.6e6
+    ellipse = SphericalEllipse(lon0, lat0, 0.5, 0.2, pa_deg=0.0)
+    # With pa=0 the major-axis vertex lies on the meridian at lat0 + 0.5.
+    lon = torch.tensor([lon0, lon0], dtype=torch.float64)
+    lat = torch.tensor(
+        [lat0 + 0.5 - 3 * mas, lat0 + 0.5 + 3 * mas], dtype=torch.float64
+    )
+    assert ellipse.contains(lon, lat).tolist() == [True, False]

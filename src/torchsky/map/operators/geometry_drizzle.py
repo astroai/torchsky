@@ -5,9 +5,10 @@ from __future__ import annotations
 import os
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
-from ...device import _as_tensor, require_float64
+from ...device import require_float64
 
 _DRIZZLE_BOUNDARY_EPS = 1.0e-4
 # Candidate (quad, box) pairs evaluated per tensor batch.  The CPU limit keeps the working
@@ -258,6 +259,7 @@ def _quadrilateral_areas_and_validity(
     return areas, valid
 
 
+@torch.compiler.disable(recursive=True)
 def _scatter_add_ordered(
     targets: list[Tensor],
     index: Tensor,
@@ -273,6 +275,8 @@ def _scatter_add_ordered(
     summed sequentially (``segment_reduce``, no atomics) and added to the target once
     per index, which fixes the summation order.  Other devices use ``scatter_add_``
     (serial on CPU, hence already deterministic).  ``ordered`` forces either path.
+    Always eager (also under ``torch.compile``), so compiled callers keep this
+    summation order.
     """
     if ordered is None:
         ordered = index.device.type == "cuda"
@@ -377,23 +381,41 @@ def _accumulate_quadrilateral_overlaps(
                 "projected source footprint is self-intersecting, non-convex, or degenerate"
             )
         return
-    finite = torch.isfinite(quad_x).all(dim=1) & torch.isfinite(quad_y).all(dim=1)
-    if not bool(finite.all()):
-        quad_x = quad_x[finite]
-        quad_y = quad_y[finite]
-        quad_numer = quad_numer[finite]
-        quad_weight = quad_weight[finite]
-        if quad_x.numel() == 0:
-            return
+    _accumulate_overlap_tiles(
+        quad_x,
+        quad_y,
+        quad_numer,
+        quad_weight,
+        width=width,
+        height=height,
+        flat_numer=flat_numer,
+        flat_weight=flat_weight,
+        flat_variance_weight=flat_variance_weight,
+        pad_tiles=torch.compiler.is_compiling(),
+    )
+
+
+def _quad_candidate_ranges(
+    quad_x: Tensor,
+    quad_y: Tensor,
+    *,
+    width: int,
+    height: int,
+    differentiable: bool,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Per-quad candidate pixel ranges (fixed shape; traces with ``fullgraph=True``).
+
+    Returns ``(areas, min_x, min_y, nx, starts, ends, resolution, summary)`` where
+    candidate pairs ``starts[q] <= p < ends[q]`` of quad ``q`` enumerate its
+    ``nx``-wide candidate box row-major from ``(min_x, min_y)``, and ``summary``
+    holds ``(pair count, invalid footprints)`` for one host read.
+    """
     areas, valid_footprints = _quadrilateral_areas_and_validity(quad_x, quad_y)
     # Pixel i covers [i - 0.5, i + 0.5].  Boxes that only touch the bounding box have
     # zero overlap, so the value-only candidate range is the open overlap with
     # [min, max].  Under autograd the touching boxes are candidates too: the overlap
     # is a kinked function of the vertices exactly at pixel-aligned geometry, and the
     # touching boxes carry the other half of the boundary sub-gradient.
-    differentiable = torch.is_grad_enabled() and any(
-        t.requires_grad for t in (quad_x, quad_y, quad_numer, quad_weight)
-    )
     lo_x = quad_x.min(dim=1).values - 0.5
     hi_x = quad_x.max(dim=1).values + 0.5
     lo_y = quad_y.min(dim=1).values - 0.5
@@ -428,89 +450,182 @@ def _accumulate_quadrilateral_overlaps(
     )
     resolution = 16.0 * torch.finfo(quad_x.dtype).eps * coordinate_scale * extent
     ends = torch.cumsum(counts, dim=0)
-    summary = torch.stack((ends[-1], (~valid_footprints).sum())).tolist()
-    pair_count = int(summary[0])
-    if int(summary[1]) > 0:
+    summary = torch.stack((ends[-1], (~valid_footprints).sum()))
+    return areas, min_x, min_y, nx, ends - counts, ends, resolution, summary
+
+
+def _overlap_pair_tile(
+    quad_x: Tensor,
+    quad_y: Tensor,
+    areas: Tensor,
+    min_x: Tensor,
+    min_y: Tensor,
+    nx: Tensor,
+    starts: Tensor,
+    ends: Tensor,
+    resolution: Tensor,
+    pair_ids: Tensor,
+    owners: Tensor,
+    *,
+    width: int,
+    differentiable: bool,
+    masked: bool,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Overlap coefficients of the candidate pairs ``pair_ids`` (fixed shape).
+
+    ``owners`` is the quad of each pair (the ragged expansion is done by the
+    caller).  Returns ``(output_index, coefficients, keep)``: flat target pixel,
+    overlap area over quad area (float32), and which pairs contribute.  With
+    ``masked`` (padded tiles) pairs at or past the pair count are dropped too,
+    and dropped pairs get a zero coefficient at pixel 0, so all pairs can be
+    scattered without compaction.  Traces with ``fullgraph=True``.
+    """
+    local = pair_ids - starts[owners]
+    owner_nx = nx[owners]
+    if masked:
+        # Owners of real pairs have nx >= 1; the clamp only guards padded pairs.
+        owner_nx = owner_nx.clamp(min=1)
+    center_x = min_x[owners] + torch.remainder(local, owner_nx)
+    center_y = min_y[owners] + torch.div(local, owner_nx, rounding_mode="floor")
+    centers = torch.stack((center_x, center_y), dim=1).to(quad_x.dtype)
+    overlaps = _batch_quads_pixel_areas(quad_x[owners], quad_y[owners], centers)
+    overlap_valid = overlaps > resolution[owners]
+    if differentiable:
+        # Grazing contacts add exactly zero to the maps but keep their sub-gradient.
+        overlaps = torch.where(overlap_valid, overlaps, overlaps - overlaps.detach())
+        overlap_valid = torch.ones_like(overlap_valid)
+    output_index = center_y * width + center_x
+    coefficients = (overlaps / areas[owners]).to(dtype=torch.float32)
+    if not masked:
+        return output_index, coefficients, overlap_valid
+    keep = overlap_valid & (pair_ids < ends[-1])
+    output_index = torch.where(keep, output_index, torch.zeros_like(output_index))
+    coefficients = torch.where(keep, coefficients, torch.zeros_like(coefficients))
+    return output_index, coefficients, keep
+
+
+@torch.compiler.disable(recursive=False)
+def _accumulate_overlap_tiles(
+    quad_x: Tensor,
+    quad_y: Tensor,
+    quad_numer: Tensor,
+    quad_weight: Tensor,
+    *,
+    width: int,
+    height: int,
+    flat_numer: Tensor,
+    flat_weight: Tensor,
+    flat_variance_weight: Tensor | None,
+    pad_tiles: bool,
+) -> None:
+    """Torch overlap accumulation: eager driver around fixed-shape compiled pieces.
+
+    Host decisions (finite-footprint compaction, the pair count, the invalid
+    footprint check, the tile loop and the scatter) run eagerly; it is skipped by
+    ``torch.compile``, which compiles :func:`_quad_candidate_ranges` and one
+    :func:`_overlap_pair_tile` graph reused by every tile.  Under compilation
+    (``pad_tiles``) the last tile is padded to the common length and its masked
+    pairs are scattered with zero values; eager calls compact the kept pairs.
+    The scatter stays eager and ordered, so the summation order is the same
+    with and without compilation.
+    """
+    finite = torch.isfinite(quad_x).all(dim=1) & torch.isfinite(quad_y).all(dim=1)
+    if not bool(finite.all()):
+        quad_x = quad_x[finite]
+        quad_y = quad_y[finite]
+        quad_numer = quad_numer[finite]
+        quad_weight = quad_weight[finite]
+        if quad_x.numel() == 0:
+            return
+    differentiable = torch.is_grad_enabled() and any(
+        t.requires_grad for t in (quad_x, quad_y, quad_numer, quad_weight)
+    )
+    areas, min_x, min_y, nx, starts, ends, resolution, summary = _quad_candidate_ranges(
+        quad_x, quad_y, width=width, height=height, differentiable=differentiable
+    )
+    pair_count, n_invalid = (int(v) for v in summary.tolist())
+    if n_invalid > 0:
         raise ValueError(
             "projected source footprint is self-intersecting, non-convex, or degenerate"
         )
     if pair_count == 0:
         return
-    starts = ends - counts
     pair_chunk = (
         _MAX_OVERLAP_CANDIDATE_PAIRS
         if quad_x.device.type == "cpu"
         else _MAX_OVERLAP_CANDIDATE_PAIRS_ACCELERATOR
     )
+    tile = _padded_tile_length(pair_count, pair_chunk) if pad_tiles else pair_chunk
+    device = quad_x.device
+    quad_ids = torch.arange(quad_x.shape[0], dtype=torch.int64, device=device)
+    targets = [flat_numer, flat_weight]
+    if flat_variance_weight is not None:
+        targets.append(flat_variance_weight)
     for pair_start in range(0, pair_count, pair_chunk):
         pair_stop = min(pair_start + pair_chunk, pair_count)
         if pair_start == 0 and pair_stop == pair_count:
             owners = torch.repeat_interleave(
-                torch.arange(quad_x.shape[0], dtype=torch.int64, device=quad_x.device),
-                counts,
+                quad_ids, ends - starts, output_size=pair_count
             )
         else:
-            first_owner = int(
-                torch.searchsorted(
+            # Quads overlapping [pair_start, pair_stop), with their counts clipped.
+            first, last = (
+                int(v)
+                for v in torch.searchsorted(
                     ends,
-                    torch.tensor(pair_start, dtype=torch.int64, device=quad_x.device),
+                    torch.tensor([pair_start, pair_stop - 1], device=device),
                     right=True,
-                ).item()
+                ).tolist()
             )
-            last_owner = int(
-                torch.searchsorted(
-                    ends,
-                    torch.tensor(
-                        pair_stop - 1, dtype=torch.int64, device=quad_x.device
-                    ),
-                    right=True,
-                ).item()
+            owner_ids = quad_ids[first : last + 1]
+            clipped = ends[owner_ids].clamp(max=pair_stop) - starts[owner_ids].clamp(
+                min=pair_start
             )
-            owner_ids = torch.arange(
-                first_owner,
-                last_owner + 1,
-                dtype=torch.int64,
-                device=quad_x.device,
+            owners = torch.repeat_interleave(
+                owner_ids, clipped, output_size=pair_stop - pair_start
             )
-            selected_starts = torch.maximum(
-                starts[owner_ids],
-                _as_tensor(pair_start, dtype=torch.int64, device=quad_x.device),
-            )
-            selected_ends = torch.minimum(
-                ends[owner_ids],
-                _as_tensor(pair_stop, dtype=torch.int64, device=quad_x.device),
-            )
-            owners = torch.repeat_interleave(owner_ids, selected_ends - selected_starts)
-        pair_ids = torch.arange(
-            pair_start,
-            pair_stop,
-            dtype=torch.int64,
-            device=quad_x.device,
+        length = tile if pad_tiles else pair_stop - pair_start
+        pair_ids = torch.arange(pair_start, pair_start + length, device=device)
+        if length > pair_stop - pair_start:
+            owners = F.pad(owners, (0, length - (pair_stop - pair_start)))
+        output_index, coefficients, keep = _overlap_pair_tile(
+            quad_x,
+            quad_y,
+            areas,
+            min_x,
+            min_y,
+            nx,
+            starts,
+            ends,
+            resolution,
+            pair_ids,
+            owners,
+            width=width,
+            differentiable=differentiable,
+            masked=pad_tiles,
         )
-        local = pair_ids - starts[owners]
-        owner_nx = nx[owners]
-        center_x = min_x[owners] + torch.remainder(local, owner_nx)
-        center_y = min_y[owners] + torch.div(local, owner_nx, rounding_mode="floor")
-        centers = torch.stack((center_x, center_y), dim=1).to(quad_x.dtype)
-        overlaps = _batch_quads_pixel_areas(quad_x[owners], quad_y[owners], centers)
-        overlap_valid = overlaps > resolution[owners]
-        if differentiable:
-            # Grazing contacts add exactly zero to the maps but keep their sub-gradient.
-            overlaps = torch.where(
-                overlap_valid, overlaps, overlaps - overlaps.detach()
-            )
-            overlap_valid = overlaps.new_ones(overlaps.shape, dtype=torch.bool)
-        if not bool(overlap_valid.any()):
-            continue
-        owners = owners[overlap_valid]
-        output_index = center_y[overlap_valid] * width + center_x[overlap_valid]
-        coefficients = (overlaps[overlap_valid] / areas[owners]).to(dtype=torch.float32)
-        targets = [flat_numer, flat_weight]
-        values = [quad_numer[owners] * coefficients, quad_weight[owners] * coefficients]
+        if not pad_tiles:
+            if not bool(keep.any()):
+                continue
+            owners = owners[keep]
+            output_index = output_index[keep]
+            coefficients = coefficients[keep]
+        weight = quad_weight[owners]
+        values = [quad_numer[owners] * coefficients, weight * coefficients]
         if flat_variance_weight is not None:
-            targets.append(flat_variance_weight)
-            values.append(quad_weight[owners] * torch.square(coefficients))
+            values.append(weight * torch.square(coefficients))
         _scatter_add_ordered(targets, output_index, values)
+
+
+def _padded_tile_length(count: int, chunk: int) -> int:
+    """Tile length that every tile of ``count`` items is padded to under compilation.
+
+    Several tiles share ``chunk``; a single tile is rounded up to a power of two,
+    so the set of compiled shapes stays logarithmic in the problem size.
+    """
+    if count >= chunk:
+        return chunk
+    return min(chunk, 1 << max(count - 1, 0).bit_length())
 
 
 def exact_square_drizzle_project(

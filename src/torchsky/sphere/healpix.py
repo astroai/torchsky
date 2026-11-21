@@ -8,25 +8,26 @@ from .._dtype import work_dtype as _float_dtype_for_device
 from torch import Tensor
 
 from ._healpix_scheme import (  # noqa: F401
-    _CAP_START_CACHE,
     _FACE_CONST_CACHE,
     _JPLL,
     _JRLL,
-    _MAX_PIXEL_RADIUS_CACHE,
     _NB_FACEARRAY,
     _NB_SWAPARRAY,
     _NB_XOFFSET,
     _NB_YOFFSET,
     _as_float64,
     _as_int64,
-    _cap_ring_starts,
+    _pix2ring_coords,
+    _ring_theta_lat,
     _face_consts,
+    _host_checks_enabled,
     _isqrt,
     _nest2xyf,
     _pix2thetaphi_ring,
     _ring2xyf,
     _validate_lonlat,
     _validate_nside,
+    _validate_pixels,
     _xyf2nest,
     _xyf2ring,
 )
@@ -44,9 +45,13 @@ from ._healpix_query_support import (  # noqa: F401
     _query_disc_nest_ranges,
     _ranges_to_sorted_pixels,
     _resolve_dtype,
+    _padded_band_rings,
     _ring_above,
     _ring_pixels_colatitude_band,
+    _ring_range_pixels,
+    _ring_ranges_nest_pixels,
     _strip_nest_pixels,
+    _strip_rings,
 )
 from ..device import _as_tensor
 
@@ -80,6 +85,94 @@ def compact_bits(x: Tensor) -> Tensor:
     return x
 
 
+def _lonlat_zt(ra: Tensor, dec: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    """``(z, tt, cap)`` of HEALPix ``ang2pix`` for lon/lat in degrees.
+
+    ``z = sin(lat)``, ``tt = 2 phi / pi`` in ``[0, 4)`` and
+    ``cap = nside_free * sqrt(3 (1 - |z|))``. ``1 - |z|`` is evaluated as
+    ``2 sin^2(colat / 2)`` with ``colat = 90 - |lat|``: the difference
+    ``1 - |sin(lat)|`` cancels next to the poles and moved order-29 points
+    several rings (healpy switches to ``sin(theta)`` there for the same
+    reason).
+    """
+    z = torch.sin(torch.deg2rad(dec))
+    tt = torch.remainder(torch.deg2rad(ra), 2.0 * math.pi) * (2.0 / math.pi)
+    half = torch.sin(torch.deg2rad(90.0 - torch.abs(dec)) * 0.5)
+    cap = torch.sqrt(3.0 * (2.0 * half * half))
+    return z, tt, cap
+
+
+def _ang2pix_ring_torch(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
+    """Branch-free RING ``ang2pix``: both regimes evaluated, selected by ``where``."""
+    f_dtype = ra.dtype
+    nl4 = 4 * nside
+    z, tt, cap = _lonlat_zt(ra, dec)
+
+    # Equatorial belt (|z| <= 2/3).
+    temp1 = nside * (0.5 + tt)
+    temp2 = nside * z * 0.75
+    jp = (temp1 - temp2).to(torch.int64)
+    jm = (temp1 + temp2).to(torch.int64)
+    ir = nside + 1 + jp - jm
+    kshift = 1 - (ir & 1)
+    ip = torch.div(jp + jm - nside + kshift + 1, 2, rounding_mode="floor") + 1
+    ip = torch.where(ip > nl4, ip - nl4, ip)
+    ip = torch.where(ip < 1, ip + nl4, ip)
+    pix_belt = 2 * nside * (nside - 1) + (ir - 1) * nl4 + (ip - 1)
+
+    # Polar caps.
+    tp = tt - tt.to(torch.int64).to(f_dtype)
+    tmp = nside * cap
+    jp_c = (tp * tmp).to(torch.int64)
+    jm_c = ((1.0 - tp) * tmp).to(torch.int64)
+    ir_c = jp_c + jm_c + 1
+    ip_c = torch.remainder((tt * ir_c.to(f_dtype)).to(torch.int64), 4 * ir_c)
+    pix_cap = torch.where(
+        z > 0,
+        2 * ir_c * (ir_c - 1) + ip_c,
+        12 * nside * nside - 2 * ir_c * (ir_c + 1) + ip_c,
+    )
+    return torch.where(torch.abs(z) <= (2.0 / 3.0), pix_belt, pix_cap)
+
+
+def _ang2pix_nested_torch(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
+    """Branch-free NESTED ``ang2pix``: both regimes evaluated, selected by ``where``."""
+    f_dtype = ra.dtype
+    z, tt, cap = _lonlat_zt(ra, dec)
+
+    # Equatorial belt.
+    temp1 = nside * (0.5 + tt)
+    temp2 = nside * (z * 0.75)
+    jp = (temp1 - temp2).to(torch.int64)
+    jm = (temp1 + temp2).to(torch.int64)
+    ifp = torch.div(jp, nside, rounding_mode="floor")
+    ifm = torch.div(jm, nside, rounding_mode="floor")
+    face_belt = torch.where(ifp == ifm, ifp | 4, torch.where(ifp < ifm, ifp, ifm + 8))
+    ix_belt = jm & (nside - 1)
+    iy_belt = nside - (jp & (nside - 1)) - 1
+
+    # Polar caps.
+    ntt = tt.to(torch.int64).clamp_max(3)
+    tp = tt - ntt.to(f_dtype)
+    tmp = nside * cap
+    jp_c = (tp * tmp).to(torch.int64).clamp_max(nside - 1)
+    jm_c = ((1.0 - tp) * tmp).to(torch.int64).clamp_max(nside - 1)
+    north = z >= 0
+    face_cap = torch.where(north, ntt, ntt + 8)
+    ix_cap = torch.where(north, nside - jm_c - 1, jp_c)
+    iy_cap = torch.where(north, nside - jp_c - 1, jm_c)
+
+    belt = torch.abs(z) <= (2.0 / 3.0)
+    face_num = torch.where(belt, face_belt, face_cap)
+    ix = torch.where(belt, ix_belt, ix_cap)
+    iy = torch.where(belt, iy_belt, iy_cap)
+    return _xyf2nest(nside, ix, iy, face_num)
+
+
+def _native_cpu(*tensors: Tensor) -> bool:
+    return _ops.has_fixed_dispatcher() and all(t.device.type == "cpu" for t in tensors)
+
+
 def ang2pix_ring(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
     """Convert RA/Dec (degrees) to HEALPix RING indices."""
     _validate_nside(nside)
@@ -87,68 +180,9 @@ def ang2pix_ring(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
     dec_t = _as_float64(dec)
     ra_t, dec_t = torch.broadcast_tensors(ra_t, dec_t)
     _validate_lonlat(ra_t, dec_t)
-
-    # Fast path for scalar or single point
-    if ra_t.numel() == 1:
-        # Use simple analytical math for single point to avoid overhead
-        pass
-
-    if (
-        _ops.has_fixed_dispatcher()
-        and ra_t.device.type == "cpu"
-        and dec_t.device.type == "cpu"
-    ):
+    if _native_cpu(ra_t, dec_t):
         return _ops.healpix_ang2pix_ring(nside, ra_t.contiguous(), dec_t.contiguous())
-    f_dtype = ra_t.dtype
-
-    z = torch.sin(torch.deg2rad(dec_t))
-    za = torch.abs(z)
-    tt = torch.remainder(torch.deg2rad(ra_t), 2.0 * math.pi) * (2.0 / math.pi)
-
-    pix = torch.empty_like(z, dtype=torch.int64)
-
-    equat = za <= (2.0 / 3.0)
-    if equat.any():
-        ze = z[equat]
-        tte = tt[equat]
-
-        temp1 = nside * (0.5 + tte)
-        temp2 = nside * ze * 0.75
-        jp = (temp1 - temp2).to(torch.int64)
-        jm = (temp1 + temp2).to(torch.int64)
-
-        ir = nside + 1 + jp - jm
-        kshift = 1 - (ir & 1)
-
-        ip = ((jp + jm - nside + kshift + 1) // 2) + 1
-        ip = torch.where(ip > (4 * nside), ip - (4 * nside), ip)
-        ip = torch.where(ip < 1, ip + (4 * nside), ip)
-
-        pix[equat] = 2 * nside * (nside - 1) + (ir - 1) * (4 * nside) + (ip - 1)
-
-    pol = ~equat
-    if pol.any():
-        zp = z[pol]
-        ttp = tt[pol]
-
-        tp = ttp - ttp.to(torch.int64).to(f_dtype)
-        tmp = nside * torch.sqrt(3.0 * (1.0 - torch.abs(zp)))
-
-        jp = (tp * tmp).to(torch.int64)
-        jm = ((1.0 - tp) * tmp).to(torch.int64)
-
-        ir = jp + jm + 1
-        ip = torch.remainder((ttp * ir.to(f_dtype)).to(torch.int64), 4 * ir)
-
-        north = zp > 0
-        ppix = torch.empty_like(ir)
-        ppix[north] = 2 * ir[north] * (ir[north] - 1) + ip[north]
-        ppix[~north] = (
-            12 * nside * nside - 2 * ir[~north] * (ir[~north] + 1) + ip[~north]
-        )
-        pix[pol] = ppix
-
-    return pix
+    return _ang2pix_ring_torch(nside, ra_t, dec_t)
 
 
 def pix2ang_ring(nside: int, pix: Tensor) -> Tuple[Tensor, Tensor]:
@@ -158,9 +192,8 @@ def pix2ang_ring(nside: int, pix: Tensor) -> Tuple[Tensor, Tensor]:
     if _ops.has_fixed_dispatcher() and pix_t.device.type == "cpu":
         return _ops.healpix_pix2ang_ring(nside, pix_t.contiguous())
 
-    theta, phi = _pix2thetaphi_ring(nside, pix_t)
+    _theta, phi, dec = _pix2ring_coords(nside, pix_t)
     ra = torch.remainder(torch.rad2deg(phi), 360.0)
-    dec = 90.0 - torch.rad2deg(theta)
     return ra, dec
 
 
@@ -171,121 +204,55 @@ def ang2pix_nested(nside: int, ra: Tensor, dec: Tensor) -> Tensor:
     dec_t = _as_float64(dec)
     ra_t, dec_t = torch.broadcast_tensors(ra_t, dec_t)
     _validate_lonlat(ra_t, dec_t)
-    if (
-        _ops.has_fixed_dispatcher()
-        and ra_t.device.type == "cpu"
-        and dec_t.device.type == "cpu"
-    ):
+    if _native_cpu(ra_t, dec_t):
         return _ops.healpix_ang2pix_nested(nside, ra_t.contiguous(), dec_t.contiguous())
-    f_dtype = ra_t.dtype
-
-    z = torch.sin(torch.deg2rad(dec_t))
-    za = torch.abs(z)
-    tt = torch.remainder(torch.deg2rad(ra_t), 2.0 * math.pi) * (2.0 / math.pi)
-
-    face_num = torch.empty_like(z, dtype=torch.int64)
-    ix = torch.empty_like(z, dtype=torch.int64)
-    iy = torch.empty_like(z, dtype=torch.int64)
-
-    equat = za <= (2.0 / 3.0)
-    if equat.any():
-        ze = z[equat]
-        tte = tt[equat]
-        temp1 = nside * (0.5 + tte)
-        temp2 = nside * (ze * 0.75)
-        jp = (temp1 - temp2).to(torch.int64)
-        jm = (temp1 + temp2).to(torch.int64)
-
-        ifp = jp // nside
-        ifm = jm // nside
-        face = torch.where(ifp == ifm, ifp | 4, torch.where(ifp < ifm, ifp, ifm + 8))
-
-        face_num[equat] = face
-        ix[equat] = jm & (nside - 1)
-        iy[equat] = nside - (jp & (nside - 1)) - 1
-
-    pol = ~equat
-    if pol.any():
-        zp = z[pol]
-        ttp = tt[pol]
-        ntt = ttp.to(torch.int64)
-        ntt = torch.where(ntt >= 4, torch.full_like(ntt, 3), ntt)
-        tp = ttp - ntt.to(f_dtype)
-
-        tmp = nside * torch.sqrt(3.0 * (1.0 - torch.abs(zp)))
-        jp = (tp * tmp).to(torch.int64)
-        jm = ((1.0 - tp) * tmp).to(torch.int64)
-        jp = torch.minimum(jp, torch.full_like(jp, nside - 1))
-        jm = torch.minimum(jm, torch.full_like(jm, nside - 1))
-
-        north = zp >= 0
-        f = torch.empty_like(jp)
-        x = torch.empty_like(jp)
-        y = torch.empty_like(jp)
-
-        f[north] = ntt[north]
-        x[north] = nside - jm[north] - 1
-        y[north] = nside - jp[north] - 1
-
-        f[~north] = ntt[~north] + 8
-        x[~north] = jp[~north]
-        y[~north] = jm[~north]
-
-        face_num[pol] = f
-        ix[pol] = x
-        iy[pol] = y
-
-    return _xyf2nest(nside, ix, iy, face_num)
+    return _ang2pix_nested_torch(nside, ra_t, dec_t)
 
 
 def pix2ang_nested(nside: int, pix: Tensor) -> Tuple[Tensor, Tensor]:
     """Convert HEALPix NESTED indices to RA/Dec (degrees)."""
     _validate_nside(nside)
     pix_t = _as_int64(pix)
-    if _ops.has_fixed_dispatcher() and pix_t.device.type == "cpu":
+    if _native_cpu(pix_t):
         return _ops.healpix_pix2ang_nested(nside, pix_t.contiguous())
     f_dtype = _float_dtype_for_device(pix_t.device)
 
     npix = 12 * nside * nside
-    if torch.any((pix_t < 0) | (pix_t >= npix)):
-        raise ValueError("pixel index out of range for nside")
+    _validate_pixels(pix_t, npix, "pixel index out of range for nside")
 
     ix, iy, face_num = _nest2xyf(nside, pix_t)
+    face_num = face_num.clamp(0, 11)  # unchecked while compiling
+    jrll, jpll = _face_consts(face_num.device)
 
     nl4 = 4 * nside
     fact2 = 4.0 / npix
+    fact1 = (2 * nside) * fact2
 
-    jr = _JRLL.to(face_num.device)[face_num] * nside - ix - iy - 1
-
-    nr = torch.empty_like(jr)
-    z = torch.empty_like(jr, dtype=f_dtype)
-    kshift = torch.zeros_like(jr)
-
+    jr = jrll[face_num] * nside - ix - iy - 1
     north = jr < nside
     south = jr > (3 * nside)
-    equat = ~(north | south)
+    belt = ~(north | south)
+    region = torch.where(
+        north,
+        torch.ones_like(jr),
+        torch.where(south, -torch.ones_like(jr), torch.zeros_like(jr)),
+    )
+    nr = torch.where(
+        north, jr, torch.where(south, nl4 - jr, torch.full_like(jr, nside))
+    )
+    kshift = torch.where(belt, (jr - nside) & 1, torch.zeros_like(jr))
+    nr_f = nr.clamp_min(1).to(f_dtype)
 
-    nr[north] = jr[north]
-    z[north] = 1.0 - torch.square(nr[north].to(f_dtype)) * fact2
+    tmp = torch.square(nr_f) * fact2
+    z_belt = (2 * nside - jr).to(f_dtype) * fact1
+    _theta, dec = _ring_theta_lat(tmp, region, z_belt)
 
-    nr[south] = nl4 - jr[south]
-    z[south] = torch.square(nr[south].to(f_dtype)) * fact2 - 1.0
-
-    if equat.any():
-        nr[equat] = nside
-        fact1 = (2 * nside) * fact2
-        z[equat] = (2 * nside - jr[equat]).to(f_dtype) * fact1
-        kshift[equat] = (jr[equat] - nside) & 1
-
-    jp = (_JPLL.to(face_num.device)[face_num] * nr + ix - iy + 1 + kshift) // 2
+    jp = torch.div(jpll[face_num] * nr + ix - iy + 1 + kshift, 2, rounding_mode="floor")
     jp = torch.where(jp > nl4, jp - nl4, jp)
     jp = torch.where(jp < 1, jp + nl4, jp)
 
-    phi = (jp.to(f_dtype) - 0.5 * (kshift.to(f_dtype) + 1.0)) * (
-        (math.pi / 2.0) / nr.to(f_dtype)
-    )
+    phi = (jp.to(f_dtype) - 0.5 * (kshift.to(f_dtype) + 1.0)) * ((math.pi / 2.0) / nr_f)
     ra = torch.remainder(torch.rad2deg(phi), 360.0)
-    dec = torch.rad2deg(torch.asin(torch.clamp(z, -1.0, 1.0)))
     return ra, dec
 
 
@@ -620,9 +587,16 @@ def boundaries(nside: int, pix: Tensor, step: int = 1, nest: bool = False) -> Te
     phi = (jpll * nr + x - y) * (math.pi * 0.25) / nr_safe
     phi = torch.where(nr == 0.0, torch.zeros_like(phi), phi)
 
-    lat = torch.asin(torch.clamp(z, -1.0, 1.0))
-    sin_lat = torch.sin(lat)
-    cos_lat = torch.cos(lat)
+    # sin(theta) from 1 - |z| in the caps: sqrt(1 - z^2) of z = 1 - tmp loses
+    # half of the digits next to the poles.
+    tmp = torch.square(nr) * fact2
+    cap = north | south
+    sin_lat = torch.where(cap, torch.sign(z) * (1.0 - tmp), z)
+    cos_lat = torch.where(
+        cap,
+        torch.sqrt(torch.clamp(tmp * (2.0 - tmp), min=0.0)),
+        torch.sqrt(torch.clamp((1.0 - z) * (1.0 + z), min=0.0)),
+    )
     sin_phi = torch.sin(phi)
     cos_phi = torch.cos(phi)
     xyz = torch.stack([cos_lat * cos_phi, cos_lat * sin_phi, sin_lat], dim=1)
@@ -843,105 +817,98 @@ def get_interp_weights(
         theta_t = torch.deg2rad(90.0 - lat_t)
         phi_t = torch.deg2rad(lon_t)
 
-    fd = _float_dtype_for_device(theta_t.device)
-    theta_f = _as_float64(theta_t).reshape(-1)
-    phi_f = torch.remainder(_as_float64(phi_t).reshape(-1), 2.0 * math.pi)
     shape = theta_t.shape
-
-    z = torch.cos(theta_f)
-    ir1 = _ring_above(nside, z)
-    ir2 = ir1 + 1
-
-    n = theta_f.numel()
-    pix0 = torch.full((n,), -1, dtype=torch.int64, device=theta_f.device)
-    pix1 = torch.full((n,), -1, dtype=torch.int64, device=theta_f.device)
-    pix2 = torch.full((n,), -1, dtype=torch.int64, device=theta_f.device)
-    pix3 = torch.full((n,), -1, dtype=torch.int64, device=theta_f.device)
-    w0 = torch.zeros((n,), dtype=fd, device=theta_f.device)
-    w1 = torch.zeros((n,), dtype=fd, device=theta_f.device)
-    w2 = torch.zeros((n,), dtype=fd, device=theta_f.device)
-    w3 = torch.zeros((n,), dtype=fd, device=theta_f.device)
-
-    theta1 = torch.zeros((n,), dtype=fd, device=theta_f.device)
-    theta2 = torch.zeros((n,), dtype=fd, device=theta_f.device)
-
-    m1 = ir1 > 0
-    if torch.any(m1):
-        sp, nr, th, shift = _get_ring_info2(nside, ir1[m1])
-        theta1[m1] = th
-        dphi = (2.0 * math.pi) / nr.to(fd)
-        sh = shift.to(fd)
-        tmp = phi_f[m1] / dphi - 0.5 * sh
-        i1 = torch.floor(tmp).to(torch.int64)
-        wt = (phi_f[m1] - (i1.to(fd) + 0.5 * sh) * dphi) / dphi
-        i2 = i1 + 1
-        i1 = torch.where(i1 < 0, i1 + nr, i1)
-        i2 = torch.where(i2 >= nr, i2 - nr, i2)
-        pix0[m1] = sp + i1
-        pix1[m1] = sp + i2
-        w0[m1] = 1.0 - wt
-        w1[m1] = wt
-
-    m2 = ir2 < (4 * nside)
-    if torch.any(m2):
-        sp, nr, th, shift = _get_ring_info2(nside, ir2[m2])
-        theta2[m2] = th
-        dphi = (2.0 * math.pi) / nr.to(fd)
-        sh = shift.to(fd)
-        tmp = phi_f[m2] / dphi - 0.5 * sh
-        i1 = torch.floor(tmp).to(torch.int64)
-        wt = (phi_f[m2] - (i1.to(fd) + 0.5 * sh) * dphi) / dphi
-        i2 = i1 + 1
-        i1 = torch.where(i1 < 0, i1 + nr, i1)
-        i2 = torch.where(i2 >= nr, i2 - nr, i2)
-        pix2[m2] = sp + i1
-        pix3[m2] = sp + i2
-        w2[m2] = 1.0 - wt
-        w3[m2] = wt
-
-    top = ir1 == 0
-    if torch.any(top):
-        wtheta = theta_f[top] / theta2[top]
-        w2[top] = w2[top] * wtheta
-        w3[top] = w3[top] * wtheta
-        fac = (1.0 - wtheta) * 0.25
-        w0[top] = fac
-        w1[top] = fac
-        w2[top] = w2[top] + fac
-        w3[top] = w3[top] + fac
-        pix0[top] = (pix2[top] + 2) & 3
-        pix1[top] = (pix3[top] + 2) & 3
-
-    bottom = ir2 == (4 * nside)
-    if torch.any(bottom):
-        wtheta = (theta_f[bottom] - theta1[bottom]) / (math.pi - theta1[bottom])
-        w0[bottom] = w0[bottom] * (1.0 - wtheta)
-        w1[bottom] = w1[bottom] * (1.0 - wtheta)
-        fac = wtheta * 0.25
-        w0[bottom] = w0[bottom] + fac
-        w1[bottom] = w1[bottom] + fac
-        w2[bottom] = fac
-        w3[bottom] = fac
-        npix = nside2npix(nside)
-        pix2[bottom] = ((pix0[bottom] + 2) & 3) + npix - 4
-        pix3[bottom] = ((pix1[bottom] + 2) & 3) + npix - 4
-
-    middle = (~top) & (~bottom)
-    if torch.any(middle):
-        wtheta = (theta_f[middle] - theta1[middle]) / (theta2[middle] - theta1[middle])
-        w0[middle] = w0[middle] * (1.0 - wtheta)
-        w1[middle] = w1[middle] * (1.0 - wtheta)
-        w2[middle] = w2[middle] * wtheta
-        w3[middle] = w3[middle] * wtheta
-
-    pix = torch.stack([pix0, pix1, pix2, pix3], dim=0)
-    wgt = torch.stack([w0, w1, w2, w3], dim=0)
+    pix, wgt = _interp_weights_torch(nside, theta_t.reshape(-1), phi_t.reshape(-1))
     if nest:
-        pix = ring2nest(nside, pix.reshape(-1)).reshape(4, n)
+        pix = ring2nest(nside, pix)
+    return pix.reshape(4, *shape), wgt.reshape(4, *shape)
 
-    pix = pix.reshape(4, *shape)
-    wgt = wgt.reshape(4, *shape)
-    return pix, wgt
+
+def _ring_pair(
+    nside: int, ring: Tensor, phi: Tensor, fd: torch.dtype
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Bracketing pixels of ``phi`` on ``ring`` (1..4 nside-1) and the weight of the second."""
+    sp, nr, th, shift = _get_ring_info2(nside, ring)
+    dphi = (2.0 * math.pi) / nr.to(fd)
+    sh = shift.to(fd)
+    i1 = torch.floor(phi / dphi - 0.5 * sh).to(torch.int64)
+    wt = (phi - (i1.to(fd) + 0.5 * sh) * dphi) / dphi
+    i2 = i1 + 1
+    i1 = torch.where(i1 < 0, i1 + nr, i1)
+    i2 = torch.where(i2 >= nr, i2 - nr, i2)
+    return sp + i1, sp + i2, wt, th
+
+
+def _interp_weights_torch(
+    nside: int, theta: Tensor, phi: Tensor
+) -> tuple[Tensor, Tensor]:
+    """Branch-free healpy ``get_interpol`` on flat RING inputs (radians).
+
+    The polar (``top``/``bottom``) and regular regimes are all evaluated and
+    selected with ``where``; rings outside ``1..4 nside-1`` are clamped for the
+    unselected regime and their denominators kept non-zero, so neither the
+    values nor the gradients of the selected regime see NaNs.
+    """
+    fd = _float_dtype_for_device(theta.device)
+    theta_f = _as_float64(theta)
+    phi_f = torch.remainder(_as_float64(phi), 2.0 * math.pi)
+    nl4 = 4 * nside
+    npix = nside2npix(nside)
+
+    ir1 = _ring_above(nside, torch.cos(theta_f))
+    ir2 = ir1 + 1
+    top = ir1 == 0
+    bottom = ir2 == nl4
+
+    p0, p1, wt1, theta1 = _ring_pair(nside, ir1.clamp(1, nl4 - 1), phi_f, fd)
+    p2, p3, wt2, theta2 = _ring_pair(nside, ir2.clamp(1, nl4 - 1), phi_f, fd)
+    w0 = 1.0 - wt1
+    w1 = wt1
+    w2 = 1.0 - wt2
+    w3 = wt2
+
+    one = torch.ones_like(theta_f)
+
+    def _span(selected: Tensor, width: Tensor) -> Tensor:
+        # At very high nside two rings (or a ring and the pole) can share one
+        # float32 colatitude (MPS); the zero width then yields weight 0 for the
+        # far ring instead of 0/0.
+        return torch.where(selected & (width != 0.0), width, one)
+
+    # Regular: linear in theta between the two rings.
+    wtheta_mid = (theta_f - theta1) / _span(~(top | bottom), theta2 - theta1)
+    # North pole: the four "virtual" pixels of ring 0 are ring 1 rotated by pi.
+    wtheta_top = theta_f / _span(top, theta2)
+    fac_top = (1.0 - wtheta_top) * 0.25
+    # South pole: likewise with the last ring.
+    wtheta_bot = (theta_f - theta1) / _span(bottom, math.pi - theta1)
+    fac_bot = wtheta_bot * 0.25
+
+    w0 = torch.where(
+        top,
+        fac_top,
+        torch.where(bottom, w0 * (1.0 - wtheta_bot) + fac_bot, w0 * (1.0 - wtheta_mid)),
+    )
+    w1 = torch.where(
+        top,
+        fac_top,
+        torch.where(bottom, w1 * (1.0 - wtheta_bot) + fac_bot, w1 * (1.0 - wtheta_mid)),
+    )
+    w2 = torch.where(
+        top, w2 * wtheta_top + fac_top, torch.where(bottom, fac_bot, w2 * wtheta_mid)
+    )
+    w3 = torch.where(
+        top, w3 * wtheta_top + fac_top, torch.where(bottom, fac_bot, w3 * wtheta_mid)
+    )
+    p0_top = (p2 + 2) & 3
+    p1_top = (p3 + 2) & 3
+    p2_bot = ((p0 + 2) & 3) + npix - 4
+    p3_bot = ((p1 + 2) & 3) + npix - 4
+    p0 = torch.where(top, p0_top, p0)
+    p1 = torch.where(top, p1_top, p1)
+    p2 = torch.where(bottom, p2_bot, p2)
+    p3 = torch.where(bottom, p3_bot, p3)
+    return torch.stack([p0, p1, p2, p3], dim=0), torch.stack([w0, w1, w2, w3], dim=0)
 
 
 def get_interp_val(
@@ -1022,30 +989,27 @@ def get_interp_val(
 
 
 def max_pixel_radius(nside: int, degrees: bool = False) -> float:
-    """
-    Return a conservative maximum center-to-corner radius for pixels at `nside`.
+    """Maximum angular distance from any pixel center to any point of its pixel.
 
-    Uses representative polar/equatorial/southern pixels and caches result.
+    Closed form of ``Healpix_Base::max_pixrad`` (Górski et al. 2005): the
+    largest center-to-vertex angle over the sphere is attained by the pixels
+    adjacent to the polar-cap/equatorial transition (``z = 2/3``), between the
+    center ``(z = 2/3, phi = pi / (4 nside))`` and the vertex
+    ``(z = 1 - (1 - 1/nside)^2 / 3, phi = 0)``. Coverings use this as the
+    pixel radius in the ``r + 2 rho`` soundness lemma.
     """
     _validate_nside(nside)
-    cached = _MAX_PIXEL_RADIUS_CACHE.get(nside)
-    if cached is None:
-        npix = nside2npix(nside)
-        reps = torch.tensor([0, 2 * nside * (nside - 1), npix - 1], dtype=torch.int64)
-        lon_c, lat_c = pix2ang_ring(nside, reps)
-        b = boundaries(nside, reps, step=1, nest=False)  # (N,3,4)
-        lon_b, lat_b = xyz_to_lonlat(b[:, 0, :], b[:, 1, :], b[:, 2, :])
-        d = angular_distance_deg(
-            lon_c.unsqueeze(-1),
-            lat_c.unsqueeze(-1),
-            lon_b,
-            lat_b,
-        )
-        cached = float(torch.max(d).item())
-        _MAX_PIXEL_RADIUS_CACHE[nside] = cached
-    if degrees:
-        return cached
-    return math.radians(cached)
+
+    def _unit(z: float, phi: float) -> tuple[float, float, float]:
+        s = math.sqrt((1.0 - z) * (1.0 + z))
+        return (s * math.cos(phi), s * math.sin(phi), z)
+
+    ax, ay, az = _unit(2.0 / 3.0, math.pi / (4.0 * nside))
+    t = (1.0 - 1.0 / nside) ** 2
+    bx, by, bz = _unit(1.0 - t / 3.0, 0.0)
+    cross = math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+    rad = math.atan2(cross, ax * bx + ay * by + az * bz)
+    return math.degrees(rad) if degrees else rad
 
 
 def pixel_resolution_to_nside(
@@ -1270,23 +1234,21 @@ def query_strip(
     inclusive: bool = False,
 ) -> Tensor:
     """
-    Return pixels with center colatitude in [theta1, theta2] (radians).
+    Return pixels in a colatitude strip, with healpy ``query_strip`` semantics.
+
+    For ``theta1 < theta2`` (radians) the pixels whose centre colatitude lies in
+    ``(theta1, theta2]``; otherwise the two polar strips with centres north of
+    ``theta2`` and south of ``theta1``. Ring membership is decided exactly as in
+    healpy (``ring_above``), and ``inclusive=True`` adds the adjacent ring on
+    each side, which holds every pixel overlapping the strip.
 
     Uses **ring pruning** (``O(nside + output)``), not a full ``O(npix)`` map scan.
     """
     _validate_nside(nside)
-    lo = min(theta1, theta2)
-    hi = max(theta1, theta2)
-    if inclusive:
-        pad = max_pixel_radius(nside, degrees=False)
-        lo -= pad
-        hi += pad
-    lo = max(0.0, lo)
-    hi = min(math.pi, hi)
-
+    ring_ranges = _strip_rings(nside, float(theta1), float(theta2), bool(inclusive))
     if nest:
-        return _strip_nest_pixels(nside, lo, hi)
-    return _ring_pixels_colatitude_band(nside, lo, hi, nest=False)
+        return _ring_ranges_nest_pixels(nside, ring_ranges)
+    return _ring_range_pixels(nside, ring_ranges)
 
 
 def query_polygon(
@@ -1781,12 +1743,13 @@ def query_box(
 
     theta1 = math.radians(90.0 - lat_hi)
     theta2 = math.radians(90.0 - lat_lo)
-    cand = query_strip(
-        nside,
-        theta1,
-        theta2,
-        nest=nest,
-        inclusive=False,
+    # Closed band [lat_lo, lat_hi] with one ring of slack on each side; the
+    # latitude filter below decides membership exactly.
+    rings = [_padded_band_rings(nside, theta1, theta2)]
+    cand = (
+        _ring_ranges_nest_pixels(nside, rings)
+        if nest
+        else _ring_range_pixels(nside, rings)
     )
     if cand.numel() == 0:
         return cand
@@ -1971,7 +1934,9 @@ def lonlat_to_xyz(ra: Tensor, dec: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
     lon = torch.deg2rad(ra_t)
     lat = torch.deg2rad(dec_t)
     sin_lat = torch.sin(lat)
-    cos_lat = torch.cos(lat)
+    # |lat| <= 90 deg, so cos(lat) >= 0; float32 deg2rad(90) exceeds pi/2 and
+    # would flip a polar vector to the opposite longitude.
+    cos_lat = torch.cos(lat).clamp_min(0.0)
     sin_lon = torch.sin(lon)
     cos_lon = torch.cos(lon)
 
@@ -1989,7 +1954,9 @@ def xyz_to_lonlat(
     y_t = _as_float64(y)
     z_t = _as_float64(z)
     x_t, y_t, z_t = torch.broadcast_tensors(x_t, y_t, z_t)
-    if bool(torch.any((x_t == 0.0) & (y_t == 0.0) & (z_t == 0.0))):
+    if _host_checks_enabled() and bool(
+        torch.any((x_t == 0.0) & (y_t == 0.0) & (z_t == 0.0))
+    ):
         raise ValueError("Cartesian vectors must have positive norm")
 
     n = torch.sqrt(x_t * x_t + y_t * y_t + z_t * z_t).clamp_min(eps)
@@ -1997,8 +1964,16 @@ def xyz_to_lonlat(
     y_n = y_t / n
     z_n = z_t / n
 
-    ra = torch.remainder(torch.rad2deg(torch.atan2(y_n, x_n)), 360.0)
-    dec = torch.rad2deg(torch.asin(torch.clamp(z_n, -1.0, 1.0)))
+    # atan2(z, rho) rather than asin(z): asin loses half of the digits next to
+    # the poles (|z| -> 1) and has an infinite derivative there. On the polar
+    # axis (rho = 0) the sqrt argument is replaced so the gradient is 0, not NaN.
+    rho2 = x_n * x_n + y_n * y_n
+    on_axis = rho2 == 0.0
+    rho = torch.where(on_axis, 0.0, torch.sqrt(torch.where(on_axis, 1.0, rho2)))
+    x_safe = torch.where(on_axis, 1.0, x_n)
+    lon = torch.where(on_axis, 0.0, torch.atan2(y_n, x_safe))
+    ra = torch.remainder(torch.rad2deg(lon), 360.0)
+    dec = torch.rad2deg(torch.atan2(z_n, rho))
     return ra, dec
 
 
@@ -2059,38 +2034,22 @@ def spherical_fourier_features(
     lat = torch.deg2rad(dec_t)
     x, y, z = lonlat_to_xyz(ra_t, dec_t)
 
+    if not (include_xyz or include_lonlat):
+        raise ValueError("at least one of include_xyz/include_lonlat must be True")
     exponents = torch.arange(num_frequencies, dtype=ra_t.dtype, device=ra_t.device)
     freqs = min_frequency * (base**exponents)
 
-    feats = []
+    # One broadcast sin/cos over (frequency, coordinate) instead of ten small
+    # kernels per frequency. Channel order per frequency: sin, cos of x, y, z
+    # (include_xyz), then of lon, lat (include_lonlat).
+    coords = ([x, y, z] if include_xyz else []) + ([lon, lat] if include_lonlat else [])
+    scaled = torch.stack(coords, dim=-1).unsqueeze(-2) * freqs.unsqueeze(-1)
+    periodic = torch.stack([torch.sin(scaled), torch.cos(scaled)], dim=-1).flatten(
+        start_dim=-3
+    )
     if include_xyz:
-        feats.extend([x, y, z])
-
-    for f in freqs:
-        if include_xyz:
-            feats.extend(
-                [
-                    torch.sin(f * x),
-                    torch.cos(f * x),
-                    torch.sin(f * y),
-                    torch.cos(f * y),
-                    torch.sin(f * z),
-                    torch.cos(f * z),
-                ]
-            )
-        if include_lonlat:
-            feats.extend(
-                [
-                    torch.sin(f * lon),
-                    torch.cos(f * lon),
-                    torch.sin(f * lat),
-                    torch.cos(f * lat),
-                ]
-            )
-
-    if not feats:
-        raise ValueError("at least one of include_xyz/include_lonlat must be True")
-    return torch.stack(feats, dim=-1)
+        return torch.cat([torch.stack([x, y, z], dim=-1), periodic], dim=-1)
+    return periodic
 
 
 def nest_parent(pix_nest: Tensor, levels: int = 1) -> Tensor:

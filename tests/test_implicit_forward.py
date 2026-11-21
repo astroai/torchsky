@@ -134,6 +134,25 @@ def test_predict_observation_mean_forwards_operator_bundle() -> None:
     torch.testing.assert_close(explicit, torch.zeros((4, 4)))
 
 
+def test_parameterless_model_renders_on_the_observation_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A model without tensors carries no placement: the CPU observation decides,
+    # even when the default compute device is an accelerator (CUDA hosts).
+    import torchsky.device as device_module
+
+    monkeypatch.setattr(
+        device_module, "default_compute_device", lambda: torch.device("meta")
+    )
+    obs = FieldObservation(
+        image=torch.zeros((4, 4), dtype=torch.float32),
+        header=_tan_header(4, crval1=150.0, crval2=2.0, scale_deg=0.01),
+        wavelength=5600.0,
+    )
+    rendered = predict_observation_mean(_ZeroField(), obs, num_spectral_samples=1)
+    assert rendered.device.type == "cpu"
+
+
 def test_predict_observation_mean_rest_frame_matches_manual_scale() -> None:
     torch.manual_seed(1)
     domain = FieldDomain(

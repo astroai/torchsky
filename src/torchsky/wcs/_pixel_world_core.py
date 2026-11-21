@@ -11,11 +11,17 @@ from typing import (
 )
 import math
 
-from ._math import _sincos, _wrap_lon180, _wrap_lon360
+from ._math import _hypot, _native_bounds, _sincos, _wrap_lon180, _wrap_lon360
 
 from .zenithal import project_zenithal, deproject_zenithal
 from .cylindrical import project_cylindrical, deproject_cylindrical
-from .allsky import project_allsky, deproject_allsky
+from .allsky import (
+    _plane_slack,
+    _polar_sigma,
+    _polar_theta,
+    deproject_allsky,
+    project_allsky,
+)
 from .conic import project_conic, deproject_conic
 from .quadcube import project_quadcube, deproject_quadcube
 from .legacy import (
@@ -27,12 +33,6 @@ from .legacy import (
 
 if TYPE_CHECKING:
     pass
-
-from ._core_support import (
-    _CENTER_CPP_P2W_THRESHOLDS,
-    _CENTER_CPP_W2P_THRESHOLDS,
-    _bound_cpp,
-)
 
 
 class _PixelWorldCoreMixin:
@@ -55,8 +55,10 @@ class _PixelWorldCoreMixin:
             return xi, eta
         if kind == "quadcube":
             return fn(xi, eta, self._proj_code)
-        # Use pre-tensorized PV parameters for modern projections
-        return fn(xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor)
+        phi, theta = fn(xi, eta, self._proj_code, self._pv1_values, self._pv2_values)
+        if self._native_bounds_check:
+            phi, theta = _native_bounds(phi, theta)
+        return phi, theta
 
     def _apply_cd_2d(self, rel_x: Tensor, rel_y: Tensor) -> Tuple[Tensor, Tensor]:
         """Apply cached 2x2 CD transform with diagonal fast path."""
@@ -104,7 +106,7 @@ class _PixelWorldCoreMixin:
             )
         if self._is_cyp:
             return deproject_cylindrical(
-                phi, theta, "CYP", self._pv1_tensor, self._pv2_tensor
+                phi, theta, "CYP", self._pv1_values, self._pv2_values
             )
         return deproject_cylindrical(phi, theta, "MER")
 
@@ -117,26 +119,28 @@ class _PixelWorldCoreMixin:
     def _center_equator_project(self, xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         """Inverse of :meth:`_center_equator_deproject` for the same projections."""
         if self._is_car:
-            return _wrap_lon360(xi + self.alpha0), eta
-        if self._is_sfl:
-            dec = eta
-            cos_dec = torch.cos(dec * self._d2r)
+            phi, theta = _native_bounds(xi, eta)
+        elif self._is_sfl:
+            cos_dec = torch.cos(eta * self._d2r)
             cos_safe = torch.sign(cos_dec) * torch.clamp(torch.abs(cos_dec), min=1e-12)
-            return _wrap_lon360((xi / cos_safe) + self.alpha0), dec
-        if self._is_cea:
+            phi, theta = _native_bounds(xi / cos_safe, eta)
+        elif self._is_cea:
             value = eta / self._cea_eta_scale
             valid = torch.isfinite(value) & (value.abs() <= 1.0 + 1e-12)
             theta = torch.asin(torch.clamp(value, -1.0, 1.0)) * self._r2d
-            ra = _wrap_lon360(xi + self.alpha0)
             nan = torch.full_like(theta, float("nan"))
-            return torch.where(valid, ra, nan), torch.where(valid, theta, nan)
-        if self._is_mer:
+            phi, theta = _native_bounds(
+                torch.where(valid, xi, nan), torch.where(valid, theta, nan)
+            )
+        elif self._is_mer:
             arg = torch.clamp(eta * self._d2r, -20.0, 20.0)
             theta = 2.0 * (torch.atan(torch.exp(arg)) * self._r2d - 45.0)
-            return _wrap_lon360(xi + self.alpha0), theta
-        phi, theta = project_cylindrical(
-            xi, eta, "CYP", self._pv1_tensor, self._pv2_tensor
-        )
+            phi, theta = _native_bounds(xi, theta)
+        else:
+            phi, theta = project_cylindrical(
+                xi, eta, "CYP", self._pv1_values, self._pv2_values
+            )
+            phi, theta = _native_bounds(phi, theta)
         return _wrap_lon360(phi + self.alpha0), theta
 
     def _detector_relative_pixels(
@@ -185,72 +189,6 @@ class _PixelWorldCoreMixin:
         """Avoid unnecessary contiguous copies on already contiguous benchmark inputs."""
         return t if t.is_contiguous() else t.contiguous()
 
-    def _use_cpp_center_pixel_to_world_small_n(
-        self, x: Tensor, y: Tensor, *, device_ok: bool, dtype_ok: bool
-    ) -> bool:
-        """Use the center-equator C++ helper only where it is a measured win."""
-        if (
-            not self._use_center_equator_fast
-            or self.sip is not None
-            or self._cpp_center_pixel_to_world is None
-            or not device_ok
-            or not dtype_ok
-            or x.requires_grad
-            or y.requires_grad
-        ):
-            return False
-        limit = _CENTER_CPP_P2W_THRESHOLDS.get(self._proj_code)
-        return limit is not None and x.numel() <= limit
-
-    def _use_cpp_center_world_to_pixel_small_n(
-        self, ra: Tensor, dec: Tensor, *, device_ok: bool, dtype_ok: bool
-    ) -> bool:
-        """Use the center-equator C++ helper only where it is a measured win."""
-        if (
-            not self._use_center_equator_fast
-            or self.sip is not None
-            or self._cpp_center_world_to_pixel is None
-            or not device_ok
-            or not dtype_ok
-            or ra.requires_grad
-            or dec.requires_grad
-        ):
-            return False
-        limit = _CENTER_CPP_W2P_THRESHOLDS.get(self._proj_code)
-        return limit is not None and ra.numel() <= limit
-
-    def _cpp_project_direct_p2w(
-        self, xi: Tensor, eta: Tensor, cpp_kind: str
-    ) -> Tuple[Tensor, Tensor]:
-        """Direct C++ projection dispatch used by pixel->world fast path."""
-        if cpp_kind == "ait":
-            return _bound_cpp(self._cpp_ait_project)(xi, eta)
-        if cpp_kind == "mol":
-            return _bound_cpp(self._cpp_mol_project)(xi, eta)
-        if cpp_kind == "hpx":
-            return _bound_cpp(self._cpp_hpx_project)(xi, eta, self._hpx_h, self._hpx_k)
-        if cpp_kind == "zenithal":
-            return _bound_cpp(self._cpp_zenithal_project)(xi, eta, self._proj_code)
-        if cpp_kind == "zpn":
-            return _bound_cpp(self._cpp_zpn_project)(xi, eta, self._zpn_coeffs_cpu)
-        raise RuntimeError("unsupported_cpp_direct_projection")
-
-    def _cpp_deproject_direct_w2p(
-        self, phi_w: Tensor, theta: Tensor, cpp_kind: str
-    ) -> Tuple[Tensor, Tensor]:
-        """Direct C++ deprojection dispatch used by world->pixel fast path."""
-        if cpp_kind == "ait":
-            return _bound_cpp(self._cpp_ait_deproject)(phi_w, theta)
-        if cpp_kind == "hpx":
-            return _bound_cpp(self._cpp_hpx_deproject)(
-                phi_w, theta, self._hpx_h, self._hpx_k
-            )
-        if cpp_kind == "zenithal":
-            return _bound_cpp(self._cpp_zenithal_deproject)(
-                phi_w, theta, self._proj_code
-            )
-        raise RuntimeError("unsupported_cpp_direct_projection")
-
     def _local_uvw_from_radec(
         self, ra: Tensor, dec: Tensor
     ) -> Tuple[Tensor, Tensor, Tensor]:
@@ -273,29 +211,6 @@ class _PixelWorldCoreMixin:
         self, ra: Tensor, dec: Tensor
     ) -> Tuple[Tensor, Tensor]:
         """Exact TAN intermediate coordinates (xi, eta) from RA/Dec via cached local basis."""
-        if (
-            self._cpp_tan_intermediate_from_radec is not None
-            and not ra.requires_grad
-            and not dec.requires_grad
-            and ra.device.type == "cpu"
-            and dec.device.type == "cpu"
-            and ra.dtype == torch.float64
-            and dec.dtype == torch.float64
-        ):
-            ra_cpp = self._contiguous_if_needed(ra)
-            dec_cpp = self._contiguous_if_needed(dec)
-            return self._cpp_tan_intermediate_from_radec(
-                ra_cpp,
-                dec_cpp,
-                self._east_x,
-                self._east_y,
-                self._north_x,
-                self._north_y,
-                self._north_z,
-                self._radial_x,
-                self._radial_y,
-                self._radial_z,
-            )
         u, v, w = self._local_uvw_from_radec(ra, dec)
         valid = torch.isfinite(w) & (w > 64.0 * torch.finfo(w.dtype).eps)
         w_safe = torch.where(valid, w, torch.ones_like(w))
@@ -349,7 +264,7 @@ class _PixelWorldCoreMixin:
             or self._is_zea
             or self._is_stg
         ):
-            r = torch.hypot(xi, eta)
+            r = _hypot(xi, eta)
             phi = torch.atan2(-xi, -eta) * self._r2d
             if self._is_tan or self._is_tpv or self._is_tnx:
                 theta = torch.atan2(torch.ones_like(r), r * self._d2r) * self._r2d
@@ -373,7 +288,7 @@ class _PixelWorldCoreMixin:
             else:
                 theta = 90.0 - 2.0 * torch.atan((r * self._d2r) * 0.5) * self._r2d
         elif self._is_sin:
-            phi, theta = project_zenithal(xi, eta, "SIN", None, self._pv2_tensor)
+            phi, theta = project_zenithal(xi, eta, "SIN", None, self._pv2_values)
         elif self._is_ait:
             phi, theta = self._native_from_ait_fast(xi, eta)
         elif self._is_mol:
@@ -389,12 +304,12 @@ class _PixelWorldCoreMixin:
             sigma = torch.clamp(
                 (self._hpx_eta_pole - abs_eta) * self._hpx_inv_polar_denom, min=0.0
             )
-            s_theta = torch.where(
+            theta = torch.where(
                 mask_eq,
-                eta * self._hpx_inv_eta_scale,
-                torch.sign(eta) * (1.0 - (sigma * sigma) / self._hpx_k),
+                torch.asin(torch.clamp(eta * self._hpx_inv_eta_scale, -1.0, 1.0))
+                * self._r2d,
+                torch.sign(eta) * _polar_theta(sigma, self._hpx_k),
             )
-            theta = torch.asin(torch.clamp(s_theta, -1.0, 1.0)) * self._r2d
             facet_offset = torch.full_like(xi, self._hpx_facet_half_width)
             if self._hpx_k % 2.0 == 0.0:
                 facet_offset = torch.where(
@@ -415,7 +330,10 @@ class _PixelWorldCoreMixin:
             invalid = invalid | (
                 (~mask_eq)
                 & (~invalid)
-                & (torch.abs(xi - xc) > (self._hpx_facet_half_width * sigma + 1e-8))
+                & (
+                    torch.abs(xi - xc)
+                    > (self._hpx_facet_half_width * sigma + _plane_slack(xi, 1e-8))
+                )
             )
             nan = torch.full_like(phi, float("nan"))
             phi = torch.where(invalid, nan, phi)
@@ -434,7 +352,7 @@ class _PixelWorldCoreMixin:
             theta = 2.0 * (torch.atan(torch.exp(arg)) * self._r2d - 45.0)
         elif self._is_cyp:
             phi, theta = project_cylindrical(
-                xi, eta, "CYP", self._pv1_tensor, self._pv2_tensor
+                xi, eta, "CYP", self._pv1_values, self._pv2_values
             )
         elif self._is_car:
             # Inline trivial CAR projection: phi = xi, theta = eta
@@ -444,31 +362,31 @@ class _PixelWorldCoreMixin:
             phi = xi / torch.clamp(torch.cos(theta * self._d2r), min=1e-12)
         elif self._is_zpn:
             if self._is_zpn_linear:
-                r = torch.hypot(xi, eta)
+                r = _hypot(xi, eta)
                 phi = torch.atan2(-xi, -eta) * self._r2d
                 theta = 90.0 - r
             else:
-                phi, theta = project_zenithal(xi, eta, "ZPN", None, self._pv2_tensor)
+                phi, theta = project_zenithal(xi, eta, "ZPN", None, self._pv2_values)
         elif (
             self._proj_code in self.CONIC_CODES
             or self._proj_code in self.POLYCONIC_CODES
         ):
             phi, theta = project_conic(
-                xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                xi, eta, self._proj_code, self._pv1_values, self._pv2_values
             )
         elif self._proj_code in self.QUADCUBE_CODES:
             phi, theta = project_quadcube(xi, eta, self._proj_code)
         elif self._proj_code == "XPH":
             phi, theta = project_allsky(
-                xi, eta, "XPH", self._pv1_tensor, self._pv2_tensor
+                xi, eta, "XPH", self._pv1_values, self._pv2_values
             )
         elif self._proj_code == "PAR":
             phi, theta = project_allsky(
-                xi, eta, "PAR", self._pv1_tensor, self._pv2_tensor
+                xi, eta, "PAR", self._pv1_values, self._pv2_values
             )
         elif self._proj_code in ("AZP", "SZP", "AIR"):
             phi, theta = project_zenithal(
-                xi, eta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                xi, eta, self._proj_code, self._pv1_values, self._pv2_values
             )
         else:
             # Linear fallback, or any projection bound via _project_native_fn.
@@ -476,6 +394,9 @@ class _PixelWorldCoreMixin:
                 phi, theta = self._project_native_coords(xi, eta)
             else:
                 phi, theta = xi, eta
+
+        if self._native_bounds_check:
+            phi, theta = _native_bounds(phi, theta)
 
         if self._use_center_equator_fast:
             ra = _wrap_lon360(phi + self.alpha0)
@@ -499,14 +420,9 @@ class _PixelWorldCoreMixin:
 
         phi = 2.0 * torch.atan2(0.5 * z * X, 2.0 * z * z - 1.0) * self._r2d
         theta = torch.asin(torch.clamp(z * Y, -1.0, 1.0)) * self._r2d
-
-        if valid.all():
-            return phi, theta
-        phi = phi.clone()
-        theta = theta.clone()
-        phi.masked_fill_(~valid, float("nan"))
-        theta.masked_fill_(~valid, float("nan"))
-        return phi, theta
+        # Masked out of place (no ``valid.all()`` host sync or graph break).
+        nan = torch.full_like(phi, float("nan"))
+        return torch.where(valid, phi, nan), torch.where(valid, theta, nan)
 
     def _native_to_intermediate(
         self, phi: Tensor, theta: Tensor
@@ -549,7 +465,7 @@ class _PixelWorldCoreMixin:
             xi = torch.where(valid, xi, nan)
             eta = torch.where(valid, eta, nan)
         elif self._is_sin:
-            xi, eta = deproject_zenithal(phi, theta, "SIN", None, self._pv2_tensor)
+            xi, eta = deproject_zenithal(phi, theta, "SIN", None, self._pv2_values)
         elif self._is_ait:
             xi, eta = deproject_allsky(phi, theta, "AIT")
         elif self._is_mol:
@@ -559,7 +475,7 @@ class _PixelWorldCoreMixin:
             s_theta = torch.sin(theta * self._d2r)
             abs_s = torch.abs(s_theta)
             mask_eq = abs_s <= self._hpx_transition_sin
-            sigma = torch.sqrt(torch.clamp(self._hpx_k * (1.0 - abs_s), min=0.0))
+            sigma = _polar_sigma(theta, self._hpx_k)
             eta_pol = torch.sign(s_theta) * (
                 self._hpx_eta_pole - self._hpx_facet_half_width * sigma
             )
@@ -592,27 +508,27 @@ class _PixelWorldCoreMixin:
                 xi = -r * sin_phi
                 eta = -r * cos_phi
             else:
-                xi, eta = deproject_zenithal(phi, theta, "ZPN", None, self._pv2_tensor)
+                xi, eta = deproject_zenithal(phi, theta, "ZPN", None, self._pv2_values)
         elif (
             self._proj_code in self.CONIC_CODES
             or self._proj_code in self.POLYCONIC_CODES
         ):
             xi, eta = deproject_conic(
-                phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                phi, theta, self._proj_code, self._pv1_values, self._pv2_values
             )
         elif self._proj_code in self.QUADCUBE_CODES:
             xi, eta = deproject_quadcube(phi, theta, self._proj_code)
         elif self._proj_code == "XPH":
             xi, eta = deproject_allsky(
-                phi, theta, "XPH", self._pv1_tensor, self._pv2_tensor
+                phi, theta, "XPH", self._pv1_values, self._pv2_values
             )
         elif self._proj_code == "PAR":
             xi, eta = deproject_allsky(
-                phi, theta, "PAR", self._pv1_tensor, self._pv2_tensor
+                phi, theta, "PAR", self._pv1_values, self._pv2_values
             )
         elif self._proj_code in ("AZP", "SZP", "AIR"):
             xi, eta = deproject_zenithal(
-                phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                phi, theta, self._proj_code, self._pv1_values, self._pv2_values
             )
         elif self._is_zpx:
             xi, eta = deproject_zpx(phi, theta, self._projection_params, self.wat_data)
@@ -620,25 +536,25 @@ class _PixelWorldCoreMixin:
             # Fallback: dispatch to the appropriate deproject function.
             if self._project_native_kind == "zenithal":
                 xi, eta = deproject_zenithal(
-                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                    phi, theta, self._proj_code, self._pv1_values, self._pv2_values
                 )
             elif self._project_native_kind == "cylindrical":
                 xi, eta = deproject_cylindrical(
-                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                    phi, theta, self._proj_code, self._pv1_values, self._pv2_values
                 )
             elif self._project_native_kind == "allsky":
                 xi, eta = deproject_allsky(
-                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                    phi, theta, self._proj_code, self._pv1_values, self._pv2_values
                 )
             elif self._project_native_kind == "conic":
                 xi, eta = deproject_conic(
-                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                    phi, theta, self._proj_code, self._pv1_values, self._pv2_values
                 )
             elif self._project_native_kind == "quadcube":
                 xi, eta = deproject_quadcube(phi, theta, self._proj_code)
             else:
                 xi, eta = deproject_zenithal(
-                    phi, theta, self._proj_code, self._pv1_tensor, self._pv2_tensor
+                    phi, theta, self._proj_code, self._pv1_values, self._pv2_values
                 )
         return xi, eta
 
@@ -648,7 +564,6 @@ class _PixelWorldCoreMixin:
         dec: Tensor,
         origin: float,
         *,
-        allow_cpp_inverse_sphere: bool = True,
         intermediate_only: bool = False,
     ) -> Tuple[Tensor, Tensor]:
         """
@@ -681,10 +596,7 @@ class _PixelWorldCoreMixin:
                 phi, theta = _wrap_lon180(ra - self.alpha0), dec
             else:
                 phi, theta = self._inverse_spherical_rotation(
-                    ra,
-                    dec,
-                    self._native_type,
-                    allow_cpp_inverse_sphere=allow_cpp_inverse_sphere,
+                    ra, dec, self._native_type
                 )
 
             # 2. Inverse Projection (Native -> Intermediate)
@@ -709,17 +621,9 @@ class _PixelWorldCoreMixin:
             return xi, eta
         return self._pixels_from_intermediate(xi, eta, origin)
 
-    def _stacked_world_to_pixel_flat(
-        self,
-        world_flat: Tensor,
-        origin: float,
-        *,
-        allow_cpp_inverse_sphere: bool = True,
-    ) -> Tensor:
-        """Fused ``world -> (px, py)`` for stacked 2D spatial + ``torch.compile``."""
+    def _stacked_world_to_pixel_flat(self, world_flat: Tensor, origin: float) -> Tensor:
+        """Single-graph ``world -> (px, py)`` for stacked 2D spatial + ``torch.compile``."""
         ra = world_flat[:, self._celestial_lon_axis]
         dec = world_flat[:, self._celestial_lat_axis]
-        px, py = self._world_to_pixel_2d_core(
-            ra, dec, origin, allow_cpp_inverse_sphere=allow_cpp_inverse_sphere
-        )
+        px, py = self._world_to_pixel_2d_core(ra, dec, origin)
         return torch.stack((px, py), dim=-1)

@@ -17,11 +17,13 @@ as the candidate list and score them yourself.
 ## How It Works
 
 Testing every left row against every right row costs \(O(NM)\). torchsky
-sorts the right catalog once by **declination strip** (strips at least one
-radius high) and right ascension inside each strip. The match cap of a left row
-then touches a few adjacent strips, and in each strip it covers one contiguous
-range of right ascension (two at the 0/360° wrap, the whole strip near a pole),
-found with a binary search. Only those candidates go through the exact test
+sorts the right catalog once into **zones**, declination bands, and by right
+ascension inside each zone (Gray, Szalay and Nieto-Santisteban 2006). The match
+cap of a left row of radius \(r\) at declination \(\delta\) meets the zones
+covering \([\delta - r, \delta + r]\). Within each zone it covers one contiguous
+range of right ascension of half-width \(\arcsin(\sin r / \cos\delta)\): two
+pieces at the 0/360° wrap, and the whole zone when the cap holds a pole. A binary
+search finds each range. Only those candidates go through the exact test
 
 \[
 \theta = \operatorname{atan2}\left(\lVert \mathbf a \times \mathbf b \rVert,\; \mathbf a \cdot \mathbf b\right) \le r,
@@ -32,25 +34,27 @@ sub-milliarcsecond separations, where the arccosine of a dot product does not.
 
 ```mermaid
 flowchart LR
-    R["right catalog"] -->|"sort by<br/>(dec strip, RA)"| I["strip index"]
+    R["right catalog"] -->|"sort by<br/>(zone, RA)"| I["SkyIndex"]
     L["left catalog<br/>(chunks)"] --> C["candidate ranges<br/>binary search"]
     I --> C
     C -->|"exact great-circle test"| P["pairs within threshold"]
     P -->|"find= best1, best2,<br/>mutual, symmetric, all"| M["CrossmatchResult"]
 ```
 
-The cost is \(O((N + M)\log M + K)\) for \(K\) candidate pairs, and candidate
-generation never drops a pair that passes the exact test. Chunk sizes bound
-memory without changing the result. When you pass a prebuilt
-[`HealpixIndex`](../reference/catalogs.md#torchsky.catalogs.HealpixIndex) as
-`right_index=`, the candidates come from nested HEALPix cells instead, with the
-same exact test.
+The cost is \(O((N + M)\log M + K)\) for \(K\) candidate pairs. Candidate
+ranges are padded by a few float64 ulp, so they never drop a pair that passes
+the exact test. The zone height changes the cost, never the result, and so do
+chunk sizes, thread count and device. Build the index once with
+[`SkyIndex`](../reference/catalogs.md#torchsky.catalogs.SkyIndex) and pass it
+as `index=` to reuse it across calls.
 
 **Assumptions.** Both tables are in the same frame at the same epoch; positions
 are degrees and thresholds arcseconds; the threshold is a circle (no error
-ellipses). **Validation.** Every `find` mode is tested against a brute-force
-\(O(NM)\) search, and separations agree with Astropy `SkyCoord` to about
-\(10^{-10}\) arcsec; see [parity](../performance/parity.md).
+ellipses). **Validation.** Every `find` mode, `match_within`, `match_nearest` and
+`count_within` is tested against a brute-force \(O(NM)\) search at the poles
+(including exactly ±90°), across the RA wrap, in a crowded cluster, and with
+per-row radii spanning five decades. Separations agree with Astropy `SkyCoord`
+to about \(10^{-10}\) arcsec; see [parity](../performance/parity.md).
 
 ## Gaia, 2MASS and AllWISE Around M67
 
@@ -91,9 +95,9 @@ search on a subset reproduces the indexed result exactly.
 Every matcher returns a
 [`CrossmatchResult`](../reference/catalogs.md#torchsky.catalogs.CrossmatchResult)
 with `left_index`, `right_index`, and `separation_arcsec`. Indices refer to the
-original input row order, also for Arrow and streamed inputs. Exact ties go to
-the lowest row index, so results do not depend on chunking or device. An empty
-input returns empty tensors.
+original input row order. Exact ties go to the lowest row index, so results do
+not depend on chunking, threads or device. An empty input returns empty tensors;
+positions must be finite.
 
 <!-- docs: run -->
 ```python
@@ -218,52 +222,355 @@ per catalog, the member with the smallest separation to the rest of the group;
 ### Match catalogs at different epochs
 
 Stars move. For catalogs observed years apart, propagate positions to one epoch
-before matching: `Catalog.crossmatch(..., target_epoch=2000.0)` applies linear
-proper motion (`motion="angular"`) or full space motion with parallax and
-radial velocity (`motion="physical"`). Rows with missing or NaN motion raise
-rather than being treated as fixed; fill them explicitly if that is what you
-want. See [Frames and time](../coordinates/frames.md) and
+before matching: `Catalog.crossmatch(..., target_epoch=2000.0)` moves each row
+with the richest motion it has. Rows with proper motion, positive parallax and
+radial velocity get full space motion. Rows with proper motion only get linear
+proper motion; a non-positive parallax is then ignored, never "fixed". Rows
+without proper motion need an explicit
+[`MotionPrior`](../reference/catalogs.md#torchsky.catalogs.MotionPrior), for
+example the Gaia proper-motion distribution of their sky cell. Missing motion
+is never treated as zero, and the call raises instead. See
+[Frames and time](../coordinates/frames.md) and
 [Catalog containers](containers.md#frames-epochs-and-motion).
 
-### Per-row radii and streaming
+### Positional uncertainties
 
-`radius_arcsec` may be a tensor with one radius per left row; candidate windows
-use the largest radius, the exact test each row's own.
-[`crossmatch_sky_streamed`](../reference/catalogs.md#torchsky.catalogs.crossmatch_sky_streamed)
-takes an iterable of `(ra, dec)` left batches against one in-memory right
-catalog and returns `best1` pairs with left indices into the concatenated
-stream. Scalar radii only.
+[`Astrometry`](../reference/catalogs.md#torchsky.catalogs.Astrometry) holds one
+6x6 covariance per row in the local east/north basis: position, proper motion,
+parallax and radial velocity, in mas and mas/yr. Build it from Gaia's archive
+columns (`Astrometry.from_gaia`), a 2MASS-style error ellipse
+(`from_ellipse`) or plain errors (`from_errors`). Quantities a catalogue does
+not measure stay NaN, never zero.
+[`propagate_astrometry`](../reference/catalogs.md#torchsky.catalogs.propagate_astrometry)
+returns positions and the position covariance at another epoch, \(J C J^T\)
+with the exact motion Jacobian. For rows without proper motion the covariance
+grows by \(\Delta t^2\) times the prior's covariance.
 
 <!-- docs: run -->
 ```python
 import torch
 
-from torchsky.catalogs import crossmatch_sky, crossmatch_sky_streamed
+from torchsky.catalogs import Astrometry, propagate_astrometry
+from torchsky.coords import CatalogState
+
+state = CatalogState(
+    lon=torch.tensor([269.45]), lat=torch.tensor([4.69]), epoch=2016.0,
+    pm_lon_coslat_mas_yr=torch.tensor([-798.6]), pm_lat_mas_yr=torch.tensor([10328.1]),
+)
+errors = Astrometry.from_gaia({
+    "ra_error": torch.tensor([0.03]), "dec_error": torch.tensor([0.03]),
+    "parallax_error": torch.tensor([0.04]), "pmra_error": torch.tensor([0.04]),
+    "pmdec_error": torch.tensor([0.04]),
+    **{f"{a}_{b}_corr": torch.tensor([0.0]) for a, b in [
+        ("ra", "dec"), ("ra", "parallax"), ("ra", "pmra"), ("ra", "pmdec"),
+        ("dec", "parallax"), ("dec", "pmra"), ("dec", "pmdec"),
+        ("parallax", "pmra"), ("parallax", "pmdec"), ("pmra", "pmdec")]},
+})
+moved, cov = propagate_astrometry(state, errors, 2000.0)
+sigma = cov[0].diagonal().sqrt()  # mas: 16 yr of 0.04 mas/yr pm error on 0.03 mas
+assert torch.allclose(sigma, torch.full((2,), (0.03**2 + (16 * 0.04) ** 2) ** 0.5, dtype=torch.float64), rtol=1e-3)
+```
+
+### Probabilistic counterparts
+
+[`associate`](../reference/catalogs.md#torchsky.catalogs.associate) goes beyond a
+fixed radius. It decides counterparts from each pair's uncertainties and the
+background density:
+
+1. **Common epoch.** Both catalogs move to one epoch with their covariances
+   (`propagate_astrometry`).
+2. **Candidates.** A pair is a candidate when its Mahalanobis distance passes a
+   \(\chi^2_2\) gate: \(d^2 = \Delta^T (C_l + C_r)^{-1} \Delta \le k^2\), where \(k^2\) is the
+   \(1-\alpha\) quantile for `gate_pvalue` \(=\alpha\). Search radii follow from the
+   covariances, so no pair inside the gate is ever missed. \(\Delta\) and both
+   covariances are expressed at the pair's midpoint (parallel transport), which
+   is exact at the poles.
+3. **Likelihood ratio.** For each candidate,
+   \(\mathrm{LR} = \mathcal N(\Delta; 0, \Sigma)/\nu\), where \(\nu\) is the right
+   catalog's surface density over its footprint (a `MOC`; pass the survey footprint).
+   Optional photometric terms (`HistogramRatio`) multiply it.
+4. **Posterior.** By default (`exclusive=True`) a right row is the counterpart
+   of at most one left row. Each likelihood ratio is discounted by the
+   probability \(\rho_{ij}\) that no competing left row takes the right row:
+   \(P_{ij} = \pi\,\mathrm{LR}_{ij}\rho_{ij} / ((1-\pi) + \pi \sum_k \mathrm{LR}_{ik}\rho_{ik})\).
+   \(\rho\) comes from belief propagation on the candidate graph (the Bethe
+   approximation of the one-to-one model). It is exact when the graph has no
+   cycles, and \(\rho = 1\) when no right row is shared, so isolated pairs keep
+   the classic Sutherland & Saunders posterior. `exclusive=False` gives the
+   independent posteriors of nway.
+5. **Assignment.** `assign="optimal"` gives the exact one-to-one assignment that
+   maximises \(\sum \log(P_{ij}/P_{i0})\).
+
+`completeness="em"` fits \(\pi\). Fitted quantities are maximum marginal
+likelihood estimates, optimised directly (L-BFGS), which also matters in
+crowded fields where EM takes hundreds of steps. With `exclusive=True` the
+background density \(\nu\) is fitted too: it counts only right rows that are
+not counterparts.
+
+When the right catalog has per-row epochs (for example 2MASS observation dates),
+each candidate pair is evaluated with the left row propagated to that right
+row's own epoch. Published errors are often miscalibrated.
+`calibrate="scale_floor"` fits a scale on the right catalog's errors and a
+systematic floor from the matches themselves, and reports both
+(`right_scale`, `floor_mas2`).
+
+**Crowded fields.** A shallow catalog matched against a deep one, such as
+CatWISE against Gaia in the bulge, puts each right row inside the gates of
+many left rows. The independent model then lets all of them claim it, so the
+completeness, the photometric terms and the error calibration learn from
+counterparts counted several times. The exclusive model counts each right row
+once. On an injected crowded field (0.6 Gaia-like sources per arcsec\(^2\),
+15 % with a counterpart whose published errors are half the true ones) it
+recovers the completeness (0.150 vs 0.151) and the error scale (1.92 vs 2),
+with 30 % more correct matches at higher purity than the independent model.
+On CPU the belief-propagation solve is one native call. With calibration,
+the calibration rounds first settle with the independent model and the
+exclusive fit starts from there, so on a crowded synthetic field it costs
+about 2.5 times the independent one.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import Astrometry, Catalog, associate
+
+opt = Catalog(lon=torch.tensor([10.0, 10.01]), lat=torch.tensor([0.0, 0.0]), epoch=2016.0,
+              astrometry=Astrometry.from_errors(torch.tensor([50.0, 50.0]), torch.tensor([50.0, 50.0])))
+ir = Catalog(lon=torch.tensor([10.00003, 10.01, 10.02]), lat=torch.tensor([0.0, 0.00002, 0.0]), epoch=2016.0,
+             astrometry=Astrometry.from_ellipse(torch.tensor([300.0] * 3), torch.tensor([100.0] * 3),
+                                                torch.tensor([90.0] * 3)))
+res = associate(opt, ir, completeness=0.9, max_radius_arcsec=5.0)
+assert res.left_index[res.match].tolist() == [0, 1] and res.right_index[res.match].tolist() == [0, 1]
+assert torch.all(res.posterior[res.match] > 0.9)
+```
+
+### Blends in low-resolution catalogs
+
+A WISE source (6″ PSF) is often two Gaia stars at once: its position is
+their flux-weighted centroid, which lies between the two. A one-to-one model
+must then pick one star or reject both, and in a crowded field the fitted
+error scale grows to explain the offsets.
+`associate(blends="pairs", blend_radius_arcsec=r)` adds the blend
+hypothesis. Each right row is background, one left row, or a pair of left
+rows closer than `r` (the right catalog's resolution) observed at
+\(f \mathbf x_a + (1-f) \mathbf x_b\), where \(f\) is the flux share of
+\(a\) in the right catalog's band.
+
+- **Flux ratio.** `blend_flux` (one linear flux per left row, for example
+  predicted W1 from Gaia photometry; NaN where unknown) fixes \(f\). Without
+  it, \(f\) has a uniform prior on \([0, 1]\) and is integrated in closed form.
+- **Model.** Single left rows (probability `completeness`) and left pairs within `r`
+  (probability \(\eta\), the blend rate) are independent sources of right
+  rows, conditioned on each left row contributing to at most one right row.
+  \(\eta\) is fitted with completeness, calibration and background density by
+  maximum marginal likelihood. Because the conditioning normalises the prior,
+  a higher \(\eta\) is not free: blends must be supported by positions.
+- **Solver.** The same belief propagation as the exclusive model, with each
+  right row choosing among its hypotheses. It is exact on cycle-free candidate
+  graphs. Without pair sources it equals `exclusive=True`. Cost and memory are
+  linear in the candidates and in the left pairs within `r`, which are
+  searched in chunks and kept only when their centroid passes the
+  \(\chi^2_2\) gate.
+- **Result.** The pair arrays hold every (left, right) edge of a hypothesis.
+  `posterior` is the probability that the left row is part of the right row's
+  counterpart, alone or in a blend. `match` takes each right row's most
+  probable hypothesis, greedily by posterior (with blends the assignment is
+  not the exact one-to-one optimum). `res.blend`
+  ([`BlendAssociation`](../reference/catalogs.md#torchsky.catalogs.BlendAssociation))
+  holds:
+  - the pair hypotheses: `right_index`, `members`, `posterior`,
+    `flux_fraction`;
+  - the single-hypothesis probability per edge (`p_single`);
+  - per right row, `p_background`, `map_members` and `map_posterior`;
+  - the fitted `blend_rate`.
+
+On an injected field the blend model fits the error scale without the
+inflation of the one-to-one fit, and gets more right rows' states right.
+The field has 0.1 left rows per arcsec², 30 % detected, a third of the
+detections blended with a neighbour within 4″, and published errors half
+the true ones. Blend model against the exclusive one, over 10⁴ left rows:
+
+- error scale: 1.93 against 2.14, for a true 2 (1.99 against 2.14 over
+  10⁵ rows);
+- right rows whose state is right: 78–79 % against 74 %;
+- true members at posterior > 0.9: 59–62 % against 55 %, at the same purity
+  (0.97).
+
+Equal-flux blends are recovered as pairs. A pair with a faint member
+looks like its bright member alone, and the model says so. Two caveats:
+
+- With the error scale held at a wrong value, blends absorb part of the
+  miscalibration. Fit the calibration (`calibrate=`) or transfer it from a
+  field where it is identifiable.
+- Blends of three or more sources, PSF-weighted centroids and photometric
+  `terms` are not modelled. Where many faint stars shift every centroid
+  (a WISE-like field with 0.37 stars per arcsec²), the marginalised flux
+  ratio still helps: 49 % of detections get their brightest star, against
+  36 % for the exclusive model. Fixed `blend_flux` ratios are then wrong,
+  because PSF weighting is missing, and the fit degenerates into pairs.
+- The fit costs more than the exclusive one: 2–3 times over 10⁴ rows, and
+  more where the calibration takes all its rounds.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import Astrometry, Catalog, associate
+
+err = lambda n, s: Astrometry.from_errors(torch.full((n,), s), torch.full((n,), s))
+# Gaia-like: two stars 3" apart (W1 fluxes 2:1) and an isolated star.
+gaia = Catalog(lon=torch.tensor([10.0, 10.0 + 3 / 3600, 10.01]), lat=torch.zeros(3),
+               epoch=2016.0, astrometry=err(3, 5.0))
+w1_flux = torch.tensor([2.0, 1.0, 1.0])
+# WISE-like: one detection at the pair's flux-weighted centroid (1" from the
+# brighter star), one on the isolated star.
+wise = Catalog(lon=torch.tensor([10.0 + 1 / 3600, 10.01]), lat=torch.zeros(2),
+               epoch=2016.0, astrometry=err(2, 100.0))
+plain = associate(gaia, wise, completeness=0.5, max_radius_arcsec=5.0)
+assert plain.left_index[plain.match].tolist() == [2]  # the blend is 10 sigma off
+res = associate(gaia, wise, completeness=0.5, max_radius_arcsec=5.0,
+                blends="pairs", blend_radius_arcsec=6.0, blend_flux=w1_flux)
+assert res.blend.map_members.tolist() == [[0, 1], [2, -1]]
+assert float(res.blend.posterior[0]) > 0.99
+```
+
+### Several catalogs at once
+
+[`associate_many`](../reference/catalogs.md#torchsky.catalogs.associate_many)
+scores, for each primary row, every combination of one gated counterpart (or
+none) per other catalog. Its weight is the exact Gaussian likelihood that all
+present positions come from one true position (Budavári & Szalay 2008, with
+full covariances), times each catalog's completeness and inverse density. The
+result lists the hypotheses per primary row with posteriors, `p_any` (any
+counterpart) and the MAP hypothesis. Primary rows with more than `budget`
+combinations are enumerated best-first by an upper bound, and the posterior
+mass left out is certified (`residual_mass` \(\le\) `mass_tol`). Nothing is
+truncated silently. With `exclusive=True` the model counts each source of
+any catalog as part of at most one primary's counterpart set, and the
+posteriors account for that competition across primaries. The MAP
+hypothesis (`best`) is still chosen per primary, not by a joint one-to-one
+assignment.
+
+`terms` adds photometry: one tuple of `HistogramRatio` per secondary catalog
+(in catalog order, the primary skipped), as in `associate`. A right
+magnitude uses that catalog's values; a pair colour (`left_values`) is
+relative to the primary, for example W1 − G. Each present member's factor is
+multiplied by its ratio. The ratios are learnt first by each pairwise fit,
+then by EM from the hypothesis posteriors (a candidate's weight is the mass
+of the hypotheses that hold it). The best-first bound includes each
+candidate's ratio, so `residual_mass` stays certified. With two catalogs
+the result equals `associate` with the same terms. On an injected
+three-catalog field with about one background source per gate, position
+alone gets 87 % of the MAP triples right; right magnitudes or a colour
+against the primary raise that to 98 %. The ratios are learnt
+from the population, so they need many primaries; the given `HistogramRatio`
+objects hold the learnt ratios afterwards.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import Astrometry, Catalog, HistogramRatio, associate_many
+
+err = lambda n, s: Astrometry.from_errors(torch.full((n,), s), torch.full((n,), s))
+opt = Catalog(lon=torch.tensor([10.0, 10.01]), lat=torch.tensor([0.0, 0.0]),
+              epoch=2016.0, astrometry=err(2, 50.0))
+ir = Catalog(lon=torch.tensor([10.0003, 9.9997, 10.01]), lat=torch.tensor([0.0, 0.0, 0.0]),
+             epoch=2016.0, astrometry=err(3, 400.0))
+uv = Catalog(lon=torch.tensor([10.00001]), lat=torch.tensor([0.0]), epoch=2016.0,
+             astrometry=err(1, 100.0))
+g_mag = torch.tensor([15.0, 16.0])
+w1 = torch.tensor([14.0, 19.5, 15.1])
+uv_mag = torch.tensor([17.0])
+terms = [
+    (HistogramRatio(w1, [torch.linspace(-6.0, 8.0, 15)], left_values=g_mag),),  # W1 - G
+    (HistogramRatio(uv_mag, [torch.linspace(12.0, 24.0, 13)]),),  # UV magnitude
+]
+res = associate_many([opt, ir, uv], completeness=[0.9, 0.9], terms=terms,
+                     max_radius_arcsec=5.0)
+per_primary = torch.zeros(2, dtype=torch.float64).index_add(
+    0, res.members[:, 0], res.posterior)
+assert torch.allclose(per_primary, torch.ones(2, dtype=torch.float64))
+assert float(res.residual_mass.max()) == 0.0
+```
+
+### Per-row radii, nearest neighbours and counts
+
+`radius_arcsec` may be a tensor with one radius per left row. Each row's window
+uses its own radius, so one large radius does not slow the others.
+[`match_within`](../reference/catalogs.md#torchsky.catalogs.match_within) returns
+every pair. With `right_radius_arcsec=` it applies a two-sided threshold
+`combine(r_left[i], r_right[j])`, with `combine` one of `"sum"` (STILTS `skyerr`),
+`"quadrature"` or `"max"`.
+[`match_nearest`](../reference/catalogs.md#torchsky.catalogs.match_nearest)
+returns the exact `k` nearest right rows per left row, optionally capped by
+`max_radius_arcsec`. [`count_within`](../reference/catalogs.md#torchsky.catalogs.count_within)
+counts the neighbours of each row. All three accept a prebuilt
+[`SkyIndex`](../reference/catalogs.md#torchsky.catalogs.SkyIndex) as `index=`,
+and the index has the same three queries as methods.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import SkyIndex, count_within, match_nearest, match_within
 
 left_ra = torch.tensor([10.0, 10.0], dtype=torch.float64)
 left_dec = torch.tensor([0.0, 0.001], dtype=torch.float64)
-right_ra, right_dec = left_ra[:1].clone(), left_dec[:1].clone()
+right_ra = torch.tensor([10.0, 10.0002, 50.0], dtype=torch.float64)
+right_dec = torch.zeros(3, dtype=torch.float64)
 
-per_row = crossmatch_sky(left_ra, left_dec, right_ra, right_dec, radius_arcsec=torch.tensor([1.0, 1.0]))
-assert per_row.left_index.tolist() == [0]
+per_row = match_within(left_ra, left_dec, right_ra, right_dec, torch.tensor([1.0, 0.5]))
+assert per_row.left_index.tolist() == [0, 0]
 
-batches = iter([(left_ra[:1], left_dec[:1]), (left_ra[1:], left_dec[1:])])
-streamed = crossmatch_sky_streamed(batches, right_ra, right_dec, radius_arcsec=4.0)
-assert streamed.left_index.tolist() == [0, 1]
+nearest = match_nearest(left_ra, left_dec, right_ra, right_dec, k=2)
+assert nearest.index.tolist() == [[0, 1], [0, 1]]
+
+index = SkyIndex.build(right_ra, right_dec)
+assert count_within(left_ra, left_dec, right_ra, right_dec, 4.0, index=index).tolist() == [2, 2]
+assert index.query_nearest(left_ra, left_dec, 1, max_radius_arcsec=1.0).index.tolist() == [[0], [-1]]
 ```
+
+`match_nearest` is exact without a radius: search radii double from a guess set
+by the mean density until each row has `k` neighbours, so dense fields resolve
+in the first rounds and sparse targets far from a small catalog still find
+their neighbours.
+
+### Coming from Astropy or SciPy
+
+| Astropy / SciPy | torchsky |
+|---|---|
+| `SkyCoord.match_to_catalog_sky(c2, nthneighbor=n)` | `match_nearest(..., k=n).index[:, n - 1]` |
+| `search_around_sky(c1, c2, seplimit)` | `match_within(..., radius_arcsec)` |
+| `cKDTree(xyz).query(xyz, k, distance_upper_bound=chord)` | `match_nearest(..., k, max_radius_arcsec=r)` |
+| `cKDTree(xyz).query_ball_point(xyz, chord)` | `match_within(..., radius_arcsec=r)` |
+| `query_ball_point(..., return_length=True)` | `count_within(...)` |
+
+Radii are angles in arcseconds rather than chord lengths, inputs are degrees,
+and results never depend on the order of the catalogue on disk: ties go to the
+lowest row index.
 
 ### Scale to large catalogs and other devices
 
 - `left_chunk_size` and `right_chunk_size` bound the working set; they never
   change the result.
 - `device="cuda"` moves the inputs and returns results there. Indices agree
-  with the CPU; separations agree to floating-point tolerance. On MPS positions
-  are float32 (about 0.1 arcsec near RA 360°), so smaller radii are not
-  meaningful there.
-- When the left table does not fit in memory, stream it; when both tables are
-  Arrow tables or IPC files, use
-  [`crossmatch_sky_from_arrow`](containers.md#arrow-and-fits-tables), which
-  tiles both on disk.
+  with the CPU; separations agree to floating-point tolerance. With MPS inputs
+  or `device="mps"`, matching runs on the CPU in float64 (MPS has no float64),
+  and indices and float32 separations come back on MPS, so results equal the
+  CPU's. Pass float64 CPU positions: float32 positions are already quantised to
+  about 0.1 arcsec.
+- For catalogs larger than memory, read them in sky partitions (HEALPix or
+  HATS tiles) with torchfits, pyarrow or polars, and let
+  [`PartitionPlan`](../reference/catalogs.md#torchsky.catalogs.PartitionPlan)
+  decide what to read. `plan.owner(lon, lat)` assigns rows to cells (order-29
+  ranges, the HATS `_healpix_29` convention), and `margin_arcsec(radius, ...)`
+  bounds how far a counterpart can be: the radius, plus errors, plus motion
+  over the epoch gap. `left_plan.neighbors(margin, right_plan)` lists the
+  right cells that can hold counterparts, and `left_plan.in_margin(p, ...)` keeps
+  the right rows that can reach cell `p`. Match each cell's owned left rows
+  against those right rows; the union over cells equals the single-pass
+  result for `all`, `best` and `match_nearest`, with no de-duplication.
 - The [million-row example](../published-examples/crossmatch_million.py)
   matches \(10^6 \times 10^6\) rows in about 0.5 s per mode on a CPU.
 

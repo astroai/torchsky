@@ -147,3 +147,48 @@ def test_relative_spectral_prior_is_brightness_independent() -> None:
     assert penalty(1000.0, "relative") / penalty(1.0, "relative") < 10.0
     with pytest.raises(ValueError):
         SpectralSkyField(Fixed(shape), basis, nodes, weights, smoothness_mode="nope")
+
+
+@pytest.mark.parametrize("mode", ["relative", "absolute"])
+def test_spectral_penalty_is_zero_without_a_second_difference(mode: str) -> None:
+    # Two basis functions have no second difference across k: the prior is
+    # identically zero, not the NaN mean of an empty tensor.
+    basis = LogLambdaRBFBasis(2, 1.0, 2.0)
+    coeff = nn.Parameter(torch.randn(2, 3, 3))
+
+    class Grid(nn.Module):
+        def forward(self) -> torch.Tensor:
+            return coeff
+
+    field = SpectralSkyField(
+        Grid(),
+        basis,
+        torch.tensor([[1.2, 1.5]]),
+        torch.tensor([[0.5, 0.5]]),
+        spectral_smoothness=1.0,
+        smoothness_mode=mode,
+    )
+    penalty = field.penalty()
+    assert torch.equal(penalty, torch.zeros_like(penalty))
+    assert penalty.dtype == coeff.dtype
+
+
+def test_chromatic_psf_basis_keeps_float64_wavelengths() -> None:
+    torch.manual_seed(0)
+    psf = ChromaticPSFField(
+        num_channels=1, num_detectors=1, pixel_scale_arcsec=0.03, size=7
+    ).double()
+    channel = torch.tensor([0])
+
+    def core(lam: torch.Tensor) -> torch.Tensor:
+        return psf.basis(lam, channel)[:, 0]
+
+    lam = torch.tensor([1.5], dtype=torch.float64, requires_grad=True)
+    assert core(lam).dtype == torch.float64
+    # A float32 cast of the wavelength flattens this finite difference to zero
+    # and breaks the float64 wavelength derivative.
+    step = 1.0e-7
+    with torch.no_grad():
+        finite = (core(lam + step) - core(lam - step)) / (2 * step)
+    assert float(finite.abs().max()) > 0.0
+    assert torch.autograd.gradcheck(core, (lam,))

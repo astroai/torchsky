@@ -79,11 +79,22 @@ ra = 150.0 + 0.01 * torch.rand(1000, dtype=torch.float64)          # 36 arcsec p
 dec = 2.0 + 0.01 * torch.rand(1000, dtype=torch.float64)
 wave = torch.full((1000,), 6000.0, dtype=torch.float64)
 
-encoder = SkyCoordinateEncoder(num_fourier_frequencies=6, min_frequency=2 * math.pi / math.radians(0.01))
+encoder = SkyCoordinateEncoder(
+    num_fourier_frequencies=6,
+    min_frequency=2 * math.pi / math.radians(0.01),
+    lon_center_deg=150.0,
+)
 features = encoder(ra, dec, wavelength=wave)
 network = torch.nn.Sequential(torch.nn.Linear(features.shape[-1], 32), torch.nn.SiLU(), torch.nn.Linear(32, 1)).double()
 assert network(features).shape == (1000, 1)
+torch.testing.assert_close(encoder(ra + 360.0, dec, wavelength=wave), features)
 ```
+
+A scaled `min_frequency` is not an integer, so `sin(f * ra)` is not periodic in
+RA by itself. The encoder wraps RA into `lon_center_deg ± 180°` first, which
+makes the features a function of sky position and puts the seam opposite the
+patch. Pass the patch centre; field models built by `make_field_model` pass
+their domain centre.
 
 ## Recipes
 

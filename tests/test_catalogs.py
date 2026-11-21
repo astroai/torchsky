@@ -2,12 +2,12 @@ import pytest
 import torch
 from torch.utils.data import DataLoader
 
-import torchsky.catalogs.core as catalogs_core
 from torchsky.catalogs import (
     Catalog,
     CatalogStreamDataset,
     CrossmatchResult,
     HealpixIndex,
+    SkyIndex,
     crossmatch_sky,
 )
 from torchsky.coords import EarthOrientation, Site, transform
@@ -80,9 +80,7 @@ def test_catalog_crossmatch_physical_epoch_alignment_uses_complete_motion() -> N
         lat=torch.tensor([moved.dec.deg]),
         epoch=2020.0,
     )
-    result = left.crossmatch(
-        right, radius_arcsec=0.001, target_epoch=2020.0, motion="physical"
-    )
+    result = left.crossmatch(right, radius_arcsec=0.001, target_epoch=2020.0)
     assert result.left_index.tolist() == result.right_index.tolist() == [0]
     assert result.separation_arcsec.item() < 0.001
 
@@ -91,18 +89,19 @@ def test_catalog_crossmatch_epoch_alignment_refuses_missing_motion_and_stale_ind
     None
 ):
     cat = Catalog(lon=torch.tensor([10.0]), lat=torch.tensor([0.0]), epoch=2000.0)
-    with pytest.raises(ValueError, match="pm_lon"):
+    with pytest.raises(ValueError, match="motion_prior|prior_pm"):
         cat.crossmatch(cat, radius_arcsec=1.0, target_epoch=2020.0)
-    with pytest.raises(ValueError, match="right_index"):
+    with pytest.raises(ValueError, match="index"):
         cat.crossmatch(
-            cat, radius_arcsec=1.0, target_epoch=2020.0, right_index=cat.index()
+            cat,
+            radius_arcsec=1.0,
+            target_epoch=2020.0,
+            index=SkyIndex.build(cat.lon, cat.lat),
         )
     with pytest.raises(ValueError, match="scalar"):
         cat.crossmatch(
             cat, radius_arcsec=1.0, target_epoch=torch.tensor([2000.0, 2020.0])
         )
-    with pytest.raises(ValueError, match="motion"):
-        cat.crossmatch(cat, radius_arcsec=1.0, target_epoch=2000.0, motion="invented")
 
 
 def test_catalog_preserves_fractional_epoch_precision() -> None:
@@ -113,17 +112,15 @@ def test_catalog_preserves_fractional_epoch_precision() -> None:
 
 
 def test_crossmatch_rejects_index_from_different_right_coordinates() -> None:
-    from torchsky.catalogs import HealpixIndex
-
-    wrong_index = HealpixIndex.build(torch.tensor([200.0]), torch.tensor([0.0]))
-    with pytest.raises(ValueError, match="right_index"):
+    wrong_index = SkyIndex.build(torch.tensor([200.0]), torch.tensor([0.0]))
+    with pytest.raises(ValueError, match="different positions"):
         crossmatch_sky(
             torch.tensor([10.0]),
             torch.tensor([0.0]),
             torch.tensor([10.0]),
             torch.tensor([0.0]),
             radius_arcsec=1.0,
-            right_index=wrong_index,
+            index=wrong_index,
         )
 
 
@@ -233,7 +230,7 @@ def test_crossmatch_sky_find_all_matches_brute_force_across_chunks() -> None:
         find="all",
     )
     separation_arcsec = (
-        catalogs_core.great_circle_distance(
+        great_circle_distance(
             left_ra.unsqueeze(1),
             left_dec.unsqueeze(1),
             right_ra.unsqueeze(0),
@@ -278,235 +275,6 @@ def test_crossmatch_sky_handles_ra_wraparound() -> None:
     assert result.separation_arcsec.item() < 2.0
 
 
-def test_crossmatch_sky_dense_dec_band_matches_declination_baseline() -> None:
-    left_ra = torch.tensor([20.0, 20.01, 20.02, 20.03], dtype=torch.float64)
-    left_dec = torch.tensor([0.0, 0.002, -0.002, 0.001], dtype=torch.float64)
-
-    band_ra = torch.linspace(0.0, 359.82, 2000, dtype=torch.float64)
-    band_dec = torch.zeros_like(band_ra)
-    matched_ra = left_ra + torch.tensor([0.00005, -0.00004, 0.00003, -0.00002])
-    matched_dec = left_dec + torch.tensor([0.0, 0.0, 0.0, 0.00001])
-    right_ra = torch.cat((matched_ra, band_ra))
-    right_dec = torch.cat((matched_dec, band_dec))
-
-    coarse_result, coarse_stats = catalogs_core._crossmatch_sky_coarse_indexed(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=3.0,
-        left_chunk_size=2,
-        right_chunk_size=128,
-        return_stats=True,
-    )
-    decl_result, decl_stats = catalogs_core._crossmatch_sky_declination_pruned(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=3.0,
-        left_chunk_size=2,
-        right_chunk_size=128,
-        return_stats=True,
-    )
-
-    assert coarse_result.left_index.tolist() == decl_result.left_index.tolist()
-    assert coarse_result.right_index.tolist() == decl_result.right_index.tolist()
-    torch.testing.assert_close(
-        coarse_result.separation_arcsec,
-        decl_result.separation_arcsec,
-        atol=1e-9,
-        rtol=0.0,
-    )
-    assert coarse_stats.candidate_rows_considered < decl_stats.candidate_rows_considered
-    assert coarse_stats.pairs_evaluated < decl_stats.pairs_evaluated
-
-
-def test_crossmatch_sky_scalar_radius_matches_declination_indexed() -> None:
-    left_ra = torch.tensor([10.0, 10.01, 350.0, 180.0], dtype=torch.float64)
-    left_dec = torch.tensor([0.0, 0.002, -5.0, 45.0], dtype=torch.float64)
-    right_ra = torch.tensor(
-        [10.0001, 10.02, 349.999, 180.001, 90.0], dtype=torch.float64
-    )
-    right_dec = torch.tensor(
-        [0.0001, 0.0015, -5.001, 45.0005, 0.0], dtype=torch.float64
-    )
-    radius_arcsec = 5.0
-    public = crossmatch_sky(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=radius_arcsec,
-        left_chunk_size=2,
-        right_chunk_size=3,
-        find="all",
-    )
-    baseline = catalogs_core._crossmatch_sky_declination_indexed(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=torch.full(
-            (left_ra.numel(),), radius_arcsec, dtype=torch.float64
-        ),
-        left_chunk_size=2,
-        right_chunk_size=3,
-        find="all",
-    )
-    assert public.left_index.tolist() == baseline.left_index.tolist()
-    assert public.right_index.tolist() == baseline.right_index.tolist()
-    torch.testing.assert_close(
-        public.separation_arcsec,
-        baseline.separation_arcsec,
-        atol=1e-9,
-        rtol=0.0,
-    )
-
-
-def test_crossmatch_sky_handles_pole_adjacent_matches() -> None:
-    left_ra = torch.tensor([5.0, 220.0], dtype=torch.float64)
-    left_dec = torch.tensor([89.9990, 89.9985], dtype=torch.float64)
-    right_ra = torch.tensor([185.0, 40.0, 10.0], dtype=torch.float64)
-    right_dec = torch.tensor([89.9991, 88.5, 89.9987], dtype=torch.float64)
-
-    result = crossmatch_sky(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=12.0,
-        left_chunk_size=1,
-        right_chunk_size=2,
-    )
-    baseline = catalogs_core._crossmatch_sky_declination_pruned(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=12.0,
-        left_chunk_size=1,
-        right_chunk_size=2,
-    )
-
-    assert result.left_index.tolist() == [0, 1]
-    assert result.left_index.tolist() == baseline.left_index.tolist()
-    assert result.right_index.tolist() == baseline.right_index.tolist()
-    torch.testing.assert_close(
-        result.separation_arcsec,
-        baseline.separation_arcsec,
-        atol=1e-9,
-        rtol=0.0,
-    )
-
-
-def test_crossmatch_sky_matches_declination_baseline_across_chunk_boundaries() -> None:
-    left_ra = torch.tensor(
-        [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0],
-        dtype=torch.float64,
-    )
-    left_dec = torch.tensor(
-        [-20.0, -10.0, 0.0, 10.0, 20.0, -15.0, 5.0, 25.0],
-        dtype=torch.float64,
-    )
-    right_ra = left_ra + torch.tensor(
-        [0.0001, -0.0001, 0.0002, -0.0002, 0.0001, 0.0002, -0.0001, 0.0001],
-        dtype=torch.float64,
-    )
-    right_dec = left_dec + torch.tensor(
-        [0.0, 0.0001, -0.0001, 0.0, 0.0001, -0.0001, 0.0001, 0.0],
-        dtype=torch.float64,
-    )
-    right_ra = torch.cat(
-        (right_ra, torch.tensor([12.0, 144.0, 288.0], dtype=torch.float64))
-    )
-    right_dec = torch.cat(
-        (right_dec, torch.tensor([50.0, -55.0, 70.0], dtype=torch.float64))
-    )
-
-    result = crossmatch_sky(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=2.0,
-        left_chunk_size=3,
-        right_chunk_size=2,
-    )
-    baseline = catalogs_core._crossmatch_sky_declination_pruned(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=2.0,
-        left_chunk_size=3,
-        right_chunk_size=2,
-    )
-
-    assert result.left_index.tolist() == baseline.left_index.tolist()
-    assert result.right_index.tolist() == baseline.right_index.tolist()
-    torch.testing.assert_close(
-        result.separation_arcsec,
-        baseline.separation_arcsec,
-        atol=1e-9,
-        rtol=0.0,
-    )
-
-
-def test_crossmatch_sky_randomized_parity_against_declination_baseline() -> None:
-    rng = torch.Generator().manual_seed(1234)
-    n_left = 48
-    n_right = 80
-
-    left_ra = torch.rand(n_left, generator=rng, dtype=torch.float64) * 360.0
-    left_dec = torch.rad2deg(
-        torch.asin((torch.rand(n_left, generator=rng, dtype=torch.float64) * 2.0) - 1.0)
-    )
-    right_ra = torch.rand(n_right, generator=rng, dtype=torch.float64) * 360.0
-    right_dec = torch.rad2deg(
-        torch.asin(
-            (torch.rand(n_right, generator=rng, dtype=torch.float64) * 2.0) - 1.0
-        )
-    )
-
-    right_ra[:12] = (
-        left_ra[:12]
-        + (torch.rand(12, generator=rng, dtype=torch.float64) - 0.5) * 0.0002
-    )
-    right_dec[:12] = (
-        left_dec[:12]
-        + (torch.rand(12, generator=rng, dtype=torch.float64) - 0.5) * 0.0002
-    )
-
-    result = crossmatch_sky(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=2.0,
-        left_chunk_size=11,
-        right_chunk_size=13,
-    )
-    baseline = catalogs_core._crossmatch_sky_declination_pruned(
-        left_ra,
-        left_dec,
-        right_ra,
-        right_dec,
-        radius_arcsec=2.0,
-        left_chunk_size=11,
-        right_chunk_size=13,
-    )
-
-    assert result.left_index.tolist() == baseline.left_index.tolist()
-    assert result.right_index.tolist() == baseline.right_index.tolist()
-    torch.testing.assert_close(
-        result.separation_arcsec,
-        baseline.separation_arcsec,
-        atol=1e-9,
-        rtol=0.0,
-    )
-
-
 def test_catalog_stream_dataset_splits_work_across_workers() -> None:
     ds = CatalogStreamDataset(range(8))
     loader = DataLoader(ds, num_workers=2, batch_size=None)
@@ -518,48 +286,6 @@ def test_catalog_stream_dataset_supports_partition_factory() -> None:
     ds = CatalogStreamDataset(lambda: iter(range(4)))
     assert list(ds) == [0, 1, 2, 3]
     assert list(ds) == [0, 1, 2, 3]
-
-
-def test_finalize_crossmatch_empty_lists() -> None:
-    device = torch.device("cpu")
-    stats = catalogs_core._CrossmatchStats(left_points=0, right_points=0)
-    result = catalogs_core._finalize_crossmatch([], [], [], device=device, stats=stats)
-    assert result.left_index.numel() == 0
-    assert result.right_index.numel() == 0
-    assert result.separation_arcsec.numel() == 0
-
-
-def test_finalize_crossmatch_combines_and_sorts_lists() -> None:
-    device = torch.device("cpu")
-    stats = catalogs_core._CrossmatchStats(left_points=5, right_points=5)
-
-    left_hits = [
-        torch.tensor([3, 1], dtype=torch.int64),
-        torch.tensor([0, 2], dtype=torch.int64),
-    ]
-    right_hits = [
-        torch.tensor([13, 11], dtype=torch.int64),
-        torch.tensor([10, 12], dtype=torch.int64),
-    ]
-    sep_hits = [
-        torch.tensor([0.3, 0.1], dtype=torch.float64),
-        torch.tensor([0.0, 0.2], dtype=torch.float64),
-    ]
-
-    result = catalogs_core._finalize_crossmatch(
-        left_hits, right_hits, sep_hits, device=device, stats=stats
-    )
-
-    # Left indices should be sorted: 0, 1, 2, 3
-    assert result.left_index.tolist() == [0, 1, 2, 3]
-    # Right indices should be sorted corresponding to left indices: 10, 11, 12, 13
-    assert result.right_index.tolist() == [10, 11, 12, 13]
-    # Separations should be sorted corresponding to left indices: 0.0, 0.1, 0.2, 0.3
-    torch.testing.assert_close(
-        result.separation_arcsec,
-        torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64),
-    )
-    assert stats.matched_rows == 4
 
 
 def test_crossmatch_result_is_public() -> None:
@@ -591,14 +317,14 @@ def test_crossmatch_with_prebuilt_index_matches_crossmatch_sky() -> None:
     right_ra = torch.tensor([10.0001, 25.0, 29.9998], dtype=torch.float64)
     right_dec = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float64)
     expected = crossmatch_sky(left_ra, left_dec, right_ra, right_dec, radius_arcsec=2.0)
-    index = HealpixIndex.build(right_ra, right_dec, nside=64)
+    index = SkyIndex.build(right_ra, right_dec)
     got = crossmatch_sky(
         left_ra,
         left_dec,
         right_ra,
         right_dec,
         radius_arcsec=2.0,
-        right_index=index,
+        index=index,
     )
     assert got.left_index.tolist() == expected.left_index.tolist()
     assert got.right_index.tolist() == expected.right_index.tolist()
@@ -712,11 +438,8 @@ def _brute_crossmatch(left, right, radius, find):
 
 @pytest.mark.parametrize("find", ["best", "all"])
 @pytest.mark.parametrize("region", ["all_sky", "north_pole", "ra_wrap"])
-def test_crossmatch_strip_candidates_match_brute_force(
-    region: str, find: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_crossmatch_zone_candidates_match_brute_force(region: str, find: str) -> None:
     # Tiny candidate batches force left rows to straddle batches.
-    monkeypatch.setattr(catalogs_core, "_MIN_CANDIDATE_PAIRS", 7)
     g = torch.Generator().manual_seed(17)
 
     def draw(n: int):
@@ -748,6 +471,7 @@ def test_crossmatch_strip_candidates_match_brute_force(
         radius_arcsec=radius,
         find=find,
         left_chunk_size=64,
+        right_chunk_size=7,
     )
     li, ri, s = _brute_crossmatch(left, right, radius, find)
     assert li.numel() > 0

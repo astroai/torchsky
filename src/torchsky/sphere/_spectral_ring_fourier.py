@@ -22,6 +22,23 @@ from ._spectral_config import (
     _RING_SMALL_DFT_MAX_NPH,
 )
 from ..device import _to
+from ._ring_bluestein import bluestein_plan
+
+
+def _use_bluestein(device: torch.device) -> bool:
+    """Batch the polar rings into one Bluestein FFT (``TORCHSKY_RING_BLUESTEIN``).
+
+    ``auto`` (default) uses it off the CPU, where one FFT call per distinct
+    ring length costs more than the arithmetic; ``1`` / ``0`` force it.
+    """
+    import os
+
+    mode = os.environ.get("TORCHSKY_RING_BLUESTEIN", "auto").strip().lower()
+    if mode in {"0", "false", "off", "no"}:
+        return False
+    if mode in {"1", "true", "on", "yes"}:
+        return True
+    return device.type != "cpu"
 
 
 def _ring_fourier_modes(
@@ -96,6 +113,12 @@ def _ring_fourier_modes(
                 col_idx = torch.remainder(m_int, int(common_len))
                 fft_sel = torch.index_select(fft_block, 2, col_idx)
             out[:, :, start_ring : end_ring + 1] = fft_sel.permute(0, 2, 1)
+
+    if groups and _use_bluestein(device):
+        npix = int(starts_cpu[-1].item()) + int(lengths_cpu[-1].item())
+        plan = bluestein_plan(groups, npix, int(mmax), device, dtype)
+        out.index_copy_(2, plan.ring_idx, plan.forward(rows))
+        return out
 
     for nph, ring_idx_cpu, pix_idx_cpu in groups:
         ring_idx = (
@@ -357,6 +380,12 @@ def _ring_fourier_synthesis(
                 )
                 map_vals = torch.fft.ifft(s_fold * float(common_len), dim=-1)
         out_map[:, pix_start:pix_end] = map_vals.reshape(nrows, -1)
+
+    if groups and _use_bluestein(device):
+        plan = bluestein_plan(groups, npix, mmax, device, dtype)
+        polar = plan.inverse(torch.index_select(s_m_batched, 2, plan.ring_idx))
+        out_map = out_map + polar[:, :npix]
+        groups = ()
 
     for nph, ring_idx_cpu, pix_idx_cpu in groups:
         ring_idx = (

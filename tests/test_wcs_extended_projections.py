@@ -4,13 +4,10 @@ Validates torch-native WCS transforms against Astropy/WCSLIB fixture behavior
 for forward (pixel->world) and inverse (world->pixel) directions.
 """
 
-import os
-import platform
 import numpy as np
 import pytest
 import torch
 from astropy.wcs import Prjprm
-from astropy.wcs import WCS as AstropyWCS
 
 from torchsky.wcs.core import WCS as TorchWCS
 from torchsky.wcs import quadcube
@@ -124,37 +121,6 @@ def test_air_antipode_and_near_antipode_match_wcslib() -> None:
 # --- Quad-cube (TSC, CSC, QSC) ---
 
 
-@pytest.mark.skipif(
-    os.environ.get("TORCHSKY_DISABLE_CPP") == "1", reason="Requires fused C++ backend"
-)
-def test_csc_python_matches_fused_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ATen and fused CSC must independently match WCSLIB float32 semantics."""
-    header = _make_header("CSC", cd_scale=0.3)
-    awcs = AstropyWCS(header)
-    x, y = _sample_pixels(header, n_side=15)
-    xt = torch.from_numpy(x)
-    yt = torch.from_numpy(y)
-    monkeypatch.setenv("TORCHSKY_WCS_FUSED", "1")
-    fused = TorchWCS(dict(header))
-    monkeypatch.setenv("TORCHSKY_WCS_FUSED", "0")
-    python = TorchWCS(dict(header))
-    assert fused._can_use_fused_p2w_static
-    assert not python._can_use_fused_p2w_static
-    ra_f, dec_f = fused.pixel_to_world(xt, yt, origin=0)
-    ra_p, dec_p = python.pixel_to_world(xt, yt, origin=0)
-    dra = _ra_wrap_delta(ra_p.numpy(), ra_f.numpy())
-    ddec = dec_p.numpy() - dec_f.numpy()
-    np.testing.assert_allclose(dra, 0.0, atol=1e-6)
-    np.testing.assert_allclose(ddec, 0.0, atol=1e-6)
-    ra_a, dec_a = awcs.all_pix2world(x, y, 0)
-    dra_a = _ra_wrap_delta(ra_p.numpy(), ra_a)
-    ddec_a = dec_p.numpy() - dec_a
-    np.testing.assert_allclose(dra_a, 0.0, atol=1e-6)
-    np.testing.assert_allclose(ddec_a, 0.0, atol=1e-6)
-    np.testing.assert_allclose(_ra_wrap_delta(ra_f.numpy(), ra_a), 0.0, atol=1e-6)
-    np.testing.assert_allclose(dec_f.numpy() - dec_a, 0.0, atol=1e-6)
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 @pytest.mark.parametrize(
     "projection,cd_scale,crval2",
@@ -229,13 +195,14 @@ def test_csc_s2x_x2s_cuda_matches_cpu():
             torch.testing.assert_close(b.cpu(), a, rtol=0.0, atol=1e-10, equal_nan=True)
 
 
-# torchsky never fuses a*b+c (identical results on every platform). Baseline
-# x86-64 WCSLIB builds do not fuse either and match exactly; AArch64 builds (macOS
-# arm64 astropy wheels) fuse, which moves a float32 step by one ulp: 45 * 2**-22 deg
-# (plane coordinate up to 8 face units) and ~5e-6 deg on the sphere.
-_EXACT = platform.machine().lower() in ("x86_64", "amd64")
-ATOL_FWD = 1e-10 if _EXACT else 2.5e-5
-ATOL_INV = 1e-10 if _EXACT else 6e-6
+# torchsky never fuses a*b+c (identical results on every platform). WCSLIB's
+# float32 CSC steps round differently per build: AArch64 builds (macOS arm64
+# astropy) fuse, and the conda-forge linux-64 build differed by up to 1.3e-6 deg
+# on the inverse (astropy 8.0.x, CI run 44876047856). One float32 ulp is
+# 45 * 2**-22 deg on the plane (offsets up to 8 face units) and ~5e-6 deg on the
+# sphere; the float64 plane-coordinate bug these tests guard against was 2e-5 deg.
+ATOL_FWD = 2.5e-5
+ATOL_INV = 6e-6
 
 
 def test_csc_matches_wcslib_float32_semantics_on_every_face():
@@ -265,3 +232,112 @@ def test_csc_matches_wcslib_float32_semantics_on_every_face():
         _ra_wrap_delta(p.numpy()[ok], pw[ok]), 0.0, rtol=0, atol=ATOL_INV
     )
     np.testing.assert_allclose(t.numpy()[ok], tw[ok], rtol=0, atol=ATOL_INV)
+
+
+@pytest.mark.parametrize(
+    "projection,pv2",
+    [
+        ("SZP", (0.0, 2.0, 180.0, 60.0)),
+        ("SZP", (0.0, 0.5, 30.0, 70.0)),
+        ("AIR", (0.0, 45.0)),
+        ("AIR", (0.0, 90.0)),
+    ],
+)
+def test_zenithal_float32_keeps_float32_accuracy(
+    projection: str, pv2: tuple[float, ...]
+) -> None:
+    # MPS runs these kernels in float32. Recovering theta from sin(theta) by
+    # asin (SZP), or log(cos(xi)) (AIR), loses half the digits near the pole:
+    # arcminute errors, and AIR's 1e-10 convergence test rejected every point.
+    radius = torch.logspace(-4, 1.5, 4000, dtype=torch.float64)
+    angle = torch.linspace(0.0, 2.0 * np.pi, 4000, dtype=torch.float64)
+    xi = radius * torch.cos(angle)
+    eta = radius * torch.sin(angle)
+    phi64, theta64 = project_zenithal(xi, eta, projection, None, pv2)
+    phi32, theta32 = project_zenithal(xi.float(), eta.float(), projection, None, pv2)
+    ok = torch.isfinite(theta64)
+    assert ok.all()
+    assert torch.equal(torch.isfinite(theta32), ok)
+    assert float((theta32.double() - theta64).abs().max()) < 1e-4
+    dphi = (phi32.double() - phi64 + 180.0) % 360.0 - 180.0
+    colat = torch.deg2rad(90.0 - theta64)
+    assert float((dphi * torch.sin(colat)).abs().max()) < 1e-4
+
+    xi64, eta64 = deproject_zenithal(phi64, theta64, projection, None, pv2)
+    xi32, eta32 = deproject_zenithal(
+        phi64.float(), theta64.float(), projection, None, pv2
+    )
+    assert float(torch.hypot(xi32.double() - xi64, eta32.double() - eta64).max()) < 1e-4
+
+
+def _sphere_samples_near_centres_and_poles(
+    phi_shift: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    generator = torch.Generator().manual_seed(3)
+    offsets = torch.logspace(-5, 0.5, 400, dtype=torch.float64)
+    angle = torch.rand(400, generator=generator, dtype=torch.float64) * 2.0 * np.pi
+    phis = []
+    thetas = []
+    # Quad-cube face centres (and HEALPix/XPH facet centres) on the equator,
+    # and both poles, approached from all directions.
+    for centre_phi, centre_theta in (
+        (0.0, 0.0),
+        (90.0, 0.0),
+        (180.0, 0.0),
+        (-90.0, 0.0),
+    ):
+        phis.append(centre_phi + phi_shift + offsets * torch.cos(angle))
+        thetas.append(centre_theta + offsets * torch.sin(angle))
+    for pole in (90.0, -90.0):
+        phis.append(angle * (180.0 / np.pi) - 180.0)
+        thetas.append(pole - torch.sign(torch.tensor(pole)) * offsets)
+    phis.append(
+        torch.rand(4000, generator=generator, dtype=torch.float64) * 360.0 - 180.0
+    )
+    thetas.append(
+        torch.rad2deg(
+            torch.asin(
+                torch.rand(4000, generator=generator, dtype=torch.float64) * 2.0 - 1.0
+            )
+        )
+    )
+    return torch.cat(phis), torch.cat(thetas)
+
+
+# CSC is left out: WCSLIB evaluates its polynomials in float32 by design.
+@pytest.mark.parametrize("projection", ["TSC", "QSC", "HPX", "XPH"])
+def test_allsky_float32_keeps_float32_accuracy(projection: str) -> None:
+    # 1 - cos and asin near 1 lose half the float32 digits next to face
+    # centres and poles (up to 2e-3 deg); the stable forms stay at a few ulp.
+    from torchsky.wcs.allsky import deproject_allsky, project_allsky
+
+    if projection in ("TSC", "CSC", "QSC"):
+        s2x = lambda p, t: quadcube.deproject_quadcube(p, t, projection)  # noqa: E731
+        x2s = lambda x, y: quadcube.project_quadcube(x, y, projection)  # noqa: E731
+    else:
+        s2x = lambda p, t: deproject_allsky(p, t, projection)  # noqa: E731
+        x2s = lambda x, y: project_allsky(x, y, projection)  # noqa: E731
+
+    def separation(p1, t1, p2, t2):
+        # Angular distance (deg); seam-agnostic, unlike plane coordinates.
+        p1, t1, p2, t2 = (torch.deg2rad(v.double()) for v in (p1, t1, p2, t2))
+        cos_d = torch.sin(t1) * torch.sin(t2) + torch.cos(t1) * torch.cos(
+            t2
+        ) * torch.cos(p1 - p2)
+        cross = torch.hypot(
+            torch.cos(t2) * torch.sin(p1 - p2),
+            torch.cos(t1) * torch.sin(t2)
+            - torch.sin(t1) * torch.cos(t2) * torch.cos(p1 - p2),
+        )
+        return torch.rad2deg(torch.atan2(cross, cos_d))
+
+    # XPH facets are centred between the quadrant boundaries phi = k * 90.
+    phi, theta = _sphere_samples_near_centres_and_poles(
+        45.0 if projection == "XPH" else 0.0
+    )
+    x64, y64 = s2x(phi, theta)
+    x32, y32 = s2x(phi.float(), theta.float())
+    # sphere -> plane in float32, judged by mapping back in float64
+    assert float(separation(*x2s(x32.double(), y32.double()), phi, theta).max()) < 1e-4
+    # plane -> sphere in float32
+    assert float(separation(*x2s(x64.float(), y64.float()), phi, theta).max()) < 1e-4

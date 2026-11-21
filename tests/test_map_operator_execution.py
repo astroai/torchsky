@@ -255,6 +255,72 @@ def test_source_bbox_on_target_clips_plain_tan_source_boundary() -> None:
     assert bbox == (2, 14, 2, 14)
 
 
+def _sip_target_covered_box(source_wcs: WCS, source_n: int) -> tuple[int, ...]:
+    """Exact (y0, y1, x0, x1) of strong-SIP 200 px target pixels inside a source."""
+    from test_map_interpolated_mapping import _strong_sip_header
+
+    yy, xx = torch.meshgrid(
+        torch.arange(200, dtype=torch.float64),
+        torch.arange(200, dtype=torch.float64),
+        indexing="ij",
+    )
+    ra, dec = WCS(_strong_sip_header(200)).pixel_to_world(xx, yy)
+    xs, ys = source_wcs.world_to_pixel(ra, dec)
+    inside = (
+        (xs >= -0.5) & (xs <= source_n - 0.5) & (ys >= -0.5) & (ys <= source_n - 0.5)
+    )
+    rows = torch.nonzero(inside.any(dim=1)).flatten()
+    cols = torch.nonzero(inside.any(dim=0)).flatten()
+    return int(rows[0]), int(rows[-1]) + 1, int(cols[0]), int(cols[-1]) + 1
+
+
+@pytest.mark.parametrize(
+    ("source_n", "dra_px"), [(3000, 0.0), (400, -150.0), (400, -5000.0)]
+)
+def test_source_bbox_on_target_bounds_overlap_where_sip_target_inverse_fails(
+    source_n: int, dra_px: float
+) -> None:
+    from test_map_interpolated_mapping import _strong_sip_header, _target_header
+
+    # Source boundary samples far from the strongly distorted target have no
+    # target pixel position (the SIP inverse does not converge: NaN). The box
+    # must still contain every covered target pixel: the whole target for an
+    # enclosing source, the true overlap for a crossing one, None for a miss.
+    scale = 2.0e-5
+    source_wcs = WCS(
+        _target_header(
+            source_n, scale, dra=dra_px * scale / math.cos(math.radians(20.0))
+        )
+    )
+    target_wcs = WCS(_strong_sip_header(200))
+    bbox = source_bbox_on_target(
+        source_wcs,
+        (source_n, source_n),
+        target_wcs,
+        (200, 200),
+        margin=2,
+        edge_samples=65,
+    )
+
+    t = torch.linspace(0.0, source_n - 1.0, 65, dtype=torch.float64)
+    x_edge = torch.cat([t, t, torch.zeros_like(t), torch.full_like(t, source_n - 1.0)])
+    y_edge = torch.cat([torch.zeros_like(t), torch.full_like(t, source_n - 1.0), t, t])
+    x_tgt, _ = target_wcs.world_to_pixel(*source_wcs.pixel_to_world(x_edge, y_edge))
+    assert not bool(torch.isfinite(x_tgt).all()), "fixture needs NaN edge samples"
+
+    if dra_px == -5000.0:
+        assert bbox is None
+        return
+    y0, y1, x0, x1 = _sip_target_covered_box(source_wcs, source_n)
+    assert bbox is not None
+    assert bbox[0] <= y0 and bbox[1] >= y1 and bbox[2] <= x0 and bbox[3] >= x1
+    if source_n == 3000:
+        assert bbox == (0, 200, 0, 200)
+    else:
+        # A crossing source is bounded tighter than the whole target.
+        assert bbox[2] > 0
+
+
 def test_plain_tan_and_distortion_predicates_cover_fast_policy_inputs() -> None:
     header = {
         "NAXIS": 2,

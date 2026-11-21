@@ -29,6 +29,7 @@ from ..map.scenes import (
 )
 from ..map.splat import SplatDiagnostics
 from ..map.target import TargetRenderSpec
+from .gaussians import GaussianItemScene, render_gaussian_items
 from .operators import (
     ObservationOperatorAdapter,
     ObservationOperatorBundle,
@@ -155,6 +156,7 @@ __all__ = [
     "DiscreteTargetImage",
     "FieldObservation",
     "ForwardContext",
+    "GaussianItemScene",
     "HarmonicAlmScene",
     "GAUSSIAN_MORPHOLOGY",
     "HealpixMapScene",
@@ -183,6 +185,7 @@ __all__ = [
     "predict",
     "product_spec",
     "render",
+    "render_gaussian_items",
     "target_from_header",
     "target_from_product",
     "target_to_field_observation",

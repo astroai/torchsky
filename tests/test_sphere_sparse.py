@@ -1022,3 +1022,28 @@ def test_sparse_ud_grade_dense_equivalence_with_bad_values() -> None:
         power=2.0,
     )
     torch.testing.assert_close(got, exp, atol=1e-12, rtol=0.0, equal_nan=True)
+
+
+def test_sparse_from_wcs_weight_skips_cells_without_pixel_position() -> None:
+    from test_map_interpolated_mapping import _strong_sip_header
+
+    import torchsky
+
+    # A coarse cell overlapping a strongly distorted detector has its centre
+    # where the SIP inverse does not converge (NaN pixel position). NaN cast
+    # to int64 is 0 on arm64, which used to read weight[0, 0].
+    nside = 1024
+    wcs = torchsky.WCS(_strong_sip_header(200))
+    weight = torch.ones(200, 200)
+    weight[0, 0] = 7.0
+    moc = MOC.from_wcs(wcs, shape=(200, 200), max_order=10)
+    pix = moc.to_pixelized_region(nside, nest=True).pixels.to(torch.int64)
+    lon, lat = hp.pix2ang(nside, pix, nest=True, lonlat=True)
+    x, y = wcs.world_to_pixel(lon, lat)
+    assert not bool(torch.isfinite(x).all()), "fixture needs a NaN cell centre"
+
+    smap = SparseHealpixMap.from_wcs(wcs, nside, weight=weight)
+
+    kept = smap.valid_pixels
+    assert not bool(torch.isin(kept, pix[~torch.isfinite(x)]).any())
+    assert not bool((smap.get_values(kept) == 7.0).any())

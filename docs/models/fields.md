@@ -201,6 +201,71 @@ for band in ("g", "r", "i"):
     ))
 ```
 
+Calibrated exposures that carry error and data-quality extensions (JWST `_cal` and `_rate`,
+HST `_flt` and `_flc`) have a reader of their own:
+[`field_observation_from_exposure_file`](../reference/field.md#torchsky.field.field_observation_from_exposure_file)
+returns one `FieldObservation` per detector chip, with `weight = 1 / ERR²` on usable pixels and
+zero elsewhere, `mask` set to the usable pixels, and `value_unit`, `exposure_time_s` and
+`band_name` filled from the headers. Which data-quality bits reject a pixel is your decision,
+stated through [`DQPolicy`](../reference/map.md#torchsky.map.DQPolicy): the default rejects every non-zero flag, and
+`DQPolicy(reject_bits=...)` keeps pixels that carry only other flags. Pass `sky_box=(lon, lat,
+half_size_arcsec)` to read only the detector rectangle that covers a sky region; the
+observation keeps the rectangle's offset in `detector_x0_pix` / `detector_y0_pix`, so
+full-detector pixel coordinates remain recoverable, and the function returns `None` when the
+exposure does not cover the box. The pixel-area plane of a calibrated file is not carried by
+`FieldObservation`; for count-rate (`_rate`) input, multiply the model by the pixel solid angle
+(see `torchsky.map.operators.pixel_area`).
+
+<!-- docs: run -->
+```python
+import math
+import tempfile
+from pathlib import Path
+
+import torch
+import torchfits
+
+from torchsky import field
+from torchsky.map import DQPolicy
+
+H, W = 40, 60
+wcs_cards = {
+    "CTYPE1": "RA---TAN", "CTYPE2": "DEC--TAN", "CUNIT1": "deg", "CUNIT2": "deg",
+    "CRPIX1": 30.5, "CRPIX2": 20.5, "CRVAL1": 150.1, "CRVAL2": 2.2,
+    "CD1_1": -1.0e-5, "CD1_2": 0.0, "CD2_1": 0.0, "CD2_2": 1.0e-5,
+}
+sci = torch.randn(H, W)
+err = torch.full((H, W), 0.5)
+dq = torch.zeros(H, W, dtype=torch.int64)
+dq[5, 7] = 2          # a pixel flagged only SATURATED (JWST bit value 2)
+err[8, 9] = 0.0       # an unusable error value
+
+with tempfile.TemporaryDirectory() as tmp:
+    path = Path(tmp) / "tiny_cal.fits"
+    torchfits.HDUList([
+        torchfits.TensorHDU(data=torch.zeros(1), header={"FILTER": "F150W", "EFFEXPTM": 100.0}),
+        torchfits.TensorHDU(data=sci, header={"EXTNAME": "SCI", "EXTVER": 1, "BUNIT": "MJy/sr", **wcs_cards}),
+        torchfits.TensorHDU(data=err, header={"EXTNAME": "ERR", "EXTVER": 1}),
+        torchfits.TensorHDU(data=dq.to(torch.uint32), header={"EXTNAME": "DQ", "EXTVER": 1}),
+    ]).write(str(path))
+
+    strict = field.field_observation_from_exposure_file(path)
+    keep_saturated = field.field_observation_from_exposure_file(
+        path, dq_policy=DQPolicy(reject_bits=0xFFFFFFFF & ~2)   # reject everything except bit 2
+    )
+    # A 0.1 arcsec half-size box centred 5 pixels to the right of the reference pixel.
+    box = (150.1 - 5 * 1.0e-5 / math.cos(math.radians(2.2)), 2.2, 0.1)
+    cut = field.field_observation_from_exposure_file(path, sky_box=box)
+    nothing = field.field_observation_from_exposure_file(path, sky_box=(151.0, 2.2, 0.1))
+
+assert not strict.mask[5, 7] and keep_saturated.mask[5, 7]
+assert strict.mask.sum() == H * W - 2 and keep_saturated.mask.sum() == H * W - 1
+assert strict.weight[8, 9] == 0 and strict.weight[0, 0] == 4.0
+assert (strict.band_name, strict.value_unit, strict.exposure_time_s) == ("F150W", "MJy/sr", 100.0)
+assert cut.image.shape[0] < H and cut.detector_x0_pix > 0
+assert nothing is None
+```
+
 For IFU cubes, [`field_observations_from_ifu_cube`](../reference/field.md#torchsky.field.field_observations_from_ifu_cube)
 and [`field_observations_from_bin_edges`](../reference/field.md#torchsky.field.field_observations_from_bin_edges)
 build one observation per spectral bin.
@@ -299,7 +364,9 @@ on `result.exposure_poses`.
 plug into the same forward model through
 `observation_operator_bundles=` (for example `ConditionedKernelPSF`, a mixture
 of positive unit-sum kernels that varies with detector position, wavelength,
-and time). Scene, PSF, and background cannot all be free at once: a broad
+and time). For a PSF whose wings reach hundreds of pixels, `NestedKernelPSF` renders the same kind of source-conditioned
+kernel field at a cost that grows with the logarithm of the extent (see
+[PSF conventions](psf-conventions.md#wide-kernels-at-constant-cost)). Scene, PSF, and background cannot all be free at once: a broad
 source can be traded for a wider PSF, diffuse emission for background. Fit in
 stages:
 

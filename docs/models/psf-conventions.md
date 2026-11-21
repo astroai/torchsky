@@ -140,6 +140,66 @@ stationary filtered images by **output** position. Their row response
 are not one in general. Do not use them where a source-flux claim is needed;
 use a source-conditioned kernel PSF instead.
 
+### Wide Kernels at Constant Cost
+
+A dense stamp that reaches 200 pixels costs `conv2d` work proportional to its area, which is out of reach
+for an image of a few thousand pixels. `NestedKernelPSF` takes the PSF as a **kernel field**, a function of
+the offset `(dx, dy)` in pixels, and splits it into concentric shells. Shell `l` is sampled on a grid of
+pitch `2**l` pixels with a fixed number of nodes, so the core is kept at full resolution and each wing is
+carried at a pitch matched to its radius; the cost grows with the number of shells (the logarithm of the
+extent), not with the area. It obeys the contract above: the stamp is an impulse response, rendering is the
+convolution `y[p] = sum_q K[p - q] x[q]`, the image is zero outside the detector, flux falling off it is
+lost, the adjoint is the exact transpose, and the unit-sum kernel conserves the flux of an interior source.
+
+Three things are different from `apply_kernel2d`, and are tested:
+
+- The result matches a dense stamp to an interpolation error, not to round-off: about 4e-5 of the peak
+  for a point source or a smooth source and 2e-4 for white noise (the worst case, because its power lies at
+  the pixel scale, which coarse shells cannot carry) for a 2-pixel core with a power-law wing to 200 pixels.
+  The only sharp structure of the kernel must lie inside half of `core_half_width` pixels.
+- The operator is not exactly shift-invariant: the response of a source depends, at the 3e-5 level of the
+  peak, on its position modulo the coarsest pitch. `effective_kernels` returns the stamp for each source
+  position; the rendered image is exactly the scatter of those stamps.
+- Kernels must be non-negative (the field is normalised to unit sum for every region node), and coordinates
+  must be a unit-pitch detector grid, because the pooling lattices are anchored to detector coordinates. That
+  anchoring makes tiled rendering with the halo `kernel_size // 2` reproduce the untiled image to round-off.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.map.operators import NestedKernelPSF
+
+
+def field(offsets, condition):
+    """Density per pixel^2 at offsets [P, 2] = (dx, dy); one row per region node."""
+    r2 = (offsets**2).sum(-1)
+    core = torch.exp(-r2 / 3.0)  # FWHM about 2 pixels
+    wing = 0.02 * (1.0 + r2 / 9.0) ** -1.5  # power-law wing
+    return (core + wing)[None]
+
+
+psf = NestedKernelPSF(field, core_half_width=16, extent=100.0)  # 4 levels: pitch 1, 2, 4, 8
+y, x = torch.meshgrid(torch.arange(256.0), torch.arange(256.0), indexing="ij")
+kwargs = {"spatial_x": x, "spatial_y": y, "wavelength": 0.5}
+
+star = torch.zeros(256, 256, dtype=torch.float64)
+star[128, 128] = 1.0
+image = psf(star, **kwargs)
+assert psf.num_levels == 4
+assert abs(float(image.sum()) - 1.0) < 1e-9  # unit flux, wings included
+assert float(image[128, 128]) > float(image[128, 132]) > float(image[128, 178])
+
+edge = torch.zeros(256, 256, dtype=torch.float64)
+edge[128, 255] = 1.0
+assert 0.5 < float(psf(edge, **kwargs).sum()) < 0.9  # flux off the detector is lost, not renormalized
+
+other = torch.rand(256, 256, dtype=torch.float64)
+lhs = (psf(star, **kwargs) * other).sum()
+rhs = (star * psf.adjoint(other, **kwargs)).sum()
+assert abs(float(lhs - rhs)) < 1e-10 * abs(float(lhs))  # adjoint is the exact transpose
+```
+
 ## Pitfalls
 
 - **Flipping twice.** Applying `flip(-2, -1)` to a stamp that was already an

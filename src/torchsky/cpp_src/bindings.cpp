@@ -1,44 +1,29 @@
+// Python module for torchsky's torch-free native core. Kernels see raw
+// buffers (DLPack, zero copy); operator schemas, fake tensors and autograd are
+// registered from Python (`torchsky/_native_ops.py`) with torch.library, so the
+// extension does not link libtorch and works with any supported PyTorch.
 #include <nanobind/nanobind.h>
 
-#include <Python.h>
-#include <string>
-
-#include "torchsky/drizzle_operators.h"
-#include "torchsky/fixed_operators.h"
-#include "torchsky/healpix.h"
+#include "torchsky/crossmatch.h"
 #include "torchsky/ishioka_kernels.h"
-#include "torchsky/wcs_operators.h"
 
 namespace nb = nanobind;
 
+namespace torchsky {
+void register_fixed(nb::module_& m);
+void register_spectral(nb::module_& m);
+void register_sphere_ranges(nb::module_& m);
+void register_drizzle(nb::module_& m);
+void register_wcs_tpv(nb::module_& m);
+}  // namespace torchsky
+
 NB_MODULE(_cpp_ext, m) {
-    torchsky::ensure_drizzle_operators_linked();
-    torchsky::ensure_fixed_operator_schemas_linked();
-    torchsky::ensure_fixed_cpu_operators_linked();
-    torchsky::ensure_wcs_operator_schemas_linked();
-    torchsky::ensure_wcs_cpu_operators_linked();
-    torchsky::ensure_spectral_operator_schemas_linked();
-    torchsky::ensure_spectral_cpu_operators_linked();
-
-    const nb::str runtime_version_object(
-        nb::module_::import_("torch").attr("__version__")
-    );
-    const std::string runtime_version(runtime_version_object.c_str());
-    const std::string required_abi = TORCHSKY_TORCH_ABI;
-    const bool matching_abi =
-        runtime_version.compare(0, required_abi.size(), required_abi) == 0
-        && (runtime_version.size() == required_abi.size()
-            || runtime_version[required_abi.size()] == '.'
-            || runtime_version[required_abi.size()] == '+');
-    if (!matching_abi) {
-        PyErr_Format(
-            PyExc_ImportError,
-            "torchsky was built for PyTorch %s.x but found PyTorch %s",
-            required_abi.c_str(),
-            runtime_version.c_str()
-        );
-        throw nb::python_error();
-    }
-
+    m.attr("NATIVE_ABI") = 2;  // torch-free core; bumped when kernel signatures change
     m.def("selected_cpu_isa", []() { return torchsky::selected_cpu_isa(); });
+    torchsky::xmatch::register_crossmatch(m);
+    torchsky::register_fixed(m);
+    torchsky::register_spectral(m);
+    torchsky::register_sphere_ranges(m);
+    torchsky::register_drizzle(m);
+    torchsky::register_wcs_tpv(m);
 }

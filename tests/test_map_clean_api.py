@@ -315,6 +315,62 @@ def test_match_sky_constant_planar_and_per_exposure() -> None:
     torch.testing.assert_close(res_planar.data, signal, atol=1e-3, rtol=1e-3)
 
 
+def test_match_sky_planar_with_strong_sip_target_keeps_observation_data_finite() -> (
+    None
+):
+    # The SIP inverse of this target has no pre-image about 400 px from its reference
+    # pixel, well inside the 600 px observations; the plane must still extend there.
+    sip_target = {
+        **_tan_header((200, 200), crval=(50.0, -20.0), cdelt=2.0e-5),
+        "CTYPE1": "RA---TAN-SIP",
+        "CTYPE2": "DEC--TAN-SIP",
+        "CD1_1": -2.0e-5,
+        "CD1_2": 3.0e-6,
+        "CD2_1": 3.0e-6,
+        "CD2_2": 2.0e-5,
+        "A_ORDER": 5,
+        "B_ORDER": 5,
+        "A_2_0": 3.0e-5,
+        "A_1_1": -2.0e-5,
+        "A_3_0": -2.0e-6,
+        "A_1_2": 1.0e-6,
+        "A_5_0": -2.0e-11,
+        "B_0_2": -2.5e-5,
+        "B_1_1": 1.5e-5,
+        "B_0_3": -2.0e-6,
+        "B_2_1": 1.0e-6,
+        "B_0_5": 1.0e-11,
+    }
+    del sip_target["CDELT1"], sip_target["CDELT2"]
+    n = 600
+    hdr = _tan_header((n, n), crval=(50.0, -20.0), cdelt=2.0e-5)
+    assert not bool(
+        torch.isfinite(
+            torchsky.WCS(sip_target).world_to_pixel(
+                *torchsky.WCS(hdr).pixel_to_world(
+                    torch.tensor([0.0], dtype=torch.float64),
+                    torch.tensor([0.0], dtype=torch.float64),
+                )
+            )[0]
+        ).all()
+    )
+    y, x = torch.meshgrid(
+        torch.linspace(-1.0, 1.0, n), torch.linspace(-1.0, 1.0, n), indexing="ij"
+    )
+    signal = 1.0 + 0.1 * torch.exp(-20.0 * (x**2 + y**2))
+    obs1 = Observation(data=signal, wcs=hdr)
+    obs2 = Observation(data=signal + 2.0 + 0.3 * x - 0.2 * y, wcs=hdr)
+
+    matched, info = match_sky([obs1, obs2], target=sip_target, mode="planar")
+
+    assert info["mode"] == "planar"
+    for obs in matched:
+        assert bool(torch.isfinite(obs.data).all())
+    # The plane, fitted on the SIP target grid, removes the gradient everywhere,
+    # including where the target's SIP inverse has no pre-image.
+    torch.testing.assert_close(matched[1].data, matched[0].data, atol=1e-2, rtol=0.0)
+
+
 def test_scamp_sidecar_head_and_multiband_cube_and_aperture(tmp_path: Path) -> None:
     base_hdr = _tan_header((16, 16), crval=(100.0, 0.0), cdelt=0.001)
     fits_path = tmp_path / "exp1.fits"

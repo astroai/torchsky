@@ -109,32 +109,101 @@ def _ring_pixels_colatitude_band(
     Cost is **O(nside)** ring metadata plus **O(output)** index materialization.
     """
     _validate_nside(nside)
-    lo = min(theta_lo, theta_hi)
-    hi = max(theta_lo, theta_hi)
-    if hi < 0.0 or lo > math.pi:
-        return torch.empty((0,), dtype=torch.int64)
-    lo = max(0.0, lo)
-    hi = min(math.pi, hi)
-
-    if 4 * nside <= 1:
-        return torch.empty((0,), dtype=torch.int64)
-
-    rings = torch.arange(1, 4 * nside, dtype=torch.int64)
-    startpix, ringpix, theta, _shifted = _get_ring_info2(nside, rings)
-    mask = (theta >= lo) & (theta <= hi)
-    idx = torch.nonzero(mask, as_tuple=False).flatten()
-    if idx.numel() == 0:
-        return torch.empty((0,), dtype=torch.int64)
-
-    parts: list[Tensor] = []
-    for j in idx:
-        sp = int(startpix[j].item())
-        rp = int(ringpix[j].item())
-        parts.append(torch.arange(sp, sp + rp, dtype=torch.int64))
-    ring_out = torch.cat(parts, dim=0)
+    ring_out = _ring_range_pixels(
+        nside, [_closed_band_rings(nside, theta_lo, theta_hi)]
+    )
     if nest:
         return _core_mod.ring2nest(nside, ring_out)
     return ring_out
+
+
+def _closed_band_rings(nside: int, theta_lo: float, theta_hi: float) -> tuple[int, int]:
+    """First and last ring whose centre colatitude lies in ``[theta_lo, theta_hi]``.
+
+    Empty bands give ``first > last``. Rings are ordered by colatitude, so the
+    selection is one contiguous ring range.
+    """
+    lo = min(theta_lo, theta_hi)
+    hi = max(theta_lo, theta_hi)
+    rings = torch.arange(1, 4 * nside, dtype=torch.int64)
+    _sp, _rp, theta, _shifted = _get_ring_info2(nside, rings)
+    inside = torch.nonzero((theta >= lo) & (theta <= hi)).flatten()
+    if inside.numel() == 0:
+        return 1, 0
+    return int(inside[0]) + 1, int(inside[-1]) + 1
+
+
+def _ring_above_scalar(nside: int, z: float) -> int:
+    """healpy ``ring_above``: the ring just north of ``z`` (0 north of all rings)."""
+    az = abs(z)
+    if az <= 2.0 / 3.0:
+        return int(nside * (2.0 - 1.5 * z))
+    iring = int(nside * math.sqrt(3.0 * (1.0 - az)))
+    return iring if z > 0.0 else 4 * nside - iring - 1
+
+
+def _padded_band_rings(nside: int, theta1: float, theta2: float) -> tuple[int, int]:
+    """Ring range holding every ring centred in ``[theta1, theta2]``, plus one ring
+    of slack on each side (so rounding ties at a ring centre are never lost).
+
+    For candidate preselection: callers filter the exact band afterwards.
+    """
+    lo = min(theta1, theta2)
+    hi = max(theta1, theta2)
+    first = max(1, _ring_above_scalar(nside, math.cos(lo)))
+    last = min(4 * nside - 1, _ring_above_scalar(nside, math.cos(hi)) + 1)
+    return first, last
+
+
+def _strip_rings(
+    nside: int, theta1: float, theta2: float, inclusive: bool
+) -> list[tuple[int, int]]:
+    """Ring ranges of healpy ``query_strip`` (``Healpix_Base::query_strip``).
+
+    For ``theta1 < theta2`` the rings with centre colatitude in
+    ``(theta1, theta2]`` (decided with healpy's ``ring_above``, so ties match);
+    otherwise the two polar strips north of ``theta2`` and south of ``theta1``.
+    ``inclusive`` widens each range by one ring, which holds every pixel that
+    overlaps the strip.
+    """
+    nl4 = 4 * nside
+
+    def _one(t1: float, t2: float) -> tuple[int, int]:
+        r1 = max(1, 1 + _ring_above_scalar(nside, math.cos(t1)))
+        r2 = min(nl4 - 1, _ring_above_scalar(nside, math.cos(t2)))
+        if inclusive:
+            r1 = max(1, r1 - 1)
+            r2 = min(nl4 - 1, r2 + 1)
+        return r1, r2
+
+    if theta1 < theta2:
+        return [_one(theta1, theta2)]
+    return [_one(0.0, theta2), _one(theta1, math.pi)]
+
+
+def _ring_range_pixels(nside: int, ring_ranges: Sequence[tuple[int, int]]) -> Tensor:
+    """Sorted unique RING pixels of the (possibly overlapping) inclusive ring ranges."""
+    spans: list[list[int]] = []
+    for first, last in ring_ranges:
+        if first > last:
+            continue
+        sp, rp, _theta, _shifted = _get_ring_info2(
+            nside, torch.tensor([first, last], dtype=torch.int64)
+        )
+        spans.append([int(sp[0]), int(sp[1] + rp[1])])
+    if not spans:
+        return torch.empty((0,), dtype=torch.int64)
+    # Ring ranges map to contiguous RING pixel spans: merge overlapping or
+    # touching spans, then emit each once (sorted and unique by construction).
+    spans.sort()
+    merged = [spans[0]]
+    for start, stop in spans[1:]:
+        if start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], stop)
+        else:
+            merged.append([start, stop])
+    parts = [torch.arange(a, b, dtype=torch.int64) for a, b in merged]
+    return parts[0] if len(parts) == 1 else torch.cat(parts)
 
 
 def _query_disc_nest_ranges(
@@ -333,25 +402,45 @@ def _ranges_to_sorted_pixels(ranges: Tensor) -> Tensor:
 def _strip_nest_pixels(nside: int, lo: float, hi: float) -> Tensor:
     """NESTED pixels of the rings with centre colatitude in ``[lo, hi]`` (ascending).
 
-    Hierarchical: cells whose colatitude interval lies inside the band emit one
-    range; only cells straddling a band edge are refined, and pixels are decided by
-    their ring's colatitude exactly as the ring-ordered band query does.
+    Empty when ``lo > hi``.
     """
-    if hi < 0.0 or lo > math.pi or 4 * nside <= 1:
+    if lo > hi:
+        return torch.empty((0,), dtype=torch.int64)
+    return _ring_ranges_nest_pixels(nside, [_closed_band_rings(nside, lo, hi)])
+
+
+def _ring_ranges_nest_pixels(
+    nside: int, ring_ranges: Sequence[tuple[int, int]]
+) -> Tensor:
+    """NESTED pixels (ascending) of the rings in the inclusive ``ring_ranges``.
+
+    Hierarchical: cells whose colatitude interval lies inside one band emit one
+    range; only cells straddling a band edge are refined, and pixels are decided
+    by their ring number, exactly as the ring-ordered query does.
+    """
+    ranges_ok = [(a, b) for a, b in ring_ranges if a <= b]
+    if not ranges_ok:
         return torch.empty((0,), dtype=torch.int64)
     rings = torch.arange(1, 4 * nside, dtype=torch.int64)
     startpix, _ringpix, theta, _shifted = _get_ring_info2(nside, rings)
-    ring_in = (theta >= lo) & (theta <= hi)
+    # Pixel centres of rings a..b have colatitudes exactly in [theta(a), theta(b)].
+    bands = [(float(theta[a - 1]), float(theta[b - 1])) for a, b in ranges_ok]
+    ring_in = torch.zeros_like(rings, dtype=torch.bool)
+    for a, b in ranges_ok:
+        ring_in[a - 1 : b] = True
     margin = 1.0e-9
 
     def _classify(centres: Tensor, radius: float) -> tuple[Tensor, Tensor]:
         colat = torch.atan2(torch.hypot(centres[:, 0], centres[:, 1]), centres[:, 2])
-        inside = ((colat - radius) >= (lo + margin)) & (
-            (colat + radius) <= (hi - margin)
-        )
-        outside = ((colat + radius) < (lo - margin)) | (
-            (colat - radius) > (hi + margin)
-        )
+        inside = torch.zeros_like(colat, dtype=torch.bool)
+        outside = torch.ones_like(colat, dtype=torch.bool)
+        for lo, hi in bands:
+            inside |= ((colat - radius) >= (lo + margin)) & (
+                (colat + radius) <= (hi - margin)
+            )
+            outside &= ((colat + radius) < (lo - margin)) | (
+                (colat - radius) > (hi + margin)
+            )
         return inside, outside
 
     def _leaf(pix: Tensor) -> Tensor:

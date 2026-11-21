@@ -21,6 +21,9 @@ baseline record linked below; they are reported by the harness, not re-measured 
 | HEALPix indexing and queries | healpy | 12 operations at nside 512 | Zero index/angle mismatches; max `1.14e-13 deg`; throughput `1.02–2.19x` |
 | Spherical and spin SHT | healpy | Transform and spectrum parity | Gates pass; throughput ratios recorded, not gated |
 | Catalog crossmatch | Astropy `SkyCoord` | Separation parity | Max difference `1.13e-10 asec` |
+| Catalog matching (exact) | Brute force, mpmath, scipy `cKDTree`, Astropy `search_around_sky` / `match_to_catalog_sky` | 19 adversarial cases: exact poles, RA wrap, ties, radii 1 mas–1 deg, per-row radii over 5 dex, clusters, two-sided rules | Zero pair mismatches outside a `1e-8 asec` tie band; separations within `1 uas` of 50-digit arithmetic |
+| Catalog matching (scale) | scipy `cKDTree` (same threads, build + query) | Pair-ID parity first, 1e4–1e8 rows, CPU and CUDA | Zero mismatches; CPU 1e8 rows 6–11x faster, CUDA 1e7 rows 5–38x faster |
+| Probabilistic association | nway 4.8 on injected truth; Gaia DR3 x 2MASS x CatWISE (HATS) | Completeness, purity, calibration; chi^2 calibration of real matches | Pairwise completeness@0.9 0.90 vs 0.71 at equal purity; N-way MAP tuples 0.93 vs 0.82; real uncrowded fields chi^2-calibrated after error calibration |
 | CUDA WCS | Astropy | 17 cases including offset cases | All pass; max angular parity `8.2e-3 asec` |
 
 Source: the harness baseline record in

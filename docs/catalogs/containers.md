@@ -117,33 +117,28 @@ catalog has rows. Radii here are degrees; crossmatch radii are arcseconds.
 [`Catalog.from_arrow`](../reference/catalogs.md#torchsky.catalogs.Catalog)
 takes a `pyarrow.Table`, an IPC reader, or an IPC file path, with the names of
 the position columns and of the numeric columns to carry. A FITS table reaches
-Arrow through `torchfits.table.read`. To match two catalogs that are too large
-for memory, give both to
-[`crossmatch_sky_from_arrow`](../reference/catalogs.md#torchsky.catalogs.crossmatch_sky_from_arrow):
-it streams each once into HEALPix tiles on disk (Parquet row groups) and matches
-one tile and its neighbours at a time, so coordinate memory follows the largest
-tile. The returned pairs stay in memory. `pyarrow` is an optional dependency.
+Arrow through `torchfits.table.read`. `pyarrow` is an optional dependency.
 
 <!-- docs: run -->
 ```python
 import pyarrow as pa
 
-from torchsky.catalogs import Catalog, crossmatch_sky_from_arrow
+from torchsky.catalogs import Catalog
 
 left = pa.table({"source_id": [11, 12, 13], "ra": [10.0, 20.0, 30.0], "dec": [0.0, 1.0, 2.0]})
 right = pa.table({"name": ["a", "b"], "ra": [20.0001, 30.0], "dec": [1.0, 2.0002]})
 
 cat = Catalog.from_arrow(left, lon="ra", lat="dec", columns=("source_id",))
+other = Catalog.from_arrow(right, lon="ra", lat="dec")
 assert cat.columns["source_id"].tolist() == [11, 12, 13]
 
-pairs = crossmatch_sky_from_arrow(left, right, radius_arcsec=2.0, find="all")
+pairs = cat.crossmatch(other, radius_arcsec=2.0, find="all")
 names = right["name"].take(pairs.right_index.numpy()).to_pylist()
 assert pairs.left_index.tolist() == [1, 2] and names == ["a", "b"]
 ```
 
 Gather identifiers with the returned indices (`Table.take`) rather than
-converting them to floats. `left_columns=` and `right_columns=` name the
-position columns when they are not `("ra", "dec")`.
+converting them to floats.
 
 ### Stream partitions into a training loop
 
@@ -152,7 +147,8 @@ wraps an iterable of partitions (files, sky tiles, row ranges) and a loader
 function into a PyTorch `IterableDataset`. With several `DataLoader` workers,
 each worker takes every *n*-th partition, so no partition is read twice.
 `CatalogStreamDataset.from_arrow(table, batch_size=...)` yields `(ra, dec)`
-tensor batches, the input `crossmatch_sky_streamed` expects.
+tensor batches; match each against a prebuilt `SkyIndex` of the reference
+catalog.
 
 ```python
 # load_partition and process are your code; partitions can be file paths.
@@ -169,16 +165,22 @@ for partition in DataLoader(dataset, num_workers=2, batch_size=None):
 
 `to_frame(name)` converts positions and rotates proper motion with them; the
 rigid ICRS, Galactic, FK5 (J2000), and ecliptic rotations keep the motion's
-length and are differentiable. `propagate_angular(epoch)` moves positions along
-their proper motion; `propagate_physical(epoch)` also uses parallax and radial
-velocity. Both require the motion they need and raise otherwise.
+length and are differentiable. `propagate(epoch, motion_prior=None)` moves
+each row with the richest motion it has: full space motion with parallax and
+radial velocity, linear proper motion otherwise, and a `MotionPrior` mean for
+rows without proper motion. `propagate_angular(epoch)` and
+`propagate_physical(epoch)` force one model for every row. All of them carry
+proper motion to the new epoch and raise rather than treat missing motion as
+zero.
 
 `Catalog.crossmatch(..., target_epoch=2016.0)` propagates both catalogs to one
 epoch before matching, preserving row indices and columns. A prebuilt
-`right_index` cannot be combined with an epoch or frame change, because the
-matched positions are new. Conversions do not propagate covariances; use the
-motion Jacobians in [Frames and time](../coordinates/frames.md) for that. FK4
-motion conversion is not provided.
+`index` cannot be combined with an epoch or frame change, because the matched
+positions are new. Propagation drops a catalog's `astrometry`, because the
+covariance would be stale; `propagate_astrometry` returns positions together
+with the propagated covariance (see
+[Crossmatch](crossmatch.md#positional-uncertainties)). FK4 motion conversion is
+not provided.
 
 ### Observe from a site
 

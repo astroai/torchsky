@@ -4,8 +4,6 @@
 
 namespace torchsky {
 
-void ensure_spectral_operator_schemas_linked();
-void ensure_spectral_cpu_operators_linked();
 
 torch::Tensor healpix_ang2pix_ring_cpu(
     int64_t nside,
@@ -68,16 +66,7 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_map2alm_from_basis_cpu(
     const torch::Tensor& ycp_t,
     const torch::Tensor& ycm_t,
     double pix_w
-);
-torch::Tensor healpix_spin_alm2map_from_basis_cpu(
-    const torch::Tensor& coeff_plus,
-    const torch::Tensor& coeff_minus,
-    const torch::Tensor& y_plus,
-    const torch::Tensor& y_minus,
-    const torch::Tensor& y_plus_m0,
-    const torch::Tensor& y_minus_m0
-);
-std::pair<torch::Tensor, torch::Tensor> healpix_spin_interpolate_concat_cpu(
+);std::pair<torch::Tensor, torch::Tensor> healpix_spin_interpolate_concat_cpu(
     const torch::Tensor& coeff_plus,
     const torch::Tensor& coeff_minus,
     const torch::Tensor& y_plus,

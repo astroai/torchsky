@@ -8,19 +8,19 @@ from __future__ import annotations
 import copy
 import math
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 
+from ...device import _to
 from ...spectrophotometry import Passband
 from ..operators.background import (
     AdditiveComponent,
     AdditiveProcessingState,
     validate_additive_components,
 )
-from ...device import _to
 
 if TYPE_CHECKING:
     from ..exposure_pose import ExposurePose
@@ -88,6 +88,61 @@ _TIME_SCALES = {"tai", "tcb", "tcg", "tdb", "tt", "ut1", "utc"}
 _DETECTOR_LAWS = {"gaussian", "poisson_gaussian", "student_t"}
 
 
+class FieldValueSemantics(StrEnum):
+    """Accepted values of :attr:`FieldObservation.value_semantics`.
+
+    Each member compares equal to its string, so ``obs.value_semantics ==
+    "surface_brightness"`` keeps working; :class:`FieldObservation` stores the plain
+    string. ``COUNT_RATE_PER_PIXEL`` is a rate (counts or electrons per second) summed over
+    each pixel, for example a JWST ``_rate`` or HST ``_flt`` image in ``DN/s`` or ``e-/s``;
+    the model must be multiplied by the pixel solid angle to compare with it. ``FLUX`` is
+    the map-product spelling (``MAP_VALUE_SEMANTICS``) of integrated flux per pixel, which
+    ``map.product`` and ``map.scenes`` copy from a render target into an observation.
+    """
+
+    SURFACE_BRIGHTNESS = "surface_brightness"
+    INTEGRATED_FLUX = "integrated_flux"
+    INTEGRATED_FLUX_PER_PIXEL = "integrated_flux_per_pixel"
+    SINGLE_INTEGRATED_READ = "single_integrated_read"
+    DETECTOR_COUNTS = "detector_counts"
+    COUNT_RATE_PER_PIXEL = "count_rate_per_pixel"
+    FLUX = "flux"
+
+
+VALUE_SEMANTICS: tuple[str, ...] = tuple(member.value for member in FieldValueSemantics)
+
+
+def _validate_value_semantics(value: str | None) -> str | None:
+    """Return ``value`` as a plain string after checking it is an accepted name."""
+    if value is None:
+        return None
+    if value not in VALUE_SEMANTICS:
+        raise ValueError(
+            f"unsupported FieldObservation value_semantics {value!r}; "
+            f"expected one of {list(VALUE_SEMANTICS)}"
+        )
+    return str(FieldValueSemantics(value).value)
+
+
+def _cast_module_without_narrowing(module: nn.Module, dtype: torch.dtype) -> None:
+    """Cast floating parameters and buffers to ``dtype``, but never to a narrower type.
+
+    ``module.to(float32)`` would round a float64 detector table; here a float64 tensor
+    stays float64 under a float32 request, while float32 -> float64 and same-width casts
+    behave as ``module.to(dtype)``.
+    """
+    bits = torch.finfo(dtype).bits
+
+    def cast(tensor: Tensor) -> Tensor:
+        if not tensor.is_floating_point():
+            return tensor
+        if torch.finfo(tensor.dtype).bits > bits:
+            return tensor
+        return tensor.to(dtype)
+
+    module._apply(cast)
+
+
 def _validate_optional_identifier(value: str | None, *, name: str) -> None:
     if value is not None and (not isinstance(value, str) or not value.strip()):
         raise ValueError(f"{name} must be a non-empty string when provided")
@@ -147,7 +202,7 @@ class ForwardContext:
         if not isinstance(self.extra, dict):
             raise TypeError("ForwardContext extra must be a dict")
 
-    def validate_certified(self) -> "ForwardContext":
+    def validate_certified(self) -> ForwardContext:
         """Fail closed unless the context identifies one calibrated exposure."""
         missing = [
             name
@@ -203,11 +258,11 @@ class PSFSpec:
     """
 
     @classmethod
-    def gaussian(cls, sigma_pix: float) -> "PSFSpec":
+    def gaussian(cls, sigma_pix: float) -> PSFSpec:
         return cls(mode="gaussian_sigma_pix", sigma_pix=float(sigma_pix))
 
     @classmethod
-    def kernel(cls, kernel2d: Tensor) -> "PSFSpec":
+    def kernel(cls, kernel2d: Tensor) -> PSFSpec:
         return cls(mode="kernel2d", kernel2d=kernel2d)
 
     @classmethod
@@ -219,7 +274,7 @@ class PSFSpec:
         cell_u_pix: Tensor | None = None,
         cell_lam_norm: float = 0.5,
         frozen: bool = True,
-    ) -> "PSFSpec":
+    ) -> PSFSpec:
         return cls(
             mode="learned_lowrank",
             sigma_pix=float(base_sigma_pix),
@@ -274,7 +329,7 @@ class PSFSpec:
         self,
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
-    ) -> "PSFSpec":
+    ) -> PSFSpec:
         """Return an independently moved PSF without mutating the source model."""
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("PSFSpec dtype must be floating point")
@@ -415,7 +470,7 @@ class FieldObservation:
     detector_to_sky: DetectorToSkyTransform | None = None
     passband: Passband | None = None
     value_unit: str | None = None
-    value_semantics: str | None = None
+    value_semantics: FieldValueSemantics | str | None = None
     spectral_unit: str | None = None
     detector_law: DetectorLaw | None = None
     gain_electrons_per_adu: Tensor | float | None = None
@@ -518,6 +573,7 @@ class FieldObservation:
             "gain_provenance_id",
         ):
             _validate_optional_identifier(getattr(self, name), name=name)
+        self.value_semantics = _validate_value_semantics(self.value_semantics)
         for name in ("exposure_time_s", "collecting_area_m2"):
             value = getattr(self, name)
             if value is not None and (
@@ -602,13 +658,17 @@ class FieldObservation:
         self,
         device: torch.device | str | None = None,
         dtype: torch.dtype | None = None,
-    ) -> "FieldObservation":
+    ) -> FieldObservation:
         """Return an independently moved observation with semantic dtypes preserved.
 
         Floating detector planes follow ``dtype``. Boolean masks and integer
         amplifier indices retain their semantic dtype. Nested modules are copied
         before moving, so the source observation is not mutated. Coordinate caches
         are intentionally dropped by :func:`dataclasses.replace`.
+
+        A ``detector_to_sky`` module follows ``device`` and is cast to ``dtype`` only
+        upward or sideways: a float64 parameter or buffer stays float64 under
+        ``dtype=torch.float32`` so that detector tables keep their precision.
         """
         if dtype is not None and not dtype.is_floating_point:
             raise TypeError("FieldObservation dtype must be floating point")
@@ -650,14 +710,17 @@ class FieldObservation:
         if isinstance(transform, nn.Module):
             transform = copy.deepcopy(transform)
             if device is not None or dtype is not None:
-                _to(transform, device, dtype)
+                if device is not None:
+                    _to(transform, device, None)
+                if dtype is not None:
+                    _cast_module_without_narrowing(transform, dtype)
                 kwargs["detector_to_sky"] = transform
         return replace(self, **kwargs)
 
     def validate_certified(
         self,
         forward_context: ForwardContext,
-    ) -> "FieldObservation":
+    ) -> FieldObservation:
         """Validate the strict native-observation contract used for claims.
 
         Legacy and exploratory observations remain valid without these fields;

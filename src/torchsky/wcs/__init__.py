@@ -80,6 +80,11 @@ from .detector_astrometry import (
     TangentPlaneAffine,
     validate_sampled_transform,
 )
+from .telescope_frame import (
+    PolynomialDetectorDistortion,
+    TelescopeAttitude,
+    TelescopeFrameDetectorToSky,
+)
 from .catalog_state import CatalogState
 from .graph import (
     AmbiguousPathError,
@@ -223,6 +228,7 @@ __all__ = [
     "PhotometricCalibrationSolution",
     "PhotometricMeasurementBlock",
     "PhotometricReference",
+    "PolynomialDetectorDistortion",
     "PortRoute",
     "PortRoutingMapping",
     "RegularGridTransform2D",
@@ -241,6 +247,8 @@ __all__ = [
     "TabularAxis",
     "TabularBoundsMode",
     "TabularLookupWCS",
+    "TelescopeAttitude",
+    "TelescopeFrameDetectorToSky",
     "TemporalWCS",
     "TimeSpec",
     "TransformEdge",

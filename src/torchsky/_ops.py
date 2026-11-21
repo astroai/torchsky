@@ -9,16 +9,6 @@ from ._native import cpp as _cpp
 if _cpp is not None:
     from . import _fixed_dispatch as _fixed_dispatch
     from . import _spectral_dispatch as _spectral_dispatch
-    from . import _wcs_dispatch as _wcs_dispatch
-
-
-def has_wcs_dispatcher() -> bool:
-    if _cpp is None:
-        return False
-    namespace = torch.ops.torchsky
-    return hasattr(namespace, "wcs_pixel_to_world") and hasattr(
-        namespace, "wcs_world_to_pixel"
-    )
 
 
 def has_fixed_dispatcher() -> bool:
@@ -179,15 +169,3 @@ def healpix_query_disc(*args: Any) -> torch.Tensor:
 
 def sparse_get_values_blocks(*args: Any) -> torch.Tensor:
     return _fixed("sparse_get_values_blocks", *args)
-
-
-def wcs_pixel_to_world(*args: Any, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor]:
-    if not has_wcs_dispatcher():
-        raise RuntimeError("torchsky WCS dispatcher operators are unavailable")
-    return torch.ops.torchsky.wcs_pixel_to_world(*args, **kwargs)
-
-
-def wcs_world_to_pixel(*args: Any, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor]:
-    if not has_wcs_dispatcher():
-        raise RuntimeError("torchsky WCS dispatcher operators are unavailable")
-    return torch.ops.torchsky.wcs_world_to_pixel(*args, **kwargs)

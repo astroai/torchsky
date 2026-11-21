@@ -10,8 +10,7 @@ from typing import Any, Literal
 import torch
 from torch import Tensor
 
-from ..catalogs import HealpixIndex
-from ..sphere import great_circle_distance
+from ..catalogs.sky_index import SkyIndex, match_nearest
 from ._graph import _UnionFind
 from .alignment import TangentPlaneFrame
 from .semantics import Epoch, TimeSpec
@@ -355,9 +354,12 @@ def match_approximate_wcs(
     reference_sky: Any,
     *,
     radius_arcsec: float,
-    index: HealpixIndex | None = None,
+    index: SkyIndex | None = None,
 ) -> ApproximateMatchResult:
-    """Nearest supplied-reference matching, using only ``HealpixIndex`` candidates."""
+    """Nearest supplied-reference match within ``radius_arcsec`` (exact, ties to lowest row).
+
+    ``index`` is an optional :class:`~torchsky.catalogs.SkyIndex` of ``reference_sky``.
+    """
     reference = _to(
         _as_real_tensor(reference_sky, "reference_sky"),
         device=observation.detector_xy.device,
@@ -368,31 +370,16 @@ def match_approximate_wcs(
     if not math.isfinite(radius_arcsec) or radius_arcsec <= 0.0:
         raise ValueError("radius_arcsec must be finite and positive")
     sky = observation.approximate_sky()
-    hp_index = index
-    if hp_index is None:
-        hp_index = HealpixIndex.build(reference[:, 0], reference[:, 1])
-    elif hp_index.lon.numel() != reference.shape[0]:
-        raise ValueError("index and reference_sky row counts differ")
-    matched = torch.full((sky.shape[0],), -1, dtype=torch.int64, device=sky.device)
-    separation = torch.full(
-        (sky.shape[0],), float("inf"), dtype=sky.dtype, device=sky.device
+    nearest = match_nearest(
+        sky[:, 0],
+        sky[:, 1],
+        reference[:, 0],
+        reference[:, 1],
+        k=1,
+        max_radius_arcsec=float(radius_arcsec),
+        index=index,
     )
-    radius_deg = float(radius_arcsec) / 3600.0
-    for row in range(int(sky.shape[0])):
-        candidates = hp_index.query_disc(sky[row, 0], sky[row, 1], radius_deg)
-        if candidates.numel() == 0:
-            continue
-        distances = great_circle_distance(
-            sky[row, 0],
-            sky[row, 1],
-            reference[candidates, 0],
-            reference[candidates, 1],
-            degrees=True,
-        )
-        closest = torch.argmin(distances)
-        matched[row] = candidates[closest]
-        separation[row] = distances[closest] * 3600.0
-    return ApproximateMatchResult(matched, separation)
+    return ApproximateMatchResult(nearest.index[:, 0], nearest.separation_arcsec[:, 0])
 
 
 class AstrometricMatchGraph:

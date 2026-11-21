@@ -22,29 +22,38 @@ dependency for FITS file and table I/O and installs together with torchsky.
 pip install "torchsky @ file:///path/to/torchsky-0.5.0-*.whl"   # a wheel you built
 ```
 
-### Supported lanes (0.5)
+### Supported versions (0.6)
 
 | | Supported and tested |
 |---|---|
 | Python | 3.12, 3.13, 3.14 (CI runs the full suite on each) |
-| PyTorch | 2.14 (`>=2.14,<2.15`) |
-| GPU | CUDA 13 and newer (PyTorch `cu130` builds; NVIDIA driver supporting CUDA 13), Apple MPS (float64-only paths raise) |
+| PyTorch | 2.13 or newer (`>=2.13`, no upper bound; tested up to 2.15) |
+| GPU | Any CUDA build of a supported PyTorch, Apple MPS (float64-only paths raise) |
 | OS / architecture | Linux x86_64 (manylinux_2_28), macOS 14+ arm64 |
-| torchfits | 1.3.1 or newer |
+| torchfits | 1.3.3 or newer |
 
-The extension is CPU-only C++; GPU work runs through PyTorch, so one Linux wheel
-serves CPU and every CUDA build of PyTorch 2.14. Other platforms build from the
-sdist.
+The native extension is CPU-only C++ that neither includes nor links libtorch:
+tensors cross into it through DLPack without a copy, and its operators are
+registered with `torch.library` from Python. It also uses the CPython stable ABI.
+So one `cp312-abi3` wheel per platform serves CPython 3.12 and newer, CPU and
+every CUDA build, and every PyTorch from the floor up. GPU work runs through
+PyTorch. Other platforms build from the sdist.
 
-Release wheels target Linux x86_64 (manylinux_2_28) and macOS arm64 (macOS 14.0 or newer) on CPython 3.12, 3.13, and 3.14;
-building from source works on the platforms in `pyproject.toml`. Package metadata
-requires Python >=3.12 and [PyTorch](https://pytorch.org/) >=2.14,<2.15 (PyTorch
-2.14 is the supported lane), plus torchfits 1.3.1 or newer. The reproducible
-contributor lane pins Python 3.13, PyTorch 2.14.0, and torchfits 1.3.1. Native
-extensions enforce their compiled PyTorch ABI at import.
+Release wheels target Linux x86_64 (manylinux_2_28) and macOS arm64 (macOS 14.0
+or newer); building from source works on the platforms in `pyproject.toml`.
+Package metadata requires Python >=3.12, [PyTorch](https://pytorch.org/) >=2.13
+and torchfits 1.3.3 or newer. CI tests the floor (pixi environment
+`test-torch-min`) and the newest PyTorch available; `scripts/torch_support.json`
+records both.
 
-Optional extras: `torchsky[viz]` (browser sky viewer) and `torchsky[map]` (SVO
-filter profiles for `torchsky map --method field`).
+Known issue: with PyTorch 2.15 on macOS 14, MPS matrix products on
+transposed inputs abort the process inside PyTorch (`-[MPSNDArray
+arrayViewWithShape:strides:]: unrecognized selector`). On that macOS, use
+PyTorch 2.14 for MPS work, or run on the CPU.
+
+Optional extras: `torchsky[viz]` (browser sky viewer and matplotlib figures;
+`import torchsky` never needs it) and `torchsky[map]` (SVO filter profiles for
+`torchsky map --method field`).
 
 ## Source Build
 
@@ -56,7 +65,7 @@ To build `torchsky` from source, you'll need a C++ compiler and CMake.
 - C++20 compatible compiler (GCC or Clang on the supported release platforms)
 - CMake 3.15+ for the native project, with 3.21+ recommended for the packaged build environment and current PyTorch/CUDA toolchains
 - Ninja (recommended)
-- **Python build backend** (see below): `scikit-build-core`, `nanobind`, plus runtime deps `torch` and `numpy` (versions in `pyproject.toml`)
+- **Python build backend** (see below): `scikit-build-core` and `nanobind`; the build needs no PyTorch
 
 #### Build-backend packages (pip without pixi)
 
@@ -65,7 +74,8 @@ The package uses **scikit-build-core** as the build backend. With default `pip i
 If you install **without** build isolation (`--no-build-isolation`), you must have the backend and build-time deps available in the **same** environment as the interpreter:
 
 ```bash
-python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2" "torch>=2.14,<2.15" "numpy>=1.20.0"
+python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2"
+python -m pip install "torch>=2.13" "numpy>=1.20.0"   # runtime
 ```
 
 Exact pins match `[build-system].requires` in `pyproject.toml`.
@@ -108,55 +118,20 @@ CFITSIO build configuration, vendoring, and troubleshooting belong to
 `torchfits`. Torchsky's native extension is limited to torchsky-owned geometry
 and compute kernels.
 
-#### Pip only (no Pixi / no conda env manager)
+#### PyTorch is not a build dependency
 
-The commands above are enough when pip can supply an isolated build env. If you already have **PyTorch from conda** (or another layout where system headers and `site-packages/torch` can disagree), prefer:
-
-```bash
-python -m pip install --no-build-isolation -e .
-```
-
-after installing `scikit-build-core` and `nanobind` into that environment (see **Build-backend packages**). Default isolation can pull a second Torch into `/tmp/...` and the C++ build may see **two different Torch include trees**, which fails with conflicting declarations.
-
-Torchsky normalizes conda's split PyTorch header layout when `TorchConfig.cmake`
-publishes `include/torch/csrc/api/include` separately from the parent `include`
-root. The build still fails closed if the corresponding autograd headers are
-not installed.
-
-If your conda base is **not writable**, use a virtual environment or a conda environment you control; otherwise installation may fail when copying artifacts into `site-packages`.
-
-#### CUDA-enabled PyTorch
-
-If `torch.version.cuda` is set, a source or editable build must find a **full
-CUDA toolkit** compatible with that PyTorch build (headers, `nvcc`, NVRTC).
-Runtime-only CUDA packages are not enough: PyTorch's own CMake package loads its
-CUDA configuration before Torchsky's CPU-only extension target is defined. On
-conda, `nvcc` is often present while **`CUDA_HOME` is unset**, which breaks
-`find_package(Torch)`. Point CMake at your toolkit root before building, for
-example:
-
-```bash
-export CUDA_HOME="${CONDA_PREFIX}"   # conda base or active env prefix
-# optional, helps some layouts:
-export CUDAToolkit_ROOT="${CUDA_HOME}"
-python -m pip install --no-build-isolation -e .
-```
-
-Adjust `CUDA_HOME` if your toolkit lives elsewhere (e.g. `/usr/local/cuda`).
-CPU-only PyTorch builds do not need this.
-
-A Torchsky wheel built against CPU-only PyTorch may be binary-compatible with
-an exact-version CUDA PyTorch runtime, but that combination is distribution- and
-ABI-sensitive. It is not a supported workaround for conda/Pixi or CANFAR until
-the exact build wheel and target runtime pass native import plus a first WCS
-construction/transform smoke. Use a full matching toolkit for source/editable
-installs in those environments.
+The native extension does not include PyTorch headers or link libtorch, so a
+source or editable build needs only a C++20 compiler, CMake, `scikit-build-core`
+and `nanobind`. It works the same next to CPU, CUDA and MPS builds of PyTorch,
+from pip, conda or Pixi, and no CUDA toolkit is needed. `--no-build-isolation`
+is only useful to reuse the backend already installed in your environment.
 
 If an otherwise supported environment crashes while loading the optional native
 accelerator, set `TORCHSKY_DISABLE_CPP=1` before importing Torchsky. This keeps
-the Torch-native WCS and sphere implementations available while disabling only
-the C++ fast paths. Treat this as a safe diagnostic/fallback, and do not publish
-native performance claims from such a run.
+the torch implementations available and disables only the C++ fast paths
+(HEALPix, spherical geometry and harmonics, crossmatch, drizzle; WCS has
+none). Treat this as a safe diagnostic/fallback, and do not publish native
+performance claims from such a run.
 
 ### Troubleshooting
 
@@ -167,14 +142,6 @@ Install PyTorch with CUDA or MPS support for torchsky tensor computation:
 
 - **`BackendUnavailable: Cannot import 'scikit_build_core.build'`** with `--no-build-isolation`?
   Install `scikit-build-core` (and `nanobind`) into the active environment, then retry.
-
-- **Torch header conflicts** (`torch/types.h` redeclarations, two include roots)?
-  Use `--no-build-isolation` so the build uses a single Torch install (common with conda PyTorch).
-
-- **CMake / PyTorch: CUDA or `CUDA::nvrtc` errors** with a GPU build of PyTorch?
-  Set `CUDA_HOME` (and optionally `CUDAToolkit_ROOT`) to a full toolkit layout;
-  ensure headers, `nvcc`, and NVRTC are installed. An NVRTC or CUDA runtime
-  package by itself is insufficient.
 
 - **Permission denied** installing into conda `site-packages`?
   Use a venv or install into a writable prefix.

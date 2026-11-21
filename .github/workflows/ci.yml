@@ -48,7 +48,7 @@ jobs:
     needs: pre-commit
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+    - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e
       with:
         pixi-version: v0.82.0
     - name: "Install Pixi env (test \u2014 pyright + built package)"
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+    - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e
       with:
         pixi-version: v0.82.0
     - name: Install docs environment
@@ -87,7 +87,7 @@ jobs:
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+    - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e
       with:
         pixi-version: v0.82.0
     - name: Install test environment
@@ -118,7 +118,7 @@ jobs:
           pixi-environment: test-py314
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+    - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e
       with:
         pixi-version: v0.82.0
     - name: Install test environment
@@ -135,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+    - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e
       with:
         pixi-version: v0.82.0
     - name: Install test environment
@@ -187,7 +187,7 @@ jobs:
           tests: tests/test_map_sky.py tests/test_map_sky_corrector.py tests/test_map_sky_polynomial.py
           pytest_args: ''
         - shard: native-likelihood
-          tests: tests/test_native_epsf.py tests/test_native_field_response.py tests/test_field_gaussian_likelihood.py tests/test_gaussian_likelihood.py tests/test_joint_native_likelihood.py tests/test_linear_query.py tests/test_continuous_response.py tests/test_detector_response.py tests/test_pixel_calibration.py tests/test_nuisance_precision.py tests/test_nuisance_device_gradients.py tests/test_nuisance_spectral_device.py tests/test_query_spectral_device.py tests/test_evidence_lifecycle.py tests/test_calibration_evidence.py
+          tests: tests/test_native_epsf.py tests/test_source_quadrature_response.py tests/test_field_gaussian_likelihood.py tests/test_gaussian_likelihood.py tests/test_shared_nuisance_likelihood.py tests/test_linear_query.py tests/test_continuous_response.py tests/test_detector_response.py tests/test_pixel_calibration.py tests/test_nuisance_precision.py tests/test_nuisance_device_gradients.py tests/test_nuisance_spectral_device.py tests/test_query_spectral_device.py tests/test_evidence_lifecycle.py tests/test_calibration_evidence.py
           pytest_args: ''
         - shard: native-physical
           tests: tests/test_poisson_gaussian_boundary.py tests/test_poisson_gaussian_positive_nll.py tests/test_additive_stage_contract.py tests/test_calibration_helpers.py
@@ -212,7 +212,7 @@ jobs:
           pytest_args: ''
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-    - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94
+    - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e
       with:
         pixi-version: v0.82.0
     - name: Install test environment

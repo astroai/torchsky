@@ -152,9 +152,9 @@ class MultiOrderHealpixMap:
         fill_value: float | int = 0,
         return_valid: bool = False,
     ) -> Tensor | tuple[Tensor, Tensor]:
-        lon = torch.as_tensor(lon_deg, device=self.uniq.device)
         dtype = _work_dtype(self.uniq.device)
-        lon = lon.to(dtype=dtype)
+        # Python floats must not pass through the float32 default dtype.
+        lon = _as_tensor(lon_deg, device=self.uniq.device, dtype=dtype)
         lat = _as_tensor(lat_deg, device=self.uniq.device, dtype=dtype)
         lon, lat = torch.broadcast_tensors(lon, lat)
         shape = lon.shape

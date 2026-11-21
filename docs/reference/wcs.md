@@ -343,6 +343,19 @@ namespace `torchsky.wcs` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Telescope frame
+
+::: torchsky.wcs
+    options:
+      members:
+        - PolynomialDetectorDistortion
+        - TelescopeAttitude
+        - TelescopeFrameDetectorToSky
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Temporal
 
 ::: torchsky.wcs

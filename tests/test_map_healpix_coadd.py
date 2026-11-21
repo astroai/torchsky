@@ -441,3 +441,55 @@ def test_coadd_healpix_fk5_header_gets_frame_bias() -> None:
         torch.hypot((ra1 - ra0) * torch.cos(torch.deg2rad(dec0)), dec1 - dec0) * 3.6e6
     )
     assert 10.0 < float(offset_mas) < 40.0
+
+
+@pytest.mark.parametrize("method", ["bilinear", "nearest"])
+def test_resample_sparse_healpix_result_matches_dense(method: str) -> None:
+    """A sparse HealpixResult resamples exactly like its dense twin.
+
+    The dense branch interpolates ``weight * data`` and ``weight`` with the
+    plain bilinear HEALPix weights (uncovered cells carry zero weight). The
+    sparse branch used to renormalise ``data`` over the neighbours whose value
+    differs from the 0.0 sentinel, ignoring the weights and treating exact
+    zeros as uncovered.
+    """
+    from torchsky.map import resample_healpix
+
+    torch.manual_seed(5)
+    observations = []
+    for k in range(3):
+        header = _header((40, 40), crval=(30.0 + 0.05 * k, 10.0), cdelt=0.02)
+        data = torch.randn(40, 40) + 3.0
+        data[10:20, 10:20] = 0.0  # exact zeros are data, not missing cells
+        observations.append(
+            Observation(
+                data=data,
+                header=header,
+                weight_map=(torch.rand(40, 40) + 0.2) * (k + 1),
+            )
+        )
+    dense = coadd_healpix(observations, 256, sparse=False)
+    sparse = coadd_healpix(observations, 256, sparse=True)
+    target = _header((60, 60), crval=(30.05, 10.0), cdelt=0.012)
+
+    from_dense = resample_healpix(dense, target, method=method)
+    from_sparse = resample_healpix(sparse, target, method=method)
+
+    assert bool((from_dense.weight > 0).any())
+    torch.testing.assert_close(from_sparse.weight, from_dense.weight)
+    torch.testing.assert_close(from_sparse.data, from_dense.data)
+
+
+def test_resample_sparse_healpix_result_keeps_exactly_zero_cells() -> None:
+    from torchsky.map import resample_healpix
+
+    zero = _observation(0.0, 1.0, cdelt=0.02)
+    sparse = coadd_healpix([zero], 1024, sparse=True)
+    dense = coadd_healpix([zero], 1024, sparse=False)
+    target = _header((16, 16), crval=(45.0, 10.0), cdelt=0.01)
+
+    from_sparse = resample_healpix(sparse, target, method="nearest")
+    from_dense = resample_healpix(dense, target, method="nearest")
+
+    assert bool((from_dense.weight > 0).all())
+    torch.testing.assert_close(from_sparse.weight, from_dense.weight)

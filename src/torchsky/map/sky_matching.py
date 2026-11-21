@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, overload
 
@@ -36,6 +37,31 @@ from .planning import plan
 from .windowing import _build_target_world_grid
 from ..wcs import WCS
 from ..device import _to
+
+
+_SIP_KEY = re.compile(r"^(A|B|AP|BP)_(ORDER|DMAX|\d+_\d+)$")
+_TPV_KEY = re.compile(r"^PV[12]_\d+$")
+
+
+def _plane_frame_wcs(wcs: WCS, target_hdr: Mapping[str, Any]) -> WCS:
+    """Target WCS without SIP/TPV distortion: CD (or PC/CDELT) plus the projection.
+
+    A planar sky model needs coordinates that are smooth and defined wherever an
+    observation lies. A distortion inverse has no pre-image beyond its convergence
+    region (NaN there), whereas the undistorted projection is defined over the whole
+    projection domain. For an undistorted target this is ``wcs`` itself.
+    """
+    if wcs.sip is None and wcs.tpv is None:
+        return wcs
+    strip = _SIP_KEY if wcs.sip is not None else _TPV_KEY
+    header = {k: v for k, v in target_hdr.items() if not strip.match(str(k).upper())}
+    for key in ("CTYPE1", "CTYPE2"):
+        ctype = str(header.get(key, "")).strip()
+        if ctype.upper().endswith("-SIP"):
+            header[key] = ctype[:-4]
+        elif ctype.upper().endswith("-TPV"):
+            header[key] = ctype[:-3] + "TAN"
+    return WCS(header)
 
 
 def _load_existing_observation_valid_mask(
@@ -564,6 +590,9 @@ def match_sky(
     if corrector_mode == "planar":
         planes = corrector.fit_planes(images, masks)
         coadd_wcs = WCS(target_hdr)
+        # Fallback frame for observations with pixels the target's distortion
+        # inverse cannot reach: the undistorted target projection.
+        plane_wcs = _plane_frame_wcs(coadd_wcs, target_hdr)
         coadd_shape = (int(images[0].shape[0]), int(images[0].shape[1]))
         H_c, W_c = coadd_shape
         updated_obs = []
@@ -583,6 +612,21 @@ def match_sky(
                     flat_ra, flat_dec, obs_wcs, coadd_wcs
                 )
                 cx_flat, cy_flat = coadd_wcs.world_to_pixel(flat_ra, flat_dec)
+                if plane_wcs is not coadd_wcs and not bool(
+                    (torch.isfinite(cx_flat) & torch.isfinite(cy_flat)).all()
+                ):
+                    # Pixels beyond the distortion inverse's reach: evaluate this
+                    # observation's plane in the undistorted target frame, which
+                    # has a position for them (the plane is fitted on the
+                    # distorted grid, so this costs distortion x slope).
+                    cx_flat, cy_flat = plane_wcs.world_to_pixel(flat_ra, flat_dec)
+                if not bool((torch.isfinite(cx_flat) & torch.isfinite(cy_flat)).all()):
+                    raise ValueError(
+                        f"planar sky matching: observation {idx} has pixels with no "
+                        "position in the target projection (for example more than 90 "
+                        "degrees from a TAN target's tangent point); choose a target "
+                        "whose projection covers every observation"
+                    )
                 cx = cx_flat.reshape(obs_shape)
                 cy = cy_flat.reshape(obs_shape)
                 u = (cx / max(W_c - 1, 1)) * 2.0 - 1.0
