@@ -488,7 +488,9 @@ class _LegendreTable:
         inv = 2.0 ** (-_SCALE_BITS[torch.float64])
         base = _alm_base(lmax, mmax)
         rows = _table_rows(mmax)
-        values_step = _stepper(_values_steps, build_dev, "values")
+        # Eager on purpose: compiling the build costs ~9 s per shape on CUDA
+        # and measured no faster at nside 512 (10.7 s vs 10.4 s cold).
+        values_step = _values_steps
         self.blocks: list[tuple[int, int, Tensor, Tensor, Tensor, Tensor]] = []
         for m0 in range(0, mmax + 1, rows):
             hi = min(m0 + rows, mmax + 1)
