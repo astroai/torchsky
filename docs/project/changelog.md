@@ -367,6 +367,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `associate_many` raised `IndexError` when a secondary catalogue had no
+  candidate within the gate. Such a catalogue is now absent from every
+  hypothesis (`-1`), and the posteriors are those of the association without
+  it.
 - TPV world→pixel in float32 (MPS) returned NaN for points whose residual
   could not reach the fixed 1e-11 deg tolerance. Convergence is now judged
   against a per-point floor set by the dtype's rounding error. On a

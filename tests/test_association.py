@@ -1171,3 +1171,42 @@ def test_fixed_calibration_transfers_from_a_fit() -> None:
     torch.testing.assert_close(fixed.posterior, fit.posterior, rtol=1e-6, atol=1e-8)
     with pytest.raises(ValueError):
         associate(left, right, right_scale=-1.0, **kw)
+
+
+@pytest.mark.parametrize("completeness", [[0.7, 0.6], "em"])
+def test_nway_secondary_without_candidates_is_simply_absent(completeness) -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, _, box = _triple_scene(31, 300, 600)
+    far = cats[2]
+    cats[2] = Catalog(
+        lon=far.lon + 5.0, lat=far.lat, epoch=far.epoch, astrometry=far.astrometry
+    )
+    many = associate_many(cats, completeness=completeness, max_radius_arcsec=30)
+    # No member of catalogue 2 can be gated, so no hypothesis uses it; the
+    # remaining two-catalogue association is unaffected.
+    assert bool((many.members[:, 2] < 0).all())
+    pair = associate_many(
+        cats[:2],
+        completeness=[0.7] if completeness != "em" else "em",
+        max_radius_arcsec=30,
+    )
+    present = many.members[:, 1] >= 0
+    assert int(present.sum()) == int((pair.members[:, 1] >= 0).sum())
+
+
+def test_nway_with_no_candidates_anywhere_gives_the_null_hypothesis() -> None:
+    from torchsky.catalogs import associate_many
+
+    cats, _, _ = _triple_scene(33, 200, 400)
+    moved = [cats[0]] + [
+        Catalog(lon=c.lon + 5.0, lat=c.lat, epoch=c.epoch, astrometry=c.astrometry)
+        for c in cats[1:]
+    ]
+    many = associate_many(moved, completeness=[0.7, 0.6], max_radius_arcsec=30)
+    n0 = int(cats[0].lon.numel())
+    assert many.members.shape == (n0, 3)
+    assert bool((many.members[:, 1:] < 0).all())
+    torch.testing.assert_close(many.posterior, torch.ones(n0, dtype=torch.float64))
+    assert float(many.p_any.abs().max()) == 0.0
+    assert torch.equal(many.best, torch.arange(n0))

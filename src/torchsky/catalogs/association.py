@@ -1638,6 +1638,66 @@ def associate_many(
                 inside, torch.log(nu.clamp_min(1e-300)), torch.full_like(nu, math.inf)
             )
         )
+    # A secondary with no gated candidate is absent from every hypothesis: its
+    # factor (1 - pi_c) is common to all of a primary's hypotheses, so the
+    # posteriors are those of the association without it. Solve without such
+    # catalogues and report them as absent (-1), keeping log_weight exact.
+    no_cand = [c for c in range(1, k) if int(pairs[c][0].numel()) == 0]
+    if no_cand:
+        back_order = torch.tensor(order, device=dev)
+        inv_order = torch.argsort(back_order)
+        log_absent = sum(math.log1p(-pi[c]) for c in no_cand)
+        comp_all = [pi[c] / (1.0 - gate_pvalue) if c else 1.0 for c in range(k)]
+        keep = [c for c in range(k) if c not in no_cand]
+        if len(keep) == 1:
+            members_int = torch.full((n0, k), -1, dtype=torch.int64, device=dev)
+            members_int[:, 0] = torch.arange(n0, device=dev)
+            return NWayAssociation(
+                members=members_int[:, inv_order],
+                offsets=torch.arange(n0 + 1, dtype=torch.int64, device=dev),
+                log_weight=torch.full((n0,), log_absent, dtype=_F64, device=dev),
+                posterior=torch.ones(n0, dtype=_F64, device=dev),
+                p_any=torch.zeros(n0, dtype=_F64, device=dev),
+                residual_mass=torch.zeros(n0, dtype=_F64, device=dev),
+                completeness=[comp_all[int(i)] for i in inv_order.tolist()],
+                best=torch.arange(n0, dtype=torch.int64, device=dev),
+            )
+        sub = associate_many(
+            [cats[c] for c in keep],
+            primary=0,
+            gate_pvalue=gate_pvalue,
+            max_radius_arcsec=max_radius_arcsec,
+            epoch=epoch,
+            motion_prior=motion_prior,
+            footprints=None if footprints is None else [feet[c] for c in keep],
+            footprint_order=footprint_order,
+            completeness=(
+                "em"
+                if completeness == "em"
+                else [completeness[c - 1] for c in keep[1:]]
+            ),
+            terms=None if terms is None else [term_sets[c] for c in keep[1:]],
+            budget=budget,
+            mass_tol=mass_tol,
+            exclusive=exclusive,
+            max_iter=max_iter,
+            tol=tol,
+        )
+        n_h = int(sub.members.shape[0])
+        members_int = torch.full((n_h, k), -1, dtype=torch.int64, device=dev)
+        members_int[:, keep] = sub.members
+        for pos, c in enumerate(keep):
+            comp_all[c] = sub.completeness[pos]
+        return NWayAssociation(
+            members=members_int[:, inv_order],
+            offsets=sub.offsets,
+            log_weight=sub.log_weight + log_absent,
+            posterior=sub.posterior,
+            p_any=sub.p_any,
+            residual_mass=sub.residual_mass,
+            completeness=[comp_all[int(i)] for i in inv_order.tolist()],
+            best=sub.best,
+        )
     # Per-candidate geometry in each primary's tangent frame.
     cov_inv: list[Tensor] = [torch.linalg.inv(covs[0])]
     logdet: list[Tensor] = [torch.logdet(covs[0])]
