@@ -9,7 +9,7 @@ import torch
 from torchsky.sphere import SphericalCap, SphericalPolygon
 from torchsky.sphere import healpix as hp
 from torchsky.sphere.core import great_circle_distance
-from torchsky.sphere.geom import PixelizedRegion
+from torchsky.sphere.geom import PixelizedRegion, spherical_polygon_contains
 from torchsky.sphere.moc import (
     BMOC,
     MOC,
@@ -712,3 +712,36 @@ def test_from_polygon_list_vertices_keep_float64() -> None:
         max_order=20,
     )
     assert from_list == from_f64
+
+
+def test_polygon_moc_concave_notch_between_cell_samples() -> None:
+    # A 0.4-deg notch through coarse cells misses their centre and corners;
+    # the 5-sample "fully inside" test kept those cells (and every leaf in
+    # the notch) as interior.
+    x = 13.3
+    lon = [0.0, 40.0, 40.0, x + 0.2, x + 0.2, x - 0.2, x - 0.2, 0.0]
+    lat = [0.0, 0.0, 40.0, 40.0, 10.0, 10.0, 40.0, 40.0]
+    order = 8
+    nside = 1 << order
+    lon_t = torch.tensor(lon, dtype=torch.float64)
+    lat_t = torch.tensor(lat, dtype=torch.float64)
+
+    moc = MOC.from_polygon(lon, lat, max_order=order)
+    pix = moc._flat_pixels(nside)
+    c_lon, c_lat = hp.pix2ang(nside, pix, nest=True, lonlat=True)
+    assert bool(spherical_polygon_contains(c_lon, c_lat, lon_t, lat_t).all())
+
+    bmoc = BMOC.from_polygon(lon, lat, max_order=order)
+    inner = bmoc.interior_moc()._flat_pixels(nside)
+    corners = hp.boundaries(nside, inner, step=2, nest=True)
+    k_lon, k_lat = hp.xyz_to_lonlat(
+        corners[:, 0, :].reshape(-1),
+        corners[:, 1, :].reshape(-1),
+        corners[:, 2, :].reshape(-1),
+    )
+    assert bool(spherical_polygon_contains(k_lon, k_lat, lon_t, lat_t).all())
+    # The centre rule still selects every leaf whose centre is inside.
+    cand = bmoc.to_moc()._flat_pixels(nside)
+    a_lon, a_lat = hp.pix2ang(nside, cand, nest=True, lonlat=True)
+    inside = spherical_polygon_contains(a_lon, a_lat, lon_t, lat_t)
+    assert set(pix.tolist()) == set(cand[inside].tolist())

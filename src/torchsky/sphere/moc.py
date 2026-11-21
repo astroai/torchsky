@@ -489,6 +489,34 @@ def _hierarchical_disc_uniq(
     return uniq
 
 
+def _points_to_polygon_boundary_distance(
+    points: Tensor, vertices: Tensor, *, chunk: int = 8192
+) -> Tensor:
+    """Angular distance (radians) from unit ``points`` [M, 3] to the closed
+    loop of minor great-circle arcs through unit ``vertices`` [N, 3]."""
+    v = vertices
+    w = torch.roll(v, shifts=-1, dims=0)
+    normal = torch.cross(v, w - v, dim=-1)
+    norm = torch.linalg.norm(normal, dim=-1)
+    proper = norm > 0.0
+    normal = normal / torch.where(proper, norm, torch.ones_like(norm)).unsqueeze(-1)
+    # (v x p) . n >= 0 and (p x w) . n >= 0: p projects onto the arc v -> w.
+    after_v = torch.cross(normal, v, dim=-1)
+    before_w = torch.cross(w, normal, dim=-1)
+    out = torch.empty(points.shape[0], dtype=points.dtype, device=points.device)
+    for m0 in range(0, int(points.shape[0]), chunk):
+        p = points[m0 : m0 + chunk]
+        within = proper & (p @ after_v.T >= 0.0) & (p @ before_w.T >= 0.0)
+        to_plane = torch.asin((p @ normal.T).abs().clamp(max=1.0))
+        to_vertex = torch.atan2(
+            torch.linalg.norm(torch.cross(p[:, None, :], v[None], dim=-1), dim=-1),
+            p @ v.T,
+        )
+        to_end = torch.minimum(to_vertex, torch.roll(to_vertex, shifts=-1, dims=1))
+        out[m0 : m0 + chunk] = torch.where(within, to_plane, to_end).amin(dim=1)
+    return out
+
+
 def _hierarchical_polygon_bmoc(
     lon_deg: Tensor,
     lat_deg: Tensor,
@@ -531,17 +559,25 @@ def _hierarchical_polygon_bmoc(
             break
         lon_p, lat_p = _healpix.pix2ang(nside, pix, nest=True, lonlat=True)
         center_in = spherical_polygon_contains(lon_p, lat_p, poly_lon, poly_lat)
-        corners = _healpix.boundaries(nside, pix, step=1, nest=True)
-        lon_c, lat_c = _healpix.xyz_to_lonlat(
-            corners[:, 0, :].reshape(-1),
-            corners[:, 1, :].reshape(-1),
-            corners[:, 2, :].reshape(-1),
-        )
-        corner_in = spherical_polygon_contains(
-            lon_c, lat_c, poly_lon, poly_lat
-        ).reshape(pix.numel(), 4)
-        fully_in = center_in & corner_in.all(dim=1)
+        # Exact side test: the cell lies in the cap of radius r_pix around its
+        # centre, so a boundary farther than r_pix puts the whole cell on the
+        # centre's side (corner samples miss edges passing between them).
+        clear = torch.rad2deg(
+            _points_to_polygon_boundary_distance(
+                lonlat_to_unit_xyz(lon_p, lat_p).to(verts.dtype), verts
+            )
+        ) > float(r_pix)
+        fully_in = center_in & clear
         if order == max_order:
+            corners = _healpix.boundaries(nside, pix, step=1, nest=True)
+            lon_c, lat_c = _healpix.xyz_to_lonlat(
+                corners[:, 0, :].reshape(-1),
+                corners[:, 1, :].reshape(-1),
+                corners[:, 2, :].reshape(-1),
+            )
+            corner_in = spherical_polygon_contains(
+                lon_c, lat_c, poly_lon, poly_lat
+            ).reshape(pix.numel(), 4)
             inside_leaf = pix[fully_in]
             if inside_leaf.numel() > 0:
                 kept_uniq.append(nest2uniq(nside, inside_leaf))
@@ -563,14 +599,14 @@ def _hierarchical_polygon_bmoc(
                     torch.zeros(bndry_all.numel(), dtype=torch.uint8, device=device)
                 )
             break
-        # ponytail: 5-sample fully-inside can miss a concave dent; exact cell-in-polygon is the upgrade.
         inside = pix[fully_in]
         if inside.numel() > 0:
             kept_uniq.append(nest2uniq(nside, inside))
             kept_flag.append(
                 torch.ones(inside.numel(), dtype=torch.uint8, device=device)
             )
-        boundary = pix[~fully_in]
+        # Cells clear of the boundary with an outside centre are fully outside.
+        boundary = pix[~clear]
         if boundary.numel() == 0:
             break
         pix = _healpix.nest_children(boundary, levels=1).reshape(-1)
