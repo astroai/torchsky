@@ -14,7 +14,7 @@ from .core import great_circle_distance, lonlat_to_unit_xyz
 from .geom import PixelizedRegion, _as_geom_tensor, spherical_polygon_contains
 from .randoms import PreparedRandomSampler, _prepare_moc_random_sampler, sample_randoms
 from .sparse import SparseHealpixMap
-from ..device import _scatter_reduce_int, _to
+from ..device import _as_tensor, _scatter_reduce_int, _to
 
 
 def _order_from_nside(nside: int, *, name: str = "nside") -> int:
@@ -417,8 +417,8 @@ def _hierarchical_disc_bmoc(
     kept_uniq: list[Tensor] = []
     kept_flag: list[Tensor] = []
     # Python floats would default to float32 (mas-level centre error).
-    lon0 = torch.as_tensor(lon_deg, dtype=_work_dtype(device), device=device)
-    lat0 = torch.as_tensor(lat_deg, dtype=_work_dtype(device), device=device)
+    lon0 = _as_tensor(lon_deg, dtype=_work_dtype(device), device=device)
+    lat0 = _as_tensor(lat_deg, dtype=_work_dtype(device), device=device)
     radius = float(radius_deg)
     v_center = lonlat_to_unit_xyz(lon0, lat0)
     r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
