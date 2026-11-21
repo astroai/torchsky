@@ -143,6 +143,27 @@ def test_rc_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "CITATION.cff" in rc_gate.ALLOWED_STABLE_CHANGES
 
 
+def test_stable_tag_requires_the_notes_in_its_own_section() -> None:
+    carried = (
+        "## [0.6.0] - 2026-12-01\n\n### Added\n\n- `associate_many`.\n\n"
+        "### Fixed\n\n- ZPN compile.\n\n## [0.5.0] - 2026-11-03\n\nold\n"
+    )
+    assert rc_gate.stable_notes_problems(carried, "0.6.0") == []
+    # The 0.5.0 pattern: a stub that points at the rc section, which the
+    # GitHub release body (this section alone) never shows.
+    stub = (
+        "## [0.6.0] - 2026-12-01\n\nIdentical to 0.6.0rc2 apart from the version "
+        "number;\nthe changes are listed under 0.6.0rc2 below.\n\n"
+        "## [0.6.0rc2] - 2026-11-22\n\n### Added\n\n- `associate_many`.\n"
+    )
+    assert rc_gate.stable_notes_problems(stub, "0.6.0")
+    headings_only = "## [0.6.0] - 2026-12-01\n\n### Added\n\n## [0.5.0]\n\nold\n"
+    assert rc_gate.stable_notes_problems(headings_only, "0.6.0")
+    assert rc_gate.stable_notes_problems(
+        "## [Unreleased]\n\n### Added\n\n- x\n", "0.6.0"
+    )
+
+
 def test_release_run_requires_green_push_run_at_the_rc_sha() -> None:
     run = {
         "event": "push",

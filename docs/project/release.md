@@ -93,10 +93,18 @@ Before tagging a candidate:
 
 [The changelog](changelog.md) keeps the in-flight work under the heading of the
 version being released, for example `## [0.5.0rc1] - Unreleased`. Set the date
-when tagging. For the stable cut, rename the heading to `## [0.5.0] - <date>`
-and update the link reference at the bottom. `scripts/release_notes.py` builds
-the GitHub release body from the section named after the tag (falling back to
-`## [Unreleased]`).
+when tagging. `scripts/release_notes.py` builds the GitHub release body from
+the section named after the tag (falling back to `## [Unreleased]`), and from
+that section alone.
+
+For the stable cut, carry the notes into the stable section: rename the last
+candidate's heading to `## [0.6.0] - <date>`, so every change since the
+previous stable release sits under it. Drop candidate-only remarks (such as an
+rc that published nothing). Do not leave a short stable section that points to
+the candidate's notes ("listed under 0.6.0rc2 below"): the stable release page
+would then show nothing else, as the v0.5.0 page does. For a stable tag,
+`scripts/check_release_rc.py` fails unless the `## [X.Y.Z]` section has `###`
+subsections with entries.
 
 ## 4. Release candidate
 
@@ -114,11 +122,14 @@ Pushing a tag runs `.github/workflows/build_wheels.yml`:
    candidate; anything else fails), requires the tag to point at the checked-out
    commit, runs `release_lane.py --check`, and requires the version to equal the
    tag. For a stable tag it also requires a `vX.Y.Zrc*` tag, a tree that differs
-   from that rc only in version files and the changelog
-   (`scripts/check_release_rc.py`), and a successful push run for the rc at the
-   same commit (`scripts/check_release_run.py`).
+   from that rc only in version files and the changelog, a `## [X.Y.Z]`
+   changelog section holding the full notes (`scripts/check_release_rc.py`),
+   and a successful push run for the rc at the same commit
+   (`scripts/check_release_run.py`).
 2. `tests` and `map_tests` run the retained suites in the locked Pixi
-   environments (Python 3.12 and 3.13).
+   environments (Python 3.12, 3.13 and 3.14, plus PyTorch `torch_min`), and
+   `torch_tested_tests` runs the non-map and map suites on the newest tested
+   PyTorch from the PyPI CPU index.
 3. `build_wheels` builds one `cp312-abi3` wheel each for manylinux_2_28 x86_64
    and for macOS arm64, with deployment target 14.0 (the floor of the PyTorch
    and torchfits wheels). The build installs no PyTorch. cibuildwheel then tests
