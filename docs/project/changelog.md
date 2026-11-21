@@ -5,11 +5,7 @@ All notable changes to torchsky are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0rc2] - Unreleased
-
-`v0.6.0rc1` was tagged, but its release build failed on the oldest supported
-PyTorch (2.13), so nothing was published. This candidate carries the same
-changes plus the torch 2.13 `torch.compile` fix listed first under Fixed.
+## [0.6.0] - 2026-11-21
 
 ### Added
 
@@ -261,11 +257,15 @@ changes plus the torch 2.13 `torch.compile` fix listed first under Fixed.
   - the extension is built against the CPython stable ABI.
 
   One `cp312-abi3` wheel per platform therefore serves CPython 3.12 and newer
-  and every PyTorch from 2.13 up. The requirement is now `torch>=2.13` with no
-  upper bound (tested up to 2.15) and `torchfits>=1.3.3`, the first
-  torch-free torchfits, and building from source no longer needs PyTorch. The release
-  tooling (`scripts/torch_support.json`, `scripts/release_lane.py`) tracks a
-  tested floor and a tested maximum instead of one torch lane per release.
+  (tested on 3.12–3.14; see Known issues for 3.15) and every PyTorch from 2.13
+  up. The requirement is now `torch>=2.13` with no upper bound (tested up to
+  2.15) and `torchfits>=1.3.3`, the first torch-free torchfits, and building
+  from source no longer needs PyTorch. The release tooling
+  (`scripts/torch_support.json`, `scripts/release_lane.py`) tracks a tested
+  floor and a tested maximum instead of one torch lane per release. Pull
+  requests and release tags test both ends: the main suite on PyTorch 2.13,
+  and the main and map suites on 2.15 (from the PyPI CPU index, since
+  conda-forge has no 2.15 build yet).
 - `import torchsky` (and `torchsky.sphere`, `torchsky.wcs`, `torchsky.catalogs`)
   no longer loads torchfits: the FITS readers and writers in `sphere.compat`,
   `sphere.stmoc`, the spectral weight loader and `wcs.astrometry_net` import it
@@ -449,14 +449,6 @@ changes plus the torch 2.13 `torch.compile` fix listed first under Fixed.
 
 ### Fixed
 
-- `torch.compile(fullgraph=True)` of `pixel_to_world` with ZPN or TPV failed
-  on PyTorch 2.13 (the supported floor): Dynamo there cannot trace
-  `max(<generator>, default=...)`. The coefficient scans are plain loops,
-  and pull-request CI now runs the torch-2.13 lane that gates a release tag.
-  The newest tested PyTorch (2.15, from the PyPI CPU index, since conda-forge
-  has no 2.15 build yet) now runs the full and map suites on every pull
-  request and gates every release tag; before, only the native-contract and
-  wheel-smoke jobs saw it.
 - `associate_many` raised `IndexError` when a secondary catalogue had no
   candidate within the gate. Such a catalogue is now absent from every
   hypothesis (`-1`), and the posteriors are those of the association without
@@ -606,6 +598,19 @@ changes plus the torch 2.13 `torch.compile` fix listed first under Fixed.
   `native_inverse_variance` mode returns the propagated inverse variance of a
   product that carries one. It returned the coadd weight instead, which differs
   after resampling, for relative weights and for flux products.
+
+### Known issues
+
+- **Python 3.15:** PyTorch 2.15's Dynamo on Python 3.15 cannot trace
+  `math.isqrt`, so `torch.compile(fullgraph=True)` fails wherever torchsky
+  derives a size with it. Tests show this for HEALPix calls that infer `nside`
+  from a map's length (`npix2nside`), such as `get_interp_val`. Eager calls
+  and compiles without `fullgraph=True` give the same results (the size check
+  runs outside the graph). 0.6.1 will fix this and add Python 3.15 to CI.
+- **PyTorch 2.15 with MPS on macOS 14:** PyTorch's MPS matmul aborts
+  (`unrecognized selector`), so MPS code that multiplies matrices fails there.
+  This is a PyTorch bug; on macOS 14 use PyTorch 2.13 or 2.14 for MPS, or the
+  CPU.
 
 ## [0.5.0] - 2026-11-03
 
