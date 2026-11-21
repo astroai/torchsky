@@ -634,3 +634,19 @@ def test_convex_polygon_contains_list_inputs_keep_float64() -> None:
     inside = convex_polygon_contains(west + 3 * mas, -45.1, lon, lat, atol=0.0)
     outside = convex_polygon_contains(west - 3 * mas, -45.1, lon, lat, atol=0.0)
     assert bool(inside) and not bool(outside)
+
+
+def test_spherical_ellipse_python_float_centre_keeps_float64() -> None:
+    from torchsky.sphere.geom import SphericalEllipse
+
+    # The focal points were built from float32 copies of the Python-float
+    # centre (~7 mas error), misclassifying points mas from the boundary.
+    lon0, lat0 = 123.456789, -45.678901
+    mas = 1.0 / 3.6e6
+    ellipse = SphericalEllipse(lon0, lat0, 0.5, 0.2, pa_deg=0.0)
+    # With pa=0 the major-axis vertex lies on the meridian at lat0 + 0.5.
+    lon = torch.tensor([lon0, lon0], dtype=torch.float64)
+    lat = torch.tensor(
+        [lat0 + 0.5 - 3 * mas, lat0 + 0.5 + 3 * mas], dtype=torch.float64
+    )
+    assert ellipse.contains(lon, lat).tolist() == [True, False]

@@ -406,10 +406,12 @@ def _destination_lonlat_deg(
     distance_rad: Tensor | float,
 ) -> tuple[Tensor, Tensor]:
     """Great-circle destination from start point + initial bearing + angular distance."""
-    lon1 = torch.deg2rad(torch.as_tensor(lon_deg))
-    lat1 = torch.deg2rad(torch.as_tensor(lat_deg))
-    bearing = torch.as_tensor(bearing_rad)
-    dist = torch.as_tensor(distance_rad)
+    # Python floats would default to float32 (~1e-6 deg focal-point error).
+    lon_t = _as_geom_tensor(lon_deg)
+    lon1 = torch.deg2rad(lon_t)
+    lat1 = torch.deg2rad(_as_geom_tensor(lat_deg, like=lon_t))
+    bearing = _as_geom_tensor(bearing_rad, like=lon_t)
+    dist = _as_geom_tensor(distance_rad, like=lon_t)
     lon1, lat1, bearing, dist = torch.broadcast_tensors(lon1, lat1, bearing, dist)
 
     sin_lat2 = torch.sin(lat1) * torch.cos(dist) + torch.cos(lat1) * torch.sin(
