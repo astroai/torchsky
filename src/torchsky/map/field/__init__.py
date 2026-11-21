@@ -304,19 +304,19 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "solve_joint_multiband_grid_cg": (".inverse", "solve_joint_multiband_grid_cg"),
     "solve_linear_band_grid_cg": (".inverse", "solve_linear_band_grid_cg"),
     "solve_linear_band_grid_lsqr": (".inverse", "solve_linear_band_grid_lsqr"),
-    "NativeIntegratedReadLikelihood": (
-        ".native_integrated_read",
-        "NativeIntegratedReadLikelihood",
+    "SourceQuadratureReadLikelihood": (
+        ".source_quadrature_read",
+        "SourceQuadratureReadLikelihood",
     ),
-    "bind_native_integrated_read_likelihood": (
-        ".native_integrated_read",
-        "bind_native_integrated_read_likelihood",
+    "bind_source_quadrature_read_likelihood": (
+        ".source_quadrature_read",
+        "bind_source_quadrature_read_likelihood",
     ),
 }
 
 __all__ = [
-    "NativeIntegratedReadLikelihood",
-    "bind_native_integrated_read_likelihood",
+    "SourceQuadratureReadLikelihood",
+    "bind_source_quadrature_read_likelihood",
     "FIELD_MODEL_KINDS",
     "FIELD_MODEL_PRESET_NAMES",
     "FIELD_MODEL_PRESETS",
@@ -497,7 +497,24 @@ __all__ = [
 ]
 
 
+# Renamed after 0.5.0; removed in 0.7. Never cached, so every access warns.
+_DEPRECATED: dict[str, tuple[str, str]] = {
+    "NativeIntegratedReadLikelihood": (
+        "torchsky.map.field.source_quadrature_read",
+        "SourceQuadratureReadLikelihood",
+    ),
+    "bind_native_integrated_read_likelihood": (
+        "torchsky.map.field.source_quadrature_read",
+        "bind_source_quadrature_read_likelihood",
+    ),
+}
+
+
 def __getattr__(name: str) -> Any:
+    if name in _DEPRECATED:
+        from ..._deprecation import deprecated_attribute
+
+        return deprecated_attribute(__name__, name, _DEPRECATED[name])
     try:
         module_name, attribute = _EXPORTS[name]
     except KeyError as exc:

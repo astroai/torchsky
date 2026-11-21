@@ -1,7 +1,7 @@
-"""Native observation operators: detector moments, field response, pixel likelihood.
+"""Source-quadrature observation operators: detector moments, field response, pixel likelihood.
 
-Three small, in-memory sections (no image files) that exercise the native
-forward-model stack:
+Three small, in-memory sections (no image files) that exercise the forward-model
+stack on native detector pixels:
 
 1. ``detector_moments``: a Gaussian pixel response, charge redistribution, dark
    and read noise give the exact mean and covariance action of detector output.
@@ -15,7 +15,7 @@ forward-model stack:
 The instrument numbers are illustrative, not a calibrated model. Runs on CPU in
 about 2 s.
 
-    pixi run -e test -- python examples/native_operators.py
+    pixi run -e test -- python examples/source_quadrature_operators.py
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ import torch
 from torch import Tensor, nn
 
 from torchsky.map.evidence import EvidenceSnapshot
-from torchsky.map.field.native_response import (
-    NativeFieldResponse,
-    bind_native_field_likelihood,
-    render_native_field_observation,
+from torchsky.map.field.source_quadrature import (
+    SourceQuadratureResponse,
+    bind_source_quadrature_likelihood,
+    render_source_quadrature_observation,
 )
 from torchsky.map.likelihood import GaussianLikelihoodFactor, GaussianLikelihoodSystem
 from torchsky.map.operators.continuous_response import (
@@ -140,7 +140,7 @@ def field_response() -> None:
         flat_convention="detector_counts",
         reference_convention="area 10 m2, duration 100 s, gain 2 electron/ADU; QE in source weights",
     )
-    response = NativeFieldResponse(
+    response = SourceQuadratureResponse(
         quadrature=quadrature,
         calibration=calibration,
         source_ra_deg=150 + positions[:, 0] / 3600,
@@ -166,9 +166,9 @@ def field_response() -> None:
         detector_law="gaussian",
     )
     sky = Sky()
-    prediction = render_native_field_observation(sky, observation, response)
+    prediction = render_source_quadrature_observation(sky, observation, response)
     observation.image = prediction.detach().clone()
-    factor = bind_native_field_likelihood(
+    factor = bind_source_quadrature_likelihood(
         observation,
         response,
         measurement_ids=("example-exposure",),
@@ -176,7 +176,7 @@ def field_response() -> None:
     )
     template = response.forward(response.sample_field(sky))[None, :]
     query = fit_linear_query(GaussianLikelihoodSystem((factor,)), (template,))
-    print("Native prediction (ADU):", prediction.tolist())
+    print("Source-quadrature prediction (ADU):", prediction.tolist())
     print("Conditional field-template amplitude:", float(query.coefficients[0]))
     print(
         "Conditional amplitude standard deviation:",

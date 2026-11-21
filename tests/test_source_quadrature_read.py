@@ -13,10 +13,10 @@ from torch import nn
 
 from torchsky.map.evidence import EvidenceSnapshot
 from torchsky.map import field as field_api
-from torchsky.map.field.native_integrated_read import (
-    bind_native_integrated_read_likelihood,
+from torchsky.map.field.source_quadrature_read import (
+    bind_source_quadrature_read_likelihood,
 )
-from torchsky.map.field.native_response import NativeFieldResponse
+from torchsky.map.field.source_quadrature import SourceQuadratureResponse
 from torchsky.map.field.types import FieldObservation, PSFSpec
 from torchsky.map.operators.background import (
     AdditiveComponent,
@@ -104,7 +104,7 @@ def _fixture(
         if revision is None
         else EvidenceSnapshot.capture(revision=revision),
     )
-    response = NativeFieldResponse(
+    response = SourceQuadratureResponse(
         quadrature=q,
         calibration=optical,
         source_ra_deg=tensor([100, 101]),
@@ -177,19 +177,19 @@ def _fixture(
 
 def _bind(fixture):
     observation, response, output, kwargs, _ = fixture
-    return bind_native_integrated_read_likelihood(
+    return bind_source_quadrature_read_likelihood(
         observation, response, output, **kwargs
     )
 
 
 def test_public_physical_binding_exports_are_actual_client():
     assert (
-        field_api.bind_native_integrated_read_likelihood
-        is bind_native_integrated_read_likelihood
+        field_api.bind_source_quadrature_read_likelihood
+        is bind_source_quadrature_read_likelihood
     )
     fixture = _fixture()
-    bound = field_api.bind_native_integrated_read_likelihood(*fixture[:3], **fixture[3])
-    assert isinstance(bound, field_api.NativeIntegratedReadLikelihood)
+    bound = field_api.bind_source_quadrature_read_likelihood(*fixture[:3], **fixture[3])
+    assert isinstance(bound, field_api.SourceQuadratureReadLikelihood)
     assert bool(torch.isfinite(bound.nll(torch.ones(2, 2, dtype=torch.float64))))
 
 
@@ -310,7 +310,7 @@ def test_output_gain_density_jacobian_and_signed_offsets_preserve_shot_law():
     no_offsets = dict(
         fixture[3], additive_components=fixture[3]["additive_components"][:2]
     )
-    without = bind_native_integrated_read_likelihood(*fixture[:3], **no_offsets)
+    without = bind_source_quadrature_read_likelihood(*fixture[:3], **no_offsets)
     # Removing signed offsets changes output means, not source/dark arrival mean.
     parameters = without._law_parameters(state)
     torch.testing.assert_close(parameters[0], torch.from_numpy(rate))
@@ -345,7 +345,7 @@ def test_photon_illumination_passes_through_optics_but_dark_does_not():
         kwargs["additive_components"][1], stochastic_contribution="deterministic_mean"
     )
     with pytest.raises(ValueError, match="stochastic"):
-        bind_native_integrated_read_likelihood(
+        bind_source_quadrature_read_likelihood(
             *fixture[:3], **(kwargs | {"additive_components": (deterministic,)})
         )
 
@@ -398,7 +398,7 @@ def test_first_second_parameter_gradients_inside_declared_pg_domain(mixture_chun
                 _component(b, AdditiveStage.READ_OFFSET),
             ),
         )
-        return bind_native_integrated_read_likelihood(
+        return bind_source_quadrature_read_likelihood(
             fixture[0], fixture[1], output, **kwargs
         ).nll(x, mixture_chunk_size=mixture_chunk_size)
 
@@ -473,7 +473,7 @@ def test_alias_and_inference_require_explicit_revision():
     with torch.inference_mode():
         fixture = _fixture(revision=lambda: revision[0])
         with pytest.raises(ValueError, match="explicit caller revision"):
-            bind_native_integrated_read_likelihood(
+            bind_source_quadrature_read_likelihood(
                 *fixture[:3], **(fixture[3] | {"revision": None})
             )
         bound = _bind(fixture)
@@ -499,7 +499,7 @@ def test_mutation_during_actual_callback_rejects_stale_evidence(client):
             response,
             quadrature=replace(response.quadrature, response=MutatingResponse(matrix)),
         )
-    bound = bind_native_integrated_read_likelihood(
+    bound = bind_source_quadrature_read_likelihood(
         observation, response, output, **kwargs
     )
     if client == "field":
@@ -532,24 +532,24 @@ def test_masks_units_processing_and_unsupported_noise_physics_fail_closed():
         {"mask": torch.zeros_like(observation.mask)},
     ):
         with pytest.raises(ValueError):
-            bind_native_integrated_read_likelihood(
+            bind_source_quadrature_read_likelihood(
                 replace(observation, **change), response, output, **kwargs
             )
     identity = LinearDetectorResponse(lambda x: x, lambda x: x)
     for name in ("charge_response", "read_noise_response"):
         with pytest.raises(ValueError, match="mixing"):
-            bind_native_integrated_read_likelihood(
+            bind_source_quadrature_read_likelihood(
                 *fixture[:3], **(kwargs | {name: identity})
             )
     with pytest.raises(ValueError, match="units"):
-        bind_native_integrated_read_likelihood(
+        bind_source_quadrature_read_likelihood(
             observation, response, replace(output, input_unit="photon/s"), **kwargs
         )
     wrong_optical = replace(
         response, calibration=replace(response.calibration, flat_convention="sky_flat")
     )
     with pytest.raises(ValueError, match="QE excluded"):
-        bind_native_integrated_read_likelihood(
+        bind_source_quadrature_read_likelihood(
             observation, wrong_optical, output, **kwargs
         )
     # Physical stages remain opt-in; they do not widen legacy observation paths.
@@ -563,7 +563,7 @@ def test_masks_units_processing_and_unsupported_noise_physics_fail_closed():
     ):
         component = replace(kwargs["additive_components"][0], **change)
         with pytest.raises(ValueError, match="mismatch"):
-            bind_native_integrated_read_likelihood(
+            bind_source_quadrature_read_likelihood(
                 *fixture[:3], **(kwargs | {"additive_components": (component,)})
             )
 
@@ -574,7 +574,7 @@ def test_mutated_observation_image_must_still_be_native_2d_at_bind():
     observation.image = observation.image.reshape(-1)
     observation.mask = None
     with pytest.raises(ValueError, match="2D"):
-        bind_native_integrated_read_likelihood(*fixture[:3], **fixture[3])
+        bind_source_quadrature_read_likelihood(*fixture[:3], **fixture[3])
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -611,7 +611,7 @@ def test_finite_read_variance_survives_extreme_output_unit_scale(gain, variance)
     fixture = _fixture(dtype=torch.float32, components=False)
     output = replace(fixture[2], scale=torch.full((2,), gain, dtype=torch.float32))
     read_var = torch.tensor(variance, dtype=torch.float32)
-    bound = bind_native_integrated_read_likelihood(
+    bound = bind_source_quadrature_read_likelihood(
         fixture[0],
         fixture[1],
         output,
@@ -658,20 +658,20 @@ def test_parameter_shapes_and_signs_fail_closed():
         ({"read_variance_electrons2": torch.ones(2, dtype=torch.float32)}, "dtype"),
     ):
         with pytest.raises(ValueError, match=message):
-            bind_native_integrated_read_likelihood(*fixture[:3], **(kwargs | change))
+            bind_source_quadrature_read_likelihood(*fixture[:3], **(kwargs | change))
     dark = replace(
         kwargs["additive_components"][1],
         values=-kwargs["additive_components"][1].values,
     )
     with pytest.raises(ValueError, match="nonnegative"):
-        bind_native_integrated_read_likelihood(
+        bind_source_quadrature_read_likelihood(
             *fixture[:3], **(kwargs | {"additive_components": (dark,)})
         )
     wrong_shape = replace(
         kwargs["additive_components"][1], values=torch.zeros(2, 2, dtype=torch.float64)
     )
     with pytest.raises(ValueError, match="shape"):
-        bind_native_integrated_read_likelihood(
+        bind_source_quadrature_read_likelihood(
             *fixture[:3], **(kwargs | {"additive_components": (wrong_shape,)})
         )
 
@@ -708,7 +708,7 @@ def test_real_finite_pixel_gaussian_limit_rejects_sum_and_mean_overflow():
         electrons_per_photon=torch.tensor(1.0),
         read_variance_electrons2=torch.tensor(1.0),
     )
-    bound = bind_native_integrated_read_likelihood(
+    bound = bind_source_quadrature_read_likelihood(
         observation, response, output, **kwargs
     )
     state = torch.zeros(2, 2, dtype=torch.float32)
@@ -788,7 +788,7 @@ def test_checkpoint_recomputation_rejects_changed_evidence(mutate):
 
 
 def test_checkpoint_post_call_guard_rejects_mutation_during_recomputation(monkeypatch):
-    from torchsky.map.field import native_integrated_read as module
+    from torchsky.map.field import source_quadrature_read as module
 
     token = [0]
     bound = _bind(_fixture(revision=lambda: token[0]))
@@ -881,7 +881,7 @@ def _many_pixel_fixture():
 
 
 def test_checkpoint_bounds_mixture_calls_and_saved_tensors(monkeypatch):
-    from torchsky.map.field import native_integrated_read as module
+    from torchsky.map.field import source_quadrature_read as module
 
     bound = _bind(_many_pixel_fixture())
     state = torch.ones(2, 2, dtype=torch.float64, requires_grad=True)

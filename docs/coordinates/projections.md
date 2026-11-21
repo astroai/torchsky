@@ -242,8 +242,7 @@ test suite, and against Astropy/WCSLIB in
 polynomial and face-offset arithmetic (up to 1e-5 degree on faces away from
 the base face). A baseline x86-64 WCSLIB build matches it to 6e-14 degree;
 AArch64 WCSLIB builds fuse the multiply-add and differ by one float32 ulp.
-Fused C++ kernels cover `PCO`, `XPH`, `TSC`, `CSC`, and `QSC` on CPU; other
-devices, and headers with a non-default fiducial point, use the tensor path.
+Every projection, these included, runs the same tensor path on all devices.
 
 ## Pitfalls
 

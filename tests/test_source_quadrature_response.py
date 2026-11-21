@@ -1,4 +1,4 @@
-"""Independent bounded native-field transport, GLS and lifetime references."""
+"""Independent bounded source-quadrature transport, GLS and lifetime references."""
 
 from dataclasses import replace
 import math
@@ -12,10 +12,10 @@ from torch import nn
 
 from torchsky.map.evidence import EvidenceSnapshot
 from torchsky.map.field.core import SineImplicitField
-from torchsky.map.field.native_response import (
-    NativeFieldResponse,
-    bind_native_field_likelihood,
-    render_native_field_observation,
+from torchsky.map.field.source_quadrature import (
+    SourceQuadratureResponse,
+    bind_source_quadrature_likelihood,
+    render_source_quadrature_observation,
 )
 from torchsky.map.field.types import (
     FieldDomain,
@@ -99,7 +99,7 @@ def _response(*, mask=False, dtype=torch.float64, device="cpu"):
         flat_convention="sky_flat",
         reference_convention="declared uniform spectral radiance v1",
     )
-    response = NativeFieldResponse(
+    response = SourceQuadratureResponse(
         quadrature=native,
         calibration=calibration,
         source_ra_deg=torch.tensor([100, 101], dtype=dtype, device=device),
@@ -158,7 +158,7 @@ def test_source_nodes_context_spectrum_and_output_background_order(chunk):
     observation.gain_electrons_per_adu = 7
     model = _Field()
     context = ForwardContext(time_mjd=1.0)
-    result = render_native_field_observation(
+    result = render_source_quadrature_observation(
         model, observation, response, forward_context=context, source_chunk_size=chunk
     )
     state = np.array([[1.5, 1.5], [2.6, 3.6]])
@@ -171,7 +171,7 @@ def test_source_nodes_context_spectrum_and_output_background_order(chunk):
     observation.image.fill_(float("nan"))
     observation.weight.zero_()
     torch.testing.assert_close(
-        render_native_field_observation(
+        render_source_quadrature_observation(
             model, observation, response, forward_context=context
         ),
         result,
@@ -183,7 +183,7 @@ def test_native_gaussian_evidence_matches_dense_gls_and_normalization(mask):
     response, observation, matrix = _response(mask=mask)
     observation.background_offset = 0.2
     observation.mask = torch.tensor([[True, True], [True, False]]) if mask else None
-    factor = bind_native_field_likelihood(
+    factor = bind_source_quadrature_likelihood(
         observation, response, measurement_ids=("native",), provenance_id="product-v1"
     )
     system = GaussianLikelihoodSystem((factor,))
@@ -237,7 +237,7 @@ def test_exact_transpose_state_and_field_parameter_gradients():
     assert torch.autograd.gradcheck(response.forward, (state,))
     assert torch.autograd.gradgradcheck(response.forward, (state,))
     assert torch.autograd.gradcheck(response.adjoint, (dual,))
-    factor = bind_native_field_likelihood(
+    factor = bind_source_quadrature_likelihood(
         observation, response, measurement_ids=("native",), provenance_id="v1"
     )
     system = GaussianLikelihoodSystem((factor,))
@@ -247,7 +247,7 @@ def test_exact_transpose_state_and_field_parameter_gradients():
         torch.autograd.grad(direct, state)[0], torch.autograd.grad(normal, state)[0]
     )
     field = _Field()
-    rendered = render_native_field_observation(field, observation, response)
+    rendered = render_source_quadrature_observation(field, observation, response)
     grad = torch.autograd.grad(rendered.sum(), field.offset)[0]
     torch.testing.assert_close(grad, torch.tensor(expected.sum(), dtype=torch.float64))
 
@@ -269,7 +269,7 @@ def test_exact_transpose_state_and_field_parameter_gradients():
 def test_cached_evidence_rejects_response_and_measurement_changes(changed):
     response, observation, matrix = _response(mask=True)
     observation.detector_background = torch.zeros_like(observation.image)
-    factor = bind_native_field_likelihood(
+    factor = bind_source_quadrature_likelihood(
         observation, response, measurement_ids=("native",), provenance_id="v1"
     )
     equations = GaussianLikelihoodSystem((factor,)).normal_equations()
@@ -305,7 +305,7 @@ def test_unsupported_double_response_and_mutable_additive_units_fail_closed():
         replace(observation, processing_state=AdditiveProcessingState.RAW_READS),
     ):
         with pytest.raises(ValueError):
-            render_native_field_observation(_Field(), bad, response)
+            render_source_quadrature_observation(_Field(), bad, response)
     observation.additive_components = (
         AdditiveComponent(
             torch.ones_like(observation.image),
@@ -317,7 +317,7 @@ def test_unsupported_double_response_and_mutable_additive_units_fail_closed():
         ),
     )
     with pytest.raises(ValueError, match="units"):
-        render_native_field_observation(_Field(), observation, response)
+        render_source_quadrature_observation(_Field(), observation, response)
 
 
 def test_integrated_bins_are_direct_states_not_implicit_field_integrals():
@@ -349,14 +349,14 @@ def test_final_rendering_rejects_combined_mean_overflow():
         def forward(self, ra, dec, wavelength):
             return torch.ones_like(ra) * 1e35
 
-    with pytest.raises(ValueError, match="combined native prediction"):
-        render_native_field_observation(Bright(), observation, response)
+    with pytest.raises(ValueError, match="combined source-quadrature prediction"):
+        render_source_quadrature_observation(Bright(), observation, response)
 
 
 def test_ignored_conversion_metadata_still_invalidates_cached_provenance():
     response, observation, _ = _response()
     observation.exposure_time_s = 30
-    factor = bind_native_field_likelihood(
+    factor = bind_source_quadrature_likelihood(
         observation, response, measurement_ids=("native",), provenance_id="v1"
     )
     evidence = GaussianLikelihoodSystem((factor,)).normal_equations()
@@ -378,10 +378,10 @@ def test_different_instrument_addition_retains_full_spectral_information_and_lin
     older = replace(
         observation, band_name="older-band", weight=observation.weight * 0.01
     )
-    good = bind_native_field_likelihood(
+    good = bind_source_quadrature_likelihood(
         observation, response, measurement_ids=("good",), provenance_id="v1"
     )
-    bad = bind_native_field_likelihood(
+    bad = bind_source_quadrature_likelihood(
         older, poorer, measurement_ids=("older",), provenance_id="v1"
     )
     joint = GaussianLikelihoodSystem((good, bad))
@@ -445,7 +445,7 @@ def test_extended_chromatic_field_matches_independent_continuous_pixel_integral(
         flat_convention="detector_counts",
         reference_convention="physical aperture area*time, no flat",
     )
-    response = NativeFieldResponse(
+    response = SourceQuadratureResponse(
         quadrature=q,
         calibration=calibration,
         source_ra_deg=torch.from_numpy(xy[:, 0]),
@@ -486,7 +486,7 @@ def test_existing_scalar_field_module_interoperability():
     model = SineImplicitField(
         FieldDomain(100, 2, 1, 7500, 2500), hidden_dim=4, hidden_layers=1
     ).double()
-    rendered = render_native_field_observation(
+    rendered = render_source_quadrature_observation(
         model, observation, response, source_chunk_size=1
     )
     assert rendered.shape == observation.image.shape
@@ -505,7 +505,7 @@ def test_dtype_device_direct_state_contract(device, dtype):
         pytest.skip("MPS unavailable")
     response, observation, _ = _response(dtype=dtype, device=device)
     state = torch.ones(2, 2, dtype=dtype, device=device)
-    factor = bind_native_field_likelihood(
+    factor = bind_source_quadrature_likelihood(
         observation, response, measurement_ids=("native",), provenance_id="v1"
     )
     system = GaussianLikelihoodSystem((factor,))

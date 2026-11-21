@@ -19,7 +19,13 @@ pip install "torchsky[viz]"
 
 The `viz` extra brings `fastapi`/`uvicorn`/`pillow` for the server plus
 `matplotlib` for figures. The server runs without matplotlib; figures run
-without the server dependencies.
+without the server dependencies. The extra is optional: `import torchsky` never
+imports `torchsky.viz`, and importing `torchsky.viz` loads none of these
+packages until a figure is drawn or the server starts.
+
+!!! warning "Experimental surface"
+    `torchsky.viz` is experimental: the server endpoints and figure options may
+    change between minor releases.
 
 ## All-sky figures
 

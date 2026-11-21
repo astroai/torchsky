@@ -1,11 +1,11 @@
-"""Tests for the differentiable lensing (magnification) operators."""
+"""Tests for the opt-in weak-lensing magnification operators."""
 
 import pytest
 import torch
 
-from torchsky.map.operators import (
+from torchsky.map.operators.lensing import (
     ConvergenceMagnification,
-    MagnificationResidual,
+    LearnedConvergenceCorrection,
     magnification_bias,
     magnify_flux,
     scale_source_sizes,
@@ -108,9 +108,9 @@ def test_learned_residual_opens_and_receives_gradients():
 
 def test_residual_rejects_even_kernel():
     with pytest.raises(ValueError, match="odd"):
-        MagnificationResidual(kernel_size=4)
+        LearnedConvergenceCorrection(kernel_size=4)
     with pytest.raises(ValueError, match="channels"):
-        MagnificationResidual(channels=0)
+        LearnedConvergenceCorrection(channels=0)
 
 
 @pytest.mark.parametrize(
@@ -131,3 +131,22 @@ def test_unbounded_linear_law_rejects_nonpositive_magnification(fn):
         fn(torch.tensor([0.0, -0.5]))
     out = fn(torch.tensor([0.0, -0.2]))
     assert bool(torch.isfinite(out).all())
+
+
+def test_functions_and_operator_share_the_exact_default_law():
+    # One default everywhere: no clamp, so the module and the functions agree.
+    kappa = torch.tensor([0.0, 60.0])
+    mu = ConvergenceMagnification()(kappa)
+    torch.testing.assert_close(mu, 1.0 + 2.0 * kappa, rtol=0, atol=0)
+    torch.testing.assert_close(magnify_flux(torch.ones(2), kappa), mu)
+    with pytest.raises(ValueError, match="positive"):
+        ConvergenceMagnification()(torch.tensor([-0.5]))
+    with pytest.raises(ValueError, match="max_magnification"):
+        magnify_flux(torch.ones(1), torch.zeros(1), max_magnification=1.0)
+
+
+def test_lensing_is_not_reexported_by_map_operators():
+    import torchsky.map.operators as operators
+
+    assert "ConvergenceMagnification" not in operators.__all__
+    assert "magnify_flux" not in operators.__all__
