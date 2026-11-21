@@ -2090,6 +2090,15 @@ def blot(
         if coordinate_device != map_device:
             src_x = _to(src_x, device=map_device, dtype=torch.float32)
             src_y = _to(src_y, device=map_device, dtype=torch.float32)
+        # A destination pixel with no coadd pre-image (the SIP/TPV inverse did
+        # not converge: NaN) lies outside the coadd. Park it beyond every
+        # kernel tap so the samplers read nothing for it; ``in_bounds`` drops
+        # it and its flux area ratio is zeroed below.
+        finite_src = torch.isfinite(src_x) & torch.isfinite(src_y)
+        if not bool(finite_src.all()):
+            outside = -float(2 * max(h_c, w_c) + 16)
+            src_x = torch.where(finite_src, src_x, torch.full_like(src_x, outside))
+            src_y = torch.where(finite_src, src_y, torch.full_like(src_y, outside))
         in_bounds = (
             (src_x >= 0.0)
             & (src_x <= float(w_c - 1))
@@ -2137,6 +2146,9 @@ def blot(
             )
             area_ratio = dest_prep.pixel_area_sr / torch.clamp(
                 coadd_area_at_dest, min=torch.finfo(torch.float32).tiny
+            )
+            area_ratio = torch.where(
+                finite_src, area_ratio, torch.zeros_like(area_ratio)
             )
             sampled = sampled * area_ratio
         return sampled

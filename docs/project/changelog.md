@@ -484,6 +484,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   within the float32 rounding floor on MPS. Converged results are unchanged.
   Image-plane resampling treats such target pixels as outside the source
   image (no coverage), as its round-trip check already did.
+- `blot` from a SIP coadd frame gives zero, not an error or NaN, at
+  destination pixels with no coadd pre-image. Lanczos kernels raised on the
+  NaN coordinates; flux semantics returned NaN for every kernel. Other pixels
+  are unchanged.
+- `SparseHealpixMap.from_wcs(weight=...)` drops cells whose centre has no
+  pixel position. On arm64, NaN cast to int64 is 0, so such a cell took the
+  weight of pixel (0, 0).
+- `map.operators.source_bbox_on_target` bounds the overlap with a distorted
+  target when some source-boundary samples have no target pixel. It adds the
+  target-edge samples that fall inside the source, so a source that encloses
+  the target gives the whole target, not `None`. `None` now means the source
+  misses the target at every sample.
 - `WCS` rejects ZPN headers that WCSLIB `zpnset` rejects, raising
   `ValueError` at construction. These are polynomials with no non-zero
   `PV2_m`, and polynomials of order ≥ 2 with `PV2_1 <= 0`. Before, a header

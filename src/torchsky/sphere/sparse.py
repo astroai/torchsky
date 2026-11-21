@@ -609,7 +609,16 @@ class SparseHealpixMap:
         x_p, y_p = wcs.world_to_pixel(lon_p, lat_p)
         ix = torch.round(x_p).to(torch.int64)
         iy = torch.round(y_p).to(torch.int64)
-        in_b = (ix >= 0) & (ix < W) & (iy >= 0) & (iy < H)
+        # A cell centre with no pixel pre-image (the SIP/TPV inverse did not
+        # converge: NaN) is off the image; NaN cast to int64 is platform-defined.
+        in_b = (
+            torch.isfinite(x_p)
+            & torch.isfinite(y_p)
+            & (ix >= 0)
+            & (ix < W)
+            & (iy >= 0)
+            & (iy < H)
+        )
         vals = torch.zeros(pix.numel(), dtype=w_t.dtype, device=w_t.device)
         if bool(in_b.any()):
             vals[in_b] = w_t[iy[in_b], ix[in_b]]
