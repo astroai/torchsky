@@ -333,6 +333,92 @@ def zone_query(
             find,
             self_upper,
         )
+    return _zone_query_torch(
+        index,
+        left_ra,
+        left_dec,
+        radius_left,
+        radius_right=radius_right,
+        combine=combine,
+        find=find,
+        accept=accept,
+        self_upper=self_upper,
+        left_chunk_size=left_chunk_size,
+        max_pairs=max_pairs,
+        stats=stats,
+        pad_tiles=torch.compiler.is_compiling(),
+    )
+
+
+def _candidate_tile(
+    k: Tensor,
+    incl: Tensor,
+    excl: Tensor,
+    seg_row: Tensor,
+    seg_start: Tensor,
+    lx: Tensor,
+    rxyz: Tensor,
+    rl: Tensor,
+    rr_sorted: Tensor | None,
+    combine: Combine,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Candidates ``k`` of the segment runs, tested (fixed shape; ``fullgraph=True``).
+
+    Returns ``(i, j, chord2, keep)``: chunk-local left row, sorted right row,
+    the exactly rounded chord^2 and whether the pair is within its radius (the
+    padded chord prefilter and the exact atan2 separation). Candidates at or past
+    the candidate count (tile padding) are not kept.
+    """
+    in_range = k < incl[-1]
+    seg = torch.searchsorted(incl, k, right=True).clamp_(max=incl.numel() - 1)
+    j = (seg_start[seg] + (k - excl[seg])).clamp_(max=rxyz.shape[0] - 1)
+    i = seg_row[seg]
+    li = lx[i]
+    rj = rxyz[j]
+    diff = li - rj
+    # Element-wise (exactly rounded, batch-independent): the
+    # ordering key and tie rule must not depend on chunking.
+    chord2 = diff[:, 0] * diff[:, 0] + diff[:, 1] * diff[:, 1] + diff[:, 2] * diff[:, 2]
+    rr = rr_sorted[j] if rr_sorted is not None else 0.0
+    thr = combine_radii(rl[i], rr, combine)
+    half = torch.deg2rad(thr / 3600.0).clamp(max=math.pi) * 0.5
+    # Padded prefilter, then the exact atan2 test.
+    pre = (
+        chord2
+        <= (2.0 * torch.sin(half)) ** 2 * (1.0 + 64.0 * torch.finfo(chord2.dtype).eps)
+        + 1e-300
+    )
+    keep = in_range & pre & (separation_arcsec(li, rj) <= thr)
+    return i, j, chord2, keep
+
+
+@torch.compiler.disable(recursive=False)
+def _zone_query_torch(
+    index: ZoneIndex,
+    left_ra: Tensor,
+    left_dec: Tensor,
+    radius_left: Tensor,
+    *,
+    radius_right: Tensor | None,
+    combine: Combine,
+    find: Literal["all", "best", "count"],
+    accept: Callable[[Tensor, Tensor], Tensor] | None,
+    self_upper: bool,
+    left_chunk_size: int,
+    max_pairs: int,
+    stats: EngineStats | None,
+    pad_tiles: bool,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Torch path of :func:`zone_query`.
+
+    Runs eagerly (skipped by ``torch.compile``): segment expansion, candidate
+    counts, compaction of the kept pairs and the output ordering are
+    data-dependent. The candidate test is the fixed-shape
+    :func:`_candidate_tile`, which Dynamo compiles once; under compilation
+    (``pad_tiles``) every candidate batch is padded to a common length.
+    """
+    dev = left_ra.device
+    n_left = int(left_ra.numel())
     left_xyz = unit_vectors(left_ra, left_dec)
     if self_upper:
         accept = _upper if accept is None else _both(accept, _upper)
@@ -342,6 +428,7 @@ def zone_query(
     if index.n == 0 or n_left == 0:
         return _empty(dev, left_ra.dtype)
     big = torch.iinfo(torch.int64).max
+    rxyz = index.xyz.detach()
     rr_sorted = None if radius_right is None else radius_right.detach()[index.order]
     rr_max = 0.0 if rr_sorted is None else float(rr_sorted.max())
     for c0 in range(0, n_left, left_chunk_size):
@@ -368,34 +455,18 @@ def zone_query(
                 best_j = torch.full((c1 - c0,), big, dtype=torch.int64, device=dev)
             elif find == "count":
                 counts = torch.zeros(c1 - c0, dtype=torch.int64, device=dev)
-            for k0, k1 in _candidate_batches(seg_count, max_pairs):
-                k = torch.arange(k0, k1, device=dev)
-                seg = torch.searchsorted(incl, k, right=True)
-                j = seg_start[seg] + (k - excl[seg])
-                i = seg_row[seg]
-                rxyz = index.xyz[j].detach()
-                diff = lx[i] - rxyz
-                # Element-wise (exactly rounded, batch-independent): the
-                # ordering key and tie rule must not depend on chunking.
-                chord2 = (
-                    diff[:, 0] * diff[:, 0]
-                    + diff[:, 1] * diff[:, 1]
-                    + diff[:, 2] * diff[:, 2]
+            batches = _candidate_batches(seg_count, max_pairs)
+            tile = 0
+            if pad_tiles and batches:
+                from ..map.operators.geometry_drizzle import _padded_tile_length
+
+                tile = _padded_tile_length(batches[-1][1], max_pairs)
+            for k0, k1 in batches:
+                k = torch.arange(k0, k0 + tile if pad_tiles else k1, device=dev)
+                i, j, chord2, keep = _candidate_tile(
+                    k, incl, excl, seg_row, seg_start, lx, rxyz, rl, rr_sorted, combine
                 )
-                rr = rr_sorted[j] if rr_sorted is not None else 0.0
-                thr = combine_radii(rl[i], rr, combine)
-                half = torch.deg2rad(thr / 3600.0).clamp(max=math.pi) * 0.5
-                # Padded prefilter, then the exact atan2 test on survivors.
-                pre = (
-                    chord2
-                    <= (2.0 * torch.sin(half)) ** 2
-                    * (1.0 + 64.0 * torch.finfo(chord2.dtype).eps)
-                    + 1e-300
-                )
-                i, j, thr, chord2 = i[pre], j[pre], thr[pre], chord2[pre]
-                sep = separation_arcsec(lx[i], index.xyz[j].detach())
-                ok = sep <= thr
-                i, j, chord2 = i[ok], j[ok], chord2[ok]
+                i, j, chord2 = i[keep], j[keep], chord2[keep]
                 jo = index.order[j]
                 if accept is not None and i.numel():
                     keep = accept(i + c0, jo)
