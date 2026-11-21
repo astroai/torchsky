@@ -596,10 +596,21 @@ class WCS(
         return world / scale + _float32_ulp(extent)
 
     def _warn_mps_precision(self) -> None:
-        """Emit :class:`PrecisionWarning` once per WCS when MPS float32 is too coarse."""
+        """Emit :class:`PrecisionWarning` once per WCS when MPS float32 is too coarse.
+
+        The error estimate reads the CD matrix back to the host, so it is
+        computed once per WCS (and per :meth:`to`), not on every MPS call;
+        a traced (``torch.compile``) call never syncs: the estimate is a
+        property of the WCS and is checked by the eager calls and :meth:`to`.
+        """
         if getattr(self, "_mps_precision_warned", False):
             return
-        error = self._mps_float32_error_pixels()
+        if torch.compiler.is_compiling():
+            return
+        error = getattr(self, "_mps_error_px_cache", None)
+        if error is None:
+            error = self._mps_float32_error_pixels()
+            self._mps_error_px_cache = error
         if error >= _MPS_PIXEL_IDENTIFICATION_LIMIT_PX:
             self._mps_precision_warned = True
             warnings.warn(
@@ -650,6 +661,7 @@ class WCS(
         if self._pixel_affine_matrix is not None:
             assert self._pixel_affine_offset is not None
             self._set_pixel_affine(self._pixel_affine_matrix, self._pixel_affine_offset)
+        self._mps_error_px_cache = None
         if self.device.type == "mps":
             self._warn_mps_precision()
         return self

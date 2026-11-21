@@ -171,11 +171,9 @@ def project_allsky(
                 )
             )
         )
-        if bool(invalid.any()):
-            nan_phi = torch.full_like(phi, float("nan"))
-            nan_theta = torch.full_like(theta, float("nan"))
-            phi = torch.where(invalid, nan_phi, phi)
-            theta = torch.where(invalid, nan_theta, theta)
+        nan = torch.full_like(phi, float("nan"))
+        phi = torch.where(invalid, nan, phi)
+        theta = torch.where(invalid, nan, theta)
 
     elif projection_code == "SFL":
         theta = eta

@@ -180,6 +180,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Celestial `WCS.pixel_to_world` / `world_to_pixel` trace as a single graph
+  under `torch.compile(fullgraph=True)` on CPU and MPS. This covers every
+  supported projection plus SIP and TPV. Host syncs that broke the graph are
+  gone:
+  - the MPS float32 precision estimate is computed once per WCS (and per
+    `.to()`), not read back on every call;
+  - AIT, GLS, HPX and PCO no longer branch on `valid.all()` / `.any()`;
+  - projection PV constants are host floats.
+
+  While tracing, the SIP and TPV inverses run a fixed number of masked Newton
+  steps that reproduce the eager stopping rules. Eager calls keep their
+  early-exit loops and the native CPU TPV kernel. Eager TPV world→pixel no
+  longer counts unconverged points (a device sync) unless
+  `TPV.set_invert_trace(True)` is on.
 - **No more per-PyTorch-minor lock.** The native extension no longer includes
   or links libtorch:
   - tensors enter its kernels through DLPack without a copy, and results come

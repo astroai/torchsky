@@ -420,14 +420,9 @@ class _PixelWorldCoreMixin:
 
         phi = 2.0 * torch.atan2(0.5 * z * X, 2.0 * z * z - 1.0) * self._r2d
         theta = torch.asin(torch.clamp(z * Y, -1.0, 1.0)) * self._r2d
-
-        if valid.all():
-            return phi, theta
-        phi = phi.clone()
-        theta = theta.clone()
-        phi.masked_fill_(~valid, float("nan"))
-        theta.masked_fill_(~valid, float("nan"))
-        return phi, theta
+        # Masked out of place (no ``valid.all()`` host sync or graph break).
+        nan = torch.full_like(phi, float("nan"))
+        return torch.where(valid, phi, nan), torch.where(valid, theta, nan)
 
     def _native_to_intermediate(
         self, phi: Tensor, theta: Tensor

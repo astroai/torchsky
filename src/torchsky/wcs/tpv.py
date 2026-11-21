@@ -53,6 +53,11 @@ class TPV:
         self._invert_trace_enabled = False
         self._last_invert_trace = None
         self._plans: Dict[Any, Any] = {}
+        # Host-side (row, u power, v power, r power, coefficient) terms for the
+        # traced evaluator, built eagerly so tracing never mutates state.
+        self._host_terms = {
+            jacobian: self._plan_entries(jacobian) for jacobian in (False, True)
+        }
 
     def set_invert_trace(self, enabled: bool):
         self._invert_trace_enabled = enabled
@@ -224,11 +229,7 @@ class TPV:
     # with about twenty, whatever the number of PV terms.
     _MONOMIAL_BUDGET = 1 << 22  # elements of M per chunk (32 MiB in float64)
 
-    def _monomial_plan(self, jacobian: bool, device: torch.device, dtype: torch.dtype):
-        key = (jacobian, device, dtype)
-        plan = self._plans.get(key)
-        if plan is not None:
-            return plan
+    def _plan_entries(self, jacobian: bool) -> "list[tuple[int, int, int, int, float]]":
         # (row, u power, v power, r power, coefficient); poly 2 has the roles
         # of its x and y exponents swapped (it is evaluated in (v, u)).
         entries: list[tuple[int, int, int, int, float]] = []
@@ -249,6 +250,14 @@ class TPV:
                 entries.append((6, py, px, pr, c))  # d eta / du
             for px, py, pr, c in self.terms2_rad:
                 entries.append((7, py, px, pr, c))  # d eta / dr
+        return entries
+
+    def _monomial_plan(self, jacobian: bool, device: torch.device, dtype: torch.dtype):
+        key = (jacobian, device, dtype)
+        plan = self._plans.get(key)
+        if plan is not None:
+            return plan
+        entries = self._host_terms[jacobian]
         monomials: dict[tuple[int, int, int], int] = {}
         for _, a, b, c, _ in entries:
             monomials.setdefault((a, b, c), len(monomials))
@@ -267,8 +276,39 @@ class TPV:
         self._plans[key] = plan
         return plan
 
+    def _evaluate_traced(self, u: Tensor, v: Tensor, jacobian: bool) -> Tensor:
+        """:meth:`_evaluate` as one elementwise expression per row.
+
+        Used under ``torch.compile``: host coefficients and Python power
+        tables fuse into a single kernel, with no ``(monomials, N)`` buffer
+        (so no chunk loop over a possibly symbolic ``N``) and no plan cache.
+        """
+        rows = 8 if jacobian else 2
+        entries = self._host_terms[jacobian]
+        max_power = max((max(a, b, c) for _, a, b, c, _ in entries), default=0)
+        up = [torch.ones_like(u), u]
+        vp = [torch.ones_like(v), v]
+        for _ in range(2, max_power + 1):
+            up.append(up[-1] * u)
+            vp.append(vp[-1] * v)
+        rp: list[Tensor] = []
+        if any(c > 0 for _, _, _, c, _ in entries):
+            r = torch.hypot(u, v)
+            rp = [torch.ones_like(r), r]
+            for _ in range(2, max_power + 1):
+                rp.append(rp[-1] * r)
+        out: list[Tensor] = [torch.zeros_like(u) for _ in range(rows)]
+        for row, a, b, c, value in entries:
+            term = up[a] * vp[b]
+            if c > 0:
+                term = term * rp[c]
+            out[row] = out[row] + value * term
+        return torch.stack(out)
+
     def _evaluate(self, u: Tensor, v: Tensor, jacobian: bool) -> Tensor:
         """Rows of ``coeff @ monomials`` for flattened ``u, v``: ``(rows, N)``."""
+        if torch.compiler.is_compiling():
+            return self._evaluate_traced(u, v, jacobian)
         powers, coeff, uses_r = self._monomial_plan(jacobian, u.device, u.dtype)
         n = u.numel()
         k = powers.shape[1]
@@ -345,6 +385,8 @@ class TPV:
             return torch.where(finite_target, xi_t, nan), torch.where(
                 finite_target, eta_t, nan
             )
+        if torch.compiler.is_compiling():
+            return self._invert_traced(xi_t, eta_t, max_iter, tol)
         native = self._native_invert(xi_t, eta_t, max_iter, tol)
         if native is not None:
             return native
@@ -353,19 +395,7 @@ class TPV:
         eta_f = eta_t.reshape(-1)
 
         u_curr, v_curr = self._initial_guess_affine(xi_f, eta_f)
-        # Per-point convergence tolerance: ``tol``, but never below what the
-        # working dtype can resolve. Evaluating the polynomial (n terms) at a
-        # target of size |xi| + |eta| carries ~n * eps * max(1, |xi| + |eta|)
-        # rounding, so in float32 (MPS) a 1e-11 deg residual is unreachable and
-        # converged points were reported as NaN. In float64 the floor is
-        # ~1e-14 deg and ``tol`` (1e-11) is unchanged.
-        n_terms = max(len(self.terms1), len(self.terms2), 1) + 2
-        floor = (
-            n_terms
-            * torch.finfo(xi_f.dtype).eps
-            * torch.clamp(xi_f.abs() + eta_f.abs(), min=1.0)
-        )
-        tol_pt = torch.clamp(floor.nan_to_num(nan=tol), min=tol)
+        tol_pt = self._tolerance_floor(xi_f, eta_f, tol)
         active_counts = []
         u, v = u_curr, v_curr
         viable = (
@@ -429,9 +459,9 @@ class TPV:
         nan = torch.full_like(u, torch.nan)
         u_out = torch.where(valid, u, nan)
         v_out = torch.where(valid, v, nan)
-        final_active = int((~valid).sum().item())
 
         if self._invert_trace_enabled:
+            final_active = int((~valid).sum().item())
             n_points = xi_t.numel()
             self._last_invert_trace = {
                 "n_points": n_points,
@@ -448,6 +478,88 @@ class TPV:
             }
 
         return u_out.reshape(shape), v_out.reshape(shape)
+
+    def _tolerance_floor(self, xi_f: Tensor, eta_f: Tensor, tol: float) -> Tensor:
+        # Per-point convergence tolerance: ``tol``, but never below what the
+        # working dtype can resolve. Evaluating the polynomial (n terms) at a
+        # target of size |xi| + |eta| carries ~n * eps * max(1, |xi| + |eta|)
+        # rounding, so in float32 (MPS) a 1e-11 deg residual is unreachable and
+        # converged points were reported as NaN. In float64 the floor is
+        # ~1e-14 deg and ``tol`` (1e-11) is unchanged.
+        n_terms = max(len(self.terms1), len(self.terms2), 1) + 2
+        floor = (
+            n_terms
+            * torch.finfo(xi_f.dtype).eps
+            * torch.clamp(xi_f.abs() + eta_f.abs(), min=1.0)
+        )
+        return torch.clamp(floor.nan_to_num(nan=tol), min=tol)
+
+    def _invert_traced(
+        self, xi_t: Tensor, eta_t: Tensor, max_iter: int, tol: float
+    ) -> Tuple[Tensor, Tensor]:
+        """Fixed-iteration masked form of the Newton sweeps in :meth:`invert`.
+
+        Same seed, step clamp, conditioning, tolerance and fail-closed mask as
+        the eager loop, which gathers the still-moving rows and stops when none
+        moves; here every sweep runs over all rows and a per-row ``active``
+        mask freezes converged ones, so ``torch.compile`` traces one graph
+        (no host syncs, no data-dependent shapes). Converged rows are never
+        touched again in either form, so the results agree.
+        """
+        shape = xi_t.shape
+        xi_f = xi_t.reshape(-1)
+        eta_f = eta_t.reshape(-1)
+        u, v = self._initial_guess_affine(xi_f, eta_f)
+        tol_pt = self._tolerance_floor(xi_f, eta_f, tol)
+        viable = (
+            torch.isfinite(xi_f)
+            & torch.isfinite(eta_f)
+            & torch.isfinite(u)
+            & torch.isfinite(v)
+        )
+        active = viable
+        for _ in range(max_iter):
+            xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
+                u, v
+            )
+            fx0 = xi - xi_f
+            fx1 = eta - eta_f
+            res_norm = torch.hypot(fx0, fx1)
+            det = dxi_du * deta_dv - dxi_dv * deta_du
+            conditioned = self._well_conditioned(dxi_du, dxi_dv, deta_du, deta_dv)
+            good = (
+                torch.isfinite(res_norm)
+                & torch.isfinite(u)
+                & torch.isfinite(v)
+                & conditioned
+            )
+            viable = viable & (~active | good)
+            update = active & good & (res_norm > tol_pt)
+            det_safe = torch.where(update, det, torch.ones_like(det))
+            du = (deta_dv * fx0 - dxi_dv * fx1) / det_safe
+            dv = (-deta_du * fx0 + dxi_du * fx1) / det_safe
+            u_new = torch.where(update, u - du.clamp(-1.0, 1.0), u)
+            v_new = torch.where(update, v - dv.clamp(-1.0, 1.0), v)
+            still = update & torch.isfinite(u_new) & torch.isfinite(v_new)
+            viable = viable & (~update | still)
+            active = still
+            u, v = u_new, v_new
+
+        xi, eta, dxi_du, dxi_dv, deta_du, deta_dv = self._distort_and_jacobian_impl(
+            u, v
+        )
+        final_residual = torch.hypot(xi - xi_f, eta - eta_f)
+        valid = (
+            viable
+            & torch.isfinite(final_residual)
+            & (final_residual <= tol_pt)
+            & self._well_conditioned(dxi_du, dxi_dv, deta_du, deta_dv)
+        )
+        nan = torch.full_like(u, torch.nan)
+        return (
+            torch.where(valid, u, nan).reshape(shape),
+            torch.where(valid, v, nan).reshape(shape),
+        )
 
     # Per-point Newton in the native core (same seed, step clamp, conditioning
     # and tolerance contract) for CPU float64 inputs that need no gradient. Set

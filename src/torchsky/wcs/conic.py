@@ -507,7 +507,9 @@ def _pco_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         dt = g / safe_gp
         theta = theta - dt
         theta = torch.clamp(theta, -half_pi + 1e-9, half_pi - 1e-9)
-        if bool(dt.abs().max() < 1e-13):
+        # Converged rows are Newton fixed points, so the early exit (a host
+        # sync) only saves work; traced graphs run the fixed iteration count.
+        if not torch.compiler.is_compiling() and bool(dt.abs().max() < 1e-13):
             break
 
     theta_deg = theta * R2D
