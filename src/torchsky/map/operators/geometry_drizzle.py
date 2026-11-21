@@ -259,6 +259,7 @@ def _quadrilateral_areas_and_validity(
     return areas, valid
 
 
+@torch.compiler.disable(recursive=True)
 def _scatter_add_ordered(
     targets: list[Tensor],
     index: Tensor,
@@ -274,6 +275,8 @@ def _scatter_add_ordered(
     summed sequentially (``segment_reduce``, no atomics) and added to the target once
     per index, which fixes the summation order.  Other devices use ``scatter_add_``
     (serial on CPU, hence already deterministic).  ``ordered`` forces either path.
+    Always eager (also under ``torch.compile``), so compiled callers keep this
+    summation order.
     """
     if ordered is None:
         ordered = index.device.type == "cuda"
