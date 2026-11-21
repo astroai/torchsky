@@ -538,7 +538,9 @@ class _LegendreTable:
             t_idx = torch.clamp(s + r, max=length - 1)
             row_valid = (s + r + m0 <= lmax) & (r + m0 <= mmax)
             tab = vals[t_idx.to(build_dev), r.to(build_dev)]  # (rows, n_s, n_eff)
-            tab = tab * row_valid.to(device=build_dev, dtype=torch.float64)[:, :, None]
+            tab = (
+                tab * _to(row_valid, device=build_dev, dtype=torch.float64)[:, :, None]
+            )
             even = _to(tab[:, 0::2].contiguous(), device=device, dtype=dtype)
             odd = _to(tab[:, 1::2].contiguous(), device=device, dtype=dtype)
             m_idx = torch.clamp(torch.arange(m0, m0 + rows), max=mmax)[:, None]
