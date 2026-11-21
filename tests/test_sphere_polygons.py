@@ -622,3 +622,15 @@ def test_python_float_and_list_geometry_inputs_stay_float64() -> None:
             edge, 5.0, [10.0, 20.0, 20.0, 10.0], [0.0, 0.0, 10.0, 10.0], inclusive=False
         )
     )
+
+
+def test_convex_polygon_contains_list_inputs_keep_float64() -> None:
+    # List vertices and Python-float points used to be rounded to float32
+    # (~14 mas at lon 123), misclassifying points a few mas from an edge.
+    west = 123.456789
+    lon = [west, west + 1.0, west + 1.0, west]
+    lat = [-45.6, -45.6, -44.6, -44.6]
+    mas = 1.0 / 3.6e6
+    inside = convex_polygon_contains(west + 3 * mas, -45.1, lon, lat, atol=0.0)
+    outside = convex_polygon_contains(west - 3 * mas, -45.1, lon, lat, atol=0.0)
+    assert bool(inside) and not bool(outside)

@@ -703,8 +703,11 @@ def convex_polygon_contains(
 ) -> Tensor:
     """Fast half-space point-in-convex-spherical-polygon predicate."""
     atol = _validate_nonnegative_finite(atol, "atol")
+    lon_t = _as_geom_tensor(lon_deg)
+    lat_t = _as_geom_tensor(lat_deg, like=lon_t)
     v_poly = lonlat_to_unit_xyz(
-        torch.as_tensor(poly_lon_deg), torch.as_tensor(poly_lat_deg)
+        _as_geom_tensor(poly_lon_deg, like=lon_t),
+        _as_geom_tensor(poly_lat_deg, like=lon_t),
     )
     if v_poly.ndim != 2 or v_poly.shape[0] < 3:
         raise ValueError("polygon must contain at least three vertices")
@@ -723,7 +726,7 @@ def convex_polygon_contains(
     orient = torch.where(orient == 0, torch.ones_like(orient), orient)
     normals = normals * orient.unsqueeze(-1)
 
-    points = lonlat_to_unit_xyz(lon_deg, lat_deg)
+    points = lonlat_to_unit_xyz(lon_t, lat_t)
     shape = points.shape[:-1]
     pts = points.reshape(-1, 3)
     chunk = _GEOM_PAIRWISE_CHUNK
