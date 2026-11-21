@@ -434,9 +434,6 @@ def fresh_dynamo():
 @pytest.mark.parametrize("masked", [False, True])
 def test_overlap_pieces_trace_fullgraph(masked: bool, fresh_dynamo) -> None:
     qx, qy = _random_quads(300, 1.3, seed=21, origin=3.0)
-    gen = torch.Generator().manual_seed(22)
-    numer = torch.randn(300, generator=gen).float()
-    weight = torch.rand(300, generator=gen).float() + 0.1
 
     def ranges(qx, qy):
         return gd._quad_candidate_ranges(
@@ -455,17 +452,15 @@ def test_overlap_pieces_trace_fullgraph(masked: bool, fresh_dynamo) -> None:
 
     def tile(pair_ids, owners):
         return gd._overlap_pair_tile(
-            qx, qy, numer, weight, areas, min_x, min_y, nx, starts, ends,
-            resolution, pair_ids, owners, width=24, differentiable=False,
-            with_variance=True, masked=masked,
+            qx, qy, areas, min_x, min_y, nx, starts, ends, resolution,
+            pair_ids, owners, width=24, differentiable=False, masked=masked,
         )  # fmt: skip
 
     got = torch.compile(tile, backend="aot_eager", fullgraph=True)(pair_ids, owners)
     want = tile(pair_ids, owners)
     torch.testing.assert_close(got[0], want[0], rtol=0.0, atol=0.0)
+    torch.testing.assert_close(got[1], want[1])
     torch.testing.assert_close(got[2], want[2], rtol=0.0, atol=0.0)
-    for g, w in zip(got[1], want[1]):
-        torch.testing.assert_close(g, w)
     if masked:
         assert not bool(want[2][-pad:].any())
 

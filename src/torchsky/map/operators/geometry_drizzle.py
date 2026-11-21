@@ -454,8 +454,6 @@ def _quad_candidate_ranges(
 def _overlap_pair_tile(
     quad_x: Tensor,
     quad_y: Tensor,
-    quad_numer: Tensor,
-    quad_weight: Tensor,
     areas: Tensor,
     min_x: Tensor,
     min_y: Tensor,
@@ -468,16 +466,15 @@ def _overlap_pair_tile(
     *,
     width: int,
     differentiable: bool,
-    with_variance: bool,
     masked: bool,
-) -> tuple[Tensor, list[Tensor], Tensor]:
-    """Overlap contributions of the candidate pairs ``pair_ids`` (fixed shape).
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Overlap coefficients of the candidate pairs ``pair_ids`` (fixed shape).
 
     ``owners`` is the quad of each pair (the ragged expansion is done by the
-    caller).  Returns ``(output_index, values, keep)``: flat target pixel, the
-    numerator, weight (and variance) contributions, and which pairs contribute.
-    With ``masked`` (padded tiles) pairs at or past the pair count are dropped
-    and dropped pairs carry zero values at pixel 0, so all pairs can be
+    caller).  Returns ``(output_index, coefficients, keep)``: flat target pixel,
+    overlap area over quad area (float32), and which pairs contribute.  With
+    ``masked`` (padded tiles) pairs at or past the pair count are dropped too,
+    and dropped pairs get a zero coefficient at pixel 0, so all pairs can be
     scattered without compaction.  Traces with ``fullgraph=True``.
     """
     local = pair_ids - starts[owners]
@@ -494,17 +491,14 @@ def _overlap_pair_tile(
         # Grazing contacts add exactly zero to the maps but keep their sub-gradient.
         overlaps = torch.where(overlap_valid, overlaps, overlaps - overlaps.detach())
         overlap_valid = torch.ones_like(overlap_valid)
-    keep = overlap_valid & (pair_ids < ends[-1]) if masked else overlap_valid
     output_index = center_y * width + center_x
     coefficients = (overlaps / areas[owners]).to(dtype=torch.float32)
-    weight = quad_weight[owners]
-    values = [quad_numer[owners] * coefficients, weight * coefficients]
-    if with_variance:
-        values.append(weight * torch.square(coefficients))
-    if masked:
-        output_index = torch.where(keep, output_index, torch.zeros_like(output_index))
-        values = [torch.where(keep, v, torch.zeros_like(v)) for v in values]
-    return output_index, values, keep
+    if not masked:
+        return output_index, coefficients, overlap_valid
+    keep = overlap_valid & (pair_ids < ends[-1])
+    output_index = torch.where(keep, output_index, torch.zeros_like(output_index))
+    coefficients = torch.where(keep, coefficients, torch.zeros_like(coefficients))
+    return output_index, coefficients, keep
 
 
 @torch.compiler.disable(recursive=False)
@@ -591,11 +585,9 @@ def _accumulate_overlap_tiles(
         pair_ids = torch.arange(pair_start, pair_start + length, device=device)
         if length > pair_stop - pair_start:
             owners = F.pad(owners, (0, length - (pair_stop - pair_start)))
-        output_index, values, keep = _overlap_pair_tile(
+        output_index, coefficients, keep = _overlap_pair_tile(
             quad_x,
             quad_y,
-            quad_numer,
-            quad_weight,
             areas,
             min_x,
             min_y,
@@ -607,14 +599,18 @@ def _accumulate_overlap_tiles(
             owners,
             width=width,
             differentiable=differentiable,
-            with_variance=flat_variance_weight is not None,
             masked=pad_tiles,
         )
         if not pad_tiles:
             if not bool(keep.any()):
                 continue
+            owners = owners[keep]
             output_index = output_index[keep]
-            values = [v[keep] for v in values]
+            coefficients = coefficients[keep]
+        weight = quad_weight[owners]
+        values = [quad_numer[owners] * coefficients, weight * coefficients]
+        if flat_variance_weight is not None:
+            values.append(weight * torch.square(coefficients))
         _scatter_add_ordered(targets, output_index, values)
 
 
