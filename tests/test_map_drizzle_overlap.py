@@ -406,3 +406,139 @@ def test_scatter_add_ordered_is_bitwise_reproducible_on_cuda() -> None:
     # float atomics (scatter_add_) are the non-reproducible baseline being replaced
     reference = torch.zeros(64, device="cuda").scatter_add_(0, index, values[0])
     torch.testing.assert_close(runs[0], reference, rtol=1e-4, atol=1e-2)
+
+
+# ---------------------------------------------------------------------------
+# torch.compile: fixed-shape pieces around an eager driver.
+# ---------------------------------------------------------------------------
+_COMPILE_DEVICES = [
+    "cpu",
+    pytest.param(
+        "mps",
+        marks=pytest.mark.skipif(
+            not torch.backends.mps.is_available(), reason="MPS unavailable"
+        ),
+    ),
+]
+
+
+@pytest.fixture
+def fresh_dynamo():
+    import torch._dynamo
+
+    torch._dynamo.reset()
+    yield
+    torch._dynamo.reset()
+
+
+@pytest.mark.parametrize("masked", [False, True])
+def test_overlap_pieces_trace_fullgraph(masked: bool, fresh_dynamo) -> None:
+    qx, qy = _random_quads(300, 1.3, seed=21, origin=3.0)
+    gen = torch.Generator().manual_seed(22)
+    numer = torch.randn(300, generator=gen).float()
+    weight = torch.rand(300, generator=gen).float() + 0.1
+
+    def ranges(qx, qy):
+        return gd._quad_candidate_ranges(
+            qx, qy, width=24, height=20, differentiable=False
+        )
+
+    got = torch.compile(ranges, backend="aot_eager", fullgraph=True)(qx, qy)
+    want = ranges(qx, qy)
+    for g, w in zip(got, want):
+        torch.testing.assert_close(g, w, rtol=0.0, atol=0.0)
+    areas, min_x, min_y, nx, starts, ends, resolution, summary = want
+    pair_ids = torch.arange(int(summary[0]) + 37)  # padded past the pair count
+
+    def tile(pair_ids):
+        return gd._overlap_pair_tile(
+            qx, qy, numer, weight, areas, min_x, min_y, nx, starts, ends,
+            resolution, pair_ids, width=24, differentiable=False,
+            with_variance=True, masked=masked,
+        )  # fmt: skip
+
+    got = torch.compile(tile, backend="aot_eager", fullgraph=True)(pair_ids)
+    want = tile(pair_ids)
+    torch.testing.assert_close(got[0], want[0], rtol=0.0, atol=0.0)
+    torch.testing.assert_close(got[2], want[2], rtol=0.0, atol=0.0)
+    for g, w in zip(got[1], want[1]):
+        torch.testing.assert_close(g, w)
+    assert not bool(want[2][-37:].any())
+
+
+@pytest.mark.parametrize("device", _COMPILE_DEVICES)
+def test_compiled_accumulation_matches_eager(
+    device: str, monkeypatch: pytest.MonkeyPatch, fresh_dynamo
+) -> None:
+    """Compiled accumulation equals eager; one tile graph serves every tile."""
+    from torch._dynamo.testing import CompileCounterWithBackend
+
+    dtype = torch.float64 if device == "cpu" else torch.float32
+    width, height = 37, 29
+    qx, qy = _random_quads(1500, 1.4, seed=23, origin=-2.0)
+    qx = (qx * 1.6).to(dtype)
+    qy = (qy * 1.2).to(dtype)
+    qx[7, 2] = float("nan")  # skipped footprint (eager compaction)
+    gen = torch.Generator().manual_seed(24)
+    numer = torch.randn(1500, generator=gen).float()
+    weight = torch.rand(1500, generator=gen).float() + 0.1
+    args = [t.to(device) for t in (qx, qy, numer, weight)]
+    monkeypatch.setattr(gd, "_NATIVE_OVERLAP_ENABLED", False)
+
+    def run(qx, qy, numer, weight):
+        maps = [torch.zeros(width * height, device=qx.device) for _ in range(3)]
+        gd._accumulate_quadrilateral_overlaps(
+            qx, qy, numer, weight, width=width, height=height,
+            flat_numer=maps[0], flat_weight=maps[1], flat_variance_weight=maps[2],
+        )  # fmt: skip
+        return maps
+
+    want = run(*args)
+    frames = []
+    for chunk in (10**9, 1000):  # one tile, then several (last one padded)
+        monkeypatch.setattr(gd, "_MAX_OVERLAP_CANDIDATE_PAIRS", chunk)
+        monkeypatch.setattr(gd, "_MAX_OVERLAP_CANDIDATE_PAIRS_ACCELERATOR", chunk)
+        torch._dynamo.reset()
+        counter = CompileCounterWithBackend("aot_eager")
+        got = torch.compile(run, backend=counter)(*args)
+        frames.append(counter.frame_count)
+        for g, w in zip(got, want):
+            # float32 maps; MPS scatters with atomics (order-dependent rounding)
+            torch.testing.assert_close(g.cpu(), w.cpu(), rtol=1e-5, atol=1e-5)
+    assert frames[0] == frames[1]
+    bow_tie = [0, 1, 3, 2]  # self-intersecting footprint
+    bad_x, bad_y = args[0].clone(), args[1].clone()
+    bad_x[3], bad_y[3] = args[0][3, bow_tie], args[1][3, bow_tie]
+    with pytest.raises(ValueError, match="self-intersecting"):
+        torch.compile(run, backend="aot_eager")(bad_x, bad_y, *args[2:])
+
+
+def test_compiled_accumulation_gradients_match_eager(
+    monkeypatch: pytest.MonkeyPatch, fresh_dynamo
+) -> None:
+    width = height = 20
+    qx, qy = _random_quads(120, 1.2, seed=25, origin=3.0)
+    gen = torch.Generator().manual_seed(26)
+    numer = torch.randn(120, generator=gen).float()
+    weight = torch.rand(120, generator=gen).float() + 0.1
+    monkeypatch.setattr(gd, "_NATIVE_OVERLAP_ENABLED", False)
+    monkeypatch.setattr(gd, "_MAX_OVERLAP_CANDIDATE_PAIRS", 300)
+    probe = torch.randn(width * height, generator=gen)
+
+    def loss(qx, numer):
+        maps = [torch.zeros(width * height) for _ in range(2)]
+        gd._accumulate_quadrilateral_overlaps(
+            qx, qy, numer, weight, width=width, height=height,
+            flat_numer=maps[0], flat_weight=maps[1], flat_variance_weight=None,
+        )  # fmt: skip
+        return (maps[0] * probe).sum() + (maps[1] * probe).sum()
+
+    grads = []
+    for fn in (loss, torch.compile(loss, backend="aot_eager")):
+        a = qx.clone().requires_grad_(True)
+        b = numer.clone().requires_grad_(True)
+        fn(a, b).backward()
+        grads.append((a.grad, b.grad))
+    for g, w in zip(grads[1], grads[0]):
+        assert g is not None and w is not None
+        torch.testing.assert_close(g, w, rtol=1e-5, atol=1e-5)
