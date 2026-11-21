@@ -477,6 +477,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had converged, which gave pixels hundreds of pixels off. A point counts as
   converged when its distorted position is within 1e-6 px of the target, or
   within the float32 rounding floor on MPS. Converged results are unchanged.
+  Image-plane resampling treats such target pixels as outside the source
+  image (no coverage), as its round-trip check already did.
 - `WCS` rejects ZPN headers that WCSLIB `zpnset` rejects, raising
   `ValueError` at construction. These are polynomials with no non-zero
   `PV2_m`, and polynomials of order ≥ 2 with `PV2_1 <= 0`. Before, a header

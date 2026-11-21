@@ -861,6 +861,13 @@ def _resample_weighted_to_target(
                 radius=_SOURCE_TAP_RADIUS[resampling_kernel],
             )
             source_numerator_variance = weighted_weight
+        # A target point with no source pre-image (the SIP/TPV inverse did not
+        # converge: NaN) lies outside the image. Park it beyond every kernel
+        # tap so the samplers read nothing for it; ``in_bounds`` drops it.
+        finite_src = torch.isfinite(x_src) & torch.isfinite(y_src)
+        outside = -float(2 * max(h_src, w_src) + 16)
+        x_src = torch.where(finite_src, x_src, torch.full_like(x_src, outside))
+        y_src = torch.where(finite_src, y_src, torch.full_like(y_src, outside))
         sampled_variance_weight = None
         fused_variance = None
         if resampling_kernel == "spectral_nonuniform":
