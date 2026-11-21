@@ -1817,8 +1817,8 @@ def source_bbox_on_target(
         & (ys_edge >= -0.5)
         & (ys_edge <= h_src - 0.5)
     )
-    x_cover.append(x_edge[inside_source].to(device=x_tgt.device, dtype=x_tgt.dtype))
-    y_cover.append(y_edge[inside_source].to(device=y_tgt.device, dtype=y_tgt.dtype))
+    x_cover.append(_to(x_edge[inside_source], device=x_tgt.device, dtype=x_tgt.dtype))
+    y_cover.append(_to(y_edge[inside_source], device=y_tgt.device, dtype=y_tgt.dtype))
     x_all = torch.cat(x_cover)
     y_all = torch.cat(y_cover)
     if x_all.numel() == 0:
