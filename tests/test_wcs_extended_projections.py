@@ -4,7 +4,6 @@ Validates torch-native WCS transforms against Astropy/WCSLIB fixture behavior
 for forward (pixel->world) and inverse (world->pixel) directions.
 """
 
-import platform
 import numpy as np
 import pytest
 import torch
@@ -196,13 +195,14 @@ def test_csc_s2x_x2s_cuda_matches_cpu():
             torch.testing.assert_close(b.cpu(), a, rtol=0.0, atol=1e-10, equal_nan=True)
 
 
-# torchsky never fuses a*b+c (identical results on every platform). Baseline
-# x86-64 WCSLIB builds do not fuse either and match exactly; AArch64 builds (macOS
-# arm64 astropy wheels) fuse, which moves a float32 step by one ulp: 45 * 2**-22 deg
-# (plane coordinate up to 8 face units) and ~5e-6 deg on the sphere.
-_EXACT = platform.machine().lower() in ("x86_64", "amd64")
-ATOL_FWD = 1e-10 if _EXACT else 2.5e-5
-ATOL_INV = 1e-10 if _EXACT else 6e-6
+# torchsky never fuses a*b+c (identical results on every platform). WCSLIB's
+# float32 CSC steps round differently per build: AArch64 builds (macOS arm64
+# astropy) fuse, and the conda-forge linux-64 build differed by up to 1.3e-6 deg
+# on the inverse (astropy 8.0.x, CI run 44876047856). One float32 ulp is
+# 45 * 2**-22 deg on the plane (offsets up to 8 face units) and ~5e-6 deg on the
+# sphere; the float64 plane-coordinate bug these tests guard against was 2e-5 deg.
+ATOL_FWD = 2.5e-5
+ATOL_INV = 6e-6
 
 
 def test_csc_matches_wcslib_float32_semantics_on_every_face():
