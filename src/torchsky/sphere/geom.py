@@ -84,7 +84,11 @@ class UnitVector3d:
 def _as_geom_tensor(
     value: Tensor | float | list[float], *, like: Tensor | None = None
 ) -> Tensor:
-    tensor = torch.as_tensor(value)
+    if isinstance(value, Tensor):
+        tensor = value
+    else:
+        # Python floats/lists would default to float32 and lose ~1e-6 deg.
+        tensor = torch.as_tensor(value, dtype=torch.float64)
     if like is not None:
         return _to(tensor, device=like.device, dtype=like.dtype)
     if tensor.device.type == "mps":

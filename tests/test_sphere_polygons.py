@@ -608,3 +608,17 @@ def test_cpp_geometry_predicates_reject_invalid_tolerances() -> None:
         ops.sphere_planar_point_in_polygon(points, polygon, -1.0)
     with pytest.raises(RuntimeError, match="finite and nonnegative"):
         ops.sphere_arc_intersections_matrix(arc0, arc1, arc0, arc1, math.inf)
+
+
+def test_python_float_and_list_geometry_inputs_stay_float64() -> None:
+    from torchsky.sphere.geom import _as_geom_tensor
+
+    assert float(_as_geom_tensor(123.4)) == 123.4
+    assert _as_geom_tensor([123.4, -45.6]).tolist() == [123.4, -45.6]
+    # A point 1 mas inside the edge of a list-defined polygon.
+    edge = 10.0 + 1.0 / 3.6e6
+    assert bool(
+        spherical_polygon_contains(
+            edge, 5.0, [10.0, 20.0, 20.0, 10.0], [0.0, 0.0, 10.0, 10.0], inclusive=False
+        )
+    )

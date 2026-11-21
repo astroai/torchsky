@@ -11,7 +11,7 @@ from .. import _ops
 from .._dtype import work_dtype as _work_dtype
 from . import healpix as _healpix
 from .core import great_circle_distance, lonlat_to_unit_xyz
-from .geom import PixelizedRegion, spherical_polygon_contains
+from .geom import PixelizedRegion, _as_geom_tensor, spherical_polygon_contains
 from .randoms import PreparedRandomSampler, _prepare_moc_random_sampler, sample_randoms
 from .sparse import SparseHealpixMap
 from ..device import _scatter_reduce_int, _to
@@ -416,8 +416,9 @@ def _hierarchical_disc_bmoc(
     pix = torch.arange(12, dtype=torch.int64, device=device)
     kept_uniq: list[Tensor] = []
     kept_flag: list[Tensor] = []
-    lon0 = torch.as_tensor(lon_deg, device=device)
-    lat0 = torch.as_tensor(lat_deg, device=device)
+    # Python floats would default to float32 (mas-level centre error).
+    lon0 = torch.as_tensor(lon_deg, dtype=_work_dtype(device), device=device)
+    lat0 = torch.as_tensor(lat_deg, dtype=_work_dtype(device), device=device)
     radius = float(radius_deg)
     v_center = lonlat_to_unit_xyz(lon0, lat0)
     r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
@@ -494,9 +495,10 @@ def _hierarchical_polygon_bmoc(
     max_order: int,
 ) -> tuple[Tensor, Tensor]:
     """Coarse-to-fine polygon BMOC returning (uniq, flag) with flag=1 inside, 0 boundary."""
-    poly_lon = torch.as_tensor(lon_deg)
+    # Working dtype (float64 off MPS): list vertices would default to float32.
+    poly_lon = _as_geom_tensor(lon_deg)
     device = poly_lon.device
-    poly_lat = torch.as_tensor(lat_deg, device=device)
+    poly_lat = _as_geom_tensor(lat_deg, like=poly_lon)
     if poly_lon.numel() < 3:
         return (
             torch.empty(0, dtype=torch.int64, device=device),
@@ -594,8 +596,8 @@ def _hierarchical_polygon_uniq(
         return uniq
     # Standard MOC.from_polygon leaf rule: include interior cells (flag==1)
     # plus leaf cells whose center is inside the polygon.
-    poly_lon = torch.as_tensor(lon_deg)
-    poly_lat = torch.as_tensor(lat_deg, device=poly_lon.device)
+    poly_lon = _as_geom_tensor(lon_deg)
+    poly_lat = _as_geom_tensor(lat_deg, like=poly_lon)
     interior = uniq[flag > 0]
     bndry = uniq[flag == 0]
     if bndry.numel() == 0:
@@ -1091,8 +1093,8 @@ class MOC:
         order = int(max_order)
         _nside_from_max_order(order)
         uniq = _hierarchical_polygon_uniq(
-            torch.as_tensor(lon_deg),
-            torch.as_tensor(lat_deg),
+            _as_geom_tensor(lon_deg),
+            _as_geom_tensor(lat_deg),
             order,
         )
         return cls(uniq)
@@ -1728,8 +1730,8 @@ class BMOC:
         order = int(max_order)
         _nside_from_max_order(order)
         uniq, flag = _hierarchical_polygon_bmoc(
-            torch.as_tensor(lon_deg),
-            torch.as_tensor(lat_deg),
+            _as_geom_tensor(lon_deg),
+            _as_geom_tensor(lat_deg),
             order,
         )
         return cls(uniq, flag)

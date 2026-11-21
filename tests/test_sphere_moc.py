@@ -8,6 +8,7 @@ import random
 import torch
 from torchsky.sphere import SphericalCap, SphericalPolygon
 from torchsky.sphere import healpix as hp
+from torchsky.sphere.core import great_circle_distance
 from torchsky.sphere.geom import PixelizedRegion
 from torchsky.sphere.moc import (
     BMOC,
@@ -670,3 +671,44 @@ def test_moc_read_fits_rejects_non_moc_and_time_moc(tmp_path):
     )
     with pytest.raises(ValueError, match="TIME MOC"):
         MOC.read_fits(tmoc)
+
+
+def _leaf_centres_within(moc: MOC, order: int) -> set[int]:
+    return set(moc._flat_pixels(1 << order).tolist())
+
+
+def test_from_circle_keeps_float64_centre_at_high_order() -> None:
+    # A Python-float centre used to become a float32 tensor (~7 mas offset),
+    # misclassifying order-20 cells whose centres lie within mas of the edge.
+    lon, lat, radius, order = 123.4, -45.6, 2.0 / 3600.0, 20
+    nside = 1 << order
+    moc = MOC.from_circle(lon, lat, radius, max_order=order, inclusive=False)
+    superset = BMOC.from_cone(lon, lat, 2.0 * radius, max_order=order).to_moc()
+    cand = torch.tensor(sorted(_leaf_centres_within(superset, order)))
+    c_lon, c_lat = hp.pix2ang(nside, cand, nest=True, lonlat=True)
+    dist = great_circle_distance(
+        torch.tensor(lon, dtype=torch.float64),
+        torch.tensor(lat, dtype=torch.float64),
+        c_lon,
+        c_lat,
+        degrees=True,
+    )
+    expected = set(cand[dist <= radius].tolist())
+    assert _leaf_centres_within(moc, order) == expected
+    # healpy 1.20.1 query_disc(inclusive=False, nest=True) membership.
+    assert 10527893115779 in expected and 10527893115791 in expected
+    assert 10527893116077 not in expected
+
+
+def test_from_polygon_list_vertices_keep_float64() -> None:
+    # List vertices used to become float32 tensors before the polygon tests.
+    a = 1.5 / 3600.0
+    lon = [123.4 - a, 123.4 + a, 123.4 + a, 123.4 - a]
+    lat = [-45.6 - a, -45.6 - a, -45.6 + a, -45.6 + a]
+    from_list = MOC.from_polygon(lon, lat, max_order=20)
+    from_f64 = MOC.from_polygon(
+        torch.tensor(lon, dtype=torch.float64),
+        torch.tensor(lat, dtype=torch.float64),
+        max_order=20,
+    )
+    assert from_list == from_f64
