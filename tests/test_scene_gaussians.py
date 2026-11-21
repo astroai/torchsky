@@ -17,6 +17,7 @@ from torchsky.scene.gaussians import (
     _Level,
     _patch_half_sizes,
     _rasterize_gaussians,
+    _sky_from_pixel_arcsec,
 )
 from torchsky.wcs import WCS
 
@@ -902,6 +903,113 @@ def test_scene_places_items_whose_jacobian_probes_leave_the_sip_inverse() -> Non
     planes.sum().backward()
     for param in (scene.lon, scene.lat, scene.sigma_arcsec, scene.angle_deg):
         assert param.grad is not None and torch.isfinite(param.grad).all()
+
+
+def test_stamp_jacobian_is_the_exact_derivative_on_every_device(
+    compute_device: torch.device,
+) -> None:
+    """The local pixel <-> sky Jacobian is the autograd derivative of pixel -> world,
+    not a difference of world coordinates, so float32 (MPS) does not cancel: one
+    longitude ulp near 50 deg is ~0.014 arcsec, a fifth of this header's pixel."""
+    header = _strong_sip_header(200)
+    wcs64 = WCS(header)
+    # The last row is the reference pixel, where the WCS uses its grad-safe path.
+    pix = torch.tensor(
+        [[30.2, 40.7], [150.0, 60.4], [10.0, 180.0], [99.5, 99.5]], dtype=F64
+    )
+    lon, lat = wcs64.pixel_to_world(pix[:, 0], pix[:, 1])
+    jac = wcs64.pixel_to_world_jacobian(pix)  # (N, world, pixel) in deg / px
+    cos_lat = torch.cos(torch.deg2rad(lat))[:, None]
+    exact = torch.stack((jac[:, 0] * cos_lat, jac[:, 1]), dim=-2) * 3600.0
+    dtype = torch.float32 if compute_device.type == "mps" else F64
+    got = _sky_from_pixel_arcsec(
+        WCS(header).to(compute_device),
+        pix.to(dtype).to(compute_device),
+        lat.to(dtype).to(compute_device),
+    )
+    tol = 2e-6 if dtype == torch.float32 else 1e-12
+    torch.testing.assert_close(
+        got.cpu().to(F64), exact, rtol=0, atol=tol * float(exact.abs().max())
+    )
+
+
+def test_source_scene_position_gradients_include_the_jacobian() -> None:
+    """Gradients flow through the Jacobian's dependence on the centre pixel
+    (create_graph): they match central differences on a strongly distorted header."""
+    header = _strong_sip_header(200)
+    # Away from integer pixels, so the steps do not move the stamp bounds.
+    lon0, lat0 = _sky_items(header, [(80.3, 90.7), (119.6, 110.4)])
+    weights = torch.rand(
+        200, 200, generator=torch.Generator().manual_seed(3), dtype=F64
+    )
+    observation = FieldObservation(
+        image=torch.zeros(200, 200, dtype=F64), header=header
+    )
+
+    def loss(lon: torch.Tensor, lat: torch.Tensor) -> torch.Tensor:
+        scene = SourceCatalogScene(
+            lon,
+            lat,
+            morphology="gaussian",
+            gaussian_parameters=torch.tensor(
+                [[1.0, 0.6, 25.0], [0.8, 0.5, 70.0]], dtype=F64
+            ),
+            coefficients=torch.tensor([[5.0], [2.0]], dtype=F64),
+            support_radius_arcsec=4.0,
+        )
+        return (scene.render_observation(observation) * weights).sum()
+
+    lon = lon0.clone().requires_grad_(True)
+    lat = lat0.clone().requires_grad_(True)
+    loss(lon, lat).backward()
+    eps = 1e-3 * 0.072 / 3600.0  # a thousandth of a pixel
+    numeric = []
+    for which in (0, 1):
+        for i in range(2):
+            step = torch.zeros(2, dtype=F64)
+            step[i] = eps
+            if which == 0:
+                diff = loss(lon0 + step, lat0) - loss(lon0 - step, lat0)
+            else:
+                diff = loss(lon0, lat0 + step) - loss(lon0, lat0 - step)
+            numeric.append(float(diff) / (2 * eps))
+    analytic = torch.cat((lon.grad, lat.grad))
+    numeric_t = torch.tensor(numeric, dtype=F64)
+    torch.testing.assert_close(
+        analytic, numeric_t, rtol=0, atol=1e-5 * float(numeric_t.abs().max())
+    )
+
+
+def test_scenes_render_the_same_under_inference_mode() -> None:
+    """The Jacobian's autograd runs outside inference mode, on a clone of a WCS
+    built inside it, so inference-mode renders equal no_grad renders."""
+    header = _strong_sip_header(200)
+    lon, lat = _sky_items(header, [(80.3, 90.1), (120.0, 110.0)])
+    gauss = torch.tensor([[1.0, 0.6, 25.0], [0.8, 0.5, 70.0]], dtype=F64)
+    coef = torch.tensor([[5.0], [2.0]], dtype=F64)
+
+    def render() -> tuple[torch.Tensor, torch.Tensor]:
+        sources = SourceCatalogScene(
+            lon,
+            lat,
+            morphology=["gaussian", "sersic"],
+            gaussian_parameters=gauss,
+            sersic_parameters=torch.tensor([[0.8, 0.7, 25.0, 1.5]] * 2, dtype=F64),
+            coefficients=coef,
+            support_radius_arcsec=4.0,
+        ).render_observation(
+            FieldObservation(image=torch.zeros(200, 200, dtype=F64), header=header)
+        )
+        items = GaussianItemScene(lon, lat, gauss, coef).render_coefficients(header)
+        return sources, items
+
+    with torch.no_grad():
+        expected = render()
+    with torch.inference_mode():
+        got = render()
+    for a, b in zip(got, expected):
+        assert torch.isfinite(a).all()
+        torch.testing.assert_close(a.clone(), b, rtol=0, atol=0)
 
 
 def test_scene_float32_parameters_render_in_float32() -> None:

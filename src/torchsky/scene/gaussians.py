@@ -607,20 +607,40 @@ def _sky_from_pixel_arcsec(wcs: WCS, centre: Tensor, lat_deg: Tensor) -> Tensor:
 
     ``centre`` is ``(..., 2)`` and ``lat_deg`` (the tangent point's latitude, which
     sets the east scale) is ``centre.shape[:-1]``; the result is
-    ``(..., 2 sky axes, 2 pixel axes)``.  Central differences of the forward
-    pixel -> world map over +-1/2 pixel, so no world -> pixel inverse is involved:
-    the Jacobian is finite wherever the forward map is, even where an iterative
-    SIP/TPV inverse does not converge (points near a distorted detector's edge),
-    and it stays differentiable through ``centre``.
+    ``(..., 2 sky axes, 2 pixel axes)``.
+
+    It is the exact derivative of the forward pixel -> world map, taken by autograd,
+    so no world -> pixel inverse is involved: the Jacobian is finite wherever the
+    forward map is, even where an iterative SIP/TPV inverse does not converge
+    (points near a distorted detector's edge).  A finite difference of world
+    coordinates would cancel catastrophically in float32 (MPS), where one ulp of
+    the longitude is ~0.01-0.06 arcsec.  When ``centre`` carries a graph the
+    derivative is built with ``create_graph`` and stays differentiable through it.
     """
-    half = 0.5
-    step = centre.new_tensor([[-half, 0.0], [half, 0.0], [0.0, -half], [0.0, half]])
-    world = wcs.pixel_to_world_differentiable(centre[..., None, :] + step)
-    lo, hi = world[..., 0::2, :], world[..., 1::2, :]  # (..., pixel axis, world axis)
-    dlon = torch.remainder(hi[..., 0] - lo[..., 0] + 180.0, 360.0) - 180.0
+    graph = centre.requires_grad and torch.is_grad_enabled()
+    # no_grad and inference-mode callers still need this one local derivative.
+    with torch.inference_mode(False), torch.enable_grad():
+        if any(
+            value.is_inference()
+            for value in vars(wcs).values()
+            if isinstance(value, Tensor)
+        ):
+            # A WCS built under inference mode holds tensors autograd cannot save.
+            wcs = wcs._clone_preserving_wcs_state()
+        pix = centre if graph else centre.detach().clone().requires_grad_(True)
+        world = wcs.pixel_to_world_differentiable(pix)
+        d_lon, d_lat = (
+            torch.autograd.grad(
+                world[..., axis].sum(),
+                pix,
+                create_graph=graph,
+                retain_graph=graph or axis == 0,
+            )[0]
+            for axis in (0, 1)
+        )
     cos_lat = torch.cos(torch.deg2rad(lat_deg)).abs().clamp_min(1e-8)
-    east = dlon * (3600.0 / (2.0 * half)) * cos_lat[..., None]
-    north = (hi[..., 1] - lo[..., 1]) * (3600.0 / (2.0 * half))
+    east = d_lon * (3600.0 * cos_lat[..., None])
+    north = d_lat * 3600.0
     return torch.stack((east, north), dim=-2)
 
 

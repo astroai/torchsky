@@ -513,16 +513,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     target that has no pixel position on the observation, instead of
     returning a NaN loss and NaN gradients.
 - `SourceCatalogScene` Gaussian and Sérsic stamps, and `GaussianItemScene`
-  items, take their local pixel↔sky Jacobian from pixel→world at the centre
-  pixel ±½ px. Before, they mapped points 1″ (±0.5″) from the centre through
-  world→pixel. Near a distorted SIP or TPV detector those points can be NaN
-  while the centre is not, so one edge source turned a whole
+  items, take their local pixel↔sky Jacobian as the autograd derivative of
+  pixel→world at the centre pixel. Before, they mapped points 1″ (±0.5″) from
+  the centre through world→pixel. Near a distorted SIP or TPV detector those
+  points can be NaN while the centre is not, so one edge source turned a whole
   `render_observation` image into NaN, and `render_coefficients` raised
   `ValueError: shape_pix must be finite`. A source whose centre has a pixel
-  position now renders finite. On TAN, results change by rounding only; on
-  strongly distorted SIP they move by up to about 2% of the peak, because the
-  new difference matches the exact Jacobian to 1e-6 where the old one was
-  off by up to 1%.
+  position now renders finite. The Jacobian is exact to rounding (≤4e-7 on
+  MPS float32, where the old differences were 2–4% off, and ~1% off for
+  float32 positions on CPU), and position gradients still flow through it.
+  On TAN, float64 results change by rounding only; on strongly distorted SIP
+  they move by up to about 2% of the peak, the old differencing error.
 - `WCS` rejects ZPN headers that WCSLIB `zpnset` rejects, raising
   `ValueError` at construction. These are polynomials with no non-zero
   `PV2_m`, and polynomials of order ≥ 2 with `PV2_1 <= 0`. Before, a header
