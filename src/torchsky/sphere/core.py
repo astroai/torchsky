@@ -7,6 +7,7 @@ from typing import Literal
 import torch
 
 from .._dtype import work_dtype as _float_dtype
+from .._dtype import writable
 from torch import Tensor
 
 from . import healpix as _healpix
@@ -14,10 +15,13 @@ from ..device import _as_tensor, _to
 
 
 def _as_float_tensor(x: Tensor | float) -> Tensor:
-    t = torch.as_tensor(x)
-    if t.is_floating_point():
-        return t
-    return t.to(dtype=_float_dtype(t.device))
+    if not isinstance(x, Tensor):
+        # torch.as_tensor(0.1) is float32 (the default dtype): keep Python and
+        # NumPy floats in float64 instead of rounding them on the way in.
+        return torch.as_tensor(writable(x), dtype=torch.float64)
+    if x.is_floating_point():
+        return x
+    return x.to(dtype=_float_dtype(x.device))
 
 
 def wrap_longitude(lon_deg: Tensor | float, *, center_deg: float = 180.0) -> Tensor:

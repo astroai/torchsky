@@ -335,6 +335,23 @@ inline double wrap_rad_2pi(double v) {
     return r;
 }
 
+// sqrt(3 (1 - |sin(lat)|)) evaluated as sqrt(3 * 2 sin^2(colat / 2)): the direct
+// difference 1 - |z| cancels next to the poles and moved order-29 points by
+// several rings. Same expression as the torch path (healpix._lonlat_zt).
+inline double polar_cap_scale(double dec_deg) {
+    const double half = std::sin((90.0 - std::abs(dec_deg)) * (PI / 180.0) * 0.5);
+    return std::sqrt(3.0 * (2.0 * half * half));
+}
+
+// Latitude (deg) of a polar-cap ring with tmp = 1 - |z|: atan2 keeps the full
+// relative precision of tmp, whereas asin(1 - tmp) collapses the first rings of
+// order 29 onto the pole. Same expression as the torch path (_cap_theta).
+inline double polar_ring_lat_deg(double tmp, bool north) {
+    const double sint = std::sqrt(std::max(0.0, tmp * (2.0 - tmp)));
+    const double pole_dist_deg = std::atan2(sint, 1.0 - tmp) * RAD2DEG;
+    return north ? 90.0 - pole_dist_deg : pole_dist_deg - 90.0;
+}
+
 inline int64_t xyf_to_nest(int64_t npface, int64_t ix, int64_t iy, int64_t face_num) {
     return face_num * npface
            + static_cast<int64_t>(spread_bits_u64(static_cast<uint64_t>(ix)))
@@ -763,7 +780,7 @@ torch::Tensor healpix_ang2pix_ring_cpu(int64_t nside, const torch::Tensor& ra_de
         } else {
             const int64_t ntt = static_cast<int64_t>(tt);
             const double tp = tt - static_cast<double>(ntt);
-            const double tmp = nside * std::sqrt(3.0 * (1.0 - std::abs(z)));
+            const double tmp = nside * polar_cap_scale(dec_ptr[i]);
             const int64_t jp = static_cast<int64_t>(tp * tmp);
             const int64_t jm = static_cast<int64_t>((1.0 - tp) * tmp);
             const int64_t ir = jp + jm + 1;
@@ -834,7 +851,7 @@ torch::Tensor healpix_ang2pix_nested_cpu(int64_t nside, const torch::Tensor& ra_
                 ntt = 3;
             }
             const double tp = tt - static_cast<double>(ntt);
-            const double tmp = nside * std::sqrt(3.0 * (1.0 - std::abs(z)));
+            const double tmp = nside * polar_cap_scale(dec_ptr[i]);
             int64_t jp = static_cast<int64_t>(tp * tmp);
             int64_t jm = static_cast<int64_t>((1.0 - tp) * tmp);
             if (jp > (nside - 1)) {
@@ -895,25 +912,26 @@ std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_ring_cpu(int64_t nside, 
                 continue;
             }
 
-            double z;
+            double dec_deg;
             double phi;
             if (p < ncap) {
                 const int64_t iring = static_cast<int64_t>((1 + isqrt_u64(static_cast<uint64_t>(1 + 2 * p))) >> 1);
                 const int64_t iphi = (p + 1) - 2 * iring * (iring - 1);
-                z = 1.0 - static_cast<double>(iring * iring) * fact2;
+                dec_deg = polar_ring_lat_deg(static_cast<double>(iring * iring) * fact2, true);
                 phi = (static_cast<double>(iphi) - 0.5) * ((PI / 2.0) / static_cast<double>(iring));
             } else if (p < (npix - ncap)) {
                 const int64_t ip = p - ncap;
                 const int64_t iring = (ip / layout.nl4) + nside;
                 const int64_t iphi = (ip % layout.nl4) + 1;
                 const double fodd = (((iring + nside) & 1) != 0) ? 1.0 : 0.5;
-                z = static_cast<double>(2 * nside - iring) * fact1;
+                const double z = static_cast<double>(2 * nside - iring) * fact1;
+                dec_deg = std::asin(std::fmax(-1.0, std::fmin(1.0, z))) * RAD2DEG;
                 phi = (static_cast<double>(iphi) - fodd) * (PI / static_cast<double>(2 * nside));
             } else {
                 const int64_t ip = npix - p;
                 const int64_t iring = static_cast<int64_t>((1 + isqrt_u64(static_cast<uint64_t>(2 * ip - 1))) >> 1);
                 const int64_t iphi = 4 * iring + 1 - (ip - 2 * iring * (iring - 1));
-                z = -1.0 + static_cast<double>(iring * iring) * fact2;
+                dec_deg = polar_ring_lat_deg(static_cast<double>(iring * iring) * fact2, false);
                 phi = (static_cast<double>(iphi) - 0.5) * ((PI / 2.0) / static_cast<double>(iring));
             }
 
@@ -924,7 +942,7 @@ std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_ring_cpu(int64_t nside, 
                 ra_deg += 360.0;
             }
             ra_ptr[i] = ra_deg;
-            dec_ptr[i] = std::asin(std::fmax(-1.0, std::fmin(1.0, z))) * RAD2DEG;
+            dec_ptr[i] = dec_deg;
         }
     };
     if (n >= PARALLEL_MIN_ELEMS) {
@@ -983,16 +1001,17 @@ std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_nested_cpu(int64_t nside
 
             int64_t nr;
             int64_t kshift = 0;
-            double z;
+            double dec_deg;
             if (jr < nside) {
                 nr = jr;
-                z = 1.0 - static_cast<double>(nr * nr) * fact2;
+                dec_deg = polar_ring_lat_deg(static_cast<double>(nr * nr) * fact2, true);
             } else if (jr > (3 * nside)) {
                 nr = nl4 - jr;
-                z = static_cast<double>(nr * nr) * fact2 - 1.0;
+                dec_deg = polar_ring_lat_deg(static_cast<double>(nr * nr) * fact2, false);
             } else {
                 nr = nside;
-                z = static_cast<double>(2 * nside - jr) * fact1;
+                const double z = static_cast<double>(2 * nside - jr) * fact1;
+                dec_deg = std::asin(std::fmax(-1.0, std::fmin(1.0, z))) * RAD2DEG;
                 kshift = (jr - nside) & 1;
             }
 
@@ -1013,7 +1032,7 @@ std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_nested_cpu(int64_t nside
                 ra += 360.0;
             }
             ra_ptr[i] = ra;
-            dec_ptr[i] = std::asin(std::fmax(-1.0, std::fmin(1.0, z))) * RAD2DEG;
+            dec_ptr[i] = dec_deg;
         }
     };
     if (n >= PARALLEL_MIN_ELEMS) {
