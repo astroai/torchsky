@@ -344,6 +344,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- WCS validity masks now match WCSLIB (Astropy) outside each projection's
+  domain:
+  - pixel→world rejects plane points whose native longitude/latitude falls
+    outside ±180°/±90° (WCSLIB `prjbchk`). CAR, CEA, MER, CYP, SFL, PAR,
+    MOL, AIT, the conics, BON and PCO used to rotate them onto the sphere
+    as valid coordinates.
+  - AZP pixel→world no longer accepts points beyond the perspective horizon
+    (its check used the clamped value). CYP pixel→world uses WCSLIB's closed
+    form instead of a clamped Newton solve that returned ±90° outside the
+    domain. XPH pixel→world applies WCSLIB's facet bounds.
+  - world→pixel returns NaN for sky points that have no plane position:
+    the far hemisphere of SIN (orthographic and slant), AZP and SZP overlap
+    and divergence regions, ZPN colatitudes beyond the polynomial's turning
+    point, and COP points behind the cone apex. They used to map to pixels
+    of the visible side.
 - TPV world→pixel in float32 (MPS) returned NaN for points whose residual
   could not reach the fixed 1e-11 deg tolerance. Convergence is now judged
   against a per-point floor set by the dtype's rounding error. On a

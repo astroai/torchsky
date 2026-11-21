@@ -1,9 +1,9 @@
 import torch
 from torch import Tensor
-from typing import Tuple, Optional
+from typing import Tuple
 import math
 
-from ._math import _sincos, _wrap_lon180
+from ._math import PVParams, _pv_value, _sincos, _wrap_lon180
 
 D2R = 0.017453292519943295
 R2D = 57.29577951308232
@@ -11,21 +11,18 @@ SQRT2 = 1.4142135623730951
 
 
 def _hpx_parameters(
-    pv1: Optional[Tensor] = None,
-    pv2: Optional[Tensor] = None,
+    pv1: PVParams = None,
+    pv2: PVParams = None,
 ) -> Tuple[float, float, float, float, float, float, float]:
     h = 4.0
     k = 3.0
-    if pv1 is not None:
-        if float(pv1[1]) != 0.0:
-            h = float(pv1[1])
-        if float(pv1[2]) != 0.0:
-            k = float(pv1[2])
-    if pv2 is not None:
-        if float(pv2[1]) != 0.0:
-            h = float(pv2[1])
-        if float(pv2[2]) != 0.0:
-            k = float(pv2[2])
+    for params in (pv1, pv2):
+        if params is None:
+            continue
+        if _pv_value(params, 1, 0.0) != 0.0:
+            h = _pv_value(params, 1, 0.0)
+        if _pv_value(params, 2, 0.0) != 0.0:
+            k = _pv_value(params, 2, 0.0)
     if not math.isfinite(h) or h <= 0.0 or not h.is_integer():
         raise ValueError("HPX H must be a finite positive integer")
     if not math.isfinite(k) or k <= 0.0 or not k.is_integer():
@@ -62,8 +59,8 @@ def project_allsky(
     xi: Tensor,
     eta: Tensor,
     projection_code: str,
-    pv1: Optional[Tensor] = None,
-    pv2: Optional[Tensor] = None,
+    pv1: PVParams = None,
+    pv2: PVParams = None,
 ) -> Tuple[Tensor, Tensor]:
     """
     Project intermediate world coordinates (xi, eta) to native spherical coordinates (phi, theta).
@@ -192,8 +189,8 @@ def deproject_allsky(
     phi: Tensor,
     theta: Tensor,
     projection_code: str,
-    pv1: Optional[Tensor] = None,
-    pv2: Optional[Tensor] = None,
+    pv1: PVParams = None,
+    pv2: PVParams = None,
 ) -> Tuple[Tensor, Tensor]:
     """Forward all-sky projection."""
     if projection_code == "AIT":
@@ -403,9 +400,15 @@ def _xph_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
     xi_f = xi1 + 45.0
     eta_f = eta1 + 90.0
     abseta = eta_f.abs()
-    invalid = abseta > 90.0
-
     mask_eq = abseta <= 45.0
+    # WCSLIB xphx2s bounds: beyond the latitude range, outside the equatorial
+    # facet column, or outside a southern polar triangle.
+    tol = 1.0e-12
+    invalid = (
+        (abseta > 90.0)
+        | (mask_eq & (xi1.abs() > 45.0 + tol))
+        | ((eta_f < -45.0) & (eta_f + 90.0 + tol < xi1.abs()))
+    )
     # Equatorial
     phi_eq = phi + xi_f
     theta_eq = torch.asin(torch.clamp(eta_f / 67.5, -1.0, 1.0)) * R2D

@@ -494,6 +494,10 @@ class _SetupTensorsMixin:
         # Pre-tensorize PV parameters to avoid dict lookups in compiled hot paths.
         pv1_data = [self._projection_params.get(k, 0.0) for k in PV1_KEYS]
         pv2_data = [self._projection_params.get(k, 0.0) for k in PV2_KEYS]
+        # Host copies handed to the projection kernels: projection constants are
+        # Python floats (no per-call device sync, no torch.compile graph break).
+        self._pv1_values: tuple[float, ...] = tuple(float(v) for v in pv1_data)
+        self._pv2_values: tuple[float, ...] = tuple(float(v) for v in pv2_data)
         self._pv1_tensor = torch.tensor(
             pv1_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
@@ -519,8 +523,29 @@ class _SetupTensorsMixin:
         self._is_stg = self._proj_code == "STG"
         self._is_zpn = self._proj_code == "ZPN"
         self._is_sin_slant = self._is_sin and (
-            abs(float(self._pv2_tensor[1].detach().cpu().item())) > 1e-15
-            or abs(float(self._pv2_tensor[2].detach().cpu().item())) > 1e-15
+            abs(self._pv2_values[1]) > 1e-15 or abs(self._pv2_values[2]) > 1e-15
+        )
+        # Plane-to-sphere kernels whose native (phi, theta) can leave
+        # [-180, 180] x [-90, 90] for plane points outside the projection
+        # domain; WCSLIB rejects those (prjbchk). The other codes produce
+        # in-range native coordinates by construction or check them already.
+        self._native_bounds_check = self._proj_code in (
+            "CAR",
+            "CEA",
+            "MER",
+            "CYP",
+            "SFL",
+            "PAR",
+            "MOL",
+            "AIT",
+            "COD",
+            "COE",
+            "COO",
+            "COP",
+            "BON",
+            "PCO",
+            "AZP",
+            "SZP",
         )
         self._is_zpn_linear = False
         if self._is_zpn:
