@@ -11,6 +11,7 @@ from torch import Tensor
 
 from ...wcs import WCS
 from .config import MapResamplingKernel, MapValueSemantics
+from .geometry_drizzle import _padded_tile_length
 from .execution import wcs_has_distortion
 from ...device import _to
 
@@ -124,8 +125,6 @@ def custom_separable_sample(
         raise ValueError("image, x_src, and y_src must be on the same device")
     if not x_src.is_floating_point() or not y_src.is_floating_point():
         raise TypeError("x_src and y_src must be floating tensors")
-    if not bool(torch.isfinite(x_src).all()) or not bool(torch.isfinite(y_src).all()):
-        raise ValueError("x_src and y_src must contain only finite coordinates")
 
     original_ndim = image.ndim
     coordinate_batch = x_src.ndim == 3
@@ -152,7 +151,8 @@ def custom_separable_sample(
         x_batch.reshape(x_batch.shape[0], -1),
         y_batch.reshape(y_batch.shape[0], -1),
         kernel=kernel,
-        require_finite=False,
+        # Checked once inside the (eager) tile driver, outside any compiled graph.
+        require_finite=True,
         chunk_size=None,
     )
     out = sampled.reshape(work.shape[0], work.shape[1], *spatial)
@@ -586,7 +586,78 @@ def _separable_sample_chunked(
     the same sum over the ``T x T`` footprint as the dense formulation, with the
     normalisation and out-of-bounds masking of ``_axis_interpolation_coefficients``.
     Returns ``(sampled [B,C,N] | None, variance [B,N] | None)``.
+
+    The chunk loop runs eagerly (it is skipped by ``torch.compile``); each chunk
+    is one call of the fixed-shape :func:`_separable_sample_tile`, which Dynamo
+    compiles once and reuses instead of unrolling the loop. Under compilation the
+    last chunk is zero-padded to the common tile length (see
+    :func:`_padded_tile_length`); eager calls are not padded.
     """
+    return _separable_sample_tiles(
+        planes,
+        variance,
+        x,
+        y,
+        kernel=kernel,
+        require_finite=require_finite,
+        chunk_size=chunk_size,
+        pad_tiles=torch.compiler.is_compiling(),
+    )
+
+
+def _separable_sample_tile(
+    table: Tensor,
+    xc: Tensor,
+    yc: Tensor,
+    *,
+    width: int,
+    height: int,
+    kernel: MapResamplingKernel,
+    channels: int,
+    with_variance: bool,
+) -> Tensor:
+    """Fixed-shape separable sampling of one tile: ``[n, columns]`` sums of the table.
+
+    Traces with ``fullgraph=True`` (no data-dependent control flow); every sample
+    is independent, so padded samples do not change the others.
+    """
+    xc = xc.to(dtype=table.dtype)
+    yc = yc.to(dtype=table.dtype)
+    x_idx, x_coef = _axis_interpolation_coefficients(xc, size=width, kernel=kernel)
+    y_idx, y_coef = _axis_interpolation_coefficients(yc, size=height, kernel=kernel)
+    x_w = _column_weights(x_coef, channels, with_variance)
+    y_w = _column_weights(y_coef, channels, with_variance)
+    acc = None
+    for ty in range(y_idx.shape[0]):
+        flat = x_idx + y_idx[ty] * width
+        row = None
+        for tx in range(x_idx.shape[0]):
+            gathered = table.index_select(0, flat[tx])
+            if row is None:
+                row = gathered * x_w[tx]
+            else:
+                row.addcmul_(gathered, x_w[tx])
+        assert row is not None
+        if acc is None:
+            acc = row * y_w[ty]
+        else:
+            acc.addcmul_(row, y_w[ty])
+    assert acc is not None
+    return acc
+
+
+@torch.compiler.disable(recursive=False)
+def _separable_sample_tiles(
+    planes: Tensor | None,
+    variance: Tensor | None,
+    x: Tensor,
+    y: Tensor,
+    *,
+    kernel: MapResamplingKernel,
+    require_finite: bool,
+    chunk_size: int | None,
+    pad_tiles: bool,
+) -> tuple[Tensor | None, Tensor | None]:
     if planes is None and variance is None:
         raise ValueError("nothing to sample")
     if planes is not None:
@@ -609,6 +680,9 @@ def _separable_sample_chunked(
     )
     if chunk < 1:
         raise ValueError("chunk_size must be positive")
+    if require_finite and not bool(torch.isfinite(x).all() & torch.isfinite(y).all()):
+        raise ValueError("x_src and y_src must contain only finite coordinates")
+    tile = _padded_tile_length(count, chunk) if pad_tiles else chunk
     sampled_out = (
         torch.empty((batch, channels, count), dtype=dtype, device=device)
         if planes is not None
@@ -619,7 +693,6 @@ def _separable_sample_chunked(
         if variance is not None
         else None
     )
-    finite_ok = torch.ones((), dtype=torch.bool, device=device)
     variance_column = (
         None if variance is None else variance.to(dtype=dtype).reshape(1, -1)
     )
@@ -638,42 +711,25 @@ def _separable_sample_chunked(
         assert table is not None
         for start in range(0, count, chunk):
             stop = min(start + chunk, count)
-            xc = x[b, start:stop].to(dtype=dtype)
-            yc = y[b, start:stop].to(dtype=dtype)
-            if require_finite:
-                finite_ok = (
-                    finite_ok & torch.isfinite(xc).all() & torch.isfinite(yc).all()
-                )
-            x_idx, x_coef = _axis_interpolation_coefficients(
-                xc, size=width, kernel=kernel
-            )
-            y_idx, y_coef = _axis_interpolation_coefficients(
-                yc, size=height, kernel=kernel
-            )
-            x_w = _column_weights(x_coef, channels, variance is not None)
-            y_w = _column_weights(y_coef, channels, variance is not None)
-            acc = None
-            for ty in range(y_idx.shape[0]):
-                flat = x_idx + y_idx[ty] * width
-                row = None
-                for tx in range(x_idx.shape[0]):
-                    gathered = table.index_select(0, flat[tx])
-                    if row is None:
-                        row = gathered * x_w[tx]
-                    else:
-                        row.addcmul_(gathered, x_w[tx])
-                assert row is not None
-                if acc is None:
-                    acc = row * y_w[ty]
-                else:
-                    acc.addcmul_(row, y_w[ty])
-            assert acc is not None
+            xc = x[b, start:stop]
+            yc = y[b, start:stop]
+            if pad_tiles and stop - start < tile:
+                xc = F.pad(xc, (0, tile - (stop - start)))
+                yc = F.pad(yc, (0, tile - (stop - start)))
+            acc = _separable_sample_tile(
+                table,
+                xc,
+                yc,
+                width=width,
+                height=height,
+                kernel=kernel,
+                channels=channels,
+                with_variance=variance is not None,
+            )[: stop - start]
             if sampled_out is not None:
                 sampled_out[b, :, start:stop] = acc[:, :channels].t()
             if variance_out is not None:
                 variance_out[b, start:stop] = acc[:, channels]
-    if require_finite and not bool(finite_ok):
-        raise ValueError("x_src and y_src must contain only finite coordinates")
     return sampled_out, variance_out
 
 
