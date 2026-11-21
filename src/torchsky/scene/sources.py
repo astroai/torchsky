@@ -18,6 +18,7 @@ from ..map.target import TargetRenderSpec
 from ..sphere.moc import MOC
 from ..wcs import WCS
 from ..device import _as_tensor
+from .gaussians import _sky_from_pixel_arcsec
 
 
 POINT_MORPHOLOGY = 0
@@ -612,6 +613,19 @@ class SourceCatalogScene(SceneRepresentation):
         normalized = (template / template.sum()).to(dtype=x.dtype)
         return response.adjoint(normalized, chunk_size=chunk_size)
 
+    def _centre_geometry(self, index: int, wcs: WCS) -> tuple[Tensor, Tensor, Tensor]:
+        """Centre pixel ``(x, y)`` and ``(2, 2)`` d(east, north arcsec)/d(x, y pixel).
+
+        The Jacobian is taken from the forward map at the centre pixel, so a source
+        whose centre has a pixel position needs no other world -> pixel inverse
+        (which may not converge near the edge of a distorted detector).
+        """
+        x, y = wcs.world_to_pixel(self.lon[index], self.lat[index])
+        sky_from_pixel = _sky_from_pixel_arcsec(
+            wcs, torch.stack((x, y)), self.lat[index].to(x.dtype)
+        )
+        return x, y, sky_from_pixel
+
     def _gaussian_stamp(
         self,
         index: int,
@@ -619,15 +633,8 @@ class SourceCatalogScene(SceneRepresentation):
         bounds: tuple[int, int, int, int],
     ) -> Tensor:
         y0, y1, x0, x1 = bounds
-        x, y = wcs.world_to_pixel(self.lon[index], self.lat[index])
-        one = self.lon.new_tensor(1.0)
-        lon_e, lat_e = self._tangent_world(index, one, self.lon.new_zeros(()))
-        lon_n, lat_n = self._tangent_world(index, self.lon.new_zeros(()), one)
-        x_e, y_e = wcs.world_to_pixel(lon_e, lat_e)
-        x_n, y_n = wcs.world_to_pixel(lon_n, lat_n)
-        jacobian = torch.stack(
-            (torch.stack((x_e - x, x_n - x)), torch.stack((y_e - y, y_n - y)))
-        )
+        x, y, sky_from_pixel = self._centre_geometry(index, wcs)
+        jacobian = torch.linalg.inv(sky_from_pixel)
         major, minor, angle_deg = self.gaussian_parameters[index]
         angle = torch.deg2rad(angle_deg)
         rotation = torch.stack(
@@ -662,20 +669,7 @@ class SourceCatalogScene(SceneRepresentation):
         bounds: tuple[int, int, int, int],
     ) -> Tensor:
         y0, y1, x0, x1 = bounds
-        x, y = wcs.world_to_pixel(self.lon[index], self.lat[index])
-        one = self.lon.new_tensor(1.0)
-        lon_e, lat_e = self._tangent_world(index, one, self.lon.new_zeros(()))
-        lon_n, lat_n = self._tangent_world(index, self.lon.new_zeros(()), one)
-        x_e, y_e = wcs.world_to_pixel(lon_e, lat_e)
-        x_n, y_n = wcs.world_to_pixel(lon_n, lat_n)
-        sky_from_pixel = torch.linalg.inv(
-            torch.stack(
-                (
-                    torch.stack((x_e - x, x_n - x)),
-                    torch.stack((y_e - y, y_n - y)),
-                )
-            )
-        )
+        x, y, sky_from_pixel = self._centre_geometry(index, wcs)
         yy, xx = torch.meshgrid(
             torch.arange(y0, y1, dtype=self.dtype, device=self.device),
             torch.arange(x0, x1, dtype=self.dtype, device=self.device),

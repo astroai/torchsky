@@ -790,6 +790,120 @@ def test_scene_drops_items_the_target_projection_cannot_place() -> None:
     )
 
 
+# ------------------------------------------------------------------ SIP inverse edge
+def _strong_sip_header(size: int) -> dict:
+    # Same as tests/test_map_interpolated_mapping.py: the negative cubic makes the
+    # forward map non-monotone, so the Newton world -> pixel inverse returns NaN for
+    # points some 100 px beyond the detector edge.
+    return {
+        "NAXIS": 2, "NAXIS1": size, "NAXIS2": size,
+        "CTYPE1": "RA---TAN-SIP", "CTYPE2": "DEC--TAN-SIP",
+        "CRPIX1": size / 2 + 0.5, "CRPIX2": size / 2 + 0.5,
+        "CRVAL1": 50.0, "CRVAL2": -20.0,
+        "CD1_1": -2.0e-5, "CD1_2": 3.0e-6, "CD2_1": 3.0e-6, "CD2_2": 2.0e-5,
+        "A_ORDER": 5, "B_ORDER": 5,
+        "A_2_0": 3.0e-5, "A_1_1": -2.0e-5, "A_3_0": -2.0e-6, "A_1_2": 1.0e-6,
+        "A_5_0": -2.0e-11,
+        "B_0_2": -2.5e-5, "B_1_1": 1.5e-5, "B_0_3": -2.0e-6, "B_2_1": 1.0e-6,
+        "B_0_5": 1.0e-11,
+    }  # fmt: skip
+
+
+def _sip_inverse_edge(
+    header: dict, probe_arcsec: float, *, one_sided: bool
+) -> tuple[float, float]:
+    """A sky point whose SIP inverse converges while a neighbour probe_arcsec east or
+    north of it (or west/south too, unless ``one_sided``) does not.
+
+    The probes mirror the old finite-difference stamp Jacobians: one-sided +1 arcsec
+    in SourceCatalogScene, central +-0.5 arcsec in GaussianItemScene.
+    """
+    wcs = WCS(header)
+
+    def placed(lon: torch.Tensor, lat: torch.Tensor) -> torch.Tensor:
+        x, y = wcs.world_to_pixel(lon, lat)
+        return torch.isfinite(x) & torch.isfinite(y)
+
+    # Walk west from the reference point along its declination, in 1/4 px steps.
+    lat = torch.full((1600,), -20.0, dtype=F64)
+    cos_lat = math.cos(math.radians(20.0))
+    lon = 50.0 - torch.arange(100.0, 500.0, 0.25, dtype=F64) * 2.0e-5 / cos_lat
+    d = probe_arcsec / 3600.0
+    neighbours = placed(lon + d / cos_lat, lat) & placed(lon, lat + d)
+    if not one_sided:
+        neighbours &= placed(lon - d / cos_lat, lat) & placed(lon, lat - d)
+    hits = (placed(lon, lat) & ~neighbours).nonzero()
+    assert hits.numel(), "the strong SIP header no longer has an inverse edge"
+    i = int(hits[0])
+    return float(lon[i]), float(lat[i])
+
+
+@pytest.mark.parametrize("morphology", ["gaussian", "sersic"])
+def test_source_scene_renders_finite_where_the_sip_inverse_stops_converging(
+    morphology: str,
+) -> None:
+    """The stamp Jacobian comes from the forward map at the centre pixel, so a source
+    whose centre has a pixel position renders finite even when points 1 arcsec away
+    have none; before, one such source turned the whole observation into NaN."""
+    header = _strong_sip_header(200)
+    lon0, lat0 = _sip_inverse_edge(header, 1.0, one_sided=True)
+    shape_kw = (
+        {"gaussian_parameters": torch.tensor([[0.1, 0.1, 0.0], [3.0, 2.0, 0.0]])}
+        if morphology == "gaussian"
+        else {
+            "sersic_parameters": torch.tensor(
+                [[0.1, 1.0, 0.0, 1.0], [3.0, 0.7, 0.0, 1.0]]
+            )
+        }
+    )
+    lon = torch.tensor([50.0, lon0], dtype=F64, requires_grad=True)
+    lat = torch.tensor([-20.0, lat0], dtype=F64, requires_grad=True)
+    scene = SourceCatalogScene(
+        lon,
+        lat,
+        morphology=["point", morphology],
+        coefficients=torch.tensor([[5.0], [10.0]], dtype=F64),
+        support_radius_arcsec=12.0,
+        **{k: v.to(F64) for k, v in shape_kw.items()},
+    )
+    observation = FieldObservation(
+        image=torch.zeros(200, 200, dtype=F64), header=header
+    )
+    stamp = scene.render_component(1, observation)
+    assert stamp is not None
+    assert torch.isfinite(stamp.data).all() and float(stamp.data.detach().sum()) > 0.0
+    image = scene.render_observation(observation)
+    assert torch.isfinite(image).all()
+    # The point source keeps its flux next to the edge source.
+    assert float(image.detach()[95:106, 95:106].sum()) >= 5.0 - 1e-9
+    image.sum().backward()
+    assert lon.grad is not None and torch.isfinite(lon.grad).all()
+    assert lat.grad is not None and torch.isfinite(lat.grad).all()
+
+
+def test_scene_places_items_whose_jacobian_probes_leave_the_sip_inverse() -> None:
+    """An item whose centre has a pixel position is rendered even where the
+    +-0.5 arcsec points around it have none; before, render_coefficients raised."""
+    header = _strong_sip_header(200)
+    lon0, lat0 = _sip_inverse_edge(header, 0.5, one_sided=False)
+    scene = GaussianItemScene(
+        torch.tensor([lon0, 50.0], dtype=F64),
+        torch.tensor([lat0, -20.0], dtype=F64),
+        torch.tensor([[0.3, 0.2, 10.0]] * 2, dtype=F64),
+        torch.tensor([[5.0], [3.0]], dtype=F64),
+    )
+    _, _, index = scene._pixel_geometry(WCS(header))
+    assert index.tolist() == [0, 1]
+    planes = scene.render_coefficients(header)
+    assert torch.isfinite(planes).all()
+    torch.testing.assert_close(
+        planes.sum(), torch.tensor(3.0, dtype=F64), rtol=0, atol=1e-9
+    )
+    planes.sum().backward()
+    for param in (scene.lon, scene.lat, scene.sigma_arcsec, scene.angle_deg):
+        assert param.grad is not None and torch.isfinite(param.grad).all()
+
+
 def test_scene_float32_parameters_render_in_float32() -> None:
     scene, header = _scene(count=3, k=2)
     scene32 = GaussianItemScene(

@@ -602,6 +602,28 @@ def _rasterize_gaussians(
 
 
 # ------------------------------------------------------------------------ the scene
+def _sky_from_pixel_arcsec(wcs: WCS, centre: Tensor, lat_deg: Tensor) -> Tensor:
+    """Local ``d(east, north arcsec) / d(x, y pixel)`` at pixel positions ``centre``.
+
+    ``centre`` is ``(..., 2)`` and ``lat_deg`` (the tangent point's latitude, which
+    sets the east scale) is ``centre.shape[:-1]``; the result is
+    ``(..., 2 sky axes, 2 pixel axes)``.  Central differences of the forward
+    pixel -> world map over +-1/2 pixel, so no world -> pixel inverse is involved:
+    the Jacobian is finite wherever the forward map is, even where an iterative
+    SIP/TPV inverse does not converge (points near a distorted detector's edge),
+    and it stays differentiable through ``centre``.
+    """
+    half = 0.5
+    step = centre.new_tensor([[-half, 0.0], [half, 0.0], [0.0, -half], [0.0, half]])
+    world = wcs.pixel_to_world_differentiable(centre[..., None, :] + step)
+    lo, hi = world[..., 0::2, :], world[..., 1::2, :]  # (..., pixel axis, world axis)
+    dlon = torch.remainder(hi[..., 0] - lo[..., 0] + 180.0, 360.0) - 180.0
+    cos_lat = torch.cos(torch.deg2rad(lat_deg)).abs().clamp_min(1e-8)
+    east = dlon * (3600.0 / (2.0 * half)) * cos_lat[..., None]
+    north = (hi[..., 1] - lo[..., 1]) * (3600.0 / (2.0 * half))
+    return torch.stack((east, north), dim=-2)
+
+
 def _as_float_rows(value: Any, name: str, ndim: int) -> Tensor:
     tensor = torch.as_tensor(value)
     if not tensor.is_floating_point() or tensor.is_complex():
@@ -746,7 +768,10 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
         """Pixel centres ``(V, 2)``, covariances ``(V, 2, 2)`` and the indices of the V valid items.
 
         An item is valid when its centre has a finite pixel position on the target
-        projection; the others (for example behind the tangent point) are dropped.
+        projection and a finite local pixel <-> sky Jacobian there; the others (for
+        example behind the tangent point) are dropped.  The Jacobian comes from the
+        forward pixel -> world map, so a centre that maps to a pixel needs no further
+        world -> pixel inverse (which may not converge near a distorted detector).
         Differentiable in lon, lat, widths and angle; evaluated in float64.
         """
         device = self.lon.device
@@ -755,9 +780,12 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
         lat = self.lat.to(wide)
         with torch.no_grad():
             probe = wcs.world_to_pixel_differentiable(torch.stack((lon, lat), -1))
-            valid = torch.isfinite(probe).all(-1) & torch.isfinite(
-                self.sigma_arcsec
-            ).all(-1)
+            probe_jac = _sky_from_pixel_arcsec(wcs, probe, lat)
+            valid = (
+                torch.isfinite(probe).all(-1)
+                & torch.isfinite(probe_jac).flatten(-2).all(-1)
+                & torch.isfinite(self.sigma_arcsec).all(-1)
+            )
         index = torch.nonzero(valid).squeeze(1)
         lon, lat = lon[index], lat[index]
         sigma = self.sigma_arcsec[index].to(wide)
@@ -767,23 +795,11 @@ class GaussianItemScene(SceneRepresentation, nn.Module):
         if bool((sigma <= 0).any()):
             raise ValueError("item widths must be positive (after the floor)")
 
-        def to_pixel(lo: Tensor, la: Tensor) -> Tensor:
-            return wcs.world_to_pixel_differentiable(torch.stack((lo, la), -1))
-
-        centre = to_pixel(lon, lat)
-        # Jacobian d(pixel)/d(east, north arcsec) by central differences over +-1/2 arcsec
-        # along the local tangent directions (the lon step is divided by cos(lat)).
-        step = 0.5 / 3600.0
-        cos_lat = torch.cos(torch.deg2rad(lat)).abs().clamp_min(1e-8)
-        d_east = step / cos_lat
-        east = (
-            to_pixel(torch.remainder(lon + d_east, 360.0), lat)
-            - to_pixel(torch.remainder(lon - d_east, 360.0), lat)
-        ) / (2 * 3600.0 * step)
-        north = (to_pixel(lon, lat + step) - to_pixel(lon, lat - step)) / (
-            2 * 3600.0 * step
-        )
-        jac = torch.stack((east, north), dim=-1)  # (V, 2 pixel axes, 2 sky axes)
+        centre = wcs.world_to_pixel_differentiable(torch.stack((lon, lat), -1))
+        # (V, 2 pixel axes, 2 sky axes) d(pixel)/d(east, north arcsec): the inverse of
+        # the forward Jacobian at the centre pixel, so only the centre goes through the
+        # world -> pixel inverse.
+        jac = torch.linalg.inv(_sky_from_pixel_arcsec(wcs, centre, lat))
         s, c = torch.sin(angle), torch.cos(angle)
         rot = torch.stack(
             (torch.stack((s, -c), -1), torch.stack((c, s), -1)), dim=-2
