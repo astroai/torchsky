@@ -745,3 +745,17 @@ def test_polygon_moc_concave_notch_between_cell_samples() -> None:
     a_lon, a_lat = hp.pix2ang(nside, cand, nest=True, lonlat=True)
     inside = spherical_polygon_contains(a_lon, a_lat, lon_t, lat_t)
     assert set(pix.tolist()) == set(cand[inside].tolist())
+
+
+def test_polygon_moc_beyond_one_hemisphere_is_not_pruned() -> None:
+    # The vertex-mean bounding cap of a 300-deg band exceeds a hemisphere and
+    # does not contain its edges; pruning with it dropped a third of the band.
+    lon = [0.0, 100.0, 200.0, 300.0, 300.0, 200.0, 100.0, 0.0]
+    lat = [-10.0, -10.0, -10.0, -10.0, 10.0, 10.0, 10.0, 10.0]
+    order = 4
+    nside = 1 << order
+    allpix = torch.arange(12 * nside * nside)
+    c_lon, c_lat = hp.pix2ang(nside, allpix, nest=True, lonlat=True)
+    expected = allpix[spherical_polygon_contains(c_lon, c_lat, lon, lat)]
+    got = MOC.from_polygon(lon, lat, max_order=order)._flat_pixels(nside)
+    assert got.tolist() == expected.tolist()

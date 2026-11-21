@@ -543,6 +543,10 @@ def _hierarchical_polygon_bmoc(
         .max()
         .item()
     )
+    if poly_radius >= 90.0:
+        # Only a cap under a hemisphere is convex (holds every minor-arc edge
+        # and hence the smaller region); otherwise do not prune.
+        poly_radius = 180.0
     r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
     order = 0
     pix = torch.arange(12, dtype=torch.int64, device=device)
