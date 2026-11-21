@@ -8,6 +8,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Sequence,
     Tuple,
 )
 import math
@@ -494,12 +495,18 @@ class _SetupTensorsMixin:
         # Pre-tensorize PV parameters to avoid dict lookups in compiled hot paths.
         pv1_data = [self._projection_params.get(k, 0.0) for k in PV1_KEYS]
         pv2_data = [self._projection_params.get(k, 0.0) for k in PV2_KEYS]
+        # Host copies handed to the projection kernels: projection constants are
+        # Python floats (no per-call device sync, no torch.compile graph break).
+        self._pv1_values: tuple[float, ...] = tuple(float(v) for v in pv1_data)
+        self._pv2_values: tuple[float, ...] = tuple(float(v) for v in pv2_data)
         self._pv1_tensor = torch.tensor(
             pv1_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
         self._pv2_tensor = torch.tensor(
             pv2_data, dtype=self._wcs_coord_dtype(self.device), device=self.device
         )
+        if self._proj_code == "ZPN":
+            self._validate_zpn_coefficients(self._pv2_values[:31])
         zpn_all = self._pv2_tensor[:31].detach().cpu()
         zpn_valid = torch.nonzero(zpn_all.abs() > 1e-15, as_tuple=False)
         if zpn_valid.numel() > 0:
@@ -519,8 +526,29 @@ class _SetupTensorsMixin:
         self._is_stg = self._proj_code == "STG"
         self._is_zpn = self._proj_code == "ZPN"
         self._is_sin_slant = self._is_sin and (
-            abs(float(self._pv2_tensor[1].detach().cpu().item())) > 1e-15
-            or abs(float(self._pv2_tensor[2].detach().cpu().item())) > 1e-15
+            abs(self._pv2_values[1]) > 1e-15 or abs(self._pv2_values[2]) > 1e-15
+        )
+        # Plane-to-sphere kernels whose native (phi, theta) can leave
+        # [-180, 180] x [-90, 90] for plane points outside the projection
+        # domain; WCSLIB rejects those (prjbchk). The other codes produce
+        # in-range native coordinates by construction or check them already.
+        self._native_bounds_check = self._proj_code in (
+            "CAR",
+            "CEA",
+            "MER",
+            "CYP",
+            "SFL",
+            "PAR",
+            "MOL",
+            "AIT",
+            "COD",
+            "COE",
+            "COO",
+            "COP",
+            "BON",
+            "PCO",
+            "AZP",
+            "SZP",
         )
         self._is_zpn_linear = False
         if self._is_zpn:
@@ -580,6 +608,28 @@ class _SetupTensorsMixin:
             and self._celestial_postrot is None
         )
         self._setup_projection_dispatch()
+
+    @staticmethod
+    def _validate_zpn_coefficients(coeffs: Sequence[float]) -> None:
+        """Reject ZPN polynomials that WCSLIB ``zpnset`` rejects.
+
+        ``r(w) = sum_m PV2_m w^m`` needs at least one non-zero coefficient, and
+        for order >= 2 a positive slope at the pole (``PV2_1 > 0``): WCSLIB
+        locates the first turning point of ``r(w)`` from there and refuses
+        polynomials that do not start increasing. Without that, sky points
+        near the reference have no unique plane position.
+        """
+        last = max((m for m, c in enumerate(coeffs) if c != 0.0), default=-1)
+        if last < 0:
+            raise ValueError(
+                "ZPN requires at least one non-zero PV2_m polynomial coefficient"
+            )
+        if last >= 2 and coeffs[1] <= 0.0:
+            raise ValueError(
+                f"ZPN of order {last} requires PV2_1 > 0 (got {coeffs[1]!r}): "
+                "the radius must increase away from the reference point "
+                "(WCSLIB zpnset)"
+            )
 
     def _setup_projection_dispatch(self) -> None:
         """Bind pixel->world projection dispatch once per WCS instance."""

@@ -203,6 +203,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_magnification=None` like the functions (it clamped at 100): the law is
   applied exactly and the linear law raises for `kappa <= -1/2`. Pass
   `max_magnification=100.0` for the old clamp.
+- Celestial `WCS.pixel_to_world` / `world_to_pixel` trace as a single graph
+  under `torch.compile(fullgraph=True)` on CPU and MPS. This covers every
+  supported projection plus SIP and TPV. Host syncs that broke the graph are
+  gone:
+  - the MPS float32 precision estimate is computed once per WCS (and per
+    `.to()`), not read back on every call;
+  - AIT, GLS, HPX and PCO no longer branch on `valid.all()` / `.any()`;
+  - projection PV constants are host floats.
+
+  Inductor's Metal backend (PyTorch 2.14) has no `hypot`/`copysign`
+  codegen, so traced MPS graphs use `sqrt(a*a + b*b)` and a sign `where`
+  instead. The SIP and TPV inverses still exceed Metal's 31 kernel buffers
+  under Inductor on MPS; they trace and run with `backend="eager"` there.
+
+  While tracing, the SIP and TPV inverses run a fixed number of masked Newton
+  steps that reproduce the eager stopping rules. Eager calls keep their
+  early-exit loops and the native CPU TPV kernel. Eager TPV world→pixel no
+  longer counts unconverged points (a device sync) unless
+  `TPV.set_invert_trace(True)` is on.
 - **No more per-PyTorch-minor lock.** The native extension no longer includes
   or links libtorch:
   - tensors enter its kernels through DLPack without a copy, and results come
@@ -372,6 +391,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   candidate within the gate. Such a catalogue is now absent from every
   hypothesis (`-1`), and the posteriors are those of the association without
   it.
+- WCS validity masks now match WCSLIB (Astropy) outside each projection's
+  domain:
+  - pixel→world rejects plane points whose native longitude/latitude falls
+    outside ±180°/±90° (WCSLIB `prjbchk`). CAR, CEA, MER, CYP, SFL, PAR,
+    MOL, AIT, the conics, BON and PCO used to rotate them onto the sphere
+    as valid coordinates.
+  - AZP pixel→world no longer accepts points beyond the perspective horizon
+    (its check used the clamped value). CYP pixel→world uses WCSLIB's closed
+    form instead of a clamped Newton solve that returned ±90° outside the
+    domain. XPH pixel→world applies WCSLIB's facet bounds.
+  - world→pixel returns NaN for sky points that have no plane position:
+    the far hemisphere of SIN (orthographic and slant), AZP and SZP overlap
+    and divergence regions, ZPN colatitudes beyond the polynomial's turning
+    point, and COP points behind the cone apex. They used to map to pixels
+    of the visible side.
+- WCS projections in float32 (MPS) lost half their digits near the reference
+  point, face centres or poles. The affected formulas were `1 - cos`,
+  `asin` of a value near 1, and `log(cos x)`. They now use exactly equivalent
+  forms that avoid the cancellation, so errors stay at a few float32 ulps:
+  - SZP pixel→world near the reference point: up to 100″ before;
+  - AIR in both directions: up to 70 px before, and pixel→world rejected
+    most points because its 1e-10 convergence test is out of float32 reach;
+  - QSC near face centres, TSC/CSC/QSC near the poles, and HPX/XPH near the
+    poles: up to 2e-3 deg before.
+
+  HPX/XPH facet-edge tests also allow for float32 rounding of the plane
+  coordinate. float64 results change by no more than rounding.
+- `WCS` rejects ZPN headers that WCSLIB `zpnset` rejects, raising
+  `ValueError` at construction. These are polynomials with no non-zero
+  `PV2_m`, and polynomials of order ≥ 2 with `PV2_1 <= 0`. Before, a header
+  without ZPN terms silently became `r = w`, and a zero or negative slope at
+  the pole was accepted.
 - TPV world→pixel in float32 (MPS) returned NaN for points whose residual
   could not reach the fixed 1e-11 deg tolerance. Convergence is now judged
   against a per-point floor set by the dtype's rounding error. On a

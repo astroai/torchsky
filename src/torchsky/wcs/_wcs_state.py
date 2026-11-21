@@ -358,8 +358,6 @@ class _WCSStateMixin:
         phi = xi / cos_safe
         valid = valid & cos_ok & (torch.abs(phi) <= 180.0 + 1e-9)
         ra = _wrap_lon360(phi + self.alpha0)
-        if bool(valid.all()):
-            return ra, dec
         nan = torch.full_like(ra, float("nan"))
         return torch.where(valid, ra, nan), torch.where(valid, dec, nan)
 

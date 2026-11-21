@@ -86,7 +86,11 @@ grid itself. `wcs.to("cuda")` moves the cached parameters with your tensors.
 HST and JWST files carry next to the primary one. `slice`, `sub`, `dropaxis`,
 and `celestial` derive new objects with the CRPIX/CD bookkeeping already
 updated. `wcs.compile()` returns a tensor-path object for repeated small-batch
-calls, where the transform takes an `(..., 2)` pixel tensor.
+calls, where the transform takes an `(..., 2)` pixel tensor. Celestial
+`pixel_to_world` and `world_to_pixel`, including SIP and TPV distortions, also
+trace as one graph inside your own `torch.compile(..., fullgraph=True)`
+function. While tracing, the SIP and TPV inverses run a fixed number of masked
+Newton steps in place of the eager early exit, and they give the same result.
 
 <!-- docs: run -->
 ```python

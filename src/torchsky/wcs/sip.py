@@ -347,6 +347,8 @@ class SIP:
         """
         if u_dist.numel() == 0 or not self.has_forward:
             return u_dist, v_dist
+        if torch.compiler.is_compiling():
+            return self._invert_distortion_traced(u_dist, v_dist, max_iter, tol)
         if self._quad_inverse_fast:
             u_f = u_dist.reshape(-1)
             v_f = v_dist.reshape(-1)
@@ -483,4 +485,50 @@ class SIP:
                 v_curr.index_copy_(0, global_idx, v_k - dv_step)
                 active_idx = global_idx
 
+        return u_curr.reshape(u_dist.shape), v_curr.reshape(v_dist.shape)
+
+    def _invert_distortion_traced(
+        self, u_dist: Tensor, v_dist: Tensor, max_iter: int, tol: float
+    ) -> "tuple[Tensor, Tensor]":
+        """:meth:`invert_distortion` without host syncs, for ``torch.compile``.
+
+        The eager solver stops early (dense paths: once every row is within
+        ``tol``; active-set path: per row) and gathers the active rows. Here
+        all ``max_iter`` Newton steps run over every row and masks reproduce
+        both stopping rules exactly: a global freeze for the dense paths and a
+        per-row one for the active-set path, chosen by the same condition
+        (rows already within ``tol`` after the AP/BP seed).
+        """
+        u_f = u_dist.reshape(-1)
+        v_f = v_dist.reshape(-1)
+        if self.has_inverse and not self._quad_inverse_fast:
+            u_curr, v_curr = self.undistort(u_f, v_f)
+            xd0, yd0 = self.distort(u_curr, v_curr)
+            active = ((xd0 - u_f).abs() >= tol) | ((yd0 - v_f).abs() >= tol)
+            dense = active.all()
+        else:
+            u_curr, v_curr = u_f, v_f
+            active = torch.ones_like(u_f, dtype=torch.bool)
+            dense = torch.ones((), dtype=torch.bool, device=u_f.device)
+        frozen = torch.zeros((), dtype=torch.bool, device=u_f.device)
+        for _ in range(max_iter):
+            xd, yd, dxd_du, dxd_dv, dyd_du, dyd_dv = self._forward_and_jacobian(
+                u_curr, v_curr
+            )
+            du_res = xd - u_f
+            dv_res = yd - v_f
+            frozen = frozen | ((du_res.abs() < tol) & (dv_res.abs() < tol)).all()
+            keep = active & ((du_res.abs() >= tol) | (dv_res.abs() >= tol))
+            step = torch.where(dense, ~frozen, keep)
+
+            det = dxd_du * dyd_dv - dxd_dv * dyd_du
+            det_sign = torch.sign(det)
+            det_sign = torch.where(det_sign == 0, torch.ones_like(det_sign), det_sign)
+            det = torch.where(det.abs() < 1e-15, det_sign * 1e-15, det)
+
+            du_step = (dyd_dv * du_res - dxd_dv * dv_res) / det
+            dv_step = (-dyd_du * du_res + dxd_du * dv_res) / det
+            u_curr = torch.where(step, u_curr - du_step, u_curr)
+            v_curr = torch.where(step, v_curr - dv_step, v_curr)
+            active = keep
         return u_curr.reshape(u_dist.shape), v_curr.reshape(v_dist.shape)
