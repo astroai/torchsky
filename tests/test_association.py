@@ -1171,3 +1171,96 @@ def test_fixed_calibration_transfers_from_a_fit() -> None:
     torch.testing.assert_close(fixed.posterior, fit.posterior, rtol=1e-6, atol=1e-8)
     with pytest.raises(ValueError):
         associate(left, right, right_scale=-1.0, **kw)
+
+
+def _pure_torch_pairwise_graph(seed: int, device: str, dtype: torch.dtype):
+    from torchsky.catalogs._exclusive import _prepare
+
+    li, rj, log_w, log_a = _crowded_pairwise_graph(seed, 1500, 1200, 4)
+    n_left, k = int(log_a.numel()), int(li.numel())
+    owner = torch.cat((li, torch.arange(n_left))).to(device)
+    source = torch.cat((rj, torch.full((n_left,), -1, dtype=torch.int64))).to(device)
+    slot = torch.arange(k + n_left, device=device)[:, None]
+    graph = _prepare(owner, slot, owner, owner, source)
+    assert graph is not None
+    graph.native = None
+    graph.groups.ext = graph.sources.ext = None
+    logw = torch.cat((log_w, log_a)).to(device=device, dtype=dtype)[graph.hyp]
+    x0 = torch.zeros(int(graph.msg_idx.numel()), dtype=dtype, device=device)
+    return graph, logw, x0
+
+
+def test_anderson_step_traces_fullgraph() -> None:
+    import torch._dynamo
+
+    from torchsky.catalogs._exclusive import _anderson_start, _anderson_step
+
+    graph, logw, x0 = _pure_torch_pairwise_graph(48, "cpu", D)
+
+    def sweep(v):
+        return graph.torch_sweep(v, logw)
+
+    def step(state):
+        return _anderson_step(sweep, state, tol=1e-9, memory=10, freeze=True)
+
+    torch._dynamo.reset()
+    compiled = torch.compile(step, backend="aot_eager", fullgraph=True)
+    eager_state = _anderson_start(sweep, x0, 10)
+    compiled_state = _anderson_start(sweep, x0, 10)
+    for _ in range(4):
+        eager_state = step(eager_state)
+        compiled_state = compiled(compiled_state)
+    for got, want in zip(compiled_state, eager_state):
+        torch.testing.assert_close(got, want, rtol=1e-12, atol=1e-12)
+    torch._dynamo.reset()
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        "cpu",
+        pytest.param(
+            "mps",
+            marks=pytest.mark.skipif(
+                not torch.backends.mps.is_available(), reason="MPS unavailable"
+            ),
+        ),
+    ],
+)
+def test_compiled_torch_bp_solve_matches_eager(device, monkeypatch) -> None:
+    """Fixed-shape Anderson steps: compiled == eager, any host-check interval."""
+    import torch._dynamo
+    from torch._dynamo.testing import CompileCounterWithBackend
+
+    from torchsky.catalogs import _exclusive
+
+    dtype = D if device == "cpu" else torch.float32
+    tol = 1e-9 if device == "cpu" else 1e-5
+    # float32 on MPS is not a supported solve; it only exercises the device path.
+    monkeypatch.setattr(_exclusive, "_F64", dtype)
+    graph, logw, x0 = _pure_torch_pairwise_graph(49, device, dtype)
+    ref = graph.solve(x0, logw, tol, 2000, True, native=False)
+    sweeps = graph.last_sweeps
+    assert sweeps > 3
+    # MPS float scatters use atomics: run-to-run rounding differences.
+    atol = 0.0 if device == "cpu" else 1e-5
+    # Converged steps freeze: the host-check interval does not change the result.
+    for every in (3, 7):
+        got, n = _exclusive._anderson(
+            lambda v: graph.sweep(v, logw, native=False),
+            x0, tol, 2000, True, check_every=every,
+        )  # fmt: skip
+        assert n == sweeps or device != "cpu"
+        torch.testing.assert_close(got, ref, rtol=0.0, atol=atol)
+    torch._dynamo.reset()
+    counter = CompileCounterWithBackend("aot_eager")
+    solve = torch.compile(
+        lambda x, w: graph.solve(x, w, tol, 2000, True, native=False), backend=counter
+    )
+    got = solve(x0, logw)
+    first = counter.frame_count
+    got = solve(x0, logw)
+    assert counter.frame_count == first  # no recompilation per step or call
+    assert graph.last_sweeps == sweeps or device != "cpu"
+    torch.testing.assert_close(got, ref, rtol=0.0, atol=max(atol, 1e-12))
+    torch._dynamo.reset()

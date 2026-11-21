@@ -39,7 +39,7 @@ function theorem at the fixed point) and for several catalogues.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 from torch import Tensor
@@ -289,14 +289,14 @@ class _Graph:
         """Fixed point ``x = sweep(x, logw)`` from ``x0`` (no autograd)."""
         nat = self.native
         if nat is None or native is False:
-            counted = [0]
-
-            def g(v: Tensor) -> Tensor:
-                counted[0] += 1
-                return self.sweep(v, logw, native=native)
-
-            x = _anderson(g, x0, tol, max_iter, strict, memory=_MEMORY)
-            self.last_sweeps = counted[0]
+            x, self.last_sweeps = _anderson(
+                lambda v: self.sweep(v, logw, native=native),
+                x0,
+                tol,
+                max_iter,
+                strict,
+                memory=_MEMORY,
+            )
             return x
         ext, goff, slot_msg, soff = nat
         x = x0.to(_F64).contiguous().clone()
@@ -408,9 +408,116 @@ def _not_converged(res: float, max_iter: int) -> RuntimeError:
     )
 
 
+class _AndersonState(NamedTuple):
+    """Device state of :func:`_anderson` (fixed shapes; scalars are 0-d tensors).
+
+    ``df``/``dg`` have ``memory + 1`` rows: the last one is a scratch row that
+    frozen (already converged) steps write to.
+    """
+
+    gx: Tensor
+    f: Tensor
+    df: Tensor
+    dg: Tensor
+    res: Tensor
+    best: Tensor
+    used: Tensor
+    slot: Tensor
+    stale: Tensor
+    sweeps: Tensor
+
+
+# Host convergence checks on accelerators: every this many Anderson steps (the
+# steps in between run without a device-to-host sync; converged steps freeze).
+_ACCELERATOR_CHECK_EVERY = 1
+
+
+def _anderson_start(g, x: Tensor, memory: int) -> _AndersonState:
+    gx = g(x)
+    f = gx - x
+    res = f.abs().amax()
+    n, dev = int(x.numel()), x.device
+    zero = torch.zeros((), dtype=torch.int64, device=dev)
+    return _AndersonState(
+        gx=gx,
+        f=f,
+        df=torch.zeros(memory + 1, n, dtype=_F64, device=dev),
+        dg=torch.zeros(memory + 1, n, dtype=_F64, device=dev),
+        res=res,
+        best=res.clone(),
+        used=zero,
+        slot=zero.clone(),
+        stale=zero.clone(),
+        sweeps=torch.ones((), dtype=torch.int64, device=dev),
+    )
+
+
+def _anderson_step(
+    g, s: _AndersonState, *, tol: float, memory: int, freeze: bool
+) -> _AndersonState:
+    """One Anderson step (restart logic, mixing, sweep) with no host sync.
+
+    Fixed shapes: the Gram system is always ``memory x memory``, with identity
+    rows for the empty history slots (zero mixing coefficient), so one compiled
+    graph serves every step; traces with ``fullgraph=True`` when ``g`` does.
+    ``df``/``dg`` rows are written in place. With ``freeze`` a step whose input
+    residual already meets ``tol`` leaves the state unchanged (the host then
+    only needs to check convergence every few steps).
+    """
+    res, best = s.res, s.best
+    stale = torch.where(res < 0.99 * best, 0, s.stale + 1)
+    # Restart a diverging or stagnating history (rows 0.. refill).
+    restart = (res > 2.0 * best) | (stale > memory)
+    used = torch.where(restart, 0, s.used)
+    slot = torch.where(restart, 0, s.slot)
+    stale = torch.where(restart, 0, stale)
+    best = torch.where(res < best, res, best)
+    rows = torch.arange(memory, device=res.device) < used
+    a_f, a_g = s.df[:memory], s.dg[:memory]
+    gram = torch.where(rows[:, None] & rows[None, :], a_f @ a_f.mT, 0.0)
+    reg = 1e-12 * gram.diagonal().amax().clamp_min(1e-300)
+    gram = gram + torch.diag(torch.where(rows, reg, 1.0))
+    gamma = torch.linalg.solve(gram, torch.where(rows, a_f @ s.f, 0.0))
+    x = torch.where(used > 0, (s.gx - gamma @ a_g).clamp(max=0.0), s.gx)
+    gx = g(x)
+    f = gx - x
+    # A frozen step writes its history rows to the scratch row ``memory``.
+    active = ~(res <= tol) if freeze else None
+    row = (slot if active is None else torch.where(active, slot, memory)).reshape(1)
+    s.df.index_copy_(0, row, (f - s.f).unsqueeze(0))
+    s.dg.index_copy_(0, row, (gx - s.gx).unsqueeze(0))
+    new = _AndersonState(
+        gx=gx,
+        f=f,
+        df=s.df,
+        dg=s.dg,
+        res=f.abs().amax(),
+        best=best,
+        used=torch.clamp(used + 1, max=memory),
+        slot=(slot + 1) % memory,
+        stale=stale,
+        sweeps=s.sweeps + 1,
+    )
+    if active is None:
+        return new
+    return _AndersonState(
+        *(
+            a if a is s.df or a is s.dg else torch.where(active, a, b)
+            for a, b in zip(new, s)
+        )
+    )
+
+
+@torch.compiler.disable(recursive=False)
 def _anderson(
-    g, x: Tensor, tol: float, max_iter: int, strict: bool = True, memory: int = 10
-) -> Tensor:
+    g,
+    x: Tensor,
+    tol: float,
+    max_iter: int,
+    strict: bool = True,
+    memory: int = 10,
+    check_every: int | None = None,
+) -> tuple[Tensor, int]:
     """Fixed point ``x = g(x)`` by Anderson acceleration (Walker & Ni 2011).
 
     Type-II Anderson mixing over the last ``memory`` iterates (differences
@@ -419,44 +526,31 @@ def _anderson(
     steps. Extrapolated messages are clamped at 0 (``log rho <= 0``). Raises
     when ``max |g(x) - x|`` is not below ``tol`` within ``max_iter`` steps,
     unless ``strict=False``. The native ``xmatch_bp_pairwise_solve`` runs the
-    same iteration.
+    same iteration. Returns ``(g(x*), sweeps)``.
+
+    The loop runs eagerly (skipped by ``torch.compile``) around the fixed-shape
+    :func:`_anderson_step`, which Dynamo compiles once. Convergence is read on
+    the host every ``check_every`` steps (default 1 on CPU and
+    ``_ACCELERATOR_CHECK_EVERY`` elsewhere); converged steps in between freeze
+    the state, so the result does not depend on ``check_every``.
     """
-    n = int(x.numel())
-    dev = x.device
-    df = torch.empty(memory, n, dtype=_F64, device=dev)
-    dg = torch.empty(memory, n, dtype=_F64, device=dev)
-    gx = g(x)
-    f = gx - x
-    used, slot, stale = 0, 0, 0
-    res = float(f.abs().max()) if n else 0.0
-    best = res
-    for _ in range(max_iter):
-        if res <= tol:
-            return gx
-        stale = 0 if res < 0.99 * best else stale + 1
-        if res > 2.0 * best or stale > memory:
-            # Restart a diverging or stagnating history (rows 0.. refill).
-            used, slot, stale = 0, 0, 0
-        best = min(best, res)
-        if used:
-            a_f, a_g = df[:used], dg[:used]
-            gram = a_f @ a_f.mT
-            reg = 1e-12 * float(gram.diagonal().max().clamp_min(1e-300))
-            gram = gram + reg * torch.eye(used, dtype=_F64, device=dev)
-            gamma = torch.linalg.solve(gram, a_f @ f)
-            x = (gx - gamma @ a_g).clamp(max=0.0)
-        else:
-            x = gx
-        gx_new = g(x)
-        f_new = gx_new - x
-        torch.sub(f_new, f, out=df[slot])
-        torch.sub(gx_new, gx, out=dg[slot])
-        slot = (slot + 1) % memory
-        used = min(used + 1, memory)
-        gx, f = gx_new, f_new
-        res = float(f.abs().max()) if n else 0.0
+    if check_every is None:
+        check_every = 1 if x.device.type == "cpu" else _ACCELERATOR_CHECK_EVERY
+    if int(x.numel()) == 0:
+        return g(x), 1
+    state = _anderson_start(g, x, memory)
+    steps = 0
+    while True:
+        res = float(state.res)
+        if res <= tol or steps >= max_iter:
+            break
+        for _ in range(min(check_every, max_iter - steps)):
+            state = _anderson_step(
+                g, state, tol=tol, memory=memory, freeze=check_every > 1
+            )
+            steps += 1
     if res <= tol or not strict:
-        return gx
+        return state.gx, int(state.sweeps)
     raise _not_converged(res, max_iter)
 
 
