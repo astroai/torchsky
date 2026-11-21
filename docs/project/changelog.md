@@ -383,6 +383,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   / 11 s (MPS) and runs in 4.6 s / 0.37 s instead of 27 s / 2.6 s eager. Warm
   compiled times at the smaller sizes are unchanged within the noise of that
   host.
+- **`sphere.healpix.query_strip` follows healpy `query_strip`.** For
+  `theta1 < theta2` it returns pixels with centre colatitude in
+  `(theta1, theta2]`; for `theta1 >= theta2` it returns the two polar strips
+  north of `theta2` and south of `theta1`, where it used to swap the bounds.
+  Ring membership is decided with healpy's `ring_above`, so ties on a ring
+  centre agree. `inclusive=True` adds one ring on each side, as healpy does,
+  instead of padding by the maximum pixel radius. Checked against healpy
+  1.20.1 for nside 1–256 (936 cases, including ring-centre ties). The ring
+  and NESTED outputs are built from ring ranges with no per-ring Python loop.
+  `tests/test_healpix_compile.py` checks that the pure-torch point operations
+  compile to one graph and give exactly the eager pixels.
 
 ### Removed
 

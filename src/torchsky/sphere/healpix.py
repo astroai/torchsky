@@ -47,7 +47,10 @@ from ._healpix_query_support import (  # noqa: F401
     _resolve_dtype,
     _ring_above,
     _ring_pixels_colatitude_band,
+    _ring_range_pixels,
+    _ring_ranges_nest_pixels,
     _strip_nest_pixels,
+    _strip_rings,
 )
 from ..device import _as_tensor
 
@@ -1230,23 +1233,21 @@ def query_strip(
     inclusive: bool = False,
 ) -> Tensor:
     """
-    Return pixels with center colatitude in [theta1, theta2] (radians).
+    Return pixels in a colatitude strip, with healpy ``query_strip`` semantics.
+
+    For ``theta1 < theta2`` (radians) the pixels whose centre colatitude lies in
+    ``(theta1, theta2]``; otherwise the two polar strips with centres north of
+    ``theta2`` and south of ``theta1``. Ring membership is decided exactly as in
+    healpy (``ring_above``), and ``inclusive=True`` adds the adjacent ring on
+    each side, which holds every pixel overlapping the strip.
 
     Uses **ring pruning** (``O(nside + output)``), not a full ``O(npix)`` map scan.
     """
     _validate_nside(nside)
-    lo = min(theta1, theta2)
-    hi = max(theta1, theta2)
-    if inclusive:
-        pad = max_pixel_radius(nside, degrees=False)
-        lo -= pad
-        hi += pad
-    lo = max(0.0, lo)
-    hi = min(math.pi, hi)
-
+    ring_ranges = _strip_rings(nside, float(theta1), float(theta2), bool(inclusive))
     if nest:
-        return _strip_nest_pixels(nside, lo, hi)
-    return _ring_pixels_colatitude_band(nside, lo, hi, nest=False)
+        return _ring_ranges_nest_pixels(nside, ring_ranges)
+    return _ring_range_pixels(nside, ring_ranges)
 
 
 def query_polygon(
