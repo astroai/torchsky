@@ -665,7 +665,7 @@ def _separable_table(plane: Tensor | None, variance: Tensor | None) -> Tensor:
     return table.t().contiguous()
 
 
-@torch.compiler.disable
+@torch.compiler.disable(recursive=True)
 def _check_finite_coordinates(x: Tensor, y: Tensor) -> None:
     """Host check (one device sync), kept out of compiled graphs."""
     if not bool(torch.isfinite(x).all() & torch.isfinite(y).all()):

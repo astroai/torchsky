@@ -307,7 +307,7 @@ def zone_query(
 
     CPU float64 queries without ``accept`` run in the native kernel
     (``crossmatch.cpp``); everything else, and every other device, runs the
-    torch path below. Both produce the same pairs.
+    torch path (:func:`_zone_query_torch`). Both produce the same pairs.
     """
     dev = left_ra.device
     n_left = int(left_ra.numel())
