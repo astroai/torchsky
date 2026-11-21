@@ -80,6 +80,42 @@ def test_workflows_do_not_hard_code_torch_pins() -> None:
         assert "release_lane.py --print-pins" in text
     assert "${TORCH_MIN_PIN}" in (WORKFLOWS / "build_wheels.yml").read_text()
     assert "${TORCH_PIN}" in (WORKFLOWS / "native-portability.yml").read_text()
+    # Pull requests and release tags both run the newest tested minor.
+    for name in ("ci.yml", "build_wheels.yml"):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        assert '"torch${TORCH_TESTED_PIN}"' in text, name
+        assert "release_lane.py --assert-torch tested" in text, name
+
+
+@pytest.mark.parametrize(
+    ("installed", "which", "ok"),
+    [
+        ("{min}.0", "min", True),
+        ("{min}.1+cpu", "min", True),
+        ("{tested}.0", "tested", True),
+        ("{tested}.2+cu129", "tested", True),
+        ("{min}.0", "tested", None),  # fails unless min == tested
+        ("1.0.0", "tested", False),
+    ],
+)
+def test_assert_torch_compares_the_installed_minor(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    installed: str,
+    which: str,
+    ok: bool | None,
+) -> None:
+    import types
+
+    support = lane.load_support()
+    version = installed.format(min=support["torch_min"], tested=support["torch_tested"])
+    monkeypatch.setitem(
+        sys.modules, "torch", types.SimpleNamespace(__version__=version)
+    )
+    if ok is None:
+        ok = support["torch_min"] == support["torch_tested"]
+    assert lane.assert_torch(which) == (0 if ok else 1)
+    assert ("[ OK ]" if ok else "[FAIL]") in capsys.readouterr().out
 
 
 def test_release_tag_kinds() -> None:

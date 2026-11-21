@@ -453,6 +453,10 @@ changes plus the torch 2.13 `torch.compile` fix listed first under Fixed.
   on PyTorch 2.13 (the supported floor): Dynamo there cannot trace
   `max(<generator>, default=...)`. The coefficient scans are plain loops,
   and pull-request CI now runs the torch-2.13 lane that gates a release tag.
+  The newest tested PyTorch (2.15, from the PyPI CPU index, since conda-forge
+  has no 2.15 build yet) now runs the full and map suites on every pull
+  request and gates every release tag; before, only the native-contract and
+  wheel-smoke jobs saw it.
 - `associate_many` raised `IndexError` when a secondary catalogue had no
   candidate within the gate. Such a catalogue is now absent from every
   hypothesis (`-1`), and the posteriors are those of the association without
