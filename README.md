@@ -27,7 +27,7 @@ cd torchsky
 pip install .
 ```
 
-torchsky supports Python 3.12 to 3.14 with PyTorch 2.14. The
+torchsky supports Python 3.12 and newer with PyTorch 2.13 and newer. The
 [installation guide](https://astroai.github.io/torchsky/introduction/install/) covers CUDA,
 Pixi, and troubleshooting.
 

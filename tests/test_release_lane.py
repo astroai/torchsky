@@ -24,6 +24,7 @@ import validate_release_sdist as release_sdist  # noqa: E402
 import validate_release_wheels as release_wheels  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
+_SUPPORT = lane.load_support()
 
 
 def test_committed_tree_matches_the_support_map() -> None:
@@ -149,8 +150,9 @@ def _wheel(
     platform: str,
     version: str,
     abi: str = "abi3",
-    torch: str = ">=2.14",
+    torch: str | None = None,
 ) -> Path:
+    torch = f">={_SUPPORT['torch_min']}" if torch is None else torch
     path = directory / f"torchsky-{version}-{python}-{abi}-{platform}.whl"
     dist_info = f"torchsky-{version}.dist-info"
     metadata = (
@@ -158,7 +160,7 @@ def _wheel(
         f"Version: {version}\nRequires-Python: >=3.12\n"
         f"Requires-Dist: torch{torch}\n"
         "Requires-Dist: numpy>=1.20.0\n"
-        "Requires-Dist: torchfits>=1.3.1\n"
+        f"Requires-Dist: torchfits{_SUPPORT['torchfits']}\n"
     )
     tags = "".join(f"Tag: {python}-{abi}-{tag}\n" for tag in platform.split("."))
     with zipfile.ZipFile(path, "w") as archive:
@@ -210,14 +212,14 @@ def test_wheel_requirements_are_checked(tmp_path: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         meta = archive.read("torchsky-0.5.0rc1.dist-info/METADATA").decode()
     message = Parser().parsestr(meta)
-    assert release_wheels._requirement(message, "torch") == ">=2.14"
-    assert release_wheels._requirement(message, "torchfits") == ">=1.3.1"
+    assert release_wheels._requirement(message, "torch") == f">={_SUPPORT['torch_min']}"
+    assert release_wheels._requirement(message, "torchfits") == _SUPPORT["torchfits"]
     assert release_wheels._requirement(message, "torchvision") is None
 
 
 def test_wheels_must_be_abi3_without_a_torch_cap(tmp_path: Path) -> None:
     _wheel(tmp_path, "cp312", "manylinux_2_28_x86_64", "0.5.0rc1", abi="cp312")
-    _wheel(tmp_path, "cp312", "macosx_14_0_arm64", "0.5.0rc1", torch=">=2.14,<2.15")
+    _wheel(tmp_path, "cp312", "macosx_14_0_arm64", "0.5.0rc1", torch=">=2.13,<2.15")
     _, problems = release_wheels.validate(tmp_path, "0.5.0rc1")
     assert any("are not cp312-abi3" in p for p in problems)
     assert any("torch requirement" in p for p in problems)

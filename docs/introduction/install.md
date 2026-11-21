@@ -27,10 +27,10 @@ pip install "torchsky @ file:///path/to/torchsky-0.5.0-*.whl"   # a wheel you bu
 | | Supported and tested |
 |---|---|
 | Python | 3.12, 3.13, 3.14 (CI runs the full suite on each) |
-| PyTorch | 2.14 or newer (`>=2.14`, no upper bound) |
+| PyTorch | 2.13 or newer (`>=2.13`, no upper bound; tested up to 2.15) |
 | GPU | Any CUDA build of a supported PyTorch, Apple MPS (float64-only paths raise) |
 | OS / architecture | Linux x86_64 (manylinux_2_28), macOS 14+ arm64 |
-| torchfits | 1.3.1 or newer |
+| torchfits | 1.3.3 or newer |
 
 The native extension is CPU-only C++ that neither includes nor links libtorch:
 tensors cross into it through DLPack without a copy, and its operators are
@@ -41,8 +41,8 @@ PyTorch. Other platforms build from the sdist.
 
 Release wheels target Linux x86_64 (manylinux_2_28) and macOS arm64 (macOS 14.0
 or newer); building from source works on the platforms in `pyproject.toml`.
-Package metadata requires Python >=3.12, [PyTorch](https://pytorch.org/) >=2.14
-and torchfits 1.3.1 or newer. CI tests the floor (pixi environment
+Package metadata requires Python >=3.12, [PyTorch](https://pytorch.org/) >=2.13
+and torchfits 1.3.3 or newer. CI tests the floor (pixi environment
 `test-torch-min`) and the newest PyTorch available; `scripts/torch_support.json`
 records both.
 
@@ -75,7 +75,7 @@ If you install **without** build isolation (`--no-build-isolation`), you must ha
 
 ```bash
 python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2"
-python -m pip install "torch>=2.14" "numpy>=1.20.0"   # runtime
+python -m pip install "torch>=2.13" "numpy>=1.20.0"   # runtime
 ```
 
 Exact pins match `[build-system].requires` in `pyproject.toml`.

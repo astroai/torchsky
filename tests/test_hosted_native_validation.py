@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -67,7 +68,10 @@ def test_cuda_hosted_job_provisions_toolkit_and_reports_runner_scope() -> None:
     assert "diagnose_cuda_build" not in workflow
     assert "pip install -e . --no-build-isolation -v" in workflow
     assert "Standard GitHub-hosted runners have no NVIDIA GPU" in workflow
-    assert 'torch = ">=2.14"' in pixi
+    support = json.loads(
+        (REPO_ROOT / "scripts" / "torch_support.json").read_text(encoding="utf-8")
+    )
+    assert f'torch = ">={support["torch_min"]}"' in pixi
 
 
 def test_runtime_parity_comparison_rejects_numerical_drift() -> None:

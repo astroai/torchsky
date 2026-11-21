@@ -43,19 +43,16 @@ pixi run release-lane-check
 Workflows read the pins from `scripts/release_lane.py --print-pins`
 (`VERSION`, `TORCH_PIN`, `TORCH_MIN_PIN`, `TORCH_TESTED_PIN`, `TORCHFITS_PIN`).
 
-### Current range and the next step
+### Current range
 
-torchfits sets the range in practice. torchfits 1.3.1 requires torch 2.14.x, so
-the support map stays at `torch_min = torch_tested = "2.14"` with
-`torchfits >= 1.3.1` until a torch-free torchfits (1.4.0) is on PyPI. Then:
-
-1. Set `torch_min = "2.13"`, `torch_tested = "2.15"` and
-   `torchfits = ">=1.4.0"`.
-2. Run `release_lane.py --apply`.
-3. Re-lock pixi (`test-torch-min` resolves `pytorch 2.13.*`).
+torchsky 0.6.0 requires `torch >= 2.13` (no upper bound) and
+`torchfits >= 1.3.3`. torchfits 1.3.3 is the first torch-free torchfits
+release, and it supports `torch >= 2.12`. Pixi's `test-torch-min` environment
+resolves `pytorch 2.13.*`; the default environments use the newest conda-forge
+build.
 
 Evidence (2026-11-20, macOS 14.8 arm64, PyPI torch, abi3 wheels of torchsky
-and torchfits 1.4.0, full suite plus map tests):
+and the torch-free torchfits, full suite plus map tests):
 
 - **2.13.0, 2.14.1 and 2.15.0 (CPU):** no version-specific failures.
 - **2.15.0, MPS on macOS 14:** aborts in PyTorch's MPS matmul (`-[MPSNDArray

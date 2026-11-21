@@ -212,8 +212,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the extension is built against the CPython stable ABI.
 
   One `cp312-abi3` wheel per platform therefore serves CPython 3.12 and newer
-  and every PyTorch from 2.14 up. The requirement is now `torch>=2.14` with no
-  upper bound, and building from source no longer needs PyTorch. The release
+  and every PyTorch from 2.13 up. The requirement is now `torch>=2.13` with no
+  upper bound (tested up to 2.15) and `torchfits>=1.3.3`, the first
+  torch-free torchfits, and building from source no longer needs PyTorch. The release
   tooling (`scripts/torch_support.json`, `scripts/release_lane.py`) tracks a
   tested floor and a tested maximum instead of one torch lane per release.
 - `import torchsky` (and `torchsky.sphere`, `torchsky.wcs`, `torchsky.catalogs`)
