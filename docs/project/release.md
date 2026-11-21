@@ -43,18 +43,33 @@ pixi run release-lane-check
 Workflows read the pins from `scripts/release_lane.py --print-pins`
 (`VERSION`, `TORCH_PIN`, `TORCH_MIN_PIN`, `TORCH_TESTED_PIN`, `TORCHFITS_PIN`).
 
+Both ends of the range run the full suite on every pull request (`ci.yml`)
+and gate every release tag (`build_wheels.yml`):
+
+- `torch_min`: Pixi's `test-torch-min` environment (`pytorch <min>.*`).
+- `torch_tested`: pip installs `torch${TORCH_TESTED_PIN}` from the PyTorch CPU
+  index, since conda-forge can lag the newest minor, and runs the non-map and
+  map suites. `release_lane.py --assert-torch tested` fails the job if the
+  installed torch is any other minor.
+
+The other Pixi environments use the newest conda-forge build in the lock, which
+can sit between the two.
+
 ### Current range
 
 torchsky 0.6.0 requires `torch >= 2.13` (no upper bound) and
 `torchfits >= 1.3.3`. torchfits 1.3.3 is the first torch-free torchfits
 release, and it supports `torch >= 2.12`. Pixi's `test-torch-min` environment
-resolves `pytorch 2.13.*`; the default environments use the newest conda-forge
-build.
+resolves `pytorch 2.13.*`; the other test environments resolve conda-forge
+`pytorch 2.14.1` (conda-forge has no 2.15 build yet), and the
+newest-tested lane installs PyPI `torch 2.15.*`.
 
 Evidence (2026-11-20, macOS 14.8 arm64, PyPI torch, abi3 wheels of torchsky
 and the torch-free torchfits, full suite plus map tests):
 
-- **2.13.0, 2.14.1 and 2.15.0 (CPU):** no version-specific failures.
+- **2.13.0, 2.14.1 and 2.15.0 (CPU):** no version-specific failures at the
+  time. The `torch.compile(fullgraph=True)` tests added later failed on 2.13
+  for ZPN and TPV (fixed in 0.6.0rc2), which is why both ends now run in CI.
 - **2.15.0, MPS on macOS 14:** aborts in PyTorch's MPS matmul (`-[MPSNDArray
   arrayViewWithShape:strides:]: unrecognized selector`), so MPS tests fail
   there. This is a PyTorch bug, not a torchsky one.
@@ -78,10 +93,18 @@ Before tagging a candidate:
 
 [The changelog](changelog.md) keeps the in-flight work under the heading of the
 version being released, for example `## [0.5.0rc1] - Unreleased`. Set the date
-when tagging. For the stable cut, rename the heading to `## [0.5.0] - <date>`
-and update the link reference at the bottom. `scripts/release_notes.py` builds
-the GitHub release body from the section named after the tag (falling back to
-`## [Unreleased]`).
+when tagging. `scripts/release_notes.py` builds the GitHub release body from
+the section named after the tag (falling back to `## [Unreleased]`), and from
+that section alone.
+
+For the stable cut, carry the notes into the stable section: rename the last
+candidate's heading to `## [0.6.0] - <date>`, so every change since the
+previous stable release sits under it. Drop candidate-only remarks (such as an
+rc that published nothing). Do not leave a short stable section that points to
+the candidate's notes ("listed under 0.6.0rc2 below"): the stable release page
+would then show nothing else, as the v0.5.0 page does. For a stable tag,
+`scripts/check_release_rc.py` fails unless the `## [X.Y.Z]` section has `###`
+subsections with entries.
 
 ## 4. Release candidate
 
@@ -99,11 +122,14 @@ Pushing a tag runs `.github/workflows/build_wheels.yml`:
    candidate; anything else fails), requires the tag to point at the checked-out
    commit, runs `release_lane.py --check`, and requires the version to equal the
    tag. For a stable tag it also requires a `vX.Y.Zrc*` tag, a tree that differs
-   from that rc only in version files and the changelog
-   (`scripts/check_release_rc.py`), and a successful push run for the rc at the
-   same commit (`scripts/check_release_run.py`).
+   from that rc only in version files and the changelog, a `## [X.Y.Z]`
+   changelog section holding the full notes (`scripts/check_release_rc.py`),
+   and a successful push run for the rc at the same commit
+   (`scripts/check_release_run.py`).
 2. `tests` and `map_tests` run the retained suites in the locked Pixi
-   environments (Python 3.12 and 3.13).
+   environments (Python 3.12, 3.13 and 3.14, plus PyTorch `torch_min`), and
+   `torch_tested_tests` runs the non-map and map suites on the newest tested
+   PyTorch from the PyPI CPU index.
 3. `build_wheels` builds one `cp312-abi3` wheel each for manylinux_2_28 x86_64
    and for macOS arm64, with deployment target 14.0 (the floor of the PyTorch
    and torchfits wheels). The build installs no PyTorch. cibuildwheel then tests

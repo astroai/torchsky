@@ -80,6 +80,42 @@ def test_workflows_do_not_hard_code_torch_pins() -> None:
         assert "release_lane.py --print-pins" in text
     assert "${TORCH_MIN_PIN}" in (WORKFLOWS / "build_wheels.yml").read_text()
     assert "${TORCH_PIN}" in (WORKFLOWS / "native-portability.yml").read_text()
+    # Pull requests and release tags both run the newest tested minor.
+    for name in ("ci.yml", "build_wheels.yml"):
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        assert '"torch${TORCH_TESTED_PIN}"' in text, name
+        assert "release_lane.py --assert-torch tested" in text, name
+
+
+@pytest.mark.parametrize(
+    ("installed", "which", "ok"),
+    [
+        ("{min}.0", "min", True),
+        ("{min}.1+cpu", "min", True),
+        ("{tested}.0", "tested", True),
+        ("{tested}.2+cu129", "tested", True),
+        ("{min}.0", "tested", None),  # fails unless min == tested
+        ("1.0.0", "tested", False),
+    ],
+)
+def test_assert_torch_compares_the_installed_minor(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    installed: str,
+    which: str,
+    ok: bool | None,
+) -> None:
+    import types
+
+    support = lane.load_support()
+    version = installed.format(min=support["torch_min"], tested=support["torch_tested"])
+    monkeypatch.setitem(
+        sys.modules, "torch", types.SimpleNamespace(__version__=version)
+    )
+    if ok is None:
+        ok = support["torch_min"] == support["torch_tested"]
+    assert lane.assert_torch(which) == (0 if ok else 1)
+    assert ("[ OK ]" if ok else "[FAIL]") in capsys.readouterr().out
 
 
 def test_release_tag_kinds() -> None:
@@ -105,6 +141,27 @@ def test_rc_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     assert rc_gate.main(["--version", "0.5.0"]) == 1
     assert "src/torchsky/__init__.py" in rc_gate.ALLOWED_STABLE_CHANGES
     assert "CITATION.cff" in rc_gate.ALLOWED_STABLE_CHANGES
+
+
+def test_stable_tag_requires_the_notes_in_its_own_section() -> None:
+    carried = (
+        "## [0.6.0] - 2026-12-01\n\n### Added\n\n- `associate_many`.\n\n"
+        "### Fixed\n\n- ZPN compile.\n\n## [0.5.0] - 2026-11-03\n\nold\n"
+    )
+    assert rc_gate.stable_notes_problems(carried, "0.6.0") == []
+    # The 0.5.0 pattern: a stub that points at the rc section, which the
+    # GitHub release body (this section alone) never shows.
+    stub = (
+        "## [0.6.0] - 2026-12-01\n\nIdentical to 0.6.0rc2 apart from the version "
+        "number;\nthe changes are listed under 0.6.0rc2 below.\n\n"
+        "## [0.6.0rc2] - 2026-11-22\n\n### Added\n\n- `associate_many`.\n"
+    )
+    assert rc_gate.stable_notes_problems(stub, "0.6.0")
+    headings_only = "## [0.6.0] - 2026-12-01\n\n### Added\n\n## [0.5.0]\n\nold\n"
+    assert rc_gate.stable_notes_problems(headings_only, "0.6.0")
+    assert rc_gate.stable_notes_problems(
+        "## [Unreleased]\n\n### Added\n\n- x\n", "0.6.0"
+    )
 
 
 def test_release_run_requires_green_push_run_at_the_rc_sha() -> None:

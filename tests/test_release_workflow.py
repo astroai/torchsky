@@ -57,6 +57,10 @@ def test_wheel_workflow_matches_supported_artifact_matrix() -> None:
     assert "torch" not in workflow.split("CIBW_BEFORE_BUILD:", 1)[1].splitlines()[0]
     assert "--exclude libtorch" not in workflow
     assert "pixi-environment: test-torch-min" in workflow
+    # Both ends of the support range gate a tag: the newest tested minor comes
+    # from the PyPI CPU index and is checked after install.
+    assert '"torch${TORCH_TESTED_PIN}"' in workflow
+    assert "release_lane.py --assert-torch tested" in workflow
     assert "PYPI_API_TOKEN" not in workflow
     assert "Build and smoke-test from source distribution" in workflow
     assert "pixi-version: v0.82.0" in workflow
@@ -72,6 +76,7 @@ def test_wheel_workflow_gates_publication() -> None:
         "release_gate",
         "tests",
         "map_tests",
+        "torch_tested_tests",
         "build_wheels",
         "build_sdist",
         "validate_release",

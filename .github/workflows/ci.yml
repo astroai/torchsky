@@ -116,6 +116,11 @@ jobs:
         - os: macos-15
           python-version: '3.14'
           pixi-environment: test-py314
+        # Oldest supported PyTorch (scripts/torch_support.json torch_min), the
+        # same lane build_wheels.yml gates a release tag on.
+        - os: ubuntu-latest
+          python-version: '3.13'
+          pixi-environment: test-torch-min
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
     - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e
@@ -129,6 +134,34 @@ jobs:
       run: pixi run -e ${{ matrix.pixi-environment }} -- pip install -e . --no-build-isolation
     - name: Run full test suite
       run: pixi run -e ${{ matrix.pixi-environment }} -- pytest -n auto -v --tb=short --ignore-glob="tests/test_map_*.py"
+  # Newest tested PyTorch (scripts/torch_support.json torch_tested), from the
+  # PyPI CPU index: conda-forge can lag the newest minor, so the Pixi lock may
+  # resolve an older one. Same suites as build-test plus the map suite.
+  torch-tested:
+    name: Build & Test (ubuntu-latest, 3.13, newest tested PyTorch)
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+      with:
+        python-version: '3.13'
+    - name: Resolve release lane pins
+      run: python scripts/release_lane.py --print-pins 2>/dev/null >> "$GITHUB_ENV"
+    - name: Install newest tested PyTorch and build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install "torch${TORCH_TESTED_PIN}" --index-url https://download.pytorch.org/whl/cpu
+        python -m pip install 'scikit-build-core>=1.0.0' 'nanobind>=2.10.2' 'numpy>=1.20' "torchfits${TORCHFITS_PIN}"
+    - name: Build editable torchsky (C++ extension) with test extras
+      run: python -m pip install -e ".[test]" --no-build-isolation
+    - name: Verify the PyTorch minor under test
+      run: python scripts/release_lane.py --assert-torch tested
+    - name: Run full test suite
+      run: python -m pytest -n auto -v --tb=short --ignore-glob="tests/test_map_*.py"
+    - name: Run map suite
+      run: python -m pytest -n auto -q tests/test_map_*.py
   sphere-spectral:
     name: Native sphere spectral contracts
     needs: pre-commit

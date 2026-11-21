@@ -11,8 +11,14 @@ Usage::
     python scripts/check_release_rc.py --version 0.5.0
     python scripts/check_release_rc.py --version 0.5.0rc1   # no-op
 
+A stable version must also carry its full release notes: its own
+``## [X.Y.Z]`` changelog section with ``###`` subsections and entries. The
+GitHub release body is that section alone, so a stub that points at the rc
+section ("listed under X.Y.ZrcN below") leaves the release page empty.
+
 Exit codes: 0 when the version is a prerelease or a matching rc tag exists,
-1 when a stable version has no rc tag, 2 on a malformed version.
+1 when a stable version has no rc tag or no full notes section, 2 on a
+malformed version.
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ import argparse
 import re
 import subprocess
 import sys
+
+import release_notes
 
 _VERSION_RE = re.compile(r"^(?P<base>\d+\.\d+\.\d+)(?P<pre>rc\d+)?$")
 _RC_TAG_RE = re.compile(r"^v(?P<base>\d+\.\d+\.\d+)rc(?P<number>\d+)$")
@@ -108,6 +116,27 @@ def validate_source_tree(rc_tag: str, target: str = "HEAD") -> list[str]:
     return changed
 
 
+def stable_notes_problems(changelog: str, version: str) -> list[str]:
+    """Problems with the stable *version*'s changelog section, if any.
+
+    The section must exist under its own heading (not the ``Unreleased``
+    fallback) and hold at least one ``###`` subsection with ``- `` entries.
+    """
+    escaped = re.escape(version)
+    body = release_notes._section(changelog, rf"## \[{escaped}\](\s+-\s+.*)?")
+    if body is None:
+        return [f"changelog has no '## [{version}]' section"]
+    has_subsection = re.search(r"^### \S", body, flags=re.MULTILINE) is not None
+    has_entry = re.search(r"^- \S", body, flags=re.MULTILINE) is not None
+    if not (has_subsection and has_entry):
+        return [
+            f"changelog '## [{version}]' has no '###' subsections with entries: "
+            "carry the release-candidate notes into the stable section, since "
+            "the GitHub release body is that section alone"
+        ]
+    return []
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -136,6 +165,13 @@ def main(argv: list[str] | None = None) -> int:
             changed = validate_source_tree(selected)
         except (subprocess.CalledProcessError, ValueError) as exc:
             print(f"release-rc gate: {exc}", file=sys.stderr)
+            return 1
+        notes = stable_notes_problems(
+            release_notes.CHANGELOG.read_text(encoding="utf-8"), version
+        )
+        if notes:
+            for problem in notes:
+                print(f"release-rc gate: {problem}", file=sys.stderr)
             return 1
         if args.print_tag:
             print(selected)

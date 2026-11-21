@@ -29,6 +29,8 @@ Usage::
     release_lane.py --print-pins             print KEY=VALUE pins (CI: >> "$GITHUB_ENV")
     release_lane.py --apply                  render the plain release version
     release_lane.py --apply --prerelease rc1 render a release candidate (0.6.0rc1)
+    release_lane.py --assert-torch tested    fail unless the installed torch is
+                                             the torch_tested (or ``min``) minor
 """
 
 from __future__ import annotations
@@ -78,6 +80,23 @@ def load_support() -> dict[str, str]:
 def minor_key(minor: str) -> tuple[int, int]:
     major, rest = minor.split(".")
     return int(major), int(rest)
+
+
+def assert_torch(which: str) -> int:
+    """Check that the installed torch is the ``torch_<which>`` minor.
+
+    A CI lane that installs a pinned torch runs this so a resolver fallback
+    (an older wheel, a cached environment) cannot pass as the pinned minor.
+    """
+    import torch  # only this mode needs torch
+
+    want = load_support()[f"torch_{which}"]
+    have = ".".join(torch.__version__.split("+", 1)[0].split(".")[:2])
+    if minor_key(have) != minor_key(want):
+        print(f"[FAIL] torch {torch.__version__} installed; torch_{which} is {want}")
+        return 1
+    print(f"[ OK ] torch {torch.__version__} is torch_{which} {want}")
+    return 0
 
 
 def strip_prerelease(version: str) -> str:
@@ -190,9 +209,17 @@ def main() -> int:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--print-pins", action="store_true")
     parser.add_argument("--prerelease", help="PEP 440 suffix such as rc1")
+    parser.add_argument(
+        "--assert-torch",
+        choices=("min", "tested"),
+        help="fail unless the installed torch is that support-map minor",
+    )
     args = parser.parse_args()
     if args.prerelease is not None and not _PRERELEASE_RE.fullmatch(args.prerelease):
         parser.error(f"--prerelease {args.prerelease!r} is not rcN/aN/bN")
+
+    if args.assert_torch is not None:
+        return assert_torch(args.assert_torch)
 
     if args.check:
         return check()
