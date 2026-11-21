@@ -441,3 +441,32 @@ def test_large_narrow_time_query_selects_only_overlaps() -> None:
         float(time_us_to_mjd(starts[target] + step - 1).item()),
     )
     assert result == moc
+
+
+def test_python_float_times_and_positions_keep_float64() -> None:
+    # Python floats/lists used to become float32 tensors: MJD 60000.1 moved
+    # by 135 s and positions by ~1e-6 deg before the float64 conversion.
+    nside = 1 << 12
+    moc = MOC(nest2uniq(nside, torch.tensor([123_456], dtype=torch.int64)))
+    lon, lat = _pixel_lonlat(nside, 123_456)
+    stmoc = STMOC.from_spatial_coverages(60000.1, 60000.7, moc, time_depth=61)
+    start = int(mjd_to_time_us(torch.tensor(60000.1, dtype=torch.float64)).item())
+    assert int(stmoc.time_start_us[0].item()) == start
+    assert bool(stmoc.contains(60000.1 + 1e-5, lon, lat))
+    assert not bool(stmoc.contains(60000.1 - 1e-5, lon, lat))
+
+    times = [60000.1, 60000.1 + 1e-5, 60001.3]
+    lons = [10.0 + 1e-7, 200.123456, 300.0]
+    lats = [5.0, -45.6789012, 60.0]
+    from_lists = STMOC.from_times_positions(
+        times, lons, lats, time_depth=61, spatial_depth=20
+    )
+    from_f64 = STMOC.from_times_positions(
+        torch.tensor(times, dtype=torch.float64),
+        torch.tensor(lons, dtype=torch.float64),
+        torch.tensor(lats, dtype=torch.float64),
+        time_depth=61,
+        spatial_depth=20,
+    )
+    assert torch.equal(from_lists.time_start_us, from_f64.time_start_us)
+    assert all(a == b for a, b in zip(from_lists.space, from_f64.space, strict=True))

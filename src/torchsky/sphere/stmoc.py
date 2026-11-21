@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
+from ..device import _to
 from . import healpix as _healpix
 from .moc import MOC, _moc_table_hdu, nest2uniq
 
@@ -21,6 +22,23 @@ _JD_MJD_OFFSET_INT = 2_400_000  # JD = MJD + 2400000.5
 _TIME_FLAG = torch.tensor(-9223372036854775808, dtype=torch.int64)  # 1<<63 signed
 _CONTAINS_CHUNK_SIZE = 262_144
 _SERIAL_CONTAINS_PRODUCT = 64
+
+
+def _as_input_tensor(value: Tensor | float | list[float]) -> Tensor:
+    """Tensors as given; Python floats/lists as float64 (not the float32 default)."""
+    if isinstance(value, Tensor):
+        return value
+    return torch.as_tensor(value, dtype=torch.float64)
+
+
+def _on_device(value: Tensor, device: torch.device) -> Tensor:
+    """Move ``value`` to ``device``; float64 becomes float32 on MPS."""
+    if value.device == device:
+        return value
+    dtype = (
+        torch.float32 if device.type == "mps" and value.dtype == torch.float64 else None
+    )
+    return _to(value, device=device, dtype=dtype)
 
 
 def mjd_to_time_us(mjd: Tensor | float) -> Tensor:
@@ -132,11 +150,11 @@ class STMOC:
         lat_deg: Tensor | float,
     ) -> Tensor:
         """True where (time, lon, lat) lies in the space-time coverage."""
-        t = torch.as_tensor(time_mjd)
-        lon = torch.as_tensor(lon_deg)
-        lat = torch.as_tensor(lat_deg)
-        lon = lon.to(device=t.device)
-        lat = lat.to(device=t.device)
+        t = _as_input_tensor(time_mjd)
+        lon = _as_input_tensor(lon_deg)
+        lat = _as_input_tensor(lat_deg)
+        lon = _on_device(lon, t.device)
+        lat = _on_device(lat, t.device)
         try:
             t, lon, lat = torch.broadcast_tensors(t, lon, lat)
         except RuntimeError as exc:
@@ -304,8 +322,8 @@ class STMOC:
         time_depth: int,
     ) -> "STMOC":
         """One spatial MOC per time interval (broadcasts a single MOC)."""
-        t0 = torch.as_tensor(t_start_mjd)
-        t1 = torch.as_tensor(t_end_mjd)
+        t0 = _as_input_tensor(t_start_mjd)
+        t1 = _as_input_tensor(t_end_mjd)
         if t0.device.type == "mps" or t1.device.type == "mps":
             t0 = t0.detach().cpu().to(dtype=torch.float64)
             t1 = t1.detach().cpu().to(dtype=torch.float64)
@@ -346,9 +364,9 @@ class STMOC:
         spatial_depth: int,
     ) -> "STMOC":
         """Coverage of catalog samples quantized to ``time_depth`` × ``spatial_depth``."""
-        t = torch.as_tensor(time_mjd)
-        lon = torch.as_tensor(lon_deg)
-        lat = torch.as_tensor(lat_deg)
+        t = _as_input_tensor(time_mjd)
+        lon = _as_input_tensor(lon_deg)
+        lat = _as_input_tensor(lat_deg)
         if t.device.type == "mps":
             t = t.detach().cpu().to(dtype=torch.float64)
             lon = lon.detach().cpu().to(dtype=torch.float64)

@@ -84,7 +84,11 @@ class UnitVector3d:
 def _as_geom_tensor(
     value: Tensor | float | list[float], *, like: Tensor | None = None
 ) -> Tensor:
-    tensor = torch.as_tensor(value)
+    if isinstance(value, Tensor):
+        tensor = value
+    else:
+        # Python floats/lists would default to float32 and lose ~1e-6 deg.
+        tensor = torch.as_tensor(value, dtype=torch.float64)
     if like is not None:
         return _to(tensor, device=like.device, dtype=like.dtype)
     if tensor.device.type == "mps":
@@ -138,9 +142,15 @@ def _normalize_polygon_vertices(
 
 
 def _signed_area_triangle(a: Tensor, b: Tensor, c: Tensor) -> Tensor:
-    det = (a * torch.cross(b, c, dim=-1)).sum(dim=-1)
+    # a . (b x c) == a . ((b - a) x (c - a)): the difference form keeps the
+    # determinant of small triangles accurate in float32 (MPS).
+    det = (a * torch.cross(b - a, c - a, dim=-1)).sum(dim=-1)
     den = 1.0 + (a * b).sum(dim=-1) + (b * c).sum(dim=-1) + (c * a).sum(dim=-1)
-    return 2.0 * torch.atan2(det, den.clamp(min=1e-15))
+    # ``den`` is negative for triangles larger than pi sr, so it must not be
+    # clamped; only the degenerate (0, 0) point is guarded (its atan2 gradient
+    # is 0/0), where the area is 0 either way.
+    degenerate = (det == 0.0) & (den == 0.0)
+    return 2.0 * torch.atan2(det, torch.where(degenerate, torch.ones_like(den), den))
 
 
 def _points_on_any_polygon_edge(
@@ -173,28 +183,31 @@ def _points_near_any_vertex(
     return out
 
 
-def _winding_fallback_chunked(
+def _antipodal_fan_area_chunked(
     points: Tensor, vertices: Tensor, *, chunk: int | None = None
 ) -> Tensor:
-    """Tangent-plane winding magnitude per point; same math as the former dense einsum path."""
+    """Signed fan area ``sum_i Omega(-p, v_i, v_{i+1})`` per point ``p``.
+
+    With ``A`` the area left of the loop, the fan sum from an apex ``r`` is
+    ``A`` when ``-r`` is right of the loop and ``A - 4 pi`` when it is left
+    (it jumps by 4 pi only where ``-r`` crosses the boundary). With ``r = -p``
+    the magnitude exceeds 2 pi exactly when ``p`` lies in the smaller of the
+    two regions, whatever the vertex order.
+    """
     if chunk is None:
         chunk = _GEOM_PAIRWISE_CHUNK
     m = int(points.shape[0])
-    device, dtype = points.device, points.dtype
-    winding = torch.empty(m, dtype=dtype, device=device)
+    v_next = torch.roll(vertices, shifts=-1, dims=0)
+    edge_cross = torch.cross(vertices, v_next, dim=-1)
+    edge_dot = (vertices * v_next).sum(dim=-1)
+    area = torch.empty(m, dtype=points.dtype, device=points.device)
     for m0 in range(0, m, chunk):
         m1 = min(m0 + chunk, m)
-        pc = points[m0:m1]
-        pv = pc @ vertices.T
-        proj = vertices.unsqueeze(0) - pc.unsqueeze(1) * pv.unsqueeze(-1)
-        proj_norm = torch.linalg.norm(proj, dim=-1, keepdim=True)
-        proj = proj / proj_norm.clamp_min(1e-14)
-        proj_next = torch.roll(proj, shifts=-1, dims=1)
-        cross = torch.cross(proj, proj_next, dim=-1)
-        num = (pc.unsqueeze(1) * cross).sum(dim=-1)
-        den = torch.clamp((proj * proj_next).sum(dim=-1), -1.0, 1.0)
-        winding[m0:m1] = torch.atan2(num, den).sum(dim=-1)
-    return winding
+        apex = -points[m0:m1]
+        det = apex @ edge_cross.T
+        den = 1.0 + apex @ vertices.T + edge_dot + apex @ v_next.T
+        area[m0:m1] = 2.0 * torch.atan2(det, den).sum(dim=-1)
+    return area
 
 
 def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tensor:
@@ -206,7 +219,8 @@ def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tens
     """
     tol_rad = _validate_nonnegative_finite(tol_rad, "tol_rad")
     a, b, p = torch.broadcast_tensors(a, b, p)
-    cross_ab = torch.linalg.cross(a, b, dim=-1)
+    # a x (b - a) == a x b without float32 cancellation for short arcs.
+    cross_ab = torch.linalg.cross(a, b - a, dim=-1)
     normal_norm = torch.linalg.norm(cross_ab, dim=-1)
     dot_ab = torch.clamp((a * b).sum(dim=-1), -1.0, 1.0)
     proper = normal_norm > 1e-15
@@ -216,7 +230,7 @@ def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tens
     normal = cross_ab / safe_norm.unsqueeze(-1)
     arc_length = torch.atan2(normal_norm, dot_ab)
 
-    cross_ap = torch.linalg.cross(a, p, dim=-1)
+    cross_ap = torch.linalg.cross(a, p - a, dim=-1)
     dot_ap = torch.clamp((a * p).sum(dim=-1), -1.0, 1.0)
     signed = torch.atan2((normal * cross_ap).sum(dim=-1), dot_ap)
     signed = torch.remainder(signed, 2.0 * math.pi)
@@ -263,8 +277,8 @@ def _great_circle_arcs_intersect_matrix(
             float(tol_rad),
         )
 
-    n1 = torch.cross(a0, a1, dim=-1)
-    n2 = torch.cross(b0, b1, dim=-1)
+    n1 = torch.cross(a0, a1 - a0, dim=-1)
+    n2 = torch.cross(b0, b1 - b0, dim=-1)
     n1_norm = torch.linalg.norm(n1, dim=-1)
     n2_norm = torch.linalg.norm(n2, dim=-1)
     dot1 = torch.clamp((a0 * a1).sum(dim=-1), -1.0, 1.0)
@@ -392,10 +406,12 @@ def _destination_lonlat_deg(
     distance_rad: Tensor | float,
 ) -> tuple[Tensor, Tensor]:
     """Great-circle destination from start point + initial bearing + angular distance."""
-    lon1 = torch.deg2rad(torch.as_tensor(lon_deg))
-    lat1 = torch.deg2rad(torch.as_tensor(lat_deg))
-    bearing = torch.as_tensor(bearing_rad)
-    dist = torch.as_tensor(distance_rad)
+    # Python floats would default to float32 (~1e-6 deg focal-point error).
+    lon_t = _as_geom_tensor(lon_deg)
+    lon1 = torch.deg2rad(lon_t)
+    lat1 = torch.deg2rad(_as_geom_tensor(lat_deg, like=lon_t))
+    bearing = _as_geom_tensor(bearing_rad, like=lon_t)
+    dist = _as_geom_tensor(distance_rad, like=lon_t)
     lon1, lat1, bearing, dist = torch.broadcast_tensors(lon1, lat1, bearing, dist)
 
     sin_lat2 = torch.sin(lat1) * torch.cos(dist) + torch.cos(lat1) * torch.sin(
@@ -613,7 +629,9 @@ def spherical_polygon_contains(
     """
     Point-in-polygon for simple (possibly non-convex) spherical polygons.
 
-    Uses tangent-plane winding number around each query point.
+    Without an inside reference point the interior is the smaller of the two
+    regions the boundary separates (gnomonic crossing test when the vertices
+    lie in one open hemisphere, signed solid-angle sum otherwise).
     """
     atol_deg = _validate_nonnegative_finite(atol_deg, "atol_deg")
     lon_t = _as_geom_tensor(lon_deg)
@@ -651,9 +669,10 @@ def spherical_polygon_contains(
             )
             inside[valid] = inside_valid
     else:
-        # Fallback path for polygons not entirely in one hemisphere.
-        winding = _winding_fallback_chunked(points, vertices)
-        inside = torch.abs(winding) > math.pi
+        # Polygons not in one hemisphere: the interior is the smaller region,
+        # as on the gnomonic path (whose region is inside a hemisphere).
+        fan = _antipodal_fan_area_chunked(points, vertices)
+        inside = torch.abs(fan) > 2.0 * math.pi
 
     if inclusive:
         atol_rad = math.radians(atol_deg)
@@ -686,14 +705,18 @@ def convex_polygon_contains(
 ) -> Tensor:
     """Fast half-space point-in-convex-spherical-polygon predicate."""
     atol = _validate_nonnegative_finite(atol, "atol")
+    lon_t = _as_geom_tensor(lon_deg)
+    lat_t = _as_geom_tensor(lat_deg, like=lon_t)
     v_poly = lonlat_to_unit_xyz(
-        torch.as_tensor(poly_lon_deg), torch.as_tensor(poly_lat_deg)
+        _as_geom_tensor(poly_lon_deg, like=lon_t),
+        _as_geom_tensor(poly_lat_deg, like=lon_t),
     )
     if v_poly.ndim != 2 or v_poly.shape[0] < 3:
         raise ValueError("polygon must contain at least three vertices")
 
     v_next = torch.roll(v_poly, shifts=-1, dims=0)
-    normals = torch.cross(v_poly, v_next, dim=-1)
+    # v x (w - v) == v x w, without the float32 cancellation for short edges.
+    normals = torch.cross(v_poly, v_next - v_poly, dim=-1)
     normal_norm = torch.linalg.norm(normals, dim=-1)
     if bool(torch.any(normal_norm <= 1e-15)):
         raise ValueError("polygon edges must have distinct, non-antipodal endpoints")
@@ -705,7 +728,7 @@ def convex_polygon_contains(
     orient = torch.where(orient == 0, torch.ones_like(orient), orient)
     normals = normals * orient.unsqueeze(-1)
 
-    points = lonlat_to_unit_xyz(lon_deg, lat_deg)
+    points = lonlat_to_unit_xyz(lon_t, lat_t)
     shape = points.shape[:-1]
     pts = points.reshape(-1, 3)
     chunk = _GEOM_PAIRWISE_CHUNK

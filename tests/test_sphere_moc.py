@@ -8,7 +8,8 @@ import random
 import torch
 from torchsky.sphere import SphericalCap, SphericalPolygon
 from torchsky.sphere import healpix as hp
-from torchsky.sphere.geom import PixelizedRegion
+from torchsky.sphere.core import great_circle_distance
+from torchsky.sphere.geom import PixelizedRegion, spherical_polygon_contains
 from torchsky.sphere.moc import (
     BMOC,
     MOC,
@@ -670,3 +671,91 @@ def test_moc_read_fits_rejects_non_moc_and_time_moc(tmp_path):
     )
     with pytest.raises(ValueError, match="TIME MOC"):
         MOC.read_fits(tmoc)
+
+
+def _leaf_centres_within(moc: MOC, order: int) -> set[int]:
+    return set(moc._flat_pixels(1 << order).tolist())
+
+
+def test_from_circle_keeps_float64_centre_at_high_order() -> None:
+    # A Python-float centre used to become a float32 tensor (~7 mas offset),
+    # misclassifying order-20 cells whose centres lie within mas of the edge.
+    lon, lat, radius, order = 123.4, -45.6, 2.0 / 3600.0, 20
+    nside = 1 << order
+    moc = MOC.from_circle(lon, lat, radius, max_order=order, inclusive=False)
+    superset = BMOC.from_cone(lon, lat, 2.0 * radius, max_order=order).to_moc()
+    cand = torch.tensor(sorted(_leaf_centres_within(superset, order)))
+    c_lon, c_lat = hp.pix2ang(nside, cand, nest=True, lonlat=True)
+    dist = great_circle_distance(
+        torch.tensor(lon, dtype=torch.float64),
+        torch.tensor(lat, dtype=torch.float64),
+        c_lon,
+        c_lat,
+        degrees=True,
+    )
+    expected = set(cand[dist <= radius].tolist())
+    assert _leaf_centres_within(moc, order) == expected
+    # healpy 1.20.1 query_disc(inclusive=False, nest=True) membership.
+    assert 10527893115779 in expected and 10527893115791 in expected
+    assert 10527893116077 not in expected
+
+
+def test_from_polygon_list_vertices_keep_float64() -> None:
+    # List vertices used to become float32 tensors before the polygon tests.
+    a = 1.5 / 3600.0
+    lon = [123.4 - a, 123.4 + a, 123.4 + a, 123.4 - a]
+    lat = [-45.6 - a, -45.6 - a, -45.6 + a, -45.6 + a]
+    from_list = MOC.from_polygon(lon, lat, max_order=20)
+    from_f64 = MOC.from_polygon(
+        torch.tensor(lon, dtype=torch.float64),
+        torch.tensor(lat, dtype=torch.float64),
+        max_order=20,
+    )
+    assert from_list == from_f64
+
+
+def test_polygon_moc_concave_notch_between_cell_samples() -> None:
+    # A 0.4-deg notch through coarse cells misses their centre and corners;
+    # the 5-sample "fully inside" test kept those cells (and every leaf in
+    # the notch) as interior.
+    x = 13.3
+    lon = [0.0, 40.0, 40.0, x + 0.2, x + 0.2, x - 0.2, x - 0.2, 0.0]
+    lat = [0.0, 0.0, 40.0, 40.0, 10.0, 10.0, 40.0, 40.0]
+    order = 8
+    nside = 1 << order
+    lon_t = torch.tensor(lon, dtype=torch.float64)
+    lat_t = torch.tensor(lat, dtype=torch.float64)
+
+    moc = MOC.from_polygon(lon, lat, max_order=order)
+    pix = moc._flat_pixels(nside)
+    c_lon, c_lat = hp.pix2ang(nside, pix, nest=True, lonlat=True)
+    assert bool(spherical_polygon_contains(c_lon, c_lat, lon_t, lat_t).all())
+
+    bmoc = BMOC.from_polygon(lon, lat, max_order=order)
+    inner = bmoc.interior_moc()._flat_pixels(nside)
+    corners = hp.boundaries(nside, inner, step=2, nest=True)
+    k_lon, k_lat = hp.xyz_to_lonlat(
+        corners[:, 0, :].reshape(-1),
+        corners[:, 1, :].reshape(-1),
+        corners[:, 2, :].reshape(-1),
+    )
+    assert bool(spherical_polygon_contains(k_lon, k_lat, lon_t, lat_t).all())
+    # The centre rule still selects every leaf whose centre is inside.
+    cand = bmoc.to_moc()._flat_pixels(nside)
+    a_lon, a_lat = hp.pix2ang(nside, cand, nest=True, lonlat=True)
+    inside = spherical_polygon_contains(a_lon, a_lat, lon_t, lat_t)
+    assert set(pix.tolist()) == set(cand[inside].tolist())
+
+
+def test_polygon_moc_beyond_one_hemisphere_is_not_pruned() -> None:
+    # The vertex-mean bounding cap of a 300-deg band exceeds a hemisphere and
+    # does not contain its edges; pruning with it dropped a third of the band.
+    lon = [0.0, 100.0, 200.0, 300.0, 300.0, 200.0, 100.0, 0.0]
+    lat = [-10.0, -10.0, -10.0, -10.0, 10.0, 10.0, 10.0, 10.0]
+    order = 4
+    nside = 1 << order
+    allpix = torch.arange(12 * nside * nside)
+    c_lon, c_lat = hp.pix2ang(nside, allpix, nest=True, lonlat=True)
+    expected = allpix[spherical_polygon_contains(c_lon, c_lat, lon, lat)]
+    got = MOC.from_polygon(lon, lat, max_order=order)._flat_pixels(nside)
+    assert got.tolist() == expected.tolist()

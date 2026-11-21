@@ -11,10 +11,10 @@ from .. import _ops
 from .._dtype import work_dtype as _work_dtype
 from . import healpix as _healpix
 from .core import great_circle_distance, lonlat_to_unit_xyz
-from .geom import PixelizedRegion, spherical_polygon_contains
+from .geom import PixelizedRegion, _as_geom_tensor, spherical_polygon_contains
 from .randoms import PreparedRandomSampler, _prepare_moc_random_sampler, sample_randoms
 from .sparse import SparseHealpixMap
-from ..device import _scatter_reduce_int, _to
+from ..device import _as_tensor, _scatter_reduce_int, _to
 
 
 def _order_from_nside(nside: int, *, name: str = "nside") -> int:
@@ -416,8 +416,9 @@ def _hierarchical_disc_bmoc(
     pix = torch.arange(12, dtype=torch.int64, device=device)
     kept_uniq: list[Tensor] = []
     kept_flag: list[Tensor] = []
-    lon0 = torch.as_tensor(lon_deg, device=device)
-    lat0 = torch.as_tensor(lat_deg, device=device)
+    # Python floats would default to float32 (mas-level centre error).
+    lon0 = _as_tensor(lon_deg, dtype=_work_dtype(device), device=device)
+    lat0 = _as_tensor(lat_deg, dtype=_work_dtype(device), device=device)
     radius = float(radius_deg)
     v_center = lonlat_to_unit_xyz(lon0, lat0)
     r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
@@ -488,15 +489,44 @@ def _hierarchical_disc_uniq(
     return uniq
 
 
+def _points_to_polygon_boundary_distance(
+    points: Tensor, vertices: Tensor, *, chunk: int = 8192
+) -> Tensor:
+    """Angular distance (radians) from unit ``points`` [M, 3] to the closed
+    loop of minor great-circle arcs through unit ``vertices`` [N, 3]."""
+    v = vertices
+    w = torch.roll(v, shifts=-1, dims=0)
+    normal = torch.cross(v, w - v, dim=-1)
+    norm = torch.linalg.norm(normal, dim=-1)
+    proper = norm > 0.0
+    normal = normal / torch.where(proper, norm, torch.ones_like(norm)).unsqueeze(-1)
+    # (v x p) . n >= 0 and (p x w) . n >= 0: p projects onto the arc v -> w.
+    after_v = torch.cross(normal, v, dim=-1)
+    before_w = torch.cross(w, normal, dim=-1)
+    out = torch.empty(points.shape[0], dtype=points.dtype, device=points.device)
+    for m0 in range(0, int(points.shape[0]), chunk):
+        p = points[m0 : m0 + chunk]
+        within = proper & (p @ after_v.T >= 0.0) & (p @ before_w.T >= 0.0)
+        to_plane = torch.asin((p @ normal.T).abs().clamp(max=1.0))
+        to_vertex = torch.atan2(
+            torch.linalg.norm(torch.cross(p[:, None, :], v[None], dim=-1), dim=-1),
+            p @ v.T,
+        )
+        to_end = torch.minimum(to_vertex, torch.roll(to_vertex, shifts=-1, dims=1))
+        out[m0 : m0 + chunk] = torch.where(within, to_plane, to_end).amin(dim=1)
+    return out
+
+
 def _hierarchical_polygon_bmoc(
     lon_deg: Tensor,
     lat_deg: Tensor,
     max_order: int,
 ) -> tuple[Tensor, Tensor]:
     """Coarse-to-fine polygon BMOC returning (uniq, flag) with flag=1 inside, 0 boundary."""
-    poly_lon = torch.as_tensor(lon_deg)
+    # Working dtype (float64 off MPS): list vertices would default to float32.
+    poly_lon = _as_geom_tensor(lon_deg)
     device = poly_lon.device
-    poly_lat = torch.as_tensor(lat_deg, device=device)
+    poly_lat = _as_geom_tensor(lat_deg, like=poly_lon)
     if poly_lon.numel() < 3:
         return (
             torch.empty(0, dtype=torch.int64, device=device),
@@ -513,6 +543,10 @@ def _hierarchical_polygon_bmoc(
         .max()
         .item()
     )
+    if poly_radius >= 90.0:
+        # Only a cap under a hemisphere is convex (holds every minor-arc edge
+        # and hence the smaller region); otherwise do not prune.
+        poly_radius = 180.0
     r_leaf = _healpix.max_pixel_radius(1 << max_order, degrees=True)
     order = 0
     pix = torch.arange(12, dtype=torch.int64, device=device)
@@ -529,17 +563,25 @@ def _hierarchical_polygon_bmoc(
             break
         lon_p, lat_p = _healpix.pix2ang(nside, pix, nest=True, lonlat=True)
         center_in = spherical_polygon_contains(lon_p, lat_p, poly_lon, poly_lat)
-        corners = _healpix.boundaries(nside, pix, step=1, nest=True)
-        lon_c, lat_c = _healpix.xyz_to_lonlat(
-            corners[:, 0, :].reshape(-1),
-            corners[:, 1, :].reshape(-1),
-            corners[:, 2, :].reshape(-1),
-        )
-        corner_in = spherical_polygon_contains(
-            lon_c, lat_c, poly_lon, poly_lat
-        ).reshape(pix.numel(), 4)
-        fully_in = center_in & corner_in.all(dim=1)
+        # Exact side test: the cell lies in the cap of radius r_pix around its
+        # centre, so a boundary farther than r_pix puts the whole cell on the
+        # centre's side (corner samples miss edges passing between them).
+        clear = torch.rad2deg(
+            _points_to_polygon_boundary_distance(
+                lonlat_to_unit_xyz(lon_p, lat_p).to(verts.dtype), verts
+            )
+        ) > float(r_pix)
+        fully_in = center_in & clear
         if order == max_order:
+            corners = _healpix.boundaries(nside, pix, step=1, nest=True)
+            lon_c, lat_c = _healpix.xyz_to_lonlat(
+                corners[:, 0, :].reshape(-1),
+                corners[:, 1, :].reshape(-1),
+                corners[:, 2, :].reshape(-1),
+            )
+            corner_in = spherical_polygon_contains(
+                lon_c, lat_c, poly_lon, poly_lat
+            ).reshape(pix.numel(), 4)
             inside_leaf = pix[fully_in]
             if inside_leaf.numel() > 0:
                 kept_uniq.append(nest2uniq(nside, inside_leaf))
@@ -561,14 +603,14 @@ def _hierarchical_polygon_bmoc(
                     torch.zeros(bndry_all.numel(), dtype=torch.uint8, device=device)
                 )
             break
-        # ponytail: 5-sample fully-inside can miss a concave dent; exact cell-in-polygon is the upgrade.
         inside = pix[fully_in]
         if inside.numel() > 0:
             kept_uniq.append(nest2uniq(nside, inside))
             kept_flag.append(
                 torch.ones(inside.numel(), dtype=torch.uint8, device=device)
             )
-        boundary = pix[~fully_in]
+        # Cells clear of the boundary with an outside centre are fully outside.
+        boundary = pix[~clear]
         if boundary.numel() == 0:
             break
         pix = _healpix.nest_children(boundary, levels=1).reshape(-1)
@@ -594,8 +636,8 @@ def _hierarchical_polygon_uniq(
         return uniq
     # Standard MOC.from_polygon leaf rule: include interior cells (flag==1)
     # plus leaf cells whose center is inside the polygon.
-    poly_lon = torch.as_tensor(lon_deg)
-    poly_lat = torch.as_tensor(lat_deg, device=poly_lon.device)
+    poly_lon = _as_geom_tensor(lon_deg)
+    poly_lat = _as_geom_tensor(lat_deg, like=poly_lon)
     interior = uniq[flag > 0]
     bndry = uniq[flag == 0]
     if bndry.numel() == 0:
@@ -1091,8 +1133,8 @@ class MOC:
         order = int(max_order)
         _nside_from_max_order(order)
         uniq = _hierarchical_polygon_uniq(
-            torch.as_tensor(lon_deg),
-            torch.as_tensor(lat_deg),
+            _as_geom_tensor(lon_deg),
+            _as_geom_tensor(lat_deg),
             order,
         )
         return cls(uniq)
@@ -1728,8 +1770,8 @@ class BMOC:
         order = int(max_order)
         _nside_from_max_order(order)
         uniq, flag = _hierarchical_polygon_bmoc(
-            torch.as_tensor(lon_deg),
-            torch.as_tensor(lat_deg),
+            _as_geom_tensor(lon_deg),
+            _as_geom_tensor(lat_deg),
             order,
         )
         return cls(uniq, flag)
