@@ -591,8 +591,36 @@ def _separable_sample_chunked(
     is one call of the fixed-shape :func:`_separable_sample_tile`, which Dynamo
     compiles once and reuses instead of unrolling the loop. Under compilation the
     last chunk is zero-padded to the common tile length (see
-    :func:`_padded_tile_length`); eager calls are not padded.
+    :func:`_padded_tile_length`), and a single-chunk call is traced inline with
+    the surrounding operations; eager calls are not padded.
     """
+    if planes is None and variance is None:
+        raise ValueError("nothing to sample")
+    chunk = _separable_chunk(planes, variance, kernel, chunk_size)
+    compiling = torch.compiler.is_compiling()
+    if compiling and int(x.shape[0]) == 1 and int(x.shape[1]) <= chunk:
+        if require_finite:
+            _check_finite_coordinates(x, y)
+        reference = planes if planes is not None else variance
+        assert reference is not None
+        channels = 0 if planes is None else int(planes.shape[1])
+        acc = _separable_sample_tile(
+            _separable_table(
+                None if planes is None else planes[0],
+                None if variance is None else variance.to(dtype=reference.dtype),
+            ),
+            x[0],
+            y[0],
+            width=int(reference.shape[-1]),
+            height=int(reference.shape[-2]),
+            kernel=kernel,
+            channels=channels,
+            with_variance=variance is not None,
+        )
+        return (
+            None if planes is None else acc[:, :channels].t().unsqueeze(0),
+            None if variance is None else acc[:, channels].unsqueeze(0),
+        )
     return _separable_sample_tiles(
         planes,
         variance,
@@ -600,9 +628,48 @@ def _separable_sample_chunked(
         y,
         kernel=kernel,
         require_finite=require_finite,
-        chunk_size=chunk_size,
-        pad_tiles=torch.compiler.is_compiling(),
+        chunk=chunk,
+        pad_tiles=compiling,
     )
+
+
+def _separable_chunk(
+    planes: Tensor | None,
+    variance: Tensor | None,
+    kernel: MapResamplingKernel,
+    chunk_size: int | None,
+) -> int:
+    """Samples per chunk: ``chunk_size`` or the working-set default."""
+    if chunk_size is not None:
+        chunk = int(chunk_size)
+    else:
+        reference = planes if planes is not None else variance
+        assert reference is not None
+        channels = 0 if planes is None else int(planes.shape[1])
+        chunk = _separable_chunk_size(
+            _axis_tap_count(kernel),
+            channels + (0 if variance is None else 1),
+            reference.element_size(),
+        )
+    if chunk < 1:
+        raise ValueError("chunk_size must be positive")
+    return chunk
+
+
+def _separable_table(plane: Tensor | None, variance: Tensor | None) -> Tensor:
+    """Channels-last gather table ``[H*W, columns]``: channels, then variance."""
+    columns = [] if plane is None else [plane.reshape(plane.shape[0], -1)]
+    if variance is not None:
+        columns.append(variance.reshape(1, -1))
+    table = columns[0] if len(columns) == 1 else torch.cat(columns, dim=0)
+    return table.t().contiguous()
+
+
+@torch.compiler.disable
+def _check_finite_coordinates(x: Tensor, y: Tensor) -> None:
+    """Host check (one device sync), kept out of compiled graphs."""
+    if not bool(torch.isfinite(x).all() & torch.isfinite(y).all()):
+        raise ValueError("x_src and y_src must contain only finite coordinates")
 
 
 def _separable_sample_tile(
@@ -655,11 +722,9 @@ def _separable_sample_tiles(
     *,
     kernel: MapResamplingKernel,
     require_finite: bool,
-    chunk_size: int | None,
+    chunk: int,
     pad_tiles: bool,
 ) -> tuple[Tensor | None, Tensor | None]:
-    if planes is None and variance is None:
-        raise ValueError("nothing to sample")
     if planes is not None:
         batch, channels, height, width = (int(v) for v in planes.shape)
         dtype, device = planes.dtype, planes.device
@@ -669,19 +734,8 @@ def _separable_sample_tiles(
         height, width = (int(v) for v in variance.shape)
         dtype, device = variance.dtype, variance.device
     count = int(x.shape[1])
-    columns = channels + (1 if variance is not None else 0)
-    taps = _axis_tap_count(kernel)
-    chunk = (
-        _separable_chunk_size(
-            taps, columns, torch.empty((), dtype=dtype).element_size()
-        )
-        if chunk_size is None
-        else int(chunk_size)
-    )
-    if chunk < 1:
-        raise ValueError("chunk_size must be positive")
-    if require_finite and not bool(torch.isfinite(x).all() & torch.isfinite(y).all()):
-        raise ValueError("x_src and y_src must contain only finite coordinates")
+    if require_finite:
+        _check_finite_coordinates(x, y)
     tile = _padded_tile_length(count, chunk) if pad_tiles else chunk
     sampled_out = (
         torch.empty((batch, channels, count), dtype=dtype, device=device)
@@ -693,22 +747,13 @@ def _separable_sample_tiles(
         if variance is not None
         else None
     )
-    variance_column = (
-        None if variance is None else variance.to(dtype=dtype).reshape(1, -1)
-    )
+    variance_plane = None if variance is None else variance.to(dtype=dtype)
     table = None
     for b in range(batch):
-        if planes is not None and (table is None or planes.stride(0) != 0):
-            table = planes[b].reshape(channels, -1)
-            if variance_column is not None:
-                table = torch.cat([table, variance_column], dim=0)
-            table = table.t().contiguous()
-        elif planes is None and table is None:
-            assert (
-                variance_column is not None
-            )  # planes and variance are never both None
-            table = variance_column.t().contiguous()
-        assert table is not None
+        if table is None or (planes is not None and planes.stride(0) != 0):
+            table = _separable_table(
+                None if planes is None else planes[b], variance_plane
+            )
         for start in range(0, count, chunk):
             stop = min(start + chunk, count)
             xc = x[b, start:stop]

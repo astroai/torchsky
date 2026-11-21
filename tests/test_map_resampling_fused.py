@@ -388,7 +388,8 @@ def test_compiled_sampler_reuses_one_tile_graph(device, data, fresh_dynamo):
     image, variance = image.to(device), variance.to(device)
     x2, y2 = x.reshape(1, -1).to(device), y.reshape(1, -1).to(device)
     frames = []
-    for chunk in (10**9, 700):
+    # One chunk (traced inline), then 5 and 11 chunks (one reused tile graph).
+    for chunk in (10**9, 700, 300):
         torch._dynamo.reset()
         counter = CompileCounterWithBackend("aot_eager")
 
@@ -420,4 +421,4 @@ def test_compiled_sampler_reuses_one_tile_graph(device, data, fresh_dynamo):
             bad = x2.clone()
             bad[0, 5] = float("nan")
             torch.compile(sample, backend=counter)(image, bad, y2)
-    assert frames[0] == frames[1]
+    assert frames[1] == frames[2]
