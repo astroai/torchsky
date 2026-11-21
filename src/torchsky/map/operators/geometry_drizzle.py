@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from ...device import require_float64
@@ -463,6 +464,7 @@ def _overlap_pair_tile(
     ends: Tensor,
     resolution: Tensor,
     pair_ids: Tensor,
+    owners: Tensor,
     *,
     width: int,
     differentiable: bool,
@@ -471,21 +473,18 @@ def _overlap_pair_tile(
 ) -> tuple[Tensor, list[Tensor], Tensor]:
     """Overlap contributions of the candidate pairs ``pair_ids`` (fixed shape).
 
-    Returns ``(output_index, values, keep)``: flat target pixel, the numerator,
-    weight (and variance) contributions, and which pairs contribute.  Pairs at or
-    beyond the pair count (padding) are not kept.  With ``masked`` the dropped
-    pairs carry zero values at pixel 0, so all pairs can be scattered without
-    compaction.  Traces with ``fullgraph=True``.
+    ``owners`` is the quad of each pair (the ragged expansion is done by the
+    caller).  Returns ``(output_index, values, keep)``: flat target pixel, the
+    numerator, weight (and variance) contributions, and which pairs contribute.
+    With ``masked`` (padded tiles) pairs at or past the pair count are dropped
+    and dropped pairs carry zero values at pixel 0, so all pairs can be
+    scattered without compaction.  Traces with ``fullgraph=True``.
     """
-    in_range = pair_ids < ends[-1]
-    # Owner of pair p: the quad whose [starts, ends) range holds p (empty ranges
-    # are skipped by the right-sided search).
-    owners = torch.searchsorted(ends, pair_ids, right=True).clamp_(
-        max=quad_x.shape[0] - 1
-    )
     local = pair_ids - starts[owners]
-    # Owners of real pairs have nx >= 1; the clamp only guards padded pairs.
-    owner_nx = nx[owners].clamp(min=1)
+    owner_nx = nx[owners]
+    if masked:
+        # Owners of real pairs have nx >= 1; the clamp only guards padded pairs.
+        owner_nx = owner_nx.clamp(min=1)
     center_x = min_x[owners] + torch.remainder(local, owner_nx)
     center_y = min_y[owners] + torch.div(local, owner_nx, rounding_mode="floor")
     centers = torch.stack((center_x, center_y), dim=1).to(quad_x.dtype)
@@ -495,7 +494,7 @@ def _overlap_pair_tile(
         # Grazing contacts add exactly zero to the maps but keep their sub-gradient.
         overlaps = torch.where(overlap_valid, overlaps, overlaps - overlaps.detach())
         overlap_valid = torch.ones_like(overlap_valid)
-    keep = overlap_valid & in_range
+    keep = overlap_valid & (pair_ids < ends[-1]) if masked else overlap_valid
     output_index = center_y * width + center_x
     coefficients = (overlaps / areas[owners]).to(dtype=torch.float32)
     weight = quad_weight[owners]
@@ -560,18 +559,38 @@ def _accumulate_overlap_tiles(
         else _MAX_OVERLAP_CANDIDATE_PAIRS_ACCELERATOR
     )
     tile = _padded_tile_length(pair_count, pair_chunk) if pad_tiles else pair_chunk
-    base_ids = torch.arange(
-        min(tile, pair_count) if not pad_tiles else tile,
-        dtype=torch.int64,
-        device=quad_x.device,
-    )
+    device = quad_x.device
+    quad_ids = torch.arange(quad_x.shape[0], dtype=torch.int64, device=device)
     targets = [flat_numer, flat_weight]
     if flat_variance_weight is not None:
         targets.append(flat_variance_weight)
     for pair_start in range(0, pair_count, pair_chunk):
         pair_stop = min(pair_start + pair_chunk, pair_count)
+        if pair_start == 0 and pair_stop == pair_count:
+            owners = torch.repeat_interleave(
+                quad_ids, ends - starts, output_size=pair_count
+            )
+        else:
+            # Quads overlapping [pair_start, pair_stop), with their counts clipped.
+            first, last = (
+                int(v)
+                for v in torch.searchsorted(
+                    ends,
+                    torch.tensor([pair_start, pair_stop - 1], device=device),
+                    right=True,
+                ).tolist()
+            )
+            owner_ids = quad_ids[first : last + 1]
+            clipped = ends[owner_ids].clamp(max=pair_stop) - starts[owner_ids].clamp(
+                min=pair_start
+            )
+            owners = torch.repeat_interleave(
+                owner_ids, clipped, output_size=pair_stop - pair_start
+            )
         length = tile if pad_tiles else pair_stop - pair_start
-        pair_ids = base_ids[:length] + pair_start
+        pair_ids = torch.arange(pair_start, pair_start + length, device=device)
+        if length > pair_stop - pair_start:
+            owners = F.pad(owners, (0, length - (pair_stop - pair_start)))
         output_index, values, keep = _overlap_pair_tile(
             quad_x,
             quad_y,
@@ -585,6 +604,7 @@ def _accumulate_overlap_tiles(
             ends,
             resolution,
             pair_ids,
+            owners,
             width=width,
             differentiable=differentiable,
             with_variance=flat_variance_weight is not None,

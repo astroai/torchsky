@@ -448,22 +448,26 @@ def test_overlap_pieces_trace_fullgraph(masked: bool, fresh_dynamo) -> None:
     for g, w in zip(got, want):
         torch.testing.assert_close(g, w, rtol=0.0, atol=0.0)
     areas, min_x, min_y, nx, starts, ends, resolution, summary = want
-    pair_ids = torch.arange(int(summary[0]) + 37)  # padded past the pair count
+    pad = 37 if masked else 0  # padded past the pair count
+    pair_ids = torch.arange(int(summary[0]) + pad)
+    owners = torch.repeat_interleave(torch.arange(300), ends - starts)
+    owners = torch.nn.functional.pad(owners, (0, pad))
 
-    def tile(pair_ids):
+    def tile(pair_ids, owners):
         return gd._overlap_pair_tile(
             qx, qy, numer, weight, areas, min_x, min_y, nx, starts, ends,
-            resolution, pair_ids, width=24, differentiable=False,
+            resolution, pair_ids, owners, width=24, differentiable=False,
             with_variance=True, masked=masked,
         )  # fmt: skip
 
-    got = torch.compile(tile, backend="aot_eager", fullgraph=True)(pair_ids)
-    want = tile(pair_ids)
+    got = torch.compile(tile, backend="aot_eager", fullgraph=True)(pair_ids, owners)
+    want = tile(pair_ids, owners)
     torch.testing.assert_close(got[0], want[0], rtol=0.0, atol=0.0)
     torch.testing.assert_close(got[2], want[2], rtol=0.0, atol=0.0)
     for g, w in zip(got[1], want[1]):
         torch.testing.assert_close(g, w)
-    assert not bool(want[2][-37:].any())
+    if masked:
+        assert not bool(want[2][-pad:].any())
 
 
 @pytest.mark.parametrize("device", _COMPILE_DEVICES)
