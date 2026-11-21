@@ -359,6 +359,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and divergence regions, ZPN colatitudes beyond the polynomial's turning
     point, and COP points behind the cone apex. They used to map to pixels
     of the visible side.
+- WCS projections in float32 (MPS) lost half their digits near the reference
+  point, face centres or poles. The affected formulas were `1 - cos`,
+  `asin` of a value near 1, and `log(cos x)`. They now use exactly equivalent
+  forms that avoid the cancellation, so errors stay at a few float32 ulps:
+  - SZP pixel→world near the reference point: up to 100″ before;
+  - AIR in both directions: up to 70 px before, and pixel→world rejected
+    most points because its 1e-10 convergence test is out of float32 reach;
+  - QSC near face centres, TSC/CSC/QSC near the poles, and HPX/XPH near the
+    poles: up to 2e-3 deg before.
+
+  HPX/XPH facet-edge tests also allow for float32 rounding of the plane
+  coordinate. float64 results change by no more than rounding.
 - TPV world→pixel in float32 (MPS) returned NaN for points whose residual
   could not reach the fixed 1e-11 deg tolerance. Convergence is now judged
   against a per-point floor set by the dtype's rounding error. On a

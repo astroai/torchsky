@@ -15,7 +15,13 @@ from ._math import _native_bounds, _sincos, _wrap_lon180, _wrap_lon360
 
 from .zenithal import project_zenithal, deproject_zenithal
 from .cylindrical import project_cylindrical, deproject_cylindrical
-from .allsky import project_allsky, deproject_allsky
+from .allsky import (
+    _plane_slack,
+    _polar_sigma,
+    _polar_theta,
+    deproject_allsky,
+    project_allsky,
+)
 from .conic import project_conic, deproject_conic
 from .quadcube import project_quadcube, deproject_quadcube
 from .legacy import (
@@ -298,12 +304,12 @@ class _PixelWorldCoreMixin:
             sigma = torch.clamp(
                 (self._hpx_eta_pole - abs_eta) * self._hpx_inv_polar_denom, min=0.0
             )
-            s_theta = torch.where(
+            theta = torch.where(
                 mask_eq,
-                eta * self._hpx_inv_eta_scale,
-                torch.sign(eta) * (1.0 - (sigma * sigma) / self._hpx_k),
+                torch.asin(torch.clamp(eta * self._hpx_inv_eta_scale, -1.0, 1.0))
+                * self._r2d,
+                torch.sign(eta) * _polar_theta(sigma, self._hpx_k),
             )
-            theta = torch.asin(torch.clamp(s_theta, -1.0, 1.0)) * self._r2d
             facet_offset = torch.full_like(xi, self._hpx_facet_half_width)
             if self._hpx_k % 2.0 == 0.0:
                 facet_offset = torch.where(
@@ -324,7 +330,10 @@ class _PixelWorldCoreMixin:
             invalid = invalid | (
                 (~mask_eq)
                 & (~invalid)
-                & (torch.abs(xi - xc) > (self._hpx_facet_half_width * sigma + 1e-8))
+                & (
+                    torch.abs(xi - xc)
+                    > (self._hpx_facet_half_width * sigma + _plane_slack(xi, 1e-8))
+                )
             )
             nan = torch.full_like(phi, float("nan"))
             phi = torch.where(invalid, nan, phi)
@@ -471,7 +480,7 @@ class _PixelWorldCoreMixin:
             s_theta = torch.sin(theta * self._d2r)
             abs_s = torch.abs(s_theta)
             mask_eq = abs_s <= self._hpx_transition_sin
-            sigma = torch.sqrt(torch.clamp(self._hpx_k * (1.0 - abs_s), min=0.0))
+            sigma = _polar_sigma(theta, self._hpx_k)
             eta_pol = torch.sign(s_theta) * (
                 self._hpx_eta_pole - self._hpx_facet_half_width * sigma
             )

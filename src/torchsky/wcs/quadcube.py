@@ -299,7 +299,9 @@ def _xy_to_face(x: Tensor, y: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
 
 
 def _lmn_to_native(lx: Tensor, m: Tensor, n: Tensor) -> Tuple[Tensor, Tensor]:
-    theta = torch.asin(torch.clamp(n, -1.0, 1.0)) * R2D
+    # atan2 keeps theta accurate next to the poles (|n| -> 1), where asin(n)
+    # loses half the digits (2e-3 deg in float32).
+    theta = torch.atan2(n, torch.hypot(lx, m)) * R2D
     pole = (lx == 0.0) & (m == 0.0)
     phi = torch.where(pole, torch.zeros_like(lx), torch.atan2(m, lx) * R2D)
     return phi, theta
@@ -594,7 +596,10 @@ def _qsc_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
             ),
         ),
     )
-    zeco = 1.0 - zeta
+    # 1 - zeta = (xi^2 + eta^2) / (1 + zeta) for unit direction cosines: no
+    # cancellation next to the face centre (zeta -> 1), where 1 - zeta lost
+    # most float32 digits (WCSLIB switches to a small-angle form there).
+    zeco = (xi * xi + eta * eta) / (1.0 + zeta)
     origin = (xi == 0.0) & (eta == 0.0)
     direct = xi.abs() >= eta.abs()
 
@@ -646,11 +651,13 @@ def _qsc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
         cw = torch.cos(w)
         o = sw / (cw - _INV_SQRT2)
         t = 1.0 + o * o
-        z = 1.0 - u * u * (1.0 - 1.0 / torch.sqrt(1.0 + t))
-        return o, t, z
+        # 1 - zeta directly (t >= 1, so no cancellation): recovering it as
+        # 1 - zeta lost the float32 digits next to the face centre.
+        zc = u * u * (1.0 - 1.0 / torch.sqrt(1.0 + t))
+        return o, t, zc
 
-    omega_d, tau_d, zeta_d = _omega_tau_zeta(xf, yf)
-    omega_i, tau_i, zeta_i = _omega_tau_zeta(yf, xf)
+    omega_d, tau_d, zeco_d = _omega_tau_zeta(xf, yf)
+    omega_i, tau_i, zeco_i = _omega_tau_zeta(yf, xf)
     zero = (xf == 0.0) & (yf == 0.0)
     omega = torch.where(
         zero,
@@ -670,17 +677,17 @@ def _qsc_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
             torch.where((~direct) & (yf != 0.0), tau_i, torch.ones_like(xf)),
         ),
     )
-    zeta = torch.where(
+    zeco = torch.where(
         zero,
-        torch.ones_like(xf),
+        torch.zeros_like(xf),
         torch.where(
             direct & (xf != 0.0),
-            zeta_d,
-            torch.where((~direct) & (yf != 0.0), zeta_i, torch.ones_like(xf)),
+            zeco_d,
+            torch.where((~direct) & (yf != 0.0), zeco_i, torch.zeros_like(xf)),
         ),
     )
-    zeta = torch.clamp(zeta, -1.0, 1.0)
-    zeco = 1.0 - zeta
+    zeco = torch.clamp(zeco, 0.0, 2.0)
+    zeta = 1.0 - zeco
     w = torch.sqrt(torch.clamp(zeco * (2.0 - zeco) / tau, min=0.0))
 
     # Reconstruct (lx, m, n) per face — matches fitsy/WCSLIB qscx2s.

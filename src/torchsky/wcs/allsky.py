@@ -40,6 +40,30 @@ def _hpx_parameters(
     )
 
 
+def _plane_slack(like: Tensor, tol: float) -> float:
+    """Facet-boundary tolerance (deg): ``tol``, or a few ulps of 180 deg when
+    the working dtype cannot resolve ``tol`` (float32: 9e-5 deg), so points on
+    a facet edge are not rejected for the rounding of their plane coordinate."""
+    return max(tol, 4.0 * torch.finfo(like.dtype).eps * 180.0)
+
+
+def _polar_sigma(theta: Tensor, k: float) -> Tensor:
+    """HEALPix polar ``sigma = sqrt(K (1 - |sin theta|))`` without cancellation.
+
+    ``1 - |sin theta| = 2 sin^2((90 - |theta|) / 2)``; the direct form loses
+    half the digits next to the poles (3e-4 deg in float32).
+    """
+    return math.sqrt(2.0 * k) * torch.sin((90.0 - theta.abs()) * (0.5 * D2R))
+
+
+def _polar_theta(sigma: Tensor, k: float) -> Tensor:
+    """``|theta|`` (deg) from the HEALPix polar ``sigma``: inverse of
+    :func:`_polar_sigma`, instead of ``asin(1 - sigma^2 / K)`` (asin near 1)."""
+    return (
+        90.0 - 2.0 * torch.asin(torch.clamp(sigma / math.sqrt(2.0 * k), max=1.0)) * R2D
+    )
+
+
 def _hpx_facet_center(
     coordinate: Tensor, south: Tensor, k: float, facet_half_width: float
 ) -> Tensor:
@@ -128,19 +152,24 @@ def project_allsky(
         abs_eta = torch.abs(eta)
         mask_eq = abs_eta <= eta_boundary
         sigma = (eta_pole - abs_eta) * inv_polar_denom
-        s_theta = torch.where(
+        theta = torch.where(
             mask_eq,
-            eta * inv_eta_scale,
-            torch.sign(eta) * (1.0 - (sigma * sigma) / K),
+            torch.asin(torch.clamp(eta * inv_eta_scale, -1.0, 1.0)) * R2D,
+            torch.sign(eta) * _polar_theta(torch.clamp(sigma, min=0.0), K),
         )
-        theta = torch.asin(torch.clamp(s_theta, -1.0, 1.0)) * R2D
         xc = _hpx_facet_center(xi, eta < 0.0, K, facet_half_width)
         phi = torch.where(mask_eq, xi, xc + (xi - xc) / torch.clamp(sigma, min=1e-9))
         invalid = (
             (~torch.isfinite(xi))
             | (~torch.isfinite(eta))
             | (abs_eta > eta_pole)
-            | ((~mask_eq) & (torch.abs(xi - xc) > facet_half_width * sigma + 1e-8))
+            | (
+                (~mask_eq)
+                & (
+                    torch.abs(xi - xc)
+                    > facet_half_width * sigma + _plane_slack(xi, 1e-8)
+                )
+            )
         )
         if bool(invalid.any()):
             nan_phi = torch.full_like(phi, float("nan"))
@@ -256,7 +285,7 @@ def deproject_allsky(
         s_theta = torch.sin(theta * D2R)
         abs_s = torch.abs(s_theta)
         mask_eq = abs_s <= transition_sin
-        sigma = torch.sqrt(torch.clamp(K * (1.0 - abs_s), min=0.0))
+        sigma = _polar_sigma(theta, K)
         eta_pol = torch.sign(s_theta) * (eta_pole - facet_half_width * sigma)
         xc = _hpx_facet_center(phi_w, s_theta < 0.0, K, facet_half_width)
         xi = torch.where(mask_eq, phi_w, xc + sigma * (phi_w - xc))
@@ -321,7 +350,7 @@ def _xph_s2x(phi: Tensor, theta: Tensor) -> Tuple[Tensor, Tensor]:
 
     # Polar regime: sigma = sqrt(3*(1-|sin theta|)), linearized near poles
     pole_lim = 90.0 - _XPH_POLE_TOL * (math.sqrt(_XPH_SINTHE_X) * R2D)
-    sigma_std = torch.sqrt(torch.clamp(3.0 * (1.0 - abssin), min=0.0))
+    sigma_std = _polar_sigma(theta, 3.0)
     sigma_lin = (90.0 - theta.abs()) * math.sqrt(1.5) * D2R
     sigma = torch.where(theta.abs() < pole_lim, sigma_std, sigma_lin)
     xi_pol = 45.0 + (psi - 45.0) * sigma
@@ -403,7 +432,7 @@ def _xph_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
     mask_eq = abseta <= 45.0
     # WCSLIB xphx2s bounds: beyond the latitude range, outside the equatorial
     # facet column, or outside a southern polar triangle.
-    tol = 1.0e-12
+    tol = _plane_slack(xi, 1.0e-12)
     invalid = (
         (abseta > 90.0)
         | (mask_eq & (xi1.abs() > 45.0 + tol))
@@ -433,7 +462,7 @@ def _xph_x2s(xi: Tensor, eta: Tensor) -> Tuple[Tensor, Tensor]:
             phi_pol,
         ),
     )
-    th_std = torch.asin(torch.clamp(1.0 - sigma * sigma / 3.0, -1.0, 1.0)) * R2D
+    th_std = _polar_theta(torch.clamp(sigma, min=0.0), 3.0)
     th_lin = 90.0 - sigma * (math.sqrt(_XPH_SINTHE_X) * R2D)
     th = torch.where(sigma < _XPH_POLE_TOL, th_lin, th_std)
     th = torch.where(eta_f < 0.0, -th, th)
