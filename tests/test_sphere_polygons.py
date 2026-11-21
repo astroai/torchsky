@@ -13,6 +13,7 @@ from torchsky.sphere.geom import (
     spherical_polygon_contains,
     spherical_polygons_intersect,
     spherical_polygon_signed_area,
+    spherical_triangle_area,
 )
 from torchsky.sphere import healpix as hp
 
@@ -209,6 +210,26 @@ def test_spherical_polygon_area_units() -> None:
     np.testing.assert_allclose(
         float(deg2), float(sr) * (180.0 / math.pi) ** 2, atol=1e-10, rtol=0.0
     )
+
+
+@pytest.mark.parametrize(
+    ("lat", "expected_sr"),
+    [
+        # spherical_geometry 1.4.0 SphericalPolygon.from_radec(...).area()
+        (10.0, 4.530220847705046),
+        (30.0, 2.000839033510993),
+        (60.0, 0.38642296769561213),
+    ],
+)
+def test_spherical_triangle_area_above_pi_steradians(
+    lat: float, expected_sr: float
+) -> None:
+    # Triangles larger than pi sr have a negative Van Oosterom-Strackee
+    # denominator; clamping it capped the area at pi.
+    tri = spherical_triangle_area(0.0, lat, 120.0, lat, 240.0, lat)
+    poly = spherical_polygon_area([0.0, 120.0, 240.0], [lat] * 3)
+    np.testing.assert_allclose(float(tri), expected_sr, rtol=1e-12)
+    np.testing.assert_allclose(float(poly), expected_sr, rtol=1e-12)
 
 
 def test_spherical_polygons_intersect_basic_cases() -> None:

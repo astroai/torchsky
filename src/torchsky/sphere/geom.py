@@ -140,7 +140,11 @@ def _normalize_polygon_vertices(
 def _signed_area_triangle(a: Tensor, b: Tensor, c: Tensor) -> Tensor:
     det = (a * torch.cross(b, c, dim=-1)).sum(dim=-1)
     den = 1.0 + (a * b).sum(dim=-1) + (b * c).sum(dim=-1) + (c * a).sum(dim=-1)
-    return 2.0 * torch.atan2(det, den.clamp(min=1e-15))
+    # ``den`` is negative for triangles larger than pi sr, so it must not be
+    # clamped; only the degenerate (0, 0) point is guarded (its atan2 gradient
+    # is 0/0), where the area is 0 either way.
+    degenerate = (det == 0.0) & (den == 0.0)
+    return 2.0 * torch.atan2(det, torch.where(degenerate, torch.ones_like(den), den))
 
 
 def _points_on_any_polygon_edge(
