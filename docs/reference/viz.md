@@ -7,7 +7,7 @@
     objects may change between minor releases; pin a version if you depend
     on them in production.
 
-torchsky.viz — astronomy visualization: browser server and slide figures.
+Optional: install `torchsky[viz]`. The browser server needs `fastapi`, `uvicorn` and `pillow`; the figures need `matplotlib`. `import torchsky` never imports this namespace, and importing it loads none of those packages until a figure is drawn or the server starts.
 
 **Guides:** [viz](../introduction/viz.md), [cli](../introduction/cli.md)
 

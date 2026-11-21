@@ -280,6 +280,32 @@ a list of point, Gaussian, or Sérsic sources (`SourceCatalogScene`).
 [`scene.predict`](../reference/scene.md#torchsky.scene.predict) dispatch on the
 representation.
 
+### Weak-Lensing Magnification (Opt-In)
+
+!!! warning "Experimental surface"
+    `torchsky.map.operators.lensing` is experimental and opt-in: import it from
+    that module, not from `torchsky.map.operators`.
+
+A convergence map \(\kappa\) magnifies sources by \(\mu = 1 + 2\kappa\)
+(`mode="linear"`) or \(\mu = e^{2\kappa}\) (`mode="exponential"`).
+[`magnify_flux`](../reference/map-operators-lensing.md#torchsky.map.operators.lensing.magnify_flux),
+`scale_source_sizes`, `magnification_bias` and the
+[`ConvergenceMagnification`](../reference/map-operators-lensing.md#torchsky.map.operators.lensing.ConvergenceMagnification)
+module apply the law exactly by default (`max_magnification=None`); the linear
+law raises where it is undefined (\(\kappa \le -1/2\)). Pass a finite
+`max_magnification` to clamp \(\mu\) instead.
+
+<!-- docs: run -->
+```python
+import torch
+from torchsky.map.operators.lensing import ConvergenceMagnification, magnify_flux
+
+kappa = torch.tensor([0.0, 0.1, -0.2])
+flux = magnify_flux(torch.ones(3), kappa)
+assert torch.allclose(flux, 1.0 + 2.0 * kappa)
+assert torch.allclose(ConvergenceMagnification()(kappa), flux)
+```
+
 ### Approximate Pixel Uncertainties
 
 An operator set estimates the diagonal of \((H + \epsilon I)^{-1}\), with

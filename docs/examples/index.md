@@ -550,11 +550,11 @@ Separate a shared sky from survey-private components with a field model. *Runtim
 
 Script: [`examples/survey_split.py`](https://github.com/astroai/torchsky/blob/main/examples/survey_split.py) · [site copy](../published-examples/survey_split.py)
 
-### Native detector, response and likelihood operators
+### Source-quadrature detector, response and likelihood operators
 
-Native observation operators: detector moments, field response, pixel likelihood.
+Source-quadrature observation operators: detector moments, field response, pixel likelihood.
 
-Script: [`examples/native_operators.py`](https://github.com/astroai/torchsky/blob/main/examples/native_operators.py) · [site copy](../published-examples/native_operators.py)
+Script: [`examples/source_quadrature_operators.py`](https://github.com/astroai/torchsky/blob/main/examples/source_quadrature_operators.py) · [site copy](../published-examples/source_quadrature_operators.py)
 
 ## Visualization (synthetic)
 

@@ -288,17 +288,17 @@
   "torchsky.map.field.gaussian": [
     "bind_linear_band_grid_likelihood"
   ],
-  "torchsky.map.field.joint_native_likelihood": [
-    "bind_joint_native_likelihood"
+  "torchsky.map.field.shared_nuisance_likelihood": [
+    "bind_shared_nuisance_likelihood"
   ],
-  "torchsky.map.field.native_integrated_read": [
-    "NativeIntegratedReadLikelihood",
-    "bind_native_integrated_read_likelihood"
+  "torchsky.map.field.source_quadrature": [
+    "SourceQuadratureResponse",
+    "bind_source_quadrature_likelihood",
+    "render_source_quadrature_observation"
   ],
-  "torchsky.map.field.native_response": [
-    "NativeFieldResponse",
-    "bind_native_field_likelihood",
-    "render_native_field_observation"
+  "torchsky.map.field.source_quadrature_read": [
+    "SourceQuadratureReadLikelihood",
+    "bind_source_quadrature_read_likelihood"
   ],
   "torchsky.map.likelihood": [
     "FunctionalSamplingUncertainty",
@@ -324,6 +324,13 @@
     "PixelIntegratedResponse",
     "native_pixel_stamp",
     "profile_native_star"
+  ],
+  "torchsky.map.operators.lensing": [
+    "ConvergenceMagnification",
+    "LearnedConvergenceCorrection",
+    "magnification_bias",
+    "magnify_flux",
+    "scale_source_sizes"
   ],
   "torchsky.map.operators.nuisance": [
     "CalibratedNuisancePrecision",

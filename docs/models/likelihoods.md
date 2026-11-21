@@ -1,7 +1,7 @@
 # Likelihoods
 
 !!! warning "Experimental surface"
-    The likelihood, query, evidence, nuisance, and native-response modules under
+    The likelihood, query, evidence, nuisance, and source-quadrature modules under
     `torchsky.map` are experimental. Class names, constructor arguments,
     required identifiers, and report fields may change between minor releases
     without a deprecation period. They are tested against independent dense
@@ -109,7 +109,7 @@ print(star.flux, star.retained_response)       # retained_response: PSF fraction
 ```
 
 The stamp holds the detector pixels as recorded; nothing is interpolated or
-resampled. The [native operators example](https://github.com/astroai/torchsky/blob/main/examples/native_operators.py)
+resampled. The [source-quadrature operators example](https://github.com/astroai/torchsky/blob/main/examples/source_quadrature_operators.py)
 continues this with a calibrated background and a normalized likelihood.
 
 ## Recipes
@@ -184,7 +184,7 @@ assert nll < gaussian_nll(observed, rate, rate + read_var, reduction="sum")
 processed in chunks of about \(2^{22}\) count terms, with activation
 checkpointing under reverse-mode autograd, so peak memory does not grow with
 the frame size. For a whole field fitted through
-[`bind_native_integrated_read_likelihood`](../reference/map-field-native-integrated-read.md#torchsky.map.field.native_integrated_read.bind_native_integrated_read_likelihood),
+[`bind_source_quadrature_read_likelihood`](../reference/map-field-source-quadrature-read.md#torchsky.map.field.source_quadrature_read.bind_source_quadrature_read_likelihood),
 `nll(..., mixture_chunk_size=C)` bounds the stored mixture activations to
 \(C\) pixels at a time during backpropagation; the field-sampling graph itself
 stays resident.
@@ -211,7 +211,7 @@ Pass either object as `apply_noise` of the operator. Profiling is right when
 the background is unknown; calibration when an independent measurement (a sky
 annulus, a sky model) constrains it. A shared background across exposures must
 be eliminated once, in one joint factor
-([`bind_joint_native_likelihood`](../reference/map-field-joint-native-likelihood.md#torchsky.map.field.joint_native_likelihood.bind_joint_native_likelihood)),
+([`bind_shared_nuisance_likelihood`](../reference/map-field-shared-nuisance-likelihood.md#torchsky.map.field.shared_nuisance_likelihood.bind_shared_nuisance_likelihood)),
 not separately per exposure.
 
 ### Normalized Densities and Noise Fitting
@@ -227,8 +227,8 @@ inflates the noise without bound.
 |---|---|
 | [`integrated_detector_moments`](../reference/map-operators-detector-response.md#torchsky.map.operators.detector_response.integrated_detector_moments) | Mean and covariance of a read: photons, dark current, charge sharing, read noise, gain |
 | [`PixelCalibrationOp`](../reference/map-operators-pixel-calibration.md#torchsky.map.operators.pixel_calibration.PixelCalibrationOp) | An explicit per-pixel scale (flat, gain) with declared units |
-| [`NativeFieldResponse`](../reference/map-field-native-response.md#torchsky.map.field.native_response.NativeFieldResponse) | A continuous sky sampled at source nodes and transported into detector pixels |
-| [`bind_native_integrated_read_likelihood`](../reference/map-field-native-integrated-read.md#torchsky.map.field.native_integrated_read.bind_native_integrated_read_likelihood) | Poisson–Gaussian likelihood of one raw integrated read per pixel |
+| [`SourceQuadratureResponse`](../reference/map-field-source-quadrature.md#torchsky.map.field.source_quadrature.SourceQuadratureResponse) | A continuous sky sampled at source nodes and transported into detector pixels |
+| [`bind_source_quadrature_read_likelihood`](../reference/map-field-source-quadrature-read.md#torchsky.map.field.source_quadrature_read.bind_source_quadrature_read_likelihood) | Poisson–Gaussian likelihood of one raw integrated read per pixel |
 | [`bind_linear_band_grid_likelihood`](../reference/map-field-gaussian.md#torchsky.map.field.gaussian.bind_linear_band_grid_likelihood) | A Gaussian factor for a group of field observations with shared nuisances |
 
 The raw-read likelihood requires `processing_state="raw_reads"` and a declared

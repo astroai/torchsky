@@ -207,7 +207,10 @@ SYNTHETIC_SCENARIOS: list[tuple[str, str, list[tuple[str, str]]]] = [
         [
             ("neural_field_multiband", "Multiband neural field"),
             ("survey_split", "Shared versus survey-private components"),
-            ("native_operators", "Native detector, response and likelihood operators"),
+            (
+                "source_quadrature_operators",
+                "Source-quadrature detector, response and likelihood operators",
+            ),
         ],
     ),
     (

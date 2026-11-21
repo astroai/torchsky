@@ -180,6 +180,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Experimental field likelihoods renamed** so the names say what they do;
+  "native" clashed with the C++ `_native`/`_cpp` layer. The 0.5.0 names still
+  resolve, emit `DeprecationWarning`, and are removed in 0.7:
+
+  | 0.5.0 | 0.6.0 |
+  |---|---|
+  | `map.field.native_response.NativeFieldResponse` | `map.field.source_quadrature.SourceQuadratureResponse` |
+  | `map.field.native_response.bind_native_field_likelihood` | `map.field.source_quadrature.bind_source_quadrature_likelihood` |
+  | `map.field.native_response.render_native_field_observation` | `map.field.source_quadrature.render_source_quadrature_observation` |
+  | `map.field.native_integrated_read.NativeIntegratedReadLikelihood` (also `map.field.`) | `map.field.source_quadrature_read.SourceQuadratureReadLikelihood` |
+  | `map.field.native_integrated_read.bind_native_integrated_read_likelihood` (also `map.field.`) | `map.field.source_quadrature_read.bind_source_quadrature_read_likelihood` |
+  | `map.field.joint_native_likelihood.bind_joint_native_likelihood` | `map.field.shared_nuisance_likelihood.bind_shared_nuisance_likelihood` |
+
+  `examples/native_operators.py` is now `examples/source_quadrature_operators.py`.
+- **Lensing operators are opt-in.** `ConvergenceMagnification`,
+  `magnify_flux`, `scale_source_sizes` and `magnification_bias` moved from
+  `torchsky.map.operators` to `torchsky.map.operators.lensing`, and
+  `MagnificationResidual` is now `LearnedConvergenceCorrection`. The old
+  `torchsky.map.operators` and `torchsky.map.operators.magnification` names
+  warn and are removed in 0.7. `ConvergenceMagnification` now defaults to
+  `max_magnification=None` like the functions (it clamped at 100): the law is
+  applied exactly and the linear law raises for `kappa <= -1/2`. Pass
+  `max_magnification=100.0` for the old clamp.
 - **No more per-PyTorch-minor lock.** The native extension no longer includes
   or links libtorch:
   - tensors enter its kernels through DLPack without a copy, and results come
