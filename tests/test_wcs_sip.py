@@ -88,3 +88,76 @@ def test_high_order_sip_cuda_pixels_without_explicit_wcs_to() -> None:
     ra, dec = twcs.pixel_to_world(x, y, origin=0)
     assert ra.device.type == "cuda"
     assert torch.isfinite(ra).all() and torch.isfinite(dec).all()
+
+
+_STRONG_SIP = {
+    # x_d = u + 1e-3 u^2 never goes below -250 px: targets further out on the
+    # -x side have no real pre-image, so the Newton inverse cannot converge.
+    "quadratic": {"A_ORDER": 2, "B_ORDER": 2, "A_2_0": 1.0e-3, "B_1_1": 2.0e-5},
+    # Cubic forward (dense Newton path): the only real pre-image of those
+    # targets is ~1e6 px away, far outside the solver's reach.
+    "cubic": {
+        "A_ORDER": 3,
+        "B_ORDER": 3,
+        "A_2_0": 1.0e-3,
+        "A_3_0": 1.0e-9,
+        "B_1_1": 2.0e-5,
+    },
+    # With AP/BP the solver seeds from the inverse polynomial (active-set path).
+    "cubic+APBP": {
+        "A_ORDER": 3,
+        "B_ORDER": 3,
+        "A_2_0": 1.0e-3,
+        "A_3_0": 1.0e-9,
+        "B_1_1": 2.0e-5,
+        "AP_ORDER": 2,
+        "BP_ORDER": 2,
+        "AP_2_0": -1.0e-3,
+        "BP_1_1": -2.0e-5,
+    },
+}
+
+
+@pytest.mark.parametrize("variant", list(_STRONG_SIP))
+def test_sip_inverse_fails_closed_where_newton_cannot_converge(variant: str) -> None:
+    from astropy.wcs import WCS as AstropyWCS
+    from astropy.wcs import NoConvergence
+
+    linear = _sip_header()
+    for key in [k for k in linear if k.startswith(("A_", "B_", "AP_", "BP_"))]:
+        del linear[key]
+    linear["CTYPE1"], linear["CTYPE2"] = "RA---TAN", "DEC--TAN"
+    header = dict(linear)
+    header["CTYPE1"], header["CTYPE2"] = "RA---TAN-SIP", "DEC--TAN-SIP"
+    header.update(_STRONG_SIP[variant])
+
+    # Sky positions whose undistorted (CD-only) pixel offset is u_d.
+    u_d = torch.tensor([-400.0, -300.0, -100.0, 0.0, 150.0, 300.0], dtype=torch.float64)
+    v_d = torch.tensor([20.0, -40.0, 60.0, 0.0, -80.0, 100.0], dtype=torch.float64)
+    crpix = float(header["CRPIX1"]) - 1.0, float(header["CRPIX2"]) - 1.0
+    ra, dec = TorchWCS(dict(linear)).pixel_to_world(u_d + crpix[0], v_d + crpix[1])
+    unreachable = u_d < -250.0
+
+    wcs = TorchWCS(dict(header))
+    for x, y in (
+        wcs.world_to_pixel(ra, dec),
+        wcs.world_to_pixel(torch.stack((ra, dec), dim=-1)).unbind(-1),
+    ):
+        assert torch.isnan(x[unreachable]).all() and torch.isnan(y[unreachable]).all()
+        assert torch.isfinite(x[~unreachable]).all()
+        assert torch.isfinite(y[~unreachable]).all()
+
+    oracle = AstropyWCS(header)
+    world = torch.stack((ra, dec), dim=-1).numpy()
+    with pytest.raises(NoConvergence):
+        oracle.all_world2pix(world[unreachable.numpy()], 0, maxiter=50)
+    # Reachable targets: astropy's fixed-point all_world2pix itself stalls on
+    # this strong distortion, so check the solutions through its forward map.
+    x, y = wcs.world_to_pixel(ra[~unreachable], dec[~unreachable])
+    back = oracle.all_pix2world(torch.stack((x, y), dim=-1).numpy(), 0)
+    torch.testing.assert_close(
+        torch.from_numpy(back),
+        torch.from_numpy(world[~unreachable.numpy()]),
+        atol=1e-9,
+        rtol=0.0,
+    )

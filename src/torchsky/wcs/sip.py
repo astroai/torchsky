@@ -344,11 +344,42 @@ class SIP:
         """
         Invert SIP forward distortion map (u, v) -> distort(u, v).
         Uses a vectorized Newton solver with manual Jacobian for high performance.
+
+        Fails closed: rows whose final iterate does not reproduce the target
+        within ``tol`` (or the dtype's rounding floor) are NaN, e.g. targets
+        with no pre-image or beyond the solver's reach after ``max_iter``.
         """
         if u_dist.numel() == 0 or not self.has_forward:
             return u_dist, v_dist
         if torch.compiler.is_compiling():
-            return self._invert_distortion_traced(u_dist, v_dist, max_iter, tol)
+            u, v = self._invert_distortion_traced(u_dist, v_dist, max_iter, tol)
+        else:
+            u, v = self._invert_distortion_eager(u_dist, v_dist, max_iter, tol)
+        return self._reject_unconverged(u_dist, v_dist, u, v, tol)
+
+    def _reject_unconverged(
+        self, u_dist: Tensor, v_dist: Tensor, u: Tensor, v: Tensor, tol: float
+    ) -> "tuple[Tensor, Tensor]":
+        """NaN where ``distort(u, v)`` misses ``(u_dist, v_dist)`` by ``tol`` or more.
+
+        The tolerance never drops below what the working dtype can resolve:
+        evaluating the polynomial at ``|u| + |v|`` pixels carries about
+        ``eps * (1 + |u| + |v|)`` rounding, which exceeds 1e-6 px in float32
+        (MPS) for detector-sized offsets. In float64 ``tol`` is unchanged.
+        """
+        xd, yd = self.distort(u, v)
+        floor = (
+            16.0 * torch.finfo(u_dist.dtype).eps * (1.0 + u_dist.abs() + v_dist.abs())
+        )
+        tol_pt = torch.clamp(floor, min=tol)
+        converged = ((xd - u_dist).abs() < tol_pt) & ((yd - v_dist).abs() < tol_pt)
+        nan = torch.full_like(u, float("nan"))
+        return torch.where(converged, u, nan), torch.where(converged, v, nan)
+
+    def _invert_distortion_eager(
+        self, u_dist: Tensor, v_dist: Tensor, max_iter: int, tol: float
+    ) -> "tuple[Tensor, Tensor]":
+        """Newton iterations with early exit; see :meth:`invert_distortion`."""
         if self._quad_inverse_fast:
             u_f = u_dist.reshape(-1)
             v_f = v_dist.reshape(-1)

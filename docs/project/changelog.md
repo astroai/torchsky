@@ -222,6 +222,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   early-exit loops and the native CPU TPV kernel. Eager TPV world→pixel no
   longer counts unconverged points (a device sync) unless
   `TPV.set_invert_trace(True)` is on.
+
+  **Compiled TPV world→pixel is slower than eager on CPU.** Inside
+  `torch.compile`, TPV world→pixel runs all 20 Newton iterations on every
+  point, while eager float64 CPU calls use the native per-point kernel. On a
+  loaded 4-thread CPU, 1e6 points took 1.3 s compiled against 0.24 s eager.
+  Pixel→world, TAN and SIN get faster when compiled (2–7× on CPU, 3–8× on
+  MPS).
 - **No more per-PyTorch-minor lock.** The native extension no longer includes
   or links libtorch:
   - tensors enter its kernels through DLPack without a copy, and results come
@@ -360,6 +367,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wcs.match_approximate_wcs` uses one exact nearest-neighbour query instead of
   a per-row disc query loop; ties go to the lowest reference row. Its `index=`
   is a `SkyIndex`.
+- **`torch.compile` no longer unrolls the chunk loops of the pure-torch square
+  drizzle, separable (Lanczos / Keys) resampling, zone query and exclusive BP
+  solve.** Each loop now runs eagerly (it is skipped by Dynamo) around one
+  fixed-shape tile or step function that Dynamo compiles once and reuses; host
+  checks (finite coordinates, invalid footprints, candidate counts,
+  convergence) stay outside the compiled graphs, and the last tile is padded
+  under compilation only. A single-chunk resample is still traced inline with
+  its caller. Eager results are unchanged: bitwise for the drizzle, the sampler
+  and the zone query on CPU, to rounding (~1e-15) for the BP messages. The
+  native CPU kernels are untouched. Cold compile on an M2 (4 threads, inductor
+  caches off, heavily loaded host): Lanczos-3 resample of 1024² from 396 s to
+  41–61 s on CPU and from 114 s to 14–23 s on MPS; square drizzle of 512² from
+  66 s to 15–23 s on CPU. A 4096² Lanczos-3 resample now compiles in 44 s (CPU)
+  / 11 s (MPS) and runs in 4.6 s / 0.37 s instead of 27 s / 2.6 s eager. Warm
+  compiled times at the smaller sizes are unchanged within the noise of that
+  host.
 
 ### Removed
 
@@ -418,6 +441,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   HPX/XPH facet-edge tests also allow for float32 rounding of the plane
   coordinate. float64 results change by no more than rounding.
+- SIP world→pixel fails closed. Points the Newton inverse cannot solve now
+  return NaN, as TPV already did: targets with no pre-image, or none within
+  reach in `max_iter` steps. Before, the last iterate was returned as if it
+  had converged, which gave pixels hundreds of pixels off. A point counts as
+  converged when its distorted position is within 1e-6 px of the target, or
+  within the float32 rounding floor on MPS. Converged results are unchanged.
 - `WCS` rejects ZPN headers that WCSLIB `zpnset` rejects, raising
   `ValueError` at construction. These are polynomials with no non-zero
   `PV2_m`, and polynomials of order ≥ 2 with `PV2_1 <= 0`. Before, a header
