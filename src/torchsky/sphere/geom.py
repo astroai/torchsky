@@ -138,7 +138,9 @@ def _normalize_polygon_vertices(
 
 
 def _signed_area_triangle(a: Tensor, b: Tensor, c: Tensor) -> Tensor:
-    det = (a * torch.cross(b, c, dim=-1)).sum(dim=-1)
+    # a . (b x c) == a . ((b - a) x (c - a)): the difference form keeps the
+    # determinant of small triangles accurate in float32 (MPS).
+    det = (a * torch.cross(b - a, c - a, dim=-1)).sum(dim=-1)
     den = 1.0 + (a * b).sum(dim=-1) + (b * c).sum(dim=-1) + (c * a).sum(dim=-1)
     # ``den`` is negative for triangles larger than pi sr, so it must not be
     # clamped; only the degenerate (0, 0) point is guarded (its atan2 gradient
@@ -213,7 +215,8 @@ def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tens
     """
     tol_rad = _validate_nonnegative_finite(tol_rad, "tol_rad")
     a, b, p = torch.broadcast_tensors(a, b, p)
-    cross_ab = torch.linalg.cross(a, b, dim=-1)
+    # a x (b - a) == a x b without float32 cancellation for short arcs.
+    cross_ab = torch.linalg.cross(a, b - a, dim=-1)
     normal_norm = torch.linalg.norm(cross_ab, dim=-1)
     dot_ab = torch.clamp((a * b).sum(dim=-1), -1.0, 1.0)
     proper = normal_norm > 1e-15
@@ -223,7 +226,7 @@ def _arc_contains_point(a: Tensor, b: Tensor, p: Tensor, tol_rad: float) -> Tens
     normal = cross_ab / safe_norm.unsqueeze(-1)
     arc_length = torch.atan2(normal_norm, dot_ab)
 
-    cross_ap = torch.linalg.cross(a, p, dim=-1)
+    cross_ap = torch.linalg.cross(a, p - a, dim=-1)
     dot_ap = torch.clamp((a * p).sum(dim=-1), -1.0, 1.0)
     signed = torch.atan2((normal * cross_ap).sum(dim=-1), dot_ap)
     signed = torch.remainder(signed, 2.0 * math.pi)
@@ -270,8 +273,8 @@ def _great_circle_arcs_intersect_matrix(
             float(tol_rad),
         )
 
-    n1 = torch.cross(a0, a1, dim=-1)
-    n2 = torch.cross(b0, b1, dim=-1)
+    n1 = torch.cross(a0, a1 - a0, dim=-1)
+    n2 = torch.cross(b0, b1 - b0, dim=-1)
     n1_norm = torch.linalg.norm(n1, dim=-1)
     n2_norm = torch.linalg.norm(n2, dim=-1)
     dot1 = torch.clamp((a0 * a1).sum(dim=-1), -1.0, 1.0)
@@ -703,7 +706,8 @@ def convex_polygon_contains(
         raise ValueError("polygon must contain at least three vertices")
 
     v_next = torch.roll(v_poly, shifts=-1, dims=0)
-    normals = torch.cross(v_poly, v_next, dim=-1)
+    # v x (w - v) == v x w, without the float32 cancellation for short edges.
+    normals = torch.cross(v_poly, v_next - v_poly, dim=-1)
     normal_norm = torch.linalg.norm(normals, dim=-1)
     if bool(torch.any(normal_norm <= 1e-15)):
         raise ValueError("polygon edges must have distinct, non-antipodal endpoints")

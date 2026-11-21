@@ -4,10 +4,13 @@ import numpy as np
 import torch
 import pytest
 
+from torchsky.sphere.core import lonlat_to_unit_xyz
 from torchsky.sphere.geom import (
     PixelizedRegion,
     SphericalMultiPolygon,
     SphericalPolygon,
+    _signed_area_triangle,
+    convex_polygon_contains,
     query_polygon_general,
     spherical_polygon_area,
     spherical_polygon_contains,
@@ -130,6 +133,59 @@ def test_spherical_polygons_intersect_cuda_or_mps_matches_cpu() -> None:
         )
         == cpu_miss
     )
+
+
+def _arcsec_square(half_arcsec: float) -> tuple[list[float], list[float]]:
+    a = half_arcsec / 3600.0
+    c_lon, c_lat = 123.4, 45.6
+    return (
+        [c_lon - a, c_lon + a, c_lon + a, c_lon - a],
+        [c_lat - a, c_lat - a, c_lat + a, c_lat + a],
+    )
+
+
+def test_float32_small_polygon_edge_normals_and_areas() -> None:
+    # Cross products of nearly parallel float32 unit vectors lose the edge
+    # plane (relative error ~eps / angle); difference forms keep it.
+    lon, lat = _arcsec_square(10.0)
+    a, c_lat = 10.0 / 3600.0, 45.6
+    e = 2.0 / 3600.0
+    q_lon = torch.tensor(
+        [123.4, 123.4, 123.4 + (a + e) / math.cos(math.radians(c_lat)), 123.4],
+        dtype=torch.float32,
+    )
+    q_lat = torch.tensor([c_lat, c_lat + a + e, c_lat, c_lat - a - e])
+    got = convex_polygon_contains(
+        q_lon,
+        q_lat,
+        torch.tensor(lon, dtype=torch.float32),
+        torch.tensor(lat, dtype=torch.float32),
+    )
+    assert got.tolist() == [True, False, False, False]
+
+    v64 = lonlat_to_unit_xyz(
+        torch.tensor(lon[:3], dtype=torch.float64),
+        torch.tensor(lat[:3], dtype=torch.float64),
+    )
+    ref = float(_signed_area_triangle(v64[0], v64[1], v64[2]))
+    v32 = v64.to(torch.float32)
+    tri32 = float(_signed_area_triangle(v32[0], v32[1], v32[2]))
+    np.testing.assert_allclose(tri32, ref, rtol=1e-2)
+
+
+def test_float32_small_polygon_area_and_intersect_on_accelerator() -> None:
+    device = _geom_accel_device()
+    if device is None or device.type != "mps":
+        pytest.skip("no MPS device (float32-only geometry)")
+    lon, lat = _arcsec_square(10.0)
+    ref = float(spherical_polygon_area(lon, lat))
+    lon_t = torch.tensor(lon, dtype=torch.float32, device=device)
+    lat_t = torch.tensor(lat, dtype=torch.float32, device=device)
+    np.testing.assert_allclose(
+        float(spherical_polygon_area(lon_t, lat_t)), ref, rtol=1e-2
+    )
+    shifted = lon_t + 3.0 * (10.0 / 3600.0) / math.cos(math.radians(45.6))
+    assert not spherical_polygons_intersect(lon_t, lat_t, shifted, lat_t)
 
 
 def test_spherical_polygon_pixel_boolean_ops() -> None:
