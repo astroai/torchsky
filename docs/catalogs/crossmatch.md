@@ -344,6 +344,96 @@ assert res.left_index[res.match].tolist() == [0, 1] and res.right_index[res.matc
 assert torch.all(res.posterior[res.match] > 0.9)
 ```
 
+### Blends in low-resolution catalogs
+
+A WISE source (6″ PSF) is often two Gaia stars at once: its position is
+their flux-weighted centroid, which lies between the two. A one-to-one model
+must then pick one star or reject both, and in a crowded field the fitted
+error scale grows to explain the offsets.
+`associate(blends="pairs", blend_radius_arcsec=r)` adds the blend
+hypothesis. Each right row is background, one left row, or a pair of left
+rows closer than `r` (the right catalog's resolution) observed at
+\(f \mathbf x_a + (1-f) \mathbf x_b\), where \(f\) is the flux share of
+\(a\) in the right catalog's band.
+
+- **Flux ratio.** `blend_flux` (one linear flux per left row, for example
+  predicted W1 from Gaia photometry; NaN where unknown) fixes \(f\). Without
+  it, \(f\) has a uniform prior on \([0, 1]\) and is integrated in closed form.
+- **Model.** Single left rows (probability `completeness`) and left pairs within `r`
+  (probability \(\eta\), the blend rate) are independent sources of right
+  rows, conditioned on each left row contributing to at most one right row.
+  \(\eta\) is fitted with completeness, calibration and background density by
+  maximum marginal likelihood. Because the conditioning normalises the prior,
+  a higher \(\eta\) is not free: blends must be supported by positions.
+- **Solver.** The same belief propagation as the exclusive model, with each
+  right row choosing among its hypotheses. It is exact on cycle-free candidate
+  graphs. Without pair sources it equals `exclusive=True`. Cost and memory are
+  linear in the candidates and in the left pairs within `r`, which are
+  searched in chunks and kept only when their centroid passes the
+  \(\chi^2_2\) gate.
+- **Result.** The pair arrays hold every (left, right) edge of a hypothesis.
+  `posterior` is the probability that the left row is part of the right row's
+  counterpart, alone or in a blend. `match` takes each right row's most
+  probable hypothesis, greedily by posterior (with blends the assignment is
+  not the exact one-to-one optimum). `res.blend`
+  ([`BlendAssociation`](../reference/catalogs.md#torchsky.catalogs.BlendAssociation))
+  holds:
+  - the pair hypotheses: `right_index`, `members`, `posterior`,
+    `flux_fraction`;
+  - the single-hypothesis probability per edge (`p_single`);
+  - per right row, `p_background`, `map_members` and `map_posterior`;
+  - the fitted `blend_rate`.
+
+On an injected field the blend model fits the error scale without the
+inflation of the one-to-one fit, and gets more right rows' states right.
+The field has 0.1 left rows per arcsec², 30 % detected, a third of the
+detections blended with a neighbour within 4″, and published errors half
+the true ones. Blend model against the exclusive one, over 10⁴ left rows:
+
+- error scale: 1.93 against 2.14, for a true 2 (1.99 against 2.14 over
+  10⁵ rows);
+- right rows whose state is right: 78–79 % against 74 %;
+- true members at posterior > 0.9: 59–62 % against 55 %, at the same purity
+  (0.97).
+
+Equal-flux blends are recovered as pairs. A pair with a faint member
+looks like its bright member alone, and the model says so. Two caveats:
+
+- With the error scale held at a wrong value, blends absorb part of the
+  miscalibration. Fit the calibration (`calibrate=`) or transfer it from a
+  field where it is identifiable.
+- Blends of three or more sources, PSF-weighted centroids and photometric
+  `terms` are not modelled. Where many faint stars shift every centroid
+  (a WISE-like field with 0.37 stars per arcsec²), the marginalised flux
+  ratio still helps: 49 % of detections get their brightest star, against
+  36 % for the exclusive model. Fixed `blend_flux` ratios are then wrong,
+  because PSF weighting is missing, and the fit degenerates into pairs.
+- The fit costs more than the exclusive one: 2–3 times over 10⁴ rows, and
+  more where the calibration takes all its rounds.
+
+<!-- docs: run -->
+```python
+import torch
+
+from torchsky.catalogs import Astrometry, Catalog, associate
+
+err = lambda n, s: Astrometry.from_errors(torch.full((n,), s), torch.full((n,), s))
+# Gaia-like: two stars 3" apart (W1 fluxes 2:1) and an isolated star.
+gaia = Catalog(lon=torch.tensor([10.0, 10.0 + 3 / 3600, 10.01]), lat=torch.zeros(3),
+               epoch=2016.0, astrometry=err(3, 5.0))
+w1_flux = torch.tensor([2.0, 1.0, 1.0])
+# WISE-like: one detection at the pair's flux-weighted centroid (1" from the
+# brighter star), one on the isolated star.
+wise = Catalog(lon=torch.tensor([10.0 + 1 / 3600, 10.01]), lat=torch.zeros(2),
+               epoch=2016.0, astrometry=err(2, 100.0))
+plain = associate(gaia, wise, completeness=0.5, max_radius_arcsec=5.0)
+assert plain.left_index[plain.match].tolist() == [2]  # the blend is 10 sigma off
+res = associate(gaia, wise, completeness=0.5, max_radius_arcsec=5.0,
+                blends="pairs", blend_radius_arcsec=6.0, blend_flux=w1_flux)
+assert res.blend.map_members.tolist() == [[0, 1], [2, -1]]
+assert float(res.blend.posterior[0]) > 0.99
+```
+
 ### Several catalogs at once
 
 [`associate_many`](../reference/catalogs.md#torchsky.catalogs.associate_many)

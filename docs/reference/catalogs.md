@@ -25,6 +25,17 @@ namespace `torchsky.catalogs` unless the group text says otherwise.
       show_root_toc_entry: false
       filters: []
 
+## Blends
+
+::: torchsky.catalogs
+    options:
+      members:
+        - BlendAssociation
+      heading_level: 3
+      show_root_heading: false
+      show_root_toc_entry: false
+      filters: []
+
 ## Association
 
 ::: torchsky.catalogs

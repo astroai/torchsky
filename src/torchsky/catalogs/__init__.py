@@ -8,6 +8,7 @@ from .index import HealpixIndex
 from .index import cap_covering_pixels
 from .index import nside_for_cap
 from .astrometry import Astrometry, MotionPrior, propagate_astrometry
+from ._blends import BlendAssociation
 from .association import (
     Association,
     HistogramRatio,
@@ -159,6 +160,7 @@ def crossmatch(
 
 __all__ = [
     "Association",
+    "BlendAssociation",
     "Astrometry",
     "HistogramRatio",
     "assign_one_to_one",

@@ -23,6 +23,7 @@
     "Association",
     "Astrometry",
     "BackgroundModel",
+    "BlendAssociation",
     "BlendFitDiagnostics",
     "BlockSparseCovariance",
     "Catalog",

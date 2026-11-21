@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `associate(blends="pairs", blend_radius_arcsec=...)`: blend-aware
+  association for low-resolution right catalogues (WISE against Gaia). A
+  right row may be the blend of two left rows closer than the blend radius,
+  at their flux-weighted centroid: `blend_flux` fixes each pair's flux
+  ratio, otherwise it is marginalised under a uniform prior (closed form).
+  Single left rows and left pairs are independent sources conditioned on
+  each left row contributing at most once; the blend rate is fitted by
+  maximum marginal likelihood with completeness, calibration and
+  background density (the prior normaliser is a monomer-dimer partition
+  function, from the same belief propagation). Posteriors are Bethe
+  marginals, exact on cycle-free graphs; without pair sources the result
+  equals the exclusive model. `Association.blend`
+  (`torchsky.catalogs.BlendAssociation`) holds the pair hypotheses,
+  their posteriors and flux fractions, per-row background probabilities
+  and each right row's most probable member list. On injected blends the
+  fitted error scale is no longer inflated by blended positions, and more
+  true members are matched confidently. Off by default; not combined with
+  photometric `terms` or per-row right epochs.
+
 - `associate_many(terms=...)`: photometric likelihood-ratio terms in N-way
   association, one tuple of `HistogramRatio` per secondary catalogue with
   the semantics of `associate` (right magnitudes, or pair colours relative

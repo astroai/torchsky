@@ -61,6 +61,7 @@ from ._zones import (
     unit_vectors,
     zone_query,
 )
+from ._blends import BlendAssociation
 from ._exclusive import exclusive_log_rho, pairwise_exclusive
 from .astrometry import Astrometry, MotionPrior, propagate_astrometry
 from .catalog import Catalog
@@ -280,7 +281,8 @@ class Association:
     ``density="healpix"`` the likelihood ratio uses the right row's cell,
     usually the same). ``completeness`` is the fitted or
     given value; ``n_capped`` counts rows whose search radius hit
-    ``max_radius_arcsec``.
+    ``max_radius_arcsec``. ``blend`` holds the blend posteriors when
+    ``associate(blends="pairs")`` (else ``None``).
     """
 
     left_index: Tensor
@@ -297,6 +299,7 @@ class Association:
     right_scale: float | Tensor = 1.0
     floor_mas2: Tensor | None = None
     density_mas2: Tensor | None = None
+    blend: BlendAssociation | None = None
 
 
 # ----------------------------------------------------------------- pipeline
@@ -548,6 +551,8 @@ def _fit_marginal(
     calibrate: str,
     group: Tensor | None,
     typical: float,
+    objective=None,
+    extra0: Tensor | None = None,
 ) -> tuple[float, Tensor, Tensor, Tensor, Tensor]:
     """One maximum marginal likelihood fit (see :func:`_fit_all`).
 
@@ -562,6 +567,11 @@ def _fit_marginal(
     likelihood, whose gradient is the posterior-weighted one, so stationary
     points are those of EM; EM itself crawls in crowded fields, where most
     of the information about the errors is missing.
+
+    ``objective(pi, scale, floor, log_nu_cell, extra)`` replaces the
+    association log likelihood (the blend model), with free parameters
+    ``extra`` starting at ``extra0``; their fitted values are left in
+    ``state["extra"]``.
 
     Returns ``(completeness, scale, floor, log_nu_cell, bad)``. ``bad[g]``
     flags groups outside physical bounds (scale within ``e^+-8``, floor below
@@ -603,15 +613,26 @@ def _fit_marginal(
         if dens is not None
         else torch.empty(0, dtype=_F64, device=dev)
     )
-    params = torch.cat((eta0, cal0, nu0)).clone().requires_grad_(True)
+    ex0 = (
+        torch.empty(0, dtype=_F64, device=dev)
+        if extra0 is None
+        else extra0.detach().to(_F64)
+    )
+    params = torch.cat((eta0, cal0, nu0, ex0)).clone().requires_grad_(True)
     n_pi = int(eta0.numel())
     n_cal = int(cal0.numel())
+    n_nu = int(nu0.numel())
     all_bad = torch.ones(n_groups, dtype=torch.bool, device=dev)
 
     def unpack_nu(p: Tensor) -> Tensor:
         if dens is None:
             return log_nu_cell
-        return log_nu_cell.masked_scatter(dens.free, p[n_pi + n_cal :])
+        return log_nu_cell.masked_scatter(
+            dens.free, p[n_pi + n_cal : n_pi + n_cal + n_nu]
+        )
+
+    def unpack_extra(p: Tensor) -> Tensor:
+        return p[n_pi + n_cal + n_nu :]
 
     def unpack(p: Tensor) -> tuple[Tensor | float, Tensor, Tensor]:
         pi = torch.sigmoid(p[0]) if fit_pi else pi_c
@@ -646,8 +667,11 @@ def _fit_marginal(
         opt.zero_grad()
         pi, sc, fl = unpack(params)
         lnu = unpack_nu(params)
-        log_w, log_a, _ = log_weights(pi, sc, fl, lnu)
-        ll = _log_partition(li, rj, log_w, log_a, n_left, exclusive, state)
+        if objective is not None:
+            ll = objective(pi, sc, fl, lnu, unpack_extra(params))
+        else:
+            log_w, log_a, _ = log_weights(pi, sc, fl, lnu)
+            ll = _log_partition(li, rj, log_w, log_a, n_left, exclusive, state)
         if dens is not None:
             ll = ll + dens.log_lik(lnu)
         loss = -ll / n_left
@@ -664,6 +688,8 @@ def _fit_marginal(
         p = params.detach()
         if not bool(torch.isfinite(p).all()):
             return pi_c, scale, floor, log_nu_cell, all_bad
+        if extra0 is not None:
+            state["extra"] = unpack_extra(p).clone()
         pi, sc, fl = unpack(p)
         lnu = unpack_nu(p).detach().clone()
         new_pi = min(max(float(pi), 1e-6), 1.0 - 1e-9) if fit_pi else pi_c
@@ -748,6 +774,9 @@ def associate(
     right_scale: float | Tensor | None = None,
     floor_mas2: Tensor | None = None,
     exclusive: bool = True,
+    blends: Literal["none", "pairs"] = "none",
+    blend_radius_arcsec: float | None = None,
+    blend_flux: Tensor | None = None,
     max_iter: int = 50,
     tol: float = 1e-6,
 ) -> Association:
@@ -817,9 +846,40 @@ def associate(
     ``footprint_order``. Pass the survey MOC when you have it, so that density
     and priors use the true coverage. With ``exclusive=True``, right rows
     outside it take no part.
+
+    **Blends.** ``blends="pairs"`` (exclusive model only) lets a right row be
+    the blend of two left rows closer than ``blend_radius_arcsec`` (the right
+    catalogue's resolution, required): its position is then the
+    flux-weighted centroid of the two. ``blend_flux`` (one value per left
+    row, linear flux in the right catalogue's band, NaN where unknown) fixes
+    each pair's flux ratio; otherwise the ratio has a uniform prior and is
+    marginalised. Single left rows and left pairs are independent sources
+    conditioned on each left row contributing at most once; the blend rate
+    (the probability that a left pair is detected as one right row) is
+    fitted with the other parameters, starting, with calibration, from the
+    independent model's calibration. Pair
+    arrays then hold every (left, right) edge of a single or blend
+    hypothesis, ``posterior`` is the probability that the left row is part
+    of the right row's counterpart (alone or in a blend), ``match`` is the
+    greedy selection of each right row's most probable hypothesis, and
+    ``Association.blend`` holds the blend posteriors and member lists
+    (:class:`~torchsky.catalogs.BlendAssociation`). Not available with
+    photometric ``terms`` or per-row right epochs.
     """
     if left.astrometry is None or right.astrometry is None:
         raise ValueError("associate needs Catalog.astrometry on both catalogues")
+    if blends not in ("none", "pairs"):
+        raise ValueError("blends must be 'none' or 'pairs'")
+    if blends == "pairs":
+        if not exclusive:
+            raise ValueError("blends='pairs' needs exclusive=True")
+        if terms:
+            raise ValueError("blends='pairs' does not support photometric terms")
+        if blend_radius_arcsec is None or not blend_radius_arcsec > 0.0:
+            raise ValueError(
+                "blends='pairs' needs blend_radius_arcsec > 0 (the right "
+                "catalogue's resolution, about 6 for WISE)"
+            )
     if left.frame != right.frame:
         right = right.to_frame(left.frame)
     priors = (
@@ -913,6 +973,69 @@ def associate(
         if bool((torch.linalg.eigvalsh(0.5 * (given_f + given_f.mT)) < 0).any()):
             raise ValueError("floor_mas2 must be positive semi-definite")
         floor = given_f.expand(n_bins, 2, 2).clone()
+    if blends == "pairs":
+        if pair_epoch:
+            raise ValueError("blends='pairs' does not support per-row right epochs")
+        from ._blends import associate_blends
+
+        assert blend_radius_arcsec is not None
+        pi_start = None
+        if calibrate != "none":
+            # Start from the independent model's calibration (cheap, no belief
+            # propagation), as the exclusive model does. Started from
+            # underestimated errors, blends would absorb the offsets instead.
+            pre = associate(
+                left,
+                right,
+                gate_pvalue=gate_pvalue,
+                max_radius_arcsec=max_radius_arcsec,
+                epoch=epoch,
+                motion_prior=motion_prior,
+                right_footprint=rfoot,
+                density=density,
+                density_order=density_order,
+                completeness=completeness,
+                assign="none",
+                calibrate=calibrate,
+                calibrate_by=calibrate_by,
+                calibrate_edges=calibrate_edges,
+                calibrate_min_pairs=calibrate_min_pairs,
+                right_scale=right_scale,
+                floor_mas2=floor_mas2,
+                exclusive=False,
+                max_iter=max_iter,
+                tol=tol,
+            )
+            scale = _as_tensor(pre.right_scale, dtype=_F64, device=dev).reshape(-1)
+            scale = scale.expand(n_bins).clone()
+            assert pre.floor_mas2 is not None
+            floor = pre.floor_mas2.to(dev).expand(n_bins, 2, 2).clone()
+            pi_start = pre.completeness
+        return associate_blends(
+            llon=llon,
+            llat=llat,
+            lcov=lcov,
+            lam_l=lam_l,
+            rlon=rlon,
+            rlat=rlat,
+            rcov=rcov,
+            lam_r=lam_r,
+            rbin=rbin,
+            scale=scale,
+            floor=floor,
+            dens=dens,
+            inside=inside,
+            k2=k2,
+            gate_pvalue=gate_pvalue,
+            max_radius_arcsec=max_radius_arcsec,
+            completeness=completeness,
+            calibrate=calibrate,
+            calibrate_min_pairs=calibrate_min_pairs,
+            assign=assign,
+            blend_radius_arcsec=float(blend_radius_arcsec),
+            blend_flux=blend_flux,
+            pi_start=pi_start,
+        )
     rounds = 1 if calibrate == "none" else 8
     outside_log = torch.where(
         inside > 0, torch.zeros_like(inside), torch.full_like(inside, -math.inf)
