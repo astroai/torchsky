@@ -45,6 +45,7 @@ from ._healpix_query_support import (  # noqa: F401
     _query_disc_nest_ranges,
     _ranges_to_sorted_pixels,
     _resolve_dtype,
+    _padded_band_rings,
     _ring_above,
     _ring_pixels_colatitude_band,
     _ring_range_pixels,
@@ -1742,12 +1743,13 @@ def query_box(
 
     theta1 = math.radians(90.0 - lat_hi)
     theta2 = math.radians(90.0 - lat_lo)
-    cand = query_strip(
-        nside,
-        theta1,
-        theta2,
-        nest=nest,
-        inclusive=False,
+    # Closed band [lat_lo, lat_hi] with one ring of slack on each side; the
+    # latitude filter below decides membership exactly.
+    rings = [_padded_band_rings(nside, theta1, theta2)]
+    cand = (
+        _ring_ranges_nest_pixels(nside, rings)
+        if nest
+        else _ring_range_pixels(nside, rings)
     )
     if cand.numel() == 0:
         return cand

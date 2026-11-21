@@ -142,6 +142,19 @@ def _ring_above_scalar(nside: int, z: float) -> int:
     return iring if z > 0.0 else 4 * nside - iring - 1
 
 
+def _padded_band_rings(nside: int, theta1: float, theta2: float) -> tuple[int, int]:
+    """Ring range holding every ring centred in ``[theta1, theta2]``, plus one ring
+    of slack on each side (so rounding ties at a ring centre are never lost).
+
+    For candidate preselection: callers filter the exact band afterwards.
+    """
+    lo = min(theta1, theta2)
+    hi = max(theta1, theta2)
+    first = max(1, _ring_above_scalar(nside, math.cos(lo)))
+    last = min(4 * nside - 1, _ring_above_scalar(nside, math.cos(hi)) + 1)
+    return first, last
+
+
 def _strip_rings(
     nside: int, theta1: float, theta2: float, inclusive: bool
 ) -> list[tuple[int, int]]:
@@ -180,8 +193,17 @@ def _ring_range_pixels(nside: int, ring_ranges: Sequence[tuple[int, int]]) -> Te
         spans.append([int(sp[0]), int(sp[1] + rp[1])])
     if not spans:
         return torch.empty((0,), dtype=torch.int64)
-    pixels = _core_mod.pixel_ranges_to_pixels(torch.tensor(spans, dtype=torch.int64))
-    return torch.unique(pixels, sorted=True)
+    # Ring ranges map to contiguous RING pixel spans: merge overlapping or
+    # touching spans, then emit each once (sorted and unique by construction).
+    spans.sort()
+    merged = [spans[0]]
+    for start, stop in spans[1:]:
+        if start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], stop)
+        else:
+            merged.append([start, stop])
+    parts = [torch.arange(a, b, dtype=torch.int64) for a, b in merged]
+    return parts[0] if len(parts) == 1 else torch.cat(parts)
 
 
 def _query_disc_nest_ranges(
@@ -378,7 +400,12 @@ def _ranges_to_sorted_pixels(ranges: Tensor) -> Tensor:
 
 
 def _strip_nest_pixels(nside: int, lo: float, hi: float) -> Tensor:
-    """NESTED pixels of the rings with centre colatitude in ``[lo, hi]`` (ascending)."""
+    """NESTED pixels of the rings with centre colatitude in ``[lo, hi]`` (ascending).
+
+    Empty when ``lo > hi``.
+    """
+    if lo > hi:
+        return torch.empty((0,), dtype=torch.int64)
     return _ring_ranges_nest_pixels(nside, [_closed_band_rings(nside, lo, hi)])
 
 

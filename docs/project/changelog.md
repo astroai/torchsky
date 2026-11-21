@@ -410,7 +410,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   centre agree. `inclusive=True` adds one ring on each side, as healpy does,
   instead of padding by the maximum pixel radius. Checked against healpy
   1.20.1 for nside 1–256 (936 cases, including ring-centre ties). The ring
-  and NESTED outputs are built from ring ranges with no per-ring Python loop.
+  and NESTED outputs are built from ring ranges with no per-ring Python loop;
+  a 191M-pixel RING strip at nside 4096 takes 0.06 s instead of 0.4 s.
+  `query_box` no longer goes through `query_strip`: it preselects the closed
+  latitude band plus one ring of slack, so boxes whose edges sit on a ring
+  latitude (for example `lat_max=0` and the equator) keep that ring, and a
+  zero-height box no longer scans the whole sky.
   `tests/test_healpix_compile.py` checks that the pure-torch point operations
   compile to one graph and give exactly the eager pixels.
 

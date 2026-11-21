@@ -877,3 +877,23 @@ def test_max_pixel_radius_bounds_every_pixel_densely(nside: int) -> None:
     bound = max_pixel_radius(nside)
     assert float(sep.max()) <= bound * (1.0 + 1e-12)
     assert float(sep.max()) >= bound * (1.0 - 1e-9)
+
+
+@pytest.mark.parametrize("nest", [False, True])
+@pytest.mark.parametrize("nside", [1, 4, 64])
+def test_query_box_keeps_rings_on_both_latitude_edges(nside: int, nest: bool) -> None:
+    # Boxes whose edges sit exactly on ring latitudes (the equator, and the
+    # rings themselves) are closed on both sides: compare with a full scan.
+    pix = torch.arange(12 * nside * nside)
+    lon, lat = healpix_mod.pix2ang(nside, pix, nest=nest, lonlat=True)
+    ring_lats = sorted({float(v) for v in lat.tolist()})
+    edges = [(-10.0, 0.0), (0.0, 0.0), (ring_lats[0], ring_lats[-1])]
+    edges += [(ring_lats[i], ring_lats[i]) for i in (0, len(ring_lats) // 2)]
+    edges += [(ring_lats[0], ring_lats[len(ring_lats) // 2])]
+    for lat_min, lat_max in edges:
+        got = healpix_mod.query_box(nside, 0.0, lat_min, 360.0, lat_max, nest=nest)
+        want = pix[(lat >= lat_min) & (lat <= lat_max)]
+        assert torch.equal(torch.sort(got).values, want), (lat_min, lat_max)
+    got = healpix_mod.query_box(nside, 350.0, -5.0, 10.0, 0.0, nest=nest)
+    keep = (lat >= -5.0) & (lat <= 0.0) & ((lon >= 350.0) | (lon <= 10.0))
+    assert torch.equal(torch.sort(got).values, pix[keep])
