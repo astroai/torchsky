@@ -78,11 +78,6 @@ else()
     endif()
 endif()
 
-execute_process(
-    COMMAND ${Python_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_path('purelib'))"
-    OUTPUT_VARIABLE PYTHON_SITE_PACKAGES
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
 find_package(nanobind CONFIG REQUIRED)
 
 message(DEBUG "torchsky: Python_EXECUTABLE=${Python_EXECUTABLE}")

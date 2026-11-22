@@ -426,10 +426,7 @@ def _table_budget(device: torch.device) -> int:
         # ~5x slower per transform and ~10 s cold.
         return int(torch.cuda.get_device_properties(device).total_memory // 2)
     if device.type == "mps":
-        recommended = getattr(torch.mps, "recommended_max_memory", None)
-        if recommended is not None:
-            return int(recommended() // 4)
-        return 2 << 30
+        return int(torch.mps.recommended_max_memory() // 4)
     return 2 << 30
 
 

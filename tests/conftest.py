@@ -20,13 +20,10 @@ if str(SRC) not in sys.path:
 
 
 def pytest_configure(config) -> None:
-    try:
-        import torch
-    except ImportError:
-        return
+    import torch
+
     torch.set_num_threads(1)
-    if hasattr(torch, "set_num_interop_threads"):
-        torch.set_num_interop_threads(1)
+    torch.set_num_interop_threads(1)
     config.addinivalue_line(
         "markers", "needs_float64: skipped on MPS (no float64 support)"
     )
@@ -89,14 +86,6 @@ def compute_device(request):
     if name != "cpu" and name not in _available_accelerators():
         pytest.skip(f"{name} unavailable")
     return torch.device(name)
-
-
-@pytest.fixture
-def default_device():
-    """The library default compute device (CUDA/MPS via TORCHSKY_DEVICE or CPU)."""
-    from torchsky.device import default_compute_device
-
-    return default_compute_device()
 
 
 def assert_close_on_device(actual, expected, **kwargs) -> None:

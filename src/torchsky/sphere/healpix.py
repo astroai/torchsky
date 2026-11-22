@@ -55,11 +55,6 @@ from ._healpix_query_support import (  # noqa: F401
 )
 from ..device import _as_tensor
 
-try:
-    from torch.func import vmap
-except ImportError:
-    vmap = None
-
 UNSEEN = -1.6375e30
 
 
