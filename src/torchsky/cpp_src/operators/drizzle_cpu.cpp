@@ -21,7 +21,7 @@
 #include <limits>
 #include <vector>
 
-#include "torchsky_torch.h"
+#include "torchsky/native.h"
 
 
 namespace torchsky {
@@ -74,46 +74,46 @@ struct EdgeClip {
 }  // namespace
 
 int64_t drizzle_square_accumulate_cpu(
-    const torch::Tensor& quad_x,
-    const torch::Tensor& quad_y,
-    const torch::Tensor& numer,
-    const torch::Tensor& weight,
+    const native::Tensor& quad_x,
+    const native::Tensor& quad_y,
+    const native::Tensor& numer,
+    const native::Tensor& weight,
     int64_t width,
     int64_t height,
-    const torch::Tensor& out_numer,
-    const torch::Tensor& out_weight,
-    const torch::Tensor& out_variance_weight,
+    const native::Tensor& out_numer,
+    const native::Tensor& out_weight,
+    const native::Tensor& out_variance_weight,
     bool with_variance
 ) {
-    TORCH_CHECK(quad_x.dim() == 2 && quad_x.size(1) == 4, "quad_x must have shape (n, 4)");
-    TORCH_CHECK(quad_y.sizes() == quad_x.sizes(), "quad_y must have the same shape as quad_x");
+    TS_CHECK(quad_x.dim() == 2 && quad_x.size(1) == 4, "quad_x must have shape (n, 4)");
+    TS_CHECK(quad_y.sizes() == quad_x.sizes(), "quad_y must have the same shape as quad_x");
     const int64_t n_quads = quad_x.size(0);
-    TORCH_CHECK(
-        quad_x.scalar_type() == torch::kFloat64 && quad_y.scalar_type() == torch::kFloat64,
+    TS_CHECK(
+        quad_x.scalar_type() == native::kFloat64 && quad_y.scalar_type() == native::kFloat64,
         "quad_x and quad_y must be float64");
-    TORCH_CHECK(
-        numer.scalar_type() == torch::kFloat32 && weight.scalar_type() == torch::kFloat32 &&
-            out_numer.scalar_type() == torch::kFloat32 &&
-            out_weight.scalar_type() == torch::kFloat32,
+    TS_CHECK(
+        numer.scalar_type() == native::kFloat32 && weight.scalar_type() == native::kFloat32 &&
+            out_numer.scalar_type() == native::kFloat32 &&
+            out_weight.scalar_type() == native::kFloat32,
         "numer, weight and the output buffers must be float32");
-    TORCH_CHECK(
+    TS_CHECK(
         quad_x.is_contiguous() && quad_y.is_contiguous() && numer.is_contiguous() &&
             weight.is_contiguous() && out_numer.is_contiguous() && out_weight.is_contiguous(),
         "drizzle_square_accumulate requires contiguous tensors");
-    TORCH_CHECK(
+    TS_CHECK(
         numer.dim() == 1 && numer.size(0) == n_quads && weight.dim() == 1 &&
             weight.size(0) == n_quads,
         "numer and weight must be 1-D with one entry per quad");
     if (n_quads == 0 || width <= 0 || height <= 0) {
         return 0;
     }
-    TORCH_CHECK(
+    TS_CHECK(
         width <= std::numeric_limits<int64_t>::max() / height &&
             out_numer.numel() == width * height && out_weight.numel() == width * height,
         "output buffers must hold width * height elements");
     if (with_variance) {
-        TORCH_CHECK(
-            out_variance_weight.scalar_type() == torch::kFloat32 &&
+        TS_CHECK(
+            out_variance_weight.scalar_type() == native::kFloat32 &&
                 out_variance_weight.is_contiguous() &&
                 out_variance_weight.numel() == width * height,
             "out_variance_weight must be a contiguous float32 buffer of width * height elements");
@@ -130,7 +130,7 @@ int64_t drizzle_square_accumulate_cpu(
     std::vector<QuadInfo> info(static_cast<size_t>(n_quads));
 
     // Pass 1: finiteness, strict convexity, area, candidate box range (clamped to the target).
-    at::parallel_for(0, n_quads, QUAD_PARALLEL_GRAIN, [&](int64_t begin, int64_t end) {
+    native::parallel_for(0, n_quads, QUAD_PARALLEL_GRAIN, [&](int64_t begin, int64_t end) {
         for (int64_t q = begin; q < end; ++q) {
             const double* x = qx + 4 * q;
             const double* y = qy + 4 * q;
@@ -208,7 +208,7 @@ int64_t drizzle_square_accumulate_cpu(
 
     // Pass 2: bucket quads by target-row band (ascending quad order inside each band).
     const int64_t rows = row_hi - row_lo + 1;
-    const int64_t n_threads = std::max<int64_t>(1, at::get_num_threads());
+    const int64_t n_threads = std::max<int64_t>(1, native::get_num_threads());
     const int64_t n_bands = std::min<int64_t>(rows, 4 * n_threads);
     const int64_t band_height = (rows + n_bands - 1) / n_bands;
     const int64_t n_used_bands = (rows + band_height - 1) / band_height;
@@ -230,7 +230,7 @@ int64_t drizzle_square_accumulate_cpu(
     }
 
     // Pass 3: per band, exact overlaps of every quad with the boxes of the band's rows.
-    at::parallel_for(0, n_used_bands, 1, [&](int64_t band_begin, int64_t band_end) {
+    native::parallel_for(0, n_used_bands, 1, [&](int64_t band_begin, int64_t band_end) {
         for (int64_t band = band_begin; band < band_end; ++band) {
             const int64_t band_row_lo = row_lo + band * band_height;
             const int64_t band_row_hi = std::min(band_row_lo + band_height - 1, row_hi);

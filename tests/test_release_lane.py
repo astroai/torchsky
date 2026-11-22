@@ -216,7 +216,7 @@ def _wheel(
         "Metadata-Version: 2.4\nName: torchsky\n"
         f"Version: {version}\nRequires-Python: >=3.12\n"
         f"Requires-Dist: torch{torch}\n"
-        "Requires-Dist: numpy>=1.20.0\n"
+        "Requires-Dist: numpy>=2.0\n"
         f"Requires-Dist: torchfits{_SUPPORT['torchfits']}\n"
     )
     tags = "".join(f"Tag: {python}-{abi}-{tag}\n" for tag in platform.split("."))

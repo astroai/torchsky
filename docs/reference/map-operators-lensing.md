@@ -7,7 +7,7 @@
     objects may change between minor releases; pin a version if you depend
     on them in production.
 
-Opt-in weak-lensing magnification operators: convergence to magnification under an explicit linear or exponential law, flux magnification, size dilation, and magnification bias. Import from this module; they are no longer re-exported by `torchsky.map.operators` (the old names warn and are removed in 0.7).
+Opt-in weak-lensing magnification operators: convergence to magnification under an explicit linear or exponential law, flux magnification, size dilation, and magnification bias. Import from this module; `torchsky.map.operators` does not re-export them.
 
 **Guides:** [scenes](../models/scenes.md)
 

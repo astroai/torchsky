@@ -8,10 +8,23 @@ tracks the package's own direction, not experiment queues.
 
 ---
 
-## Current focus: 0.5
+## Current focus: 0.7
 
-0.5 is the first public release of the package under the name `torchsky`. The
-goals below define what it ships.
+0.5 was the first public release under the name `torchsky`. 0.6 made the native
+core torch-free: one `cp312-abi3` wheel per platform serves Python 3.12 and newer
+and every PyTorch from 2.13 up. The next release is 0.7, because `main` has
+dropped the aliases that 0.6 deprecated.
+
+Planned for 0.7:
+
+- Python 3.15: replace `math.isqrt` on paths traced by
+  `torch.compile(fullgraph=True)` (`npix2nside` and the other integer roots),
+  and add a Python 3.15 CI lane.
+- Move the wall-clock assertion in `tests/test_nested_kernel_psf.py` into
+  `tests/test_perf_gate.py`; it flakes on shared CI runners.
+- SHT performance: the Triton backend and tuning of the native CPU transform.
+
+The goals below still define what a release ships.
 
 | Goal | What "done" means |
 |---|---|
@@ -98,25 +111,13 @@ boundary while focused upstream PRs are reviewed and released.
   that writes TPV headers, which `torchsky.wcs` consumes natively. A native
   solver is a large effort and is not scheduled.
 
-## Open items carried over from the retired planning notes
-
-Release 0.5:
+## Open items
 
 - Review `torchsky.viz` (FastAPI server, routers, frontend, cache, renderer) for
   obsolete endpoints and untested branches; decide whether it stays an optional
   extra or is split out.
-- Experimental field surface names (done in 0.6): `native_response`,
-  `native_integrated_read` and `joint_native_likelihood` are now
-  `source_quadrature`, `source_quadrature_read` and
-  `shared_nuisance_likelihood`, and the lensing/magnification operators moved
-  to the opt-in `torchsky.map.operators.lensing`. No public `native_physical`
-  or `neural_inverse` surface exists: the only remnant is the private
-  Gauss-Newton/PCG step in `torchsky.map.field._gauss_newton`, kept private
-  for a harness benchmark.
-- Keep a single canonical trusted-publishing workflow for `v*` tags, merging the
-  useful verification steps of any overlapping workflow.
 
-Calibrated-field work (post-0.5 unless promoted):
+Calibrated-field work (unscheduled unless promoted):
 
 - Adaptive chromatic response, physical radiometric/flat calibration, and
   photon/charge/read additive-stage renderer integration.

@@ -7,7 +7,7 @@
     objects may change between minor releases; pin a version if you depend
     on them in production.
 
-Poisson-Gaussian likelihood of one raw integrated read per detector pixel, fed by a source-quadrature photon response. Renamed from `torchsky.map.field.native_integrated_read` in 0.6; the old names warn and are removed in 0.7.
+Poisson-Gaussian likelihood of one raw integrated read per detector pixel, fed by a source-quadrature photon response.
 
 **Guides:** [likelihoods](../models/likelihoods.md)
 

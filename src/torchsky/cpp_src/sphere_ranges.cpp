@@ -24,18 +24,18 @@ constexpr int kMaxOrder = 29;
 
 using Range = std::pair<int64_t, int64_t>;
 
-torch::Tensor to_i64_cpu(const torch::Tensor& t, const char* name) {
-    if (!t.device().is_cpu() || t.scalar_type() != torch::kInt64 || t.dim() != 1) {
+native::Tensor to_i64_cpu(const native::Tensor& t, const char* name) {
+    if (!t.device().is_cpu() || t.scalar_type() != native::kInt64 || t.dim() != 1) {
         throw std::runtime_error(std::string(name) + " must be a 1-D int64 CPU tensor");
     }
     return t.contiguous();
 }
 
-std::tuple<torch::Tensor, torch::Tensor> ranges_to_tensors(const std::vector<Range>& r) {
+std::tuple<native::Tensor, native::Tensor> ranges_to_tensors(const std::vector<Range>& r) {
     const int64_t n = static_cast<int64_t>(r.size());
-    auto opts = torch::TensorOptions().dtype(torch::kInt64);
-    auto s = torch::empty({n}, opts);
-    auto e = torch::empty({n}, opts);
+    auto opts = native::TensorOptions().dtype(native::kInt64);
+    auto s = native::empty({n}, opts);
+    auto e = native::empty({n}, opts);
     auto* sp = s.data_ptr<int64_t>();
     auto* ep = e.data_ptr<int64_t>();
     for (int64_t i = 0; i < n; ++i) {
@@ -64,8 +64,8 @@ inline int floor_log2_u64(uint64_t v) {
     return 63 - __builtin_clzll(v);
 }
 
-std::tuple<torch::Tensor, torch::Tensor> moc_uniq_to_ranges_cpu(
-    const torch::Tensor& uniq_in, int64_t max_order
+std::tuple<native::Tensor, native::Tensor> moc_uniq_to_ranges_cpu(
+    const native::Tensor& uniq_in, int64_t max_order
 ) {
     const auto uniq = to_i64_cpu(uniq_in, "uniq");
     if (max_order < 0 || max_order > kMaxOrder) {
@@ -101,8 +101,8 @@ std::tuple<torch::Tensor, torch::Tensor> moc_uniq_to_ranges_cpu(
     return ranges_to_tensors(r);
 }
 
-torch::Tensor moc_ranges_to_uniq_cpu(
-    const torch::Tensor& starts_in, const torch::Tensor& ends_in, int64_t max_order
+native::Tensor moc_ranges_to_uniq_cpu(
+    const native::Tensor& starts_in, const native::Tensor& ends_in, int64_t max_order
 ) {
     const auto starts = to_i64_cpu(starts_in, "starts");
     const auto ends = to_i64_cpu(ends_in, "ends");
@@ -132,17 +132,17 @@ torch::Tensor moc_ranges_to_uniq_cpu(
             s += int64_t{1} << (2 * k);
         }
     }
-    auto t = torch::empty({static_cast<int64_t>(out.size())}, torch::TensorOptions().dtype(torch::kInt64));
+    auto t = native::empty({static_cast<int64_t>(out.size())}, native::TensorOptions().dtype(native::kInt64));
     std::copy(out.begin(), out.end(), t.data_ptr<int64_t>());
     return t;
 }
 
 // op: 0 union, 1 intersection, 2 difference (a - b); inputs sorted disjoint.
-std::tuple<torch::Tensor, torch::Tensor> moc_combine_ranges_cpu(
-    const torch::Tensor& a_s_in,
-    const torch::Tensor& a_e_in,
-    const torch::Tensor& b_s_in,
-    const torch::Tensor& b_e_in,
+std::tuple<native::Tensor, native::Tensor> moc_combine_ranges_cpu(
+    const native::Tensor& a_s_in,
+    const native::Tensor& a_e_in,
+    const native::Tensor& b_s_in,
+    const native::Tensor& b_e_in,
     int64_t op
 ) {
     const auto a_s = to_i64_cpu(a_s_in, "a_starts");
@@ -222,8 +222,8 @@ std::tuple<torch::Tensor, torch::Tensor> moc_combine_ranges_cpu(
 }
 
 // Complement within [0, total).
-std::tuple<torch::Tensor, torch::Tensor> moc_complement_ranges_cpu(
-    const torch::Tensor& s_in, const torch::Tensor& e_in, int64_t total
+std::tuple<native::Tensor, native::Tensor> moc_complement_ranges_cpu(
+    const native::Tensor& s_in, const native::Tensor& e_in, int64_t total
 ) {
     const auto s = to_i64_cpu(s_in, "starts");
     const auto e = to_i64_cpu(e_in, "ends");
@@ -247,14 +247,14 @@ std::tuple<torch::Tensor, torch::Tensor> moc_complement_ranges_cpu(
 }
 
 // Cells finer than `order` are replaced by their parent at `order` (not deduplicated).
-torch::Tensor moc_degrade_uniq_cpu(const torch::Tensor& uniq_in, int64_t order) {
+native::Tensor moc_degrade_uniq_cpu(const native::Tensor& uniq_in, int64_t order) {
     const auto uniq = to_i64_cpu(uniq_in, "uniq");
     if (order < 0 || order > kMaxOrder) {
         throw std::runtime_error("order out of range");
     }
     const int64_t n = uniq.numel();
     const int64_t* u = uniq.data_ptr<int64_t>();
-    auto out = torch::empty({n}, torch::TensorOptions().dtype(torch::kInt64));
+    auto out = native::empty({n}, native::TensorOptions().dtype(native::kInt64));
     int64_t* o = out.data_ptr<int64_t>();
     for (int64_t i = 0; i < n; ++i) {
         const int64_t v = u[i];
@@ -278,8 +278,8 @@ torch::Tensor moc_degrade_uniq_cpu(const torch::Tensor& uniq_in, int64_t order) 
     return out;
 }
 
-torch::Tensor sphere_query_disc_nest_ranges_dispatch_cpu(
-    int64_t nside, const torch::Tensor& vec, double cos_lim
+native::Tensor sphere_query_disc_nest_ranges_dispatch_cpu(
+    int64_t nside, const native::Tensor& vec, double cos_lim
 ) {
     return healpix_query_disc_nest_ranges_cpu(nside, vec, cos_lim);
 }

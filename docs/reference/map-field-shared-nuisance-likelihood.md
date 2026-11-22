@@ -7,7 +7,7 @@
     objects may change between minor releases; pin a version if you depend
     on them in production.
 
-One Gaussian factor for several source-quadrature observations whose additive nuisance modes (a common background or calibration term) are eliminated once, jointly, instead of once per exposure. Renamed from `torchsky.map.field.joint_native_likelihood.bind_joint_native_likelihood` in 0.6; the old path warns and is removed in 0.7.
+One Gaussian factor for several source-quadrature observations whose additive nuisance modes (a common background or calibration term) are eliminated once, jointly, instead of once per exposure.
 
 **Guides:** [likelihoods](../models/likelihoods.md)
 

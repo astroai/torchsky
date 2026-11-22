@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "torchsky_torch.h"
+#include "torchsky/native.h"
 #include "torchsky/geom.h"
 
 namespace torchsky {
@@ -134,14 +134,14 @@ inline bool arc_contains_point(
 }
 
 inline void check_matrix_shape(
-    const torch::Tensor& t,
+    const native::Tensor& t,
     int64_t width,
     const char* name
 ) {
     if (!t.device().is_cpu()) {
         throw std::runtime_error(std::string(name) + " must be a CPU tensor");
     }
-    if (t.scalar_type() != torch::kFloat64) {
+    if (t.scalar_type() != native::kFloat64) {
         throw std::runtime_error(std::string(name) + " must have dtype float64");
     }
     if (t.dim() != 2 || t.size(1) != width) {
@@ -156,9 +156,9 @@ inline void check_matrix_shape(
 
 }  // namespace
 
-torch::Tensor sphere_planar_point_in_polygon_cpu(
-    const torch::Tensor& points_xy,
-    const torch::Tensor& polygon_xy,
+native::Tensor sphere_planar_point_in_polygon_cpu(
+    const native::Tensor& points_xy,
+    const native::Tensor& polygon_xy,
     double eps
 ) {
     check_matrix_shape(points_xy, 2, "points_xy");
@@ -172,15 +172,15 @@ torch::Tensor sphere_planar_point_in_polygon_cpu(
 
     const int64_t num_points = points_xy.size(0);
     const int64_t num_vertices = polygon_xy.size(0);
-    auto out = torch::zeros(
-        {num_points}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCPU)
+    auto out = native::zeros(
+        {num_points}, native::TensorOptions().dtype(native::kBool).device(native::kCPU)
     );
 
     const double* points_ptr = points_xy.data_ptr<double>();
     const double* poly_ptr = polygon_xy.data_ptr<double>();
     bool* out_ptr = out.data_ptr<bool>();
 
-    at::parallel_for(
+    native::parallel_for(
         0, num_points, GEOM_PARALLEL_MIN, [&](int64_t begin, int64_t end) {
             for (int64_t i = begin; i < end; ++i) {
                 const double x = points_ptr[2 * i];
@@ -210,11 +210,11 @@ torch::Tensor sphere_planar_point_in_polygon_cpu(
     return out;
 }
 
-torch::Tensor sphere_arc_intersections_matrix_cpu(
-    const torch::Tensor& a0,
-    const torch::Tensor& a1,
-    const torch::Tensor& b0,
-    const torch::Tensor& b1,
+native::Tensor sphere_arc_intersections_matrix_cpu(
+    const native::Tensor& a0,
+    const native::Tensor& a1,
+    const native::Tensor& b0,
+    const native::Tensor& b1,
     double tol_rad
 ) {
     check_matrix_shape(a0, 3, "a0");
@@ -233,8 +233,8 @@ torch::Tensor sphere_arc_intersections_matrix_cpu(
 
     const int64_t e1 = a0.size(0);
     const int64_t e2 = b0.size(0);
-    auto out = torch::zeros(
-        {e1, e2}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCPU)
+    auto out = native::zeros(
+        {e1, e2}, native::TensorOptions().dtype(native::kBool).device(native::kCPU)
     );
     if (e1 == 0 || e2 == 0) {
         return out;
@@ -260,7 +260,7 @@ torch::Tensor sphere_arc_intersections_matrix_cpu(
         arcs2[static_cast<size_t>(j)] = make_arc_data(b0_j, b1_j);
     }
 
-    at::parallel_for(0, e1, 1, [&](int64_t begin, int64_t end) {
+    native::parallel_for(0, e1, 1, [&](int64_t begin, int64_t end) {
         for (int64_t i = begin; i < end; ++i) {
             const double* a0_i = a0_ptr + (3 * i);
             const double* a1_i = a1_ptr + (3 * i);

@@ -14,7 +14,7 @@ from torchsky.map.field import (
     render_field_observation,
     render_field_observation_distribution,
 )
-from torchsky.map.field.core import _BaseFieldModel
+from torchsky.map.field._core_helpers import _BaseFieldModel
 from torchsky.map.field.observation_ops import (
     coordinate_grid,
     crop_field_observation,

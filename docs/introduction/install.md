@@ -75,7 +75,7 @@ If you install **without** build isolation (`--no-build-isolation`), you must ha
 
 ```bash
 python -m pip install "scikit-build-core>=1.0.0" "nanobind>=2.10.2"
-python -m pip install "torch>=2.13" "numpy>=1.20.0"   # runtime
+python -m pip install "torch>=2.13" "numpy>=2.0"   # runtime
 ```
 
 Exact pins match `[build-system].requires` in `pyproject.toml`.

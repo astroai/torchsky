@@ -7,7 +7,7 @@ from torchsky.map.field import (
     FieldDomain,
     ForwardContext,
 )
-from torchsky.map.field.core import _BaseFieldModel
+from torchsky.map.field._core_helpers import _BaseFieldModel
 
 
 def _tan_header(

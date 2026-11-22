@@ -134,7 +134,7 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
     "SpectralBasisField": (".core", "SpectralBasisField"),
     "SpectralPowerFoamField": (".core", "SpectralPowerFoamField"),
     "WireImplicitField": (".core", "WireImplicitField"),
-    "estimate_field_domain": (".core", "estimate_field_domain"),
+    "estimate_field_domain": ("._core_helpers", "estimate_field_domain"),
     "field_component_anchor_loss": (".core", "field_component_anchor_loss"),
     "field_component_centroid_anchor_loss": (
         ".core",
@@ -146,9 +146,18 @@ _EXPORTS: dict[str, tuple[str, str | None]] = {
         "make_field_component_decomposition",
     ),
     "STRAINER_TRUNK_CHECKPOINT_FORMAT": (".core", "STRAINER_TRUNK_CHECKPOINT_FORMAT"),
-    "load_strainer_trunk_checkpoint": (".core", "load_strainer_trunk_checkpoint"),
-    "pretrain_strainer_trunk_synthetic": (".core", "pretrain_strainer_trunk_synthetic"),
-    "save_strainer_trunk_checkpoint": (".core", "save_strainer_trunk_checkpoint"),
+    "load_strainer_trunk_checkpoint": (
+        "._core_helpers",
+        "load_strainer_trunk_checkpoint",
+    ),
+    "pretrain_strainer_trunk_synthetic": (
+        "._core_helpers",
+        "pretrain_strainer_trunk_synthetic",
+    ),
+    "save_strainer_trunk_checkpoint": (
+        "._core_helpers",
+        "save_strainer_trunk_checkpoint",
+    ),
     "evaluate_field_coordinates_vmapped": (
         ".rendering",
         "evaluate_field_coordinates_vmapped",
@@ -497,24 +506,7 @@ __all__ = [
 ]
 
 
-# Renamed after 0.5.0; removed in 0.7. Never cached, so every access warns.
-_DEPRECATED: dict[str, tuple[str, str]] = {
-    "NativeIntegratedReadLikelihood": (
-        "torchsky.map.field.source_quadrature_read",
-        "SourceQuadratureReadLikelihood",
-    ),
-    "bind_native_integrated_read_likelihood": (
-        "torchsky.map.field.source_quadrature_read",
-        "bind_source_quadrature_read_likelihood",
-    ),
-}
-
-
 def __getattr__(name: str) -> Any:
-    if name in _DEPRECATED:
-        from ..._deprecation import deprecated_attribute
-
-        return deprecated_attribute(__name__, name, _DEPRECATED[name])
     try:
         module_name, attribute = _EXPORTS[name]
     except KeyError as exc:

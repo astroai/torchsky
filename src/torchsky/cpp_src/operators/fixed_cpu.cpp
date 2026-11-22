@@ -7,9 +7,9 @@
 
 namespace torchsky {
 
-torch::Tensor sphere_planar_point_in_polygon_dispatch_cpu(
-    const torch::Tensor& points_xy,
-    const torch::Tensor& polygon_xy,
+native::Tensor sphere_planar_point_in_polygon_dispatch_cpu(
+    const native::Tensor& points_xy,
+    const native::Tensor& polygon_xy,
     double eps
 ) {
     return sphere_planar_point_in_polygon_cpu(
@@ -17,11 +17,11 @@ torch::Tensor sphere_planar_point_in_polygon_dispatch_cpu(
     );
 }
 
-torch::Tensor sphere_arc_intersections_matrix_dispatch_cpu(
-    const torch::Tensor& a0,
-    const torch::Tensor& a1,
-    const torch::Tensor& b0,
-    const torch::Tensor& b1,
+native::Tensor sphere_arc_intersections_matrix_dispatch_cpu(
+    const native::Tensor& a0,
+    const native::Tensor& a1,
+    const native::Tensor& b0,
+    const native::Tensor& b1,
     double tol_rad
 ) {
     return sphere_arc_intersections_matrix_cpu(
@@ -29,45 +29,45 @@ torch::Tensor sphere_arc_intersections_matrix_dispatch_cpu(
     );
 }
 
-std::tuple<torch::Tensor, torch::Tensor> reshape_interp_weights(
-    std::pair<torch::Tensor, torch::Tensor> output,
-    const torch::Tensor& coordinates
+std::tuple<native::Tensor, native::Tensor> reshape_interp_weights(
+    std::pair<native::Tensor, native::Tensor> output,
+    const native::Tensor& coordinates
 ) {
     auto shape = coordinates.sizes().vec();
     shape.insert(shape.begin(), 4);
     return {output.first.reshape(shape), output.second.reshape(shape)};
 }
 
-std::tuple<torch::Tensor, torch::Tensor> healpix_pix2ang_ring_dispatch_cpu(
+std::tuple<native::Tensor, native::Tensor> healpix_pix2ang_ring_dispatch_cpu(
     int64_t nside,
-    const torch::Tensor& pixels
+    const native::Tensor& pixels
 ) {
     auto output = healpix_pix2ang_ring_cpu(nside, pixels);
     return {output.first, output.second};
 }
 
-std::tuple<torch::Tensor, torch::Tensor> healpix_pix2ang_nested_dispatch_cpu(
+std::tuple<native::Tensor, native::Tensor> healpix_pix2ang_nested_dispatch_cpu(
     int64_t nside,
-    const torch::Tensor& pixels
+    const native::Tensor& pixels
 ) {
     auto output = healpix_pix2ang_nested_cpu(nside, pixels);
     return {output.first, output.second};
 }
 
-std::tuple<torch::Tensor, torch::Tensor> healpix_get_interp_weights_ring_dispatch_cpu(
+std::tuple<native::Tensor, native::Tensor> healpix_get_interp_weights_ring_dispatch_cpu(
     int64_t nside,
-    const torch::Tensor& lon_deg,
-    const torch::Tensor& lat_deg
+    const native::Tensor& lon_deg,
+    const native::Tensor& lat_deg
 ) {
     return reshape_interp_weights(
         healpix_get_interp_weights_ring_cpu(nside, lon_deg, lat_deg), lon_deg
     );
 }
 
-std::tuple<torch::Tensor, torch::Tensor> healpix_get_interp_weights_nested_dispatch_cpu(
+std::tuple<native::Tensor, native::Tensor> healpix_get_interp_weights_nested_dispatch_cpu(
     int64_t nside,
-    const torch::Tensor& lon_deg,
-    const torch::Tensor& lat_deg
+    const native::Tensor& lon_deg,
+    const native::Tensor& lat_deg
 ) {
     return reshape_interp_weights(
         healpix_get_interp_weights_nested_cpu(nside, lon_deg, lat_deg), lon_deg

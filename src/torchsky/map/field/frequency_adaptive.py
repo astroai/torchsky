@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from .core import _BaseFieldModel
+from ._core_helpers import _BaseFieldModel
 from .hashgrid import HashGridEncoder
 from .types import FieldDomain
 from ...device import _to

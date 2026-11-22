@@ -1,7 +1,7 @@
 """Shared helpers and the base class for :mod:`torchsky.map.field` models.
 
 Extracted from ``map/field/core.py`` so the model zoo and the helper layer can
-grow independently; ``core`` re-exports every name here for compatibility.
+grow independently. Import these names from here, not from ``core``.
 """
 
 from __future__ import annotations

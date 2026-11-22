@@ -39,7 +39,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install "torch${TORCH_PIN}" --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install 'nanobind>=2.10.2' 'numpy>=1.20' 'pytest>=8' 'scikit-build-core>=1.0.0' "torchfits${TORCHFITS_PIN}"
+          python -m pip install 'nanobind>=2.10.2' 'numpy>=2.0' 'pytest>=8' 'scikit-build-core>=1.0.0' "torchfits${TORCHFITS_PIN}"
       - name: Build sanitized native extension
         run: python -m pip install -e . --no-build-isolation
       - name: Run native safety contracts
@@ -71,7 +71,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install "torch${TORCH_PIN}" --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install 'build>=1,<2' 'nanobind>=2.10.2' 'numpy>=1.20' 'pytest>=8' 'scikit-build-core>=1.0.0' "torchfits${TORCHFITS_PIN}" 'twine>=5'
+          python -m pip install 'build>=1,<2' 'nanobind>=2.10.2' 'numpy>=2.0' 'pytest>=8' 'scikit-build-core>=1.0.0' "torchfits${TORCHFITS_PIN}" 'twine>=5'
           python -c "import torch; assert torch.version.cuda is None, torch.version.cuda"
       - name: Configure and build CPU-only native wheel
         run: python -m build --wheel --no-isolation --outdir wheelhouse
@@ -119,7 +119,7 @@ jobs:
           test "$(uname -m)" = arm64
           python -m pip install --upgrade pip
           python -m pip install "torch${TORCH_PIN}"
-          python -m pip install 'build>=1,<2' 'nanobind>=2.10.2' 'numpy>=1.20' 'scikit-build-core>=1.0.0' "torchfits${TORCHFITS_PIN}" 'twine>=5'
+          python -m pip install 'build>=1,<2' 'nanobind>=2.10.2' 'numpy>=2.0' 'scikit-build-core>=1.0.0' "torchfits${TORCHFITS_PIN}" 'twine>=5'
           python -c "import platform, torch; assert platform.machine() == 'arm64'; assert torch.version.cuda is None"
       - name: Build, inspect, and install arm64 wheel
         run: |
