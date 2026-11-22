@@ -15,7 +15,8 @@ from ..device import default_compute_device, _to
 from torchfits import read
 from torchfits import read_header  # noqa: F401
 from ..map.field.artifacts import load_field_artifact, save_field_artifact
-from ..map.field.core import estimate_field_domain, make_field_model
+from ..map.field._core_helpers import estimate_field_domain
+from ..map.field.core import make_field_model
 from ..map.field.presets import get_field_model_preset
 from ..map.field.training import fit_field_model
 from ..map.field.types import FieldObservation, FieldSpatialSampling

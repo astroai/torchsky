@@ -317,7 +317,7 @@ inline void integrate_block(
     const double* wqr,  // odd-parity weights
     const double* wqi,
     const double* lscale,  // per-l scale pre_phase * sqrt((2l+1)/4pi), indexed by l
-    c10::complex<double>* alm_m  // alm_out + idx_base - m  (index by l)
+    std::complex<double>* alm_m  // alm_out + idx_base - m  (index by l)
 ) {
     constexpr int NV = kInt;
     Lanes<NV> ln;
@@ -492,14 +492,14 @@ inline void synth_block(
 
 // s_modes (mmax+1, nrings) -> alm (nalm); weights scalar or per ring.
 inline void integrate(
-    const c10::complex<double>* s_modes,
+    const std::complex<double>* s_modes,
     const double* theta,
     const double* weight,
     bool w_scalar,
     int64_t nrings,
     int64_t lmax,
     int64_t mmax,
-    c10::complex<double>* alm_out
+    std::complex<double>* alm_out
 ) {
     const RingGeometry g(theta, nrings, lmax);
     const std::vector<double> dcoef = sectoral_coeffs(mmax);
@@ -520,7 +520,7 @@ inline void integrate(
             if (first >= g.n_eff) {
                 continue;
             }
-            const c10::complex<double>* sm = s_modes + m * nrings;
+            const std::complex<double>* sm = s_modes + m * nrings;
             for (int64_t i = first; i < g.n_eff; ++i) {
                 const double wn = w_scalar ? weight[0] : weight[i];
                 const double nr = sm[i].real() * wn, ni = sm[i].imag() * wn;
@@ -542,7 +542,7 @@ inline void integrate(
             for (int64_t l = m; l <= lmax; ++l) {
                 lscale[static_cast<size_t>(l)] = pre_phase * (*lfac)[static_cast<size_t>(l)];
             }
-            c10::complex<double>* alm_m = alm_out + (m * (lmax + 1) - (m * (m - 1)) / 2) - m;
+            std::complex<double>* alm_m = alm_out + (m * (lmax + 1) - (m * (m - 1)) / 2) - m;
             for (int64_t i0 = first; i0 < g.n_eff; i0 += VL * kInt) {
                 const int64_t nb = std::min<int64_t>(VL * kInt, g.n_eff - i0);
                 integrate_block(
@@ -556,12 +556,12 @@ inline void integrate(
 
 // alm (nalm) -> s_modes (mmax+1, nrings) complex.
 inline void synthesize(
-    const c10::complex<double>* alm,
+    const std::complex<double>* alm,
     const double* theta,
     int64_t nrings,
     int64_t lmax,
     int64_t mmax,
-    c10::complex<double>* s_modes
+    std::complex<double>* s_modes
 ) {
     const RingGeometry g(theta, nrings, lmax);
     const std::vector<double> dcoef = sectoral_coeffs(mmax);
@@ -583,13 +583,13 @@ inline void synthesize(
             }
             fill_coeffs(m, lmax, c1.data(), c3.data());
             const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
-            const c10::complex<double>* am = alm + (m * (lmax + 1) - (m * (m - 1)) / 2) - m;
+            const std::complex<double>* am = alm + (m * (lmax + 1) - (m * (m - 1)) / 2) - m;
             for (int64_t l = m; l <= lmax; ++l) {
                 const double sc = pre_phase * (*lfac)[static_cast<size_t>(l)];
                 alm_s[static_cast<size_t>(2 * l)] = am[l].real() * sc;
                 alm_s[static_cast<size_t>(2 * l + 1)] = am[l].imag() * sc;
             }
-            c10::complex<double>* out = s_modes + m * nrings;
+            std::complex<double>* out = s_modes + m * nrings;
             for (int64_t i0 = first; i0 < g.n_eff; i0 += VL * kSyn) {
                 const int64_t nb = std::min<int64_t>(VL * kSyn, g.n_eff - i0);
                 synth_block(
@@ -598,9 +598,9 @@ inline void synthesize(
                 );
                 for (int64_t j = 0; j < nb; ++j) {
                     const int64_t i = i0 + j;
-                    out[i] = c10::complex<double>(er[j] + orr[j], ei[j] + oi[j]);
+                    out[i] = std::complex<double>(er[j] + orr[j], ei[j] + oi[j]);
                     if (i < g.n_pairs) {
-                        out[nrings - 1 - i] = c10::complex<double>(er[j] - orr[j], ei[j] - oi[j]);
+                        out[nrings - 1 - i] = std::complex<double>(er[j] - orr[j], ei[j] - oi[j]);
                     }
                 }
             }

@@ -179,7 +179,7 @@ name = "torchsky.map.operators.lensing"
 slug = "map-operators-lensing"
 tier = "experimental"
 related = ["models/scenes.md"]
-intro = "Opt-in weak-lensing magnification operators: convergence to magnification under an explicit linear or exponential law, flux magnification, size dilation, and magnification bias. Import from this module; they are no longer re-exported by `torchsky.map.operators` (the old names warn and are removed in 0.7)."
+intro = "Opt-in weak-lensing magnification operators: convergence to magnification under an explicit linear or exponential law, flux magnification, size dilation, and magnification bias. Import from this module; `torchsky.map.operators` does not re-export them."
 
 [[namespace]]
 name = "torchsky.map.operators.nuisance"
@@ -219,21 +219,21 @@ name = "torchsky.map.field.shared_nuisance_likelihood"
 slug = "map-field-shared-nuisance-likelihood"
 tier = "experimental"
 related = ["models/likelihoods.md"]
-intro = "One Gaussian factor for several source-quadrature observations whose additive nuisance modes (a common background or calibration term) are eliminated once, jointly, instead of once per exposure. Renamed from `torchsky.map.field.joint_native_likelihood.bind_joint_native_likelihood` in 0.6; the old path warns and is removed in 0.7."
+intro = "One Gaussian factor for several source-quadrature observations whose additive nuisance modes (a common background or calibration term) are eliminated once, jointly, instead of once per exposure."
 
 [[namespace]]
 name = "torchsky.map.field.source_quadrature_read"
 slug = "map-field-source-quadrature-read"
 tier = "experimental"
 related = ["models/likelihoods.md"]
-intro = "Poisson-Gaussian likelihood of one raw integrated read per detector pixel, fed by a source-quadrature photon response. Renamed from `torchsky.map.field.native_integrated_read` in 0.6; the old names warn and are removed in 0.7."
+intro = "Poisson-Gaussian likelihood of one raw integrated read per detector pixel, fed by a source-quadrature photon response."
 
 [[namespace]]
 name = "torchsky.map.field.source_quadrature"
 slug = "map-field-source-quadrature"
 tier = "experimental"
 related = ["models/likelihoods.md"]
-intro = "A continuous sky sampled at caller-supplied source nodes and transported by an explicit quadrature and calibration into detector pixels, with fixed Gaussian evidence. Renamed from `torchsky.map.field.native_response` in 0.6; the old names warn and are removed in 0.7."
+intro = "A continuous sky sampled at caller-supplied source nodes and transported by an explicit quadrature and calibration into detector pixels, with fixed Gaussian evidence."
 
 [[namespace]]
 name = "torchsky.map.exposure_fit"

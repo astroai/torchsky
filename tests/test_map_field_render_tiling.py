@@ -11,7 +11,8 @@ import math
 
 import torch
 
-from torchsky.map.field.core import estimate_field_domain, make_field_model
+from torchsky.map.field._core_helpers import estimate_field_domain
+from torchsky.map.field.core import make_field_model
 from torchsky.map.field.rendering import render_field_observation
 from torchsky.map.field.types import FieldObservation
 

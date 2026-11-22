@@ -37,7 +37,7 @@ from ..solvers import (
     LinearSolveResult,
 )
 from ..target import TargetRenderSpec
-from .core import _BaseFieldModel
+from ._core_helpers import _BaseFieldModel
 from .observation_ops import (
     coordinate_grid,
     observation_support_mask,

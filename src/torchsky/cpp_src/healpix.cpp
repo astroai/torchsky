@@ -45,7 +45,7 @@
 #define POCKETFFT_CACHE_SIZE 128
 #include "third_party/pocketfft_hdronly.h"
 
-#include "torchsky_torch.h"
+#include "torchsky/native.h"
 #include "torchsky/healpix.h"
 #include "torchsky/ishioka_kernels.h"
 
@@ -138,8 +138,8 @@ inline HealpixLayout validate_healpix_layout(int64_t nside, const char* function
 }
 
 inline void validate_lonlat_values(
-    const torch::Tensor& lon,
-    const torch::Tensor& lat,
+    const native::Tensor& lon,
+    const native::Tensor& lat,
     const char* function_name
 ) {
     const auto* lon_ptr = lon.data_ptr<double>();
@@ -195,9 +195,9 @@ inline int64_t validate_spin_spectral_limits(
     return nalm;
 }
 
-inline torch::Tensor validate_spectral_tensor(
-    const torch::Tensor& tensor,
-    torch::ScalarType dtype,
+inline native::Tensor validate_spectral_tensor(
+    const native::Tensor& tensor,
+    native::ScalarType dtype,
     std::initializer_list<int64_t> ranks,
     const char* function_name,
     const char* tensor_name,
@@ -232,23 +232,23 @@ inline void validate_finite_scalar(double value, const char* function_name, cons
 }
 
 struct SpectralRingLayout {
-    torch::Tensor starts;
-    torch::Tensor lengths;
+    native::Tensor starts;
+    native::Tensor lengths;
     int64_t nrings;
     int64_t extent;
 };
 
 inline SpectralRingLayout validate_spectral_ring_layout(
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths,
+    const native::Tensor& starts,
+    const native::Tensor& lengths,
     const char* function_name,
     std::optional<int64_t> map_extent = std::nullopt
 ) {
     auto starts_c = validate_spectral_tensor(
-        starts, torch::kInt64, {1}, function_name, "starts", "int64"
+        starts, native::kInt64, {1}, function_name, "starts", "int64"
     );
     auto lengths_c = validate_spectral_tensor(
-        lengths, torch::kInt64, {1}, function_name, "lengths", "int64"
+        lengths, native::kInt64, {1}, function_name, "lengths", "int64"
     );
     if (starts_c.numel() != lengths_c.numel()) {
         throw std::runtime_error(std::string(function_name) + " starts/lengths size mismatch");
@@ -585,14 +585,14 @@ static RecurrenceCache g_recurrence_cache;
 class RingAliasIndexCache {
     std::mutex mutex_;
     using Key = std::pair<int64_t, int64_t>;
-    using Entry = torch::Tensor;
+    using Entry = native::Tensor;
     std::map<Key, std::shared_ptr<const Entry>> plus_idx_;
     std::map<Key, std::shared_ptr<const Entry>> minus_idx_;
     std::map<Key, std::shared_ptr<const Entry>> both_idx_;
     static constexpr size_t kMaxEntries = 256;
 
-    static torch::Tensor make_plus_idx(int64_t nph, int64_t mcount) {
-        auto idx = torch::empty({mcount}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+    static native::Tensor make_plus_idx(int64_t nph, int64_t mcount) {
+        auto idx = native::empty({mcount}, native::TensorOptions().dtype(native::kInt64).device(native::kCPU));
         auto* ptr = idx.data_ptr<int64_t>();
         for (int64_t m = 0; m < mcount; ++m) {
             ptr[m] = m % nph;
@@ -600,8 +600,8 @@ class RingAliasIndexCache {
         return idx;
     }
 
-    static torch::Tensor make_minus_idx(int64_t nph, int64_t mcount) {
-        auto idx = torch::empty({mcount}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+    static native::Tensor make_minus_idx(int64_t nph, int64_t mcount) {
+        auto idx = native::empty({mcount}, native::TensorOptions().dtype(native::kInt64).device(native::kCPU));
         auto* ptr = idx.data_ptr<int64_t>();
         for (int64_t m = 0; m < mcount; ++m) {
             const int64_t k = m % nph;
@@ -610,8 +610,8 @@ class RingAliasIndexCache {
         return idx;
     }
 
-    static torch::Tensor make_both_idx(int64_t nph, int64_t mcount) {
-        auto idx = torch::empty({2 * mcount}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCPU));
+    static native::Tensor make_both_idx(int64_t nph, int64_t mcount) {
+        auto idx = native::empty({2 * mcount}, native::TensorOptions().dtype(native::kInt64).device(native::kCPU));
         auto* ptr = idx.data_ptr<int64_t>();
         for (int64_t m = 0; m < mcount; ++m) {
             const int64_t k = m % nph;
@@ -732,13 +732,13 @@ inline int64_t sharp_mlim_estimate(int64_t lmax, int64_t spin_abs, double sth, d
 
 }  // namespace
 
-torch::Tensor healpix_ang2pix_ring_cpu(int64_t nside, const torch::Tensor& ra_deg, const torch::Tensor& dec_deg) {
+native::Tensor healpix_ang2pix_ring_cpu(int64_t nside, const native::Tensor& ra_deg, const native::Tensor& dec_deg) {
     constexpr const char* function_name = "healpix_ang2pix_ring_cpu";
     const auto layout = validate_healpix_layout(nside, function_name);
     if (!ra_deg.device().is_cpu() || !dec_deg.device().is_cpu()) {
         throw std::runtime_error("healpix_ang2pix_ring_cpu expects CPU tensors");
     }
-    if (ra_deg.scalar_type() != torch::kDouble || dec_deg.scalar_type() != torch::kDouble) {
+    if (ra_deg.scalar_type() != native::kDouble || dec_deg.scalar_type() != native::kDouble) {
         throw std::runtime_error("healpix_ang2pix_ring_cpu expects float64 tensors");
     }
     if (!ra_deg.sizes().equals(dec_deg.sizes())) {
@@ -748,7 +748,7 @@ torch::Tensor healpix_ang2pix_ring_cpu(int64_t nside, const torch::Tensor& ra_de
     auto ra = ra_deg.contiguous().reshape({-1});
     auto dec = dec_deg.contiguous().reshape({-1});
     validate_lonlat_values(ra, dec, function_name);
-    auto out = torch::empty_like(ra, torch::TensorOptions().dtype(torch::kInt64));
+    auto out = native::empty_like(ra, native::TensorOptions().dtype(native::kInt64));
     const auto* ra_ptr = ra.data_ptr<double>();
     const auto* dec_ptr = dec.data_ptr<double>();
     auto* dst = out.data_ptr<int64_t>();
@@ -796,13 +796,13 @@ torch::Tensor healpix_ang2pix_ring_cpu(int64_t nside, const torch::Tensor& ra_de
     return out.reshape(ra_deg.sizes().vec());
 }
 
-torch::Tensor healpix_ang2pix_nested_cpu(int64_t nside, const torch::Tensor& ra_deg, const torch::Tensor& dec_deg) {
+native::Tensor healpix_ang2pix_nested_cpu(int64_t nside, const native::Tensor& ra_deg, const native::Tensor& dec_deg) {
     constexpr const char* function_name = "healpix_ang2pix_nested_cpu";
     const auto layout = validate_healpix_layout(nside, function_name);
     if (!ra_deg.device().is_cpu() || !dec_deg.device().is_cpu()) {
         throw std::runtime_error("healpix_ang2pix_nested_cpu expects CPU tensors");
     }
-    if (ra_deg.scalar_type() != torch::kDouble || dec_deg.scalar_type() != torch::kDouble) {
+    if (ra_deg.scalar_type() != native::kDouble || dec_deg.scalar_type() != native::kDouble) {
         throw std::runtime_error("healpix_ang2pix_nested_cpu expects float64 tensors");
     }
     if (!ra_deg.sizes().equals(dec_deg.sizes())) {
@@ -812,7 +812,7 @@ torch::Tensor healpix_ang2pix_nested_cpu(int64_t nside, const torch::Tensor& ra_
     auto ra = ra_deg.contiguous().reshape({-1});
     auto dec = dec_deg.contiguous().reshape({-1});
     validate_lonlat_values(ra, dec, function_name);
-    auto out = torch::empty_like(ra, torch::TensorOptions().dtype(torch::kInt64));
+    auto out = native::empty_like(ra, native::TensorOptions().dtype(native::kInt64));
     const auto* ra_ptr = ra.data_ptr<double>();
     const auto* dec_ptr = dec.data_ptr<double>();
     auto* dst = out.data_ptr<int64_t>();
@@ -878,19 +878,19 @@ torch::Tensor healpix_ang2pix_nested_cpu(int64_t nside, const torch::Tensor& ra_
     return out.reshape(ra_deg.sizes().vec());
 }
 
-std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_ring_cpu(int64_t nside, const torch::Tensor& pix_ring) {
+std::pair<native::Tensor, native::Tensor> healpix_pix2ang_ring_cpu(int64_t nside, const native::Tensor& pix_ring) {
     constexpr const char* function_name = "healpix_pix2ang_ring_cpu";
     const auto layout = validate_healpix_layout(nside, function_name);
     if (!pix_ring.device().is_cpu()) {
         throw std::runtime_error("healpix_pix2ang_ring_cpu expects CPU tensor");
     }
-    if (pix_ring.scalar_type() != torch::kInt64) {
+    if (pix_ring.scalar_type() != native::kInt64) {
         throw std::runtime_error("healpix_pix2ang_ring_cpu expects int64 tensor");
     }
 
     auto pix = pix_ring.contiguous().reshape({-1});
-    auto ra = torch::empty_like(pix, torch::TensorOptions().dtype(torch::kDouble));
-    auto dec = torch::empty_like(pix, torch::TensorOptions().dtype(torch::kDouble));
+    auto ra = native::empty_like(pix, native::TensorOptions().dtype(native::kDouble));
+    auto dec = native::empty_like(pix, native::TensorOptions().dtype(native::kDouble));
 
     const int64_t ncap = layout.ncap;
     const int64_t npix = layout.npix;
@@ -946,7 +946,7 @@ std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_ring_cpu(int64_t nside, 
         }
     };
     if (n >= PARALLEL_MIN_ELEMS) {
-        at::parallel_for(0, n, 4096, compute_block);
+        native::parallel_for(0, n, 4096, compute_block);
     } else {
         compute_block(0, n);
     }
@@ -958,19 +958,19 @@ std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_ring_cpu(int64_t nside, 
     return {ra.reshape(shape), dec.reshape(shape)};
 }
 
-std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_nested_cpu(int64_t nside, const torch::Tensor& pix_nest) {
+std::pair<native::Tensor, native::Tensor> healpix_pix2ang_nested_cpu(int64_t nside, const native::Tensor& pix_nest) {
     constexpr const char* function_name = "healpix_pix2ang_nested_cpu";
     const auto layout = validate_healpix_layout(nside, function_name);
     if (!pix_nest.device().is_cpu()) {
         throw std::runtime_error("healpix_pix2ang_nested_cpu expects CPU tensor");
     }
-    if (pix_nest.scalar_type() != torch::kInt64) {
+    if (pix_nest.scalar_type() != native::kInt64) {
         throw std::runtime_error("healpix_pix2ang_nested_cpu expects int64 tensor");
     }
 
     auto pix = pix_nest.contiguous().reshape({-1});
-    auto ra = torch::empty_like(pix, torch::TensorOptions().dtype(torch::kDouble));
-    auto dec = torch::empty_like(pix, torch::TensorOptions().dtype(torch::kDouble));
+    auto ra = native::empty_like(pix, native::TensorOptions().dtype(native::kDouble));
+    auto dec = native::empty_like(pix, native::TensorOptions().dtype(native::kDouble));
 
     const int64_t npface = layout.npface;
     const int64_t npix = layout.npix;
@@ -1036,7 +1036,7 @@ std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_nested_cpu(int64_t nside
         }
     };
     if (n >= PARALLEL_MIN_ELEMS) {
-        at::parallel_for(0, n, 8192, compute_block);
+        native::parallel_for(0, n, 8192, compute_block);
     } else {
         compute_block(0, n);
     }
@@ -1048,18 +1048,18 @@ std::pair<torch::Tensor, torch::Tensor> healpix_pix2ang_nested_cpu(int64_t nside
     return {ra.reshape(shape), dec.reshape(shape)};
 }
 
-torch::Tensor healpix_ring2nest_cpu(int64_t nside, const torch::Tensor& pix_ring) {
+native::Tensor healpix_ring2nest_cpu(int64_t nside, const native::Tensor& pix_ring) {
     constexpr const char* function_name = "healpix_ring2nest_cpu";
     const auto layout = validate_healpix_layout(nside, function_name);
     if (!pix_ring.device().is_cpu()) {
         throw std::runtime_error("healpix_ring2nest_cpu expects CPU tensor");
     }
-    if (pix_ring.scalar_type() != torch::kInt64) {
+    if (pix_ring.scalar_type() != native::kInt64) {
         throw std::runtime_error("healpix_ring2nest_cpu expects int64 tensor");
     }
 
     auto pix = pix_ring.contiguous();
-    auto out = torch::empty_like(pix);
+    auto out = native::empty_like(pix);
 
     const int64_t npface = layout.npface;
     const int64_t ncap = layout.ncap;
@@ -1143,7 +1143,7 @@ torch::Tensor healpix_ring2nest_cpu(int64_t nside, const torch::Tensor& pix_ring
         }
     };
     if (n >= PARALLEL_MIN_ELEMS) {
-        at::parallel_for(0, n, 16384, compute_block);
+        native::parallel_for(0, n, 16384, compute_block);
     } else {
         compute_block(0, n);
     }
@@ -1154,18 +1154,18 @@ torch::Tensor healpix_ring2nest_cpu(int64_t nside, const torch::Tensor& pix_ring
     return out;
 }
 
-torch::Tensor healpix_nest2ring_cpu(int64_t nside, const torch::Tensor& pix_nest) {
+native::Tensor healpix_nest2ring_cpu(int64_t nside, const native::Tensor& pix_nest) {
     constexpr const char* function_name = "healpix_nest2ring_cpu";
     const auto layout = validate_healpix_layout(nside, function_name);
     if (!pix_nest.device().is_cpu()) {
         throw std::runtime_error("healpix_nest2ring_cpu expects CPU tensor");
     }
-    if (pix_nest.scalar_type() != torch::kInt64) {
+    if (pix_nest.scalar_type() != native::kInt64) {
         throw std::runtime_error("healpix_nest2ring_cpu expects int64 tensor");
     }
 
     auto pix = pix_nest.contiguous();
-    auto out = torch::empty_like(pix);
+    auto out = native::empty_like(pix);
 
     const int64_t npface = layout.npface;
     const int64_t ncap = layout.ncap;
@@ -1219,7 +1219,7 @@ torch::Tensor healpix_nest2ring_cpu(int64_t nside, const torch::Tensor& pix_nest
         }
     };
     if (n >= PARALLEL_MIN_ELEMS) {
-        at::parallel_for(0, n, 16384, compute_block);
+        native::parallel_for(0, n, 16384, compute_block);
     } else {
         compute_block(0, n);
     }
@@ -1230,9 +1230,9 @@ torch::Tensor healpix_nest2ring_cpu(int64_t nside, const torch::Tensor& pix_nest
     return out;
 }
 
-static torch::Tensor healpix_neighbors_cpu_impl(
+static native::Tensor healpix_neighbors_cpu_impl(
     int64_t nside,
-    const torch::Tensor& pix_in,
+    const native::Tensor& pix_in,
     bool input_nest,
     bool output_nest
 ) {
@@ -1241,7 +1241,7 @@ static torch::Tensor healpix_neighbors_cpu_impl(
     if (!pix_in.device().is_cpu()) {
         throw std::runtime_error("healpix_neighbors_cpu expects CPU tensor");
     }
-    if (pix_in.scalar_type() != torch::kInt64) {
+    if (pix_in.scalar_type() != native::kInt64) {
         throw std::runtime_error("healpix_neighbors_cpu expects int64 tensor");
     }
 
@@ -1250,7 +1250,7 @@ static torch::Tensor healpix_neighbors_cpu_impl(
     checked_allocation_count(
         checked_nonnegative_mul(n, 8, function_name), sizeof(int64_t), function_name
     );
-    auto out = torch::full({n, 8}, static_cast<int64_t>(-1), torch::TensorOptions().dtype(torch::kInt64));
+    auto out = native::full({n, 8}, static_cast<int64_t>(-1), native::TensorOptions().dtype(native::kInt64));
     if (n == 0) {
         auto shape = pix_in.sizes().vec();
         shape.push_back(8);
@@ -1391,7 +1391,7 @@ static torch::Tensor healpix_neighbors_cpu_impl(
     };
 
     if (n >= PARALLEL_MIN_ELEMS) {
-        at::parallel_for(0, n, 8192, compute_block);
+        native::parallel_for(0, n, 8192, compute_block);
     } else {
         compute_block(0, n);
     }
@@ -1401,34 +1401,34 @@ static torch::Tensor healpix_neighbors_cpu_impl(
     return out.reshape(shape);
 }
 
-torch::Tensor healpix_neighbors_ring_cpu(int64_t nside, const torch::Tensor& pix_ring) {
+native::Tensor healpix_neighbors_ring_cpu(int64_t nside, const native::Tensor& pix_ring) {
     return healpix_neighbors_cpu_impl(nside, pix_ring, false, false);
 }
 
-torch::Tensor healpix_neighbors_nested_cpu(int64_t nside, const torch::Tensor& pix_nest) {
+native::Tensor healpix_neighbors_nested_cpu(int64_t nside, const native::Tensor& pix_nest) {
     return healpix_neighbors_cpu_impl(nside, pix_nest, true, true);
 }
 
-torch::Tensor healpix_scalar_alm2map_direct_cpu(
-    const torch::Tensor& alm_values,
-    const torch::Tensor& cos_theta,
-    const torch::Tensor& phi,
+native::Tensor healpix_scalar_alm2map_direct_cpu(
+    const native::Tensor& alm_values,
+    const native::Tensor& cos_theta,
+    const native::Tensor& phi,
     int64_t lmax,
     int64_t mmax
 ) {
     constexpr const char* function_name = "healpix_scalar_alm2map_direct_cpu";
     const int64_t expected_nalm = validate_spectral_limits(lmax, mmax, function_name);
     auto alm_c = validate_spectral_tensor(
-        alm_values, torch::kComplexDouble, {1, 2}, function_name, "alm_values", "complex128"
+        alm_values, native::kComplexDouble, {1, 2}, function_name, "alm_values", "complex128"
     );
     auto x = validate_spectral_tensor(
-        cos_theta, torch::kDouble, {1}, function_name, "cos_theta", "float64"
+        cos_theta, native::kDouble, {1}, function_name, "cos_theta", "float64"
     );
     auto ph = validate_spectral_tensor(
-        phi, torch::kDouble, {1}, function_name, "phi", "float64"
+        phi, native::kDouble, {1}, function_name, "phi", "float64"
     );
 
-    torch::Tensor rows;
+    native::Tensor rows;
     if (alm_c.dim() == 1) {
         rows = alm_c.reshape({1, alm_c.numel()});
     } else {
@@ -1446,7 +1446,7 @@ torch::Tensor healpix_scalar_alm2map_direct_cpu(
         throw std::runtime_error("alm length does not match lmax/mmax");
     }
 
-    const auto* alm_ptr = rows.data_ptr<c10::complex<double>>();
+    const auto* alm_ptr = rows.data_ptr<std::complex<double>>();
     const auto* x_ptr = x.data_ptr<double>();
     const auto* phi_ptr = ph.data_ptr<double>();
     for (int64_t i = 0; i < rows.numel(); ++i) {
@@ -1463,10 +1463,10 @@ torch::Tensor healpix_scalar_alm2map_direct_cpu(
         }
     }
 
-    auto out = torch::zeros({nmaps, npix}, torch::TensorOptions().dtype(torch::kDouble));
+    auto out = native::zeros({nmaps, npix}, native::TensorOptions().dtype(native::kDouble));
     auto* out_ptr = out.data_ptr<double>();
 
-    at::parallel_for(0, npix, 128, [&](int64_t begin, int64_t end) {
+    native::parallel_for(0, npix, 128, [&](int64_t begin, int64_t end) {
         std::vector<double> acc(static_cast<size_t>(nmaps), 0.0);
         for (int64_t p = begin; p < end; ++p) {
             std::fill(acc.begin(), acc.end(), 0.0);
@@ -1724,47 +1724,47 @@ static void fft_outofplace(
 
 // Forward FFT of each row of a complex [rows, n] block (torch.fft.fft along
 // the last dimension), with the file's pocketfft/Accelerate kernel.
-static torch::Tensor fft_rows(const torch::Tensor& block) {
-    TORCH_CHECK(block.dim() == 2 && block.scalar_type() == torch::kComplexDouble,
+static native::Tensor fft_rows(const native::Tensor& block) {
+    TS_CHECK(block.dim() == 2 && block.scalar_type() == native::kComplexDouble,
                 "fft_rows expects a complex128 [rows, n] block");
     const int64_t rows = block.size(0);
     const int64_t n = block.size(1);
-    auto out = torch::empty({rows, n}, torch::TensorOptions().dtype(torch::kComplexDouble));
-    const auto* in = block.data_ptr<c10::complex<double>>();
-    auto* dst = out.data_ptr<c10::complex<double>>();
+    auto out = native::empty({rows, n}, native::TensorOptions().dtype(native::kComplexDouble));
+    const auto* in = block.data_ptr<std::complex<double>>();
+    auto* dst = out.data_ptr<std::complex<double>>();
     for (int64_t r = 0; r < rows; ++r) {
         fft_outofplace(in + r * n, static_cast<int>(n), 1, dst + r * n, -1);
     }
     return out;
 }
 
-torch::Tensor healpix_ring_fourier_modes_cpu(
-    const torch::Tensor& rows,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths,
+native::Tensor healpix_ring_fourier_modes_cpu(
+    const native::Tensor& rows,
+    const native::Tensor& starts,
+    const native::Tensor& lengths,
     int64_t mmax
 ) {
     constexpr const char* function_name = "healpix_ring_fourier_modes_cpu";
     const int64_t mcount = validate_spectral_mmax(mmax, function_name);
     auto rows_c = validate_spectral_tensor(
-        rows, torch::kComplexDouble, {2}, function_name, "rows", "complex128"
+        rows, native::kComplexDouble, {2}, function_name, "rows", "complex128"
     );
     const int64_t nrows = rows_c.size(0);
     const int64_t npix = rows_c.size(1);
     auto layout = validate_spectral_ring_layout(starts, lengths, function_name, npix);
     const int64_t nrings = layout.nrings;
     if (nrings == 0) {
-        return torch::zeros({nrows, mcount, 0}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
+        return native::zeros({nrows, mcount, 0}, native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU));
     }
 
-    auto out = torch::zeros({nrows, mcount, nrings}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
+    auto out = native::zeros({nrows, mcount, nrings}, native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU));
     const auto* starts_ptr = layout.starts.data_ptr<int64_t>();
     const auto* lengths_ptr = layout.lengths.data_ptr<int64_t>();
     const auto* rows_ptr = reinterpret_cast<const std::complex<double>*>(
-        rows_c.data_ptr<c10::complex<double>>()
+        rows_c.data_ptr<std::complex<double>>()
     );
     auto* out_ptr = reinterpret_cast<std::complex<double>*>(
-        out.data_ptr<c10::complex<double>>()
+        out.data_ptr<std::complex<double>>()
     );
 
     int64_t ring = 0;
@@ -1826,27 +1826,27 @@ torch::Tensor healpix_ring_fourier_modes_cpu(
     return out;
 }
 
-torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
-    const torch::Tensor& row,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths,
+native::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
+    const native::Tensor& row,
+    const native::Tensor& starts,
+    const native::Tensor& lengths,
     int64_t mmax,
-    const c10::complex<double>* phase_ptr,
+    const std::complex<double>* phase_ptr,
     bool from_qu
 ) {
     constexpr const char* function_name = "healpix_ring_fourier_modes_spin_conj_cpu";
     const int64_t mcount = validate_spectral_mmax(mmax, function_name);
 
-    torch::Tensor row_c;
-    torch::Tensor q_c;
-    torch::Tensor u_c;
+    native::Tensor row_c;
+    native::Tensor q_c;
+    native::Tensor u_c;
     const std::complex<double>* row_ptr = nullptr;
     const double* q_ptr = nullptr;
     const double* u_ptr = nullptr;
     int64_t npix = 0;
     if (from_qu) {
         auto maps_c = validate_spectral_tensor(
-            row, torch::kDouble, {2}, function_name, "maps", "float64"
+            row, native::kDouble, {2}, function_name, "maps", "float64"
         );
         if (maps_c.size(0) != 2) {
             throw std::runtime_error(std::string(function_name) + " expects maps shape (2, npix)");
@@ -1856,35 +1856,35 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
         npix = q_c.numel();
     } else {
         row_c = validate_spectral_tensor(
-            row, torch::kComplexDouble, {1}, function_name, "row", "complex128"
+            row, native::kComplexDouble, {1}, function_name, "row", "complex128"
         );
         npix = row_c.size(0);
     }
     auto layout = validate_spectral_ring_layout(starts, lengths, function_name, npix);
     const int64_t nrings = layout.nrings;
     if (nrings == 0) {
-        return torch::zeros({2, mcount, 0}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
+        return native::zeros({2, mcount, 0}, native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU));
     }
     if (from_qu) {
         q_ptr = q_c.data_ptr<double>();
         u_ptr = u_c.data_ptr<double>();
     } else {
         row_ptr = reinterpret_cast<const std::complex<double>*>(
-            row_c.data_ptr<c10::complex<double>>()
+            row_c.data_ptr<std::complex<double>>()
         );
     }
     const auto* starts_ptr = layout.starts.data_ptr<int64_t>();
     const auto* lengths_ptr = layout.lengths.data_ptr<int64_t>();
 
-    auto out = torch::zeros(
+    auto out = native::zeros(
         {2, mcount, nrings},
-        torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU)
+        native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU)
     );
     auto out_plus = out.select(0, 0);
     auto out_minus = out.select(0, 1);
-    auto* plus_ptr = out_plus.data_ptr<c10::complex<double>>();
-    auto* minus_ptr = out_minus.data_ptr<c10::complex<double>>();
-    const auto cplx_opts = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
+    auto* plus_ptr = out_plus.data_ptr<std::complex<double>>();
+    auto* minus_ptr = out_minus.data_ptr<std::complex<double>>();
+    const auto cplx_opts = native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU);
 
     int64_t ring = 0;
     std::vector<int64_t> polar_r;
@@ -1917,13 +1917,13 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
             continue;
         }
 
-        torch::Tensor fft_block;
+        native::Tensor fft_block;
         if (row_ptr != nullptr) {
             auto block = row_c.narrow(0, run_pix_start, run_ring_count * nph).view({run_ring_count, nph});
             fft_block = fft_rows(block);
         } else {
-            auto block = torch::empty({run_ring_count, nph}, cplx_opts);
-            auto* bp = reinterpret_cast<std::complex<double>*>(block.data_ptr<c10::complex<double>>());
+            auto block = native::empty({run_ring_count, nph}, cplx_opts);
+            auto* bp = reinterpret_cast<std::complex<double>*>(block.data_ptr<std::complex<double>>());
             const int64_t n = run_ring_count * nph;
             for (int64_t j = 0; j < n; ++j) {
                 const int64_t p = run_pix_start + j;
@@ -1931,7 +1931,7 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
             }
             fft_block = fft_rows(block);
         }
-        const auto* fptr = fft_block.data_ptr<c10::complex<double>>();
+        const auto* fptr = fft_block.data_ptr<std::complex<double>>();
         for (int64_t ir = 0; ir < run_ring_count; ++ir) {
             const int64_t r = run_start_ring + ir;
             const auto* row_fft = fptr + ir * nph;
@@ -1940,7 +1940,7 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
                 const int64_t kneg = (k == 0) ? 0 : (nph - k);
                 auto vp = row_fft[k];
                 auto vm = row_fft[kneg];
-                vm = c10::complex<double>(vm.real(), -vm.imag());
+                vm = std::complex<double>(vm.real(), -vm.imag());
                 if (phase_ptr != nullptr) {
                     const auto ph = phase_ptr[m * nrings + r];
                     vp = vp * ph;
@@ -1988,8 +1988,8 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
                         vp *= w;
                         vm *= w;
                     }
-                    plus_ptr[m * nrings + r] = c10::complex<double>(vp.real(), vp.imag());
-                    minus_ptr[m * nrings + r] = c10::complex<double>(vm.real(), vm.imag());
+                    plus_ptr[m * nrings + r] = std::complex<double>(vp.real(), vp.imag());
+                    minus_ptr[m * nrings + r] = std::complex<double>(vm.real(), vm.imag());
                 }
             }
         });
@@ -1998,18 +1998,18 @@ torch::Tensor healpix_ring_fourier_modes_spin_conj_cpu(
     return out;
 }
 
-torch::Tensor healpix_ring_fourier_synthesis_cpu(
-    const torch::Tensor& s_modes,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths
+native::Tensor healpix_ring_fourier_synthesis_cpu(
+    const native::Tensor& s_modes,
+    const native::Tensor& starts,
+    const native::Tensor& lengths
 ) {
     constexpr const char* function_name = "healpix_ring_fourier_synthesis_cpu";
     auto modes_c = validate_spectral_tensor(
-        s_modes, torch::kComplexDouble, {2, 3}, function_name, "s_modes", "complex128"
+        s_modes, native::kComplexDouble, {2, 3}, function_name, "s_modes", "complex128"
     );
     auto layout = validate_spectral_ring_layout(starts, lengths, function_name);
 
-    torch::Tensor s_batched;
+    native::Tensor s_batched;
     bool squeeze_out = false;
     if (modes_c.dim() == 2) {
         s_batched = modes_c.unsqueeze(0);
@@ -2031,22 +2031,22 @@ torch::Tensor healpix_ring_fourier_synthesis_cpu(
     const auto* starts_ptr = layout.starts.data_ptr<int64_t>();
     const auto* lengths_ptr = layout.lengths.data_ptr<int64_t>();
     if (nrings == 0) {
-        auto empty = torch::zeros(
+        auto empty = native::zeros(
             {nrows, 0},
-            torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU)
+            native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU)
         );
         return squeeze_out ? empty.reshape({0}) : empty;
     }
     const int64_t npix = layout.extent;
 
-    auto out = torch::zeros({nrows, npix}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
-    const auto cplx_opts = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
+    auto out = native::zeros({nrows, npix}, native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU));
+    const auto cplx_opts = native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU);
     const int64_t mmax = mcount - 1;
     const auto* s_ptr = reinterpret_cast<const std::complex<double>*>(
-        s_batched.data_ptr<c10::complex<double>>()
+        s_batched.data_ptr<std::complex<double>>()
     );
     auto* out_ptr = reinterpret_cast<std::complex<double>*>(
-        out.data_ptr<c10::complex<double>>()
+        out.data_ptr<std::complex<double>>()
     );
 
     int64_t ring = 0;
@@ -2153,11 +2153,11 @@ static inline void spin_qu_store_ring(
     }
 }
 
-static torch::Tensor healpix_spin_synthesize_qu_cpu(
-    const torch::Tensor& s_modes,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths,
-    torch::Tensor eq_spec,
+static native::Tensor healpix_spin_synthesize_qu_cpu(
+    const native::Tensor& s_modes,
+    const native::Tensor& starts,
+    const native::Tensor& lengths,
+    native::Tensor eq_spec,
     int64_t eq_start,
     int64_t n_eq,
     int64_t nph_eq
@@ -2171,12 +2171,12 @@ static torch::Tensor healpix_spin_synthesize_qu_cpu(
     const int64_t mcount = s_modes.size(1);
     const int64_t mmax = mcount - 1;
     const auto* s_ptr = reinterpret_cast<const std::complex<double>*>(
-        s_modes.data_ptr<c10::complex<double>>()
+        s_modes.data_ptr<std::complex<double>>()
     );
     const std::complex<double>* s0 = s_ptr;
     const std::complex<double>* s1 = s_ptr + mcount * nrings;
 
-    auto out = torch::empty({2, npix}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
+    auto out = native::empty({2, npix}, native::TensorOptions().dtype(native::kFloat64).device(native::kCPU));
     auto* q_ptr = out.select(0, 0).data_ptr<double>();
     auto* u_ptr = out.select(0, 1).data_ptr<double>();
 
@@ -2188,7 +2188,7 @@ static torch::Tensor healpix_spin_synthesize_qu_cpu(
     if (n_eq > 0 && eq_spec.defined() && eq_spec.numel() > 0) {
         auto eq_c = eq_spec.contiguous();
         const auto* spec = reinterpret_cast<const std::complex<double>*>(
-            eq_c.data_ptr<c10::complex<double>>()
+            eq_c.data_ptr<std::complex<double>>()
         );
         const int nph = static_cast<int>(nph_eq);
         const int64_t eq_pix0 = starts_ptr[eq_start];
@@ -2292,12 +2292,12 @@ static torch::Tensor healpix_spin_synthesize_qu_cpu(
     return out;
 }
 
-static torch::Tensor spin_qu_from_ifft_cpu(
-    const torch::Tensor& p_pm_pos,
-    const torch::Tensor& s_plus,
-    const torch::Tensor& s_minus,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths
+static native::Tensor spin_qu_from_ifft_cpu(
+    const native::Tensor& p_pm_pos,
+    const native::Tensor& s_plus,
+    const native::Tensor& s_minus,
+    const native::Tensor& starts,
+    const native::Tensor& lengths
 ) {
     auto p_plus_pos = p_pm_pos.select(0, 0).contiguous();
     auto p_minus_pos = p_pm_pos.select(0, 1).contiguous();
@@ -2308,14 +2308,14 @@ static torch::Tensor spin_qu_from_ifft_cpu(
     const int64_t npix = p_plus_pos.size(0);
     const int64_t nrings = starts_c.numel();
     const int64_t mmax = s_plus.size(0) - 1;
-    const auto* sp_ptr = s_plus.data_ptr<c10::complex<double>>();
-    const auto* sm_ptr = s_minus.data_ptr<c10::complex<double>>();
+    const auto* sp_ptr = s_plus.data_ptr<std::complex<double>>();
+    const auto* sm_ptr = s_minus.data_ptr<std::complex<double>>();
     const int64_t sp_r_stride = s_plus.stride(1);
     const int64_t sm_r_stride = s_minus.stride(1);
 
-    auto out = torch::empty({2, npix}, torch::TensorOptions().dtype(torch::kFloat64).device(torch::kCPU));
-    const auto* p_plus_ptr = p_plus_pos.data_ptr<c10::complex<double>>();
-    const auto* p_minus_ptr = p_minus_pos.data_ptr<c10::complex<double>>();
+    auto out = native::empty({2, npix}, native::TensorOptions().dtype(native::kFloat64).device(native::kCPU));
+    const auto* p_plus_ptr = p_plus_pos.data_ptr<std::complex<double>>();
+    const auto* p_minus_ptr = p_minus_pos.data_ptr<std::complex<double>>();
     auto* q_ptr = out.select(0, 0).data_ptr<double>();
     auto* u_ptr = out.select(0, 1).data_ptr<double>();
 
@@ -2325,16 +2325,16 @@ static torch::Tensor spin_qu_from_ifft_cpu(
         if (nph <= 0 || start < 0 || start + nph > npix) {
             throw std::runtime_error("invalid ring layout in healpix_spin_ring_finalize_cpu");
         }
-        const c10::complex<double> v_plus_m0 = sp_ptr[r * sp_r_stride];
-        const c10::complex<double> v_minus_m0 = sm_ptr[r * sm_r_stride];
-        const c10::complex<double> v_plus_m0_conj(v_plus_m0.real(), -v_plus_m0.imag());
-        const c10::complex<double> v_minus_m0_conj(v_minus_m0.real(), -v_minus_m0.imag());
+        const std::complex<double> v_plus_m0 = sp_ptr[r * sp_r_stride];
+        const std::complex<double> v_minus_m0 = sm_ptr[r * sm_r_stride];
+        const std::complex<double> v_plus_m0_conj(v_plus_m0.real(), -v_plus_m0.imag());
+        const std::complex<double> v_minus_m0_conj(v_minus_m0.real(), -v_minus_m0.imag());
 
         if (mmax == 0) {
             for (int64_t i = 0; i < nph; ++i) {
                 const int64_t p = start + i;
-                const c10::complex<double> a = p_plus_ptr[p];
-                const c10::complex<double> b = p_minus_ptr[p];
+                const std::complex<double> a = p_plus_ptr[p];
+                const std::complex<double> b = p_minus_ptr[p];
                 q_ptr[p] = -0.5 * (a.real() + b.real());
                 u_ptr[p] = -0.5 * (a.imag() - b.imag());
             }
@@ -2342,12 +2342,12 @@ static torch::Tensor spin_qu_from_ifft_cpu(
         }
         for (int64_t i = 0; i < nph; ++i) {
             const int64_t p = start + i;
-            const c10::complex<double> a = p_plus_ptr[p];
-            const c10::complex<double> b = p_minus_ptr[p];
-            const c10::complex<double> b_conj(b.real(), -b.imag());
-            const c10::complex<double> a_conj(a.real(), -a.imag());
-            const c10::complex<double> p_plus = a + (b_conj - v_minus_m0_conj);
-            const c10::complex<double> p_minus = b + (a_conj - v_plus_m0_conj);
+            const std::complex<double> a = p_plus_ptr[p];
+            const std::complex<double> b = p_minus_ptr[p];
+            const std::complex<double> b_conj(b.real(), -b.imag());
+            const std::complex<double> a_conj(a.real(), -a.imag());
+            const std::complex<double> p_plus = a + (b_conj - v_minus_m0_conj);
+            const std::complex<double> p_minus = b + (a_conj - v_plus_m0_conj);
             q_ptr[p] = -0.5 * (p_plus.real() + p_minus.real());
             u_ptr[p] = -0.5 * (p_plus.imag() - p_minus.imag());
         }
@@ -2355,18 +2355,18 @@ static torch::Tensor spin_qu_from_ifft_cpu(
     return out;
 }
 
-torch::Tensor healpix_spin_ring_finalize_cpu(
-    const torch::Tensor& s_plus,
-    const torch::Tensor& s_minus,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths
+native::Tensor healpix_spin_ring_finalize_cpu(
+    const native::Tensor& s_plus,
+    const native::Tensor& s_minus,
+    const native::Tensor& starts,
+    const native::Tensor& lengths
 ) {
     constexpr const char* function_name = "healpix_spin_ring_finalize_cpu";
     auto sp = validate_spectral_tensor(
-        s_plus, torch::kComplexDouble, {2}, function_name, "s_plus", "complex128"
+        s_plus, native::kComplexDouble, {2}, function_name, "s_plus", "complex128"
     );
     auto sm = validate_spectral_tensor(
-        s_minus, torch::kComplexDouble, {2}, function_name, "s_minus", "complex128"
+        s_minus, native::kComplexDouble, {2}, function_name, "s_minus", "complex128"
     );
     auto layout = validate_spectral_ring_layout(starts, lengths, function_name);
     if (sp.sizes() != sm.sizes()) {
@@ -2377,32 +2377,32 @@ torch::Tensor healpix_spin_ring_finalize_cpu(
         throw std::runtime_error("healpix_spin_ring_finalize_cpu ring dimension mismatch");
     }
 
-    auto s_stacked = torch::stack({sp, sm}, 0);
+    auto s_stacked = native::stack({sp, sm}, 0);
     auto p_pm_pos = healpix_ring_fourier_synthesis_cpu(s_stacked, layout.starts, layout.lengths);
     return spin_qu_from_ifft_cpu(p_pm_pos, sp, sm, layout.starts, layout.lengths);
 }
 
-std::pair<torch::Tensor, torch::Tensor> healpix_spin_interpolate_concat_cpu(
-    const torch::Tensor& coeff_plus,
-    const torch::Tensor& coeff_minus,
-    const torch::Tensor& y_plus,
-    const torch::Tensor& y_minus,
+std::pair<native::Tensor, native::Tensor> healpix_spin_interpolate_concat_cpu(
+    const native::Tensor& coeff_plus,
+    const native::Tensor& coeff_minus,
+    const native::Tensor& y_plus,
+    const native::Tensor& y_minus,
     int64_t lmax,
     int64_t mmax
 ) {
     constexpr const char* function_name = "healpix_spin_interpolate_concat_cpu";
     const int64_t expected_nalm = validate_spectral_limits(lmax, mmax, function_name);
     auto cp = validate_spectral_tensor(
-        coeff_plus, torch::kComplexDouble, {1}, function_name, "coeff_plus", "complex128"
+        coeff_plus, native::kComplexDouble, {1}, function_name, "coeff_plus", "complex128"
     );
     auto cm = validate_spectral_tensor(
-        coeff_minus, torch::kComplexDouble, {1}, function_name, "coeff_minus", "complex128"
+        coeff_minus, native::kComplexDouble, {1}, function_name, "coeff_minus", "complex128"
     );
     auto yp = validate_spectral_tensor(
-        y_plus, torch::kComplexDouble, {2}, function_name, "y_plus", "complex128"
+        y_plus, native::kComplexDouble, {2}, function_name, "y_plus", "complex128"
     );
     auto ym = validate_spectral_tensor(
-        y_minus, torch::kComplexDouble, {2}, function_name, "y_minus", "complex128"
+        y_minus, native::kComplexDouble, {2}, function_name, "y_minus", "complex128"
     );
     if (cp.numel() != cm.numel()) {
         throw std::runtime_error("healpix_spin_interpolate_concat_cpu coeff length mismatch");
@@ -2421,25 +2421,25 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_interpolate_concat_cpu(
         throw std::runtime_error("healpix_spin_interpolate_concat_cpu nalm does not match lmax/mmax");
     }
 
-    auto out_plus = torch::zeros({mcount, nrings}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
-    auto out_minus = torch::zeros_like(out_plus);
+    auto out_plus = native::zeros({mcount, nrings}, native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU));
+    auto out_minus = native::zeros_like(out_plus);
 
-    const auto* cp_ptr = cp.data_ptr<c10::complex<double>>();
-    const auto* cm_ptr = cm.data_ptr<c10::complex<double>>();
-    const auto* yp_ptr = yp.data_ptr<c10::complex<double>>();
-    const auto* ym_ptr = ym.data_ptr<c10::complex<double>>();
-    auto* op_ptr = out_plus.data_ptr<c10::complex<double>>();
-    auto* om_ptr = out_minus.data_ptr<c10::complex<double>>();
+    const auto* cp_ptr = cp.data_ptr<std::complex<double>>();
+    const auto* cm_ptr = cm.data_ptr<std::complex<double>>();
+    const auto* yp_ptr = yp.data_ptr<std::complex<double>>();
+    const auto* ym_ptr = ym.data_ptr<std::complex<double>>();
+    auto* op_ptr = out_plus.data_ptr<std::complex<double>>();
+    auto* om_ptr = out_minus.data_ptr<std::complex<double>>();
 
-    at::parallel_for(0, mcount, 1, [&](int64_t begin, int64_t end) {
+    native::parallel_for(0, mcount, 1, [&](int64_t begin, int64_t end) {
         for (int64_t m = begin; m < end; ++m) {
             const int64_t base = m * (lmax + 1) - (m * (m - 1)) / 2;
             const int64_t l_count = lmax - m + 1;
             auto* op_row = op_ptr + m * nrings;
             auto* om_row = om_ptr + m * nrings;
             for (int64_t r = 0; r < nrings; ++r) {
-                c10::complex<double> accp(0.0, 0.0);
-                c10::complex<double> accm(0.0, 0.0);
+                std::complex<double> accp(0.0, 0.0);
+                std::complex<double> accm(0.0, 0.0);
                 for (int64_t t = 0; t < l_count; ++t) {
                     const int64_t i = base + t;
                     accp += cp_ptr[i] * yp_ptr[i * nrings + r];
@@ -2454,11 +2454,11 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_interpolate_concat_cpu(
     return {out_plus, out_minus};
 }
 
-std::pair<torch::Tensor, torch::Tensor> healpix_spin_integrate_concat_cpu(
-    const torch::Tensor& s_plus,
-    const torch::Tensor& s_minus,
-    const torch::Tensor& y_plus,
-    const torch::Tensor& y_minus,
+std::pair<native::Tensor, native::Tensor> healpix_spin_integrate_concat_cpu(
+    const native::Tensor& s_plus,
+    const native::Tensor& s_minus,
+    const native::Tensor& y_plus,
+    const native::Tensor& y_minus,
     int64_t lmax,
     int64_t mmax,
     double pix_w
@@ -2467,16 +2467,16 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_integrate_concat_cpu(
     const int64_t expected_nalm = validate_spectral_limits(lmax, mmax, function_name);
     validate_finite_scalar(pix_w, function_name, "pix_w");
     auto sp = validate_spectral_tensor(
-        s_plus, torch::kComplexDouble, {2}, function_name, "s_plus", "complex128"
+        s_plus, native::kComplexDouble, {2}, function_name, "s_plus", "complex128"
     );
     auto sm = validate_spectral_tensor(
-        s_minus, torch::kComplexDouble, {2}, function_name, "s_minus", "complex128"
+        s_minus, native::kComplexDouble, {2}, function_name, "s_minus", "complex128"
     );
     auto yp = validate_spectral_tensor(
-        y_plus, torch::kComplexDouble, {2}, function_name, "y_plus", "complex128"
+        y_plus, native::kComplexDouble, {2}, function_name, "y_plus", "complex128"
     );
     auto ym = validate_spectral_tensor(
-        y_minus, torch::kComplexDouble, {2}, function_name, "y_minus", "complex128"
+        y_minus, native::kComplexDouble, {2}, function_name, "y_minus", "complex128"
     );
     if (sp.sizes() != sm.sizes()) {
         throw std::runtime_error("healpix_spin_integrate_concat_cpu s_plus/s_minus shape mismatch");
@@ -2498,17 +2498,17 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_integrate_concat_cpu(
         throw std::runtime_error("healpix_spin_integrate_concat_cpu nalm does not match lmax/mmax");
     }
 
-    auto out_plus = torch::zeros({nalm}, torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU));
-    auto out_minus = torch::zeros_like(out_plus);
+    auto out_plus = native::zeros({nalm}, native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU));
+    auto out_minus = native::zeros_like(out_plus);
 
-    const auto* sp_ptr = sp.data_ptr<c10::complex<double>>();
-    const auto* sm_ptr = sm.data_ptr<c10::complex<double>>();
-    const auto* yp_ptr = yp.data_ptr<c10::complex<double>>();
-    const auto* ym_ptr = ym.data_ptr<c10::complex<double>>();
-    auto* op_ptr = out_plus.data_ptr<c10::complex<double>>();
-    auto* om_ptr = out_minus.data_ptr<c10::complex<double>>();
+    const auto* sp_ptr = sp.data_ptr<std::complex<double>>();
+    const auto* sm_ptr = sm.data_ptr<std::complex<double>>();
+    const auto* yp_ptr = yp.data_ptr<std::complex<double>>();
+    const auto* ym_ptr = ym.data_ptr<std::complex<double>>();
+    auto* op_ptr = out_plus.data_ptr<std::complex<double>>();
+    auto* om_ptr = out_minus.data_ptr<std::complex<double>>();
 
-    at::parallel_for(0, mcount, 1, [&](int64_t begin, int64_t end) {
+    native::parallel_for(0, mcount, 1, [&](int64_t begin, int64_t end) {
         for (int64_t m = begin; m < end; ++m) {
             const int64_t base = m * (lmax + 1) - (m * (m - 1)) / 2;
             const int64_t l_count = lmax - m + 1;
@@ -2519,8 +2519,8 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_integrate_concat_cpu(
             for (int64_t l = 0; l < l_count; ++l) {
                 const auto* yp_row = yp_ptr + (base + l) * nrings;
                 const auto* ym_row = ym_ptr + (base + l) * nrings;
-                c10::complex<double> acc_p(0.0, 0.0);
-                c10::complex<double> acc_m(0.0, 0.0);
+                std::complex<double> acc_p(0.0, 0.0);
+                std::complex<double> acc_m(0.0, 0.0);
                 for (int64_t r = 0; r < nrings; ++r) {
                     acc_p += yp_row[r] * sp_row[r];
                     acc_m += ym_row[r] * sm_row[r];
@@ -2534,13 +2534,13 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_integrate_concat_cpu(
     return {out_plus, out_minus};
 }
 
-std::pair<torch::Tensor, torch::Tensor> healpix_spin_map2alm_ring_concat_cpu(
-    const torch::Tensor& p_plus,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths,
-    const torch::Tensor& phase0_neg,
-    const torch::Tensor& y_plus,
-    const torch::Tensor& y_minus,
+std::pair<native::Tensor, native::Tensor> healpix_spin_map2alm_ring_concat_cpu(
+    const native::Tensor& p_plus,
+    const native::Tensor& starts,
+    const native::Tensor& lengths,
+    const native::Tensor& phase0_neg,
+    const native::Tensor& y_plus,
+    const native::Tensor& y_minus,
     int64_t lmax,
     int64_t mmax,
     double pix_w
@@ -2549,19 +2549,19 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_map2alm_ring_concat_cpu(
     const int64_t expected_nalm = validate_spectral_limits(lmax, mmax, function_name);
     validate_finite_scalar(pix_w, function_name, "pix_w");
     auto p_plus_c = validate_spectral_tensor(
-        p_plus, torch::kComplexDouble, {1}, function_name, "p_plus", "complex128"
+        p_plus, native::kComplexDouble, {1}, function_name, "p_plus", "complex128"
     );
     auto layout = validate_spectral_ring_layout(
         starts, lengths, function_name, p_plus_c.numel()
     );
     auto phase = validate_spectral_tensor(
-        phase0_neg, torch::kComplexDouble, {2}, function_name, "phase0_neg", "complex128"
+        phase0_neg, native::kComplexDouble, {2}, function_name, "phase0_neg", "complex128"
     );
     auto yp = validate_spectral_tensor(
-        y_plus, torch::kComplexDouble, {2}, function_name, "y_plus", "complex128"
+        y_plus, native::kComplexDouble, {2}, function_name, "y_plus", "complex128"
     );
     auto ym = validate_spectral_tensor(
-        y_minus, torch::kComplexDouble, {2}, function_name, "y_minus", "complex128"
+        y_minus, native::kComplexDouble, {2}, function_name, "y_minus", "complex128"
     );
     if (yp.sizes() != ym.sizes()) {
         throw std::runtime_error("healpix_spin_map2alm_ring_concat_cpu y_plus/y_minus shape mismatch");
@@ -2580,11 +2580,11 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_map2alm_ring_concat_cpu(
     auto s_plus = s_stacked.select(0, 0).clone();
     auto s_minus = s_stacked.select(0, 1).clone();
     {
-        auto* spp = s_plus.data_ptr<c10::complex<double>>();
-        auto* smp = s_minus.data_ptr<c10::complex<double>>();
-        const auto* ph = phase.data_ptr<c10::complex<double>>();
+        auto* spp = s_plus.data_ptr<std::complex<double>>();
+        auto* smp = s_minus.data_ptr<std::complex<double>>();
+        const auto* ph = phase.data_ptr<std::complex<double>>();
         const int64_t count = s_plus.numel();
-        TORCH_CHECK(phase.numel() == count, "phase0_neg does not match the spin modes");
+        TS_CHECK(phase.numel() == count, "phase0_neg does not match the spin modes");
         for (int64_t i = 0; i < count; ++i) {
             spp[i] *= ph[i];
             smp[i] *= ph[i];
@@ -2593,17 +2593,17 @@ std::pair<torch::Tensor, torch::Tensor> healpix_spin_map2alm_ring_concat_cpu(
     return healpix_spin_integrate_concat_cpu(s_plus, s_minus, yp, ym, lmax, mmax, pix_w);
 }
 
-std::pair<torch::Tensor, torch::Tensor> healpix_get_interp_weights_ring_cpu(
+std::pair<native::Tensor, native::Tensor> healpix_get_interp_weights_ring_cpu(
     int64_t nside,
-    const torch::Tensor& lon_deg,
-    const torch::Tensor& lat_deg
+    const native::Tensor& lon_deg,
+    const native::Tensor& lat_deg
 ) {
     constexpr const char* function_name = "healpix_get_interp_weights_ring_cpu";
     const auto layout = validate_healpix_layout(nside, function_name);
     if (!lon_deg.device().is_cpu() || !lat_deg.device().is_cpu()) {
         throw std::runtime_error("healpix_get_interp_weights_ring_cpu expects CPU tensors");
     }
-    if (lon_deg.scalar_type() != torch::kDouble || lat_deg.scalar_type() != torch::kDouble) {
+    if (lon_deg.scalar_type() != native::kDouble || lat_deg.scalar_type() != native::kDouble) {
         throw std::runtime_error("healpix_get_interp_weights_ring_cpu expects float64 tensors");
     }
     if (!lon_deg.sizes().equals(lat_deg.sizes())) {
@@ -2620,8 +2620,8 @@ std::pair<torch::Tensor, torch::Tensor> healpix_get_interp_weights_ring_cpu(
     checked_allocation_count(
         checked_nonnegative_mul(4, n, function_name), sizeof(double), function_name
     );
-    auto pix = torch::empty({4, n}, torch::TensorOptions().dtype(torch::kInt64));
-    auto wgt = torch::zeros({4, n}, torch::TensorOptions().dtype(torch::kDouble));
+    auto pix = native::empty({4, n}, native::TensorOptions().dtype(native::kInt64));
+    auto wgt = native::zeros({4, n}, native::TensorOptions().dtype(native::kDouble));
 
     const auto* lon_ptr = lon.data_ptr<double>();
     const auto* lat_ptr = lat.data_ptr<double>();
@@ -2737,7 +2737,7 @@ std::pair<torch::Tensor, torch::Tensor> healpix_get_interp_weights_ring_cpu(
         }
     };
     if (n >= PARALLEL_MIN_ELEMS) {
-        at::parallel_for(0, n, 4096, compute_block);
+        native::parallel_for(0, n, 4096, compute_block);
     } else {
         compute_block(0, n);
     }
@@ -2745,41 +2745,41 @@ std::pair<torch::Tensor, torch::Tensor> healpix_get_interp_weights_ring_cpu(
     return {pix, wgt};
 }
 
-std::pair<torch::Tensor, torch::Tensor> healpix_get_interp_weights_nested_cpu(
+std::pair<native::Tensor, native::Tensor> healpix_get_interp_weights_nested_cpu(
     int64_t nside,
-    const torch::Tensor& lon_deg,
-    const torch::Tensor& lat_deg
+    const native::Tensor& lon_deg,
+    const native::Tensor& lat_deg
 ) {
     auto out = healpix_get_interp_weights_ring_cpu(nside, lon_deg, lat_deg);
     auto pix_n = healpix_ring2nest_cpu(nside, out.first.reshape({-1})).reshape(out.first.sizes().vec());
     return {pix_n, out.second};
 }
 
-static torch::Tensor healpix_interp_val_from_weights_cpu(
-    const torch::Tensor& maps_2d,
-    const torch::Tensor& pix4n,
-    const torch::Tensor& wgt4n
+static native::Tensor healpix_interp_val_from_weights_cpu(
+    const native::Tensor& maps_2d,
+    const native::Tensor& pix4n,
+    const native::Tensor& wgt4n
 ) {
     // out[b, q] = sum_k maps[b, pix[k, q]] * w[k, q], accumulated in the maps' dtype.
-    TORCH_CHECK(pix4n.dim() == 2 && pix4n.size(0) == 4 && wgt4n.sizes() == pix4n.sizes(),
+    TS_CHECK(pix4n.dim() == 2 && pix4n.size(0) == 4 && wgt4n.sizes() == pix4n.sizes(),
                 "interpolation pixels/weights must be [4, n]");
     const int64_t nq = pix4n.size(1);
     const int64_t nb = maps_2d.size(0);
     const int64_t npix = maps_2d.size(1);
     const auto* pix = pix4n.data_ptr<int64_t>();
-    auto w = wgt4n.to(torch::kDouble);
+    auto w = wgt4n.to(native::kDouble);
     const auto* wp = w.data_ptr<double>();
-    auto out = torch::empty({nb, nq}, torch::TensorOptions().dtype(maps_2d.scalar_type()));
+    auto out = native::empty({nb, nq}, native::TensorOptions().dtype(maps_2d.scalar_type()));
     auto gather = [&](auto* maps, auto* dst) {
         using T = std::remove_cv_t<std::remove_pointer_t<decltype(dst)>>;
-        at::parallel_for(0, nq, 4096, [&](int64_t q0, int64_t q1) {
+        native::parallel_for(0, nq, 4096, [&](int64_t q0, int64_t q1) {
             for (int64_t b = 0; b < nb; ++b) {
                 const auto* row = maps + b * npix;
                 for (int64_t q = q0; q < q1; ++q) {
                     T acc = T(0);
                     for (int64_t k = 0; k < 4; ++k) {
                         const int64_t p = pix[k * nq + q];
-                        TORCH_CHECK(p >= 0 && p < npix, "interpolation pixel out of range");
+                        TS_CHECK(p >= 0 && p < npix, "interpolation pixel out of range");
                         acc += row[p] * static_cast<T>(wp[k * nq + q]);
                     }
                     dst[b * nq + q] = acc;
@@ -2787,27 +2787,27 @@ static torch::Tensor healpix_interp_val_from_weights_cpu(
             }
         });
     };
-    if (maps_2d.scalar_type() == torch::kDouble) {
+    if (maps_2d.scalar_type() == native::kDouble) {
         gather(maps_2d.data_ptr<double>(), out.data_ptr<double>());
-    } else if (maps_2d.scalar_type() == torch::kFloat) {
+    } else if (maps_2d.scalar_type() == native::kFloat) {
         gather(maps_2d.data_ptr<float>(), out.data_ptr<float>());
     } else {
-        TORCH_CHECK(false, "interpolated maps must be float32 or float64");
+        TS_CHECK(false, "interpolated maps must be float32 or float64");
     }
     return out;
 }
 
-torch::Tensor healpix_get_interp_val_ring_cpu(
+native::Tensor healpix_get_interp_val_ring_cpu(
     int64_t nside,
-    const torch::Tensor& maps_in,
-    const torch::Tensor& lon_deg,
-    const torch::Tensor& lat_deg
+    const native::Tensor& maps_in,
+    const native::Tensor& lon_deg,
+    const native::Tensor& lat_deg
 ) {
     const auto layout = validate_healpix_layout(nside, "healpix_get_interp_val_ring_cpu");
     if (!maps_in.device().is_cpu() || !lon_deg.device().is_cpu() || !lat_deg.device().is_cpu()) {
         throw std::runtime_error("healpix_get_interp_val_ring_cpu expects CPU tensors");
     }
-    if (lon_deg.scalar_type() != torch::kDouble || lat_deg.scalar_type() != torch::kDouble) {
+    if (lon_deg.scalar_type() != native::kDouble || lat_deg.scalar_type() != native::kDouble) {
         throw std::runtime_error("healpix_get_interp_val_ring_cpu expects float64 lon/lat tensors");
     }
     if (!lon_deg.sizes().equals(lat_deg.sizes())) {
@@ -2817,8 +2817,8 @@ torch::Tensor healpix_get_interp_val_ring_cpu(
         throw std::runtime_error("maps must be rank-1 or rank-2");
     }
     if (
-        maps_in.scalar_type() != torch::kFloat && maps_in.scalar_type() != torch::kDouble
-        && maps_in.scalar_type() != torch::kBFloat16 && maps_in.scalar_type() != torch::kHalf
+        maps_in.scalar_type() != native::kFloat && maps_in.scalar_type() != native::kDouble
+        && maps_in.scalar_type() != native::kBFloat16 && maps_in.scalar_type() != native::kHalf
     ) {
         throw std::runtime_error("maps must be floating point");
     }
@@ -2844,17 +2844,17 @@ torch::Tensor healpix_get_interp_val_ring_cpu(
     return values.reshape(out_shape);
 }
 
-torch::Tensor healpix_get_interp_val_nested_cpu(
+native::Tensor healpix_get_interp_val_nested_cpu(
     int64_t nside,
-    const torch::Tensor& maps_in,
-    const torch::Tensor& lon_deg,
-    const torch::Tensor& lat_deg
+    const native::Tensor& maps_in,
+    const native::Tensor& lon_deg,
+    const native::Tensor& lat_deg
 ) {
     const auto layout = validate_healpix_layout(nside, "healpix_get_interp_val_nested_cpu");
     if (!maps_in.device().is_cpu() || !lon_deg.device().is_cpu() || !lat_deg.device().is_cpu()) {
         throw std::runtime_error("healpix_get_interp_val_nested_cpu expects CPU tensors");
     }
-    if (lon_deg.scalar_type() != torch::kDouble || lat_deg.scalar_type() != torch::kDouble) {
+    if (lon_deg.scalar_type() != native::kDouble || lat_deg.scalar_type() != native::kDouble) {
         throw std::runtime_error("healpix_get_interp_val_nested_cpu expects float64 lon/lat tensors");
     }
     if (!lon_deg.sizes().equals(lat_deg.sizes())) {
@@ -2864,8 +2864,8 @@ torch::Tensor healpix_get_interp_val_nested_cpu(
         throw std::runtime_error("maps must be rank-1 or rank-2");
     }
     if (
-        maps_in.scalar_type() != torch::kFloat && maps_in.scalar_type() != torch::kDouble
-        && maps_in.scalar_type() != torch::kBFloat16 && maps_in.scalar_type() != torch::kHalf
+        maps_in.scalar_type() != native::kFloat && maps_in.scalar_type() != native::kDouble
+        && maps_in.scalar_type() != native::kBFloat16 && maps_in.scalar_type() != native::kHalf
     ) {
         throw std::runtime_error("maps must be floating point");
     }
@@ -3095,7 +3095,7 @@ class SpinMPool {
       n = std::min(n, quota);
     }
 #endif
-    const int aten = at::get_num_threads();
+    const int aten = native::get_num_threads();
     if (aten > 0) {
       n = std::min(n, aten);
     }
@@ -3125,7 +3125,7 @@ class SpinMPool {
           stderr,
           "TORCHSKY_SHT_PROFILE SpinMPool workers=%d aten_threads=%d hw=%u\n",
           nworkers_,
-          at::get_num_threads(),
+          native::get_num_threads(),
           std::thread::hardware_concurrency()
       );
     }
@@ -3592,37 +3592,37 @@ static std::shared_ptr<const std::vector<double>> get_l_factors(int64_t lmax) {
     return entries.emplace(lmax, std::move(entry)).first->second;
 }
 
-static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
-    const c10::complex<double>* alm0_ptr,
-    const c10::complex<double>* alm1_ptr,
-    const torch::Tensor& theta,
+static native::Tensor ishioka_spin_lowered_interpolate_cpu(
+    const std::complex<double>* alm0_ptr,
+    const std::complex<double>* alm1_ptr,
+    const native::Tensor& theta,
     int64_t lmax,
     int64_t mmax,
     int64_t spin_abs,
-    const c10::complex<double>* phase_ptr,
-    c10::complex<double>* eq_plus,
-    c10::complex<double>* eq_minus,
+    const std::complex<double>* phase_ptr,
+    std::complex<double>* eq_plus,
+    std::complex<double>* eq_minus,
     int64_t eq_start,
     int64_t n_eq,
     int64_t nph_eq
 );
 
-static torch::Tensor ishioka_spin_lowered_integrate_cpu(
-    const torch::Tensor& s_plus,
-    const torch::Tensor& s_minus,
-    const torch::Tensor& theta,
-    const torch::Tensor& weight,
+static native::Tensor ishioka_spin_lowered_integrate_cpu(
+    const native::Tensor& s_plus,
+    const native::Tensor& s_minus,
+    const native::Tensor& theta,
+    const native::Tensor& weight,
     int64_t lmax,
     int64_t mmax,
     int64_t spin_abs
 );
 
 
-torch::Tensor healpix_spin_integrate_recurrence_cpu(
-    const torch::Tensor& s_plus,
-    const torch::Tensor& s_minus,
-    const torch::Tensor& theta,
-    const torch::Tensor& weight,
+native::Tensor healpix_spin_integrate_recurrence_cpu(
+    const native::Tensor& s_plus,
+    const native::Tensor& s_minus,
+    const native::Tensor& theta,
+    const native::Tensor& weight,
     int64_t lmax,
     int64_t mmax,
     int64_t spin
@@ -3630,16 +3630,16 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
     constexpr const char* function_name = "healpix_spin_integrate_recurrence_cpu";
     const int64_t nalm = validate_spin_spectral_limits(lmax, mmax, spin, function_name);
     auto sp_f = validate_spectral_tensor(
-        s_plus, torch::kComplexDouble, {2}, function_name, "s_plus", "complex128"
+        s_plus, native::kComplexDouble, {2}, function_name, "s_plus", "complex128"
     );
     auto sm_f = validate_spectral_tensor(
-        s_minus, torch::kComplexDouble, {2}, function_name, "s_minus", "complex128"
+        s_minus, native::kComplexDouble, {2}, function_name, "s_minus", "complex128"
     );
     auto theta_c = validate_spectral_tensor(
-        theta, torch::kDouble, {1}, function_name, "theta", "float64"
+        theta, native::kDouble, {1}, function_name, "theta", "float64"
     );
     auto weight_c = validate_spectral_tensor(
-        weight, torch::kDouble, {1}, function_name, "weight", "float64"
+        weight, native::kDouble, {1}, function_name, "weight", "float64"
     );
     const int64_t nrings = theta_c.numel();
     const int64_t mcount = checked_nonnegative_add(mmax, 1, function_name);
@@ -3655,8 +3655,8 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
     auto th_ptr = theta_c.data_ptr<double>();
     auto w_ptr = weight_c.data_ptr<double>();
     const bool w_scalar = weight_c.numel() == 1;
-    const c10::complex<double>* __restrict__ sp_ptr = sp_f.data_ptr<c10::complex<double>>();
-    const c10::complex<double>* __restrict__ sm_ptr = sm_f.data_ptr<c10::complex<double>>();
+    const std::complex<double>* __restrict__ sp_ptr = sp_f.data_ptr<std::complex<double>>();
+    const std::complex<double>* __restrict__ sm_ptr = sm_f.data_ptr<std::complex<double>>();
     const int64_t spin_abs = std::abs(spin);
     if ((spin_abs == 1 || spin_abs == 2) && spin_ishioka_enabled()) {
         return ishioka_spin_lowered_integrate_cpu(
@@ -3669,10 +3669,10 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
     bool has_equator = (nrings % 2 != 0);
     const auto l_factors = get_l_factors(lmax);
 
-    auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
-    torch::Tensor alms = torch::zeros({2, nalm}, options);
-    auto cp_out = alms.select(0, 0).data_ptr<c10::complex<double>>();
-    auto cm_out = alms.select(0, 1).data_ptr<c10::complex<double>>();
+    auto options = native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU);
+    native::Tensor alms = native::zeros({2, nalm}, options);
+    auto cp_out = alms.select(0, 0).data_ptr<std::complex<double>>();
+    auto cm_out = alms.select(0, 1).data_ptr<std::complex<double>>();
 
     std::vector<int64_t> m_offsets(mmax + 1);
     int64_t current_lut_off = 0;
@@ -3811,8 +3811,8 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
                     r_m += Nm_r[i]*d_m[i]; i_m += Nm_i[i]*d_m[i];
                 }
                 const double sc = pre_phase * (*l_factors)[static_cast<size_t>(l)];
-                cp_out[idx_base+(l-m)] = c10::complex<double>(r_p*sc, i_p*sc);
-                cm_out[idx_base+(l-m)] = c10::complex<double>(r_m*sc, i_m*sc);
+                cp_out[idx_base+(l-m)] = std::complex<double>(r_p*sc, i_p*sc);
+                cm_out[idx_base+(l-m)] = std::complex<double>(r_m*sc, i_m*sc);
             };
 
             accumulate_l_internal(l0, dp1, dm1);
@@ -3878,10 +3878,10 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
                     }
                     const double scA = pre_phase * (*l_factors)[static_cast<size_t>(l)];
                     const double scB = pre_phase * (*l_factors)[static_cast<size_t>(l + 1)];
-                    cp_out[idx_base + (l - m)] = c10::complex<double>(r_pA * scA, i_pA * scA);
-                    cm_out[idx_base + (l - m)] = c10::complex<double>(r_mA * scA, i_mA * scA);
-                    cp_out[idx_base + (l + 1 - m)] = c10::complex<double>(r_pB * scB, i_pB * scB);
-                    cm_out[idx_base + (l + 1 - m)] = c10::complex<double>(r_mB * scB, i_mB * scB);
+                    cp_out[idx_base + (l - m)] = std::complex<double>(r_pA * scA, i_pA * scA);
+                    cm_out[idx_base + (l - m)] = std::complex<double>(r_mA * scA, i_mA * scA);
+                    cp_out[idx_base + (l + 1 - m)] = std::complex<double>(r_pB * scB, i_pB * scB);
+                    cm_out[idx_base + (l + 1 - m)] = std::complex<double>(r_mB * scB, i_mB * scB);
                 }
                 if (l <= lmax) {
                     const auto& c = lut_ptr[l - (l0 + 2)];
@@ -3923,8 +3923,8 @@ torch::Tensor healpix_spin_integrate_recurrence_cpu(
                         r_m += Nm_r[eq]*vmN; i_m += Nm_i[eq]*vmN;
                     }
                     const double sc = pre_phase * (*l_factors)[static_cast<size_t>(l)];
-                    cp_out[idx_base+(l-m)] = c10::complex<double>(r_p*sc, i_p*sc);
-                    cm_out[idx_base+(l-m)] = c10::complex<double>(r_m*sc, i_m*sc);
+                    cp_out[idx_base+(l-m)] = std::complex<double>(r_p*sc, i_p*sc);
+                    cm_out[idx_base+(l-m)] = std::complex<double>(r_m*sc, i_m*sc);
                 }
             }
         }
@@ -3938,8 +3938,8 @@ static inline void spin_interpolate_l_scan_one(
     int64_t lmax,
     int64_t m,
     const RecurrenceCoeffs* lut_ptr,
-    const c10::complex<double>* alm0_ptr,
-    const c10::complex<double>* alm1_ptr,
+    const std::complex<double>* alm0_ptr,
+    const std::complex<double>* alm1_ptr,
     int64_t idx_base,
     double pre_phase,
     const double* l_factors,
@@ -4011,8 +4011,8 @@ static inline void spin_interpolate_l_scan_four(
     int64_t lmax,
     int64_t m,
     const RecurrenceCoeffs* lut_ptr,
-    const c10::complex<double>* alm0_ptr,
-    const c10::complex<double>* alm1_ptr,
+    const std::complex<double>* alm0_ptr,
+    const std::complex<double>* alm1_ptr,
     int64_t idx_base,
     double pre_phase,
     const double* l_factors,
@@ -4182,8 +4182,8 @@ static inline void spin_interpolate_l_scan_two(
     int64_t lmax,
     int64_t m,
     const RecurrenceCoeffs* lut_ptr,
-    const c10::complex<double>* alm0_ptr,
-    const c10::complex<double>* alm1_ptr,
+    const std::complex<double>* alm0_ptr,
+    const std::complex<double>* alm1_ptr,
     int64_t idx_base,
     double pre_phase,
     const double* l_factors,
@@ -4304,17 +4304,17 @@ static inline void spin_interpolate_l_scan_two(
 #endif
 
 
-torch::Tensor healpix_spin_interpolate_recurrence_cpu(
-    const torch::Tensor& alms,
-    const torch::Tensor& theta,
+native::Tensor healpix_spin_interpolate_recurrence_cpu(
+    const native::Tensor& alms,
+    const native::Tensor& theta,
     int64_t lmax,
     int64_t mmax,
     int64_t spin,
-    const c10::complex<double>* phase_ptr,
-    const c10::complex<double>* alm0_ptr_in,
-    const c10::complex<double>* alm1_ptr_in,
-    c10::complex<double>* eq_plus,
-    c10::complex<double>* eq_minus,
+    const std::complex<double>* phase_ptr,
+    const std::complex<double>* alm0_ptr_in,
+    const std::complex<double>* alm1_ptr_in,
+    std::complex<double>* eq_plus,
+    std::complex<double>* eq_minus,
     int64_t eq_start,
     int64_t n_eq,
     int64_t nph_eq
@@ -4322,19 +4322,19 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
     constexpr const char* function_name = "healpix_spin_interpolate_recurrence_cpu";
     const int64_t nalm = validate_spin_spectral_limits(lmax, mmax, spin, function_name);
     auto theta_c = validate_spectral_tensor(
-        theta, torch::kDouble, {1}, function_name, "theta", "float64"
+        theta, native::kDouble, {1}, function_name, "theta", "float64"
     );
-    torch::Tensor alms_keep;
-    const c10::complex<double>* alm0_ptr = alm0_ptr_in;
-    const c10::complex<double>* alm1_ptr = alm1_ptr_in;
+    native::Tensor alms_keep;
+    const std::complex<double>* alm0_ptr = alm0_ptr_in;
+    const std::complex<double>* alm1_ptr = alm1_ptr_in;
     if (alm0_ptr == nullptr) {
         alms_keep = validate_spectral_tensor(
-            alms, torch::kComplexDouble, {2}, function_name, "alms", "complex128"
+            alms, native::kComplexDouble, {2}, function_name, "alms", "complex128"
         );
         if (alms_keep.size(0) != 2 || alms_keep.size(1) != nalm) {
             throw std::runtime_error(std::string(function_name) + " alms shape must be (2, nalm)");
         }
-        alm0_ptr = alms_keep.data_ptr<c10::complex<double>>();
+        alm0_ptr = alms_keep.data_ptr<std::complex<double>>();
         alm1_ptr = alm0_ptr + nalm;
     } else {
         (void)alms;
@@ -4369,9 +4369,9 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
     const auto l_factors = get_l_factors(lmax);
     const double* l_factor_ptr = l_factors->data();
 
-    auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
-    torch::Tensor s_modes = torch::zeros({2, mmax + 1, nrings}, options);
-    auto* s0_ptr = s_modes.data_ptr<c10::complex<double>>();
+    auto options = native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU);
+    native::Tensor s_modes = native::zeros({2, mmax + 1, nrings}, options);
+    auto* s0_ptr = s_modes.data_ptr<std::complex<double>>();
     auto* s1_ptr = s0_ptr + (mmax + 1) * nrings;
     auto th_ptr = theta_c.data_ptr<double>();
 
@@ -4476,8 +4476,8 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
 
 
             auto acc_spin = [&](int64_t l, const double* __restrict__ d_p, const double* __restrict__ d_m) {
-                const c10::complex<double> a0 = alm0_ptr[idx_base+(l-m)];
-                const c10::complex<double> a1 = alm1_ptr[idx_base+(l-m)];
+                const std::complex<double> a0 = alm0_ptr[idx_base+(l-m)];
+                const std::complex<double> a1 = alm1_ptr[idx_base+(l-m)];
                 const double sc = pre_phase * l_factor_ptr[l];
                 const double r0 = a0.real()*sc, i0 = a0.imag()*sc, r1 = a1.real()*sc, i1 = a1.imag()*sc;
                 const double parity = ((l+m)%2 == 0) ? 1.0 : -1.0;
@@ -4647,8 +4647,8 @@ torch::Tensor healpix_spin_interpolate_recurrence_cpu(
             }
 
             auto store_pair = [&](int64_t idx, int /*ring_i*/, double rP, double iP, double rM, double iM) {
-                auto zp = c10::complex<double>(rP, iP);
-                auto zm = c10::complex<double>(rM, iM);
+                auto zp = std::complex<double>(rP, iP);
+                auto zm = std::complex<double>(rM, iM);
                 if (phase_ptr != nullptr) {
                     const auto ph = phase_ptr[m * nrings + idx];
                     zp = zp * ph;
@@ -4886,27 +4886,27 @@ public:
 static RecoupleCache g_recouple_cache;
 
 static void recouple_spin_to_scalar_m(
-    const c10::complex<double>* plus_m,
-    const c10::complex<double>* minus_m,
+    const std::complex<double>* plus_m,
+    const std::complex<double>* minus_m,
     int64_t lmax,
     int64_t m,
     int64_t spin,
     const RecoupleSrc* src_base,
     const int64_t* m_off,
     const int64_t* lmin_arr,
-    c10::complex<double>* s0,
-    c10::complex<double>* s1
+    std::complex<double>* s0,
+    std::complex<double>* s1
 ) {
     const int64_t lmax_s = lmax + spin;
     const int64_t n_s = lmax_s - m + 1;
-    std::fill(s0, s0 + n_s, c10::complex<double>(0.0, 0.0));
-    std::fill(s1, s1 + n_s, c10::complex<double>(0.0, 0.0));
+    std::fill(s0, s0 + n_s, std::complex<double>(0.0, 0.0));
+    std::fill(s1, s1 + n_s, std::complex<double>(0.0, 0.0));
     const int64_t lmin = lmin_arr[m];
     const RecoupleSrc* cs = src_base + m_off[m];
     for (int64_t l = lmin; l <= lmax; ++l) {
         const RecoupleSrc& c = cs[l - lmin];
-        const c10::complex<double> p = plus_m[l - m];
-        const c10::complex<double> q = minus_m[l - m];
+        const std::complex<double> p = plus_m[l - m];
+        const std::complex<double> q = minus_m[l - m];
         if (c.cm2 != 0.0 && l - 2 >= m) {
             s0[l - 2 - m] += p * c.cm2;
             s1[l - 2 - m] += q * c.cm2;
@@ -4929,27 +4929,27 @@ static void recouple_spin_to_scalar_m(
 }
 
 static void recouple_scalar_to_spin_m(
-    const c10::complex<double>* s0,
-    const c10::complex<double>* s1,
+    const std::complex<double>* s0,
+    const std::complex<double>* s1,
     int64_t lmax,
     int64_t m,
     int64_t spin,
     const RecoupleSrc* src_base,
     const int64_t* m_off,
     const int64_t* lmin_arr,
-    c10::complex<double>* plus_m,
-    c10::complex<double>* minus_m
+    std::complex<double>* plus_m,
+    std::complex<double>* minus_m
 ) {
     const int64_t lmax_s = lmax + spin;
     const int64_t n_spin = lmax - m + 1;
-    std::fill(plus_m, plus_m + n_spin, c10::complex<double>(0.0, 0.0));
-    std::fill(minus_m, minus_m + n_spin, c10::complex<double>(0.0, 0.0));
+    std::fill(plus_m, plus_m + n_spin, std::complex<double>(0.0, 0.0));
+    std::fill(minus_m, minus_m + n_spin, std::complex<double>(0.0, 0.0));
     const int64_t lmin = lmin_arr[m];
     const RecoupleSrc* cs = src_base + m_off[m];
     for (int64_t l = lmin; l <= lmax; ++l) {
         const RecoupleSrc& c = cs[l - lmin];
-        c10::complex<double> p(0.0, 0.0);
-        c10::complex<double> q(0.0, 0.0);
+        std::complex<double> p(0.0, 0.0);
+        std::complex<double> q(0.0, 0.0);
         if (c.cm2 != 0.0 && l - 2 >= m) {
             p += s0[l - 2 - m] * c.cm2;
             q += s1[l - 2 - m] * c.cm2;
@@ -5336,16 +5336,16 @@ static inline void ishioka_k_reduce_rings(
 
 #include "sht_scalar_kernels.inc"
 
-static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
-    const c10::complex<double>* alm0_ptr,
-    const c10::complex<double>* alm1_ptr,
-    const torch::Tensor& theta,
+static native::Tensor ishioka_spin_lowered_interpolate_cpu(
+    const std::complex<double>* alm0_ptr,
+    const std::complex<double>* alm1_ptr,
+    const native::Tensor& theta,
     int64_t lmax,
     int64_t mmax,
     int64_t spin_abs,
-    const c10::complex<double>* phase_ptr,
-    c10::complex<double>* eq_plus,
-    c10::complex<double>* eq_minus,
+    const std::complex<double>* phase_ptr,
+    std::complex<double>* eq_plus,
+    std::complex<double>* eq_minus,
     int64_t eq_start,
     int64_t n_eq,
     int64_t nph_eq
@@ -5365,9 +5365,9 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
     const int64_t* rec_off = recouple->m_off.data();
     const int64_t* rec_lmin = recouple->lmin.data();
 
-    auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
-    torch::Tensor s_modes = torch::zeros({2, mmax + 1, nrings}, options);
-    auto* s0_ptr = s_modes.data_ptr<c10::complex<double>>();
+    auto options = native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU);
+    native::Tensor s_modes = native::zeros({2, mmax + 1, nrings}, options);
+    auto* s0_ptr = s_modes.data_ptr<std::complex<double>>();
     auto* s1_ptr = s0_ptr + (mmax + 1) * nrings;
     auto th_ptr = theta.data_ptr<double>();
 
@@ -5396,8 +5396,8 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
             return;
         }
         const int64_t n_s_max = lmax_s - m0 + 1;
-        std::vector<c10::complex<double>> v_s0(static_cast<size_t>(n_s_max));
-        std::vector<c10::complex<double>> v_s1(static_cast<size_t>(n_s_max));
+        std::vector<std::complex<double>> v_s0(static_cast<size_t>(n_s_max));
+        std::vector<std::complex<double>> v_s1(static_cast<size_t>(n_s_max));
         std::vector<double> v_p(n_eff), v_pold(n_eff);
         std::vector<double> v_s0r(n_eff), v_s0i(n_eff), v_a0r(n_eff), v_a0i(n_eff);
         std::vector<double> v_s1r(n_eff), v_s1i(n_eff), v_a1r(n_eff), v_a1i(n_eff);
@@ -5436,8 +5436,8 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
                 v_s0.data(),
                 v_s1.data()
             );
-            const c10::complex<double>* __restrict__ sc0 = v_s0.data();
-            const c10::complex<double>* __restrict__ sc1 = v_s1.data();
+            const std::complex<double>* __restrict__ sc0 = v_s0.data();
+            const std::complex<double>* __restrict__ sc1 = v_s1.data();
             const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
             const double seed = (*m_factors)[static_cast<size_t>(m)];
 
@@ -5461,9 +5461,9 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
             int n_run = 0;
             spin_active_pair_span(active, static_cast<int>(n_pairs), pair0, n_run);
 
-            auto s_at = [&](const c10::complex<double>* sc, int64_t n) -> c10::complex<double> {
+            auto s_at = [&](const std::complex<double>* sc, int64_t n) -> std::complex<double> {
                 if (n < m || n > lmax_s) {
-                    return c10::complex<double>(0.0, 0.0);
+                    return std::complex<double>(0.0, 0.0);
                 }
                 return sc[n - m];
             };
@@ -5476,19 +5476,19 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
                 }
                 const int64_t n_even = m + 2 * k;
                 const double e1 = pc.eps[static_cast<size_t>(n_even + 1)];
-                c10::complex<double> t0 = s_at(sc0, n_even) * e1;
-                c10::complex<double> t1 = s_at(sc1, n_even) * e1;
+                std::complex<double> t0 = s_at(sc0, n_even) * e1;
+                std::complex<double> t1 = s_at(sc1, n_even) * e1;
                 if (k < pc.kmax) {
                     const double e2 = pc.eps[static_cast<size_t>(n_even + 2)];
                     t0 += s_at(sc0, n_even + 2) * e2;
                     t1 += s_at(sc1, n_even + 2) * e2;
                 }
                 const double al = pc.alpha[static_cast<size_t>(k)];
-                const c10::complex<double> we0 = t0 * al;
-                const c10::complex<double> we1 = t1 * al;
+                const std::complex<double> we0 = t0 * al;
+                const std::complex<double> we1 = t1 * al;
                 const bool do_odd = (k <= pc.kmax_odd);
-                c10::complex<double> wo0(0.0, 0.0);
-                c10::complex<double> wo1(0.0, 0.0);
+                std::complex<double> wo0(0.0, 0.0);
+                std::complex<double> wo1(0.0, 0.0);
                 if (do_odd) {
                     wo0 = s_at(sc0, m + 2 * k + 1) * al;
                     wo1 = s_at(sc1, m + 2 * k + 1) * al;
@@ -5548,8 +5548,8 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
             }
 
             auto store_pair = [&](int64_t idx, double rP, double iP, double rM, double iM) {
-                auto zp = c10::complex<double>(rP, iP);
-                auto zm = c10::complex<double>(rM, iM);
+                auto zp = std::complex<double>(rP, iP);
+                auto zm = std::complex<double>(rM, iM);
                 if (phase_ptr != nullptr) {
                     const auto ph = phase_ptr[m * nrings + idx];
                     zp = zp * ph;
@@ -5593,17 +5593,17 @@ static torch::Tensor ishioka_spin_lowered_interpolate_cpu(
     return s_modes;
 }
 
-static torch::Tensor ishioka_spin_lowered_integrate_cpu(
-    const torch::Tensor& s_plus,
-    const torch::Tensor& s_minus,
-    const torch::Tensor& theta,
-    const torch::Tensor& weight,
+static native::Tensor ishioka_spin_lowered_integrate_cpu(
+    const native::Tensor& s_plus,
+    const native::Tensor& s_minus,
+    const native::Tensor& theta,
+    const native::Tensor& weight,
     int64_t lmax,
     int64_t mmax,
     int64_t spin_abs
 ) {
-    const c10::complex<double>* __restrict__ sp_ptr = s_plus.data_ptr<c10::complex<double>>();
-    const c10::complex<double>* __restrict__ sm_ptr = s_minus.data_ptr<c10::complex<double>>();
+    const std::complex<double>* __restrict__ sp_ptr = s_plus.data_ptr<std::complex<double>>();
+    const std::complex<double>* __restrict__ sm_ptr = s_minus.data_ptr<std::complex<double>>();
     auto th_ptr = theta.data_ptr<double>();
     auto w_ptr = weight.data_ptr<double>();
     const bool w_scalar = weight.numel() == 1;
@@ -5619,10 +5619,10 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
     const int64_t* rec_off = recouple->m_off.data();
     const int64_t* rec_lmin = recouple->lmin.data();
 
-    auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
-    torch::Tensor alms = torch::zeros({2, alm_size(lmax, mmax)}, options);
-    auto* cp_out = alms.select(0, 0).data_ptr<c10::complex<double>>();
-    auto* cm_out = alms.select(0, 1).data_ptr<c10::complex<double>>();
+    auto options = native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU);
+    native::Tensor alms = native::zeros({2, alm_size(lmax, mmax)}, options);
+    auto* cp_out = alms.select(0, 0).data_ptr<std::complex<double>>();
+    auto* cm_out = alms.select(0, 1).data_ptr<std::complex<double>>();
 
     std::vector<double> cos_theta_all(n_eff), sin_theta_all(n_eff), inv_sin_s(n_eff), mu2_all(n_eff);
     for (int i = 0; i < n_eff; ++i) {
@@ -5649,8 +5649,8 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
             return;
         }
         const int64_t n_s_max = lmax_s - m0 + 1;
-        std::vector<c10::complex<double>> v_s0(static_cast<size_t>(n_s_max));
-        std::vector<c10::complex<double>> v_s1(static_cast<size_t>(n_s_max));
+        std::vector<std::complex<double>> v_s0(static_cast<size_t>(n_s_max));
+        std::vector<std::complex<double>> v_s1(static_cast<size_t>(n_s_max));
         std::vector<double> v_p(n_eff), v_pold(n_eff);
         std::vector<double> v_s0r(n_eff), v_s0i(n_eff), v_a0r(n_eff), v_a0i(n_eff);
         std::vector<double> v_s1r(n_eff), v_s1i(n_eff), v_a1r(n_eff), v_a1i(n_eff);
@@ -5678,10 +5678,10 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
             seeds.advance_to(m);
             const IshiokaMCoeffs& pc = (*packs)[static_cast<size_t>(m)];
             const int64_t n_s = lmax_s - m + 1;
-            std::fill(v_s0.begin(), v_s0.begin() + n_s, c10::complex<double>(0.0, 0.0));
-            std::fill(v_s1.begin(), v_s1.begin() + n_s, c10::complex<double>(0.0, 0.0));
-            c10::complex<double>* __restrict__ sc0 = v_s0.data();
-            c10::complex<double>* __restrict__ sc1 = v_s1.data();
+            std::fill(v_s0.begin(), v_s0.begin() + n_s, std::complex<double>(0.0, 0.0));
+            std::fill(v_s1.begin(), v_s1.begin() + n_s, std::complex<double>(0.0, 0.0));
+            std::complex<double>* __restrict__ sc0 = v_s0.data();
+            std::complex<double>* __restrict__ sc1 = v_s1.data();
             const double pre_phase = (m % 2 != 0) ? -1.0 : 1.0;
             const double seed = (*m_factors)[static_cast<size_t>(m)];
             const int64_t m_off = m * nrings;
@@ -5796,8 +5796,8 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
                     }
                 }
                 const double al = pc.alpha[static_cast<size_t>(k)];
-                const c10::complex<double> t0(we0r * al, we0i * al);
-                const c10::complex<double> t1(we1r * al, we1i * al);
+                const std::complex<double> t0(we0r * al, we0i * al);
+                const std::complex<double> t1(we1r * al, we1i * al);
                 sc0[n_even - m] += t0 * e1;
                 sc1[n_even - m] += t1 * e1;
                 if (k < pc.kmax) {
@@ -5807,8 +5807,8 @@ static torch::Tensor ishioka_spin_lowered_integrate_cpu(
                 }
                 if (do_odd) {
                     const int64_t n_odd = m + 2 * k + 1;
-                    sc0[n_odd - m] += c10::complex<double>(wo0r * al, wo0i * al);
-                    sc1[n_odd - m] += c10::complex<double>(wo1r * al, wo1i * al);
+                    sc0[n_odd - m] += std::complex<double>(wo0r * al, wo0i * al);
+                    sc1[n_odd - m] += std::complex<double>(wo1r * al, wo1i * al);
                 }
             }
 
@@ -5898,23 +5898,23 @@ public:
 static ScalarRecurrenceCache g_scalar_recurrence_cache;
 
 
-torch::Tensor healpix_scalar_integrate_recurrence_cpu(
-    const torch::Tensor& s_modes,  // (mmax+1, nrings) complex128
-    const torch::Tensor& theta,    // (nrings,) float64
-    const torch::Tensor& weight,   // (nrings,) float64
+native::Tensor healpix_scalar_integrate_recurrence_cpu(
+    const native::Tensor& s_modes,  // (mmax+1, nrings) complex128
+    const native::Tensor& theta,    // (nrings,) float64
+    const native::Tensor& weight,   // (nrings,) float64
     int64_t lmax,
     int64_t mmax
 ) {
     constexpr const char* function_name = "healpix_scalar_integrate_recurrence_cpu";
     const int64_t nalm = validate_spectral_limits(lmax, mmax, function_name);
     auto sm_f = validate_spectral_tensor(
-        s_modes, torch::kComplexDouble, {2}, function_name, "s_modes", "complex128"
+        s_modes, native::kComplexDouble, {2}, function_name, "s_modes", "complex128"
     );
     auto theta_c = validate_spectral_tensor(
-        theta, torch::kDouble, {1}, function_name, "theta", "float64"
+        theta, native::kDouble, {1}, function_name, "theta", "float64"
     );
     auto weight_c = validate_spectral_tensor(
-        weight, torch::kDouble, {1}, function_name, "weight", "float64"
+        weight, native::kDouble, {1}, function_name, "weight", "float64"
     );
     const int64_t nrings = theta_c.numel();
     const int64_t mcount = checked_nonnegative_add(mmax, 1, function_name);
@@ -5927,48 +5927,48 @@ torch::Tensor healpix_scalar_integrate_recurrence_cpu(
     if (nrings > 0 && weight_c.numel() == 0) {
         throw std::runtime_error(std::string(function_name) + " weight cannot be empty for non-empty rings");
     }
-    auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
-    torch::Tensor alms = torch::zeros({nalm}, options);
+    auto options = native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU);
+    native::Tensor alms = native::zeros({nalm}, options);
     sht_scalar::integrate(
-        sm_f.data_ptr<c10::complex<double>>(),
+        sm_f.data_ptr<std::complex<double>>(),
         theta_c.data_ptr<double>(),
         weight_c.data_ptr<double>(),
         weight_c.numel() == 1,
         nrings,
         lmax,
         mmax,
-        alms.data_ptr<c10::complex<double>>()
+        alms.data_ptr<std::complex<double>>()
     );
     return alms;
 }
 
-torch::Tensor healpix_scalar_interpolate_recurrence_cpu(
-    const torch::Tensor& alm,    // (nalm,) complex128
-    const torch::Tensor& theta,  // (nrings,) float64
+native::Tensor healpix_scalar_interpolate_recurrence_cpu(
+    const native::Tensor& alm,    // (nalm,) complex128
+    const native::Tensor& theta,  // (nrings,) float64
     int64_t lmax,
     int64_t mmax
 ) {
     constexpr const char* function_name = "healpix_scalar_interpolate_recurrence_cpu";
     const int64_t nalm = validate_spectral_limits(lmax, mmax, function_name);
     auto alm_f = validate_spectral_tensor(
-        alm, torch::kComplexDouble, {1}, function_name, "alm", "complex128"
+        alm, native::kComplexDouble, {1}, function_name, "alm", "complex128"
     );
     auto theta_c = validate_spectral_tensor(
-        theta, torch::kDouble, {1}, function_name, "theta", "float64"
+        theta, native::kDouble, {1}, function_name, "theta", "float64"
     );
     if (alm_f.numel() != nalm) {
         throw std::runtime_error(std::string(function_name) + " alm length does not match lmax/mmax");
     }
     const int64_t nrings = theta_c.size(0);
-    auto options = torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU);
-    torch::Tensor s_modes = torch::zeros({mmax + 1, nrings}, options);
+    auto options = native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU);
+    native::Tensor s_modes = native::zeros({mmax + 1, nrings}, options);
     sht_scalar::synthesize(
-        alm_f.data_ptr<c10::complex<double>>(),
+        alm_f.data_ptr<std::complex<double>>(),
         theta_c.data_ptr<double>(),
         nrings,
         lmax,
         mmax,
-        s_modes.data_ptr<c10::complex<double>>()
+        s_modes.data_ptr<std::complex<double>>()
     );
     return s_modes;
 }
@@ -6193,9 +6193,9 @@ static double cell_radius_bound(int level) {
     return exact[kExactLevels] * std::ldexp(1.0, kExactLevels - level) * 1.08;
 }
 
-torch::Tensor healpix_query_disc_nest_ranges_cpu(
+native::Tensor healpix_query_disc_nest_ranges_cpu(
     int64_t nside,
-    const torch::Tensor& vec_xyz,
+    const native::Tensor& vec_xyz,
     double cos_lim
 ) {
     constexpr const char* function_name = "healpix_query_disc_nest_ranges_cpu";
@@ -6203,7 +6203,7 @@ torch::Tensor healpix_query_disc_nest_ranges_cpu(
     if (!std::isfinite(cos_lim) || cos_lim < -1.0 || cos_lim > 1.0) {
         throw std::runtime_error("cos_lim must be finite and in [-1, 1]");
     }
-    if (!vec_xyz.device().is_cpu() || vec_xyz.scalar_type() != torch::kDouble) {
+    if (!vec_xyz.device().is_cpu() || vec_xyz.scalar_type() != native::kDouble) {
         throw std::runtime_error("healpix_query_disc_nest_ranges_cpu expects float64 CPU vec");
     }
     auto vec = vec_xyz.contiguous().reshape({-1});
@@ -6225,7 +6225,7 @@ torch::Tensor healpix_query_disc_nest_ranges_cpu(
     vz /= vnorm;
 
     auto make = [](const std::vector<std::pair<int64_t, int64_t>>& out) {
-        auto t = torch::empty({static_cast<int64_t>(out.size()), 2}, torch::TensorOptions().dtype(torch::kInt64));
+        auto t = native::empty({static_cast<int64_t>(out.size()), 2}, native::TensorOptions().dtype(native::kInt64));
         auto* p = t.data_ptr<int64_t>();
         for (size_t i = 0; i < out.size(); ++i) {
             p[2 * i] = out[i].first;
@@ -6305,10 +6305,10 @@ torch::Tensor healpix_query_disc_nest_ranges_cpu(
     return make(out);
 }
 
-torch::Tensor healpix_query_disc_cpu(
+native::Tensor healpix_query_disc_cpu(
 
     int64_t nside,
-    const torch::Tensor& vec_xyz,
+    const native::Tensor& vec_xyz,
     double cos_lim,
     bool nest
 ) {
@@ -6317,7 +6317,7 @@ torch::Tensor healpix_query_disc_cpu(
     if (!std::isfinite(cos_lim) || cos_lim < -1.0 || cos_lim > 1.0) {
         throw std::runtime_error("cos_lim must be finite and in [-1, 1]");
     }
-    if (!vec_xyz.device().is_cpu() || vec_xyz.scalar_type() != torch::kDouble) {
+    if (!vec_xyz.device().is_cpu() || vec_xyz.scalar_type() != native::kDouble) {
         throw std::runtime_error("healpix_query_disc_cpu expects float64 CPU vec");
     }
     auto vec = vec_xyz.contiguous().reshape({-1});
@@ -6342,10 +6342,10 @@ torch::Tensor healpix_query_disc_cpu(
     const int64_t npix = layout.npix;
     if (cos_lim <= -1.0) {
         checked_allocation_count(npix, sizeof(int64_t), function_name);
-        return torch::arange(npix, torch::TensorOptions().dtype(torch::kInt64));
+        return native::arange(npix, native::TensorOptions().dtype(native::kInt64));
     }
     if (nest) {
-        const torch::Tensor nr = healpix_query_disc_nest_ranges_cpu(nside, vec, cos_lim);
+        const native::Tensor nr = healpix_query_disc_nest_ranges_cpu(nside, vec, cos_lim);
         const int64_t nrange = nr.size(0);
         const int64_t* rp = nr.data_ptr<int64_t>();
         int64_t total = 0;
@@ -6353,7 +6353,7 @@ torch::Tensor healpix_query_disc_cpu(
             total = checked_nonnegative_add(total, rp[2 * i + 1] - rp[2 * i], function_name);
         }
         checked_allocation_count(total, sizeof(int64_t), function_name);
-        auto nest_out = torch::empty({total}, torch::TensorOptions().dtype(torch::kInt64));
+        auto nest_out = native::empty({total}, native::TensorOptions().dtype(native::kInt64));
         auto* optr = nest_out.data_ptr<int64_t>();
         int64_t off = 0;
         for (int64_t i = 0; i < nrange; ++i) {
@@ -6364,14 +6364,14 @@ torch::Tensor healpix_query_disc_cpu(
     }
     std::vector<DiscRange> ranges = disc_ring_ranges(nside, layout, vx, vy, vz, cos_lim);
     if (ranges.empty()) {
-        return torch::empty({0}, torch::TensorOptions().dtype(torch::kInt64));
+        return native::empty({0}, native::TensorOptions().dtype(native::kInt64));
     }
     int64_t total = 0;
     for (const auto& r : ranges) {
         total = checked_nonnegative_add(total, r.len, function_name);
     }
     checked_allocation_count(total, sizeof(int64_t), function_name);
-    auto ring_out = torch::empty({total}, torch::TensorOptions().dtype(torch::kInt64));
+    auto ring_out = native::empty({total}, native::TensorOptions().dtype(native::kInt64));
     auto* ptr = ring_out.data_ptr<int64_t>();
     int64_t off = 0;
     for (const auto& r : ranges) {
@@ -6381,12 +6381,12 @@ torch::Tensor healpix_query_disc_cpu(
     return ring_out;
 }
 
-torch::Tensor healpix_spin_map2alm_ring_recurrence_cpu(
-    const torch::Tensor& maps,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths,
-    const torch::Tensor& theta,
-    const torch::Tensor& phase0_neg,
+native::Tensor healpix_spin_map2alm_ring_recurrence_cpu(
+    const native::Tensor& maps,
+    const native::Tensor& starts,
+    const native::Tensor& lengths,
+    const native::Tensor& theta,
+    const native::Tensor& phase0_neg,
     int64_t lmax,
     int64_t mmax,
     int64_t spin,
@@ -6395,12 +6395,12 @@ torch::Tensor healpix_spin_map2alm_ring_recurrence_cpu(
     constexpr const char* function_name = "healpix_spin_map2alm_ring_recurrence_cpu";
     validate_spin_spectral_limits(lmax, mmax, spin, function_name);
     validate_finite_scalar(pix_w, function_name, "pix_w");
-    torch::Tensor maps_c;
+    native::Tensor maps_c;
     int64_t npix = 0;
     bool from_qu = false;
-    if (maps.scalar_type() == torch::kDouble) {
+    if (maps.scalar_type() == native::kDouble) {
         maps_c = validate_spectral_tensor(
-            maps, torch::kDouble, {2}, function_name, "maps", "float64"
+            maps, native::kDouble, {2}, function_name, "maps", "float64"
         );
         if (maps_c.size(0) != 2) {
             throw std::runtime_error(std::string(function_name) + " float64 maps shape must be (2, npix)");
@@ -6409,16 +6409,16 @@ torch::Tensor healpix_spin_map2alm_ring_recurrence_cpu(
         from_qu = true;
     } else {
         maps_c = validate_spectral_tensor(
-            maps, torch::kComplexDouble, {1}, function_name, "maps", "complex128"
+            maps, native::kComplexDouble, {1}, function_name, "maps", "complex128"
         );
         npix = maps_c.numel();
     }
     auto layout = validate_spectral_ring_layout(starts, lengths, function_name, npix);
     auto theta_c = validate_spectral_tensor(
-        theta, torch::kDouble, {1}, function_name, "theta", "float64"
+        theta, native::kDouble, {1}, function_name, "theta", "float64"
     );
     auto phase = validate_spectral_tensor(
-        phase0_neg, torch::kComplexDouble, {2}, function_name, "phase0_neg", "complex128"
+        phase0_neg, native::kComplexDouble, {2}, function_name, "phase0_neg", "complex128"
     );
     const int64_t mcount = checked_nonnegative_add(mmax, 1, function_name);
     if (theta_c.numel() != layout.nrings) {
@@ -6427,19 +6427,19 @@ torch::Tensor healpix_spin_map2alm_ring_recurrence_cpu(
     if (phase.size(0) != mcount || phase.size(1) != layout.nrings) {
         throw std::runtime_error(std::string(function_name) + " phase0_neg shape must be (mmax+1, nrings)");
     }
-    torch::Tensor s_stacked;
+    native::Tensor s_stacked;
     if (from_qu) {
         s_stacked = healpix_ring_fourier_modes_spin_conj_cpu(
-            maps_c, layout.starts, layout.lengths, mmax, phase.data_ptr<c10::complex<double>>(), true
+            maps_c, layout.starts, layout.lengths, mmax, phase.data_ptr<std::complex<double>>(), true
         );
     } else {
         s_stacked = healpix_ring_fourier_modes_spin_conj_cpu(
-            maps_c, layout.starts, layout.lengths, mmax, phase.data_ptr<c10::complex<double>>()
+            maps_c, layout.starts, layout.lengths, mmax, phase.data_ptr<std::complex<double>>()
         );
     }
     auto s_plus = s_stacked.select(0, 0);
     auto s_minus = s_stacked.select(0, 1);
-    auto weight = torch::empty({1}, torch::TensorOptions().dtype(torch::kDouble).device(torch::kCPU));
+    auto weight = native::empty({1}, native::TensorOptions().dtype(native::kDouble).device(native::kCPU));
     weight.fill_(pix_w);
     return healpix_spin_integrate_recurrence_cpu(
         s_plus,
@@ -6452,25 +6452,25 @@ torch::Tensor healpix_spin_map2alm_ring_recurrence_cpu(
     );
 }
 
-torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
-    const torch::Tensor& alm_plus,
-    const torch::Tensor& starts,
-    const torch::Tensor& lengths,
-    const torch::Tensor& theta,
-    const torch::Tensor& phase0_pos,
+native::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
+    const native::Tensor& alm_plus,
+    const native::Tensor& starts,
+    const native::Tensor& lengths,
+    const native::Tensor& theta,
+    const native::Tensor& phase0_pos,
     int64_t lmax,
     int64_t mmax,
     int64_t spin,
-    const torch::Tensor& alm_minus
+    const native::Tensor& alm_minus
 ) {
     constexpr const char* function_name = "healpix_spin_alm2map_ring_recurrence_cpu";
     const int64_t nalm = validate_spin_spectral_limits(lmax, mmax, spin, function_name);
     auto layout = validate_spectral_ring_layout(starts, lengths, function_name);
     auto theta_c = validate_spectral_tensor(
-        theta, torch::kDouble, {1}, function_name, "theta", "float64"
+        theta, native::kDouble, {1}, function_name, "theta", "float64"
     );
     auto phase = validate_spectral_tensor(
-        phase0_pos, torch::kComplexDouble, {2}, function_name, "phase0_pos", "complex128"
+        phase0_pos, native::kComplexDouble, {2}, function_name, "phase0_pos", "complex128"
     );
     const int64_t mcount = checked_nonnegative_add(mmax, 1, function_name);
     if (theta_c.numel() != layout.nrings) {
@@ -6479,31 +6479,31 @@ torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
     if (phase.size(0) != mcount || phase.size(1) != layout.nrings) {
         throw std::runtime_error(std::string(function_name) + " phase0_pos shape must be (mmax+1, nrings)");
     }
-    const c10::complex<double>* a0 = nullptr;
-    const c10::complex<double>* a1 = nullptr;
-    torch::Tensor keep0;
-    torch::Tensor keep1;
-    torch::Tensor stacked;
+    const std::complex<double>* a0 = nullptr;
+    const std::complex<double>* a1 = nullptr;
+    native::Tensor keep0;
+    native::Tensor keep1;
+    native::Tensor stacked;
     if (alm_minus.defined()) {
         keep0 = validate_spectral_tensor(
-            alm_plus, torch::kComplexDouble, {1}, function_name, "alm_plus", "complex128"
+            alm_plus, native::kComplexDouble, {1}, function_name, "alm_plus", "complex128"
         );
         keep1 = validate_spectral_tensor(
-            alm_minus, torch::kComplexDouble, {1}, function_name, "alm_minus", "complex128"
+            alm_minus, native::kComplexDouble, {1}, function_name, "alm_minus", "complex128"
         );
         if (keep0.numel() != nalm || keep1.numel() != nalm) {
             throw std::runtime_error(std::string(function_name) + " ALM lengths do not match lmax/mmax");
         }
-        a0 = keep0.data_ptr<c10::complex<double>>();
-        a1 = keep1.data_ptr<c10::complex<double>>();
+        a0 = keep0.data_ptr<std::complex<double>>();
+        a1 = keep1.data_ptr<std::complex<double>>();
     } else {
         stacked = validate_spectral_tensor(
-            alm_plus, torch::kComplexDouble, {2}, function_name, "alm_plus", "complex128"
+            alm_plus, native::kComplexDouble, {2}, function_name, "alm_plus", "complex128"
         );
         if (stacked.size(0) != 2 || stacked.size(1) != nalm) {
             throw std::runtime_error(std::string(function_name) + " stacked ALMs shape must be (2, nalm)");
         }
-        a0 = stacked.data_ptr<c10::complex<double>>();
+        a0 = stacked.data_ptr<std::complex<double>>();
         a1 = a0 + nalm;
     }
 
@@ -6534,19 +6534,19 @@ torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
         }
     }
 
-    torch::Tensor eq_spec;
-    c10::complex<double>* eq_plus = nullptr;
-    c10::complex<double>* eq_minus = nullptr;
+    native::Tensor eq_spec;
+    std::complex<double>* eq_plus = nullptr;
+    std::complex<double>* eq_minus = nullptr;
     if (n_eq > 0 && nph_eq > mmax) {
-        eq_spec = torch::zeros(
+        eq_spec = native::zeros(
             {2, n_eq, nph_eq},
-            torch::TensorOptions().dtype(torch::kComplexDouble).device(torch::kCPU)
+            native::TensorOptions().dtype(native::kComplexDouble).device(native::kCPU)
         );
-        eq_plus = eq_spec.select(0, 0).data_ptr<c10::complex<double>>();
-        eq_minus = eq_spec.select(0, 1).data_ptr<c10::complex<double>>();
+        eq_plus = eq_spec.select(0, 0).data_ptr<std::complex<double>>();
+        eq_minus = eq_spec.select(0, 1).data_ptr<std::complex<double>>();
     }
 
-    const torch::Tensor& alms_ref = alm_minus.defined() ? keep0 : stacked;
+    const native::Tensor& alms_ref = alm_minus.defined() ? keep0 : stacked;
     const bool profile = sht_profile_enabled();
     const auto t0 = std::chrono::steady_clock::now();
     auto s_modes = healpix_spin_interpolate_recurrence_cpu(
@@ -6555,7 +6555,7 @@ torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
         lmax,
         mmax,
         spin,
-        phase.data_ptr<c10::complex<double>>(),
+        phase.data_ptr<std::complex<double>>(),
         a0,
         a1,
         eq_plus,
@@ -6565,7 +6565,7 @@ torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
         nph_eq
     );
     const auto t1 = std::chrono::steady_clock::now();
-    torch::Tensor out;
+    native::Tensor out;
     if (eq_spec.defined() && eq_spec.numel() > 0) {
         out = healpix_spin_synthesize_qu_cpu(
             s_modes, starts_c, lengths_c, eq_spec, eq_start, n_eq, nph_eq
@@ -6587,18 +6587,18 @@ torch::Tensor healpix_spin_alm2map_ring_recurrence_cpu(
             interp_ms,
             synth_ms,
             SpinMPool::instance().nworkers(),
-            at::get_num_threads()
+            native::get_num_threads()
         );
     }
     return out;
 }
 
 template <typename T>
-torch::Tensor sparse_get_values_blocks_impl(
-    const torch::Tensor& query,
-    const torch::Tensor& block_index,
-    const torch::Tensor& block_values,
-    const torch::Tensor& fill
+native::Tensor sparse_get_values_blocks_impl(
+    const native::Tensor& query,
+    const native::Tensor& block_index,
+    const native::Tensor& block_values,
+    const native::Tensor& fill
 ) {
     const int64_t n = query.numel();
     const auto bv_sizes = block_values.sizes();
@@ -6618,9 +6618,9 @@ torch::Tensor sparse_get_values_blocks_impl(
         out_sizes.push_back(bv_sizes[i]);
     }
     out_sizes.push_back(n);
-    auto out = torch::empty(
+    auto out = native::empty(
         out_sizes,
-        torch::TensorOptions()
+        native::TensorOptions()
             .dtype(block_values.dtype())
             .device(block_values.device())
     );
@@ -6674,18 +6674,18 @@ torch::Tensor sparse_get_values_blocks_impl(
         }
     };
     if (n >= PARALLEL_MIN_ELEMS) {
-        at::parallel_for(0, n, 4096, body);
+        native::parallel_for(0, n, 4096, body);
     } else {
         body(0, n);
     }
     return out;
 }
 
-torch::Tensor sparse_get_values_blocks_cpu(
-    const torch::Tensor& query,
-    const torch::Tensor& block_index,
-    const torch::Tensor& block_values,
-    const torch::Tensor& fill
+native::Tensor sparse_get_values_blocks_cpu(
+    const native::Tensor& query,
+    const native::Tensor& block_index,
+    const native::Tensor& block_values,
+    const native::Tensor& fill
 ) {
     if (!query.defined() || !block_index.defined() || !block_values.defined()
         || !fill.defined()) {
@@ -6695,7 +6695,7 @@ torch::Tensor sparse_get_values_blocks_cpu(
         || !block_values.device().is_cpu() || !fill.device().is_cpu()) {
         throw std::runtime_error("sparse_get_values_blocks_cpu expects CPU tensors");
     }
-    if (query.scalar_type() != torch::kLong || block_index.scalar_type() != torch::kLong) {
+    if (query.scalar_type() != native::kLong || block_index.scalar_type() != native::kLong) {
         throw std::runtime_error("query and block_index must be int64");
     }
     if (fill.numel() != 1) {
@@ -6709,15 +6709,15 @@ torch::Tensor sparse_get_values_blocks_cpu(
     auto bv = block_values.contiguous();
     auto f = fill.contiguous();
     switch (bv.scalar_type()) {
-        case torch::kFloat64:
+        case native::kFloat64:
             return sparse_get_values_blocks_impl<double>(q, idx, bv, f);
-        case torch::kFloat32:
+        case native::kFloat32:
             return sparse_get_values_blocks_impl<float>(q, idx, bv, f);
-        case torch::kInt64:
+        case native::kInt64:
             return sparse_get_values_blocks_impl<int64_t>(q, idx, bv, f);
-        case torch::kInt32:
+        case native::kInt32:
             return sparse_get_values_blocks_impl<int32_t>(q, idx, bv, f);
-        case torch::kBool:
+        case native::kBool:
             return sparse_get_values_blocks_impl<bool>(q, idx, bv, f);
         default:
             throw std::runtime_error("unsupported block_values dtype");

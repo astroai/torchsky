@@ -81,8 +81,8 @@ dependency. `torchsky` contains no FITS/CFITSIO code.
 
 Use Pixi for every Python invocation: `pixi run <task>`,
 `pixi run -e test -- pytest ...`, `pixi run -e default -- python ...`. Do not
-guess bare `python`/`python3`. Environments: `default`, `test`, `test-py312`,
-`test-py313`, `test-py314`, `test-torch-min`, `docs`, `astrometry`,
+guess bare `python`/`python3`. Environments: `default`, `test` (Python 3.13),
+`test-py312`, `test-py314`, `test-torch-min`, `docs`, `astrometry`,
 `cuda-bench`. Never `pip install --user`.
 For headless runs set `PYTHONNOUSERSITE=1` and unset `PYTHONPATH`.
 

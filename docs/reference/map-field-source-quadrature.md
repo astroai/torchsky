@@ -7,7 +7,7 @@
     objects may change between minor releases; pin a version if you depend
     on them in production.
 
-A continuous sky sampled at caller-supplied source nodes and transported by an explicit quadrature and calibration into detector pixels, with fixed Gaussian evidence. Renamed from `torchsky.map.field.native_response` in 0.6; the old names warn and are removed in 0.7.
+A continuous sky sampled at caller-supplied source nodes and transported by an explicit quadrature and calibration into detector pixels, with fixed Gaussian evidence.
 
 **Guides:** [likelihoods](../models/likelihoods.md)
 

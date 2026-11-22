@@ -1,20 +1,20 @@
 #pragma once
 
-#include "torchsky_torch.h"
+#include "torchsky/native.h"
 
 namespace torchsky {
 
-torch::Tensor sphere_planar_point_in_polygon_cpu(
-    const torch::Tensor& points_xy,
-    const torch::Tensor& polygon_xy,
+native::Tensor sphere_planar_point_in_polygon_cpu(
+    const native::Tensor& points_xy,
+    const native::Tensor& polygon_xy,
     double eps
 );
 
-torch::Tensor sphere_arc_intersections_matrix_cpu(
-    const torch::Tensor& a0,
-    const torch::Tensor& a1,
-    const torch::Tensor& b0,
-    const torch::Tensor& b1,
+native::Tensor sphere_arc_intersections_matrix_cpu(
+    const native::Tensor& a0,
+    const native::Tensor& a1,
+    const native::Tensor& b0,
+    const native::Tensor& b1,
     double tol_rad
 );
 

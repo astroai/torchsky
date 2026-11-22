@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from .core import _BaseFieldModel
+from ._core_helpers import _BaseFieldModel
 from .observation_ops import observation_pixel_to_world
 from .quality import (
     FieldResidualProduct,

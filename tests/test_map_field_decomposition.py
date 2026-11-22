@@ -18,7 +18,7 @@ from torchsky.map.field import (
     render_field_observation,
 )
 from torchsky.map.solvers import ComponentDecompositionDiagnostics
-from torchsky.map.field.core import _BaseFieldModel
+from torchsky.map.field._core_helpers import _BaseFieldModel
 from map_field_support import (
     _ConstantField,
     _GaussianSpotField,

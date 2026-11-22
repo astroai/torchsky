@@ -67,28 +67,13 @@ from .types import (
     ForwardContext,
 )
 
-from .bandpass import bandpass_bounds as _bandpass_bounds  # noqa: F401 - re-exported
-from ._core_helpers import (  # noqa: F401 - re-exported helper layer
+from ._core_helpers import (
     _STRAINER_TRUNK_FORMAT,
-    _BaseFieldModel,
-    _atlas_expert_weights,
-    _atlas_local_coords,
-    _fourier_features_vectorized,
-    _fourier_features_with_curriculum,
     _infer_context_axis_labels,
-    _observation_footprint_world_deg,
     _observation_without_background,
     _pixel_coordinate_grids,
-    _point_bandpass_features,
-    _reset_xavier_mlp,
     _resolve_anchor_sample_world_coordinates,
     _resolve_centroid_target_pixel_coordinates,
-    _sample_feature_volume,
-    _smoothness_probe_grid,
-    estimate_field_domain,
-    load_strainer_trunk_checkpoint,
-    pretrain_strainer_trunk_synthetic,
-    save_strainer_trunk_checkpoint,
 )
 
 

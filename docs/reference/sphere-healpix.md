@@ -2,7 +2,7 @@
 
 # `torchsky.sphere.healpix`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
+**Stability: core.** Names on this page are public API; changes to them are listed in the [changelog](../project/changelog.md).
 
 The torch-native HEALPix kernels: indexing, neighbors, interpolation, queries, reordering, and map sampling. These functions accept and return PyTorch tensors.
 

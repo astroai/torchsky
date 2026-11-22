@@ -7,8 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- numpy 2.0 is the minimum (`numpy>=2.0`). The old `numpy>=1.20` floor was
+  wrong: the bandpass integration calls `np.trapezoid`, which numpy 1.x lacks,
+  and numpy 1.x has no Python 3.12 wheels before 1.26.
+
 ### Removed
 
+- The aliases that 0.6 deprecated:
+  - the modules `torchsky.map.field.native_response`,
+    `torchsky.map.field.native_integrated_read`,
+    `torchsky.map.field.joint_native_likelihood` and
+    `torchsky.map.operators.magnification`;
+  - `torchsky.map.field.NativeIntegratedReadLikelihood` and
+    `bind_native_integrated_read_likelihood`;
+  - the lensing names on `torchsky.map.operators` (`ConvergenceMagnification`,
+    `MagnificationResidual`, `magnification_bias`, `magnify_flux`,
+    `scale_source_sizes`).
+
+  Use `source_quadrature`, `source_quadrature_read`,
+  `shared_nuisance_likelihood` and `torchsky.map.operators.lensing`.
+- `torchsky.map.field.core` no longer re-exports the helper layer
+  (`estimate_field_domain`, the strainer-trunk checkpoint functions and the
+  private helpers). Import them from `torchsky.map.field`.
 - The `test` and `examples` extras no longer list `pandas`, and the `test`
   extra no longer lists `requests`; nothing in torchsky imports them.
 - Fallbacks for PyTorch and Python versions below the supported floor

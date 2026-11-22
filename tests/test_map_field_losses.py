@@ -5,7 +5,7 @@ import math
 import pytest
 import torch
 
-from torchsky.map.field.core import _BaseFieldModel
+from torchsky.map.field._core_helpers import _BaseFieldModel
 from torchsky.map.field.losses import _field_residual_loss
 from torchsky.map.field.training import (
     _compute_full_observation_losses,

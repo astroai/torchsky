@@ -29,8 +29,12 @@ from .bandpass import (
     bandpass_bounds as _bandpass_bounds,
     mixture_mc_samples as _mixture_mc_samples,
 )
-from .core import (
+from ._core_helpers import (
     _BaseFieldModel,
+    _smoothness_probe_grid,
+    estimate_field_domain,
+)
+from .core import (
     BandpassConditionedField,
     DiffuseFoamHybridField,
     FieldComponentDecomposition,
@@ -44,8 +48,6 @@ from .core import (
     SkyEncoderResMLPField,
     StrainerSkyEncoderMLPField,
     WireImplicitField,
-    _smoothness_probe_grid,
-    estimate_field_domain,
     field_component_anchor_loss,
     field_component_centroid_anchor_loss,
     make_field_component_decomposition,

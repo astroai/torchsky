@@ -279,23 +279,7 @@ _LAZY_EXPORTS = {
 }
 
 
-# Lensing operators moved to the opt-in ``lensing`` module after 0.5.0; these
-# aliases are removed in 0.7. Never cached, so every access warns.
-_LENSING = "torchsky.map.operators.lensing"
-_DEPRECATED = {
-    "ConvergenceMagnification": (_LENSING, "ConvergenceMagnification"),
-    "MagnificationResidual": (_LENSING, "LearnedConvergenceCorrection"),
-    "magnification_bias": (_LENSING, "magnification_bias"),
-    "magnify_flux": (_LENSING, "magnify_flux"),
-    "scale_source_sizes": (_LENSING, "scale_source_sizes"),
-}
-
-
 def __getattr__(name: str) -> Any:
-    if name in _DEPRECATED:
-        from ..._deprecation import deprecated_attribute
-
-        return deprecated_attribute(__name__, name, _DEPRECATED[name])
     if name not in _LAZY_EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attr_name = _LAZY_EXPORTS[name]

@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 
-from .core import _bandpass_bounds
+from .bandpass import bandpass_bounds as _bandpass_bounds
 from .types import (
     FieldObservation,
     ObservationSpectralSummary,

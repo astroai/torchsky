@@ -15,9 +15,9 @@ from ..map.field.artifacts import (
     load_field_artifact as load_artifact,
     save_field_artifact as save_artifact,
 )
+from ..map.field._core_helpers import estimate_field_domain as estimate_domain
 from ..map.field.core import (
     FieldComponentDecomposition,
-    estimate_field_domain as estimate_domain,
     make_field_component_decomposition as component_decomposition,
     make_field_model as model,
 )

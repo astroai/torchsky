@@ -27,7 +27,7 @@ from torchsky.map.field import (
     render_field_residual_product,
     select_field_residual_tiles,
 )
-from torchsky.map.field.core import _BaseFieldModel
+from torchsky.map.field._core_helpers import _BaseFieldModel
 from torchsky.map.field.hashgrid import sample_feature_plane
 from torchsky.map.field.observation_ops import (
     coordinate_grid,

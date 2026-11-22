@@ -2,7 +2,7 @@
 
 # `torchsky.extinction`
 
-**Stability: core.** Names on this page follow the deprecation policy in [contributing](../project/contributing.md).
+**Stability: core.** Names on this page are public API; changes to them are listed in the [changelog](../project/changelog.md).
 
 Milky Way and starburst dust laws on torch tensors.
 
