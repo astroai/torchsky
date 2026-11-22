@@ -27,10 +27,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlsplit
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # Python < 3.11
-    import tomli as tomllib  # type: ignore[import-not-found,no-redef]
+import tomllib
 
 SITE_DIR = Path("site")
 ZENSICAL_CONFIG = Path("zensical.toml")

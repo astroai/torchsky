@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 from ._core_support import (  # noqa: F401
     _CELESTIAL_LATITUDE_PREFIXES,
     _CELESTIAL_LONGITUDE_PREFIXES,
-    _HAS_TORCH_SINCOS,
     _MPS_PIXEL_IDENTIFICATION_LIMIT_PX,
     _celestial_axis_role,
     _ctype_projection_code,

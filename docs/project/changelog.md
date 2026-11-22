@@ -5,6 +5,16 @@ All notable changes to torchsky are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- The `test` and `examples` extras no longer list `pandas`, and the `test`
+  extra no longer lists `requests`; nothing in torchsky imports them.
+- Fallbacks for PyTorch and Python versions below the supported floor
+  (`torch.func`, `torch.OutOfMemoryError` and the `torch.mps` RNG and memory
+  helpers are used directly), and two stray FITS files under `tests/data/`.
+
 ## [0.6.0] - 2026-11-21
 
 ### Added

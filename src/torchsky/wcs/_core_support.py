@@ -3,14 +3,6 @@
 from __future__ import annotations
 
 import torch
-from typing import TYPE_CHECKING
-
-
-if TYPE_CHECKING:
-    pass
-
-
-_HAS_TORCH_SINCOS = hasattr(torch, "sincos")
 
 
 def _ctype_without_projection(ctype: str) -> str:

@@ -14,11 +14,6 @@ from ..device import _to
 if TYPE_CHECKING:
     import numpy as np
 
-try:
-    from torch.func import vmap
-except ImportError:
-    vmap = None
-
 from .. import _ops
 
 from . import _region_area

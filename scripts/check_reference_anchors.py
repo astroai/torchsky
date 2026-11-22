@@ -21,10 +21,8 @@ REGISTRY = DOCS / "reference" / "_registry.toml"
 
 
 def _read_registry() -> dict:
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
-        import tomli as tomllib  # type: ignore[no-redef]
+    import tomllib
+
     return tomllib.loads(REGISTRY.read_text(encoding="utf-8"))
 
 

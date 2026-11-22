@@ -67,7 +67,7 @@ preflight-push = "ruff check . && pixi run -e default -- python -m compileall -q
 # Optional local copy of GitHub build-test. Not a push blocker.
 ci-local = "pixi run preflight-push && pixi run release-lane-check && pixi run api-manifest-check && pixi run typecheck && pixi run test"
 typecheck = "pixi run -e test pyright"
-# Release lane (torch minor, versions, workflow pins) must match scripts/torch_lanes.json.
+# Release lane (torch range, versions, workflow pins) must match scripts/torch_support.json.
 release-lane-check = "pixi run -e default -- python scripts/release_lane.py --check"
 release-lane-pins = "pixi run -e default -- python scripts/release_lane.py --print-pins"
 # Run every example script as a bounded smoke gate.
@@ -101,7 +101,6 @@ api-manifest = "pixi run -e test -- python scripts/api_manifest.py --write docs/
 api-manifest-check = "pixi run -e test -- python scripts/api_manifest.py --check docs/api-manifest.json"
 setup-hooks = "python scripts/install_hooks.py"
 pre-commit = "pre-commit run --all-files"
-test-transforms = "pixi run -e default -- pytest tests/test_transforms.py -v"
 
 [feature.prod]
 platforms = ["osx-arm64-14", "linux-64"]
@@ -127,12 +126,10 @@ fastapi = ">=0.110"
 httpx = ">=0.27"
 pillow = ">=10.0"
 matplotlib = ">=3.8"
-pandas = ">=2.2"
 polars = ">=1.0"
 pyarrow = ">=25.0"  # torchfits requires pyarrow>=25
 pyright = ">=1.1.350"
 pytest-xdist = ">=3.0"
-requests = ">=2.28"
 
 # Documentation feature: static site generator + Python API reference.
 [feature.docs.dependencies]

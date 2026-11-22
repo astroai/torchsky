@@ -402,9 +402,8 @@ def capture_field_rng_state(*, sampling_rng_state: Tensor | None = None) -> dict
     state: dict[str, Any] = {"cpu": torch.get_rng_state()}
     if torch.cuda.is_available():
         state["cuda"] = torch.cuda.get_rng_state_all()
-    get_mps_state = getattr(torch.mps, "get_rng_state", None)
-    if callable(get_mps_state) and torch.backends.mps.is_available():
-        state["mps"] = get_mps_state()
+    if torch.backends.mps.is_available():
+        state["mps"] = torch.mps.get_rng_state()
     if sampling_rng_state is not None:
         state["sampling"] = sampling_rng_state
     return _cpu_safe_state(state)
@@ -420,9 +419,8 @@ def restore_field_rng_state(state: Mapping[str, Any]) -> Tensor | None:
             [_as_tensor(item, dtype=torch.uint8, device="cpu") for item in cuda_state]
         )
     mps_state = state.get("mps")
-    set_mps_state = getattr(torch.mps, "set_rng_state", None)
-    if isinstance(mps_state, Tensor) and callable(set_mps_state):
-        set_mps_state(_to(mps_state, device="cpu", dtype=torch.uint8))
+    if isinstance(mps_state, Tensor):
+        torch.mps.set_rng_state(_to(mps_state, device="cpu", dtype=torch.uint8))
     sampling = state.get("sampling")
     return (
         _to(sampling, device="cpu", dtype=torch.uint8)

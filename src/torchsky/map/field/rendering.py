@@ -1477,12 +1477,8 @@ def evaluate_field_coordinates_vmapped(
     calls, which fail for models with tensor-value validation) and remains
     differentiable.
     """
-    try:
-        from torch.func import functional_call
-    except ImportError as e:
-        raise RuntimeError(
-            "evaluate_field_coordinates_vmapped requires PyTorch 2.x torch.func"
-        ) from e
+    from torch.func import functional_call
+
     ra = torch.as_tensor(ra_deg)
     dec = torch.as_tensor(dec_deg, device=ra.device)
     wl = torch.as_tensor(wavelength_angstrom, device=ra.device)

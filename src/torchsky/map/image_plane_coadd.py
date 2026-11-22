@@ -239,12 +239,9 @@ def _restore_to_compute_device(
             f"free on {device}"
         )
     else:
-        out_of_memory = getattr(torch, "OutOfMemoryError", RuntimeError)
         try:
             return [None if t is None else t.to(device=device) for t in tensors]
-        except out_of_memory as exc:
-            if out_of_memory is RuntimeError and "out of memory" not in str(exc):
-                raise
+        except torch.OutOfMemoryError:
             reason = f"copy to {device} ran out of memory"
     warnings.warn(
         f"coadd_image_plane: the tiled {label} stay on the host ({reason}); the "

@@ -522,7 +522,7 @@ def test_residual_models_device_gradient_and_compile(device: str) -> None:
     assert gp_query.grad is not None
     assert bool(torch.isfinite(gp_query.grad).all())
 
-    if device == "cpu" and hasattr(torch, "compile"):
+    if device == "cpu":
 
         def compiled_chunk(
             context_features: torch.Tensor,

@@ -20,6 +20,10 @@ Human contributors start at [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - Work on the fork's `main` and open one PR to `astroai/torchsky` `main`.
   No extra branches, stashes, or worktrees unless the user asks.
+- `sfabbro/torchsky` is not a GitHub fork, so `gh pr create --head
+  sfabbro:main` fails. Push the commit to a branch on `upstream`
+  (`release/X.Y.Z` for a release), open the PR from it, and merge with a merge
+  commit (`gh pr merge --merge --match-head-commit <full 40-char SHA>`).
 - Commit or push only when asked. Do not open PRs for single-import or
   single-file cosmetic changes; batch mechanical cleanup into one change.
 
@@ -78,7 +82,8 @@ dependency. `torchsky` contains no FITS/CFITSIO code.
 Use Pixi for every Python invocation: `pixi run <task>`,
 `pixi run -e test -- pytest ...`, `pixi run -e default -- python ...`. Do not
 guess bare `python`/`python3`. Environments: `default`, `test`, `test-py312`,
-`test-py313`, `docs`, `astrometry`, `cuda-bench`. Never `pip install --user`.
+`test-py313`, `test-py314`, `test-torch-min`, `docs`, `astrometry`,
+`cuda-bench`. Never `pip install --user`.
 For headless runs set `PYTHONNOUSERSITE=1` and unset `PYTHONPATH`.
 
 ## Core principles
@@ -124,9 +129,19 @@ covers torchsky-owned hot paths.
   Run `pixi run typecheck` when types or public signatures change, and
   `pixi run api-manifest-check` when the public API changes.
 - `pixi run test` is the main suite (excludes `tests/test_map_*.py`; map tests run
-  separately: `KMP_DUPLICATE_LIB_OK=TRUE pixi run -e test -- pytest -n 4 -q tests/test_map_*.py`).
+  separately: `KMP_DUPLICATE_LIB_OK=TRUE pixi run -e test -- pytest -n 2 -q tests/test_map_*.py`).
   `pixi run ci-local` mirrors GitHub `build-test`; run these only when asked or
   for a risky cross-cutting change. Never add pytest to the pre-push hook.
+- On the maintainer's Mac, never run a full or map suite with `pytest -n auto`
+  (it froze the machine twice). Use at most `-n 2` with `OMP_NUM_THREADS=2`;
+  full runs belong to CI or a CANFAR session.
+- Code traced by `torch.compile(fullgraph=True)` must trace on both ends of the
+  supported range: `test-torch-min` (torch 2.13) and the newest-tested lane
+  (PyPI torch 2.15), on every supported Python. Dynamo rejects some builtins
+  there, e.g. `max(<genexpr>, default=...)` on 2.13 and `math.isqrt` on
+  Python 3.15.
+- Assert wall-clock timings only in `tests/test_perf_gate.py`; timing ratios
+  in ordinary tests flake on shared CI runners.
 - Never auto-run benchmark suites or harness campaigns.
 - Once required checks pass, stop. Record unrelated baseline failures without
   fixing them or claiming the gate passed.
@@ -144,7 +159,12 @@ covers torchsky-owned hot paths.
   generated pages, snippets, docs tests). Docs-only edits need no other pytest.
 - Examples in `examples/` must use torchsky, be self-contained, and write
   outputs to a temporary directory, not the working directory.
-- Releases follow `docs/project/release.md`.
+- Releases follow `docs/project/release.md`. A stable tag follows an rc tag and
+  changes only the version files and the changelog; the rc's notes move into
+  the stable `## [X.Y.Z]` section. Publishing to PyPI is a separate
+  `workflow_dispatch` run with `publish=true` and needs the user's approval.
+- Sibling-package requirements (`torchfits`, `torch`) are lower bounds
+  (`>=`), never exact pins.
 
 ## Change checklist
 
